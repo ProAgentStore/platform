@@ -10,6 +10,8 @@
  */
 import { boundedJson, clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
+import { sqlTime } from "./sql-time.js";
+import { spoolTelemetry, type TelemetryWrite } from "./telemetry-spool.js";
 import { toolLogLine } from "./tool-result-cap.js";
 
 export type EventLevel = "debug" | "info" | "warn" | "error";
@@ -50,8 +52,25 @@ export interface EventInput {
 }
 
 /** Persist a trace event. Best-effort; never throws. */
-export async function logEvent(env: Pick<Env, "DB">, e: EventInput): Promise<void> {
+export async function logEvent(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_KV">>, e: EventInput): Promise<TelemetryWrite> {
+	// Minted once (#1084): a row D1 refuses is spooled under this id and replayed with it, so the
+	// replay and any late success of the original write are the same fact, never two.
+	const id = e.id ? String(e.id).slice(0, 300) : crypto.randomUUID();
+	let row: Record<string, unknown> | null = null;
 	try {
+		row = {
+		ts: typeof e.ts === "number" ? e.ts : Date.now(),
+		created_at: sqlTime(),
+		user_id: e.userId ?? null,
+		instance_id: e.instanceId ?? null,
+		trace_id: e.traceId ?? null,
+		source: String(e.source).slice(0, 48),
+		level: e.level ?? "info",
+		event: String(e.event).slice(0, 64),
+		// Marked, and valid JSON (#898): a sliced context failed json_valid and its row vanished.
+		message: e.message != null ? clipMarked(e.message, 2000) : null,
+		context: e.context ? boundedJson(e.context, 4000) : null,
+		};
 		// `ON CONFLICT(id) DO NOTHING` is a no-op for every caller that lets the id default to a
 		// fresh uuid — a random 128-bit key never collides — and is what makes a supplied `id`
 		// idempotent. Written in this form rather than `INSERT OR IGNORE` deliberately: several
@@ -60,19 +79,7 @@ export async function logEvent(env: Pick<Env, "DB">, e: EventInput): Promise<voi
 		await env.DB.prepare(
 			"INSERT INTO agent_events (id, ts, user_id, instance_id, trace_id, source, level, event, message, context) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO NOTHING",
 		)
-			.bind(
-				e.id ? String(e.id).slice(0, 300) : crypto.randomUUID(),
-				typeof e.ts === "number" ? e.ts : Date.now(),
-				e.userId ?? null,
-				e.instanceId ?? null,
-				e.traceId ?? null,
-				String(e.source).slice(0, 48),
-				e.level ?? "info",
-				String(e.event).slice(0, 64),
-				// Marked, and valid JSON (#898): a sliced context failed json_valid and its row vanished.
-				e.message != null ? clipMarked(e.message, 2000) : null,
-				e.context ? boundedJson(e.context, 4000) : null,
-			)
+			.bind(id, row.ts, row.user_id, row.instance_id, row.trace_id, row.source, row.level, row.event, row.message, row.context)
 			.run();
 		// Opportunistic retention: no cron, so ~1% of writes prune rows older than
 		// 14 days (indexed on created_at). The trace is a debugging aid, not an archive.
@@ -85,8 +92,11 @@ export async function logEvent(env: Pick<Env, "DB">, e: EventInput): Promise<voi
 				.run()
 				.catch(() => undefined);
 		}
+		return "persisted";
 	} catch (err) {
+		// Never throws and never logs through itself: the refused row goes to the KV spool (#1084).
 		console.error("[events] failed to persist:", err instanceof Error ? err.message : String(err));
+		return row ? spoolTelemetry(env, "agent_events", id, row) : "lost";
 	}
 }
 

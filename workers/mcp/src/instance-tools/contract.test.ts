@@ -392,6 +392,7 @@ const TABLE: Record<string, Row> = {
 	agent_messages: ["agentAuthoring", "none", null, null, "agent_id,before,limit,token"],
 	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
 	error_summary: ["observability", "none", null, null, "days,instance_id,level,limit,source,token"],
+	telemetry_health: ["observability", "none", null, null, "token"],
 	list_errors: ["observability", "none", null, null, "limit,offset,scope,source,token"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
 	list_instance_drive_files: ["connectors", "none", null, null, "folder,grant_id,instance_id,limit,q,token"],

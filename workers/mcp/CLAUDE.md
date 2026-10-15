@@ -96,7 +96,7 @@ src/
 │                     takeover controls (#613)
     ├── browser-verification.ts 12 tools — the owner's browser-screenshot switch, get/set (#1064), a declared local browser turned on per instance (settings), which machines are eligible now, the durable takeovers: list, get, request, transition (#1031), and the browser verification of Gmail job leads: its queue and receipts, and verify now (#1030), and owner-selected job URL intake (#1056)
     ├── knowledge.ts      13 tools — documents (incl. in-place edit + URL ingest, #613), owner-scoped files, vectors, memory
-    ├── observability.ts  13 tools — messages, activity, errors (flat + grouped), trace, pipeline runs, feedback (incl. file + delete, #613), single-turn deletion
+    ├── observability.ts  14 tools — messages, activity, errors (flat + grouped), telemetry delivery health (#1084), trace, pipeline runs, feedback (incl. file + delete, #613), single-turn deletion
     ├── board.ts          13 tools — the board, its columns, the per-ticket thread (#150), card→ticket promotion (#757), GitHub issue link/unlink/sync (#895)
 ├── agent-tasks.ts    4 tools — the agent's OWN standing tasks: DO state rendered into its
 │                     prompt, deliberately not the board above (#613)
@@ -140,13 +140,13 @@ src/
                           surfaces:["coding"]) + 6 loop tools (3 run + 3 objective queue: list, cancel, lifecycle)
 ```
 
-**326 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**327 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all sixteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 273 across `instance-tools/`. 299 are always registered; 27 are
+`storage-tools.ts`, and 274 across `instance-tools/`. 300 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 273 = 326. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 274 = 327. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

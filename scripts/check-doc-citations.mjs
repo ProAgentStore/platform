@@ -115,9 +115,8 @@ let totalCitations = 0;
 for (const file of files) {
 	const src = readFileSync(file, "utf-8");
 	const rel = relative(ROOT, file);
-	let m;
 	CITATION_RE.lastIndex = 0;
-	while ((m = CITATION_RE.exec(src)) !== null) {
+	for (let m = CITATION_RE.exec(src); m !== null; m = CITATION_RE.exec(src)) {
 		const citedPath = m[1];
 		totalCitations++;
 		const matches = resolve_path(citedPath);

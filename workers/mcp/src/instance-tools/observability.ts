@@ -186,6 +186,20 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 	);
 
 	server.tool(
+		"telemetry_health",
+		"Is platform telemetry actually reaching its stores? (#1084) Per sink — `error_log`, `agent_events` (the trace), `admin_audit_log`, `mcp_audit` — how many records their primary store REFUSED and are spooled for replay (`pending`: accepted, NOT yet durable), how many replay gave up on after its attempts (`dead`), and how many could not even be spooled in the last 30 days (`lost`, a floor). `complete` is true only when all three are zero everywhere. `lastDrain` is the per-minute replay's own receipt — an old `ageMs` means the drain itself is not running. Read this before trusting an empty list_errors / agent_trace / mcp_audit_log as \"nothing happened\". Platform-wide, so ADMIN only; anyone else is refused.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/errors/telemetry-health", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"agent_trace",
 		"Reconstruct the complete, time-ordered timeline of what an agent instance DID — chat turns (chat.in/tool.call/chat.out), apply steps/handoffs/outcomes (apply.*), and failures, interleaved. This is the primary tool for debugging or improving an agent: see exactly what happened, in order, not just errors. Failures sit in two bands: a tool call that FAILED is level=warn (one row per failed tool, carrying the tool name in `context` and its full refusal text), while level=error means the turn or run could not complete at all. Since level is a floor, level=\"warn\" is the read that shows both — use it, not \"error\", when the question is \"what went wrong\". Filter by trace_id (one run/turn), source (chat|apply|coding|voice), or level. `count` always describes the WHOLE window `limit` selected and is never reduced; `events` is a PAGE of it, so read `page.hasMore` and call again with `offset: page.nextOffset` to continue. A busy instance's default 200-event window measured 163,437 bytes, 2.5x a calling host's 64 KiB limit, so one reply cannot carry them all and never could — narrow with trace_id or source when you know what you are looking for.",
 		{

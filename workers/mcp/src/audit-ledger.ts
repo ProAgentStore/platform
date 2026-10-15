@@ -30,6 +30,22 @@ export const AUDIT_TTL_SECONDS = 90 * 86_400;
 export const AUDIT_INDEX_PREFIX = "audit_idx:";
 export const AUDIT_GLOBAL_PREFIX = "audit_all:";
 export const AUDIT_MIGRATION_KEY = "audit_ledger_migration";
+/**
+ * A PARTIAL index write — one of an event's two keys landed — is recorded here for the API Worker's
+ * per-minute cron to finish (#1084), in the shape `workers/api/src/lib/telemetry-spool.ts` replays:
+ * `{ sink, id, payload: { keys, value, expiration, metadata }, attempts, nextAt, createdAt }`.
+ * Replay re-puts the same key with the same value and the same absolute expiry, so finishing it
+ * twice changes nothing and an event never outlives its 90 days. Loss is counted per day under
+ * `AUDIT_LOSS_PREFIX`. Both test suites assert these strings.
+ */
+export const AUDIT_SPOOL_PREFIX = "tel_spool:mcp_audit:";
+export const AUDIT_LOSS_PREFIX = "tel_loss:mcp_audit:";
+export const AUDIT_DEAD_PREFIX = "tel_dead:mcp_audit:";
+/** Pending partial writes kept at once — the spool's per-sink capacity. */
+export const AUDIT_SPOOL_MAX = 1000;
+/** The spool's own TTL (7 days) and its first replay delay (5s). */
+export const AUDIT_SPOOL_TTL_SECONDS = 7 * 86_400;
+export const AUDIT_SPOOL_FIRST_DELAY_MS = 5_000;
 /** 13 digits of epoch milliseconds — the year 2286. */
 const MAX_MS = 9_999_999_999_999;
 
@@ -59,12 +75,32 @@ export function auditKeyMetadata(event: Record<string, unknown>): AuditKeyMetada
 }
 
 export interface AuditCoverage {
-	/** True only once every legacy event still within retention has been indexed. */
+	/**
+	 * True only when BOTH halves are: every legacy event within retention has been indexed
+	 * (`migrationComplete`) and every recorded event reached both indexes (`delivery.complete`, #1084).
+	 */
 	complete: boolean;
+	/** The legacy backfill alone — finished and nothing unplaceable. Says nothing about delivery. */
+	migrationComplete: boolean;
+	delivery: AuditDelivery;
 	retentionDays: number;
 	legacyIndex: "complete" | "in_progress" | "not_started";
 	detail: string;
 }
+/**
+ * Whether every event the MCP Worker ACCEPTED reached both indexes (#1084) — separate from whether
+ * the legacy MIGRATION finished, which is all `legacyIndex` says. `pending` events landed in one index
+ * and are spooled for the API cron to finish; `dead` exhausted their replays; `lost` (last 30 days)
+ * could not even be spooled. `pendingCapped` means there are at least that many.
+ */
+export interface AuditDelivery {
+	complete: boolean;
+	pending: number;
+	pendingCapped: boolean;
+	dead: number;
+	lost: number;
+}
+
 
 export interface AuditPage {
 	events: Array<Record<string, unknown>>;
@@ -82,7 +118,7 @@ export const AUDIT_SEMANTICS =
 	"it started has finished; follow the ids in `input`/`result` (instance_id, session_id, run/queue ids) " +
 	"to that work's own record.";
 
-export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage> {
+async function readMigrationCoverage(kv: KVNamespace): Promise<Omit<AuditCoverage, "migrationComplete" | "delivery">> {
 	const raw = await kv.get(AUDIT_MIGRATION_KEY);
 	const state = raw
 		? (JSON.parse(raw) as { status?: string; pass?: number; scanned?: number; unplaceable?: number; passUnplaceable?: number })
@@ -124,6 +160,38 @@ export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage>
 			(state ? ` (pass ${(state.pass ?? 0) + 1}, ${state.scanned ?? 0} legacy keys scanned so far)` : "") +
 			". The newest events are complete; older pages may be missing legacy events until indexing finishes.",
 	};
+}
+
+/** The delivery half: what the spool still holds, gave up on, or never got (the API's `telemetry-spool.ts`). */
+async function readAuditDelivery(kv: KVNamespace): Promise<AuditDelivery> {
+	const [pending, dead, losses] = await Promise.all([
+		kv.list({ prefix: AUDIT_SPOOL_PREFIX, limit: AUDIT_SPOOL_MAX }),
+		kv.list({ prefix: AUDIT_DEAD_PREFIX, limit: AUDIT_SPOOL_MAX }),
+		kv.list({ prefix: AUDIT_LOSS_PREFIX, limit: 40 }),
+	]);
+	let lost = 0;
+	for (const k of losses.keys) lost += Number((await kv.get(k.name)) ?? 0) || 0;
+	const n = pending.keys.length;
+	return { complete: n === 0 && dead.keys.length === 0 && lost === 0, pending: n, pendingCapped: !pending.list_complete || n >= AUDIT_SPOOL_MAX, dead: dead.keys.length, lost };
+}
+
+/**
+ * Coverage of the ledger a reader is paging (#1016, #1084): the migration's half and the delivery
+ * half, reported apart, `complete` only when both are. A storage failure throws — partial coverage
+ * is never reported as whole because the spool could not be read.
+ */
+export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage> {
+	const [migration, delivery] = await Promise.all([readMigrationCoverage(kv), readAuditDelivery(kv)]);
+	const complete = migration.complete && delivery.complete;
+	const gaps = [
+		delivery.pending ? `${delivery.pending}${delivery.pendingCapped ? "+" : ""} recent event${delivery.pending === 1 ? " is" : "s are"} in only one index and waiting to be re-written to the other` : "",
+		delivery.dead ? `${delivery.dead} could not be re-written after repeated attempts` : "",
+		delivery.lost ? `${delivery.lost} audit write${delivery.lost === 1 ? "" : "s"} in the last 30 days could not be recorded at all` : "",
+	].filter(Boolean);
+	const detail = gaps.length
+		? `${migration.complete ? "Legacy indexing finished. " : `${migration.detail} `}Delivery is incomplete: ${gaps.join("; ")}.`
+		: migration.detail;
+	return { ...migration, complete, migrationComplete: migration.complete, delivery, detail };
 }
 
 /**

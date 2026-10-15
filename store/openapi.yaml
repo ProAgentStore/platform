@@ -13812,12 +13812,64 @@ paths:
                 context: { type: object, additionalProperties: true }
       responses:
         "200":
-          description: Logged
+          description: Stored in the error log (`durable: true`).
           content:
             application/json:
-              schema: { type: object, properties: { ok: { type: boolean } } }
+              schema: { type: object, properties: { ok: { type: boolean }, durable: { type: boolean } } }
+        "202":
+          description: |
+            Accepted, NOT yet stored (#1084): the database refused the row and it is spooled for the
+            per-minute replay (`durable: false, queued: true`). Counted as `pending` in `telemetry-health`.
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean }, durable: { type: boolean }, queued: { type: boolean } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: Could not be stored anywhere — lost, and counted (`ok: false, durable: false`).
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean }, durable: { type: boolean }, error: { type: string } } }
+
+  /v1/errors/telemetry-health:
+    get:
+      summary: Telemetry delivery health (admin)
+      description: |
+        Whether telemetry is reaching its stores (#1084). Per sink — `error_log`, `agent_events`,
+        `admin_audit_log`, `mcp_audit` — records refused by the primary store and spooled for replay
+        (`pending`), replays given up after `policy.maxAttempts` (`dead`), and records that could not be
+        spooled at all in the last 30 days (`lost`, a floor). `complete` is true only when all are zero.
+        `lastDrain` is the per-minute replay's receipt. Platform-wide, so admin only. 503 when the spool
+        cannot be read — never a healthy-looking answer. MCP: `telemetry_health`.
+      operationId: telemetryHealth
+      tags: [Errors]
+      responses:
+        "200":
+          description: Per-sink delivery, the last drain and the policy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  complete: { type: boolean }
+                  sinks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sink: { type: string, enum: [error_log, agent_events, admin_audit_log, mcp_audit] }
+                        pending: { type: integer }
+                        pendingCapped: { type: boolean }
+                        oldestPendingMs: { type: integer, nullable: true }
+                        dead: { type: integer }
+                        lost: { type: integer }
+                  lastDrain: { type: object, nullable: true, additionalProperties: true }
+                  policy: { type: object, additionalProperties: true }
+                  semantics: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: The spool could not be read.
 
   # ── Feedback ──────────────────────────────────────────────────────────────
 

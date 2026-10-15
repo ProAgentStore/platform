@@ -92,7 +92,8 @@ describe("logEvent", () => {
 		const spy = vi.spyOn(console, "error").mockImplementation((...a) => { errors.push(a); });
 		try {
 			const env = { DB: { prepare() { throw new Error("db down"); } } } as unknown as Env;
-			await expect(logEvent(env, { source: "x", event: "y" })).resolves.toBeUndefined();
+			// No spool store is bound here either, so it says the record is LOST — never that it was kept (#1084).
+			await expect(logEvent(env, { source: "x", event: "y" })).resolves.toBe("lost");
 			expect(errors.some((a) => String(a[0]).includes("[events] failed to persist"))).toBe(true);
 		} finally {
 			spy.mockRestore();

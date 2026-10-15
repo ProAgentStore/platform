@@ -1167,4 +1167,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.133": "sha256:dc22a33bdc1205cbcbe394516b53c7eb673b2f92210b0f2cc09138109a2b8aad",
 	// #1081: sync_github_installations — bind GitHub App installations added after the last Connect, with a reason for each refusal.
 	"0.1.134": "sha256:9d79398581be82d3d8871446edaf4a305706a734eb93df09a438a862d62697ed",
+	// #1084: telemetry_health (read, admin-only) — per-sink telemetry delivery: pending, dead, lost, last drain.
+	"0.1.135": "sha256:24d8264e1b82fcb7414c7f1e2afc737518803d80c8cbe3a57d7bd30d28473185",
 };

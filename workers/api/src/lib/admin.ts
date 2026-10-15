@@ -3,6 +3,7 @@ import { agentCapabilities } from "./agent-capabilities.js";
 import { relayConnected } from "./runner-client.js";
 import { registryTools } from "./tool-registry.js";
 import { sqlTime } from "./sql-time.js";
+import { spoolTelemetry, type TelemetryWrite } from "./telemetry-spool.js";
 import { CHARGED_SQL } from "./usage-payer.js";
 
 // toolName → { connector, scope } for connector-provided registry tools (built once).
@@ -519,32 +520,42 @@ export async function getUserDetail(env: Env, id: string): Promise<AdminUserDeta
 /**
  * Admin-action audit log (issue #28). Every privileged mutation in a /v1/admin/*
  * handler MUST call this after it succeeds, so there's a durable record of who did
- * what to whom. Best-effort: a logging failure never breaks the action (mirrors
- * lib/error-log.ts / recordUsage). Read back via GET /v1/admin/audit.
+ * what to whom. A logging failure never breaks the action (mirrors lib/error-log.ts /
+ * recordUsage). Read back via GET /v1/admin/audit.
+ *
+ * Not swallowed any more (#1084): a row D1 refuses is spooled to KV under the id it was minted with
+ * and replayed by the cron, and the result says which happened — `persisted`, `queued`, or `lost`
+ * (counted, and readable in MCP `telemetry_health`).
  */
 export async function recordAdminAction(
-	env: Env,
+	env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_KV">>,
 	actor: SessionPayload,
 	action: string,
 	target?: { type?: string; id?: string },
 	detail?: unknown,
-): Promise<void> {
+): Promise<TelemetryWrite> {
+	const id = crypto.randomUUID();
+	let row: Record<string, unknown> | null = null;
 	try {
+		row = {
+			created_at: sqlTime(),
+			actor_user_id: actor.uid,
+			action,
+			target_type: target?.type ?? null,
+			target_id: target?.id ?? null,
+			detail: detail === undefined ? null : JSON.stringify(detail),
+		};
 		await env.DB.prepare(
-			`INSERT INTO admin_audit_log (id, actor_user_id, action, target_type, target_id, detail)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+			`INSERT INTO admin_audit_log (id, actor_user_id, action, target_type, target_id, detail, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
 		)
-			.bind(
-				crypto.randomUUID(),
-				actor.uid,
-				action,
-				target?.type ?? null,
-				target?.id ?? null,
-				detail === undefined ? null : JSON.stringify(detail),
-			)
+			.bind(id, row.actor_user_id, action, row.target_type, row.target_id, row.detail, row.created_at)
 			.run();
-	} catch {
-		// swallow — auditing must never break the underlying admin action
+		return "persisted";
+	} catch (err) {
+		// Auditing must never break the underlying admin action — but it must not vanish either.
+		console.error("[admin-audit] failed to persist:", err instanceof Error ? err.message : String(err));
+		return row ? spoolTelemetry(env, "admin_audit_log", id, row) : "lost";
 	}
 }
 

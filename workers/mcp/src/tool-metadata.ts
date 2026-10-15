@@ -187,6 +187,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_connection_deliveries: "read",
 	list_connections: "read",
 	error_summary: "read",
+	telemetry_health: "read",
 	preview_instance_run_continue: "read",
 	my_agent: "read",
 	get_agent_capabilities: "read",

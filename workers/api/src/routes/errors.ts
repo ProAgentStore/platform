@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { ERROR_COLUMNS, ERROR_RECENCY, deriveClientLevel, listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
 import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
+import { telemetryHealth } from "../lib/telemetry-spool.js";
 import type { Env } from "../types.js";
 
 export const errorRoutes = new Hono<{ Bindings: Env }>();
@@ -25,6 +26,14 @@ export const errorRoutes = new Hono<{ Bindings: Env }>();
  * `rateLimitStrict` in `index.ts`, which buckets an unauthenticated caller by
  * `CF-Connecting-IP` at 10/min, by the 2000-character message cap in `logError`, by the
  * write-side repeat collapse, and by the 30-day retention sweep.
+ *
+ * ## The answer says whether it was KEPT (#1084)
+ *
+ * It answered `{ ok: true }` whatever `logError` did, so a report the database refused was
+ * acknowledged as recorded. Now: 200 `durable: true` when the row is in the log; 202
+ * `durable: false, queued: true` when the database refused it and it is spooled for the cron to
+ * replay (accepted, not yet stored); 503 `durable: false` when it could not be kept anywhere — lost,
+ * and counted in MCP `telemetry_health`.
  */
 errorRoutes.post("/client", async (c) => {
 	// Optional session: a valid token attributes the row, an absent or expired one still logs.
@@ -35,7 +44,7 @@ errorRoutes.post("/client", async (c) => {
 	const rawSource = typeof body.source === "string" ? body.source : "app";
 	const source = `client:${rawSource}`.slice(0, 64);
 	const status = typeof body.status === "number" ? body.status : undefined;
-	await logError(c.env, {
+	const written = await logError(c.env, {
 		source,
 		userId: session?.uid ?? null,
 		status,
@@ -58,7 +67,27 @@ errorRoutes.post("/client", async (c) => {
 		message,
 		context: body.context && typeof body.context === "object" ? (body.context as Record<string, unknown>) : undefined,
 	});
-	return c.json({ ok: true });
+	if (written === "persisted") return c.json({ ok: true, durable: true });
+	if (written === "queued") return c.json({ ok: true, durable: false, queued: true }, 202);
+	return c.json({ ok: false, durable: false, error: "the report could not be stored" }, 503);
+});
+
+/**
+ * GET /v1/errors/telemetry-health — whether telemetry is reaching its stores (#1084): per sink
+ * (`error_log`, `agent_events`, `admin_audit_log`, `mcp_audit`) what is spooled and waiting, what
+ * replay gave up on, what was lost outright, and when the cron last drained. Platform-wide, so ADMIN
+ * only (the same role `?scope=all` requires). Outside `/v1/admin/*` so the MCP Worker can reach it
+ * from behind the Access perimeter; the role check is the gate. 503 when the spool cannot be read —
+ * an unreadable spool is never reported as a healthy one.
+ */
+errorRoutes.get("/telemetry-health", async (c) => {
+	const session = await requireUser(c);
+	if (!session.roles.includes("admin")) return c.json({ error: "Admin only." }, 403);
+	try {
+		return c.json(await telemetryHealth(c.env));
+	} catch (e) {
+		return c.json({ error: `telemetry health could not be read: ${e instanceof Error ? e.message : String(e)}` }, 503);
+	}
 });
 
 /**

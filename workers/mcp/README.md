@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**326 tool registrations.** 299 are always registered; 27 are gated to the console
+**327 tool registrations.** 300 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -602,6 +602,7 @@ immediately instead of a whole transcript.
 | `agent_trace` | The primary debug tool — time-ordered timeline of chat turns, apply steps, tool calls, failures | — | | |
 | `list_errors` | Persisted platform failures (`scope: "all"` is admin-only) | — | | |
 | `error_summary` | The same failures GROUPED by signature — what is recurring, and for how long. The write-side collapse bucket is one hour, so a warning firing for days is ~24 rows a day in the flat feed | — | | |
+| `telemetry_health` | Whether platform telemetry is reaching its stores: per sink (`error_log`, `agent_events`, `admin_audit_log`, `mcp_audit`) what the primary store refused and is spooled for replay (`pending`), what replay gave up on (`dead`), what was lost outright in the last 30 days, and the per-minute drain's last receipt. `complete` only when all are zero. Admin only (#1084). |
 | `list_feedback` | What the owner said went wrong, anchored to the turn — pair the `trace_id` with `agent_trace` | — | | |
 | `resolve_feedback` | Triage one row: status + the `issue_url` it became | write | yes | |
 | `record_instance_feedback` | File what the owner said went wrong, in their words — marked as filed over MCP; the body is never editable (#613) | write | yes | |

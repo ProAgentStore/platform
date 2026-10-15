@@ -599,7 +599,7 @@ export class AgentDO extends DurableObject<Env> {
 							instanceId: state.agentId,
 							traceId: delegation?.traceId ?? null,
 							context: { toolsCarried: round.executedTools, roundsUsed: round.roundsUsed },
-						}),
+						}).then(() => undefined),
 				},
 			);
 

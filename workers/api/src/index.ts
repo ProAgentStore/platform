@@ -43,6 +43,7 @@ import { statsRoutes } from "./routes/stats.js";
 import { controllerAiSettingsRoutes } from "./routes/controller-ai-settings.js";
 import { mcpAuditRoutes } from "./routes/mcp-audit.js";
 import { runAuditLedgerBackfill } from "./lib/mcp-audit-ledger.js";
+import { drainTelemetrySpool } from "./lib/telemetry-spool.js";
 import { sweepExpiredPermissionRequests } from "./lib/instance-permission-resume.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -366,6 +367,12 @@ export default {
 		// idempotent batch per tick; a single KV read per tick once it has finished.
 		if (env.OAUTH_KV) {
 			ctx.waitUntil(runAuditLedgerBackfill(env.OAUTH_KV).catch((err) => logUnhandled(env, err, { path: "scheduled:mcp-audit-ledger", method: "CRON" })));
+		}
+		// Replay telemetry its primary store refused (#1084): spooled error-log, trace and admin-audit
+		// rows back into D1, partial MCP audit index writes back into KV. Bounded per sink per tick;
+		// it never logs through `logError`, so a D1 outage cannot feed itself.
+		if (env.OAUTH_KV) {
+			ctx.waitUntil(drainTelemetrySpool(env).catch((err) => console.error("[telemetry] drain failed:", err instanceof Error ? err.message : String(err))));
 		}
 		// Notify on a finished deploy (#6). A fifth independent failure domain — it reaches an
 		// external API (GitHub), which is the most likely of these to be slow or rate-limited,

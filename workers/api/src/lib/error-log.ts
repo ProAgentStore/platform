@@ -6,6 +6,7 @@ import { boundedJson, clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { logEvent } from "./events.js";
 import { sqlTime } from "./sql-time.js";
+import { spoolTelemetry, type TelemetryWrite } from "./telemetry-spool.js";
 
 /**
  * How severe a logged failure is.
@@ -232,7 +233,9 @@ async function collapseRepeat(
  * storage engine reaches the durable log this way rather than being handed every binding in the
  * environment (#637). `lib/meter-ids.ts` already narrows the same way for the same reason.
  */
-export async function logError(env: Pick<Env, "DB">, e: ErrorLogInput): Promise<void> {
+export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_KV">>, e: ErrorLogInput): Promise<TelemetryWrite> {
+	let row: Record<string, unknown> | null = null;
+	let id = "";
 	try {
 		const level: ErrorLevel = e.level === "warn" ? "warn" : "error";
 		const source = String(e.source).slice(0, 64);
@@ -258,21 +261,17 @@ export async function logError(env: Pick<Env, "DB">, e: ErrorLogInput): Promise<
 		// the failure mode if that assumption is ever wrong is total silence in the one component
 		// whose entire job is to not be silent, and a duplicate row is a trivially better outcome
 		// than no row.
-		if (await collapseRepeat(env, e, level, message, source, context, build).catch(() => false)) return;
+		if (await collapseRepeat(env, e, level, message, source, context, build).catch(() => false)) return "persisted";
+		// The id and the time are minted ONCE (#1084): if this insert fails, the same row — same id,
+		// same moment — is what the spool replays, so a replay can never become a second fact.
+		id = crypto.randomUUID();
+		row = { created_at: sqlTime(), user_id: e.userId ?? null, source, status: typeof e.status === "number" ? e.status : null, message, context, level, build };
 		await env.DB.prepare(
-			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
+			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
 		)
-			.bind(
-				crypto.randomUUID(),
-				e.userId ?? null,
-				source,
-				typeof e.status === "number" ? e.status : null,
-				message,
-				context,
-				level,
-				build,
-			)
+			.bind(id, row.user_id, source, row.status, message, context, level, build, row.created_at)
 			.run();
+		row = null;
 		// Mirror into the unified trace so failures appear inline in agent_trace next to
 		// the steps that led to them — mapping the well-known context keys onto the
 		// trace's instance/run scoping. Best-effort; a bridge failure must not surface.
@@ -305,9 +304,12 @@ export async function logError(env: Pick<Env, "DB">, e: ErrorLogInput): Promise<
 				.run()
 				.catch(() => undefined);
 		}
+		return "persisted";
 	} catch (err) {
-		// Last resort — the logger itself must not throw.
+		// The logger itself must not throw, and must not call itself (#1084): the row D1 refused goes
+		// to the KV spool, which the cron replays; only a row the spool refuses too is lost — and counted.
 		console.error("[error-log] failed to persist:", err instanceof Error ? err.message : String(err));
+		return row ? spoolTelemetry(env, "error_log", id, row) : "lost";
 	}
 }
 

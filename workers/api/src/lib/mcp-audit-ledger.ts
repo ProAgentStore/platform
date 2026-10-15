@@ -26,6 +26,8 @@
  * `coverage.complete: false`.
  */
 
+import { telemetryDelivery } from "./telemetry-spool.js";
+
 export const AUDIT_TTL_SECONDS = 90 * 86_400;
 export const AUDIT_INDEX_PREFIX = "audit_idx:";
 export const AUDIT_GLOBAL_PREFIX = "audit_all:";
@@ -64,12 +66,32 @@ export function auditKeyMetadata(event: Record<string, unknown>): AuditKeyMetada
 }
 
 export interface AuditCoverage {
-	/** True only once every legacy event still within retention has been indexed. */
+	/**
+	 * True only when BOTH halves are: every legacy event within retention has been indexed
+	 * (`migrationComplete`) and every recorded event reached both indexes (`delivery.complete`, #1084).
+	 */
 	complete: boolean;
+	/** The legacy backfill alone — finished and nothing unplaceable. Says nothing about delivery. */
+	migrationComplete: boolean;
+	delivery: AuditDelivery;
 	retentionDays: number;
 	legacyIndex: "complete" | "in_progress" | "not_started";
 	detail: string;
 }
+/**
+ * Whether every event the MCP Worker ACCEPTED reached both indexes (#1084) — separate from whether
+ * the legacy MIGRATION finished, which is all `legacyIndex` says. `pending` events landed in one index
+ * and are spooled for the API cron to finish; `dead` exhausted their replays; `lost` (last 30 days)
+ * could not even be spooled. `pendingCapped` means there are at least that many.
+ */
+export interface AuditDelivery {
+	complete: boolean;
+	pending: number;
+	pendingCapped: boolean;
+	dead: number;
+	lost: number;
+}
+
 
 export interface AuditMigrationState {
 	status: "running" | "complete";
@@ -116,7 +138,7 @@ export function needsRecount(state: Pick<AuditMigrationState, "unplaceable" | "p
 	return state.passUnplaceable === undefined && (state.unplaceable ?? 0) > 0;
 }
 
-export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage> {
+async function readMigrationCoverage(kv: KVNamespace): Promise<Omit<AuditCoverage, "migrationComplete" | "delivery">> {
 	const state = await readMigrationState(kv);
 	const retentionDays = AUDIT_TTL_SECONDS / 86_400;
 	if (state && needsRecount(state)) {
@@ -151,6 +173,32 @@ export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage>
 			(state ? ` (pass ${state.pass + 1}, ${state.scanned} legacy keys scanned so far)` : "") +
 			". The newest events are complete; older pages may be missing legacy events until indexing finishes.",
 	};
+}
+
+/** The MCP audit's delivery half, from the shared telemetry spool (`telemetry-spool.ts`). */
+async function readAuditDelivery(kv: KVNamespace): Promise<AuditDelivery> {
+	const { sinks } = await telemetryDelivery({ OAUTH_KV: kv }, Date.now(), ["mcp_audit"]);
+	const { pending, pendingCapped, dead, lost } = sinks[0];
+	return { complete: pending === 0 && dead === 0 && lost === 0, pending, pendingCapped, dead, lost };
+}
+
+/**
+ * Coverage of the ledger a reader is paging (#1016, #1084): the migration's half and the delivery
+ * half, reported apart, `complete` only when both are. A storage failure throws — partial coverage
+ * is never reported as whole because the spool could not be read.
+ */
+export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage> {
+	const [migration, delivery] = await Promise.all([readMigrationCoverage(kv), readAuditDelivery(kv)]);
+	const complete = migration.complete && delivery.complete;
+	const gaps = [
+		delivery.pending ? `${delivery.pending}${delivery.pendingCapped ? "+" : ""} recent event${delivery.pending === 1 ? " is" : "s are"} in only one index and waiting to be re-written to the other` : "",
+		delivery.dead ? `${delivery.dead} could not be re-written after repeated attempts` : "",
+		delivery.lost ? `${delivery.lost} audit write${delivery.lost === 1 ? "" : "s"} in the last 30 days could not be recorded at all` : "",
+	].filter(Boolean);
+	const detail = gaps.length
+		? `${migration.complete ? "Legacy indexing finished. " : `${migration.detail} `}Delivery is incomplete: ${gaps.join("; ")}.`
+		: migration.detail;
+	return { ...migration, complete, migrationComplete: migration.complete, delivery, detail };
 }
 
 export interface AuditPage<E = Record<string, unknown>> {

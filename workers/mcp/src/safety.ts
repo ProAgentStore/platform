@@ -2,6 +2,11 @@ import { jsonText, text, type McpEnv, type TextResult } from "./http.js";
 import { clipMarked } from "./clip-marked.js";
 import {
 	AUDIT_INDEX_PREFIX,
+	AUDIT_LOSS_PREFIX,
+	AUDIT_SPOOL_FIRST_DELAY_MS,
+	AUDIT_SPOOL_MAX,
+	AUDIT_SPOOL_PREFIX,
+	AUDIT_SPOOL_TTL_SECONDS,
 	AUDIT_TTL_SECONDS,
 	type AuditPage,
 	auditGlobalKey,
@@ -174,30 +179,41 @@ function summarize(value: unknown, depth = 0): unknown {
 }
 
 /**
+ * What an audit write did (#1084): `persisted` (both keys landed), `queued` (one landed and the other
+ * is spooled for the API cron to finish), `lost` (nothing durable — logged and counted where KV still
+ * answers), or `skipped` (no ledger bound, or an anonymous call with no subject to file it under).
+ */
+export type AuditWrite = "persisted" | "queued" | "lost" | "skipped";
+
+/**
  * Record a tool call in the MCP audit log. BEST-EFFORT: it never throws (#885).
  *
  * Every write tool audits AFTER its write has landed, so an audit that threw turned a completed
  * action into a bare "tool call failed" — the caller then told its user a pin move had failed while
  * the pin was saved. The action's own result is what the caller must see; a lost audit entry is
- * logged, not surfaced in its place.
+ * logged and COUNTED (#1084), not surfaced in its place.
  */
 export async function audit(
 	ctx: SafetyContext,
 	event: Record<string, unknown>,
-): Promise<void> {
+): Promise<AuditWrite> {
 	try {
-		await writeAudit(ctx, event);
+		return await writeAudit(ctx, event);
 	} catch (e) {
 		console.warn(JSON.stringify({ event: "mcp.audit_failed", tool: event.tool ?? null, error: e instanceof Error ? e.message : String(e) }));
+		if (ctx.env.OAUTH_KV) await countAuditLoss(ctx.env.OAUTH_KV, Date.now());
+		return "lost";
 	}
 }
 
-async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): Promise<void> {
+async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): Promise<AuditWrite> {
 	const kv = ctx.env.OAUTH_KV;
-	if (!kv) return;
+	if (!kv) return "skipped";
 	const subject = await subjectFor(ctx);
-	if (!subject) return;
+	if (!subject) return "skipped";
 	const ms = Date.now();
+	// Minted ONCE (#1084): both keys, and any replay of a missing one, carry this id — so a
+	// reconciled index holds the same event, never a second one.
 	const id = crypto.randomUUID();
 	// Summarise BEFORE redacting: `summarize` decides what is recorded at all, `redact`
 	// masks what survives. The other order would run the value-shape regex over prose
@@ -216,11 +232,43 @@ async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): P
 	});
 	// Two keys, one value: the owner's time-ordered index and the cross-owner one the admin
 	// sweep reads (#1016). See `audit-ledger.ts` for why the time is inverted.
-	const options = { expirationTtl: AUDIT_TTL_SECONDS, metadata: auditKeyMetadata(recorded) };
-	await Promise.all([
-		kv.put(auditIndexKey(subject, ms, id), value, options),
-		kv.put(auditGlobalKey(subject, ms, id), value, options),
-	]);
+	const metadata = auditKeyMetadata(recorded);
+	const keys = [auditIndexKey(subject, ms, id), auditGlobalKey(subject, ms, id)];
+	const settled = await Promise.allSettled(keys.map((k) => kv.put(k, value, { expirationTtl: AUDIT_TTL_SECONDS, metadata })));
+	const missing = keys.filter((_, i) => settled[i].status === "rejected");
+	if (missing.length === 0) return "persisted";
+	if (missing.length === keys.length) throw (settled[0] as PromiseRejectedResult).reason;
+	// One index has the event and the other does not. Record what is missing for the API cron to
+	// re-put — same key, same value, same absolute expiry — rather than leaving the indexes to disagree.
+	try {
+		const pending = await kv.list({ prefix: AUDIT_SPOOL_PREFIX, limit: AUDIT_SPOOL_MAX });
+		if (pending.keys.length >= AUDIT_SPOOL_MAX) throw new Error("spool_full");
+		const record = {
+			sink: "mcp_audit",
+			id,
+			payload: { keys: missing, value, expiration: Math.floor(ms / 1000) + AUDIT_TTL_SECONDS, metadata },
+			attempts: 0,
+			nextAt: ms + AUDIT_SPOOL_FIRST_DELAY_MS,
+			createdAt: ms,
+		};
+		await kv.put(`${AUDIT_SPOOL_PREFIX}${id}`, JSON.stringify(record), { expirationTtl: AUDIT_SPOOL_TTL_SECONDS, metadata: { nextAt: record.nextAt, createdAt: ms } });
+		return "queued";
+	} catch (e) {
+		console.warn(JSON.stringify({ event: "mcp.audit_partial_lost", tool: event.tool ?? null, missing: missing.length, error: e instanceof Error ? e.message : String(e) }));
+		await countAuditLoss(kv, ms);
+		return "lost";
+	}
+}
+
+/** One more lost audit write today. Best-effort: when KV itself is down this is a floor, not the truth. */
+async function countAuditLoss(kv: KVNamespace, ms: number): Promise<void> {
+	try {
+		const key = `${AUDIT_LOSS_PREFIX}${new Date(ms).toISOString().split("T")[0]}`;
+		const n = Number((await kv.get(key)) ?? 0) || 0;
+		await kv.put(key, String(n + 1), { expirationTtl: 30 * 86_400 });
+	} catch {
+		// Nothing left to write to; the console line is the record.
+	}
 }
 
 /**

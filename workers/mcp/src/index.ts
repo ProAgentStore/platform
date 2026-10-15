@@ -351,7 +351,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"mcp_audit_log",
-			"Read this account's MCP tool audit events (write, runtime, dry-run, denied, destructive), newest first. Returns {events, nextCursor, coverage}: pass nextCursor back as cursor for the next-older page; receipt finds the events for one run/queue/session/event id; request_id + session_id find what ONE MCP request did (every event records the JSON-RPC id and mcp-session-id of the call that wrote it), which is how to settle a write whose reply was lost; nextCursor null is the end of the 90-day ledger. coverage.complete false means older legacy events are still being indexed. An event is a receipt for the TOOL CALL, not for the work it started.",
+			"Read this account's MCP tool audit events (write, runtime, dry-run, denied, destructive), newest first. Returns {events, nextCursor, coverage}: pass nextCursor back as cursor for the next-older page; receipt finds the events for one run/queue/session/event id; request_id + session_id find what ONE MCP request did (every event records the JSON-RPC id and mcp-session-id of the call that wrote it), which is how to settle a write whose reply was lost; nextCursor null is the end of the 90-day ledger. coverage.complete false means older legacy events are still being indexed (coverage.migrationComplete false) or recent events have not yet reached both indexes (coverage.delivery: pending, dead, lost). An event is a receipt for the TOOL CALL, not for the work it started.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				limit: z.coerce.number().int().min(1).max(200).optional(),

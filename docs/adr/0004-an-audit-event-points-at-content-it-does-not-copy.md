@@ -105,6 +105,14 @@ What this rule *does* require, and what makes it a constraint rather than a shru
 No constant changes in the commit that carries this ADR. A5 is a decision to state the mismatch and
 bound what may be concluded from it, not to alter a TTL.
 
+**The telemetry spool (#1084) keeps both rules.** A record its primary store refused waits in KV
+(`workers/api/src/lib/telemetry-spool.ts`) as the exact row or ledger value that sink would have
+written. That row has already been summarised, redacted and clipped, so the spool holds nothing the
+store would not. Retention is unchanged: a replayed error/trace/admin row is dated when it happened
+and ages out on its table's own schedule, and a replayed MCP index key keeps its original absolute
+90-day expiry. The spool's own bounds are pending ≤ 7 days, dead letters and loss counts 30 days,
+and 1000 per sink.
+
 ## Consequences
 
 - **Reconstructing a call requires one join.** That is the price of not keeping a 90-day archive of
