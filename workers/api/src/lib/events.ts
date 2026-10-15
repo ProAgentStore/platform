@@ -9,6 +9,7 @@
  * path it observes — and every field is length-bounded.
  */
 import { boundedJson, clipMarked } from "./clip-marked.js";
+import { type CursorQuery, keysetBefore, keysetPage } from "./history-page.js";
 import type { Env } from "../types.js";
 import { sqlTime } from "./sql-time.js";
 import { spoolTelemetry, type TelemetryWrite } from "./telemetry-spool.js";
@@ -203,8 +204,36 @@ export async function listEvents(
 	opts: { userId: string; instanceId: string; traceId?: string; source?: string; level?: EventLevel; limit?: number },
 ): Promise<EventRow[]> {
 	const limit = Math.max(1, Math.min(opts.limit ?? 200, 1000));
-	const where = ["user_id = ?1", "instance_id = ?2"];
-	const binds: unknown[] = [opts.userId, opts.instanceId];
+	const { where, binds } = eventFilters(opts);
+	// Take the most recent `limit` by ts DESC, then flip to chronological for display.
+	const sql = `SELECT ${EVENT_COLUMNS} FROM agent_events WHERE ${where.join(" AND ")} ORDER BY ts DESC LIMIT ${limit}`;
+	const res = await env.DB.prepare(sql).bind(...binds).all<EventRow>();
+	return (res.results ?? []).reverse();
+}
+
+const EVENT_COLUMNS = "id, ts, created_at, user_id, instance_id, trace_id, source, level, event, message, context";
+
+interface EventFilter {
+	/** The owner. Omitted only for an admin's cross-owner read, which still names one instance. */
+	userId?: string;
+	instanceId: string;
+	traceId?: string;
+	source?: string;
+	level?: EventLevel;
+	/** Epoch ms bounds on `ts`, inclusive. */
+	since?: number;
+	until?: number;
+}
+
+function eventFilters(opts: EventFilter): { where: string[]; binds: unknown[] } {
+	const where: string[] = [];
+	const binds: unknown[] = [];
+	if (opts.userId !== undefined) {
+		binds.push(opts.userId);
+		where.push(`user_id = ?${binds.length}`);
+	}
+	binds.push(opts.instanceId);
+	where.push(`instance_id = ?${binds.length}`);
 	if (opts.traceId) {
 		binds.push(opts.traceId);
 		where.push(`trace_id = ?${binds.length}`);
@@ -224,8 +253,31 @@ export async function listEvents(
 		});
 		where.push(`level IN (${placeholders.join(", ")})`);
 	}
-	// Take the most recent `limit` by ts DESC, then flip to chronological for display.
-	const sql = `SELECT id, ts, created_at, user_id, instance_id, trace_id, source, level, event, message, context FROM agent_events WHERE ${where.join(" AND ")} ORDER BY ts DESC LIMIT ${limit}`;
+	if (opts.since !== undefined) {
+		binds.push(opts.since);
+		where.push(`ts >= ?${binds.length}`);
+	}
+	if (opts.until !== undefined) {
+		binds.push(opts.until);
+		where.push(`ts <= ?${binds.length}`);
+	}
+	return { where, binds };
+}
+
+/**
+ * The whole RETAINED trace, walked newest-first by a keyset cursor on `(ts, id)` (#1090).
+ * `listEvents` above is the legacy "newest N, max 1000" window and is kept for its callers; this is
+ * how a caller reaches past it without gaps or repeats while the instance keeps writing.
+ */
+export async function listEventsPage(
+	env: Env,
+	opts: EventFilter & { cursor: CursorQuery; limit?: number },
+): Promise<{ events: EventRow[]; hasMore: boolean; nextCursor: string | null }> {
+	const limit = Math.max(1, Math.min(opts.limit ?? 200, 500));
+	const { where, binds } = eventFilters(opts);
+	keysetBefore(opts.cursor, "ts", where, binds);
+	const sql = `SELECT ${EVENT_COLUMNS} FROM agent_events WHERE ${where.join(" AND ")} ORDER BY ts DESC, id DESC LIMIT ${limit + 1}`;
 	const res = await env.DB.prepare(sql).bind(...binds).all<EventRow>();
-	return (res.results ?? []).reverse();
+	const page = keysetPage(res.results ?? [], limit, (row) => row.ts);
+	return { events: page.rows, hasMore: page.hasMore, nextCursor: page.nextCursor };
 }

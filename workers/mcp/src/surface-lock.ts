@@ -1171,4 +1171,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.135": "sha256:24d8264e1b82fcb7414c7f1e2afc737518803d80c8cbe3a57d7bd30d28473185",
 	// #1085: list_errors gains instance_id + run_id; error_summary gains run_id — exact reads on the verified columns.
 	"0.1.136": "sha256:19765442c730799a44f2d8754de215f8b18fcda0cae3ffc4ec7d0e190d08ae0b",
+	// #1090: list_errors gains level/build/since/until + a keyset cursor walk; agent_trace a cursor walk past its 1000-event window with since/until and admin scope=all; error_summary scope/build/offset; admin_mcp_audit and admin_action_audit (read, admin-only).
+	"0.1.137": "sha256:68d44cb4290a8e642a07093e300427ee45d625c84144712027b9ddbeee57f759",
 };

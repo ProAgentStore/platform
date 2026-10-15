@@ -47,6 +47,7 @@ import {
 	type McpScope,
 } from "./safety.js";
 import { suspensionBlock } from "./suspension.js";
+import { fitFetchedPage } from "./wire-budget.js";
 
 type Props = {
 	authToken?: string;
@@ -367,15 +368,13 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const denied = await requirePermission(this.safety(token), "read", "mcp_audit_log", { limit, cursor, tool, receipt });
 				if (denied) return denied;
 				try {
-					const page = await listAuditEvents(this.safety(token), {
+					// Fitted to the wire by asking the ledger for fewer events from the same cursor (#1090).
+					const page = await fitFetchedPage({
 						limit: limit || 50,
-						cursor,
-						tool,
-						receipt,
-						requestId: request_id,
-						mcpSessionId: session_id,
+						key: "events",
+						fetch: async (n) => (await listAuditEvents(this.safety(token), { limit: n, cursor, tool, receipt, requestId: request_id, mcpSessionId: session_id })) ?? { unavailable: true },
 					});
-					return page ? jsonText(page) : text("Error: the MCP audit ledger is unavailable on this connection (no audit store or no authenticated subject).");
+					return page.startsWith('{"unavailable"') ? text("Error: the MCP audit ledger is unavailable on this connection (no audit store or no authenticated subject).") : text(page);
 				} catch (e) {
 					// Never a short page passed off as the history: the read failed, and the caller is told so.
 					return text(`Error: reading the MCP audit ledger failed — no events returned. ${e instanceof Error ? e.message : String(e)}`);

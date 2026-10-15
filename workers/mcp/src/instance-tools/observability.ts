@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
-import { fitPage } from "../wire-budget.js";
+import { fitFetchedPage, fitPage } from "../wire-budget.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -139,36 +139,57 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 
 	server.tool(
 		"list_errors",
-		"Read the platform error log — persisted failures (key-proxy, sign-in, apply/coding, and workflow crashes) that would otherwise be invisible. Yours by default; scope \"all\" returns everyone's (admin only). Filter by source and limit.",
+		"Read the platform error log — persisted failures (key-proxy, sign-in, apply/coding, and workflow crashes) that would otherwise be invisible. Yours by default; scope \"all\" returns everyone's (admin only). Filter by source, level, instance, run, build and time. To read the WHOLE retained log (30 days by last occurrence) without gaps or repeats while it keeps changing, pass cursor \"newest\" and then each reply's `nextCursor` until it is null: that walk is newest-first by when a row was FIRST written, so a repeat folding into a row cannot move it past your cursor, and its reply carries `coverage` (retention, and for admins the replay backlog). Without `cursor` this is the original recency-ordered page walked by `offset`. Every reply fits the wire budget: a page is shortened to fit, never cut mid-row, and the continuation always starts after the last row delivered.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			scope: z.enum(["me", "all"]).optional().describe('"all" = every user\'s errors (admin only); default your own.'),
 			source: z.string().optional().describe("Filter by source, e.g. keys-proxy | auth | job-apply | coding."),
+			level: z.enum(["error", "warn"]).optional().describe("`error` is a bug; `warn` is recorded but not counted as one. Exact band; unfiltered returns both."),
 			limit: z.coerce.number().int().min(1).max(500).optional(),
-			offset: z.coerce.number().int().min(0).optional().describe("Skip this many of the newest rows — the previous reply's `nextOffset` while `hasMore` is true."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many of the newest rows — the previous reply's `nextOffset` while `hasMore` is true. Ignored when `cursor` is given."),
+			cursor: z.string().min(1).max(2048).optional().describe('"newest" to start a stable walk of the whole retained log, then the previous reply\'s `nextCursor`. Opaque — copy it exactly.'),
 			instance_id: z.string().optional().describe("Only this instance's rows — exact, on the verified `instance_id` column. Rows written before #1085 carry no instance; find those with error_summary's instance_id, which also reads their samples."),
 			run_id: z.string().optional().describe("Only this run's rows (the run / trace id that agent_trace's trace_id takes). Exact; client-reported rows never carry one."),
+			build: z.string().max(64).optional().describe("Only rows stamped with this deployed build (the `build` field, a commit prefix). Rows from before build stamping carry none."),
+			since: z.string().max(40).optional().describe("Only rows FIRST written at or after this time (ISO 8601 or epoch ms)."),
+			until: z.string().max(40).optional().describe("Only rows first written at or before this time (ISO 8601 or epoch ms)."),
 		},
-		async ({ token, scope, source, limit, offset, instance_id, run_id }) => {
+		async ({ token, scope, source, level, limit, offset, cursor, instance_id, run_id, build, since, until }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
 			if (scope === "all") qs.set("scope", "all");
 			if (source) qs.set("source", source);
+			if (level) qs.set("level", level);
 			if (instance_id) qs.set("instance_id", instance_id);
 			if (run_id) qs.set("run_id", run_id);
-			if (limit) qs.set("limit", String(limit));
-			if (offset) qs.set("offset", String(offset));
-			const data = await authedCall(`/v1/errors${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
-			return jsonText(data);
+			if (build) qs.set("build", build);
+			if (since) qs.set("since", since);
+			if (until) qs.set("until", until);
+			if (cursor) qs.set("cursor", cursor);
+			else if (offset) qs.set("offset", String(offset));
+			return text(
+				await fitFetchedPage({
+					limit: limit ?? 100,
+					key: "errors",
+					fetch: (n) => {
+						// The API's default page is 100; a caller who set nothing sends nothing until a shrink.
+						if (limit !== undefined || n !== 100) qs.set("limit", String(n));
+						return authedCall(`/v1/errors${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
+					},
+				}),
+			);
 		},
 	);
 
 	server.tool(
 		"error_summary",
-		"What is RECURRING in the platform error log, rather than what happened last — ask this before list_errors when the question is \"what is wrong with my account\". The write side folds an identical repeat into a counter, but only within a ONE-HOUR bucket, so a warning firing for three days is ~72 separate rows in the flat feed and reads as 72 fresh incidents. This groups them by normalized signature and returns one entry each with `count` (OCCURRENCES, not rows — a row standing for 60 collapsed repeats counts 60), `rows`, `firstSeen` and `lastSeen`. The span between those two is the thing worth acting on: a signature seen 200 times in ten minutes is an incident, and one seen 200 times over four days is something nobody is looking at, and both show the same big number. Always your own errors; the cross-account grouped view is an admin route.",
+		"What is RECURRING in the platform error log, rather than what happened last — ask this before list_errors when the question is \"what is wrong with my account\". The write side folds an identical repeat into a counter, but only within a ONE-HOUR bucket, so a warning firing for three days is ~72 separate rows in the flat feed and reads as 72 fresh incidents. This groups them by normalized signature and returns one entry each with `count` (OCCURRENCES, not rows — a row standing for 60 collapsed repeats counts 60), `rows`, `firstSeen` and `lastSeen`. The span between those two is the thing worth acting on: a signature seen 200 times in ten minutes is an incident, and one seen 200 times over four days is something nobody is looking at, and both show the same big number. Your own errors by default; an admin may pass scope \"all\" to group every account's. When `truncated` is true the grouping is a FLOOR: `window.oldestRead` is how far back the rows read actually reach, and nothing older than it in `days` was counted. Signatures are paged to fit the wire (`page`, then `offset: page.nextOffset`); each page re-reads and re-groups the window, so on a busy log counts can move between pages.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			scope: z.enum(["me", "all"]).optional().describe('"all" = group every account\'s errors (admin only); default your own.'),
+			build: z.string().max(64).optional().describe("Only rows stamped with this deployed build."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many signatures — the previous reply's `page.nextOffset`."),
 			days: z.coerce.number().int().min(1).max(30).optional().describe("Window to group over. Default 7."),
 			source: z.string().optional().describe("Filter by source, e.g. commit-close-watch | coding | keys-proxy."),
 			level: z.enum(["error", "warn"]).optional().describe("`error` is a bug; `warn` is recorded but not counted as one. Unfiltered returns both."),
@@ -176,10 +197,12 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			run_id: z.string().optional().describe("One run's failures (the id agent_trace's trace_id takes). Exact; rows from before #1085 carry no run."),
 			limit: z.coerce.number().int().min(1).max(5000).optional().describe("Rows READ, not signatures returned — the width of the window being grouped. Default 2000."),
 		},
-		async ({ token, days, source, level, limit, instance_id, run_id }) => {
+		async ({ token, scope, build, offset, days, source, level, limit, instance_id, run_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
+			if (scope === "all") qs.set("scope", "all");
+			if (build) qs.set("build", build);
 			if (days) qs.set("days", String(days));
 			if (source) qs.set("source", source);
 			if (level) qs.set("level", level);
@@ -187,7 +210,10 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			if (run_id) qs.set("run_id", run_id);
 			if (limit) qs.set("limit", String(limit));
 			const data = await authedCall(`/v1/errors/summary${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
-			return jsonText(data);
+			const rec = data as { signatures?: unknown[] };
+			if (!Array.isArray(rec.signatures)) return jsonText(data);
+			const { signatures, ...head } = rec;
+			return text(fitPage({ rows: signatures, offset, build: (rows, page) => ({ ...head, page, signatures: rows }) }).text);
 		},
 	);
 
@@ -206,8 +232,78 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 	);
 
 	server.tool(
+		"admin_mcp_audit",
+		"ADMIN only: every account's MCP tool-call audit events, newest first (the cross-owner view of mcp_audit_log), or one account's with `user`. Same filters and continuation as mcp_audit_log: pass `nextCursor` back as `cursor` until it is null, which is the end of the 90-day ledger. `coverage` says whether legacy events are still being indexed and whether recent events have yet to reach both indexes (`coverage.delivery`), so an empty page is never proof nothing happened. An event is a receipt for the TOOL CALL, not for the work it started. Each reply fits the wire budget by asking the ledger for fewer events, never by dropping one. Anyone else is refused.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			user: z.string().min(1).max(200).optional().describe("Only this account's events (its user id). Omit for every account."),
+			tool: z.string().min(1).max(100).optional().describe("Only events for this exact tool name. A filtered page may hold fewer than limit events; keep following nextCursor."),
+			receipt: z.string().min(1).max(200).optional().describe("Only events that ARE this id or carry it as a whole value (a runId, queueEntryId, session_id, task id). Exact; applied per page."),
+			cursor: z.string().min(1).max(2048).optional().describe("nextCursor from the previous page. Omit for the newest page."),
+			limit: z.coerce.number().int().min(1).max(200).optional(),
+		},
+		async ({ token, user, tool, receipt, cursor, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (user) qs.set("user", user);
+			if (tool) qs.set("tool", tool);
+			if (receipt) qs.set("receipt", receipt);
+			if (cursor) qs.set("cursor", cursor);
+			return text(
+				await fitFetchedPage({
+					limit: limit ?? 100,
+					key: "events",
+					fetch: (n) => {
+						qs.set("limit", String(n));
+						return authedCall(`/v1/audit/mcp?${qs.toString()}`, sessionToken, {}, env);
+					},
+				}),
+			);
+		},
+	);
+
+	server.tool(
+		"admin_action_audit",
+		"ADMIN only: the admin-action audit log — every operator change (suspensions, role changes, unpublishes, platform settings) with who did it, what it targeted and its before/after `detail` (redacted on read). Newest first; pass cursor \"newest\" or omit it for the first page, then each reply's `nextCursor` until it is null to walk the whole log without gaps or repeats while it grows. This log has no automatic expiry. Filter by actor, action, target_type, target and time. Each reply fits the wire budget; `coverage.delivery` is the admin-audit replay backlog, so a row still waiting to be written is counted rather than invisible. Anyone else is refused.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			actor: z.string().min(1).max(200).optional().describe("Only actions by this admin (user id)."),
+			action: z.string().min(1).max(100).optional().describe("Only this action, e.g. user.suspend | agent.unpublish."),
+			target_type: z.string().min(1).max(50).optional().describe("Only this kind of target: user | agent | instance | setting | …"),
+			target: z.string().min(1).max(200).optional().describe("Only actions on this target id."),
+			since: z.string().max(40).optional().describe("At or after this time (ISO 8601 or epoch ms)."),
+			until: z.string().max(40).optional().describe("At or before this time (ISO 8601 or epoch ms)."),
+			cursor: z.string().min(1).max(2048).optional().describe('"newest" or the previous reply\'s `nextCursor`. Opaque — copy it exactly.'),
+			limit: z.coerce.number().int().min(1).max(200).optional(),
+		},
+		async ({ token, actor, action, target_type, target, since, until, cursor, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (actor) qs.set("actor", actor);
+			if (action) qs.set("action", action);
+			if (target_type) qs.set("target_type", target_type);
+			if (target) qs.set("target", target);
+			if (since) qs.set("since", since);
+			if (until) qs.set("until", until);
+			qs.set("cursor", cursor ?? "newest");
+			return text(
+				await fitFetchedPage({
+					limit: limit ?? 100,
+					key: "audit",
+					fetch: (n) => {
+						qs.set("limit", String(n));
+						return authedCall(`/v1/audit/admin-actions?${qs.toString()}`, sessionToken, {}, env);
+					},
+				}),
+			);
+		},
+	);
+
+	server.tool(
 		"agent_trace",
-		"Reconstruct the complete, time-ordered timeline of what an agent instance DID — chat turns (chat.in/tool.call/chat.out), apply steps/handoffs/outcomes (apply.*), and failures, interleaved. This is the primary tool for debugging or improving an agent: see exactly what happened, in order, not just errors. Failures sit in two bands: a tool call that FAILED is level=warn (one row per failed tool, carrying the tool name in `context` and its full refusal text), while level=error means the turn or run could not complete at all. Since level is a floor, level=\"warn\" is the read that shows both — use it, not \"error\", when the question is \"what went wrong\". Filter by trace_id (one run/turn), source (chat|apply|coding|voice), or level. `count` always describes the WHOLE window `limit` selected and is never reduced; `events` is a PAGE of it, so read `page.hasMore` and call again with `offset: page.nextOffset` to continue. A busy instance's default 200-event window measured 163,437 bytes, 2.5x a calling host's 64 KiB limit, so one reply cannot carry them all and never could — narrow with trace_id or source when you know what you are looking for.",
+		"Reconstruct the complete, time-ordered timeline of what an agent instance DID — chat turns (chat.in/tool.call/chat.out), apply steps/handoffs/outcomes (apply.*), and failures, interleaved. This is the primary tool for debugging or improving an agent: see exactly what happened, in order, not just errors. Failures sit in two bands: a tool call that FAILED is level=warn (one row per failed tool, carrying the tool name in `context` and its full refusal text), while level=error means the turn or run could not complete at all. Since level is a floor, level=\"warn\" is the read that shows both — use it, not \"error\", when the question is \"what went wrong\". Filter by trace_id (one run/turn), source (chat|apply|coding|voice), or level. `count` always describes the WHOLE window `limit` selected and is never reduced; `events` is a PAGE of it, so read `page.hasMore` and call again with `offset: page.nextOffset` to continue. A busy instance's default 200-event window measured 163,437 bytes, 2.5x a calling host's 64 KiB limit, so one reply cannot carry them all and never could — narrow with trace_id or source when you know what you are looking for. That window stops at the newest 1000 events; to reach the WHOLE retained trace (14 days) pass cursor \"newest\" and then each reply's `nextCursor` until it is null — a newest-first walk keyed on (time, id), so events the agent writes meanwhile never shift it, each reply fits the wire budget, and `coverage` states retention and (for admins) the replay backlog. since/until bound the walk in time; an admin may read an instance they do not own with scope \"all\".",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("The instance (agent) to trace."),
@@ -231,14 +327,35 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			// bump does not flush on its own. Same remedy `workers/mcp/CLAUDE.md` already records
 			// for object-shaped arguments ("models send JSON strings"), applied to the numeric case.
 			offset: z.coerce.number().int().min(0).optional().describe("Skip this many events within the window. Pass `page.nextOffset` from the previous reply; omit for the first page."),
+			cursor: z.string().min(1).max(2048).optional().describe('"newest" to start a walk of the whole retained trace, newest first; then the previous reply\'s `nextCursor`. In this mode `limit` is a page size (max 500) and `offset` is not used.'),
+			since: z.string().max(40).optional().describe("Only events at or after this time (ISO 8601 or epoch ms). Implies the cursor walk."),
+			until: z.string().max(40).optional().describe("Only events at or before this time (ISO 8601 or epoch ms). Implies the cursor walk."),
+			scope: z.enum(["me", "all"]).optional().describe('"all" = an ADMIN reading an instance they do not own (implies the cursor walk); ignored for anyone else.'),
 		},
-		async ({ token, instance_id, trace_id, source, level, limit, offset }) => {
+		async ({ token, instance_id, trace_id, source, level, limit, offset, cursor, since, until, scope }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
 			if (trace_id) qs.set("trace_id", trace_id);
 			if (source) qs.set("source", source);
 			if (level) qs.set("level", level);
+			const path = `/v1/instances/${encodeURIComponent(instance_id)}/trace`;
+			if (cursor || since || until || scope === "all") {
+				qs.set("cursor", cursor ?? "newest");
+				if (since) qs.set("since", since);
+				if (until) qs.set("until", until);
+				if (scope === "all") qs.set("scope", "all");
+				return text(
+					await fitFetchedPage({
+						limit: Math.min(limit ?? 200, 500),
+						key: "events",
+						fetch: (n) => {
+							qs.set("limit", String(n));
+							return authedCall(`${path}?${qs.toString()}`, sessionToken, {}, env);
+						},
+					}),
+				);
+			}
 			if (limit) qs.set("limit", String(limit));
 			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/trace${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
 			// An `{error}` body carries no `events` and passes through untouched rather than being

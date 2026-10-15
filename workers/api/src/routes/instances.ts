@@ -11,7 +11,6 @@ import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
 import { notifyUser } from "./push.js";
 import { deepLinkFor } from "../lib/console-links.js";
-import { listEvents } from "../lib/events.js";
 import { validatePipeline } from "../lib/pipeline.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import { registerBehaviourRoutes } from "./instances-behaviour.js";
@@ -31,6 +30,7 @@ import { registerInstanceDescriptionRoutes } from "./instances-description.js";
 import { registerRunnerAttachRoutes, registerRunnerPinRoutes } from "./instances-runner-attach.js";
 import { registerRunnerSetupRoutes } from "./instances-runner-setup.js";
 import { registerNativeRoutes } from "./instances-native.js";
+import { registerTraceRoutes } from "./instances-trace.js";
 import { registerBrowserScreenshotsRoutes } from "./instances-browser-screenshots.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
@@ -792,27 +792,9 @@ async function voiceSettingsBody(env: Env, instanceId: string, userId: string, c
 	};
 }
 
-/**
- * Unified run trace — the complete time-ordered timeline of what this agent DID
- * (chat turns, tool calls, apply steps/handoffs/outcomes, and bridged failures),
- * so a run can be reconstructed and debugged from one place. Filter by `trace_id`
- * (one run/turn), `source`, or `level` — a FLOOR since #564, so `?level=warn` returns the warnings AND the errors above them (it read as an equality until then, excluding exactly the rows a caller asking for warnings most wanted); `limit` caps how many recent events.
- */
-instanceRoutes.get("/:instanceId/trace", async (c) => {
-	const session = await requireUser(c);
-	const instanceId = c.req.param("instanceId");
-	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const level = c.req.query("level");
-	const events = await listEvents(c.env, {
-		userId: session.uid,
-		instanceId,
-		traceId: c.req.query("trace_id") || c.req.query("traceId") || undefined,
-		source: c.req.query("source") || undefined,
-		level: level === "debug" || level === "info" || level === "warn" || level === "error" ? level : undefined,
-		limit: Number(c.req.query("limit")) || 200,
-	});
-	return c.json({ instanceId, count: events.length, events });
-});
+// The unified run trace — the legacy window and the keyset walk over retained history (#1090). Registered
+// HERE, where its handler used to be, so the route order the contract test pins is unchanged.
+registerTraceRoutes(instanceRoutes); // the unified run trace: legacy window + the keyset walk over retained history (#1090)
 
 /**
  * Resolve what this agent ACTUALLY uses: account defaults, then this instance's override if it has

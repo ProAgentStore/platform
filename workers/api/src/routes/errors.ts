@@ -1,7 +1,8 @@
 /** GET /v1/errors — read back the durable error log (see lib/error-log.ts). */
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { ERROR_COLUMNS, ERROR_RECENCY, deriveClientLevel, listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
+import { ERROR_COLUMNS, ERROR_RECENCY, deriveClientLevel, listErrors, listErrorsPage, logError, sanitizeBuildId, type ErrorFilter } from "../lib/error-log.js";
+import { historyCoverage, parseHistoryCursor, parseTimeBound } from "../lib/history-page.js";
 import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
 import { telemetryHealth } from "../lib/telemetry-spool.js";
 import { clipMarked } from "../lib/clip-marked.js";
@@ -190,7 +191,32 @@ errorRoutes.get("/", async (c) => {
 	// Exact per-instance / per-run reads (#1085), on the verified columns — never widened past `scope`.
 	const instanceId = c.req.query("instance_id") || undefined;
 	const runId = c.req.query("run_id") || undefined;
-	const rows = await listErrors(c.env, { userId: session.uid, all, source, limit: limit + 1, offset, level, instanceId, runId });
+	// #1090: build and time bounds, and the keyset walk over the whole retained log.
+	const build = c.req.query("build") || undefined;
+	const since = parseTimeBound(c.req.query("since"));
+	const until = parseTimeBound(c.req.query("until"));
+	if (since === null || until === null) return c.json({ error: "since/until must be an ISO time or epoch milliseconds" }, 400);
+	const filter: ErrorFilter = { userId: session.uid, all, source, level, instanceId, runId, build, since, until };
+	const rawCursor = c.req.query("cursor");
+	if (rawCursor !== undefined) {
+		const cursor = parseHistoryCursor(rawCursor, "string");
+		if (cursor.kind === "invalid") return c.json({ error: "cursor is not one this endpoint issued — pass \"newest\" or a previous nextCursor" }, 400);
+		try {
+			const page = await listErrorsPage(c.env, { ...filter, cursor, limit });
+			return c.json({
+				scope: all ? "all" : "me",
+				order: "first_seen_newest_first",
+				count: page.errors.length,
+				errors: page.errors,
+				hasMore: page.hasMore,
+				nextCursor: page.nextCursor,
+				coverage: await historyCoverage(c.env, "error_log", session.roles.includes("admin")),
+			});
+		} catch (e) {
+			return c.json({ error: `error log read failed: ${e instanceof Error ? e.message : String(e)}`, errors: null }, 503);
+		}
+	}
+	const rows = await listErrors(c.env, { ...filter, limit: limit + 1, offset });
 	const errors = rows.slice(0, limit);
 	const hasMore = rows.length > limit;
 	return c.json({ scope: all ? "all" : "me", count: errors.length, errors, offset, hasMore, nextOffset: hasMore ? offset + limit : null });
@@ -229,6 +255,9 @@ errorRoutes.get("/", async (c) => {
  */
 errorRoutes.get("/summary", async (c) => {
 	const session = await requireUser(c);
+	// #1090: an admin may group across every account, the same opt-in `scope=all` the flat feed takes.
+	const all = c.req.query("scope") === "all" && session.roles.includes("admin");
+	const build = c.req.query("build") || undefined;
 	const days = Math.max(1, Math.min(Number(c.req.query("days")) || 7, 30));
 	const limit = Math.max(1, Math.min(Number(c.req.query("limit")) || 2000, 5000));
 	const source = c.req.query("source") || undefined;
@@ -236,11 +265,18 @@ errorRoutes.get("/summary", async (c) => {
 	const instanceId = c.req.query("instance_id") || undefined;
 	const runId = c.req.query("run_id") || undefined;
 
-	// Always user-scoped — there is no `scope=all` here. The flat feed offers one to admins; a
-	// grouped cross-account view already exists on the admin route, and quietly widening this one
-	// would mean an owner's page changing meaning based on who is signed in.
-	const where = ["user_id = ?1", `${ERROR_RECENCY} >= ?2`];
-	const binds: unknown[] = [session.uid, new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 19).replace("T", " ")];
+	// User-scoped unless an ADMIN explicitly asks for `scope=all` (#1090) — never widened just
+	// because of who is signed in, so an owner's page keeps one meaning.
+	const where = [`${ERROR_RECENCY} >= ?1`];
+	const binds: unknown[] = [new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 19).replace("T", " ")];
+	if (!all) {
+		binds.push(session.uid);
+		where.push(`user_id = ?${binds.length}`);
+	}
+	if (build) {
+		binds.push(build);
+		where.push(`build = ?${binds.length}`);
+	}
 	if (source) {
 		binds.push(source);
 		where.push(`source = ?${binds.length}`);
@@ -285,8 +321,13 @@ errorRoutes.get("/summary", async (c) => {
 	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log WHERE ${where.join(" AND ")} ORDER BY ${ERROR_RECENCY} DESC LIMIT ${limit}`;
 	const rows = (await c.env.DB.prepare(sql).bind(...binds).all<RawError>()).results ?? [];
 	const signatures = summarizeErrors(rows);
+	const recencyOf = (r: RawError) => r.last_seen_at ?? r.created_at;
 	return c.json({
+		scope: all ? "all" : "me",
 		days,
+		// The span the rows read actually cover. When `truncated`, `oldestRead` is later than the start
+		// of `days`: everything between the two was NOT grouped (#1090).
+		window: { from: new Date(Date.now() - days * 86_400_000).toISOString(), oldestRead: rows.length ? recencyOf(rows[rows.length - 1]) : null, rowLimit: limit },
 		// OCCURRENCES, not rows — a row standing for 60 collapsed repeats counts 60. Reporting the
 		// row count would understate a runaway by exactly the factor the collapse achieved.
 		total: signatures.reduce((n, s) => n + s.count, 0),

@@ -49,6 +49,8 @@
  * UNDER-reports exactly the payloads most likely to overflow. {@link wireBytes} encodes.
  */
 
+import { clipMarked } from "./clip-marked.js";
+
 /**
  * The limit the calling host in #569 applied, and the number every assertion here is against.
  *
@@ -263,4 +265,68 @@ export function pageTextTail(input: {
 	}
 	// Always carry something while there is text behind `before`, or a caller walking back would loop.
 	return render(Math.max(best, Math.min(1, end)));
+}
+
+/**
+ * The budget for a page the SERVER cuts (#1090): a keyset or ledger cursor names the last row the
+ * server returned, so a page cannot be trimmed after the fact without stranding the rows cut off —
+ * the next cursor would point past them. Instead the page is re-requested from the SAME position with
+ * a smaller `limit`, so `nextCursor`/`nextOffset` always describe exactly what was delivered.
+ *
+ * `fetch(limit)` returns the API body; `key` names its row array. A body without that array (an
+ * `{error}`) is passed through untouched — an unreadable page is never reshaped into an empty one.
+ * The shrink is proportional (one extra request in practice) and bounded. A single row that is over
+ * budget on its own is delivered once with its largest fields cut and marked, and the payload says
+ * so in `budgetNote` — never skipped, never a page that cannot advance.
+ */
+export async function fitFetchedPage(input: {
+	limit: number;
+	key: string;
+	fetch: (limit: number) => Promise<unknown>;
+	budget?: number;
+}): Promise<string> {
+	const budget = input.budget ?? WIRE_BUDGET_BYTES;
+	let limit = Math.max(1, Math.trunc(input.limit));
+	for (let attempt = 0; attempt < 8; attempt++) {
+		const data = (await input.fetch(limit)) as Record<string, unknown> | null;
+		if (!data || typeof data !== "object" || !Array.isArray(data[input.key])) return JSON.stringify(data);
+		const rows = data[input.key] as unknown[];
+		const text = JSON.stringify(data);
+		const bytes = wireBytes(text);
+		if (bytes <= budget) return text;
+		if (rows.length <= 1) return clipLoneRow(data, input.key, rows, budget);
+		limit = Math.max(1, Math.min(rows.length - 1, Math.floor((rows.length * budget * 0.9) / bytes)));
+	}
+	// Eight proportional shrinks cannot fail to reach one row unless the server ignores `limit`.
+	const data = (await input.fetch(1)) as Record<string, unknown>;
+	return clipLoneRow(data, input.key, data[input.key] as unknown[], budget);
+}
+
+/** Halve the largest field of the one row until the page fits, marking every cut. */
+function clipLoneRow(data: Record<string, unknown>, key: string, rows: unknown[], budget: number): string {
+	if (!rows.length || !rows[0] || typeof rows[0] !== "object") return JSON.stringify(data);
+	const row: Record<string, unknown> = { ...(rows[0] as Record<string, unknown>) };
+	const cut: string[] = [];
+	const render = () =>
+		JSON.stringify({
+			...data,
+			[key]: [row],
+			budgetNote: `This page's only row was over the ${budget}-byte budget on its own; its field(s) ${cut.join(", ")} are cut and marked. Continue from the cursor as normal.`,
+		});
+	for (let i = 0; i < 24 && wireBytes(render()) > budget; i++) {
+		let largest = "";
+		let size = 0;
+		for (const [field, value] of Object.entries(row)) {
+			const s = typeof value === "string" ? value : JSON.stringify(value ?? null);
+			if (s.length > size) {
+				largest = field;
+				size = s.length;
+			}
+		}
+		if (!largest || size < 64) break;
+		const value = row[largest];
+		row[largest] = clipMarked(typeof value === "string" ? value : JSON.stringify(value), Math.floor(size / 2));
+		if (!cut.includes(largest)) cut.push(largest);
+	}
+	return render();
 }

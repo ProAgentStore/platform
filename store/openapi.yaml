@@ -5774,6 +5774,12 @@ paths:
         The complete time-ordered timeline of what this agent DID — chat turns, tool calls,
         apply steps, handoffs, outcomes and bridged failures — so a run can be reconstructed
         from one place. This is the primary debugging surface. Owner only.
+
+        Without `cursor` it is the newest `limit` events (max 1000), oldest→newest. With
+        `cursor=newest` (then each reply's `nextCursor`) it walks the WHOLE retained trace (14 days)
+        newest-first by a keyset on `(ts, id)`, so events written meanwhile never shift the walk, and
+        the reply carries `coverage` (retention; the replay backlog for admins). `since`/`until`
+        imply the walk. `scope=all` lets an admin read an instance they do not own (#1090).
       operationId: getInstanceTrace
       tags: [Trace]
       parameters:
@@ -5781,7 +5787,11 @@ paths:
         - { name: trace_id, in: query, description: Narrow to one run or turn. Also accepted as `traceId`., schema: { type: string } }
         - { name: source, in: query, description: "Event source, e.g. `chat`, `apply`, `tool`, `pipeline`.", schema: { type: string } }
         - { name: level, in: query, schema: { type: string, enum: [debug, info, warn, error] } }
-        - { name: limit, in: query, schema: { type: integer, default: 200 } }
+        - { name: limit, in: query, description: "Window size (legacy, max 1000) or page size (walk, max 500).", schema: { type: integer, default: 200 } }
+        - { name: cursor, in: query, description: "`newest` to start the keyset walk, then a previous `nextCursor`. Opaque.", schema: { type: string } }
+        - { name: since, in: query, description: ISO 8601 or epoch ms, inclusive., schema: { type: string } }
+        - { name: until, in: query, description: ISO 8601 or epoch ms, inclusive., schema: { type: string } }
+        - { name: scope, in: query, description: "`all` — admin only: read an instance you do not own. Ignored for anyone else.", schema: { type: string, enum: [all] } }
       responses:
         "200":
           description: Trace events, most recent first
@@ -5795,8 +5805,14 @@ paths:
                   events:
                     type: array
                     items: { type: object, additionalProperties: true }
+                  hasMore: { type: boolean, description: Walk only. }
+                  nextCursor: { type: string, nullable: true, description: "Walk only. `null` is the end of the retained trace." }
+                  coverage: { type: object, additionalProperties: true, description: "Walk only: retention, walk semantics and (admins) replay backlog." }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: The trace could not be read — never an empty page.
 
   # ── Instances: settings, name, runner node ────────────────────────────────
 
@@ -13706,6 +13722,11 @@ paths:
         - { name: scope, in: query, schema: { type: string, enum: [all] } }
         - { name: source, in: query, description: "Filter by source, e.g. `auth`, `keys-proxy`, `client:voice`.", schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, default: 100 } }
+        - { name: level, in: query, schema: { type: string, enum: [error, warn] } }
+        - { name: build, in: query, description: Exact deployed build stamp., schema: { type: string } }
+        - { name: since, in: query, description: "First seen at or after (ISO 8601 or epoch ms).", schema: { type: string } }
+        - { name: until, in: query, description: "First seen at or before (ISO 8601 or epoch ms).", schema: { type: string } }
+        - { name: cursor, in: query, description: "`newest`, then a previous `nextCursor`: walks the whole retained log (30 days) newest-first by FIRST-seen time, so a repeat folding into a row cannot move it past the cursor (#1090). Without it, the recency-ordered `offset` page.", schema: { type: string } }
       responses:
         "200":
           description: Errors, most recent first
@@ -13734,9 +13755,8 @@ paths:
         `count` sums OCCURRENCES across the rows a signature covers — not the row count, which
         would understate a collapsed runaway by exactly the factor the collapse achieved.
 
-        Always scoped to the caller. There is no `scope=all` here: a cross-account grouped view
-        already exists on the admin route, and widening this one would mean the page changing
-        meaning based on who is signed in.
+        Scoped to the caller unless an ADMIN passes `scope=all` (#1090) — never widened just by who
+        is signed in. When `truncated`, `window.oldestRead` is how far back the rows read reach.
       operationId: summarizeErrors
       tags: [Errors]
       parameters:
@@ -13744,6 +13764,8 @@ paths:
         - { name: limit, in: query, description: "Rows READ (not signatures returned), 1–5000. Default 2000 — this is the width of the window being grouped, not a page size.", schema: { type: integer, default: 2000 } }
         - { name: source, in: query, schema: { type: string } }
         - { name: level, in: query, schema: { type: string, enum: [error, warn] } }
+        - { name: scope, in: query, description: "`all` — admin only; ignored otherwise.", schema: { type: string, enum: [all] } }
+        - { name: build, in: query, description: Exact deployed build stamp., schema: { type: string } }
         - { name: instance_id, in: query, description: "One agent's failures. The instance rides in the free-form `context` JSON rather than a column, so this matches either retained sample (first and latest) and is a LOWER BOUND on what the signature touched.", schema: { type: string } }
       responses:
         "200":
@@ -13925,6 +13947,65 @@ paths:
           description: The spool could not be read.
 
   # ── Feedback ──────────────────────────────────────────────────────────────
+
+  /v1/audit/mcp:
+    get:
+      summary: Cross-owner MCP tool-call audit (admin)
+      description: |
+        Every account's MCP tool-call events, newest first, or one account's with `user` (#1090).
+        Paged by the ledger's own cursor; same `tool`/`receipt` filters and `coverage` as
+        `/v1/mcp-audit`. Outside `/v1/admin/*` so the MCP Worker can reach it; the admin role is the
+        gate. 503 when the ledger cannot be read. MCP: `admin_mcp_audit`.
+      operationId: adminMcpAudit
+      tags: [Errors]
+      parameters:
+        - { name: user, in: query, schema: { type: string } }
+        - { name: tool, in: query, schema: { type: string } }
+        - { name: receipt, in: query, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 200 } }
+      responses:
+        "200":
+          description: One page of the ledger.
+          content:
+            application/json:
+              schema: { type: object, properties: { events: { type: array, items: { type: object, additionalProperties: true } }, count: { type: integer }, nextCursor: { type: string, nullable: true }, coverage: { type: object, additionalProperties: true }, semantics: { type: string } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: The ledger could not be read.
+
+  /v1/audit/admin-actions:
+    get:
+      summary: Admin-action audit log (admin)
+      description: |
+        Every operator change with who did it, its target and its before/after `detail` (redacted on
+        read), newest first by a keyset cursor on `(created_at, id)` — the whole log, which has no
+        automatic expiry (#1090). Outside `/v1/admin/*` so the MCP Worker can reach it; the admin
+        role is the gate. MCP: `admin_action_audit`.
+      operationId: adminActionAudit
+      tags: [Errors]
+      parameters:
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: target_type, in: query, schema: { type: string } }
+        - { name: target, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string } }
+        - { name: until, in: query, schema: { type: string } }
+        - { name: cursor, in: query, description: "`newest` (default) or a previous `nextCursor`.", schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 200 } }
+      responses:
+        "200":
+          description: One page, newest first.
+          content:
+            application/json:
+              schema: { type: object, properties: { audit: { type: array, items: { type: object, additionalProperties: true } }, count: { type: integer }, hasMore: { type: boolean }, nextCursor: { type: string, nullable: true }, coverage: { type: object, additionalProperties: true } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: The log could not be read.
 
   /v1/feedback:
     get:

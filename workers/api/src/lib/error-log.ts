@@ -3,6 +3,7 @@
  * a reason is never thrown away — readable via GET /v1/errors. See migration 0034.
  */
 import { boundedJson, clipMarked } from "./clip-marked.js";
+import { type CursorQuery, keysetBefore, keysetPage, sqlTimeOf } from "./history-page.js";
 import type { Env } from "../types.js";
 import { logEvent } from "./events.js";
 import { sqlTime } from "./sql-time.js";
@@ -425,11 +426,36 @@ export const ERROR_RECENCY = "COALESCE(last_seen_at, created_at)";
 /** Read recent errors — for one user, or all (admin). Newest first. */
 export async function listErrors(
 	env: Env,
-	opts: { userId?: string; all?: boolean; limit?: number; offset?: number; source?: string; level?: ErrorLevel; instanceId?: string; runId?: string },
+	opts: ErrorFilter & { limit?: number; offset?: number },
 ): Promise<ErrorRow[]> {
 	// `limit` may be one past a page (the route asks for 501 to learn whether more exist).
 	const limit = Math.max(1, Math.min(opts.limit ?? 100, 501));
 	const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
+	const { where, binds } = errorFilters(opts);
+	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log${
+		where.length ? ` WHERE ${where.join(" AND ")}` : ""
+	} ORDER BY ${ERROR_RECENCY} DESC, id DESC LIMIT ${limit} OFFSET ${offset}`;
+	const res = await env.DB.prepare(sql)
+		.bind(...binds)
+		.all<ErrorRow>();
+	return res.results ?? [];
+}
+
+export interface ErrorFilter {
+	userId?: string;
+	all?: boolean;
+	source?: string;
+	level?: ErrorLevel;
+	instanceId?: string;
+	runId?: string;
+	/** Exact deployed build stamp (the `build` column, a 12-char commit prefix). */
+	build?: string;
+	/** Epoch ms bounds on `created_at` (first seen), inclusive. */
+	since?: number;
+	until?: number;
+}
+
+function errorFilters(opts: ErrorFilter): { where: string[]; binds: unknown[] } {
 	const where: string[] = [];
 	const binds: unknown[] = [];
 	if (!opts.all) {
@@ -454,11 +480,39 @@ export async function listErrors(
 		binds.push(opts.runId);
 		where.push(`run_id = ?${binds.length}`);
 	}
+	if (opts.build) {
+		binds.push(opts.build);
+		where.push(`build = ?${binds.length}`);
+	}
+	if (opts.since !== undefined) {
+		binds.push(sqlTimeOf(opts.since));
+		where.push(`created_at >= ?${binds.length}`);
+	}
+	if (opts.until !== undefined) {
+		binds.push(sqlTimeOf(opts.until));
+		where.push(`created_at <= ?${binds.length}`);
+	}
+	return { where, binds };
+}
+
+/**
+ * The retained error log walked newest-first by a keyset cursor (#1090). Ordered by `created_at`
+ * (FIRST seen), not by recency: a repeat folding into a row moves its `last_seen_at`, and a walk
+ * keyed on a moving column skips or repeats exactly the rows that are busiest. See `history-page.ts`.
+ */
+export async function listErrorsPage(
+	env: Env,
+	opts: ErrorFilter & { cursor: CursorQuery; limit?: number },
+): Promise<{ errors: ErrorRow[]; hasMore: boolean; nextCursor: string | null }> {
+	const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
+	const { where, binds } = errorFilters(opts);
+	keysetBefore(opts.cursor, "created_at", where, binds);
 	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log${
 		where.length ? ` WHERE ${where.join(" AND ")}` : ""
-	} ORDER BY ${ERROR_RECENCY} DESC, id DESC LIMIT ${limit} OFFSET ${offset}`;
+	} ORDER BY created_at DESC, id DESC LIMIT ${limit + 1}`;
 	const res = await env.DB.prepare(sql)
 		.bind(...binds)
 		.all<ErrorRow>();
-	return res.results ?? [];
+	const page = keysetPage(res.results ?? [], limit, (row) => row.created_at);
+	return { errors: page.rows, hasMore: page.hasMore, nextCursor: page.nextCursor };
 }
