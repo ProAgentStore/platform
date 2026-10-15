@@ -28,6 +28,7 @@ export function createRunnerServer(runner: LocalRunner) {
 				const runId = String(body.runId ?? "");
 				// The same forwarder serves application runs (#957); each runtime knows only its own tokens.
 				if (runner.localApply.authorizeBridge(runId, token)) return json(res, 200, await runner.localApply.bridge(body));
+				if (runner.siteBuilder.authorizeBridge(runId, token)) return json(res, 200, await runner.siteBuilder.bridge(body));
 				if (!runner.localBrowser.authorizeBridge(runId, token)) return json(res, 401, { error: "Unauthorized" });
 				return json(res, 200, await runner.localBrowser.bridge(body));
 			}
@@ -164,6 +165,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, task);
 	}
 
+	const refineMatch = path.match(/^\/tasks\/([^/]+)\/site-builder\/refine$/);
+	if (req.method === "POST" && refineMatch) return json(res, 202, runner.refineSiteBuilder(refineMatch[1], (await readJson<Record<string, unknown>>(req)).refinement));
 	const approveMatch = path.match(/^\/tasks\/([^/]+)\/approve$/);
 	if (req.method === "POST" && approveMatch) {
 		return json(res, 200, await runner.approveTask(approveMatch[1]));

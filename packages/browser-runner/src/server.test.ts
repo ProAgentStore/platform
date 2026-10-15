@@ -21,6 +21,8 @@ describe("runner server", () => {
 		});
 		close = started.close;
 		url = started.url;
+		// Never start a real author CLI from these HTTP tests (#841): site-builder/runtime.test.ts covers the launch.
+		started.runner.siteBuilder.launch = () => undefined;
 	});
 
 	afterEach(async () => {
@@ -103,7 +105,7 @@ describe("runner server", () => {
 	});
 
 	it("forwards bounded Website Builder capture manifests into the local task", async () => {
-		const created = await fetch(`${url}/tasks`, { method: "POST", headers: { Authorization: "Bearer secret", "X-PAGS-Instance-Id": "inst-1", "Content-Type": "application/json" }, body: JSON.stringify({ type: "site_builder_runtime", input: {} }) });
+		const created = await fetch(`${url}/tasks`, { method: "POST", headers: { Authorization: "Bearer secret", "X-PAGS-Instance-Id": "inst-1", "Content-Type": "application/json" }, body: JSON.stringify({ type: "site_builder_runtime", input: { runId: "run-1", engine: "claude", broker: { url: "https://api.proagentstore.online/v1/site-builder/broker/run-1", token: "0000000000000.capture-test-token" } } }) });
 		const task = await created.json() as { id: string };
 		const res = await fetch(`${url}/tasks/${task.id}/artifacts`, { method: "POST", headers: { Authorization: "Bearer secret", "X-PAGS-Instance-Id": "inst-1", "Content-Type": "application/json" }, body: JSON.stringify({ captureArtifacts: [{ id: "a".repeat(64), device: "mobile", contentType: "image/png", bytes: 456, url: "https://api.proagentstore.online/v1/capture?token=short-lived" }] }) });
 		expect(res.status).toBe(200);

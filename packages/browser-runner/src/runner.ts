@@ -24,6 +24,7 @@ import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
 import { createRunnerBrowserFactories } from "./local-apply/live-run-browser.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
+import { SITE_BUILDER_TASK_TYPE, SiteBuilderRuntime } from "./site-builder/runtime.js";
 /** True for a plain object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -105,6 +106,8 @@ export class LocalRunner {
 	readonly localApply: LocalApplyRuntime;
 	/** Browser-only, no-bridge reconciliation for an ended uncertain apply attempt. */
 	readonly localApplyReconciliation: LocalApplyReconciliationRuntime;
+	/** The Website Builder's local author (#841): the signed-in CLI drafting through the PAGS broker. */
+	readonly siteBuilder: SiteBuilderRuntime;
 	/** This runner's own local URL, once the server listens — the bridge forwarder calls back to it. */
 	selfUrl: string | null = null;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
@@ -129,6 +132,7 @@ export class LocalRunner {
 			takeover: localApplyTakeover,
 		});
 		this.localApplyReconciliation = new LocalApplyReconciliationRuntime({ dataDir: config.dataDir, browserFor: applyBrowserFor, takeover: localApplyTakeover });
+		this.siteBuilder = new SiteBuilderRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, onEvent: (id, type, message, data) => this.addTaskEvent(this.requireTask(id), type, message, data) });
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
@@ -146,7 +150,7 @@ export class LocalRunner {
 	 */
 	liveWork(): { codingTurns: number; localRuns: number; detail: string[] } {
 		const coding = this.coding.liveWork();
-		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork(), ...this.localApplyReconciliation.liveWork()];
+		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork(), ...this.localApplyReconciliation.liveWork(), ...this.siteBuilder.liveWork()];
 		return { codingTurns: coding.length, localRuns: local.length, detail: [...coding, ...local].slice(0, 10) };
 	}
 
@@ -176,6 +180,8 @@ export class LocalRunner {
 		// steered by the remote Workflow brain via the /browser/* endpoints — the runner
 		// never auto-executes them. The task exists for the console board, the activity
 		// trace, and takeover keying.
+		// The broker credential never becomes part of a task this runner returns (#841).
+		if (normalized.type === SITE_BUILDER_TASK_TYPE) normalized.input = this.siteBuilder.accept(normalized.input);
 		if (WORKFLOW_DRIVEN_TASKS.has(normalized.type)) {
 			const task: RunnerTask = {
 				id: `task_${crypto.randomUUID()}`,
@@ -188,8 +194,19 @@ export class LocalRunner {
 				updatedAt: now,
 			};
 			this.store.putTask(task);
-			const startedMsg = normalized.type === "browser.task" ? "Browser task started (agent-driven)" : "Job application started (agent-driven)";
+			const startedMsg = normalized.type === "browser.task" ? "Browser task started (agent-driven)" : normalized.type === SITE_BUILDER_TASK_TYPE ? "Website Builder draft registered (workflow-driven); starting the local author" : "Job application started (agent-driven)";
 			this.addTaskEvent(task, "task.created", startedMsg, { status: "running", url: normalized.input.url });
+			// The one workflow-driven type the runner DOES start work for (#841): its local author CLI.
+			if (normalized.type === SITE_BUILDER_TASK_TYPE) {
+				try {
+					this.siteBuilder.launch(task);
+				} catch (err) {
+					// Not left `running` with no author: failed, with the reason PAGS records on the run.
+					Object.assign(task, { status: "failed", error: err instanceof Error ? err.message : String(err), updatedAt: new Date().toISOString() });
+					this.store.putTask(task);
+					throw err;
+				}
+			}
 			return task;
 		}
 		const requiresApproval =
@@ -215,6 +232,13 @@ export class LocalRunner {
 		});
 		if (task.status === "queued") void this.runTask(task.id);
 		return task;
+	}
+
+	/** An owner's refinement of a Website Builder draft (#841): one more author turn, never an approval. */
+	refineSiteBuilder(id: string, refinement: unknown): { accepted: true } {
+		const task = this.requireTask(id);
+		if (task.type !== SITE_BUILDER_TASK_TYPE) throw new RunnerInputError("Only a Website Builder task can be refined");
+		return this.siteBuilder.refine(task, typeof refinement === "string" ? refinement : "");
 	}
 
 	async approveTask(id: string): Promise<RunnerTask> {

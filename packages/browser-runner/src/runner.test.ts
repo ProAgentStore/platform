@@ -100,7 +100,11 @@ describe("LocalRunner", () => {
 	});
 
 	it("keeps signed Website Builder captures on the local durable task, without image bytes", () => {
-		const task = runner.createTask({ type: "site_builder_runtime", input: {} });
+		// The author's launch is the worker's own test (site-builder/runtime.test.ts); here only the manifest.
+		runner.siteBuilder.launch = () => undefined;
+		const task = runner.createTask({ type: "site_builder_runtime", input: { runId: "run-1", engine: "claude", broker: { url: "https://api.proagentstore.online/v1/site-builder/broker/run-1", token: "0000000000000.capture-test-token" } } });
+		// The broker credential is taken out of the task on arrival (#841): no task the runner returns carries it.
+		expect(JSON.stringify(task)).not.toContain("capture-test-token");
 		const id = "a".repeat(64);
 		const updated = runner.appendCaptureArtifacts(task.id, [{ id, device: "desktop", contentType: "image/png", bytes: 123, url: "https://api.proagentstore.online/v1/capture?token=short-lived" }]);
 		expect(updated.input.captureArtifacts).toEqual([{ id, device: "desktop", contentType: "image/png", bytes: 123, url: "https://api.proagentstore.online/v1/capture?token=short-lived" }]);
