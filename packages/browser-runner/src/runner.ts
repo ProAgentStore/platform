@@ -118,7 +118,7 @@ export class LocalRunner {
 		this.store = new RunnerStore(config.dataDir);
 		this.crashLog = new CrashLog(join(config.dataDir, "crash-reports.json"), runtimeCrashIdentity());
 		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
-		const { browserFor, applyBrowserFor } = createRunnerBrowserFactories({ headless: config.headless, defaultTools: () => this.getMcp(), sharedPage: () => this.activePage });
+		const { browserFor, applyBrowserFor } = createRunnerBrowserFactories({ headless: config.headless, dataDir: config.dataDir, defaultTools: () => this.getMcp(), defaultCookies: async () => (await (await this.getBrowserContext()).cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires })), sharedPage: () => this.activePage });
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
 		const localApplyTakeover = createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) });

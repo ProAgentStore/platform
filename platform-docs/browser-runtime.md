@@ -257,6 +257,14 @@ An Application Runner does not use these takeovers. Its `get_instance_browser_ve
 - **The run pauses at a sign-in or CAPTCHA** (#1013). The run's own browser is offered to the owner as a
   bounded handoff (`blocker_required`: "Sign in to continue an application"). The owner clears the step
   on their device and resumes the same run.
+- **The site needs a sign-in before the one-click press** (#1094). The application browser keeps its
+  sign-ins between runs (on-disk profile, per machine and profile). Before pressing a control that may
+  send the application, the run checks that profile's session for the site. It pauses `login_required`
+  **before pressing anything** when SEEK has never been signed in on that profile, when an earlier
+  press bounced to the site's sign-in page, or when a recorded session cookie has expired. The owner
+  signs in once through the handoff above, and later runs reuse the session. Only cookie names and
+  expiry are recorded, never values. Where the profile lives, and its limits:
+  `packages/browser-runner/APPLICATION_PROFILES.md`.
 - **The submit was pressed and the site did not confirm it** (`submit_unconfirmed`, #1068). For example,
   a "Quick apply" control, which the Runner treats as a possible one-click send, lands on a sign-in page.
   - **It is never retried.** A redirect is not proof that nothing was sent (#994, #1013).

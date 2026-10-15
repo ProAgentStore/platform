@@ -38,6 +38,7 @@ import {
 import { ELEMENT_PROBE_FN, type ElementFacts } from "../commit-guard.js";
 import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
+import { looksLikeSignIn, type SiteSessionLedger, siteKeyOf } from "./site-session.js";
 import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
@@ -56,6 +57,8 @@ export interface ApplyBridgeHost {
 	limits: LocalApplyLimits;
 	mode: LocalApplyMode;
 	gateId?: string;
+	/** This browser profile's site sign-in ledger (#1094). Absent: no session gate. */
+	sessions?: SiteSessionLedger;
 }
 
 export interface ToolResult {
@@ -346,10 +349,14 @@ export class ApplyBridge {
 		const blocker = this.blockerOf(state);
 		if (!blocker) return text(toolText);
 		this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: blocker } });
+		const site = blocker === "login_required" && host ? siteKeyOf(host) : null;
+		if (site) await this.host.sessions?.beginSignIn(site).catch(() => undefined);
 		const ok = await this.pauseFor({ reason: blocker, url: state.url, domain: host }, async () => {
 			const after = await this.inspect();
 			return !!after && this.blockerOf(after) === null;
 		});
+		// A sign-in the owner completed here is remembered for this browser profile (#1094).
+		if (ok && site) await this.recordSignIn(site);
 		if (!ok) return text(`${host} needs a person (${blocker.replace(/_/g, " ")}) and it was not resolved. Do not work around it. Stop now.`, true);
 		return text("Resumed after the owner handled it. Take a browser_snapshot to read the page.");
 	}
@@ -671,6 +678,8 @@ export class ApplyBridge {
 		}
 		const domain = hostOf(before.url) ?? "";
 		if (!this.host.isAllowed(domain)) return this.refuse("browser_click", "submit", `${domain} is not one of this application's sites; nothing was submitted.`, domain);
+		const gate = await this.sessionGate(before.url, domain);
+		if (gate) return gate;
 		this.submitAttempted = true;
 		this.host.emit({ type: "submit.attempted", url: before.url, domain, detail: { class: "submit", gateId: this.host.gateId } });
 		const res = await this.browser.callTool("browser_click", forward);
@@ -688,7 +697,18 @@ export class ApplyBridge {
 			this.host.emit({ type: "submit.confirmed", url: at.url, domain: hostOf(at.url) ?? domain, detail: { gateId: this.host.gateId, marker: seen.marker, ...evidence } });
 			return text("Submitted, and the site confirmed it. Stop now.");
 		}
-		this.blocked = { reason: "submit_unconfirmed", questions: ["The application was submitted but the site did not confirm it. Check the employer's site or your email before anything is retried."] };
+		// Landed on a sign-in page (#1094): the outcome stays `submit_unconfirmed` (#1013 never infers
+		// "not sent" from a redirect), but this profile now knows the site needs a sign-in, so the next
+		// run asks the owner to sign in BEFORE pressing instead of bouncing again.
+		const wall = after && looksLikeSignIn(after.url, after.login) ? this.host.sessions?.learnSignInWall(before.url, after.url) : null;
+		if (wall) this.host.emit({ type: "policy.decision", domain, detail: { tool: "browser_click", class: "session", decision: "learned", reason: "bounced_to_sign_in", site: wall } });
+		this.blocked = {
+			reason: "submit_unconfirmed",
+			questions: [
+				"The application was submitted but the site did not confirm it. Check the employer's site or your email before anything is retried." +
+					(wall ? ` The site asked for a sign-in, so the next run on this machine will ask you to sign in to ${wall} first.` : ""),
+			],
+		};
 		this.host.emit({ type: "submit.unconfirmed", ...(after ? { url: after.url } : {}), domain, detail: { gateId: this.host.gateId, ...evidence } });
 		return text("The submit was pressed but no confirmation was seen. Do not press it again. Stop now.", true);
 	}
@@ -710,6 +730,41 @@ export class ApplyBridge {
 			if (confirmationMarker(before, page)) return { after: page, looks: i + 1 };
 		}
 		return { after, looks: CONFIRMATION_LOOKS };
+	}
+
+	/**
+	 * Before an uncertain press (#1094): is this browser profile signed in to the site? If the ledger
+	 * says it is not, or its session cookies are gone, the run pauses `login_required` so the owner
+	 * signs in ONCE in this same browser (the existing handoff) — and nothing has been pressed, so
+	 * there is no submit to be uncertain about. Returns null when the press may go ahead.
+	 */
+	private async sessionGate(url: string, domain: string): Promise<ToolResult | null> {
+		const ledger = this.host.sessions;
+		if (!ledger) return null;
+		const check = await ledger.check(url).catch(() => null);
+		if (!check || check.state === "ok") return null;
+		const site = check.site;
+		this.host.emit({ type: "policy.decision", domain, detail: { tool: "browser_click", class: "session", decision: "paused", reason: `session_${check.reason}`, site } });
+		await ledger.beginSignIn(site).catch(() => undefined);
+		const ok = await this.pauseFor({
+			reason: "login_required",
+			url,
+			domain,
+			question: `Sign in to ${site} in this browser. It is remembered on this machine, so later applications reuse it. Nothing has been submitted.`,
+		});
+		if (!ok) {
+			this.blocked = { reason: "login_required", questions: [`Sign in to ${site} on this machine's application browser, then retry. Nothing was submitted.`] };
+			return this.refuse("browser_click", "submit", `${site} needs a sign-in in this browser and the owner did not complete one. Nothing was submitted. Stop now.`, domain);
+		}
+		await this.recordSignIn(site);
+		return text(`The owner signed in to ${site}; this browser remembers it. Nothing has been submitted. Open the job page again with browser_navigate (${url.split(/[?#]/, 1)[0]}), take a browser_snapshot, and continue from there.`);
+	}
+
+	private async recordSignIn(site: string): Promise<void> {
+		const ledger = this.host.sessions;
+		if (!ledger) return;
+		const result = await ledger.completeSignIn(site).catch(() => null);
+		if (result) this.host.emit({ type: "policy.decision", detail: { tool: "sign_in", class: "session", decision: "recorded", site, count: result.fingerprint, basis: result.verifiable ? "cookies" : "unverifiable" } });
 	}
 
 	/** A cloud-persisted checkpoint, not a prompt instruction, authorizes each page's writes. */

@@ -544,7 +544,20 @@ const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 // from `LOCAL_APPLY_CONFIRMATION_MARKERS`, how many times the page was read, and whether it moved.
 // Each is an id, a count or a boolean — the same whitelist rule as everything else here, so no page
 // text and no typed value can ride along on a `submit.confirmed` / `submit.unconfirmed` event.
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point"]);
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site"]);
+
+/**
+ * A page URL as a trace may keep it (#1069): origin and path, no query or fragment — a sign-in page's
+ * carry OAuth state, PKCE values and session ids. "" when it is not an http(s) URL.
+ */
+export function traceUrl(raw: string): string {
+	try {
+		const u = new URL(raw);
+		return u.protocol === "http:" || u.protocol === "https:" ? `${u.origin}${u.pathname}` : "";
+	} catch {
+		return "";
+	}
+}
 
 /** A validated event, or null. Detail keeps only whitelisted, primitive, bounded values. */
 export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
@@ -554,8 +567,14 @@ export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
 	const at = str(o.at, 40);
 	if (!type || !at || Number.isNaN(Date.parse(at))) return null;
 	const event: LocalApplyEvent = { type, at };
+	// Origin and path only (#1069): a sign-in page's query and fragment carry OAuth state and session
+	// ids, and the trace is read back verbatim by `application_run` and the console. Same rule as the
+	// #1063 artifact captions, so an older runner that still sends the full URL is covered here too.
 	const url = str(o.url, 2000);
-	if (url && isHttpUrl(url)) event.url = url;
+	if (url && isHttpUrl(url)) {
+		const kept = traceUrl(url);
+		if (kept) event.url = kept;
+	}
 	const domain = str(o.domain, 253);
 	if (domain) event.domain = domain.toLowerCase();
 	const pauseReason = oneOf(LOCAL_APPLY_PAUSE_REASONS, o.pauseReason);

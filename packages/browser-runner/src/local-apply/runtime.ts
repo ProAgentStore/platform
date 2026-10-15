@@ -35,6 +35,7 @@ import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
+import type { SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
 import { confirmationSignals } from "./confirmation.js";
 import { listingUnavailableReason } from "./unavailable.js";
@@ -65,6 +66,7 @@ import {
 	type LocalApplySupervisorDirective,
 	type LocalApplyTaskEnvelope,
 	parseLocalApplyResult,
+	traceUrl,
 } from "./contract.js";
 import { applyPrompt, buildApplyEngineSpec, observedApplyAuth, type SourceBlock } from "./engine.js";
 import { LocalApplyHandoffRuntime, type LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
@@ -74,6 +76,8 @@ export interface RunBrowser {
 	stop(): Promise<void>;
 	/** The currently live page in this run's own browser context, if it has one. */
 	handoffPage?(): Page | null;
+	/** This profile's site sign-in ledger (#1094): names and expiry of session cookies, never values. */
+	sessions?: SiteSessionLedger;
 }
 
 export interface LocalApplyRuntimeDeps {
@@ -451,6 +455,7 @@ export class LocalApplyRuntime {
 			limits: e.limits,
 			mode: e.policy.mode,
 			gateId: e.policy.submitGate?.gateId,
+			sessions: run.browser.sessions,
 		}, e.policy.screenshots === false ? undefined : run.shots);
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
 
@@ -570,7 +575,10 @@ export class LocalApplyRuntime {
 
 	private emit(run: Run, ev: Omit<LocalApplyEvent, "at">): void {
 		if (run.events.length >= MAX_EVENTS) return;
-		run.events.push({ ...ev, at: new Date(this.now()).toISOString(), seq: ++run.seq });
+		// Origin and path only (#1069): a sign-in page's query carries OAuth state and session ids.
+		const url = ev.url ? traceUrl(ev.url) : "";
+		const { url: _raw, ...rest } = ev;
+		run.events.push({ ...rest, ...(url ? { url } : {}), at: new Date(this.now()).toISOString(), seq: ++run.seq });
 	}
 
 	private pause(run: Run, p: LocalApplyPause): Promise<"resumed" | "stopped"> {
@@ -578,8 +586,10 @@ export class LocalApplyRuntime {
 		if (run.state === "running") {
 			run.activeMs += this.now() - run.activeSince;
 			run.state = "paused";
-			run.pause = p;
-			this.emit(run, { type: "run.paused", pauseReason: p.reason, ...(p.url ? { url: p.url } : {}), ...(p.domain ? { domain: p.domain } : {}) });
+			const url = p.url ? traceUrl(p.url) : "";
+			const { url: _raw, ...rest } = p;
+			run.pause = { ...rest, ...(url ? { url } : {}) };
+			this.emit(run, { type: "run.paused", pauseReason: p.reason, ...(url ? { url } : {}), ...(p.domain ? { domain: p.domain } : {}) });
 		}
 		return new Promise((done) => run.waiters.push(done));
 	}

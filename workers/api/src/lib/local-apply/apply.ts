@@ -39,6 +39,7 @@ import {
 	type LocalApplyTaskEnvelope,
 	parseLocalApplyEvent,
 	parseLocalApplyResult,
+	traceUrl,
 } from "./contract.js";
 import { type ApplicationRunnerSettings, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, hostOfUrl } from "./policy.js";
 import {
@@ -669,7 +670,8 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 		body.state === "paused" && p && LOCAL_APPLY_PAUSE_REASONS.includes(p.reason as never)
 			? {
 				reason: p.reason as LocalApplyPause["reason"],
-				...(typeof p.url === "string" ? { url: p.url.slice(0, 2000) } : {}),
+				// Origin and path only (#1069) — a sign-in pause's page URL carries OAuth/session parameters.
+				...(typeof p.url === "string" && traceUrl(p.url) ? { url: traceUrl(p.url) } : {}),
 				...(typeof p.domain === "string" ? { domain: p.domain.slice(0, 253) } : {}),
 				...(typeof p.question === "string" ? { question: p.question.slice(0, 300) } : {}),
 				...(p.reason === "supervisor_checkpoint" && checkpoint ? { checkpoint } : {}),
