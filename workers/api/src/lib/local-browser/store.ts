@@ -17,6 +17,10 @@ export interface FindingReview {
 	collection?: string;
 	recordId?: string;
 	duplicateOf?: string;
+	/** Why a finding was not saved, when the platform decided rather than the owner (#1096): `no_work_key`, `prior_application`. */
+	reason?: string;
+	/** `auto` when the run's own completion wrote it (#1096); absent for an owner's decision. */
+	basis?: "auto";
 	at: number;
 }
 

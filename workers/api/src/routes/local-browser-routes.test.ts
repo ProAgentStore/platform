@@ -523,8 +523,9 @@ describe("the owner is told when a run pauses (#946)", () => {
 });
 
 describe("reviewing findings (#946)", () => {
+	// A general research collection: its findings wait for the owner. `job_leads` is written by the run itself (#1096, local-browser-job-leads.test.ts).
 	const finding = (n: number) => ({ title: `Dev ${n}`, url: `https://seek.com.au/job/${n}`, evidence: `Dev ${n} — Sydney`, fields: { salary: 100 + n } });
-	async function finishedRun(collection: Record<string, unknown> | null = { name: "job_leads" }) {
+	async function finishedRun(collection: Record<string, unknown> | null = { name: "research_notes" }) {
 		if (collection) await call("PUT", "/i1/local-browser/settings", { collection });
 		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
 		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { runId: run.id, outcome: "completed", traceId: run.id, engineAuth: "subscription", summary: "2", findings: [finding(1), finding(2)], sourceFailures: [] } } } };
@@ -535,28 +536,28 @@ describe("reviewing findings (#946)", () => {
 	it("saves a finding to the run's collection with where it came from, and skips another without writing", async () => {
 		const runId = await finishedRun();
 		const saved = await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`);
-		expect(saved.body.findingReviews["0"]).toMatchObject({ decision: "saved", collection: "job_leads", recordId: "rec_1" });
-		expect(collections.job_leads[0].data).toEqual({ salary: 101, title: "Dev 1", url: "https://seek.com.au/job/1", evidence: "Dev 1 — Sydney", sourceRunId: runId });
+		expect(saved.body.findingReviews["0"]).toMatchObject({ decision: "saved", collection: "research_notes", recordId: "rec_1" });
+		expect(collections.research_notes[0].data).toEqual({ salary: 101, title: "Dev 1", url: "https://seek.com.au/job/1", evidence: "Dev 1 — Sydney", sourceRunId: runId });
 		const skipped = await call("POST", `/i1/local-browser/runs/${runId}/findings/1/skip`);
 		expect(skipped.body.findingReviews["1"]).toMatchObject({ decision: "skipped" });
-		expect(collections.job_leads).toHaveLength(1);
+		expect(collections.research_notes).toHaveLength(1);
 		expect((await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`)).status).toBe(409);
 	});
 
 	it("reports a duplicate BEFORE writing, and saves it only when told to", async () => {
-		collections.job_leads = [{ id: "rec_old", data: { url: "https://seek.com.au/job/1" } }];
+		collections.research_notes = [{ id: "rec_old", data: { url: "https://seek.com.au/job/1" } }];
 		const runId = await finishedRun();
 		const dup = await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`);
 		expect(dup.body.findingReviews["0"]).toMatchObject({ decision: "duplicate", duplicateOf: "rec_old" });
-		expect(collections.job_leads).toHaveLength(1);
+		expect(collections.research_notes).toHaveLength(1);
 		const forced = await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`, { force: true });
 		expect(forced.body.findingReviews["0"]).toMatchObject({ decision: "saved" });
-		expect(collections.job_leads).toHaveLength(2);
+		expect(collections.research_notes).toHaveLength(2);
 	});
 
 	it("checks duplicates on the collection's own key field", async () => {
-		collections.job_leads = [{ id: "rec_old", data: { salary: 102 } }];
-		const runId = await finishedRun({ name: "job_leads", keyField: "salary" });
+		collections.research_notes = [{ id: "rec_old", data: { salary: 102 } }];
+		const runId = await finishedRun({ name: "research_notes", keyField: "salary" });
 		expect((await call("POST", `/i1/local-browser/runs/${runId}/findings/1/save`)).body.findingReviews["1"]).toMatchObject({ decision: "duplicate" });
 	});
 

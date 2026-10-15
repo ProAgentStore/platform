@@ -29,6 +29,7 @@ import { agentName } from "./local-browser/sync.js";
 import { notifyUser } from "../routes/push.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
+import { clip } from "./job-lead-queue.js";
 
 export const MAX_ATTEMPTS = 3;
 /** Wait after the Nth temporarily_unverifiable outcome before trying again. */
@@ -40,7 +41,6 @@ export const OUTCOME_FIELD = "verification_outcome";
 
 type DB = Pick<Env, "DB">;
 const iso = (ms: number | null): string | null => (ms ? new Date(ms).toISOString() : null);
-const clip = (s: string | null | undefined, n = 300) => (s ? s.slice(0, n) : null);
 
 interface LeadRow {
 	instance_id: string;
@@ -125,19 +125,6 @@ export function outcomeFromRun(run: LocalBrowserRun | null): { outcome: BrowserV
 	return { outcome: distinct[0] as BrowserVerificationOutcome, detail: clip(run.result?.summary, 200) ?? `Browser verification: ${distinct[0]}.` };
 }
 
-export async function enqueueBrowserVerification(
-	env: DB,
-	input: { instanceId: string; userId: string; leadId: string; workKey: string | null; canonicalUrl: string; expectedTitle: string | null; expectedCompany: string | null; reason: string },
-	now = Date.now(),
-): Promise<void> {
-	await env.DB.prepare(
-		`INSERT INTO job_lead_browser_verifications (instance_id, lead_id, user_id, work_key, canonical_url, expected_title, expected_company, state, attempts, next_attempt_at, awaiting_since, last_detail, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'awaiting', 0, ?8, ?8, ?9, ?8, ?8)
-		 ON CONFLICT(instance_id, lead_id) DO NOTHING`,
-	)
-		.bind(input.instanceId, input.leadId, input.userId, input.workKey, input.canonicalUrl, clip(input.expectedTitle), clip(input.expectedCompany, 160), now, `The server could not check the posting (${input.reason}); waiting for browser verification.`)
-		.run();
-}
 
 export async function listLeadVerifications(env: DB, instanceId: string, userId: string, limit = 50): Promise<LeadVerificationListResponse> {
 	const lim = Math.max(1, Math.min(200, limit));

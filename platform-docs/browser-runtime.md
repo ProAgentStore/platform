@@ -140,6 +140,16 @@ roles, places and sites, edited in Settings → Local browser research and shown
   0.4.132, ignores the field, and runs on the objective alone), `brief_unconfirmed`, or `brief_missing`
   (the objective mentions a saved brief but none is saved).
 
+**Where findings go (#1096).** It depends on the run's results collection.
+- **`job_leads` (a Job Search Scout):** each finding is written when the run completes, just as the Gmail and pasted-URL intakes write theirs.
+  - **Deduplication:** by the collection's key field (`url`), then by job (the work key).
+  - **Prior applications:** a job that already has an application is never written again.
+  - **Verification off:** the lead is stored `new` and is ready for triage. Its `verification.state` is `research_observed`: seen by the run's browser, but not proven to have a live apply path.
+  - **Verification on:** the lead is stored `awaiting_browser_verification` and is also queued in `job_lead_browser_verifications`.
+  - **Lifecycle fields:** a page's own claims about lifecycle fields (status, apply or application ids) are dropped.
+- **Any other collection:** findings wait for the owner to save or skip each one (#946).
+- **Unsaved findings:** a finding with no decision yet (`pending` in the scan's telemetry) is kept on the run and can be saved with `review_local_browser_finding`. It is not on any queue, and the scan's outcome says so.
+
 A run whose CLI exits without ever calling the bridge ends `failed`, saying no page was opened. A Codex run needs a runner on CLI 0.4.74 or newer, because older runners cannot approve the bridge's tools for `codex exec`. Preflight flags an older runner, and a start on one ends at once as `runner_unsupported`, naming the update or the switch to Claude Code.
 
 ## Coder Agents

@@ -17,7 +17,8 @@ import type { LocalBrowserConsentList, LocalBrowserRunView, LocalBrowserTrace, L
  *
  * Reading the run pulls its latest state from the runner (the API does that on every GET), so the
  * poll below is also what moves a run forward in PAGS. A pause is shown first and alone, with only
- * the step that unblocks it; findings are candidates until the owner saves them.
+ * the step that unblocks it; findings are candidates until the owner saves them — except a Job Search
+ * Scout's, which the run writes into job_leads itself when it completes (#1096).
  */
 export default function ResearchRunView({ instanceId, runId }: { instanceId: string; runId: string }) {
 	const navigate = useNavigate();

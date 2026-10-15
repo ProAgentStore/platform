@@ -40,7 +40,8 @@ vi.mock("./local-browser/store.js", async (importOriginal) => ({
 }));
 
 const { applyJobLeadBrowserVerification } = await import("../agent-do-storage-routes.js");
-const { MAX_ATTEMPTS, RETRY_BACKOFF_MS, listLeadVerifications, outcomeFromRun, runLeadBrowserVerification, verificationObjective, verifyLeadNow, enqueueBrowserVerification } = await import("./job-lead-browser-verification.js");
+const { MAX_ATTEMPTS, RETRY_BACKOFF_MS, listLeadVerifications, outcomeFromRun, runLeadBrowserVerification, verificationObjective, verifyLeadNow } = await import("./job-lead-browser-verification.js");
+const { enqueueBrowserVerification } = await import("./job-lead-queue.js");
 const { planJobLeadTriage, planBrowserVerificationOutcome } = await import("./job-lead-triage.js");
 const { ingestGmailCandidates } = await import("./gmail-scout/scan.js");
 

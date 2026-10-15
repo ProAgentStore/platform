@@ -7,7 +7,7 @@ import { getMessage, listMessages, type GmailMessage } from "../gmail.js";
 import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage.js";
 import { clipMarked } from "../clip-marked.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
-import { enqueueBrowserVerification } from "../job-lead-browser-verification.js";
+import { appliedWorkKeys, enqueueBrowserVerification } from "../job-lead-queue.js";
 import { providerPostingUrl, resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
 
 /** A lead stored `awaiting_browser_verification` (#1030), to be queued for the Scout's browser. */
@@ -437,11 +437,6 @@ export function gmailScoutReprocessQuery(window: { after: string; before?: strin
 	return `${JOB_ALERT_FILTER} after:${secs(window.after)}${window.before ? ` before:${secs(window.before)}` : ""}`;
 }
 
-/** Work keys this owner already has an application for — of any status, from any Tailor. */
-async function appliedWorkKeys(env: Env, userId: string): Promise<Set<string>> {
-	const { results } = await env.DB.prepare("SELECT DISTINCT work_key FROM job_applications WHERE user_id = ?1 AND work_key IS NOT NULL").bind(userId).all<{ work_key: string }>();
-	return new Set((results ?? []).map((r) => r.work_key));
-}
 
 /**
  * Reprocess historical job mail (#1052). Once the scan cursor has moved past a message, nothing reads

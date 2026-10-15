@@ -262,7 +262,7 @@ describe("#980: telemetry answers why a scan found what it found", () => {
 		expect(card.description).toMatch(/1 page · 0 results · 0 leads added · 1 source unreachable/);
 	});
 
-	it("a saved finding becomes a lead in Data carrying its scan, and the card counts it", async () => {
+	it("a found job becomes a lead in Data when the scan completes, carrying its scan, and the card counts it", async () => {
 		const runId = await startScan();
 		answers["/local-browser/status"] = {
 			status: 200,
@@ -275,10 +275,8 @@ describe("#980: telemetry answers why a scan found what it found", () => {
 			},
 		};
 		await runView(runId);
-		// Still the owner's decision: the finding is PENDING until they save it (#946).
-		expect((await runView(runId)).body.telemetry.leads).toMatchObject({ added: 0, pending: 1 });
-
-		expect((await call("POST", `/v1/instances/scout/local-browser/runs/${runId}/findings/0/save`)).status).toBe(200);
+		// A Job Search Scout's finding becomes a lead when the run completes (#1096) — not when someone
+		// remembers to save it; before, this read `added: 0, pending: 1` and the lead never existed.
 		const t = (await runView(runId)).body.telemetry;
 		expect(t.leads).toMatchObject({ added: 1, duplicates: 0, pending: 0 });
 		expect(t.leads.recordIds).toHaveLength(1);

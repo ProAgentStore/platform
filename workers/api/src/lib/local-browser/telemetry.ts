@@ -108,8 +108,14 @@ export function scanOutcomeReason(run: LocalBrowserRun, leads: ScanTelemetry["le
 	}
 	if (seen.findings === 0 && seen.pages === 0) return "No results, and no page was opened — the scan ended without reaching a source. Check the allowed sources and the engine's sign-in.";
 	if (seen.findings === 0) return `No results from ${seen.pages} page(s) read. The sources were reachable and nothing matched the objective — narrow or widen it and scan again.`;
+	// `pending` is a finding with no decision yet. It is NOT queued anywhere (#1096): it sits on this run,
+	// and only a save from review_local_browser_finding (or the run page) puts it in Data. Say exactly that.
+	if (leads.pending > 0) {
+		const unsaved = `${leads.pending} not in your Data yet — kept on this run until you save or skip each (review_local_browser_finding)`;
+		if (!run.policy.collection) return `${seen.findings} result(s) found; no results collection is set, so ${unsaved}. Choose one in the local browser settings.`;
+		return leads.added > 0 ? `${leads.added} lead(s) added from ${seen.findings} result(s); ${unsaved}.` : `${seen.findings} result(s) found and none added: ${unsaved}.`;
+	}
 	if (leads.added === 0 && leads.duplicates > 0) return `${seen.findings} result(s), all of them already in your Data (${leads.duplicates} duplicate(s)). Nothing new was found.`;
-	if (leads.added === 0 && leads.pending > 0) return `${seen.findings} result(s) found and ${leads.pending} still waiting for your review — nothing has entered the pipeline yet.`;
 	return `${leads.added} lead(s) added from ${seen.findings} result(s) across ${seen.pages} page(s).`;
 }
 
@@ -233,7 +239,7 @@ export function scanHeadline(t: ScanTelemetry): string {
 		`${t.leads.added} lead${t.leads.added === 1 ? "" : "s"} added`,
 	];
 	if (t.leads.duplicates) parts.push(`${t.leads.duplicates} duplicate${t.leads.duplicates === 1 ? "" : "s"}`);
-	if (t.leads.pending) parts.push(`${t.leads.pending} awaiting review`);
+	if (t.leads.pending) parts.push(`${t.leads.pending} not saved yet`);
 	if (t.sources.unreachable) parts.push(`${t.sources.unreachable} source${t.sources.unreachable === 1 ? "" : "s"} unreachable`);
 	if (t.errors.length) parts.push(`errors: ${t.errors.map((e) => e.code).join(", ")}`);
 	return `${parts.join(" · ")} — ${t.terminal.reason}`;

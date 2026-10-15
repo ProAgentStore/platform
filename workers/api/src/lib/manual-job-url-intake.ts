@@ -13,7 +13,7 @@
  *   Runner's final-submit approval is untouched.
  */
 import type { Env } from "../types.js";
-import { enqueueBrowserVerification } from "./job-lead-browser-verification.js";
+import { enqueueBrowserVerification } from "./job-lead-queue.js";
 import { type JobLeadLifecycleEntry, workKeyForLead } from "./job-lead-triage.js";
 import { type ManualUrlRejectionReason, validateManualJobUrl } from "./manual-job-url.js";
 

@@ -7,6 +7,8 @@
  * through the two functions here, so the pull and the report routes cannot disagree about what an
  * event or a result does to a run.
  */
+import { logError } from "../error-log.js";
+import { persistJobLeadFindings } from "./findings.js";
 import { syncScanCard } from "./scan-board.js";
 import { ingestRunnerShots } from "../browser-artifacts.js";
 import { HttpError } from "../auth.js";
@@ -198,9 +200,15 @@ export async function applyRunnerResult(env: Env, instanceId: string, uid: strin
 	);
 	if (!moved) throw new HttpError(409, `The run cannot end from "${run.status}"`);
 	await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: to, findings: parsed.findings.length, sourceFailures: parsed.sourceFailures.length, engineAuth: parsed.engineAuth } }], now);
-	await syncScanCard(env, instanceId, uid, moved);
-	await notifyEnded(env, uid, instanceId, moved).catch(() => undefined);
-	return moved;
+	// A Job Search Scout's findings enter the job-lead pipeline now, not when someone reviews them (#1096).
+	// A failure here must not undo the run's end: what was not stored stays on the run, unreviewed.
+	const ended = await persistJobLeadFindings(env, instanceId, uid, moved, now).catch(async (err) => {
+		await logError(env, { source: "local-browser", message: `job leads from run ${run.id} were not stored: ${err instanceof Error ? err.message : String(err)}`, userId: uid, context: { instanceId, runId: run.id } }).catch(() => undefined);
+		return moved;
+	});
+	await syncScanCard(env, instanceId, uid, ended);
+	await notifyEnded(env, uid, instanceId, ended).catch(() => undefined);
+	return ended;
 }
 
 /**

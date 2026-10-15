@@ -178,9 +178,10 @@ describe("the terminal reason — the sentence an empty scan needs", () => {
 		expect(t.terminal.reason).toMatch(/all of them already in your Data \(2 duplicate/);
 	});
 
-	it("results found and waiting for the owner — nothing has entered the pipeline yet", () => {
+	it("results with no decision say where they are — on the run, not in a queue (#1096)", () => {
 		const t = scanTelemetry({ run: run({ result: result({ findings: [finding(1), finding(2)] }) }), events: [] });
-		expect(t.terminal.reason).toMatch(/2 still waiting for your review/);
+		expect(t.terminal.reason).toMatch(/2 result\(s\) found and none added: 2 not in your Data yet — kept on this run until you save or skip each \(review_local_browser_finding\)/);
+		expect(t.terminal.reason).not.toMatch(/waiting for your review/);
 	});
 
 	it("a FAILED scan says what failed, not that it found nothing", () => {
