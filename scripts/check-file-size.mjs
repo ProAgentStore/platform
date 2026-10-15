@@ -1546,7 +1546,7 @@ const PINS = {
 	// components/ScanRunFace.tsx, so the board gains an import and a line.
 	"store/console/src/tabs/BoardTab.tsx": 842, // +38 at #1062: the apply board's Retry (Kanban card + List row) and its single-flight state are back — JOB_APPLY is supported again (they left at #970).
 	"workers/api/src/lib/storage-tools.ts": 816, // #1062: re-pinned — the JOB_APPLY chat start is supported again; #969 unpinned it when the retirement shrank it below 800.
-	"store/console/src/pages/AgentDetail.tsx": 971, // +1 at #1057: the local_native option in the runtime picker. // +1 at #957: the local_apply runtime option. +1 at #956: the local_artifact runtime option. +6 at #894: a link to a deleted agent says so (MissingSubject) instead of loading forever.
+	"store/console/src/pages/AgentDetail.tsx": 973, // +2 at PR839/#826: the Open-vs-Use lookup reads the roster WITH paused instances (an import and its why). // +1 at #1057: the local_native option in the runtime picker. // +1 at #957: the local_apply runtime option. +1 at #956: the local_artifact runtime option. +6 at #894: a link to a deleted agent says so (MissingSubject) instead of loading forever.
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows

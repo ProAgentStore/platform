@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import Page from "../components/Page";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 import type { Instance } from "../lib/types";
 import Card from "../components/Card";
 import Button from "../components/Button";
@@ -36,7 +37,9 @@ export default function Browse() {
 		try {
 			const [cat, mine] = await Promise.all([
 				api<{ agents: CatalogAgent[] }>("/v1/agents"),
-				api<{ instances: Instance[] }>("/v1/instances/my/instances"),
+				// Paused included (#826, PR839): this roster only decides Open vs Subscribe, and a paused
+				// instance is still yours — the default working list hides it, so Subscribe was offered again.
+				api<{ instances: Instance[] }>(MY_INSTANCES_WITH_PAUSED),
 			]);
 			setAgents(cat.agents || []);
 			setInstances(mine.instances || []);

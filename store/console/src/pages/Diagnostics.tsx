@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 import { api } from "@proagentstore/sdk/client";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import Page from "../components/Page";
@@ -78,7 +79,7 @@ export default function Diagnostics() {
 	useEffect(() => {
 		void (async () => {
 			try {
-				const d = await api<{ instances?: Array<{ id: string; name?: string; agent_name?: string }> }>("/v1/instances/my/instances");
+				const d = await api<{ instances?: Array<{ id: string; name?: string; agent_name?: string }> }>(MY_INSTANCES_WITH_PAUSED);
 				setNames(Object.fromEntries((d.instances || []).map((i) => [i.id, i.name || i.agent_name || i.id])));
 			} catch {
 				// IGNORABLE: these are LABELS on rows that render fine without them, and the list

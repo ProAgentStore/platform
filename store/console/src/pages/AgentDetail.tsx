@@ -6,6 +6,7 @@ import { isNotFoundError } from "../lib/notFound";
 import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 import type { Agent, Instance, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
 import { type WorkflowChoice, workflowPickerRows } from "../lib/workflow-picker";
 import LocalBrowserCapabilityCard from "../components/LocalBrowserCapabilityCard";
@@ -274,7 +275,8 @@ export default function AgentDetail() {
 	const [myInstances, setMyInstances] = useState<Instance[]>([]);
 	const loadMyInstances = useCallback(async () => {
 		try {
-			const r = await api<MyInstances>("/v1/instances/my/instances");
+			// Paused included (#826, PR839): a lookup for "Open my instance", not a working list.
+			const r = await api<MyInstances>(MY_INSTANCES_WITH_PAUSED);
 			setMyInstances(r.instances || []);
 		} catch {
 			// Non-fatal, and NOT silent in effect: an empty roster makes the control offer a
