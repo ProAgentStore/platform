@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * pre-push.mjs — the OPT-IN pre-push trip-wire (#902). Tens of seconds, scoped to what is pushed.
+ * pre-push.mjs — the pre-push trip-wire (#902). Tens of seconds, scoped to what is pushed.
  *
- * Installed by `bash scripts/install-hooks.sh`; never active on a fresh clone. CI runs every one of
+ * Active in every checkout via husky, which `pnpm install` sets up (#1103). CI runs every one of
  * these, and the full suite, on every push regardless — this only catches a red CI before it costs
  * a round trip. Run it by hand with `node scripts/pre-push.mjs` (it then checks against origin/main).
  *

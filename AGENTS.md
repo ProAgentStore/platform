@@ -127,11 +127,14 @@ not what you saved. A save that fails or saves nothing still lets a chained `pop
 work, and zsh does not split `$SRC="a.ts b.ts"`, so an unquoted path variable is ONE pathspec and the save
 fails. Never apply or pop a stash you did not just verifiably create.
 
-## Local git hooks (optional)
+## Local git hooks
 
-`bash scripts/install-hooks.sh` opts a checkout into a fast pre-commit (staged lint) and pre-push
-(CI guards, touched-project typecheck, related tests) trip-wire. It is never a substitute for the
-full-suite command above or for CI. See CONTRIBUTING.md.
+`pnpm install` activates them in every checkout (husky's `prepare`, #1103) — no manual step, so they
+follow a checkout to any machine. pre-commit: whitespace, the file-size ratchet (#302) over what is
+staged, unstaged-edit refusal, Biome. pre-push: CI's guards, touched-project typecheck, related tests.
+A commit that pushes a file past its pin is refused locally: split the file, or raise its pin in
+`scripts/check-file-size.mjs` with a reason, in the same commit. The hooks never replace the
+full-suite command above or CI. See CONTRIBUTING.md.
 
 ## Writing a guard test
 

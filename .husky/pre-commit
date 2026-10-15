@@ -1,0 +1,2 @@
+# Activated for every checkout by `pnpm install` (husky, #1103). The checks live in the script.
+node scripts/pre-commit.mjs

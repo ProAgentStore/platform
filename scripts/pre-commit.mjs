@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * pre-commit.mjs — the OPT-IN pre-commit trip-wire (#902). Seconds, staged files only.
+ * pre-commit.mjs — the pre-commit trip-wire (#902). Seconds, staged files only.
  *
- * Installed by `bash scripts/install-hooks.sh`; never active on a fresh clone. CI enforces all of
- * this and much more on every push, so a hook that is skipped (`--no-verify`) or never installed
- * loses nothing but the early warning. Run it by hand with `node scripts/pre-commit.mjs`.
+ * Active in every checkout: `pnpm install` runs husky (`prepare`), which points git at `.husky/`
+ * (#1103). CI enforces all of this and much more on every push, so a hook that is skipped
+ * (`--no-verify`) loses nothing but the early warning. Run it by hand with `node scripts/pre-commit.mjs`.
  *
- * Checks, in order: whitespace errors in what is staged; that no checked file also has unstaged
- * edits (or the checks would pass on a fix that is not in the commit); and CI's Biome lint over
- * the staged files it covers. Typecheck and tests are the pre-push hook's job — they take tens of
- * seconds, which a commit should not cost.
+ * Checks, in order: whitespace errors in what is staged; the file-size ratchet (#302) over what is
+ * STAGED, with CI's message — so a file pushed past its pin is split or its pin raised in the same
+ * commit, not found by a red CI after the deploys ran (#1103); that no checked file also has
+ * unstaged edits (or the checks would pass on a fix that is not in the commit); and CI's Biome lint
+ * over the staged files it covers. Typecheck and tests are the pre-push hook's job — they take tens
+ * of seconds, which a commit should not cost.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { biomeTargets } from "./lib/hook-plan.mjs";
@@ -27,6 +29,7 @@ function run(cmd, args) {
 const staged = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
 
 run("git", ["diff", "--cached", "--check"]);
+run("node", ["scripts/check-file-size.mjs", "--staged"]);
 
 const lint = biomeTargets(staged);
 if (lint.length) {

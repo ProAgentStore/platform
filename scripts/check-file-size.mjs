@@ -51,6 +51,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { stagedContents } from "./lib/staged-contents.mjs";
 
 /** A new file above this needs a PINS entry. */
 const LIMIT = 800;
@@ -1961,7 +1962,9 @@ const tracked = execFileSync("git", ["ls-files"], { encoding: "utf-8" })
 	.filter(Boolean)
 	.filter((f) => isSource(f) && !isTest(f));
 
-const lines = (f) => readFileSync(f, "utf-8").split("\n").length;
+// `--staged` (#1103, the pre-commit hook): measure the commit being made, not the working tree.
+const staged = process.argv.includes("--staged") ? stagedContents(tracked) : null;
+const lines = (f) => (staged?.get(f) ?? readFileSync(f, "utf-8")).split("\n").length;
 
 const problems = [];
 const measured = new Map();

@@ -30,19 +30,16 @@ Branch names are deleted after merge. If you reference a branch (`feat/some-bran
 
 ---
 
-## Local git hooks (optional)
+## Local git hooks
 
-Not active on a clone. To opt in for your checkout:
+Active in every checkout with no manual step: `pnpm install` runs husky through the root `prepare`
+script, which points this checkout's `core.hooksPath` at `.husky/_` (#1103). The hooks themselves
+are `.husky/pre-commit` and `.husky/pre-push`, each one line that runs our script. To skip
+activation (a packaging job, say), install with `HUSKY=0`.
 
-```sh
-bash scripts/install-hooks.sh             # activate (sets core.hooksPath to .githooks)
-bash scripts/install-hooks.sh --uninstall # deactivate
-```
-
-The installer only touches this checkout's `core.hooksPath`, and it will not replace one you set
-yourself unless you pass `--force`.
-
-- **pre-commit** (about a second): refuses whitespace errors in what is staged and refuses a
+- **pre-commit** (about a second): refuses whitespace errors in what is staged. It runs the
+  file-size ratchet (#302) over the STAGED content (`check-file-size.mjs --staged`), with CI's
+  message: split the file, or raise its pin with a reason, in the same commit. It refuses a
   checked file that also has unstaged edits, so the check sees exactly what you commit. Then it
   runs CI's Biome lint (`--error-on-warnings`) over the staged files CI lints.
 - **pre-push** (typically 30-60 s): runs CI's guard scripts with CI's arguments, plus
