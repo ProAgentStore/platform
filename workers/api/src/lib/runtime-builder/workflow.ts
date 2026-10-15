@@ -6,7 +6,7 @@ import { startPipelineRun } from "../pipeline-run-start.js";
 import { callRuntime, getLiveRuntime, mirrorRuntimeTask, runtimeJson } from "../../routes/instances-runtime.js";
 import type { Env } from "../../types.js";
 import { emptyEvidence, type RuntimeBuilderEngine, type RuntimeBuilderEvidence, type RuntimeBuilderRun, type RuntimeBuilderStatus } from "./types.js";
-import { appendFwsEvidence, fwsProxyInput, hasVisualQa } from "./fws-proxy.js";
+import { appendFwsEvidence, bindRunSession, fwsProxyInput, hasVisualQa } from "./fws-proxy.js";
 import { unfenceUntrusted } from "../untrusted-fence.js";
 import { signedCaptureDelivery, storeCaptureArtifact, type CaptureRequest } from "./capture-artifacts.js";
 
@@ -92,7 +92,9 @@ export async function captureRuntimeBuilderPreview(
 	// The call still goes through the one registry dispatch path, so no grant or OAuth check is
 	// skipped merely because this is a durable Website Builder action.
 	const { runRegistryTool } = await import("../tool-registry.js");
-	const capture = await runRegistryTool("mcp_call_tool", { env, userId, instanceId }, { url, tool: "capture_preview", args });
+	// Bound to this run's own draft (PR842 review), whoever asks — the author through the broker or the
+	// owner's capture route: a capture of another session is not this run's visual evidence.
+	const capture = await runRegistryTool("mcp_call_tool", { env, userId, instanceId }, { url, tool: "capture_preview", args: bindRunSession(run.evidence.sessionId, "capture_preview", args) });
 	if (!capture.success) throw new HttpError(502, `FWS capture_preview failed: ${capture.content.slice(0, 500)}`);
 	const artifact = await storeCaptureArtifact(env, run, request, capture.artifacts ?? []);
 	const runtime = await getLiveRuntime(env, instanceId, userId);
@@ -187,18 +189,56 @@ function fwsAnswer(content: string): Record<string, unknown> | null {
  * call is recorded on the run, and the quality report and draft session are taken from FreeWebStore's
  * own answers — the author cannot claim them.
  */
-export async function brokerFwsTool(env: Env, run: RuntimeBuilderRun, tool: string, args: Record<string, unknown>): Promise<{ success: boolean; content: string }> {
+/** How long an unfinished create_site claim blocks another — a crashed call must not block the run forever. */
+const CREATE_CLAIM_MS = 5 * 60 * 1000;
+
+/**
+ * Claim this run's one create_site, atomically: only while it has no session and no live claim. Two
+ * concurrent creates cannot both reach FreeWebStore, so the run cannot end up adopting the later draft.
+ */
+async function claimDraftCreation(env: Env, run: RuntimeBuilderRun, now: number): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE site_builder_runtime_runs SET evidence = json_set(evidence, '$.creatingSessionAt', ?4), updated_at = datetime('now')
+		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3
+		    AND json_extract(evidence, '$.sessionId') IS NULL
+		    AND (json_extract(evidence, '$.creatingSessionAt') IS NULL OR json_extract(evidence, '$.creatingSessionAt') < ?5)`,
+	)
+		.bind(run.id, run.instanceId, run.userId, now, now - CREATE_CLAIM_MS)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * One FreeWebStore authoring call for the local author, made by PAGS (#841, PR842) — the broker route
+ * (`routes/site-builder-broker.ts`) has already authenticated the run and refused non-authoring tools.
+ * The call is bound to THIS run's draft (`bindRunSession`); `mcp_call_tool` applies the owner's own FWS
+ * OAuth token, write consent and endpoint/tool grant. The call is recorded on the run, and the quality
+ * report and draft session are taken from FreeWebStore's own answers — the author cannot claim them.
+ */
+export async function brokerFwsTool(env: Env, run: RuntimeBuilderRun, tool: string, rawArgs: Record<string, unknown>): Promise<{ success: boolean; content: string }> {
 	const url = run.evidence.fwsEndpoint?.trim();
 	if (!url) throw new HttpError(409, "This Website Builder run has no FreeWebStore endpoint.");
-	// Deferred for the same import-cycle reason `captureRuntimeBuilderPreview` gives.
-	const { runRegistryTool } = await import("../tool-registry.js");
-	const result = await runRegistryTool("mcp_call_tool", { env, userId: run.userId, instanceId: run.instanceId }, { url, tool, args });
+	const args = bindRunSession(run.evidence.sessionId, tool, rawArgs);
+	const creating = tool === "create_site";
+	if (creating && !(await claimDraftCreation(env, run, Date.now()))) throw new HttpError(409, "This run's draft is already being created, or already exists.");
+	let result: { success: boolean; content: string };
+	try {
+		// Deferred for the same import-cycle reason `captureRuntimeBuilderPreview` gives.
+		const { runRegistryTool } = await import("../tool-registry.js");
+		result = await runRegistryTool("mcp_call_tool", { env, userId: run.userId, instanceId: run.instanceId }, { url, tool, args });
+	} finally {
+		// The claim never outlives the call: a failed create may be retried, a successful one is the session.
+		if (creating) await env.DB.prepare("UPDATE site_builder_runtime_runs SET evidence = json_remove(evidence, '$.creatingSessionAt') WHERE id = ?1 AND user_id = ?2").bind(run.id, run.userId).run();
+	}
+	// Written onto the LATEST record, not the one read at the start: a concurrent call's transcript entry
+	// or the session a create just recorded must not be overwritten by this call's stale copy.
+	const latest = (await getRuntimeBuilderRun(env, run.instanceId, run.userId, run.id)) ?? run;
 	const kept = Object.fromEntries(TRANSCRIPT_ARGS.filter((k) => typeof args[k] === "string").map((k) => [k, args[k]]));
-	let evidence = appendFwsEvidence(run.evidence, { tool, ...(Object.keys(kept).length ? { args: kept } : {}), at: new Date().toISOString(), result: result.success ? "ok" : "error" });
+	let evidence = appendFwsEvidence(latest.evidence, { tool, ...(Object.keys(kept).length ? { args: kept } : {}), at: new Date().toISOString(), result: result.success ? "ok" : "error" });
 	const answer = result.success ? fwsAnswer(result.content) : null;
 	if (answer && tool === "get_quality_report") evidence = { ...evidence, qualityReport: answer };
-	if (answer && tool === "create_site" && typeof answer.session_id === "string") evidence = { ...evidence, sessionId: answer.session_id };
+	if (answer && creating && typeof answer.session_id === "string" && !latest.evidence.sessionId) evidence = { ...evidence, sessionId: answer.session_id };
 	const status = hasVisualQa(evidence) ? "awaiting_review" : "drafting";
-	await updateRuntimeBuilderRun(env, run.instanceId, run.userId, run.id, status, { ...evidence, approvalState: status === "awaiting_review" ? "awaiting_review" : evidence.approvalState }, run.refinementCount);
+	await updateRuntimeBuilderRun(env, run.instanceId, run.userId, run.id, status, { ...evidence, approvalState: status === "awaiting_review" ? "awaiting_review" : evidence.approvalState }, latest.refinementCount);
 	return { success: result.success, content: result.content };
 }

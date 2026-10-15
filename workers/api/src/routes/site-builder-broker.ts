@@ -22,7 +22,9 @@ import type { Env } from "../types.js";
  *     connector write consent and the exact endpoint/tool grant — the same registry path every other
  *     caller uses; `capture_preview` goes through the existing capture path, so screenshots become
  *     the run's R2 artifacts, never bytes in a model transcript;
- *  4. records the call on the run's transcript, and takes the quality report and the draft's
+ *  4. binds every session-scoped call to THIS run's own draft (`bindRunSession`): the credential
+ *     authorizes one draft, not every draft the owner's FreeWebStore account can reach;
+ *  5. records the call on the run's transcript, and takes the quality report and the draft's
  *     session id from FreeWebStore's OWN answers — the author's evidence cannot claim them.
  *
  * Outside the owner-session routes on purpose: the caller is a runner, which has no session.
@@ -73,9 +75,10 @@ siteBuilderBrokerRoutes.post("/:runId/evidence", async (c) => {
 	if (body.deployParams && typeof body.deployParams === "object" && !Array.isArray(body.deployParams)) patch.deployParams = body.deployParams;
 	if (typeof body.model === "string" && body.model.trim()) patch.model = body.model.trim();
 	if (!Object.keys(patch).length) return c.json({ error: "sessionId, deployParams or model is required" }, 400);
-	// The draft's session is FreeWebStore's own answer to create_site when PAGS saw it; a different one is refused.
-	if (patch.sessionId && run.evidence.sessionId && patch.sessionId !== run.evidence.sessionId) {
-		return c.json({ error: "That is not the draft session this run created." }, 409);
+	// The draft's session is ONLY FreeWebStore's own answer to this run's create_site (PR842 review): before
+	// one there is no session to adopt, and any other one — another draft of the same owner — is refused.
+	if (patch.sessionId && patch.sessionId !== run.evidence.sessionId) {
+		return c.json({ error: run.evidence.sessionId ? "That is not the draft session this run created." : "This run has no draft yet: its session is recorded from create_site, never reported." }, 409);
 	}
 	const updated = await submitRuntimeBuilderEvidence(c.env, run.instanceId, run.userId, run.id, patch);
 	return c.json({ status: updated.status });

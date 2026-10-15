@@ -32,6 +32,8 @@ export interface RuntimeBuilderEvidence {
 	offline: { pausedAt?: string; resumedAt?: string; reason?: string };
 	/** The FWS draft session. Never an OAuth credential. */
 	sessionId?: string | null;
+	/** Set while this run's one create_site is in flight (PR842 review) — a second cannot start beside it. */
+	creatingSessionAt?: number | null;
 	deployParams?: Record<string, unknown> | null;
 	/** Endpoint identity only; OAuth remains in PAGS' endpoint-scoped credential store. */
 	fwsEndpoint?: string | null;

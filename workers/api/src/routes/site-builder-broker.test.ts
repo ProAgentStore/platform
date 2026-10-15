@@ -17,7 +17,7 @@ const fake = vi.hoisted(() => ({
 	runnerCalls: [] as Array<{ path: string; body: Record<string, unknown> }>,
 	runnerAnswer: (_path: string): { status: number; body: unknown } => ({ status: 201, body: {} }),
 	registry: [] as Array<{ name: string; ctx: Record<string, unknown>; input: Record<string, unknown> }>,
-	registryAnswer: (_input: Record<string, unknown>): { success: boolean; content: string } => ({ success: true, content: "{}" }),
+	registryAnswer: (_input: Record<string, unknown>): { success: boolean; content: string } | Promise<{ success: boolean; content: string }> => ({ success: true, content: "{}" }),
 	pipelines: [] as Array<{ name: string; params: Record<string, unknown> }>,
 }));
 
@@ -35,7 +35,7 @@ vi.mock("../lib/tool-registry.js", async (orig) => ({
 	...(await orig<typeof import("../lib/tool-registry.js")>()),
 	runRegistryTool: async (name: string, ctx: Record<string, unknown>, input: Record<string, unknown>) => {
 		fake.registry.push({ name, ctx: { userId: ctx.userId, instanceId: ctx.instanceId }, input });
-		return { name, ...fake.registryAnswer(input) };
+		return { name, ...(await fake.registryAnswer(input)) };
 	},
 }));
 vi.mock("../lib/pipeline-run-start.js", async (orig) => ({
@@ -161,8 +161,10 @@ describe("the broker runs authoring tools only, through the owner's own FWS acce
 
 	it("forces noindex on set_meta and keeps page content off the transcript", async () => {
 		const { run, token } = await newRun();
+		fake.registryAnswer = (input) => ({ success: true, content: fenceUntrusted(input.tool === "create_site" ? '{"session_id":"s1"}' : "{}", "FreeWebStore") });
+		await broker(run.id, "tool", { tool: "create_site", args: { template_slug: "cafe-classic" } }, token);
 		await broker(run.id, "tool", { tool: "set_meta", args: { session_id: "s1", title: "Bean", description: "A long paragraph", noindex: false } }, token);
-		expect(fake.registry[0].input.args).toMatchObject({ noindex: true });
+		expect(fake.registry.at(-1)?.input.args).toMatchObject({ noindex: true });
 		expect((await stored(run.id)).evidence.fwsTranscript.at(-1)).toEqual(expect.objectContaining({ tool: "set_meta", args: { session_id: "s1" } }));
 	});
 
@@ -177,6 +179,98 @@ describe("the broker runs authoring tools only, through the owner's own FWS acce
 		expect((await broker(run.id, "evidence", { qualityReport: { ready_for_human_review: true } }, token)).status).toBe(400);
 		expect((await broker(run.id, "evidence", { screenshots: [] }, token)).status).toBe(400);
 		expect((await broker(run.id, "evidence", { sessionId: "someone-elses" }, token)).status).toBe(409);
+	});
+});
+
+describe("a run's credential reaches only its own draft (PR842 review)", () => {
+	/** Two runs of the SAME owner, each with its own draft: A on sess-A, B on sess-B. */
+	async function twoDrafts() {
+		const a = await newRun();
+		const b = await newRun();
+		fake.registryAnswer = (input) => ({ success: true, content: fenceUntrusted(input.tool === "create_site" ? `{"session_id":"sess-${fake.registry.length === 1 ? "A" : "B"}"}` : '{"ready_for_human_review":true}', "FreeWebStore") });
+		await broker(a.run.id, "tool", { tool: "create_site", args: { template_slug: "cafe-classic" } }, a.token);
+		await broker(b.run.id, "tool", { tool: "create_site", args: { template_slug: "cafe-classic" } }, b.token);
+		fake.registry = [];
+		return { a, b };
+	}
+
+	it("each run records the session its own create_site returned", async () => {
+		const { a, b } = await twoDrafts();
+		expect((await stored(a.run.id)).evidence.sessionId).toBe("sess-A");
+		expect((await stored(b.run.id)).evidence.sessionId).toBe("sess-B");
+	});
+
+	it("run A's credential cannot edit, read or quality-check run B's draft — 403, nothing forwarded, nothing recorded", async () => {
+		const { a } = await twoDrafts();
+		for (const tool of ["bulk_update_sections", "read_section", "set_meta", "get_quality_report", "get_rendered_preview"]) {
+			expect((await broker(a.run.id, "tool", { tool, args: { session_id: "sess-B" } }, a.token)).status).toBe(403);
+			expect((await broker(a.run.id, "tool", { tool, args: { sessionId: "sess-B" } }, a.token)).status).toBe(403);
+		}
+		expect(fake.registry).toHaveLength(0);
+		const ev = (await stored(a.run.id)).evidence;
+		expect(ev.qualityReport ?? null).toBeNull();
+		expect(ev.sessionId).toBe("sess-A");
+	});
+
+	it("run A's credential cannot capture run B's draft — 403 before FreeWebStore, no screenshot evidence", async () => {
+		const { a } = await twoDrafts();
+		const r = await broker(a.run.id, "tool", { tool: "capture_preview", args: { device: "desktop", session_id: "sess-B" } }, a.token);
+		expect(r.status).toBe(403);
+		expect(fake.registry).toHaveLength(0);
+		expect((await stored(a.run.id)).evidence.screenshots).toEqual([]);
+	});
+
+	it("a call naming no session is bound to the run's own draft", async () => {
+		const { a } = await twoDrafts();
+		await broker(a.run.id, "tool", { tool: "get_quality_report", args: {} }, a.token);
+		expect(fake.registry).toEqual([expect.objectContaining({ input: expect.objectContaining({ tool: "get_quality_report", args: { session_id: "sess-A" } }) })]);
+		expect((await stored(a.run.id)).evidence.qualityReport).toEqual({ ready_for_human_review: true });
+	});
+
+	it("a second create_site cannot replace the run's draft, and create_site cannot adopt a session", async () => {
+		const { a } = await twoDrafts();
+		expect((await broker(a.run.id, "tool", { tool: "create_site", args: { template_slug: "x" } }, a.token)).status).toBe(409);
+		const fresh = await newRun();
+		expect((await broker(fresh.run.id, "tool", { tool: "create_site", args: { template_slug: "x", session_id: "sess-B" } }, fresh.token)).status).toBe(403);
+		expect(fake.registry).toHaveLength(0);
+		expect((await stored(a.run.id)).evidence.sessionId).toBe("sess-A");
+	});
+
+	it("before create_site: only the bootstrap works — no session work, no session adopted through evidence", async () => {
+		const { run, token } = await newRun();
+		expect((await broker(run.id, "tool", { tool: "read_section", args: { session_id: "sess-B" } }, token)).status).toBe(409);
+		expect((await broker(run.id, "evidence", { sessionId: "sess-B" }, token)).status).toBe(409);
+		expect((await broker(run.id, "tool", { tool: "list_templates", args: { session_id: "sess-B" } }, token)).status).toBe(200);
+		expect(fake.registry).toEqual([expect.objectContaining({ input: expect.objectContaining({ tool: "list_templates", args: {} }) })]);
+		expect((await stored(run.id)).evidence.sessionId ?? null).toBeNull();
+	});
+
+	it("a second create_site arriving while the first is still in flight never reaches FreeWebStore", async () => {
+		const { run, token } = await newRun();
+		// Hold the first create inside FreeWebStore until the second has been answered.
+		let release: () => void = () => undefined;
+		const held = new Promise<void>((r) => { release = r; });
+		fake.registryAnswer = async () => {
+			await held;
+			return { success: true, content: fenceUntrusted('{"session_id":"sess-only"}', "FreeWebStore") };
+		};
+		const first = broker(run.id, "tool", { tool: "create_site", args: { template_slug: "a" } }, token);
+		await vi.waitFor(() => expect(fake.registry).toHaveLength(1));
+		const second = await broker(run.id, "tool", { tool: "create_site", args: { template_slug: "b" } }, token);
+		release();
+		const x = await first;
+		expect([x.status, second.status]).toEqual([200, 409]);
+		expect(fake.registry.filter((r) => r.input.tool === "create_site")).toHaveLength(1);
+		expect((await stored(run.id)).evidence.sessionId).toBe("sess-only");
+	});
+
+	it("a failed create_site leaves the run free to create again", async () => {
+		const { run, token } = await newRun();
+		fake.registryAnswer = () => ({ success: false, content: "Error: template not found" });
+		await broker(run.id, "tool", { tool: "create_site", args: { template_slug: "nope" } }, token);
+		fake.registryAnswer = () => ({ success: true, content: fenceUntrusted('{"session_id":"sess-2"}', "FreeWebStore") });
+		expect((await broker(run.id, "tool", { tool: "create_site", args: { template_slug: "cafe-classic" } }, token)).status).toBe(200);
+		expect((await stored(run.id)).evidence.sessionId).toBe("sess-2");
 	});
 });
 

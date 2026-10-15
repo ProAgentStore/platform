@@ -14811,7 +14811,10 @@ paths:
         403 and happen only through the owner's approve. The tool runs through `mcp_call_tool` with the
         owner's own FreeWebStore grant; `capture_preview` goes through PAGS's capture path. `set_meta`
         is always `noindex: true`. The quality report and the draft session id are taken from
-        FreeWebStore's answers.
+        FreeWebStore's answers. Every call is bound to THIS run's draft: `list_templates` takes no
+        session; `create_site` only while the run has none (409 after) and never naming one (403);
+        every other tool works only on the run's own session — supplied when the call names none,
+        403 when it names another, 409 before `create_site`.
       operationId: siteBuilderBrokerTool
       tags: [Runtime]
       security: []
