@@ -1687,6 +1687,78 @@ describe("settings, access and cancel", () => {
 	});
 });
 
+describe("the runtime-task live view of an application card reaches its fill's browser (#1100)", () => {
+	const FRAME = { frame: "data:image/jpeg;base64,AAAA", width: 1280, height: 720 };
+	/** A fill paused on a SEEK sign-in, as the reported run was: the card is `app-<applicationId>`. */
+	async function pausedOnSignIn(id: string) {
+		const started = await call("POST", "/ap/application-runs", readyApp(id));
+		const runId = started.body.run.id as string;
+		runner("paused", { pause: { reason: "login_required", question: "Sign in to SEEK" } });
+		const ready = { handoffId: "ignored-by-relay", runId, applicationId: id, browserProfile: "isolated", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" };
+		answers["/local-apply/handoff"] = { status: 200, body: ready };
+		answers["/local-apply/handoff-status"] = { status: 200, body: ready };
+		answers["/local-apply/handoff/frame"] = { status: 200, body: FRAME };
+		answers["/local-apply/handoff/input"] = { status: 200, body: { ok: true } };
+		answers["/local-apply/handoff/resume"] = { status: 200, body: { ok: true } };
+		return { runId, card: `app-${id}` };
+	}
+	const takeoverOf = (card: string) => d1.DB.prepare("SELECT id, state FROM browser_takeovers WHERE subject_kind = 'runtime_task' AND subject_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(card).first<{ id: string; state: string }>();
+
+	it("an active runtime_task takeover on the card streams the fill's page — the reported failure", async () => {
+		const { runId, card } = await pausedOnSignIn("lead-1100");
+		const requested = await call("POST", "/ap/browser-takeovers", { subjectKind: "runtime_task", subjectId: card });
+		expect(requested.status).toBeLessThan(300);
+
+		const frame = await call("GET", `/ap/takeover/${card}/frame?device=mobile`);
+		expect(frame.status).toBe(200);
+		expect(frame.body).toEqual(FRAME);
+		// Served through the fill's handoff, bound to this run — never the runner's task-takeover map, which
+		// is where "No active human-takeover session for this task" came from.
+		const handoffId = (await d1.DB.prepare("SELECT continuity_id FROM local_apply_handoffs WHERE run_id = ?1").bind(runId).first<{ continuity_id: string }>())?.continuity_id;
+		expect(sent.find((x) => x.path === "/local-apply/handoff/frame")?.body).toMatchObject({ handoffId, runId, applicationId: "lead-1100" });
+		expect(sent.some((x) => x.path.startsWith("/takeover/"))).toBe(false);
+		expect((await takeoverOf(card))?.state).toBe("active");
+
+		// Polling again reuses the open handoff rather than opening another.
+		await call("GET", `/ap/takeover/${card}/frame?device=mobile`);
+		expect(sent.filter((x) => x.path === "/local-apply/handoff")).toHaveLength(1);
+	});
+
+	it("the owner's input reaches that page, and resume hands the fill back and closes the takeover", async () => {
+		const { runId, card } = await pausedOnSignIn("lead-1100b");
+		await call("GET", `/ap/takeover/${card}/frame`);
+		const input = { type: "click", x: 10, y: 20 };
+		expect((await call("POST", `/ap/takeover/${card}/input`, input)).status).toBe(200);
+		expect(sent.find((x) => x.path === "/local-apply/handoff/input")?.body).toMatchObject({ runId, input });
+
+		runner("running");
+		const resumed = await call("POST", `/ap/takeover/${card}/resume`);
+		expect(resumed.status).toBe(200);
+		expect(sent.some((x) => x.path === "/local-apply/handoff/resume")).toBe(true);
+		expect(sent.some((x) => x.path === "/local-apply/resume")).toBe(true);
+		expect((await takeoverOf(card))?.state).toBe("resumed");
+	});
+
+	it("a card whose fill is not waiting on a person has no takeover to open — and records none", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-1100c"));
+		expect(started.status).toBeLessThan(300);
+		runner("running");
+		const r = await call("GET", "/ap/takeover/app-lead-1100c/frame");
+		expect(r.status).toBe(404);
+		expect(await takeoverOf("app-lead-1100c")).toBeNull();
+		expect(sent.some((x) => x.path.startsWith("/local-apply/handoff"))).toBe(false);
+	});
+
+	it("the owner's no-phone preference still holds on the card's live view", async () => {
+		const { card } = await pausedOnSignIn("lead-1100d");
+		await call("POST", "/ap/browser-takeovers", { subjectKind: "runtime_task", subjectId: card });
+		d1.sqlite.prepare("UPDATE browser_takeovers SET mobile_allowed = 0 WHERE subject_id = ?").run(card);
+		const r = await call("GET", `/ap/takeover/${card}/frame?device=mobile`);
+		expect(r.status).toBe(409);
+		expect(sent.some((x) => x.path === "/local-apply/handoff/frame")).toBe(false);
+	});
+});
+
 describe("deleting an agent", () => {
 	it.each([
 		["the Tailor (its applications and their audit go; the Runner's run rows stay)", "tailor-a", { apps: 0, audit: 0, runs: 1 }],

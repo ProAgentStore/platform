@@ -59,14 +59,20 @@ async function notifyRequested(env: Env, uid: string, instanceId: string, takeov
  * resumed, ended, expired — is refused with how to ask again rather than silently reopened. `open`
  * moves a requested takeover to `active`: showing the frame is what opening means.
  */
-export async function takeoverGate(env: Env, uid: string, instanceId: string, runtime: RuntimeRow, taskId: string, opts: { open: boolean; device?: string }): Promise<BrowserTakeover> {
+export async function takeoverGate(env: Env, uid: string, instanceId: string, runtime: RuntimeRow, taskId: string, opts: { open: boolean; device?: string; fill?: { waiting: boolean } }): Promise<BrowserTakeover> {
 	let takeover = await latestTakeoverFor(env, uid, instanceId, "runtime_task", taskId);
 	if (takeover && !LIVE_TAKEOVER_STATES.includes(takeover.state)) {
 		throw new HttpError(409, `This takeover is ${takeover.state}. Ask for it again (POST …/browser-takeovers with subjectKind "runtime_task") if the task still needs you.`);
 	}
 	if (!takeover) {
-		const listed = (await runtimeJson(await callRuntime(env, runtime, "/takeover")).catch(() => ({}))) as { takeovers?: unknown };
-		if (!Array.isArray(listed.takeovers) || !listed.takeovers.includes(taskId)) throw new HttpError(404, "No takeover is waiting for this task.");
+		// An application card (#1100) is never in the runner's task-takeover list — its page is its fill's
+		// handoff — so with no record yet it is admitted only while that fill waits on a person.
+		if (opts.fill) {
+			if (!opts.fill.waiting) throw new HttpError(404, "No takeover is waiting for this task.");
+		} else {
+			const listed = (await runtimeJson(await callRuntime(env, runtime, "/takeover")).catch(() => ({}))) as { takeovers?: unknown };
+			if (!Array.isArray(listed.takeovers) || !listed.takeovers.includes(taskId)) throw new HttpError(404, "No takeover is waiting for this task.");
+		}
 		const { settings } = await readBrowserVerification(env, instanceId, uid);
 		takeover = (await requestTakeover(env, { userId: uid, instanceId, subjectKind: "runtime_task", subjectId: taskId, reason: "manual", mobileAllowed: settings.allowMobile }))?.takeover ?? null;
 		if (!takeover) throw new HttpError(409, "The takeover could not be recorded, so it was not opened.");
