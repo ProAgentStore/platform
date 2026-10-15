@@ -1,11 +1,13 @@
 import { HttpError } from "../auth.js";
+import { BROKER_BASE_URL, mintBrokerToken } from "./broker-token.js";
 import { deriveClientType } from "../coding-command.js";
 import { readEngines } from "../coding-engines.js";
 import { startPipelineRun } from "../pipeline-run-start.js";
 import { callRuntime, getLiveRuntime, mirrorRuntimeTask, runtimeJson } from "../../routes/instances-runtime.js";
 import type { Env } from "../../types.js";
 import { emptyEvidence, type RuntimeBuilderEngine, type RuntimeBuilderEvidence, type RuntimeBuilderRun, type RuntimeBuilderStatus } from "./types.js";
-import { fwsProxyInput, hasVisualQa } from "./fws-proxy.js";
+import { appendFwsEvidence, fwsProxyInput, hasVisualQa } from "./fws-proxy.js";
+import { unfenceUntrusted } from "../untrusted-fence.js";
 import { signedCaptureDelivery, storeCaptureArtifact, type CaptureRequest } from "./capture-artifacts.js";
 
 interface RunRow { id: string; instance_id: string; user_id: string; engine: RuntimeBuilderEngine; status: RuntimeBuilderStatus; evidence: string; refinement_count: number; created_at: string; updated_at: string }
@@ -32,7 +34,9 @@ export async function createRuntimeBuilderRun(env: Env, instanceId: string, user
 	const runtime = await getLiveRuntime(env, instanceId, userId);
 	if (!runtime) return pauseRuntimeBuilderRun(env, instanceId, userId, runId, "Local pags up runner is unavailable");
 	try {
-		const res = await callRuntime(env, runtime, "/tasks", { method: "POST", body: JSON.stringify({ type: "site_builder_runtime", title: "Website Builder draft", subtitle: `${engine} authoring draft`, input: { ...fwsProxyInput(runId, mcpUrl), params: input.params && typeof input.params === "object" ? input.params : {} } }) });
+		// The author reaches PAGS only through the broker, with a credential naming THIS run (#841, PR842).
+		const broker = { url: `${BROKER_BASE_URL}${encodeURIComponent(runId)}`, token: await mintBrokerToken(env, { userId, instanceId, runId }) };
+		const res = await callRuntime(env, runtime, "/tasks", { method: "POST", body: JSON.stringify({ type: "site_builder_runtime", title: "Website Builder draft", subtitle: `${engine} authoring draft`, input: { ...fwsProxyInput(runId, mcpUrl), engine, broker, params: input.params && typeof input.params === "object" ? input.params : {} } }) });
 		const payload = await runtimeJson(res);
 		if (!res.ok) throw new Error("runner rejected Website Builder task");
 		const taskId = typeof (payload as Record<string, unknown>).id === "string" ? String((payload as Record<string, unknown>).id) : null;
@@ -120,10 +124,24 @@ export async function captureRuntimeBuilderPreview(
 export async function refineRuntimeBuilderRun(env: Env, instanceId: string, userId: string, runId: string, request: string): Promise<RuntimeBuilderRun> {
 	const run = await getRuntimeBuilderRun(env, instanceId, userId, runId);
 	if (!run) throw new HttpError(404, "Website Builder run not found");
+	if (run.status === "cancelled" || run.status === "approved") throw new HttpError(409, "Website Builder run is closed");
 	if (run.refinementCount >= 1) throw new HttpError(409, "Website Builder allows one refinement only");
+	if (!run.evidence.taskId) throw new HttpError(409, "This run has no runner task to refine");
 	const runtime = await getLiveRuntime(env, instanceId, userId);
 	if (!runtime) return pauseRuntimeBuilderRun(env, instanceId, userId, runId, "Local pags up runner is unavailable");
-	await callRuntime(env, runtime, `/tasks/${encodeURIComponent(run.evidence.taskId ?? runId)}/approve`, { method: "POST", body: JSON.stringify({ refinement: request, runId }) });
+	// The refinement is one more turn for the local author (PR842). It used to POST the task's `/approve`,
+	// which the runner refuses for a running task — and the answer was never read, so the run recorded a
+	// refinement nobody received and the one allowed refinement was spent on nothing.
+	let delivered: Response;
+	try {
+		delivered = await callRuntime(env, runtime, `/tasks/${encodeURIComponent(run.evidence.taskId)}/site-builder/refine`, { method: "POST", body: JSON.stringify({ refinement: request }) });
+	} catch (error) {
+		throw new HttpError(502, `The runner did not take the refinement: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	if (!delivered.ok) {
+		const why = (await runtimeJson(delivered).catch(() => ({}))) as { error?: unknown };
+		throw new HttpError(delivered.status === 409 ? 409 : 502, `The runner did not take the refinement: ${typeof why.error === "string" ? why.error : `HTTP ${delivered.status}`}`);
+	}
 	const evidence = { ...run.evidence, refinementCount: 1, offline: { ...run.evidence.offline, resumedAt: new Date().toISOString() } };
 	await updateRuntimeBuilderRun(env, instanceId, userId, runId, "drafting", evidence, 1);
 	return (await getRuntimeBuilderRun(env, instanceId, userId, runId))!;
@@ -148,4 +166,39 @@ export async function cancelRuntimeBuilderRun(env: Env, instanceId: string, user
 	if (runtime && run.evidence.taskId) await callRuntime(env, runtime, `/tasks/${encodeURIComponent(run.evidence.taskId)}/cancel`, { method: "POST" }).catch(() => undefined);
 	await updateRuntimeBuilderRun(env, instanceId, userId, runId, "cancelled", { ...run.evidence, approvalState: "denied" }, run.refinementCount);
 	return (await getRuntimeBuilderRun(env, instanceId, userId, runId))!;
+}
+
+/** Arguments worth keeping on the transcript: identifiers, never page content. */
+const TRANSCRIPT_ARGS = ["session_id", "template_slug", "section_id", "device"];
+
+function fwsAnswer(content: string): Record<string, unknown> | null {
+	try {
+		const v = JSON.parse(unfenceUntrusted(content)) as unknown;
+		return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * One FreeWebStore authoring call for the local author, made by PAGS (#841, PR842) — the broker route
+ * (`routes/site-builder-broker.ts`) has already authenticated the run and refused non-authoring tools.
+ * `mcp_call_tool` applies the owner's own FWS OAuth token, write consent and endpoint/tool grant. The
+ * call is recorded on the run, and the quality report and draft session are taken from FreeWebStore's
+ * own answers — the author cannot claim them.
+ */
+export async function brokerFwsTool(env: Env, run: RuntimeBuilderRun, tool: string, args: Record<string, unknown>): Promise<{ success: boolean; content: string }> {
+	const url = run.evidence.fwsEndpoint?.trim();
+	if (!url) throw new HttpError(409, "This Website Builder run has no FreeWebStore endpoint.");
+	// Deferred for the same import-cycle reason `captureRuntimeBuilderPreview` gives.
+	const { runRegistryTool } = await import("../tool-registry.js");
+	const result = await runRegistryTool("mcp_call_tool", { env, userId: run.userId, instanceId: run.instanceId }, { url, tool, args });
+	const kept = Object.fromEntries(TRANSCRIPT_ARGS.filter((k) => typeof args[k] === "string").map((k) => [k, args[k]]));
+	let evidence = appendFwsEvidence(run.evidence, { tool, ...(Object.keys(kept).length ? { args: kept } : {}), at: new Date().toISOString(), result: result.success ? "ok" : "error" });
+	const answer = result.success ? fwsAnswer(result.content) : null;
+	if (answer && tool === "get_quality_report") evidence = { ...evidence, qualityReport: answer };
+	if (answer && tool === "create_site" && typeof answer.session_id === "string") evidence = { ...evidence, sessionId: answer.session_id };
+	const status = hasVisualQa(evidence) ? "awaiting_review" : "drafting";
+	await updateRuntimeBuilderRun(env, run.instanceId, run.userId, run.id, status, { ...evidence, approvalState: status === "awaiting_review" ? "awaiting_review" : evidence.approvalState }, run.refinementCount);
+	return { success: result.success, content: result.content };
 }

@@ -23,6 +23,7 @@ import { driveRoutes } from "./routes/drive.js";
 import { workdriveRoutes } from "./routes/workdrive.js";
 import { errorRoutes } from "./routes/errors.js";
 import { auditRoutes } from "./routes/audit.js";
+import { siteBuilderBrokerRoutes } from "./routes/site-builder-broker.js";
 import { feedbackRoutes } from "./routes/feedback.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { notificationRoutes } from "./routes/notifications.js";
@@ -223,6 +224,7 @@ app.route("/v1/workdrive", workdriveRoutes); // /v1/workdrive/zoho/start, /callb
 app.route("/v1/triggers", triggerRoutes); // instance webhook + cron triggers
 app.route("/v1/errors", errorRoutes); // GET /v1/errors — durable error log read-back
 app.route("/v1/audit", auditRoutes); // admin-only MCP + admin-action audit readers, outside the Access perimeter for the MCP Worker (#1090)
+app.route("/v1/site-builder/broker", siteBuilderBrokerRoutes); // the Website Builder's local author → FreeWebStore, authorized per run (#841)
 app.route("/v1/feedback", feedbackRoutes); // owner's in-session complaints, turn-anchored (#514)
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);

@@ -57,7 +57,7 @@ async function digest(bytes: Uint8Array): Promise<string> {
 	return Array.from(hash, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function hmac(env: Env, value: string): Promise<string> {
+export async function hmac(env: Pick<Env, "SESSION_SIGNING_KEY">, value: string): Promise<string> {
 	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.SESSION_SIGNING_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 	const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
 	return btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

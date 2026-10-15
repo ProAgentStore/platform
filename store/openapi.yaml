@@ -14800,6 +14800,67 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/site-builder/broker/{runId}/tool:
+    post:
+      summary: Website Builder broker — run one FreeWebStore authoring tool for the local author
+      description: |
+        Called by the owner's runner on behalf of the local Claude Code/Codex author (#841), never by a
+        browser. Authorized by the run-scoped credential PAGS minted for this run (`Authorization:
+        Bearer <exp>.<hmac>`): 401 for any credential problem, 409 once the run is approved, cancelled
+        or failed. Only the FreeWebStore authoring tools are accepted — `deploy` and `push_update` are
+        403 and happen only through the owner's approve. The tool runs through `mcp_call_tool` with the
+        owner's own FreeWebStore grant; `capture_preview` goes through PAGS's capture path. `set_meta`
+        is always `noindex: true`. The quality report and the draft session id are taken from
+        FreeWebStore's answers.
+      operationId: siteBuilderBrokerTool
+      tags: [Runtime]
+      security: []
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [tool], properties: { tool: { type: string }, args: { type: object, additionalProperties: true } } }
+      responses:
+        "200":
+          description: The tool's answer.
+          content:
+            application/json:
+              schema: { type: object, properties: { success: { type: boolean }, content: { type: string } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/site-builder/broker/{runId}/evidence:
+    post:
+      summary: Website Builder broker — the local author's draft evidence
+      description: |
+        The author reports the FreeWebStore session it built and the deploy parameters. Same run-scoped
+        credential and refusals as `/tool`. Screenshots, the quality report, the transcript and the
+        approval state are recorded by PAGS itself and refused here (400); a session other than the one
+        PAGS saw `create_site` return is 409. Reaching review is not approval.
+      operationId: siteBuilderBrokerEvidence
+      tags: [Runtime]
+      security: []
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { sessionId: { type: string }, deployParams: { type: object, additionalProperties: true }, model: { type: string } } }
+      responses:
+        "200":
+          description: The run's status after the evidence.
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/instances/{instanceId}/site-builder/{runId}/cancel:
     post:
       summary: Cancel a runtime Website Builder draft

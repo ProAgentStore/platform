@@ -1,4 +1,5 @@
 import { overLimit } from "../lib/write-limits.js";
+import { withoutBrokerCredential } from "../lib/runtime-builder/task-credential.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
@@ -266,6 +267,7 @@ export async function mirrorRuntimeTask(
 ): Promise<void> {
 	const id = taskId(task);
 	if (!id) return;
+	task = withoutBrokerCredential(task);
 	const type = typeof task.type === "string" ? task.type.slice(0, 120) : "task";
 	const status = typeof task.status === "string" ? task.status.slice(0, 80) : "queued";
 	const createdAt = taskColumnTimestamp(task.createdAt ?? task.created_at);
