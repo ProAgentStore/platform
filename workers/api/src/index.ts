@@ -278,6 +278,8 @@ export default {
 		return app.fetch(request, env, ctx);
 	},
 	async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+		// A cron isolate may never serve a fetch, and its failures carried no build (#1085).
+		if (!_buildStamped) { setServerBuild(env.API_BUILD ?? "dev"); _buildStamped = true; }
 		// Cron doesn't go through app.onError — persist a failure ourselves so a broken
 		// trigger sweep is visible in the admin Errors view instead of vanishing.
 		ctx.waitUntil(

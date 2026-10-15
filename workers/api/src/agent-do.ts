@@ -417,6 +417,8 @@ export class AgentDO extends DurableObject<Env> {
 					message: message.slice(0, 500),
 					context: {
 						path,
+						// The DO's own name — `logError` verifies it into an owner + instance (#1085).
+						agentId: (await this.getState().catch(() => null))?.agentId,
 						stack: err instanceof Error ? String(err.stack || "").slice(0, 1800) : undefined,
 					},
 				}).catch(() => undefined);
@@ -1279,7 +1281,7 @@ export class AgentDO extends DurableObject<Env> {
 			await logError(this.env, {
 				source: "alarm",
 				message: `DO alarm crashed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
-				context: { stack: err instanceof Error ? String(err.stack || "").slice(0, 1500) : undefined },
+				context: { agentId: (await this.getState().catch(() => null))?.agentId, stack: err instanceof Error ? String(err.stack || "").slice(0, 1500) : undefined },
 			}).catch(() => undefined);
 			throw err;
 		}

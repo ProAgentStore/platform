@@ -66,6 +66,8 @@ errorRoutes.post("/client", async (c) => {
 		build: sanitizeBuildId(body.build),
 		message,
 		context: body.context && typeof body.context === "object" ? (body.context as Record<string, unknown>) : undefined,
+		// The body is the caller's word (#1085): its instance counts only if this session owns it.
+		untrusted: true,
 	});
 	if (written === "persisted") return c.json({ ok: true, durable: true });
 	if (written === "queued") return c.json({ ok: true, durable: false, queued: true }, 202);
@@ -104,7 +106,10 @@ errorRoutes.get("/", async (c) => {
 	// that is invisible by default is a warn nobody reads, which is the state #424 was filed about.
 	const level = c.req.query("level") === "warn" ? "warn" : c.req.query("level") === "error" ? "error" : undefined;
 	// One past the page, to say whether there is more (#898): a full page used to read as the whole log.
-	const rows = await listErrors(c.env, { userId: session.uid, all, source, limit: limit + 1, offset, level });
+	// Exact per-instance / per-run reads (#1085), on the verified columns — never widened past `scope`.
+	const instanceId = c.req.query("instance_id") || undefined;
+	const runId = c.req.query("run_id") || undefined;
+	const rows = await listErrors(c.env, { userId: session.uid, all, source, limit: limit + 1, offset, level, instanceId, runId });
 	const errors = rows.slice(0, limit);
 	const hasMore = rows.length > limit;
 	return c.json({ scope: all ? "all" : "me", count: errors.length, errors, offset, hasMore, nextOffset: hasMore ? offset + limit : null });
@@ -148,6 +153,7 @@ errorRoutes.get("/summary", async (c) => {
 	const source = c.req.query("source") || undefined;
 	const level = c.req.query("level") === "warn" ? "warn" : c.req.query("level") === "error" ? "error" : undefined;
 	const instanceId = c.req.query("instance_id") || undefined;
+	const runId = c.req.query("run_id") || undefined;
 
 	// Always user-scoped — there is no `scope=all` here. The flat feed offers one to admins; a
 	// grouped cross-account view already exists on the admin route, and quietly widening this one
@@ -179,15 +185,21 @@ errorRoutes.get("/summary", async (c) => {
 		// written order — so a sibling guard in the same WHERE does not protect it. Measured: one
 		// row whose context read `not json at all` failed the ENTIRE query, on precisely the page
 		// whose job is to show you malformed rows. CASE fixes the evaluation order by definition.
+		// Since migration 0239 the VERIFIED `instance_id` column answers this exactly (#1085); the
+		// samples below remain for rows written before it, and for those the answer stays a lower bound.
 		binds.push(instanceId);
 		const n = binds.length;
 		where.push(
-			`?${n} IN (` +
+			`(instance_id = ?${n} OR ?${n} IN (` +
 				`CASE WHEN json_valid(context) THEN json_extract(context, '$.instanceId') END, ` +
 				`CASE WHEN json_valid(context) THEN json_extract(context, '$.instance_id') END, ` +
 				`CASE WHEN json_valid(last_context) THEN json_extract(last_context, '$.instanceId') END, ` +
-				`CASE WHEN json_valid(last_context) THEN json_extract(last_context, '$.instance_id') END)`,
+				`CASE WHEN json_valid(last_context) THEN json_extract(last_context, '$.instance_id') END))`,
 		);
+	}
+	if (runId) {
+		binds.push(runId);
+		where.push(`run_id = ?${binds.length}`);
 	}
 	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log WHERE ${where.join(" AND ")} ORDER BY ${ERROR_RECENCY} DESC LIMIT ${limit}`;
 	const rows = (await c.env.DB.prepare(sql).bind(...binds).all<RawError>()).results ?? [];

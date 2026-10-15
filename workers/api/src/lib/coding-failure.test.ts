@@ -29,7 +29,9 @@ function mockDb() {
 							return {};
 						},
 						all: async () => ({ results: [] }),
-						first: async () => null,
+						// `logError` verifies the instance's owner before filing the row under it (#1085):
+						// in this fixture u1 owns i1.
+						first: async () => (sql.includes("FROM agent_instances") && args[0] === "i1" ? { user_id: "u1" } : null),
 					};
 				},
 			};

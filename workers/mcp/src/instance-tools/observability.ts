@@ -146,13 +146,17 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			source: z.string().optional().describe("Filter by source, e.g. keys-proxy | auth | job-apply | coding."),
 			limit: z.coerce.number().int().min(1).max(500).optional(),
 			offset: z.coerce.number().int().min(0).optional().describe("Skip this many of the newest rows — the previous reply's `nextOffset` while `hasMore` is true."),
+			instance_id: z.string().optional().describe("Only this instance's rows — exact, on the verified `instance_id` column. Rows written before #1085 carry no instance; find those with error_summary's instance_id, which also reads their samples."),
+			run_id: z.string().optional().describe("Only this run's rows (the run / trace id that agent_trace's trace_id takes). Exact; client-reported rows never carry one."),
 		},
-		async ({ token, scope, source, limit, offset }) => {
+		async ({ token, scope, source, limit, offset, instance_id, run_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
 			if (scope === "all") qs.set("scope", "all");
 			if (source) qs.set("source", source);
+			if (instance_id) qs.set("instance_id", instance_id);
+			if (run_id) qs.set("run_id", run_id);
 			if (limit) qs.set("limit", String(limit));
 			if (offset) qs.set("offset", String(offset));
 			const data = await authedCall(`/v1/errors${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
@@ -168,10 +172,11 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			days: z.coerce.number().int().min(1).max(30).optional().describe("Window to group over. Default 7."),
 			source: z.string().optional().describe("Filter by source, e.g. commit-close-watch | coding | keys-proxy."),
 			level: z.enum(["error", "warn"]).optional().describe("`error` is a bug; `warn` is recorded but not counted as one. Unfiltered returns both."),
-			instance_id: z.string().optional().describe("One agent's failures. The instance rides in the error's free-form context rather than a column, so this is a LOWER BOUND — a collapsed row keeps only two samples and cannot name every agent it covered."),
+			instance_id: z.string().optional().describe("One agent's failures. Exact for rows written since #1085 (a verified column that is part of the dedupe key); rows from before carry the instance only in two context samples, so across them this is a LOWER BOUND."),
+			run_id: z.string().optional().describe("One run's failures (the id agent_trace's trace_id takes). Exact; rows from before #1085 carry no run."),
 			limit: z.coerce.number().int().min(1).max(5000).optional().describe("Rows READ, not signatures returned — the width of the window being grouped. Default 2000."),
 		},
-		async ({ token, days, source, level, limit, instance_id }) => {
+		async ({ token, days, source, level, limit, instance_id, run_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
@@ -179,6 +184,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			if (source) qs.set("source", source);
 			if (level) qs.set("level", level);
 			if (instance_id) qs.set("instance_id", instance_id);
+			if (run_id) qs.set("run_id", run_id);
 			if (limit) qs.set("limit", String(limit));
 			const data = await authedCall(`/v1/errors/summary${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
 			return jsonText(data);

@@ -107,11 +107,19 @@ export interface ErrorLogInput {
 	/** Structured extras: host, path, provider, instanceId, taskId, … */
 	context?: Record<string, unknown>;
 	/**
+	 * The context came from an UNAUTHENTICATED or caller-controlled source — the browser's
+	 * `/v1/errors/client` (#1085). Its instance id is then kept only when the row's own user owns
+	 * that instance, never used to find an owner, and its run id is dropped: a report must not be
+	 * able to file a row under someone else's instance, nor mint ids that defeat the collapse.
+	 */
+	untrusted?: boolean;
+	/**
 	 * The build that produced this row (#539) — a short commit sha for a deployed browser bundle,
 	 * `dev` for one built on a developer's machine, `unset` for a client that declares nothing.
 	 *
-	 * Absent for server-side callers: the API Worker does not stamp its own build (it has no build
-	 * var), so NULL here reads as "written by the server, or by a bundle predating #539".
+	 * Absent for server-side callers, which are stamped with the API Worker's own deployed build
+	 * (`env.API_BUILD`, #735 — on every entrypoint since #1085). NULL reads as "a bundle predating
+	 * #539" or a server isolate that had no build var.
 	 */
 	build?: string | null;
 }
@@ -189,17 +197,17 @@ export function sanitizeBuildId(raw: unknown): string | undefined {
  * Safe for volume in a way the context is not: a build id is constant for a tab, so it adds at
  * most one bucket per signature per deployed build.
  *
+ * ## The INSTANCE and RUN are part of the identity (#1085)
+ *
+ * The same failure on instances A, B and C used to fold into one row whose two samples named A and
+ * C, leaving B unfindable and the count unattributable. Both are bounded entity ids, not
+ * per-occurrence measurements, and both are VERIFIED before they get here (`resolveErrorScope`), so
+ * keying on them keeps each instance's and each run's occurrences in a row of their own while a
+ * repeat inside one run still folds. Rows from before migration 0239 carry NULL in both.
+ *
  * Returns true when an existing row absorbed the occurrence.
  */
-async function collapseRepeat(
-	env: Pick<Env, "DB">,
-	e: ErrorLogInput,
-	level: ErrorLevel,
-	message: string,
-	source: string,
-	context: string | null,
-	build: string | null,
-): Promise<boolean> {
+async function collapseRepeat(env: Pick<Env, "DB">, k: CollapseKey, context: string | null): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE error_log
 		    SET repeat_count = repeat_count + 1, last_seen_at = datetime('now'), last_context = ?7
@@ -207,20 +215,65 @@ async function collapseRepeat(
 		               WHERE source = ?1 AND message = ?2 AND level = ?3
 		                 AND status IS ?4 AND user_id IS ?5
 		                 AND created_at >= ?6 AND build IS ?8
+		                 AND instance_id IS ?9 AND run_id IS ?10
 		               ORDER BY created_at DESC LIMIT 1)`,
 	)
-		.bind(
-			source,
-			message,
-			level,
-			typeof e.status === "number" ? e.status : null,
-			e.userId ?? null,
-			sqlTime(Date.now() - COLLAPSE_WINDOW_MS),
-			context,
-			build,
-		)
+		.bind(k.source, k.message, k.level, k.status, k.userId, sqlTime(Date.now() - COLLAPSE_WINDOW_MS), context, k.build, k.instanceId, k.runId)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
+}
+
+/** What makes two occurrences the SAME row: exact text, severity, status, owner, build, instance and run. */
+interface CollapseKey {
+	source: string;
+	message: string;
+	level: ErrorLevel;
+	status: number | null;
+	userId: string | null;
+	build: string | null;
+	instanceId: string | null;
+	runId: string | null;
+}
+
+/** An id as it may enter a column and a collapse key: id-shaped and bounded, or nothing. */
+function idOrNull(raw: unknown): string | null {
+	if (typeof raw !== "string") return null;
+	const v = raw.trim();
+	return v && v.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(v) ? v : null;
+}
+
+/**
+ * The owner, instance and run a row is filed under (#1085) — VERIFIED, never taken on the caller's word.
+ *
+ * The instance is read from the context keys real call sites use (`instanceId`, `instance_id`) and
+ * kept only when `agent_instances` says who owns it: a row naming a user keeps the instance only if
+ * that user owns it; a trusted server path that named no user (a Durable Object, a sweep) is filed
+ * under the instance's owner. A Durable Object's name may be a TEMPLATE agent id rather than an
+ * instance — then the agent's owner is the row's user and there is no instance. Any lookup failure
+ * keeps what the caller said about the user and drops the instance, rather than guess.
+ *
+ * The run is the correlation id the trace already reads — `runId` first, then the trace and task
+ * spellings — and is dropped for untrusted (client) rows.
+ */
+export async function resolveErrorScope(
+	env: Pick<Env, "DB">,
+	e: Pick<ErrorLogInput, "userId" | "context" | "untrusted">,
+): Promise<{ userId: string | null; instanceId: string | null; runId: string | null }> {
+	const ctx = e.context ?? {};
+	const claimedUser = e.userId ?? null;
+	const runId = e.untrusted ? null : idOrNull(ctx.runId ?? ctx.run_id ?? ctx.traceId ?? ctx.trace_id ?? ctx.taskId ?? ctx.task_id);
+	// A Durable Object names itself by `agentId`, which is an instance id OR a template agent id —
+	// accepted only from a trusted path that did not already say whose row this is.
+	const named = idOrNull(ctx.instanceId ?? ctx.instance_id) ?? (!claimedUser && !e.untrusted ? idOrNull(ctx.agentId) : null);
+	if (!named) return { userId: claimedUser, instanceId: null, runId };
+	const owned = await env.DB.prepare("SELECT user_id FROM agent_instances WHERE id = ?1").bind(named).first<{ user_id: string | null }>().catch(() => null);
+	if (owned?.user_id) {
+		if (claimedUser) return { userId: claimedUser, instanceId: owned.user_id === claimedUser ? named : null, runId };
+		return e.untrusted ? { userId: null, instanceId: null, runId } : { userId: owned.user_id, instanceId: named, runId };
+	}
+	if (claimedUser || e.untrusted) return { userId: claimedUser, instanceId: null, runId };
+	const agent = await env.DB.prepare("SELECT owner_id FROM agents WHERE id = ?1").bind(named).first<{ owner_id: string | null }>().catch(() => null);
+	return { userId: agent?.owner_id ?? null, instanceId: null, runId };
 }
 
 /**
@@ -233,7 +286,7 @@ async function collapseRepeat(
  * storage engine reaches the durable log this way rather than being handed every binding in the
  * environment (#637). `lib/meter-ids.ts` already narrows the same way for the same reason.
  */
-export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_KV">>, e: ErrorLogInput): Promise<TelemetryWrite> {
+export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_KV" | "API_BUILD">>, e: ErrorLogInput): Promise<TelemetryWrite> {
 	let row: Record<string, unknown> | null = null;
 	let id = "";
 	try {
@@ -251,7 +304,13 @@ export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_K
 		// that `index.ts` sets from `env.API_BUILD` on the first request (#735). This is what stamps
 		// server-side rows with the deployed git SHA, making "is this row pre-fix or post-fix?"
 		// answerable without a cross-reference to `git log`.
+		// Every entrypoint that holds the full env stamps the isolate here (#1085): `index.ts` only
+		// ever did it on `fetch`, so a cron, Durable Object or Workflow isolate that never served a
+		// request wrote `build: null`. A narrowed env without the var still falls back to the stamp.
+		if (!_serverBuild && env.API_BUILD) setServerBuild(env.API_BUILD);
 		const build = sanitizeBuildId(e.build) ?? _serverBuild ?? null;
+		const scope = await resolveErrorScope(env, e);
+		const key: CollapseKey = { source, message, level, status: typeof e.status === "number" ? e.status : null, userId: scope.userId, build, instanceId: scope.instanceId, runId: scope.runId };
 		// A repeat is absorbed by the row already recording it AND does not mirror into the trace:
 		// #423 flooded `agent_events` with 1811 error events for the same reason it flooded this
 		// table, so collapsing only one of the two would leave the other unreadable.
@@ -261,34 +320,31 @@ export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_K
 		// the failure mode if that assumption is ever wrong is total silence in the one component
 		// whose entire job is to not be silent, and a duplicate row is a trivially better outcome
 		// than no row.
-		if (await collapseRepeat(env, e, level, message, source, context, build).catch(() => false)) return "persisted";
+		if (await collapseRepeat(env, key, context).catch(() => false)) return "persisted";
 		// The id and the time are minted ONCE (#1084): if this insert fails, the same row — same id,
 		// same moment — is what the spool replays, so a replay can never become a second fact.
 		id = crypto.randomUUID();
-		row = { created_at: sqlTime(), user_id: e.userId ?? null, source, status: typeof e.status === "number" ? e.status : null, message, context, level, build };
+		row = { created_at: sqlTime(), user_id: key.userId, source, status: key.status, message, context, level, build, instance_id: key.instanceId, run_id: key.runId };
 		await env.DB.prepare(
-			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at, created_at, instance_id, run_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)",
 		)
-			.bind(id, row.user_id, source, row.status, message, context, level, build, row.created_at)
+			.bind(id, row.user_id, source, row.status, message, context, level, build, row.created_at, key.instanceId, key.runId)
 			.run();
 		row = null;
 		// Mirror into the unified trace so failures appear inline in agent_trace next to
 		// the steps that led to them — mapping the well-known context keys onto the
 		// trace's instance/run scoping. Best-effort; a bridge failure must not surface.
-		const ctx = e.context ?? {};
+		// The VERIFIED scope, and the row's own severity (#1085): this used to mirror every warn as an
+		// error and read the run only from `traceId`/`taskId`, so a coding or pipeline failure that
+		// named its `runId` was absent from `agent_trace?trace_id=<run>`.
 		await logEvent(env, {
 			source: String(e.source).split(":")[0] || "error",
 			event: "error",
-			level: "error",
+			level,
 			message: e.message,
-			userId: e.userId ?? null,
-			instanceId: (ctx.instanceId as string) ?? (ctx.instance_id as string) ?? null,
-			// `traceId` FIRST (#529). The bridge only ever read `taskId`, which is the apply/browser
-			// workflows' correlation key and nobody else's: a coding run correlates by its loop-run
-			// id, a pipeline by its run id. Those callers had a trace id to give and no way to give
-			// it, so their failures mirrored into `agent_trace` with a NULL `trace_id` — present in
-			// the timeline, absent from `?trace_id=<run>`, which is the query an investigator makes.
-			traceId: (ctx.traceId as string) ?? (ctx.trace_id as string) ?? (ctx.taskId as string) ?? (ctx.task_id as string) ?? null,
+			userId: key.userId,
+			instanceId: key.instanceId,
+			traceId: key.runId,
 			context: e.context,
 		}).catch(() => undefined);
 		// Opportunistic retention: there is no cron, so ~2% of writes prune rows older
@@ -348,6 +404,10 @@ export interface ErrorRow {
 	 * on one written by a browser bundle predating #539.
 	 */
 	build?: string | null;
+	/** The verified instance this occurrence belongs to (#1085). NULL on rows before migration 0239. */
+	instance_id?: string | null;
+	/** The run/trace correlation id (#1085). NULL on rows before migration 0239 and on client reports. */
+	run_id?: string | null;
 }
 
 /**
@@ -359,13 +419,13 @@ export interface ErrorRow {
  * without it a NULL sorts LAST under `DESC` in SQLite, which is invisibility rather than staleness.
  */
 export const ERROR_COLUMNS =
-	"id, created_at, user_id, source, status, message, context, last_context, level, repeat_count, last_seen_at, build";
+	"id, created_at, user_id, source, status, message, context, last_context, level, repeat_count, last_seen_at, build, instance_id, run_id";
 export const ERROR_RECENCY = "COALESCE(last_seen_at, created_at)";
 
 /** Read recent errors — for one user, or all (admin). Newest first. */
 export async function listErrors(
 	env: Env,
-	opts: { userId?: string; all?: boolean; limit?: number; offset?: number; source?: string; level?: ErrorLevel },
+	opts: { userId?: string; all?: boolean; limit?: number; offset?: number; source?: string; level?: ErrorLevel; instanceId?: string; runId?: string },
 ): Promise<ErrorRow[]> {
 	// `limit` may be one past a page (the route asks for 501 to learn whether more exist).
 	const limit = Math.max(1, Math.min(opts.limit ?? 100, 501));
@@ -383,6 +443,16 @@ export async function listErrors(
 	if (opts.level) {
 		binds.push(opts.level);
 		where.push(`level = ?${binds.length}`);
+	}
+	// Exact, indexed columns (#1085). A row written before migration 0239 has neither, and is not
+	// guessed into either: its instance survives only in its samples (`/errors/summary` reads those).
+	if (opts.instanceId) {
+		binds.push(opts.instanceId);
+		where.push(`instance_id = ?${binds.length}`);
+	}
+	if (opts.runId) {
+		binds.push(opts.runId);
+		where.push(`run_id = ?${binds.length}`);
 	}
 	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log${
 		where.length ? ` WHERE ${where.join(" AND ")}` : ""

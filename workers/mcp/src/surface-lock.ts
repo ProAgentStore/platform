@@ -1169,4 +1169,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.134": "sha256:9d79398581be82d3d8871446edaf4a305706a734eb93df09a438a862d62697ed",
 	// #1084: telemetry_health (read, admin-only) — per-sink telemetry delivery: pending, dead, lost, last drain.
 	"0.1.135": "sha256:24d8264e1b82fcb7414c7f1e2afc737518803d80c8cbe3a57d7bd30d28473185",
+	// #1085: list_errors gains instance_id + run_id; error_summary gains run_id — exact reads on the verified columns.
+	"0.1.136": "sha256:19765442c730799a44f2d8754de215f8b18fcda0cae3ffc4ec7d0e190d08ae0b",
 };

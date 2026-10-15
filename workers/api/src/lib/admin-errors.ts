@@ -19,6 +19,8 @@ export interface RawError {
 	last_seen_at?: string | null;
 	/** The MOST RECENT occurrence's context (#538). Absent on a row collapsed before 0124. */
 	last_context?: string | null;
+	/** The verified instance (#1085) — every occurrence in the row is in it. NULL before 0239. */
+	instance_id?: string | null;
 }
 
 /** Occurrences a row accounts for. A pre-0103 row has no column and stands for exactly itself. */
@@ -33,11 +35,11 @@ export const lastSeenOf = (r: RawError): string => r.last_seen_at || r.created_a
  * ── Why this is "seen on", not "affecting" ──
  *
  * A collapsed row keeps exactly TWO context samples — the first occurrence's and the latest
- * (`context` and `last_context`, #538) — and `instanceId` is deliberately NOT part of the collapse
- * identity, because for the sources that actually repeat the context is a per-occurrence
- * measurement and keying on it would mean never collapsing anything.
- *
- * So a row standing for sixty occurrences across four instances can only ever show two of them.
+ * (`context` and `last_context`, #538). Before migration 0239 the instance was not part of the
+ * collapse identity, so a row standing for sixty occurrences across four instances could only ever
+ * show two of them. From 0239 on (#1085) the VERIFIED `instance_id` is in the identity and every
+ * occurrence in such a row is that instance's — but a summary window still mixes in older rows,
+ * and rows whose failure named no instance at all, so the set stays a lower bound.
  * These fields are therefore a LOWER BOUND on what a signature touched, and every name that
  * renders them has to say so. Presenting them as the complete set would be a confident wrong
  * answer of exactly the kind the payer work (#551) and the SSH-identity work (#684) were both
@@ -190,6 +192,8 @@ export function summarizeErrors(rows: RawError[]): ErrorSignature[] {
 		// BOTH retained samples, not just the first: #538 keeps the latest one precisely so a
 		// collapsed bucket is not represented by whichever occurrence happened to open it.
 		const facets = facetSets.get(key)!;
+		// A row from migration 0239 on is ONE instance's, verified (#1085); older rows only have samples.
+		if (r.instance_id) facets.instances.add(r.instance_id);
 		readFacetSample(r.context, facets);
 		readFacetSample(r.last_context, facets);
 		// OCCURRENCES, not rows. The write side collapses an identical repeat into a counter
