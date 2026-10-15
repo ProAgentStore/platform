@@ -12,7 +12,7 @@ import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { getLiveRuntime, callRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import type { Env } from "../../types.js";
 import { LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "./contract.js";
-import { LOCAL_BROWSER_CODEX_MIN_CLI, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./policy.js";
+import { LOCAL_BROWSER_BRIEF_MIN_CLI, LOCAL_BROWSER_CODEX_MIN_CLI, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./policy.js";
 import { cliAtLeast } from "../runner-upgrade.js";
 import { syncScanCard } from "./scan-board.js";
 import {
@@ -100,6 +100,29 @@ export function engineRunnerProblem(engine: string, runnerVersion: string | null
 	return `The runner on ${node || "that machine"} is CLI ${runnerVersion.trim()}, too old for Codex research — it cannot call the browser tools (needs ${LOCAL_BROWSER_CODEX_MIN_CLI} or newer). Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\` — or switch this instance's engine to Claude Code.`;
 }
 
+/**
+ * What the run's trace says about the owner's saved brief (#1065), so "why did this find nothing" has
+ * an answer that is not a guess. Counts and codes only — the brief's text is the owner's and already
+ * on the run's policy; it is not repeated into the trace.
+ *
+ *   brief_included        sent, to a runner that reads it
+ *   brief_not_supported   sent, but this runner's CLI predates the field: the run went WITHOUT it
+ *   brief_unconfirmed     sent, but the runner reported no version, so whether it was read is unknown
+ *   brief_missing         none saved, while the objective refers to a saved brief or criteria
+ */
+export function briefNoteFor(objective: string, brief: string | undefined, runnerVersion: string | null | undefined): Record<string, unknown> | null {
+	if (!brief) {
+		return /\bsaved\s+(?:search\s+)?(?:brief|criteria|search|preferences)\b/i.test(objective)
+			? { code: "brief_missing", message: "The objective refers to a saved brief, but none is saved on this agent's local browser settings, so the run has only its objective. Save one with set_instance_local_browser_settings (brief)." }
+			: null;
+	}
+	if (!runnerVersion?.trim()) return { code: "brief_unconfirmed", chars: brief.length, message: "The saved brief was sent, but the runner did not report its version, so whether it read the brief is unknown." };
+	if (!cliAtLeast(runnerVersion, LOCAL_BROWSER_BRIEF_MIN_CLI)) {
+		return { code: "brief_not_supported", chars: brief.length, runnerVersion: runnerVersion.trim(), message: `The runner is CLI ${runnerVersion.trim()}, older than ${LOCAL_BROWSER_BRIEF_MIN_CLI}: it ignores the saved brief, so this run went on its objective alone. Update the CLI (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`.` };
+	}
+	return { code: "brief_included", chars: brief.length };
+}
+
 /** Hand the run to the live runner. A dispatch that cannot happen ends the run `failed` with a code. */
 async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBrowserRun): Promise<LocalBrowserRun> {
 	const now = Date.now();
@@ -122,6 +145,7 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 		requestId: run.requestId,
 		instanceId,
 		objective: run.objective,
+		...(p.brief ? { brief: p.brief } : {}),
 		engine: p.engine,
 		authMode: p.authMode,
 		workspace: p.workspace,
@@ -139,6 +163,8 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 		limits: p.limits,
 		resultSchema: p.resultSchema,
 	};
+	const briefNote = briefNoteFor(run.objective, p.brief, runtime.runner_version);
+	if (briefNote) await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "note", at: new Date(now).toISOString(), detail: briefNote }], now);
 	let res: Response;
 	try {
 		res = await callRuntime(env, runtime, LOCAL_BROWSER_RUN_PATH, { method: "POST", body: JSON.stringify(envelope) });

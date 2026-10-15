@@ -160,8 +160,16 @@ describe("settings form", () => {
 			access: { allowDomains: ["seek.com.au"], denyDomains: [] },
 			limits: { maxMinutes: null, maxPages: 10, maxActions: null, maxConcurrent: null },
 			collection: { name: "leads", keyField: "url" },
+			brief: null,
 		});
 		expect(patchFromForm({ ...form, workspace: "scratch", collection: "" })).toMatchObject({ workspace: null, collection: null });
+	});
+
+	it("carries the saved brief (#1065): stored text round-trips trimmed, an emptied box clears it", () => {
+		const form = formFromSettings({ brief: "Melbourne engineering leadership" });
+		expect(form.brief).toBe("Melbourne engineering leadership");
+		expect(patchFromForm({ ...form, brief: "  Remote AI roles  " }).brief).toBe("Remote AI roles");
+		expect(patchFromForm({ ...form, brief: "   " }).brief).toBeNull();
 	});
 
 	it("reads a site list typed one per line or comma-separated", () => {

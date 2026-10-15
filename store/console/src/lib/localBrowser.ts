@@ -261,6 +261,7 @@ export interface SettingsForm {
 	maxConcurrent: string;
 	collection: string;
 	keyField: string;
+	brief: string;
 }
 
 export function formFromSettings(s: LocalBrowserSettingsValues): SettingsForm {
@@ -278,6 +279,7 @@ export function formFromSettings(s: LocalBrowserSettingsValues): SettingsForm {
 		maxConcurrent: s.limits?.maxConcurrent?.toString() ?? "",
 		collection: s.collection?.name ?? "",
 		keyField: s.collection?.keyField ?? "",
+		brief: s.brief ?? "",
 	};
 }
 
@@ -295,5 +297,6 @@ export function patchFromForm(f: SettingsForm): Record<string, unknown> {
 		access: { allowDomains: parseDomains(f.allowDomains), denyDomains: parseDomains(f.denyDomains) },
 		limits: { maxMinutes: num(f.maxMinutes), maxPages: num(f.maxPages), maxActions: num(f.maxActions), maxConcurrent: num(f.maxConcurrent) },
 		collection: f.collection.trim() ? { name: f.collection.trim(), ...(f.keyField.trim() ? { keyField: f.keyField.trim() } : {}) } : null,
+		brief: f.brief.trim() || null,
 	};
 }

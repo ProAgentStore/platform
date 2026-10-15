@@ -43,6 +43,14 @@ describe("set_instance_local_browser_settings", () => {
 		expect(seen.find((s) => s.method === "PUT")?.body).toEqual({ engine: null, workspace: { kind: "scratch" }, limits: null });
 	});
 
+	it("sends the saved brief (#1065), its reset, and a one-time copy from the owner's memory", async () => {
+		const { seen, call } = tools();
+		await call("set_instance_local_browser_settings", { instance_id: "i1", brief: "Melbourne engineering leadership roles" });
+		await call("set_instance_local_browser_settings", { instance_id: "i1", brief: null });
+		await call("set_instance_local_browser_settings", { instance_id: "i1", brief_from_memory: "search_target" });
+		expect(seen.filter((s) => s.method === "PUT").map((s) => s.body)).toEqual([{ brief: "Melbourne engineering leadership roles" }, { brief: null }, { briefFromMemory: "search_target" }]);
+	});
+
 	it("writes nothing on a dry run, or when given nothing to change", async () => {
 		const { seen, call } = tools();
 		await call("set_instance_local_browser_settings", { instance_id: "i1", engine: "codex", dry_run: true });

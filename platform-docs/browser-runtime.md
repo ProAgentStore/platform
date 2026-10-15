@@ -128,6 +128,18 @@ A separate runtime from the Workflow-driven browser task above. A locally signed
 | `access_blocked` | A bot check or access-control page ("unusual traffic", "Access Denied", 403) | Pass a human check in that browser and resume, or leave it. The run reports a block that is still there; it never retries past it |
 | `write_affordance` | A form that submits, pays or uploads: an application, card fields, a file input, or an account sign-up | Let it read the page and resume, or stop and it goes back. Nothing on the page can be filled or submitted in either case |
 
+**The saved brief (#1065).** An agent's local browser settings can hold the owner's saved search brief:
+roles, places and sites, edited in Settings → Local browser research and shown beside the scan schedule.
+- **What each run is given:** its objective plus that brief, scheduled or started by hand. A scheduled
+  objective can therefore say "matching the saved brief" and mean it.
+- **Fenced as data:** the brief sits in the CLI's prompt fenced as data (ADR 0006), beside the objective
+  and never inside the rules, so nothing in it can change what the run may do.
+- **Owner-authored only:** it comes from the settings field, or is copied once from a memory entry the
+  owner set (`source: "user"`); an agent-written entry is refused.
+- **Every run's trace records** `brief_included`, `brief_not_supported` (the runner's CLI is older than
+  0.4.132, ignores the field, and runs on the objective alone), `brief_unconfirmed`, or `brief_missing`
+  (the objective mentions a saved brief but none is saved).
+
 A run whose CLI exits without ever calling the bridge ends `failed`, saying no page was opened. A Codex run needs a runner on CLI 0.4.74 or newer, because older runners cannot approve the bridge's tools for `codex exec`. Preflight flags an older runner, and a start on one ends at once as `runner_unsupported`, naming the update or the switch to Claude Code.
 
 ## Coder Agents

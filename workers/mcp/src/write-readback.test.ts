@@ -295,6 +295,9 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_local_browser_settings.workspace_path": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.browser_profile": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.allow_domains": "get_instance_local_browser_settings",
+	"set_instance_local_browser_settings.brief": "get_instance_local_browser_settings",
+	// Persisted AS `brief`: the copied text is what the reader returns (#1065).
+	"set_instance_local_browser_settings.brief_from_memory": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.deny_domains": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.limits": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.trace_retention_days": "get_instance_local_browser_settings",

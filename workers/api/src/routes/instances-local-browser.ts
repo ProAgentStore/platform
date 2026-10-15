@@ -23,6 +23,7 @@ import {
 	transitionLocalBrowserRun,
 	writeLocalBrowserSettings,
 } from "../lib/local-browser/store.js";
+import { briefFromMemory, briefSuggestion } from "../lib/local-browser/brief.js";
 import { type LocalBrowserCapability, effectiveLocalBrowserPolicy, isTerminal, mergeLocalBrowserSettings, normalizeDomain } from "../lib/local-browser/policy.js";
 import { callRuntime, getLiveRuntime, requireOwnedInstance, runtimeJson } from "./instances-runtime.js";
 import { LOCAL_BROWSER_OBJECTIVE_MAX, engineRunnerProblem, localBrowserCapability, startLocalBrowserRun } from "../lib/local-browser/start.js";
@@ -99,7 +100,10 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		// answered in the same breath as "how would it run", and the two surfaces cannot disagree.
 		// A view over the existing cron trigger, never a second scheduler: see lib/local-browser/schedule.ts.
 		const schedule = await readScanSchedule(c.env, instanceId, uid);
-		return c.json({ settings, effective: "error" in effective ? null : effective, problem: "error" in effective ? effective.error : null, capability: cap, runnerNode, schedule, scheduleSummary: scanScheduleSummary(schedule) });
+		// The saved brief (#1065) is answered beside the schedule it serves; while none is saved, a
+		// user-set memory entry the owner could adopt is named (never applied by reading).
+		const briefOffer = settings && (settings as { brief?: unknown }).brief ? null : await briefSuggestion(c.env, instanceId);
+		return c.json({ settings, effective: "error" in effective ? null : effective, problem: "error" in effective ? effective.error : null, capability: cap, runnerNode, schedule, scheduleSummary: scanScheduleSummary(schedule), ...(briefOffer ? { briefSuggestion: briefOffer } : {}) });
 	});
 
 	/** PATCH semantics: a field present replaces, `null` clears it to the agent default. The pin is `PUT /runner-node`. */
@@ -108,6 +112,16 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const cap = await capabilityOf(c, instanceId, uid);
 		const patch = await body(c);
 		if ("runnerNode" in patch) throw new HttpError(400, "The runner is chosen with PUT /v1/instances/:id/runner-node (it re-attaches the runner); it is not a local browser setting.");
+		// Seed the brief from one of the owner's OWN memory entries (#1065), on request — never an agent-written one.
+		if ("briefFromMemory" in patch) {
+			const key = patch.briefFromMemory;
+			delete patch.briefFromMemory;
+			if (typeof key !== "string" || !key.trim() || key.length > 200) throw new HttpError(400, "briefFromMemory must be a memory key");
+			if ("brief" in patch) throw new HttpError(400, "Pass brief or briefFromMemory, not both.");
+			const seeded = await briefFromMemory(c.env, instanceId, key.trim());
+			if ("error" in seeded) throw new HttpError(400, seeded.error);
+			patch.brief = seeded.brief;
+		}
 		const { settings: stored } = await readLocalBrowserSettings(c.env, instanceId, uid);
 		const merged = mergeLocalBrowserSettings(stored, patch, cap);
 		if ("error" in merged) throw new HttpError(400, merged.error);

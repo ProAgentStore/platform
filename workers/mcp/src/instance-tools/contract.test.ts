@@ -487,7 +487,7 @@ const TABLE: Record<string, Row> = {
 	job_lead_browser_verifications: ["browserVerification", "read", null, null, "instance_id,limit,token"],
 	verify_job_lead_now: ["browserVerification", "runtime", null, "envelope", "dry_run,instance_id,record_id,token"],
 	job_lead_intake_url: ["browserVerification", "write", null, "envelope", "dry_run,instance_id,token,url"],
-	set_instance_local_browser_settings: ["localBrowser", "write", null, "envelope", "allow_domains,auth_mode,browser_profile,collection,deny_domains,dry_run,engine,instance_id,limits,token,trace_retention_days,workspace_path"],
+	set_instance_local_browser_settings: ["localBrowser", "write", null, "envelope", "allow_domains,auth_mode,brief,brief_from_memory,browser_profile,collection,deny_domains,dry_run,engine,instance_id,limits,token,trace_retention_days,workspace_path"],
 	list_local_browser_runs: ["localBrowser", "read", null, null, "after,instance_id,limit,run_id,token"],
 	start_local_browser_run: ["localBrowser", "runtime", null, "envelope", "dry_run,instance_id,objective,request_id,token"],
 	cancel_local_browser_run: ["localBrowser", "write", null, null, "instance_id,run_id,token"],

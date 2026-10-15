@@ -36,7 +36,7 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"get_instance_local_browser_settings",
-		"A local browser research agent's settings AND its scan schedule: what this instance chose (settings), the policy a run would start with (effective — engine, sign-in mode, workspace, browser profile, sites, limits, retention, result collection), the agent's ceilings (capability), the runner it is pinned to, and `schedule` (#980). `schedule` answers whether this agent searches by itself: `configured` false means nobody has set a cadence — which is NOT the same as off — then `enabled`, `cadence` (the cron expression), the `objective` each scheduled scan is given, `nextRunAt`, `lastRunAt`, `failureCount` and `lastError`, plus `scheduleSummary`, the same sentence in words. It is a view over the cron trigger that actually fires the scan, so CHANGE it with create_instance_trigger / list_instance_triggers / delete_instance_trigger (type `cron`, action `run_local_browser`, config.objective) — never by inventing a cadence for the owner. problem is set when saved settings no longer fit the agent. Contains no credential, cookie or key. Read-only.",
+		"A local browser research agent's settings AND its scan schedule: what this instance chose (settings), the policy a run would start with (effective — engine, sign-in mode, workspace, browser profile, sites, limits, retention, result collection), the agent's ceilings (capability), the runner it is pinned to, and `schedule` (#980). `schedule` answers whether this agent searches by itself: `configured` false means nobody has set a cadence — which is NOT the same as off — then `enabled`, `cadence` (the cron expression), the `objective` each scheduled scan is given, `nextRunAt`, `lastRunAt`, `failureCount` and `lastError`, plus `scheduleSummary`, the same sentence in words. `settings.brief` is the owner's saved search brief (#1065) — what every run, scheduled or not, is told to look for, given to the CLI beside the objective as data; while none is saved, `briefSuggestion` names a user-set memory entry the owner could adopt with set_instance_local_browser_settings brief_from_memory. It is a view over the cron trigger that actually fires the scan, so CHANGE it with create_instance_trigger / list_instance_triggers / delete_instance_trigger (type `cron`, action `run_local_browser`, config.objective) — never by inventing a cadence for the owner. problem is set when saved settings no longer fit the agent. Contains no credential, cookie or key. Read-only.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
@@ -76,6 +76,8 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			limits: limits.describe("Per-run limits, each at most the agent's ceiling. null resets all of them."),
 			trace_retention_days: z.coerce.number().int().nullable().optional().describe("How long a run's trace is kept, 1 to 90 days."),
 			collection: z.object({ name: z.string(), key_field: z.string().optional() }).nullable().optional().describe("The collection accepted findings are stored in, and the field that marks a duplicate."),
+			brief: z.string().max(4000).nullable().optional().describe("The owner's saved search brief (#1065): roles, places, sites — what every run looks for, so a scheduled objective can say \"matching the saved brief\". Owner-authored text only; sent to the CLI fenced as data, never as instructions. null clears it."),
+			brief_from_memory: z.string().max(200).optional().describe('Copy the brief, once, from one of YOUR OWN memory entries (source "user"), e.g. "search_target". An agent-written entry is refused. Not with brief.'),
 			dry_run: z.boolean().optional().describe("Preview the change without saving it."),
 		},
 		async ({ token, instance_id, dry_run, ...fields }) => {
@@ -98,6 +100,8 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			}
 			if (fields.trace_retention_days !== undefined) patch.traceRetentionDays = fields.trace_retention_days;
 			if (fields.collection !== undefined) patch.collection = fields.collection === null ? null : { name: fields.collection.name, ...(fields.collection.key_field ? { keyField: fields.collection.key_field } : {}) };
+			if (fields.brief !== undefined) patch.brief = fields.brief;
+			if (fields.brief_from_memory !== undefined) patch.briefFromMemory = fields.brief_from_memory;
 			const input = { instance_id, ...patch };
 			const denied = await requirePermission(safetyFor(token), "write", "set_instance_local_browser_settings", input);
 			if (denied) return denied;

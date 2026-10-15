@@ -140,6 +140,9 @@ export function parseEnvelope(raw: unknown): LocalBrowserTaskEnvelope {
 	if (o.type !== LOCAL_BROWSER_TASK_TYPE) throw bad(`type must be ${LOCAL_BROWSER_TASK_TYPE}`);
 	for (const k of ["runId", "requestId", "instanceId"]) if (typeof o[k] !== "string" || !SAFE_ID.test(o[k] as string)) throw bad(`${k} is required`);
 	if (typeof o.objective !== "string" || !o.objective.trim() || o.objective.length > 4000) throw bad("objective is required");
+	// The owner's saved brief (#1065): optional, so a PAGS that sends none still starts a run.
+	if (o.brief !== undefined && (typeof o.brief !== "string" || o.brief.length > 4000)) throw bad("brief must be text of at most 4000 characters");
+	const brief = typeof o.brief === "string" ? o.brief.trim() : "";
 	if (!LOCAL_BROWSER_ENGINES.includes(o.engine as never)) throw bad("engine must be claude or codex");
 	if (!LOCAL_BROWSER_AUTH_MODES.includes(o.authMode as never)) throw bad("authMode is invalid");
 	const ws = (o.workspace && typeof o.workspace === "object" ? o.workspace : {}) as Record<string, unknown>;
@@ -162,6 +165,7 @@ export function parseEnvelope(raw: unknown): LocalBrowserTaskEnvelope {
 		requestId: o.requestId as string,
 		instanceId: o.instanceId as string,
 		objective: o.objective.trim(),
+		...(brief ? { brief } : {}),
 		engine: o.engine as LocalBrowserTaskEnvelope["engine"],
 		authMode: o.authMode as LocalBrowserTaskEnvelope["authMode"],
 		workspace: ws.kind === "path" ? { kind: "path", path: ws.path as string } : { kind: "scratch" },

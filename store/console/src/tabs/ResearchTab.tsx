@@ -33,6 +33,7 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 	const [starting, setStarting] = useState(false);
 	const [startMsg, setStartMsg] = useState("");
 	const [schedule, setSchedule] = useState<ScanSchedule | null>(null);
+	const [brief, setBrief] = useState<string | null>(null);
 
 	const loadRuns = useCallback(async () => {
 		try {
@@ -44,7 +45,9 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 	// The schedule rides on the settings response (#980) — one read, the same one MCP makes.
 	const loadSchedule = useCallback(async () => {
 		try {
-			setSchedule((await api<LocalBrowserSettingsResponse>(`/v1/instances/${instanceId}/local-browser/settings`)).schedule ?? null);
+			const s = await api<LocalBrowserSettingsResponse>(`/v1/instances/${instanceId}/local-browser/settings`);
+			setSchedule(s.schedule ?? null);
+			setBrief(s.settings?.brief ?? null);
 		} catch {
 			/* the schedule is a read beside the runs; a failure must not blank the tab */
 		}
@@ -106,7 +109,7 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 			</Card>
 
 			{/* #980: is this Scout scheduled, when did it last look, when does it look next. */}
-			<ScanScheduleCard instanceId={instanceId} schedule={schedule} onChanged={loadSchedule} onScanNow={(what) => start(what)} />
+			<ScanScheduleCard instanceId={instanceId} schedule={schedule} brief={brief} onChanged={loadSchedule} onScanNow={(what) => start(what)} />
 
 			<Card className="mb-3 sm:mb-4">
 				<label htmlFor="research-objective" className="text-sm font-semibold block mb-1">

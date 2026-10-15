@@ -74,6 +74,13 @@ export interface LocalBrowserTaskEnvelope {
 	requestId: string;
 	instanceId: string;
 	objective: string;
+	/**
+	 * The owner's saved search brief (#1065), sent BESIDE the objective: the runner puts it in the
+	 * prompt fenced as data (ADR 0006), never merged into the run's instructions. Optional, so a runner
+	 * that predates it ignores the field and runs on the objective alone; PAGS notes that on the run.
+	 * At most 4000 characters; owner-authored only (the instance's local-browser settings).
+	 */
+	brief?: string;
 	engine: LocalBrowserEngine;
 	authMode: LocalBrowserAuthMode;
 	workspace: LocalBrowserWorkspace;

@@ -7655,6 +7655,11 @@ paths:
         it does not offer, `api-key` sign-in on a subscription-only agent, a workspace path not written
         `~/…` under the runner's home, a site outside its list, a limit above its ceiling. The runner is
         chosen with `PUT /runner-node`.
+
+        `brief` (#1065) is the owner's saved search brief, 1–4000 characters, `null` clears it. Every
+        run, scheduled or not, is given it beside its objective. `briefFromMemory: "<key>"` copies it
+        once from one of the owner's own memory entries (`source: "user"`); an agent-written entry is
+        refused. While none is saved, `GET` names a user-set `search_target` entry as `briefSuggestion`.
       operationId: setLocalBrowserSettings
       tags: [Instances]
       parameters:

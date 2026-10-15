@@ -67,6 +67,16 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 		}
 		setSaving(false);
 	};
+	const adoptBrief = async (memoryKey: string) => {
+		try {
+			const r = await api<LocalBrowserSettingsSaved>(`/v1/instances/${instanceId}/local-browser/settings`, { method: "PUT", body: JSON.stringify({ briefFromMemory: memoryKey }) });
+			setForm(formFromSettings(r.settings));
+			setData((d) => (d ? { ...d, settings: r.settings, briefSuggestion: undefined } : d));
+			setMsg("Saved brief copied from your memory entry.");
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+	};
 	const decide = async (body: Record<string, unknown>) => {
 		try {
 			setConsent((await api<LocalBrowserConsentList>(`/v1/instances/${instanceId}/local-browser/consent`, { method: "PUT", body: JSON.stringify(body) })).consent);
@@ -85,6 +95,22 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 				Runs on <span className="font-semibold">{data.runnerNode ?? "whichever machine runs `pags up`"}</span> — choose the machine in the Runner card below. PAGS keeps the run and asks you first; the CLI signed in on that machine does the browsing.
 			</p>
 			{data.problem && <p className="text-sm text-warning mb-3">{data.problem}</p>}
+
+			<label className="flex flex-col gap-1 text-xs font-semibold mb-3">
+				Saved search brief{" "}
+				<span className="font-normal text-muted">
+					What every run looks for — roles, places, sites. Each scan, scheduled or started by hand, is given it beside its objective, as your notes rather than as instructions. Empty: runs have only their objective.
+				</span>
+				<textarea className={input} rows={4} maxLength={4000} value={form.brief} aria-label="Saved search brief" onChange={(e) => set({ brief: e.target.value })} />
+			</label>
+			{!form.brief.trim() && data.briefSuggestion && (
+				<p className="text-xs text-muted mb-3">
+					You saved search criteria in this agent's memory ({data.briefSuggestion.memoryKey}, {data.briefSuggestion.chars} characters).{" "}
+					<button type="button" className="underline" onClick={() => adoptBrief(data.briefSuggestion!.memoryKey)}>
+						Use it as the saved brief
+					</button>
+				</p>
+			)}
 
 			<div className="grid sm:grid-cols-2 gap-3 mb-3">
 				<label className="flex flex-col gap-1 text-xs font-semibold">

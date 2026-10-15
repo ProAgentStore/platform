@@ -654,6 +654,8 @@ export interface LocalBrowserSettingsValues {
 	limits?: Partial<LocalBrowserLimits>;
 	traceRetentionDays?: number;
 	collection?: LocalBrowserCollection;
+	/** The owner's saved search brief (#1065), given to every run beside its objective. */
+	brief?: string;
 }
 
 /** The policy a run would start with. */
@@ -681,6 +683,8 @@ export interface LocalBrowserSettingsResponse {
 	/** The Scout's scan schedule (#980) — a view over the cron trigger that fires it. */
 	schedule?: ScanSchedule;
 	scheduleSummary?: string;
+	/** While no brief is saved: a memory entry YOU set that could become it (#1065). */
+	briefSuggestion?: { memoryKey: string; chars: number };
 }
 
 /** `PUT …/local-browser/settings`. */

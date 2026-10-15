@@ -30,6 +30,11 @@ import {
  * page could open. Claude Code has no such floor.
  */
 export const LOCAL_BROWSER_CODEX_MIN_CLI = "0.4.74";
+/** The first CLI whose runner reads `brief` from the envelope and puts it in the prompt (#1065). An
+ *  older runner drops the field and runs on the objective alone — the run says so in a `note`. */
+export const LOCAL_BROWSER_BRIEF_MIN_CLI = "0.4.132";
+/** The longest saved brief, in characters. The objective's own ceiling, so neither can crowd the other out. */
+export const BRIEF_MAX_CHARS = 4000;
 
 /** Platform hard ceilings — no agent may declare above these. */
 export const PLATFORM_LIMITS: LocalBrowserLimits = { maxMinutes: 60, maxPages: 200, maxActions: 1000, maxConcurrent: 3 };
@@ -70,6 +75,13 @@ export interface LocalBrowserSettings {
 	limits?: Partial<LocalBrowserLimits>;
 	traceRetentionDays?: number;
 	collection?: CollectionMapping;
+	/**
+	 * The owner's saved search brief (#1065): what every run of this agent is looking for — roles,
+	 * places, sites. OWNER-AUTHORED by construction: it is set only through the owner's settings route,
+	 * never by the agent, and a run carries it to the CLI fenced as data, beside the objective rather
+	 * than inside it. A scheduled run's objective can then say "matching the saved brief" and mean it.
+	 */
+	brief?: string;
 }
 
 /** What a run is started with: the capability narrowed by the settings, nothing optional. */
@@ -87,6 +99,8 @@ export interface EffectiveLocalBrowserPolicy {
 	collection: CollectionMapping | null;
 	/** Set only on a RUN's policy, when the owner's browser-screenshot switch was off as it started (#1064). */
 	screenshots?: false;
+	/** The owner's saved brief as the run started with it (#1065). Absent when none is saved. */
+	brief?: string;
 }
 
 const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -240,6 +254,12 @@ export function validateLocalBrowserSettings(raw: unknown, cap: LocalBrowserCapa
 		if (c && "error" in c) return c;
 		if (c) out.collection = c;
 	}
+	if (o.brief !== undefined) {
+		const brief = typeof o.brief === "string" ? o.brief.trim() : "";
+		// Refused, never cut: a brief missing its last criteria would quietly search for less.
+		if (!brief || brief.length > BRIEF_MAX_CHARS) return { error: `brief must be text of 1 to ${BRIEF_MAX_CHARS} characters (null clears it)` };
+		out.brief = brief;
+	}
 	return { settings: out };
 }
 
@@ -289,6 +309,7 @@ export function effectiveLocalBrowserPolicy(cap: LocalBrowserCapability, stored:
 		traceRetentionDays: s.traceRetentionDays ?? RETENTION_DAYS.default,
 		resultSchema: cap.resultSchema,
 		collection: s.collection ?? cap.collection ?? null,
+		...(s.brief ? { brief: s.brief } : {}),
 	};
 }
 

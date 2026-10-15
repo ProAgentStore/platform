@@ -25,7 +25,7 @@ const TONE: Record<"muted" | "success" | "warning" | "danger", string> = {
 	danger: "text-danger",
 };
 
-export default function ScanScheduleCard({ instanceId, schedule, onChanged, onScanNow }: { instanceId: string; schedule: ScanSchedule | null; onChanged: () => void; onScanNow: (objective: string) => void }) {
+export default function ScanScheduleCard({ instanceId, schedule, brief, onChanged, onScanNow }: { instanceId: string; schedule: ScanSchedule | null; brief?: string | null; onChanged: () => void; onScanNow: (objective: string) => void }) {
 	const [cadence, setCadence] = useState(schedule?.cadence ?? "");
 	const [objective, setObjective] = useState(schedule?.objective ?? "");
 	const [busy, setBusy] = useState("");
@@ -131,6 +131,10 @@ export default function ScanScheduleCard({ instanceId, schedule, onChanged, onSc
 					Scan now
 				</Button>
 			</div>
+			{/* The saved brief each scan is given beside its objective (#1065); edited in Settings → Local browser research. */}
+			<p className="text-xs text-muted mt-2 whitespace-pre-wrap" data-testid="scan-brief">
+				{brief ? `Each scan is also given your saved brief: ${brief}` : "No saved brief: each scan has only its objective. Add one in Settings → Local browser research."}
+			</p>
 			{schedule?.lastError && <p className="text-xs text-danger mt-2">Last attempt: {schedule.lastError}</p>}
 			{msg && <p className="text-xs text-danger mt-2">{msg}</p>}
 		</Card>
