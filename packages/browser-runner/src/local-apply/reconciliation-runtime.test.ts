@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
-import type { LocalApplyReconciliationEnvelope } from "./contract.js";
+import type { LocalApplyReconciliationEnvelope } from "./handoff-contract.js";
 import { LocalApplyReconciliationRuntime } from "./reconciliation-runtime.js";
 
 const envelope = (): LocalApplyReconciliationEnvelope => ({

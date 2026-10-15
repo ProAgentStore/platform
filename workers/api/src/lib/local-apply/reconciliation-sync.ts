@@ -7,7 +7,7 @@
 import type { Env } from "../../types.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
-import { LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyReconciliationStatus } from "./contract.js";
+import { LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyReconciliationStatus } from "./handoff-contract.js";
 import {
 	activeLocalApplyReconciliations,
 	getApplyRun,

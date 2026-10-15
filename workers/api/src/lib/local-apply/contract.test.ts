@@ -16,6 +16,11 @@ describe("the vendored copy", () => {
 		expect(readFileSync(join(ROOT, "packages/browser-runner/src/local-apply/contract.ts"), "utf8")).toBe(worker);
 		expect(worker).not.toMatch(/^import /m);
 	});
+	it("so is its handoff half (#1100), whose only import is a type from the vendored contract beside it", () => {
+		const worker = readFileSync(join(ROOT, "workers/api/src/lib/local-apply/handoff-contract.ts"), "utf8");
+		expect(readFileSync(join(ROOT, "packages/browser-runner/src/local-apply/handoff-contract.ts"), "utf8")).toBe(worker);
+		expect(worker.match(/^import .*$/gm)).toEqual(['import type { LocalApplyProfile } from "./contract.js";']);
+	});
 });
 
 describe("parseLocalApplyEvent", () => {

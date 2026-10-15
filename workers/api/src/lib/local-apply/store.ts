@@ -5,7 +5,8 @@
 import type { Env } from "../../types.js";
 import { type ApplicationStatus, type JobApplication, writeBackToLead } from "../local-artifact/store.js";
 import { fingerprintOf, jobIdentityOf, sameFingerprint, type ApprovalFingerprint } from "./approval.js";
-import type { LocalApplyEvent, LocalApplyHandoffTerminalReason, LocalApplyMode, LocalApplyPause, LocalApplyPlatformEventType } from "./contract.js";
+import type { LocalApplyEvent, LocalApplyMode, LocalApplyPause, LocalApplyPlatformEventType } from "./contract.js";
+import type { LocalApplyHandoffTerminalReason } from "./handoff-contract.js";
 import type { GateCheck } from "./policy.js";
 
 type DB = Pick<Env, "DB"> & Partial<Pick<Env, "AGENT">>;

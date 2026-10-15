@@ -1,7 +1,8 @@
 import { RunnerInputError } from "../errors.js";
 import type { TakeoverInput } from "../types.js";
 import type { Page } from "playwright";
-import type { LocalApplyHandoffRequest, LocalApplyHandoffStatus, LocalApplyHandoffTerminalReason, LocalApplyTaskEnvelope } from "./contract.js";
+import type { LocalApplyTaskEnvelope } from "./contract.js";
+import type { LocalApplyHandoffRequest, LocalApplyHandoffStatus, LocalApplyHandoffTerminalReason } from "./handoff-contract.js";
 
 export interface LocalApplyTakeoverAdapter {
 	/** The caller supplies the page retained by this exact run/profile. */

@@ -54,7 +54,6 @@ import {
 	type LocalApplyDirectiveRequest,
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
-	type LocalApplyHandoffStatus,
 	type LocalApplyPause,
 	type LocalApplyPreflightResult,
 	type LocalApplyProfile,
@@ -68,6 +67,7 @@ import {
 	parseLocalApplyResult,
 	traceUrl,
 } from "./contract.js";
+import type { LocalApplyHandoffStatus } from "./handoff-contract.js";
 import { applyPrompt, buildApplyEngineSpec, observedApplyAuth, type SourceBlock } from "./engine.js";
 import { LocalApplyHandoffRuntime, type LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
@@ -130,7 +130,7 @@ interface Run {
 	checkpoints: Map<string, { checkpoint?: LocalApplySupervisorCheckpoint; directive?: LocalApplySupervisorDirective }>;
 	endedAt?: number;
 	timer?: ReturnType<typeof setInterval>;
-	handoff?: { handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: import("./contract.js").LocalApplyHandoffTerminalReason };
+	handoff?: { handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: import("./handoff-contract.js").LocalApplyHandoffTerminalReason };
 }
 
 /**

@@ -7,7 +7,8 @@ import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances
 import { type AttentionDeps, requestOwnerAttention } from "../owner-attention.js";
 import { clipMarked } from "../clip-marked.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
-import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, type LocalApplyHandoffStatus, type LocalApplyPause } from "./contract.js";
+import { type LocalApplyPause } from "./contract.js";
+import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, type LocalApplyHandoffStatus } from "./handoff-contract.js";
 import { type ApplyRun, createLocalApplyHandoff, markLocalApplyHandoff, usableLocalApplyHandoff } from "./store.js";
 
 const HANDOFF_TTL_MS = 10 * 60_000;

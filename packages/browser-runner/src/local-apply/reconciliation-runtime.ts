@@ -10,7 +10,8 @@ import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
 import { domainWithin } from "../local-browser/bridge.js";
 import type { TakeoverInput } from "../types.js";
-import type { LocalApplyHandoffTerminalReason, LocalApplyProfile, LocalApplyReconciliationEnvelope, LocalApplyReconciliationHandoffRequest, LocalApplyReconciliationStatus } from "./contract.js";
+import type { LocalApplyProfile } from "./contract.js";
+import type { LocalApplyHandoffTerminalReason, LocalApplyReconciliationEnvelope, LocalApplyReconciliationHandoffRequest, LocalApplyReconciliationStatus } from "./handoff-contract.js";
 import type { RunBrowser } from "./runtime.js";
 import type { LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 

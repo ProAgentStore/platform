@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
 import type { TakeoverInput } from "../types.js";
-import type { LocalApplyHandoffRequest } from "./contract.js";
+import type { LocalApplyHandoffRequest } from "./handoff-contract.js";
 import type { LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
 const prefix = "local-apply:";

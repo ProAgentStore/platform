@@ -14,7 +14,7 @@ import {
 	LOCAL_APPLY_SIGN_IN_PATH,
 	type LocalApplyHandoffStatus,
 	type LocalApplySignInStatus,
-} from "./contract.js";
+} from "./handoff-contract.js";
 import { type ApplyRun, type LocalApplyHandoff, createLocalApplyHandoff, getApplyRun, getLocalApplyHandoffForRun, isTerminalApplyRun, markLocalApplyHandoff, usableLocalApplyHandoff } from "./store.js";
 
 /**
