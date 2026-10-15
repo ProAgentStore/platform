@@ -13,7 +13,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	accountKey,
@@ -135,14 +135,37 @@ describe("what a refused `pags up` says", () => {
 });
 
 describe("where the lock lives", () => {
+	// #1092: these pin the config dir with PAGS_CONFIG_DIR — the one input `configDir` reads. They used
+	// to pass `{ HOME }`, which `configDir` ignores (it calls `homedir()`), so the path's PARENT was the
+	// real home of whoever ran the suite, and `not.toContain("serge-ivo")` failed on a machine whose
+	// home directory is /Users/serge-ivo. Secrecy is a property of the FILENAME; the parent is the user's.
+	const at = (dir: string) => ({ PAGS_CONFIG_DIR: dir }) as NodeJS.ProcessEnv;
+
 	it("is per ACCOUNT, so two accounts can each run one runner here (Q1)", () => {
-		const a = lockPath("serge-ivo", { HOME: "/home/x" } as NodeJS.ProcessEnv);
-		const b = lockPath("someone-else", { HOME: "/home/x" } as NodeJS.ProcessEnv);
+		const a = lockPath("serge-ivo", at("/home/x/.config/proagentstore"));
+		const b = lockPath("someone-else", at("/home/x/.config/proagentstore"));
 		expect(a).not.toBe(b);
-		expect(a).toMatch(/up-[0-9a-f]{12}\.lock$/);
+		expect(basename(a)).toMatch(/^up-[0-9a-f]{12}\.lock$/);
 		// The account is hashed, not spelled out, and the same account always resolves the same way.
-		expect(a).not.toContain("serge-ivo");
+		expect(basename(a)).toBe(`up-${accountKey("serge-ivo")}.lock`);
+		expect(basename(a)).not.toContain("serge-ivo");
 		expect(accountKey("Serge-Ivo")).toBe(accountKey("serge-ivo "));
+		expect(accountKey("serge-ivo")).not.toBe(accountKey("someone-else"));
+	});
+
+	it("keeps the account out of the FILENAME even when the home directory is named after it (#1092)", () => {
+		// The audit machine's real layout: the OS user and the PAGS account share a name.
+		const dir = "/Users/serge-ivo/.config/proagentstore";
+		const a = lockPath("serge-ivo", at(dir));
+		// The parent is the user's own directory and is left exactly as given — it is not ours to hide.
+		expect(dirname(a)).toBe(dir);
+		// The segment this module names is hashed: no account, in any case or with stray spaces.
+		expect(basename(a)).toBe(`up-${accountKey("serge-ivo")}.lock`);
+		for (const spelling of ["serge-ivo", "Serge-Ivo", "SERGE-IVO"]) expect(basename(a)).not.toContain(spelling);
+		expect(lockPath(" Serge-Ivo ", at(dir)), "normalised: case and surrounding space do not make a second lock").toBe(a);
+		// Per-account uniqueness holds in that directory too.
+		expect(lockPath("someone-else", at(dir))).not.toBe(a);
+		expect(dirname(lockPath("someone-else", at(dir)))).toBe(dir);
 	});
 
 	it("follows PAGS_CONFIG_DIR, which is how a dev runner stays out of the installed one's way", () => {
