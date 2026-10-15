@@ -37,17 +37,21 @@ app.post("/run", async (c) => {
 	const { input } = await c.req.json<{ input: string }>();
 	if (!input) return c.json({ error: "input required" }, 400);
 
-	const result = (await runCallerWorkersAi(credentials, {
-		messages: [
-			{
-				role: "system",
-				content: "You are a helpful tool. Process the input and return a result.",
-			},
-			{ role: "user", content: input },
-		],
-	})) as { result?: { response?: string }; response?: string };
-
-	return c.json({ result: result.result?.response || result.response || "" });
+	try {
+		const result = await runCallerWorkersAi(credentials, {
+			messages: [
+				{
+					role: "system",
+					content: "You are a helpful tool. Process the input and return a result.",
+				},
+				{ role: "user", content: input },
+			],
+		});
+		return c.json({ result });
+	} catch (err) {
+		if (err instanceof UpstreamAiError) return upstreamFailure(err);
+		throw err;
+	}
 });
 
 function callerAiCredentials(
@@ -59,10 +63,26 @@ function callerAiCredentials(
 	return { accountId, token };
 }
 
+/**
+ * Workers AI refused the call, or answered with nothing. Carries the upstream HTTP status only —
+ * never the upstream body, which can echo the caller's own account details back.
+ */
+class UpstreamAiError extends Error {
+	constructor(readonly upstreamStatus: number, reason: string) {
+		super(`Workers AI ${reason} (HTTP ${upstreamStatus})`);
+		this.name = "UpstreamAiError";
+	}
+}
+
+/**
+ * Run the model on the CALLER's Workers AI account and return its reply text. Throws
+ * `UpstreamAiError` when the call fails or the reply is empty: an upstream failure is never an empty
+ * success, so the caller can answer it with a non-2xx status (and the platform's caller can see it).
+ */
 async function runCallerWorkersAi(
 	credentials: { accountId: string; token: string },
 	body: unknown,
-): Promise<unknown> {
+): Promise<string> {
 	const encodedModel = MODEL.split("/").map(encodeURIComponent).join("/");
 	const res = await fetch(
 		`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(credentials.accountId)}/ai/run/${encodedModel}`,
@@ -75,14 +95,24 @@ async function runCallerWorkersAi(
 			body: JSON.stringify(body),
 		},
 	);
-	const data = await res.json().catch(() => ({}));
-	if (!res.ok) {
-		return { error: "caller_workers_ai_failed", status: res.status, details: data };
-	}
-	if (data && typeof data === "object" && "result" in data) {
-		return (data as { result: unknown }).result;
-	}
-	return data;
+	if (!res.ok) throw new UpstreamAiError(res.status, "refused the call");
+	const data = (await res.json().catch(() => ({}))) as { result?: { response?: unknown }; response?: unknown };
+	const reply = data.result?.response ?? data.response;
+	if (typeof reply !== "string" || !reply.trim()) throw new UpstreamAiError(res.status, "returned an empty reply");
+	return reply;
+}
+
+/**
+ * The answer to an upstream failure: 502 with the upstream status, and one log line (`wrangler tail`
+ * / Workers Logs). This template has no platform error log of its own — report from here to your own
+ * sink (Sentry, a webhook, a D1 table) if you want these kept.
+ */
+function upstreamFailure(err: UpstreamAiError): Response {
+	console.error(JSON.stringify({ event: "upstream_ai_failed", upstreamStatus: err.upstreamStatus, message: err.message }));
+	return new Response(JSON.stringify({ error: "upstream_ai_failed", message: err.message, upstreamStatus: err.upstreamStatus }), {
+		status: 502,
+		headers: { "Content-Type": "application/json" },
+	});
 }
 
 export default app;

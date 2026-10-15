@@ -4,11 +4,18 @@
  * client IP for anonymous requests. Resets per-minute, no persistence.
  */
 import type { Context, Next } from "hono";
+import { logDirectResponse } from "./on-error.js";
 import { verifySession } from "./session.js";
 import type { Env } from "../types.js";
 
 const windowMs = 60_000;
-const buckets = new Map<string, { count: number; resetAt: number }>();
+/** `reported` — this window's refusal is already in the log (#1086). */
+interface Bucket {
+	count: number;
+	resetAt: number;
+	reported?: boolean;
+}
+const buckets = new Map<string, Bucket>();
 
 /** Who to rate-limit: the authenticated user if the token is valid, else the IP. */
 async function subject(c: Context<{ Bindings: Env }>): Promise<string> {
@@ -27,14 +34,33 @@ async function subject(c: Context<{ Bindings: Env }>): Promise<string> {
 	return `ip:${c.req.header("CF-Connecting-IP") || "unknown"}`;
 }
 
-function deny(c: Context<{ Bindings: Env }>) {
+/**
+ * Refuse, and record it (#1086) — once per bucket per window, not once per refused request. A
+ * client hammering a limit is the case worth a row, and also the case that would flood the log if
+ * every refusal wrote one; the first refusal in a window is the evidence, the rest are the same fact.
+ * The subject is recorded as its KIND (`user` / `ip`) — never the IP itself.
+ */
+async function deny(c: Context<{ Bindings: Env }>, bucket: { key: string; state: Bucket; limit: number }) {
+	if (!bucket.state.reported) {
+		bucket.state.reported = true;
+		const name = bucket.key.split(":")[0];
+		const who = bucket.key.substring(name.length + 1);
+		const isUser = who.startsWith("u:");
+		await logDirectResponse(c.env, {
+			status: 429,
+			source: "rate-limit",
+			message: `rate limit exceeded: ${name} (${bucket.limit}/min)`,
+			userId: isUser ? who.substring(2) : null,
+			context: { bucket: name, limit: bucket.limit, subject: isUser ? "user" : "ip", path: c.req.path, method: c.req.method },
+		});
+	}
 	return c.json({ error: "Rate limit exceeded. Try again in a minute." }, 429);
 }
 
 function getRateLimit(
 	key: string,
 	limit: number,
-): { allowed: boolean; remaining: number } {
+): { allowed: boolean; remaining: number; state: Bucket } {
 	const now = Date.now();
 	let bucket = buckets.get(key);
 
@@ -55,6 +81,7 @@ function getRateLimit(
 	return {
 		allowed: bucket.count <= limit,
 		remaining: Math.max(0, limit - bucket.count),
+		state: bucket,
 	};
 }
 
@@ -76,10 +103,11 @@ export function rateLimitDefault() {
 		const isExplain = path.endsWith("/explain");
 		const limit = isLivePoll ? 3000 : isExplain ? 40 : 240;
 		const bucket = isLivePoll ? "live" : isExplain ? "explain" : "default";
-		const { allowed, remaining } = getRateLimit(`${bucket}:${who}`, limit);
+		const key = `${bucket}:${who}`;
+		const { allowed, remaining, state } = getRateLimit(key, limit);
 		c.header("X-RateLimit-Limit", String(limit));
 		c.header("X-RateLimit-Remaining", String(remaining));
-		if (!allowed) return deny(c);
+		if (!allowed) return deny(c, { key, state, limit });
 		await next();
 	};
 }
@@ -87,10 +115,11 @@ export function rateLimitDefault() {
 /** 10/min per user — expensive endpoints (chat, run). */
 export function rateLimitStrict() {
 	return async (c: Context<{ Bindings: Env }>, next: Next) => {
-		const { allowed, remaining } = getRateLimit(`strict:${await subject(c)}`, 10);
+		const key = `strict:${await subject(c)}`;
+		const { allowed, remaining, state } = getRateLimit(key, 10);
 		c.header("X-RateLimit-Limit", "10");
 		c.header("X-RateLimit-Remaining", String(remaining));
-		if (!allowed) return deny(c);
+		if (!allowed) return deny(c, { key, state, limit: 10 });
 		await next();
 	};
 }
@@ -106,10 +135,11 @@ export function rateLimitAdmin() {
 	return async (c: Context<{ Bindings: Env }>, next: Next) => {
 		const who = await subject(c);
 		const limit = who.startsWith("u:") ? 120 : 20;
-		const { allowed, remaining } = getRateLimit(`admin:${who}`, limit);
+		const key = `admin:${who}`;
+		const { allowed, remaining, state } = getRateLimit(key, limit);
 		c.header("X-RateLimit-Limit", String(limit));
 		c.header("X-RateLimit-Remaining", String(remaining));
-		if (!allowed) return deny(c);
+		if (!allowed) return deny(c, { key, state, limit });
 		await next();
 	};
 }

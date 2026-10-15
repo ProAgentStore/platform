@@ -1,6 +1,8 @@
 import type { Env } from "../types.js";
 import { HttpError } from "./auth.js";
-import { logError } from "./error-log.js";
+import { clipMarked } from "./clip-marked.js";
+import { type ErrorLevel, logError } from "./error-log.js";
+import { redactText } from "./redact.js";
 
 /**
  * Transient infrastructure errors that are NOT bugs — a Durable Object being reset
@@ -89,5 +91,42 @@ export async function logUnhandled(
 			method: req.method,
 			stack: err instanceof Error ? String(err.stack || "").slice(0, 1800) : undefined,
 		},
+	}).catch(() => undefined);
+}
+
+/**
+ * The same policy for a failure a handler RETURNED rather than threw (#1086).
+ *
+ * `app.onError` only ever sees a throw. A route that answers `c.json(…, 502)` itself — an upstream
+ * model failing, a runner that is not connected, the rate limiter's 429 — produced no row at all,
+ * so the classification above covered half of the failures it was written for. This is that
+ * classification, applied at the place the response is built:
+ *
+ *   - 401, 404 and every other non-diagnostic 4xx → nothing (constant background traffic);
+ *   - 402 / 403 / 409 / 429 → `warn`;
+ *   - 5xx → `error`, unless the caller declares the state EXPECTED (`level: "warn"`) — "the runner
+ *     is not connected" is a 502 to the client and a fact about the owner's laptop, not a bug.
+ *
+ * Exactly one report per failure: a path calls this only where it RETURNS the failure. A thrown
+ * error is `logUnhandled`'s, and a path that has already called `logError` itself must not call
+ * this too. Nothing that serves `/v1/errors/*`, the telemetry spool or its drain reports through
+ * here — a failing log must never report itself.
+ *
+ * The message is redacted (`redactText`) and clipped: an upstream body can carry a key, and ADR
+ * 0004 keeps bodies out of the log. Never throws.
+ */
+export async function logDirectResponse(
+	env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_KV" | "API_BUILD">>,
+	r: { status: number; source: string; message: string; userId?: string | null; level?: ErrorLevel; context?: Record<string, unknown> },
+): Promise<void> {
+	if (r.status < 500 && !DIAGNOSTIC_CLIENT_ERRORS.has(r.status)) return;
+	const level: ErrorLevel = r.level ?? (r.status < 500 ? "warn" : "error");
+	await logError(env, {
+		source: r.source,
+		level,
+		status: r.status,
+		message: clipMarked(redactText(r.message), 500),
+		userId: r.userId ?? null,
+		context: r.context,
 	}).catch(() => undefined);
 }

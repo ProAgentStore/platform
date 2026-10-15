@@ -821,33 +821,59 @@ export class AgentDO extends DurableObject<Env> {
 		// No-op: sessions are tracked by the runtime via ctx.getWebSockets()
 	}
 
+	/** A socket the runtime reports as failed (#1086) — previously unhandled, so the cause was lost. */
+	async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+		await this.reportSocketFailure(ws, "agent-ws", `chat socket error: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
 	async webSocketMessage(
 		ws: WebSocket,
 		data: string | ArrayBuffer,
 	): Promise<void> {
 		if (typeof data !== "string") return;
+		// A frame that is not JSON is the CLIENT's mistake: answered, not logged.
+		let parsed: { type?: unknown; message?: unknown };
 		try {
-			const parsed = JSON.parse(data);
-			if (parsed.type === "chat" && parsed.message) {
-				// Use the server-verified uid pinned to the socket at accept time —
-				// NEVER parsed.userId (a client could otherwise name any victim's uid
-				// and run inference on their stored API key).
-				const attach = ws.deserializeAttachment() as { userId?: string; agentId?: string } | null;
-				const userId = attach?.userId;
-				const request = new Request("https://internal/chat", {
-					method: "POST",
-					body: JSON.stringify({
-						message: parsed.message,
-						channel: "chat",
-						userId,
-						agentId: attach?.agentId,
-					}),
-				});
-				await this.handleChat(request);
-			}
+			parsed = JSON.parse(data);
 		} catch {
 			ws.send(JSON.stringify({ type: "error", error: "Invalid message" }));
+			return;
 		}
+		if (parsed?.type !== "chat" || !parsed.message) return;
+		// Use the server-verified uid pinned to the socket at accept time —
+		// NEVER parsed.userId (a client could otherwise name any victim's uid
+		// and run inference on their stored API key).
+		const attach = ws.deserializeAttachment() as { userId?: string; agentId?: string } | null;
+		const request = new Request("https://internal/chat", {
+			method: "POST",
+			body: JSON.stringify({ message: parsed.message, channel: "chat", userId: attach?.userId, agentId: attach?.agentId }),
+		});
+		try {
+			// `handleChat` records its own failures and RETURNS a 500; only a throw that escaped it
+			// reaches here, so this is the one report for it (#1086) — it used to read "Invalid message".
+			await this.handleChat(request);
+		} catch (err) {
+			await this.reportSocketFailure(ws, "agent-ws", `chat over the socket failed: ${err instanceof Error ? err.message : String(err)}`, err);
+			ws.send(JSON.stringify({ type: "error", error: "The agent could not process that message. Please try again." }));
+		}
+	}
+
+	/** One durable row for a socket failure, filed under the socket's PINNED user and this DO's name. */
+	private async reportSocketFailure(ws: WebSocket, source: string, message: string, err?: unknown): Promise<void> {
+		const attach = (() => {
+			try {
+				return ws.deserializeAttachment() as { userId?: string; agentId?: string } | null;
+			} catch {
+				return null;
+			}
+		})();
+		const agentId = attach?.agentId ?? (await this.getState().catch(() => null))?.agentId;
+		await logError(this.env, {
+			source,
+			message: clipMarked(message, 500),
+			userId: attach?.userId ?? null,
+			context: { instanceId: agentId, stack: err instanceof Error ? clipMarked(String(err.stack || ""), 1500) : undefined },
+		}).catch(() => undefined);
 	}
 
 	private broadcast(data: Record<string, unknown>): void {

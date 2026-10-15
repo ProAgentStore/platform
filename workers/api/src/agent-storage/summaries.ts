@@ -6,6 +6,7 @@ import type { ActivityEvent, ConversationSummary, ExtractedFact, VectorMeta } fr
 import type { AgentMessage, MemoryEntry } from "../agent-types.js";
 import { approxTokens } from "../lib/ai-pricing.js";
 import { redactFabricatedHistory } from "../lib/fabricated-history.js";
+import { logError } from "../lib/error-log.js";
 import { recordPlatformUsage } from "../lib/usage.js";
 import { type AgentStorageBaseCtor, SUMMARY_CF_MODEL, SUMMARY_THRESHOLD } from "./base.js";
 
@@ -145,7 +146,10 @@ NEVER extract the platform's own state, as a class: whether a tool, permission, 
 					);
 				}
 				const jsonMatch = text.match(/\{[\s\S]*\}/);
-				if (!jsonMatch) return null;
+				if (!jsonMatch) {
+					await this.reportSummaryFailure("warn", `summary model returned no JSON (${text.length} chars)`, { messageCount: messages.length });
+					return null;
+				}
 
 				const parsed = JSON.parse(jsonMatch[0]) as {
 					summary: string;
@@ -207,6 +211,7 @@ NEVER extract the platform's own state, as a class: whether a tool, permission, 
 					await this.vectorizeStore("message", sessionId, summary.summary);
 				} catch (err) {
 					console.error(`[storage] summary ${sessionId} stored but not vectorized:`, err);
+					await this.reportSummaryFailure("warn", `summary ${sessionId} stored but not vectorized: ${err instanceof Error ? err.message : String(err)}`, { sessionId });
 				}
 
 				await this.logEvent("summary.generated", undefined, {
@@ -216,9 +221,22 @@ NEVER extract the platform's own state, as a class: whether a tool, permission, 
 				});
 
 				return summary;
-			} catch {
+			} catch (err) {
+				// Callers still get null — a failed summary must not fail the chat turn — but it is a
+				// durable diagnostic now, not a silent absence (#1086).
+				await this.reportSummaryFailure("error", `summarization failed: ${err instanceof Error ? err.message : String(err)}`, { messageCount: messages.length });
 				return null;
 			}
+		}
+
+		/**
+		 * A summary that failed, or was stored without its vector, in the durable log (#1086). Filed by
+		 * the DO's own name, which `logError` verifies into an owner and instance — the engine cannot
+		 * tell a template DO from an instance DO itself (`lib/meter-ids.ts`). No `db` (unit tests) → nothing.
+		 */
+		protected async reportSummaryFailure(level: "warn" | "error", message: string, context: Record<string, unknown>): Promise<void> {
+			if (!this.db) return;
+			await logError(this.db, { source: "storage", level, message, context: { ...context, agentId: this.agentId, op: "summary" } }).catch(() => undefined);
 		}
 
 		/**

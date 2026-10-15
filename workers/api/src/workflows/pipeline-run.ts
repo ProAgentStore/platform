@@ -318,18 +318,10 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				throw err;
 			}
 			await logError(env, { source: "pipeline-run", userId, status: 500, message: `pipeline "${pipeline.name}" crashed: ${msg}`, context: { instanceId, runId, pipeline: pipeline.name, stack: err instanceof Error ? String(err.stack || "").slice(0, 1500) : undefined } });
-			// Swallowed deliberately — throwing from the crash handler would replace the real cause
-			// with a bookkeeping error. But a failed close leaves the row `running` forever, so it
-			// gets its own durable entry rather than disappearing behind the crash it followed.
-			await closeRun(env, runId, "failed", { seen, added, skipped, errors: errors + 1 }, msg.slice(0, 200)).catch((e) =>
-				logError(env, {
-					source: "pipeline-run",
-					userId,
-					status: 500,
-					message: `could not close run ${runId} after a crash — the row will stay 'running': ${e instanceof Error ? e.message : String(e)}`,
-					context: { instanceId, runId, pipeline: pipeline.name },
-				}).catch(() => undefined),
-			);
+			// Never throws — throwing from the crash handler would replace the real cause with a
+			// bookkeeping error. A failed close leaves the row `running`, and `closeRun` records that
+			// itself under this run (#1086); this `.catch` used to be that record, and could never fire.
+			await closeRun(env, runId, "failed", { seen, added, skipped, errors: errors + 1 }, msg.slice(0, 200));
 			if (loopRunId) await finishLoopRun(env, loopRunId, "failed", msg.slice(0, 200), Date.now()).catch(() => undefined);
 			return { outcome: "failed", steps: 0, detail: msg };
 		}

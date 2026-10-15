@@ -15,6 +15,7 @@
  */
 import { closePipelineRunCard, upsertPipelineRunCard } from "./pipeline-board.js";
 import type { Env } from "../types.js";
+import { logError } from "./error-log.js";
 
 export type RunStatus = "running" | "completed" | "failed" | "interrupted";
 
@@ -42,11 +43,15 @@ export interface PipelineRunRow {
 	detail: string | null;
 }
 
-/** Open a run record at kick. Best-effort; never throws. */
+/**
+ * Open a run record at kick. Best-effort; never throws. Returns whether the RECORD landed — a
+ * failure is written to the durable error log (#1086), not just the worker console, so a run with
+ * no row (or no board card) is explained rather than merely missing.
+ */
 export async function openRun(
 	env: Env,
 	r: { runId: string; userId: string; instanceId: string; pipeline: string; trigger: string; params?: Record<string, unknown> },
-): Promise<void> {
+): Promise<boolean> {
 	try {
 		await env.DB.prepare(
 			"INSERT OR IGNORE INTO pipeline_runs (run_id, user_id, instance_id, pipeline, trigger, status, params, started_at) VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7)",
@@ -61,8 +66,14 @@ export async function openRun(
 				Date.now(),
 			)
 			.run();
-		// The run also goes on the work board, so a pipeline agent is visible to the unified board
-		// and to a supervisor while it runs (#207A) — not only in its own runs table.
+	} catch (err) {
+		await recordBookkeepingFailure(env, "open", r.runId, r.userId, r.instanceId, err);
+		return false;
+	}
+	// The run also goes on the work board, so a pipeline agent is visible to the unified board
+	// and to a supervisor while it runs (#207A) — not only in its own runs table. The row has
+	// landed by now, so a card failure is its own, smaller fact.
+	try {
 		await upsertPipelineRunCard(env, {
 			instanceId: r.instanceId,
 			userId: r.userId,
@@ -71,23 +82,50 @@ export async function openRun(
 			trigger: String(r.trigger).slice(0, 32),
 			status: "running",
 		});
-		// Opportunistic retention: no cron, so ~1% of writes prune rows older than 30 days.
-		if (Math.random() < 0.01) {
-			await env.DB.prepare("DELETE FROM pipeline_runs WHERE created_at < datetime('now', '-30 days')").run().catch(() => undefined);
-		}
 	} catch (err) {
-		console.error("[pipeline-runs] openRun failed:", err instanceof Error ? err.message : String(err));
+		await recordBookkeepingFailure(env, "card", r.runId, r.userId, r.instanceId, err);
 	}
+	// Opportunistic retention: no cron, so ~1% of writes prune rows older than 30 days.
+	if (Math.random() < 0.01) {
+		await env.DB.prepare("DELETE FROM pipeline_runs WHERE created_at < datetime('now', '-30 days')").run().catch(() => undefined);
+	}
+	return true;
 }
 
-/** Close a run record with a terminal status + final counts + optional detail. Best-effort. */
+/**
+ * A run record that could not be written is a durable diagnostic (#1086). Before this both halves
+ * only reached `console.error`, and `closeRun` never threw — so the crash handler's
+ * `closeRun(…).catch(log)` could never fire, and a failed close left a run `running` forever with
+ * nothing anywhere saying why.
+ */
+async function recordBookkeepingFailure(env: Env, op: "open" | "close" | "card", runId: string, userId: string | null, instanceId: string | null, err: unknown): Promise<void> {
+	const message = err instanceof Error ? err.message : String(err);
+	console.error(`[pipeline-runs] ${op} failed:`, message);
+	const what = {
+		open: `could not open the record for run ${runId}: ${message}`,
+		close: `could not close run ${runId} — its record may still read 'running': ${message}`,
+		card: `run ${runId} is recorded, but its board card could not be updated: ${message}`,
+	}[op];
+	await logError(env, {
+		source: "pipeline-run-record",
+		status: 500,
+		message: what,
+		userId,
+		context: { instanceId, runId },
+	}).catch(() => undefined);
+}
+
+/**
+ * Close a run record with a terminal status + final counts + optional detail. Never throws; returns
+ * whether it closed, and a failure is in the durable error log under the run (#1086).
+ */
 export async function closeRun(
 	env: Env,
 	runId: string,
 	status: Exclude<RunStatus, "running">,
 	counts: RunCounts,
 	detail?: string,
-): Promise<void> {
+): Promise<boolean> {
 	try {
 		await env.DB.prepare(
 			"UPDATE pipeline_runs SET status = ?2, finished_at = ?3, seen = ?4, added = ?5, skipped = ?6, errors = ?7, detail = ?8 WHERE run_id = ?1",
@@ -103,13 +141,30 @@ export async function closeRun(
 				detail != null ? String(detail).slice(0, 2000) : null,
 			)
 			.run();
-		// AFTER the row is updated, so the card reads back the terminal state, and here rather than
-		// at the four `closeRun` call sites in `workflows/pipeline-run.ts` — one choke point is how
-		// #206 avoided stranding cards on the paths nobody remembered to wire.
-		const counted = `${counts.seen | 0} seen · ${counts.added | 0} added${counts.errors ? ` · ${counts.errors | 0} error(s)` : ""}`;
+	} catch (err) {
+		const owner = await runOwner(env, runId);
+		await recordBookkeepingFailure(env, "close", runId, owner?.user_id ?? null, owner?.instance_id ?? null, err);
+		return false;
+	}
+	// AFTER the row is updated, so the card reads back the terminal state, and here rather than
+	// at the four `closeRun` call sites in `workflows/pipeline-run.ts` — one choke point is how
+	// #206 avoided stranding cards on the paths nobody remembered to wire.
+	const counted = `${counts.seen | 0} seen · ${counts.added | 0} added${counts.errors ? ` · ${counts.errors | 0} error(s)` : ""}`;
+	try {
 		await closePipelineRunCard(env, runId, status, detail ? `${detail} — ${counted}` : counted);
 	} catch (err) {
-		console.error("[pipeline-runs] closeRun failed:", err instanceof Error ? err.message : String(err));
+		const owner = await runOwner(env, runId);
+		await recordBookkeepingFailure(env, "card", runId, owner?.user_id ?? null, owner?.instance_id ?? null, err);
+	}
+	return true;
+}
+
+/** The run's owner and instance, for a diagnostic. Never throws — it runs on a path already failing. */
+async function runOwner(env: Env, runId: string): Promise<{ user_id: string; instance_id: string } | null> {
+	try {
+		return await env.DB.prepare("SELECT user_id, instance_id FROM pipeline_runs WHERE run_id = ?1").bind(runId).first<{ user_id: string; instance_id: string }>();
+	} catch {
+		return null;
 	}
 }
 

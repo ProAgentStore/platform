@@ -44,7 +44,8 @@ describe("openRun", () => {
 
 	it("never throws when the DB write fails", async () => {
 		const env = { DB: { prepare() { throw new Error("db down"); } } } as unknown as Env;
-		await expect(openRun(env, { runId: "r1", userId: "u1", instanceId: "i1", pipeline: "p", trigger: "api" })).resolves.toBeUndefined();
+		// …and says the record did not land (#1086), so a caller can tell.
+		await expect(openRun(env, { runId: "r1", userId: "u1", instanceId: "i1", pipeline: "p", trigger: "api" })).resolves.toBe(false);
 	});
 });
 

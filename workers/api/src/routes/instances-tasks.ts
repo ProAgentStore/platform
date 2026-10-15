@@ -66,6 +66,7 @@ import {
 	updateRuntimeStatus,
 } from "./instances-runtime.js";
 import type { Env } from "../types.js";
+import { logDirectResponse } from "../lib/on-error.js";
 
 /**
  * The work board and everything that puts a card on it (#305) — runner tasks, board layout,
@@ -650,9 +651,14 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			const status = isRecord(err) && typeof err.status === "number" ? err.status : 502;
+			// Returned, not thrown, so `app.onError` never saw it (#1086): record it where it is built.
+			await logDirectResponse(c.env, { status, source: "ticket-thread", message, userId: session.uid, context: { instanceId, taskId } });
 			return c.json({ error: message, question: questionEvent }, status as ContentfulStatusCode);
 		}
-		if (!answer.trim()) return c.json({ error: "The agent returned an empty answer.", question: questionEvent }, 502);
+		if (!answer.trim()) {
+			await logDirectResponse(c.env, { status: 502, source: "ticket-thread", message: "The agent returned an empty answer.", userId: session.uid, context: { instanceId, taskId } });
+			return c.json({ error: "The agent returned an empty answer.", question: questionEvent }, 502);
+		}
 
 		const answerEvent = {
 			id: `ticketa_${crypto.randomUUID()}`,

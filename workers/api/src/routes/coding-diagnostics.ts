@@ -32,6 +32,7 @@ import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-re
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getLiveRuntime, getRuntimeNode, updateRuntimeStatus } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
+import { logDirectResponse } from "../lib/on-error.js";
 import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
 import type { Env } from "../types.js";
 
@@ -65,7 +66,11 @@ function parseJsonOr<T>(raw: string | null | undefined, fallback: T): T {
 async function closeCodingSessions(c: Context<{ Bindings: Env }>) {
 	const { uid, instanceId } = await requireOwned(c);
 	const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
-	if (!conn) return c.json({ error: "Runner not connected", runnerConnected: false }, 502);
+	if (!conn) {
+		// A 502 to the client, but an EXPECTED state of the owner's machine, not a bug (#1086): a warn.
+		await logDirectResponse(c.env, { status: 502, level: "warn", source: "coding-diagnostics", message: "close-sessions: runner not connected", userId: uid, context: { instanceId } });
+		return c.json({ error: "Runner not connected", runnerConnected: false }, 502);
+	}
 	// Legacy runner path on purpose — an older runner has no /coding/close-sessions, and this
 	// is the only endpoint that ever did the useful work.
 	const result = await callRunner(conn, "/coding/kill-tmux", {}, { timeoutMs: READ_TIMEOUT_MS });

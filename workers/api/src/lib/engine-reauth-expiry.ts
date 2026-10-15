@@ -38,6 +38,7 @@ import { deepLinkFor } from "./console-links.js";
 import { claimExpiryWarning, finishReauthIfCurrent, parseReauthState, readReauthState, signInSessionId, writeReauthState, type EngineReauthState } from "./engine-reauth-store.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
+import { logError } from "./error-log.js";
 
 /** How long each method's one-time code stays usable. Only these methods are watched. */
 export const REAUTH_CODE_TTL_MS: Partial<Record<ReauthMethod, number>> = {
@@ -192,10 +193,20 @@ export async function runReauthExpiryWatch(env: Env, now: number = Date.now()): 
 				state = null;
 			}
 			if (!state || reauthExpiresAt(state) === null) continue;
-			await sweepReauthFlow(env, row.id, row.user_id, state, now).catch(() => undefined);
+			// One flow's failure must not stop the sweep — but it must not vanish either (#1086): a
+			// flow left `pending` past its expiry with no record is exactly what this sweep exists to end.
+			await sweepReauthFlow(env, row.id, row.user_id, state, now).catch((e) =>
+				logError(env, {
+					source: "reauth-expiry",
+					userId: row.user_id,
+					message: `could not expire the sign-in flow on instance ${row.id}: ${e instanceof Error ? e.message : String(e)}`,
+					context: { instanceId: row.id, clientType: state?.clientType, method: state?.method },
+				}).catch(() => undefined),
+			);
 		}
 	} catch (e) {
 		console.error("reauth-expiry-watch", e instanceof Error ? e.message : String(e));
+		await logError(env, { source: "reauth-expiry", message: `reauth expiry sweep failed: ${e instanceof Error ? e.message : String(e)}` }).catch(() => undefined);
 	}
 }
 
