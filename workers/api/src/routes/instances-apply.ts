@@ -1,5 +1,5 @@
-import { fillGate, fillRunForCard, relayCardTakeover } from "../lib/local-apply/fill-handoff.js";
-import { closeLiveTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
+import { endCardTakeover, fillGate, fillRunForCard, relayCardTakeover } from "../lib/local-apply/fill-handoff.js";
+import { closeLiveTakeoverFor, LIVE_TAKEOVER_STATES, latestTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
 import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
 import { markHumanAnswered, recordLateAnswer } from "../lib/coder-question-store.js";
@@ -430,9 +430,10 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		// #1031: no remote view without a durable takeover; showing the frame opens it (→ active).
 		const fill = await fillRunForCard(c.env, instanceId, session.uid, taskId);
-		await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: true, device: c.req.query("device"), fill: fillGate(fill) });
-		// #1100: an application card's live page is its fill's handoff, not a runner task takeover.
-		if (fill) return c.json((await relayCardTakeover(c.env, session.uid, instanceId, fill, "frame")) as object);
+		const takeover = await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: true, device: c.req.query("device"), fill: fillGate(fill) });
+		// #1100: an application card's live page is its fill's handoff — or, once that fill has ended
+		// blocked on a sign-in, a sign-in page with no run — never a runner task takeover.
+		if (fill) return c.json((await relayCardTakeover(c.env, session.uid, instanceId, fill, takeover, "frame")) as object);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/frame`);
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
@@ -445,9 +446,9 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const fill = await fillRunForCard(c.env, instanceId, session.uid, taskId);
-		await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: true, device: c.req.query("device"), fill: fillGate(fill) });
+		const takeover = await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: true, device: c.req.query("device"), fill: fillGate(fill) });
 		const body = await c.req.text();
-		if (fill) return c.json((await relayCardTakeover(c.env, session.uid, instanceId, fill, "input", JSON.parse(body || "null"))) as object);
+		if (fill) return c.json((await relayCardTakeover(c.env, session.uid, instanceId, fill, takeover, "input", JSON.parse(body || "null"))) as object);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/input`, { method: "POST", body });
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
@@ -462,7 +463,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const fill = await fillRunForCard(c.env, instanceId, session.uid, taskId);
 		const takeover = await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: false, fill: fillGate(fill) });
 		if (fill) {
-			const resumed = await relayCardTakeover(c.env, session.uid, instanceId, fill, "resume");
+			const resumed = await relayCardTakeover(c.env, session.uid, instanceId, fill, takeover, "resume");
 			await transitionTakeover(c.env, session.uid, instanceId, takeover.id, "resumed").catch(() => undefined);
 			return c.json(resumed as object);
 		}
@@ -632,6 +633,14 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
+		// #1100: a card's page is its fill's handoff or a post-run sign-in, never in the runner's task map.
+		const fill = await fillRunForCard(c.env, instanceId, session.uid, taskId);
+		if (fill) {
+			const live = await latestTakeoverFor(c.env, session.uid, instanceId, "runtime_task", taskId);
+			if (live && LIVE_TAKEOVER_STATES.includes(live.state)) await endCardTakeover(c.env, session.uid, instanceId, fill, live);
+			await closeLiveTakeoverFor(c.env, session.uid, instanceId, "runtime_task", taskId, "ended", Date.now(), "declined").catch(() => undefined);
+			return c.json({ ok: true });
+		}
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/end`, { method: "POST" });
 		// Ending is never gated — a person must always be able to let go — but it is recorded (#1031).

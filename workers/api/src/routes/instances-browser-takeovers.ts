@@ -27,6 +27,7 @@ import {
 import { getTakeover, latestTakeoverFor, LIVE_TAKEOVER_STATES, listTakeovers, requestTakeover, takeoverReasonOf, transitionTakeover } from "../lib/browser-takeovers.js";
 import { deepLinkFor } from "../lib/console-links.js";
 import { getLocalBrowserRun } from "../lib/local-browser/store.js";
+import { endCardTakeover, fillRunForCard, relayCardTakeover } from "../lib/local-apply/fill-handoff.js";
 import { resumeLocalBrowserRun } from "../lib/local-browser/sync.js";
 import { callRuntime, type RuntimeRow, requireLiveRuntime, requireOwnedInstance, runtimeJson } from "./instances-runtime.js";
 import { notifyUser } from "./push.js";
@@ -59,7 +60,7 @@ async function notifyRequested(env: Env, uid: string, instanceId: string, takeov
  * resumed, ended, expired — is refused with how to ask again rather than silently reopened. `open`
  * moves a requested takeover to `active`: showing the frame is what opening means.
  */
-export async function takeoverGate(env: Env, uid: string, instanceId: string, runtime: RuntimeRow, taskId: string, opts: { open: boolean; device?: string; fill?: { waiting: boolean } }): Promise<BrowserTakeover> {
+export async function takeoverGate(env: Env, uid: string, instanceId: string, runtime: RuntimeRow, taskId: string, opts: { open: boolean; device?: string; fill?: { waiting: boolean; reason?: TakeoverReason } }): Promise<BrowserTakeover> {
 	let takeover = await latestTakeoverFor(env, uid, instanceId, "runtime_task", taskId);
 	if (takeover && !LIVE_TAKEOVER_STATES.includes(takeover.state)) {
 		throw new HttpError(409, `This takeover is ${takeover.state}. Ask for it again (POST …/browser-takeovers with subjectKind "runtime_task") if the task still needs you.`);
@@ -74,7 +75,7 @@ export async function takeoverGate(env: Env, uid: string, instanceId: string, ru
 			if (!Array.isArray(listed.takeovers) || !listed.takeovers.includes(taskId)) throw new HttpError(404, "No takeover is waiting for this task.");
 		}
 		const { settings } = await readBrowserVerification(env, instanceId, uid);
-		takeover = (await requestTakeover(env, { userId: uid, instanceId, subjectKind: "runtime_task", subjectId: taskId, reason: "manual", mobileAllowed: settings.allowMobile }))?.takeover ?? null;
+		takeover = (await requestTakeover(env, { userId: uid, instanceId, subjectKind: "runtime_task", subjectId: taskId, reason: opts.fill?.reason ?? "manual", mobileAllowed: settings.allowMobile }))?.takeover ?? null;
 		if (!takeover) throw new HttpError(409, "The takeover could not be recorded, so it was not opened.");
 	}
 	// The owner's mobile preference (#1031), on the remote view itself — `device` is the caller's own statement.
@@ -158,14 +159,23 @@ export function registerBrowserTakeoverRoutes(router: Hono<{ Bindings: Env }>): 
 				// Resuming the run closes its takeover — from the run's own state change (store.ts).
 				if (run?.status === "paused") await resumeLocalBrowserRun(c.env, instanceId, uid, run);
 			} else if (takeover.subjectKind === "runtime_task") {
-				const runtime = await requireLiveRuntime(c.env, instanceId, uid);
-				const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(takeover.subjectId)}/resume`, { method: "POST" });
-				if (!res.ok) throw new HttpError(409, `The runner did not resume the task (HTTP ${res.status}); the takeover stays ${takeover.state}.`);
+				// #1100: a card hands back through its fill (or records its post-run sign-in and retries it).
+				const fill = await fillRunForCard(c.env, instanceId, uid, takeover.subjectId);
+				if (fill) await relayCardTakeover(c.env, uid, instanceId, fill, takeover, "resume");
+				else {
+					const runtime = await requireLiveRuntime(c.env, instanceId, uid);
+					const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(takeover.subjectId)}/resume`, { method: "POST" });
+					if (!res.ok) throw new HttpError(409, `The runner did not resume the task (HTTP ${res.status}); the takeover stays ${takeover.state}.`);
+				}
 			}
 		}
 		if (body.state === "ended" && takeover.subjectKind === "runtime_task" && LIVE_TAKEOVER_STATES.includes(takeover.state)) {
-			const runtime = await requireLiveRuntime(c.env, instanceId, uid).catch(() => null);
-			if (runtime) await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(takeover.subjectId)}/end`, { method: "POST" }).catch(() => undefined);
+			const fill = await fillRunForCard(c.env, instanceId, uid, takeover.subjectId);
+			if (fill) await endCardTakeover(c.env, uid, instanceId, fill, takeover);
+			else {
+				const runtime = await requireLiveRuntime(c.env, instanceId, uid).catch(() => null);
+				if (runtime) await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(takeover.subjectId)}/end`, { method: "POST" }).catch(() => undefined);
+			}
 		}
 		const out = await transitionTakeover(c.env, uid, instanceId, takeover.id, body.state, body.state === "ended" ? { endReason: "declined" } : {});
 		// A resume above may already have closed it (resumed); that is the outcome asked for.

@@ -16,6 +16,7 @@ import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail
 import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
 import { runNativePreflight } from "./native/preflight.js";
 import { routeLocalApplyReconciliation } from "./local-apply/reconciliation-routes.js";
+import { routeLocalApplySignIn } from "./local-apply/sign-in-runtime.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -296,6 +297,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (handoff) return json(res, 200, handoff);
 	const reconciliation = await routeLocalApplyReconciliation(runner.localApplyReconciliation, req.method, path, () => readJson(req));
 	if (reconciliation !== undefined) return json(res, 200, reconciliation);
+	const signIn = await routeLocalApplySignIn(runner.localApplySignIn, req.method, path, () => readJson(req));
+	if (signIn !== undefined) return json(res, 200, signIn);
 	if (req.method === "POST" && path === "/local-apply/resume") {
 		return json(res, 200, runner.localApply.resume(await readJson(req)));
 	}

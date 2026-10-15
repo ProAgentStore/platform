@@ -6,9 +6,14 @@ import { type BrowserTakeover, type BrowserTakeoverListResponse, type BrowserTak
 /**
  * The durable takeover for one run or task (#1031), read from the record — so what the page says about
  * "you are being asked to take over" is a fact someone can read back, not the runner's memory. Shows the
- * latest takeover for the subject and the moves the owner can make: hand it back (resume) or decline.
+ * latest takeover for the subject and the moves the owner can make: take it over (open the live view),
+ * hand it back (resume) or decline.
+ *
+ * #1100: "Waiting for you to take over" used to have no take-over control at all — only resume and
+ * decline — so a `requested` takeover could be activated only through the API. `onOpen` is the page's
+ * live view; taking over records the move to `active` first, then opens it.
  */
-export default function TakeoverBanner({ instanceId, subjectKind, subjectId }: { instanceId: string; subjectKind: "local_browser_run" | "runtime_task"; subjectId: string }) {
+export default function TakeoverBanner({ instanceId, subjectKind, subjectId, onOpen }: { instanceId: string; subjectKind: "local_browser_run" | "runtime_task"; subjectId: string; onOpen?: () => void }) {
 	const [takeover, setTakeover] = useState<BrowserTakeover | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState("");
@@ -40,12 +45,30 @@ export default function TakeoverBanner({ instanceId, subjectKind, subjectId }: {
 		}
 		setBusy(false);
 	};
+	const takeOver = async () => {
+		if (takeover.state === "requested") {
+			setBusy(true);
+			setErr("");
+			try {
+				const r = await api<BrowserTakeoverTransitionResponse>(`/v1/instances/${instanceId}/browser-takeovers/${takeover.id}`, { method: "PATCH", body: JSON.stringify({ state: "active", device: deviceKind() }) });
+				setTakeover(r.takeover);
+			} catch (e) {
+				setErr(e instanceof Error ? e.message : String(e));
+				setBusy(false);
+				return;
+			}
+			setBusy(false);
+		}
+		onOpen?.();
+	};
+	const blocked = isLive(takeover) ? remoteViewBlocked(takeover, deviceKind()) : null;
 	return (
 		<div role="status" data-testid="takeover-banner" className={`rounded-lg border px-3 py-2 text-sm ${line.tone === "warn" ? "border-warning text-warning" : line.tone === "ok" ? "border-line text-success" : "border-line text-muted"}`}>
 			{line.text}
-			{isLive(takeover) && remoteViewBlocked(takeover, deviceKind()) && <div className="text-xs mt-1">{remoteViewBlocked(takeover, deviceKind())}</div>}
+			{blocked && <div className="text-xs mt-1">{blocked}</div>}
 			{isLive(takeover) && (
 				<div className="flex gap-2 mt-2">
+					{onOpen && !blocked && <Button size="sm" variant="primary" onClick={() => void takeOver()} disabled={busy} data-testid="takeover-open">🖥 Take over (live)</Button>}
 					<Button size="sm" onClick={() => void move("resumed")} disabled={busy} data-testid="takeover-resume">I'm done — resume</Button>
 					<Button size="sm" variant="ghost" onClick={() => void move("ended")} disabled={busy} data-testid="takeover-decline">Decline</Button>
 				</div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type KeyboardEvent, type Ref } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
@@ -146,9 +146,6 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	const mobileText = (value: string) => {
 		const event = mobileTakeoverText(value);
 		if (event) void send(event);
-		// Native input is ephemeral: it exists to summon the phone keyboard, never as a credential
-		// store or a rendered echo.  The remote page alone receives its text event.
-		if (mobileEntryRef.current) mobileEntryRef.current.value = "";
 		setTimeout(poll, 150);
 	};
 	const mobileKey = (key: "Enter" | "Backspace") => { void send(mobileTakeoverKey(key)); setTimeout(poll, 150); };
@@ -184,28 +181,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 				<Button variant="secondary" size="md" onClick={onClose}>Close ✕</Button>
 			</div>
 		</div>
-		<div className="shrink-0 flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-panel border-b border-line" data-testid="application-handoff-mobile-entry">
-			<label className="sr-only" htmlFor="application-handoff-mobile-entry">Secure sign-in or verification entry</label>
-			<input
-				id="application-handoff-mobile-entry"
-				ref={mobileEntryRef}
-				type="text"
-				inputMode="text"
-				enterKeyHint="next"
-				autoComplete="off"
-				autoCapitalize="none"
-				autoCorrect="off"
-				spellCheck={false}
-				data-testid="application-handoff-mobile-text-entry"
-				placeholder="Tap after selecting the login or code field"
-				className="min-w-0 flex-1 rounded border border-line bg-paper px-3 py-2 text-base text-ink"
-				onChange={(e) => mobileText(e.currentTarget.value)}
-				onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Backspace") { e.preventDefault(); mobileKey(e.key); } }}
-			/>
-			<Button type="button" variant="secondary" size="sm" onClick={() => mobileKey("Backspace")}>Delete</Button>
-			<Button type="button" variant="secondary" size="sm" onClick={() => mobileKey("Enter")}>Continue</Button>
-			<p className="basis-full text-xs text-muted-soft">Phone-only sign-in/CAPTCHA control. Text is forwarded once and immediately cleared here; {reconciliation ? "after authentication the read-only Runner rejects further input." : "this remains the existing owner-authorized live handoff only."}</p>
-		</div>
+		<MobileTakeoverEntry inputRef={mobileEntryRef} onText={mobileText} onKey={mobileKey} note={reconciliation ? "after authentication the read-only Runner rejects further input." : "this remains the existing owner-authorized live handoff only."} />
 		{endError && <div data-testid="application-handoff-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{endError}</div>}
 		{resumeNotice && <div data-testid="application-handoff-resume-notice" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{resumeNotice}</div>}
 		{inputNotice && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{inputNotice}</div>}
@@ -216,6 +192,43 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 			) : <div className="text-sm text-white/70 max-w-lg text-center px-4">{frameError ? <><div className="font-semibold text-danger mb-1">Live handoff unavailable</div><div className="text-xs text-white/60 break-words font-mono">{frameError}</div></> : "Connecting to the existing Runner browser…"}</div>}
 		</div>
 	</div>;
+}
+
+/**
+ * The phone's way in: a native input that summons the keyboard. A captured `<div>` gets no keystrokes on
+ * a phone, so without this a remote sign-in page is visible but cannot be typed into (#1100). Used by
+ * every live browser view the console opens.
+ */
+export function MobileTakeoverEntry({ inputRef, onText, onKey, note }: { inputRef?: Ref<HTMLInputElement>; onText: (value: string) => void; onKey: (key: "Enter" | "Backspace") => void; note: string }) {
+	return (
+		<div className="shrink-0 flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-panel border-b border-line" data-testid="application-handoff-mobile-entry">
+			<label className="sr-only" htmlFor="application-handoff-mobile-entry">Secure sign-in or verification entry</label>
+			<input
+				id="application-handoff-mobile-entry"
+				ref={inputRef}
+				type="text"
+				inputMode="text"
+				enterKeyHint="next"
+				autoComplete="off"
+				autoCapitalize="none"
+				autoCorrect="off"
+				spellCheck={false}
+				data-testid="application-handoff-mobile-text-entry"
+				placeholder="Tap after selecting the login or code field"
+				className="min-w-0 flex-1 rounded border border-line bg-paper px-3 py-2 text-base text-ink"
+				onChange={(e) => {
+					onText(e.currentTarget.value);
+					// Native input is ephemeral: it exists to summon the phone keyboard, never as a credential
+					// store or a rendered echo. The remote page alone receives its text event.
+					e.currentTarget.value = "";
+				}}
+				onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Backspace") { e.preventDefault(); onKey(e.key); } }}
+			/>
+			<Button type="button" variant="secondary" size="sm" onClick={() => onKey("Backspace")}>Delete</Button>
+			<Button type="button" variant="secondary" size="sm" onClick={() => onKey("Enter")}>Continue</Button>
+			<p className="basis-full text-xs text-muted-soft">Phone-only sign-in/CAPTCHA control. Text is forwarded once and immediately cleared here; {note}</p>
+		</div>
+	);
 }
 
 /** Add a route segment before the query string; `${base}/input` would corrupt it. */

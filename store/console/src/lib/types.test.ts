@@ -180,8 +180,10 @@ const _preparedApplicationTransferReceiptAcceptsTheProducer: PreparedApplication
 // rows the cloud synthesises itself, which is a real second producer and not a loophole. Its one
 // extra field is `reasoning` (`routes/instances-tasks.ts:328`, rendered as the WHY on the card).
 // Naming it explicitly is what keeps this assertion exact: widen `CloudAdded` and you have to say
-// which route writes the field and where it is read.
-type CloudAdded = { reasoning?: string };
+// which route writes the field and where it is read. `application` is an application's board card
+// (`lib/applications/application-board.ts` `applicationRunTaskRecord`), read by `RunDetail` to offer the
+// post-run sign-in (#1100).
+type CloudAdded = { reasoning?: string; application?: { applicationStatus?: string; blockReason?: string } };
 
 // Four invented fields lived here before #617. `handoff_field` was the expensive one — it headed a
 // `||` chain in `pages/RunDetail.tsx` whose first operand could never win, so the prompt a user is

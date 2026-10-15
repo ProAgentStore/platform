@@ -1,10 +1,20 @@
 import type { Env } from "../../types.js";
 import { HttpError } from "../auth.js";
-import { applicationCardId } from "../applications/application-board.js";
+import { applicationCardId, applicationCardLabel } from "../applications/application-board.js";
+import type { BrowserTakeover } from "../browser-takeover-types.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
-import { resumeApplyRun, syncApplyRun } from "./apply.js";
-import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, type LocalApplyHandoffStatus } from "./contract.js";
+import { resumeApplyRun, retryFill, syncApplyRun } from "./apply.js";
+import {
+	LOCAL_APPLY_HANDOFF_PATH,
+	LOCAL_APPLY_HANDOFF_STATUS_PATH,
+	LOCAL_APPLY_SIGN_IN_END_PATH,
+	LOCAL_APPLY_SIGN_IN_FRAME_PATH,
+	LOCAL_APPLY_SIGN_IN_INPUT_PATH,
+	LOCAL_APPLY_SIGN_IN_PATH,
+	type LocalApplyHandoffStatus,
+	type LocalApplySignInStatus,
+} from "./contract.js";
 import { type ApplyRun, type LocalApplyHandoff, createLocalApplyHandoff, getApplyRun, getLocalApplyHandoffForRun, isTerminalApplyRun, markLocalApplyHandoff, usableLocalApplyHandoff } from "./store.js";
 
 /**
@@ -40,9 +50,21 @@ export async function fillRunForCard(env: Env, instanceId: string, userId: strin
 	return syncApplyRun(env, userId, run).catch(() => run);
 }
 
-/** What the takeover gate needs to know about a card's fill: does it wait on a person right now. */
-export function fillGate(run: ApplyRun | null): { waiting: boolean } | undefined {
-	return run ? { waiting: run.status === "paused" && (run.pause?.reason === "login_required" || run.pause?.reason === "captcha") } : undefined;
+/**
+ * A fill that ENDED `blocked` because the site needed a sign-in (#1094's gate, not answered before the
+ * run's time ran out). #1100 round 2: the reported run paused at 11:32, ended at 11:53, and the owner's
+ * takeover came at 11:57 — so its fill handoff was gone, and only a sign-in with no run can help.
+ */
+export function blockedOnSignIn(run: ApplyRun): boolean {
+	return run.status === "blocked" && (run.result as { blockReason?: unknown } | null)?.blockReason === "login_required";
+}
+
+/** What the takeover gate needs to know about a card's fill: does it wait on a person right now, and for what. */
+export function fillGate(run: ApplyRun | null): { waiting: boolean; reason?: "login_required" | "captcha" } | undefined {
+	if (!run) return undefined;
+	if (blockedOnSignIn(run)) return { waiting: true, reason: "login_required" };
+	const reason = run.status === "paused" && (run.pause?.reason === "login_required" || run.pause?.reason === "captcha") ? run.pause.reason : undefined;
+	return reason ? { waiting: true, reason } : { waiting: false };
 }
 
 /**
@@ -112,12 +134,66 @@ export async function relayFillHandoff(env: Env, userId: string, instanceId: str
 	return payload;
 }
 
+/** The runner's id for the sign-in a takeover opens: one per durable takeover, so the record IS its bound. */
+export const signInIdFor = (takeoverId: string) => `sign-in-${takeoverId}`;
+
 /**
- * #1100: the generic runtime-task takeover routes, for an application card. Frame and input open (or reuse)
- * the fill's handoff and relay through it; resume relays and resumes the fill. A card whose fill is not
- * paused for a login or CAPTCHA is refused with that reason — never answered as "no session".
+ * #1100 round 2: the live view of a card whose fill ended blocked on a sign-in. There is no paused run to
+ * relay to, so the runner opens the run's own application profile at the job's page (`sign-in-runtime.ts`
+ * on the runner) for exactly as long as the takeover lives:
+ *
+ *  - frame / input go to that page. When the runner has none — first poll, a runner restart, a tab the
+ *    owner closed — it is opened (idempotent per takeover) and the call made once more, so every poll in
+ *    the takeover window keeps a real page behind the view;
+ *  - resume ("I'm done") records the sign-in in the profile's ledger, closes the page and retries the
+ *    fill, which now passes the session gate that blocked it;
+ *  - end closes the page and records nothing.
  */
-export async function relayCardTakeover(env: Env, userId: string, instanceId: string, run: ApplyRun, suffix: "frame" | "input" | "resume", input?: unknown): Promise<unknown> {
+async function relaySignIn(env: Env, userId: string, instanceId: string, run: ApplyRun, takeover: Pick<BrowserTakeover, "id">, suffix: HandoffSuffix, input?: unknown): Promise<unknown> {
+	const runtime = await getLiveRuntime(env, instanceId, userId).catch(() => null);
+	if (!runtime) throw new HttpError(409, "The Runner is disconnected. Start it (pags up) and take over again to sign in.");
+	const signInId = signInIdFor(takeover.id);
+	const post = (path: string, body: unknown) => callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(body) }).catch(() => null);
+
+	if (suffix === "end" || suffix === "resume") {
+		const res = await post(LOCAL_APPLY_SIGN_IN_END_PATH, { signInId, complete: suffix === "resume" });
+		const status = res?.ok ? ((await runtimeJson(res)) as LocalApplySignInStatus) : null;
+		if (suffix === "end") return status ?? { signInId, state: "closed" };
+		if (!status?.signedIn) throw new HttpError(409, "The sign-in was not recorded: its page had already closed on the Runner. Open the live view, sign in, then press done.");
+		const app = await getOwnedApplication(env, userId, run.applicationId);
+		if (!app || app.fillRunId !== run.id) throw new HttpError(409, "The sign-in was recorded, but this application has moved on from that run; retry it from the board.");
+		const retried = await retryFill(env, instanceId, userId, app);
+		return { signIn: status, retry: { outcome: retried.kind, runId: retried.run?.id ?? null } };
+	}
+
+	const path = suffix === "frame" ? LOCAL_APPLY_SIGN_IN_FRAME_PATH : LOCAL_APPLY_SIGN_IN_INPUT_PATH;
+	const body = suffix === "input" ? { signInId, input } : { signInId };
+	const first = await post(path, body);
+	if (first?.ok) return runtimeJson(first);
+	const app = await getOwnedApplication(env, userId, run.applicationId);
+	const url = app ? applicationCardLabel(app).url : "";
+	if (!app || app.fillRunId !== run.id || !url) throw new HttpError(409, "This application has no job page to sign in on.");
+	const opened = await post(LOCAL_APPLY_SIGN_IN_PATH, { signInId, browserProfile: run.policy.browserProfile, url });
+	if (!opened) throw new HttpError(409, "The Runner did not answer; take over again once it is back.");
+	if (opened.status === 404) {
+		throw new HttpError(409, `This machine's runner${run.runnerVersion ? ` (${run.runnerVersion})` : ""} cannot open a sign-in after a run has ended. Update it (pags update) and take over again.`);
+	}
+	const status = (await runtimeJson(opened)) as LocalApplySignInStatus & { error?: string };
+	if (!opened.ok) throw new HttpError(409, status.error ?? "The Runner refused to open the sign-in page.");
+	if (status.state !== "ready") throw new HttpError(409, `The Runner could not open the application browser (${status.terminalReason ?? "unavailable"}).`);
+	const again = await post(path, body);
+	if (!again?.ok) throw new HttpError(409, "The sign-in page opened but is not answering; take over again.");
+	return runtimeJson(again);
+}
+
+/**
+ * #1100: the generic runtime-task takeover routes, for an application card. A fill paused for a login or
+ * CAPTCHA is reached through its handoff (frame and input open or reuse it; resume relays and resumes the
+ * fill). A fill that already ENDED blocked on a sign-in is reached through a sign-in with no run
+ * (`relaySignIn`). Anything else is refused with its reason — never answered as "no session".
+ */
+export async function relayCardTakeover(env: Env, userId: string, instanceId: string, run: ApplyRun, takeover: Pick<BrowserTakeover, "id">, suffix: "frame" | "input" | "resume", input?: unknown): Promise<unknown> {
+	if (blockedOnSignIn(run)) return relaySignIn(env, userId, instanceId, run, takeover, suffix, input);
 	const now = Date.now();
 	let handoff = await getLocalApplyHandoffForRun(env, run.id, instanceId, userId);
 	if (handoff?.state !== "ready" || !usableLocalApplyHandoff(handoff, now)) {
@@ -127,4 +203,14 @@ export async function relayCardTakeover(env: Env, userId: string, instanceId: st
 		handoff = ensured.handoff;
 	}
 	return relayFillHandoff(env, userId, instanceId, run, handoff, suffix, input);
+}
+
+/** Let go of a card's live view. Never gated and never fails the caller: a person must always be able to stop. */
+export async function endCardTakeover(env: Env, userId: string, instanceId: string, run: ApplyRun, takeover: Pick<BrowserTakeover, "id">): Promise<void> {
+	if (blockedOnSignIn(run)) {
+		await relaySignIn(env, userId, instanceId, run, takeover, "end").catch(() => undefined);
+		return;
+	}
+	const handoff = await getLocalApplyHandoffForRun(env, run.id, instanceId, userId);
+	if (handoff && usableLocalApplyHandoff(handoff, Date.now())) await relayFillHandoff(env, userId, instanceId, run, handoff, "end").catch(() => undefined);
 }

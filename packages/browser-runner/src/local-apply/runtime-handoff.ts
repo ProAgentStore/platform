@@ -5,7 +5,7 @@ import type { LocalApplyHandoffRequest, LocalApplyHandoffStatus, LocalApplyHando
 
 export interface LocalApplyTakeoverAdapter {
 	/** The caller supplies the page retained by this exact run/profile. */
-	open(request: LocalApplyHandoffRequest, page: Page): Promise<void>;
+	open(request: Pick<LocalApplyHandoffRequest, "handoffId">, page: Page): Promise<void>;
 	state(handoffId: string): Promise<"ready" | "page_lost">;
 	frame(handoffId: string): Promise<{ frame: string; width: number; height: number }>;
 	input(handoffId: string, input: TakeoverInput): Promise<void>;

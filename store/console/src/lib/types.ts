@@ -321,6 +321,8 @@ export interface RuntimeTask {
 	createdAt?: string;
 	updatedAt?: string;
 	completedAt?: string;
+	/** On an application's board card only (`applicationRunTaskRecord`, #978): its lifecycle and why it stopped. */
+	application?: { applicationStatus?: string; blockReason?: string };
 	/**
 	 * Four fields were removed here in #617, all of them invented on this side and emitted by
 	 * nothing — the mirrored payload is a `RunnerTask` verbatim

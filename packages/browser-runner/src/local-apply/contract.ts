@@ -61,6 +61,16 @@ export const LOCAL_APPLY_RECONCILIATION_HANDOFF_FRAME_PATH = "/local-apply/recon
 export const LOCAL_APPLY_RECONCILIATION_HANDOFF_INPUT_PATH = "/local-apply/reconciliation/handoff/input";
 export const LOCAL_APPLY_RECONCILIATION_HANDOFF_RESUME_PATH = "/local-apply/reconciliation/handoff/resume";
 export const LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH = "/local-apply/reconciliation/handoff/end";
+/**
+ * A sign-in to the job's site in this machine's application browser profile, AFTER a fill ended
+ * `blocked` on `login_required` (#1100). Not a run and not a run's handoff: there is no engine, no
+ * source, no artifact and no submit gate — only the profile's page at the job's site, for the owner
+ * to sign in, and the profile's sign-in ledger (#1094) to record that they did.
+ */
+export const LOCAL_APPLY_SIGN_IN_PATH = "/local-apply/sign-in";
+export const LOCAL_APPLY_SIGN_IN_FRAME_PATH = "/local-apply/sign-in/frame";
+export const LOCAL_APPLY_SIGN_IN_INPUT_PATH = "/local-apply/sign-in/input";
+export const LOCAL_APPLY_SIGN_IN_END_PATH = "/local-apply/sign-in/end";
 
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];
@@ -481,6 +491,26 @@ export interface LocalApplyHandoffStatus {
 	expiresAt: string;
 	/** Present only when no page can still be controlled. It is never a submission result. */
 	terminalReason?: LocalApplyHandoffTerminalReason;
+}
+
+/** Open (or read back) a post-run sign-in. The id is opaque; the URL is the job's own page. */
+export interface LocalApplySignInRequest {
+	signInId: string;
+	browserProfile: LocalApplyProfile;
+	url: string;
+}
+
+/** Secret-free status of a post-run sign-in: names a site, never a cookie, URL query or value. */
+export interface LocalApplySignInStatus {
+	signInId: string;
+	browserProfile: LocalApplyProfile;
+	/** The registrable domain being signed in to, e.g. `seek.com`. */
+	site: string;
+	state: "ready" | "closed";
+	expiresAt: string;
+	terminalReason?: LocalApplyHandoffTerminalReason;
+	/** Present once the owner finished: how many session cookie NAMES the ledger now fingerprints. */
+	signedIn?: { fingerprint: number; verifiable: boolean };
 }
 
 /** All four bindings are compared at the runner boundary before a live page is exposed. */

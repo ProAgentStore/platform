@@ -1,4 +1,5 @@
 import TakeoverBanner from "../components/TakeoverBanner";
+import { MobileTakeoverEntry, mobileTakeoverKey, mobileTakeoverText } from "../components/ApplicationHandoffLive";
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
 import { type LegacyShot, replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { deviceKind } from "../lib/browserTakeovers";
@@ -298,6 +299,12 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 					<button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg bg-panel border border-line text-muted text-sm hover:text-ink">Close ✕</button>
 				</div>
 			</div>
+			{/* A phone has no keyboard events to capture: this is how a sign-in page gets typed into (#1100). */}
+			<MobileTakeoverEntry
+				onText={(value) => { const ev = mobileTakeoverText(value); if (ev) send(ev); setTimeout(poll, 150); }}
+				onKey={(key) => { send(mobileTakeoverKey(key)); setTimeout(poll, 150); }}
+				note="it goes only to the page shown below."
+			/>
 			{endErr && (
 				<div data-testid="takeover-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">
 					{endErr}
@@ -393,6 +400,10 @@ export default function RunDetail() {
 	usePolling(load, 3000, !!running);
 
 	const needsHuman = task?.status === "needs_human";
+	// #1100: an application card whose fill ended blocked on a site sign-in. Its task is `blocked`, never
+	// `needs_human`, so the take-over prompt below never showed for it — yet the sign-in is exactly the
+	// step only the owner can do. The live view opens the run's application browser at the job's site.
+	const signInBlocked = !needsHuman && task?.application?.applicationStatus === "blocked" && task.application.blockReason === "login_required";
 	// One vocabulary, in `lib/runStatus.ts`, matching the api-side sweep (#625). This was a
 	// hand-written list that named `expired` (unmatchable, #611) and counted `blocked` as
 	// finished — so deleting a run that was waiting on the user skipped the "it will be stopped
@@ -430,7 +441,10 @@ export default function RunDetail() {
 	 * could only ever turn one failure into two, the second a 404, and the `.catch` hid the real
 	 * error on the way. Removed: one request, and its failure is the one reported.
 	 */
-	const resume = async () => { await api(`/v1/instances/${instanceId}/takeover/${taskId}/resume`, { method: "POST" }); load(); };
+	const resume = async () => {
+		await api(`/v1/instances/${instanceId}/takeover/${taskId}/resume`, { method: "POST" }).catch((e) => alert(e instanceof Error ? e.message : String(e)));
+		load();
+	};
 	const remove = async () => {
 		if (!isFinished && !confirm("Delete this ticket? If it's still running it will be stopped first.")) return;
 		await api(`/v1/instances/${instanceId}/tasks/${taskId}`, { method: "DELETE" }).catch((e) => alert(e instanceof Error ? e.message : String(e)));
@@ -507,7 +521,14 @@ export default function RunDetail() {
 			)}
 
 			{/* The durable takeover for this task (#1031): what the page says about being asked is a recorded fact. */}
-			<TakeoverBanner instanceId={instanceId} subjectKind="runtime_task" subjectId={taskId} />
+			<TakeoverBanner instanceId={instanceId} subjectKind="runtime_task" subjectId={taskId} onOpen={() => setTakeoverOpen(true)} />
+			{signInBlocked && (
+				<div data-testid="sign-in-blocked" className="bg-warning-soft border border-warning-line rounded-xl p-4 sm:p-5 mb-5">
+					<div className="text-lg font-bold text-ink">🔐 The job site needs you to sign in</div>
+					<div className="text-sm text-muted mt-0.5 mb-3">Nothing was submitted. Open your Runner's application browser here, sign in to the site once — it is remembered on that machine — then press Resume and the application is filled again.</div>
+					<Button variant="primary" size="lg" onClick={() => setTakeoverOpen(true)}>🖥 Take over (live)</Button>
+				</div>
+			)}
 			{needsHuman && kind === "value" && (
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
 					<div className="text-lg font-bold text-ink">✏️ The agent needs one answer to continue</div>

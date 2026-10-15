@@ -20,6 +20,7 @@ import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
 import { LocalApplyReconciliationRuntime } from "./local-apply/reconciliation-runtime.js";
+import { LocalApplySignInRuntime } from "./local-apply/sign-in-runtime.js";
 import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
 import { createRunnerBrowserFactories } from "./local-apply/live-run-browser.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
@@ -106,6 +107,8 @@ export class LocalRunner {
 	readonly localApply: LocalApplyRuntime;
 	/** Browser-only, no-bridge reconciliation for an ended uncertain apply attempt. */
 	readonly localApplyReconciliation: LocalApplyReconciliationRuntime;
+	/** A site sign-in in the application profile after a fill ended blocked on it (#1100): no run, no bridge. */
+	readonly localApplySignIn: LocalApplySignInRuntime;
 	/** The Website Builder's local author (#841): the signed-in CLI drafting through the PAGS broker. */
 	readonly siteBuilder: SiteBuilderRuntime;
 	/** This runner's own local URL, once the server listens — the bridge forwarder calls back to it. */
@@ -132,6 +135,12 @@ export class LocalRunner {
 			takeover: localApplyTakeover,
 		});
 		this.localApplyReconciliation = new LocalApplyReconciliationRuntime({ dataDir: config.dataDir, browserFor: applyBrowserFor, takeover: localApplyTakeover });
+		this.localApplySignIn = new LocalApplySignInRuntime({
+			dataDir: config.dataDir,
+			browserFor: applyBrowserFor,
+			takeover: localApplyTakeover,
+			busy: () => this.localApply.liveWork().length + this.localApplyReconciliation.liveWork().length + this.localBrowser.liveWork().length > 0,
+		});
 		this.siteBuilder = new SiteBuilderRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, onEvent: (id, type, message, data) => this.addTaskEvent(this.requireTask(id), type, message, data) });
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
@@ -150,7 +159,7 @@ export class LocalRunner {
 	 */
 	liveWork(): { codingTurns: number; localRuns: number; detail: string[] } {
 		const coding = this.coding.liveWork();
-		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork(), ...this.localApplyReconciliation.liveWork(), ...this.siteBuilder.liveWork()];
+		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork(), ...this.localApplyReconciliation.liveWork(), ...this.localApplySignIn.liveWork(), ...this.siteBuilder.liveWork()];
 		return { codingTurns: coding.length, localRuns: local.length, detail: [...coding, ...local].slice(0, 10) };
 	}
 
@@ -330,6 +339,7 @@ export class LocalRunner {
 		this.localArtifact.closeAll();
 		this.localApply.closeAll();
 		this.localApplyReconciliation.closeAll();
+		this.localApplySignIn.closeAll();
 		try {
 			this.coding.closeAll();
 		} catch (e) {

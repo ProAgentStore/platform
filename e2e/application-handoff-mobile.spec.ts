@@ -174,3 +174,95 @@ test("mobile — reconciliation keeps the authenticated read-only notice through
 	await expect(page.getByText(REFUSAL)).toHaveCount(0);
 	await expect(page.getByTestId("handoff-fixture-closed")).toHaveCount(0);
 });
+
+// ── #1100 round 2: the console's take-over control on an application card, on a phone ─────────────────
+//
+// Round 1 changed no console file, so nothing proved the owner could reach a card's live browser at all:
+// the card's task is `blocked`, so RunDetail's "Take over (live)" (gated on `needs_human`) never showed,
+// and the banner said "Waiting for you to take over" with only resume/decline under it. These mount the
+// REAL RunDetail page for the reported card on a touch phone (so `deviceKind()` is "mobile"), with the
+// API mocked at the network edge and every request recorded.
+
+const CARD = "app-b8586cf8-0987-4397-85ef-e4db9563cdd5";
+const TAKEOVER_ID = "30532b43-66b0-41c4-8906-021f8ebc31d7";
+
+async function mountCard(page: import("@playwright/test").Page, opts: { takeover: "requested" | "none"; mobileAllowed?: boolean }) {
+	const calls: Array<{ method: string; path: string; query: string; body: unknown }> = [];
+	const takeover = opts.takeover === "none" ? null : {
+		id: TAKEOVER_ID, subjectKind: "runtime_task", subjectId: CARD, state: "requested", reason: "login_required", mobileAllowed: opts.mobileAllowed ?? true,
+		endReason: null, expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(), createdAt: new Date().toISOString(), activatedAt: null, endedAt: null,
+	};
+	await page.route("**/v1/instances/instance-1/**", async (route) => {
+		const req = route.request();
+		const url = new URL(req.url());
+		const path = url.pathname.replace("/v1/instances/instance-1", "");
+		const body = req.postData() ? req.postDataJSON() : null;
+		calls.push({ method: req.method(), path, query: url.search, body });
+		const ok = (json: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(json) });
+		if (path === `/tasks/${CARD}`) return ok({ id: CARD, type: "application.run", status: "blocked", title: "Senior Engineer — Globex", description: "reason: login_required", application: { applicationStatus: "blocked", blockReason: "login_required" } });
+		if (path === `/tasks/${CARD}/thread`) return ok({ turns: [] });
+		if (path === "/task-events") return ok({ events: [] });
+		if (path === "/board") return ok({ items: [] });
+		if (path === "/browser-artifacts") return ok({ subjectKind: "runtime_task", subjectId: CARD, artifacts: [], screenshotsOff: false });
+		if (path === "/browser-takeovers") return ok({ takeovers: takeover ? [takeover] : [] });
+		if (path === `/browser-takeovers/${TAKEOVER_ID}` && req.method() === "PATCH" && takeover) {
+			takeover.state = (body as { state: string }).state;
+			return ok({ takeover, changed: true });
+		}
+		if (path === `/takeover/${CARD}/frame`) return ok(FRAME);
+		if (path === `/takeover/${CARD}/input`) return ok({ ok: true });
+		if (path === `/takeover/${CARD}/resume`) return ok({ signIn: { state: "closed", signedIn: { fingerprint: 1, verifiable: true } }, retry: { outcome: "started", runId: "run-2" } });
+		return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: `unexpected fixture route ${path}` }) });
+	});
+	await page.goto(`${fixtureBase}/console/run-detail-fixture.html?task=${CARD}`);
+	return { calls, frames: () => calls.filter((c) => c.path === `/takeover/${CARD}/frame`) };
+}
+
+test.describe("on a touch phone", () => {
+	test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+	test("mobile — a requested takeover on an application card is taken over from the banner and streams the live page", async ({ page }) => {
+		const { calls, frames } = await mountCard(page, { takeover: "requested" });
+		const banner = page.getByTestId("takeover-banner");
+		await expect(banner).toContainText("Waiting for you to take over");
+		await banner.getByTestId("takeover-open").click();
+
+		// Taking over is the recorded move to `active`, from a phone, BEFORE any frame is asked for.
+		await expect.poll(() => calls.find((c) => c.method === "PATCH")?.body).toEqual({ state: "active", device: "mobile" });
+		await expect.poll(() => frames().length).toBeGreaterThanOrEqual(1);
+		expect(calls.findIndex((c) => c.path === `/takeover/${CARD}/frame`)).toBeGreaterThan(calls.findIndex((c) => c.method === "PATCH"));
+
+		// The live view polls the card's frame and shows the page.
+		await expect(page.getByAltText("Live agent browser")).toBeVisible();
+		await expect.poll(() => frames().length).toBeGreaterThanOrEqual(3);
+		expect(frames().every((c) => c.query.includes("device=mobile"))).toBe(true);
+
+		// A phone types through the native entry — the page receives it, the field never keeps it.
+		const entry = page.getByTestId("application-handoff-mobile-text-entry");
+		await entry.fill("owner@example.com");
+		await expect(entry).toHaveValue("");
+		await expect.poll(() => calls.find((c) => c.path === `/takeover/${CARD}/input`)?.body).toEqual({ type: "text", text: "owner@example.com" });
+		await page.getByRole("button", { name: "Continue" }).click();
+		await expect.poll(() => calls.some((c) => c.path === `/takeover/${CARD}/input` && (c.body as { key?: string }).key === "Enter")).toBe(true);
+
+		await page.getByRole("button", { name: "Resume — done" }).click();
+		await expect.poll(() => calls.some((c) => c.method === "POST" && c.path === `/takeover/${CARD}/resume`)).toBe(true);
+	});
+
+	test("mobile — a card blocked on a site sign-in with no takeover yet still offers the live view", async ({ page }) => {
+		const { frames } = await mountCard(page, { takeover: "none" });
+		const panel = page.getByTestId("sign-in-blocked");
+		await expect(panel).toContainText("The job site needs you to sign in");
+		await panel.getByRole("button", { name: /Take over \(live\)/ }).click();
+		await expect(page.getByAltText("Live agent browser")).toBeVisible();
+		expect(frames().length).toBeGreaterThanOrEqual(1);
+	});
+
+	test("mobile — when the owner turned phone takeovers off, the banner says so instead of offering the control", async ({ page }) => {
+		const { calls } = await mountCard(page, { takeover: "requested", mobileAllowed: false });
+		const banner = page.getByTestId("takeover-banner");
+		await expect(banner).toContainText("Taking over from a phone is off");
+		await expect(banner.getByTestId("takeover-open")).toHaveCount(0);
+		expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+	});
+});

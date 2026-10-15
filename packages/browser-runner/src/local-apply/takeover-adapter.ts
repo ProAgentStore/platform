@@ -18,7 +18,7 @@ export function createLocalApplyTakeoverAdapter(deps: {
 }): LocalApplyTakeoverAdapter {
 	const key = (handoffId: string) => `${prefix}${handoffId}`;
 	return {
-		async open(request: LocalApplyHandoffRequest, page: Page): Promise<void> {
+		async open(request: Pick<LocalApplyHandoffRequest, "handoffId">, page: Page): Promise<void> {
 			const id = key(request.handoffId);
 			if (deps.get(id)) throw new RunnerInputError("A local application handoff already exists", 409);
 			// Do not create or substitute a page here. The runtime supplied the page retained by

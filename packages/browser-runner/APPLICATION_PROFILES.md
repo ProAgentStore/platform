@@ -47,6 +47,12 @@ lives only in the browser profile.
    records which cookies appeared, then reopens the job page and carries on.
 3. **Later runs** check those cookies and press without asking.
 
+**If the run ended before you signed in (#1100).** A sign-in pause lasts only as long as the run, and a
+run that runs out of time ends `blocked` (`login_required`). Taking over its board card then opens
+**this profile** at the job's page, with no run behind it. Sign in there and press Resume: the sign-in
+is recorded the same way, and the application is filled again. This is refused while an application
+run is using the profile, and only one such sign-in can be open per profile.
+
 ## Limits
 
 - **A session the site revoked while its cookie is still present cannot be seen** before pressing. That

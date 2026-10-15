@@ -26,7 +26,9 @@ const { agentDeleteStatements } = await import("../lib/agent-cascade.js");
 
 let d1: RealSchemaD1;
 let sent: Array<{ path: string; body: Record<string, unknown> }>;
-let answers: Record<string, { status: number; body: unknown }>;
+type Answer = { status: number; body: unknown };
+/** A path's canned answer — or, for a runner whose answer depends on what it was asked before, a function. */
+let answers: Record<string, Answer | ((body: Record<string, unknown>) => Answer)>;
 const relay = {
 	idFromName: (n: string) => n,
 	get: () => ({
@@ -34,7 +36,8 @@ const relay = {
 			const cmd = (await req.json()) as { path: string; body: string | Record<string, unknown> };
 			const body = typeof cmd.body === "string" ? JSON.parse(cmd.body) : (cmd.body ?? {});
 			sent.push({ path: cmd.path, body });
-			const a = answers[cmd.path] ?? { status: 404, body: { error: "unknown path" } };
+			const canned = answers[cmd.path];
+			const a = (typeof canned === "function" ? canned(body) : canned) ?? { status: 404, body: { error: "unknown path" } };
 			return new Response(JSON.stringify(a.body), { status: a.status });
 		},
 	}),
@@ -1756,6 +1759,173 @@ describe("the runtime-task live view of an application card reaches its fill's b
 		const r = await call("GET", `/ap/takeover/${card}/frame?device=mobile`);
 		expect(r.status).toBe(409);
 		expect(sent.some((x) => x.path === "/local-apply/handoff/frame")).toBe(false);
+	});
+});
+
+/**
+ * #1100 round 2 — the REAL sequence, which round 1's tests never modelled: they all began from a fill that
+ * was still paused. Run 9a7d9e85 (application b8586cf8…) paused `login_required` at 11:32:44, hit its
+ * 20-minute limit and ended `blocked` at 11:53:26; takeover 30532b43 was requested at 11:57:11 and forced
+ * `active` through the API — by then there was no paused fill and no handoff page, so every frame poll was
+ * a 409, and the console had no control to activate it with. Here the runner is a stateful fake that
+ * behaves as `sign-in-runtime.ts` does: a frame for a sign-in it does not hold is 404 until it is opened.
+ */
+describe("a takeover requested AFTER the fill ended blocked on a sign-in streams a real page (#1100 round 2)", () => {
+	const RUNNER = "2e85124f-4946-49d2-b922-8636ba92ca6a";
+	const APP = "b8586cf8-0987-4397-85ef-e4db9563cdd5";
+	const CARD = `app-${APP}`;
+	const TAKEOVER = "30532b43-66b0-41c4-8906-021f8ebc31d7";
+	const JOB = "https://www.seek.com.au/job/88001234";
+	const FRAME = { frame: "data:image/jpeg;base64,U0lHTklO", width: 1280, height: 720 };
+
+	beforeEach(() => {
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('${RUNNER}', 'runner-a', 'u1', 'active', '{"runnerNode":"dell-laptop"}')`);
+		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, status, last_seen_at) VALUES ('${RUNNER}', 'u1', 'dell-laptop', 'relay://', '0.6.0', 'online', '2026-10-15 11:57:00')`);
+		getBoundRunnerConn.mockImplementation(async (_env: unknown, instanceId: string) => ({ runnerNode: "dell-laptop", instanceId, userId: "u1", relayName: `${instanceId}:node:dell-laptop`, endpointUrl: "relay://", token: "", env: {} }));
+	});
+
+	/** The runner's sign-in surface, holding what it holds in memory: one open page per sign-in id. */
+	function signInRunner() {
+		const st = { open: null as Record<string, unknown> | null, opens: 0 };
+		const held = (b: Record<string, unknown>) => st.open?.signInId === b.signInId;
+		const view = (b: Record<string, unknown>, over: Record<string, unknown>) => ({ signInId: b.signInId, browserProfile: st.open?.browserProfile ?? "isolated", site: "seek.com.au", expiresAt: "2026-10-15T12:57:11.000Z", ...over });
+		answers["/local-apply/sign-in"] = (b) => {
+			st.opens++;
+			st.open = b;
+			return { status: 200, body: view(b, { state: "ready" }) };
+		};
+		answers["/local-apply/sign-in/frame"] = (b) => (held(b) ? { status: 200, body: FRAME } : { status: 404, body: { error: "Sign-in not found" } });
+		answers["/local-apply/sign-in/input"] = (b) => (held(b) ? { status: 200, body: { ok: true } } : { status: 404, body: { error: "Sign-in not found" } });
+		answers["/local-apply/sign-in/end"] = (b) => {
+			if (!held(b)) return { status: 404, body: { error: "Sign-in not found" } };
+			const out = view(b, { state: "closed", ...(b.complete === true ? { signedIn: { fingerprint: 1, verifiable: true } } : { terminalReason: "unavailable" }) });
+			st.open = null;
+			return { status: 200, body: out };
+		};
+		return st;
+	}
+
+	/** Paused on the SEEK sign-in, then ended blocked when nobody reached it in time — the reported run. */
+	async function endedBlockedOnSignIn() {
+		const started = await call("POST", `/${RUNNER}/application-runs`, readyApp(APP, { url: JOB }));
+		expect(started.status).toBeLessThan(300);
+		const runId = started.body.run.id as string;
+		// What the Tailor's materials_ready delivery records on a real application (see the #1073 tests).
+		await d1.DB.prepare("UPDATE job_applications SET ready_event = ?1 WHERE id = ?2").bind(JSON.stringify({ eventId: `t1:${APP}:1:materials`, applicationId: APP }), APP).run();
+		runner("paused", { pause: { reason: "login_required", question: "Sign in to seek.com.au in this browser." } });
+		expect((await call("GET", `/${RUNNER}/application-runs/${runId}`)).body.run.status).toBe("paused");
+		const question = "Sign in to seek.com.au on this machine's application browser, then retry. Nothing was submitted.";
+		runner("ended", { lastSeq: 2, result: RESULT(runId, { outcome: "blocked", filled: 0, uploaded: [], blockReason: "login_required", questions: [question] }) });
+		const ended = await call("GET", `/${RUNNER}/application-runs/${runId}`);
+		expect(ended.body.run.status).toBe("blocked");
+		return { runId, profile: started.body.run.policy.browserProfile as string };
+	}
+	const takeoverRow = () => d1.DB.prepare("SELECT id, state, reason, end_reason FROM browser_takeovers WHERE subject_kind = 'runtime_task' AND subject_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(CARD).first<{ id: string; state: string; reason: string; end_reason: string | null }>();
+	const requestedAfterTheRunEnded = async () => {
+		const { requestTakeover } = await import("../lib/browser-takeovers.js");
+		const out = await requestTakeover(env(), { id: TAKEOVER, userId: "u1", instanceId: RUNNER, subjectKind: "runtime_task", subjectId: CARD, reason: "login_required", mobileAllowed: true });
+		expect(out?.takeover.state).toBe("requested");
+	};
+
+	it("requested → activated from the phone → every frame poll is a live page, opened on the run's own profile at the job", async () => {
+		const st = signInRunner();
+		const { runId, profile } = await endedBlockedOnSignIn();
+		await requestedAfterTheRunEnded();
+		const before = sent.length;
+
+		// The console's take-over control: the move to active, from a phone.
+		const activated = await call("PATCH", `/${RUNNER}/browser-takeovers/${TAKEOVER}`, { state: "active", device: "mobile" });
+		expect(activated.status).toBe(200);
+		expect(activated.body.takeover.state).toBe("active");
+
+		// The frame poll the live view makes at ~2 fps. Round 1 answered every one of these 409.
+		for (let i = 0; i < 4; i++) {
+			const frame = await call("GET", `/${RUNNER}/takeover/${CARD}/frame?device=mobile`);
+			expect(frame.status).toBe(200);
+			expect(frame.body).toEqual(FRAME);
+		}
+		// Opened ONCE, then kept: the same page serves every poll for the takeover's lifetime.
+		expect(st.opens).toBe(1);
+		expect(sent.find((x) => x.path === "/local-apply/sign-in")?.body).toEqual({ signInId: `sign-in-${TAKEOVER}`, browserProfile: profile, url: JOB });
+		// Never the ended run's fill handoff (gone with the run), never the runner's task-takeover map.
+		expect(sent.slice(before).some((x) => x.path.startsWith("/local-apply/handoff") || x.path.startsWith("/takeover/"))).toBe(false);
+		expect((await takeoverRow())?.state).toBe("active");
+
+		// The runner restarts mid-takeover (nothing in memory): the next poll re-establishes the page.
+		st.open = null;
+		expect((await call("GET", `/${RUNNER}/takeover/${CARD}/frame?device=mobile`)).status).toBe(200);
+		expect(st.opens).toBe(2);
+
+		// The owner types into SEEK's sign-in page.
+		const input = { type: "text", text: "x" };
+		expect((await call("POST", `/${RUNNER}/takeover/${CARD}/input?device=mobile`, input)).status).toBe(200);
+		expect(sent.find((x) => x.path === "/local-apply/sign-in/input")?.body).toEqual({ signInId: `sign-in-${TAKEOVER}`, input });
+
+		// "Resume — done": the sign-in is recorded on the runner, and the fill runs again.
+		const resumed = await call("POST", `/${RUNNER}/takeover/${CARD}/resume`);
+		expect(resumed.status).toBe(200);
+		expect(sent.find((x) => x.path === "/local-apply/sign-in/end")?.body).toEqual({ signInId: `sign-in-${TAKEOVER}`, complete: true });
+		expect(resumed.body.signIn.signedIn).toEqual({ fingerprint: 1, verifiable: true });
+		expect(resumed.body.retry.outcome).toBe("started");
+		expect(resumed.body.retry.runId).not.toBe(runId);
+		expect(dispatches()).toHaveLength(2);
+		expect((await appRow(APP))?.fill_run_id).toBe(resumed.body.retry.runId);
+		expect((await takeoverRow())?.state).toBe("resumed");
+	});
+
+	it("the banner's own moves work on the card: resumed records the sign-in and retries; ended records nothing", async () => {
+		signInRunner();
+		await endedBlockedOnSignIn();
+		await requestedAfterTheRunEnded();
+		await call("PATCH", `/${RUNNER}/browser-takeovers/${TAKEOVER}`, { state: "active", device: "desktop" });
+		await call("GET", `/${RUNNER}/takeover/${CARD}/frame`);
+		const handed = await call("PATCH", `/${RUNNER}/browser-takeovers/${TAKEOVER}`, { state: "resumed" });
+		expect(handed.status).toBe(200);
+		expect(handed.body.takeover.state).toBe("resumed");
+		expect(sent.find((x) => x.path === "/local-apply/sign-in/end")?.body).toMatchObject({ complete: true });
+		expect(dispatches()).toHaveLength(2);
+	});
+
+	it("declining closes the page without recording a sign-in or retrying", async () => {
+		signInRunner();
+		await endedBlockedOnSignIn();
+		await requestedAfterTheRunEnded();
+		await call("GET", `/${RUNNER}/takeover/${CARD}/frame`);
+		const declined = await call("PATCH", `/${RUNNER}/browser-takeovers/${TAKEOVER}`, { state: "ended" });
+		expect(declined.body.takeover.state).toBe("ended");
+		expect(sent.find((x) => x.path === "/local-apply/sign-in/end")?.body).toEqual({ signInId: `sign-in-${TAKEOVER}`, complete: false });
+		expect(dispatches()).toHaveLength(1);
+		expect((await call("GET", `/${RUNNER}/takeover/${CARD}/frame`)).status).toBe(409);
+	});
+
+	it("with no takeover recorded yet, the card's live view asks for one — for the sign-in — and serves the page", async () => {
+		signInRunner();
+		await endedBlockedOnSignIn();
+		const frame = await call("GET", `/${RUNNER}/takeover/${CARD}/frame?device=mobile`);
+		expect(frame.status).toBe(200);
+		expect(await takeoverRow()).toMatchObject({ state: "active", reason: "login_required" });
+	});
+
+	it("a runner too old to open a sign-in says so, rather than a dead live view", async () => {
+		await endedBlockedOnSignIn();
+		await requestedAfterTheRunEnded();
+		const frame = await call("GET", `/${RUNNER}/takeover/${CARD}/frame?device=mobile`);
+		expect(frame.status).toBe(409);
+		expect(frame.body.error).toMatch(/cannot open a sign-in after a run has ended\. Update it/);
+		expect((await takeoverRow())?.state).toBe("active");
+	});
+
+	it("resume is refused, and nothing retried, when the runner no longer holds the page to record the sign-in from", async () => {
+		const st = signInRunner();
+		await endedBlockedOnSignIn();
+		await requestedAfterTheRunEnded();
+		await call("GET", `/${RUNNER}/takeover/${CARD}/frame`);
+		st.open = null;
+		const resumed = await call("POST", `/${RUNNER}/takeover/${CARD}/resume`);
+		expect(resumed.status).toBe(409);
+		expect(resumed.body.error).toMatch(/not recorded/);
+		expect(dispatches()).toHaveLength(1);
+		expect((await takeoverRow())?.state).toBe("active");
 	});
 });
 
