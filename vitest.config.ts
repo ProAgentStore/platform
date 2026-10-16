@@ -87,6 +87,8 @@ export default defineConfig({
 		alias: SDK_ALIASES,
 	},
 	test: {
+		// One real event-loop turn before each test, so a worker can read the main process's RPC replies (#1093).
+		setupFiles: ["./vitest.setup-ipc-yield.mjs"],
 		/**
 		 * Two projects (#253).
 		 *
