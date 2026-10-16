@@ -115,6 +115,12 @@ describe("history pages fit the wire and walk completely (#1090)", () => {
 });
 
 describe("filters and modes reach the API (#1090)", () => {
+	it("admin_mcp_audit forwards outcome, time and request filters", async () => {
+		const h = setup(keysetApi("events", ROWS.slice(0, 2)));
+		await h.call("admin_mcp_audit", { user: "u9", action: "failed", since: "2026-10-01T00:00:00Z", until: "1760000000000", request_id: 7, session_id: "sess-a", tool: "rename_instance" });
+		expect(Object.fromEntries(h.urls[0].searchParams)).toMatchObject({ user: "u9", action: "failed", since: "2026-10-01T00:00:00Z", until: "1760000000000", request_id: "7", session_id: "sess-a", tool: "rename_instance" });
+	});
+
 	it("list_errors forwards level, build, time, instance and run; a cursor replaces offset", async () => {
 		const h = setup(keysetApi("errors", ROWS.slice(0, 2)));
 		await h.call("list_errors", { cursor: "newest", offset: 50, level: "warn", build: "abc123", since: "2026-10-01T00:00:00Z", until: "2026-10-02T00:00:00Z", instance_id: "iA", run_id: "run-1", scope: "all" });

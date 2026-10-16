@@ -5,7 +5,7 @@ import { AUDIT_GLOBAL_PREFIX, AUDIT_INDEX_PREFIX } from "../lib/mcp-audit-ledger
 import { redactSecrets } from "../lib/redact.js";
 import type { AdminAuditRow } from "../lib/admin.js";
 import type { Env } from "../types.js";
-import { auditPageOr503, parseAuditPaging } from "./mcp-audit.js";
+import { AUDIT_PAGING_LIMITS, auditPageOr503, parseAuditPaging } from "./mcp-audit.js";
 
 /**
  * Admin-only history readers for the MCP server (#1090): the cross-owner MCP tool-call ledger and
@@ -20,7 +20,7 @@ type EnvWithOAuthKV = Env & { OAUTH_KV?: KVNamespace };
 
 /**
  * GET /v1/audit/mcp — every account's MCP tool-call events, newest first (KV-cursor paged, the
- * ledger's own order). `?user=` narrows to one subject's index. Same paging and receipt filters as
+ * ledger's own order). `?user=` narrows to one subject's index. Same paging and filters (tool, action, receipt, request_id, session_id, since, until) as
  * the owner route; a failed ledger read is a 503, never a short page.
  */
 auditRoutes.get("/mcp", async (c) => {
@@ -30,7 +30,7 @@ auditRoutes.get("/mcp", async (c) => {
 	const limit = Math.max(1, Math.min(200, Number(c.req.query("limit")) || 100));
 	const user = c.req.query("user")?.trim() || undefined;
 	const paging = parseAuditPaging(c.req.query());
-	if (!paging || (user && user.length > 200)) return c.json({ error: "cursor must be at most 2048 characters, tool 100, receipt and user 200" }, 400);
+	if (!paging || (user && user.length > 200)) return c.json({ error: `${AUDIT_PAGING_LIMITS}; user at most 200` }, 400);
 	return auditPageOr503(c, kv, { prefix: user ? `${AUDIT_INDEX_PREFIX}${user}:` : AUDIT_GLOBAL_PREFIX, limit, ...paging });
 });
 

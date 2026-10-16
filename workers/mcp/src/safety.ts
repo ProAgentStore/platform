@@ -8,6 +8,7 @@ import {
 	AUDIT_SPOOL_PREFIX,
 	AUDIT_SPOOL_TTL_SECONDS,
 	AUDIT_TTL_SECONDS,
+	type AuditFilter,
 	type AuditPage,
 	auditGlobalKey,
 	auditIndexKey,
@@ -309,7 +310,7 @@ async function countAuditLoss(kv: KVNamespace, ms: number): Promise<void> {
  */
 export async function listAuditEvents(
 	ctx: SafetyContext,
-	{ limit = 50, cursor, tool, receipt, requestId, mcpSessionId }: { limit?: number; cursor?: string; tool?: string; receipt?: string; requestId?: string; mcpSessionId?: string } = {},
+	{ limit = 50, cursor, ...filter }: { limit?: number; cursor?: string } & AuditFilter = {},
 ): Promise<AuditPage | null> {
 	if (!ctx.env.OAUTH_KV) return null;
 	const subject = await subjectFor(ctx);
@@ -318,10 +319,7 @@ export async function listAuditEvents(
 		prefix: `${AUDIT_INDEX_PREFIX}${subject}:`,
 		limit: Math.max(1, Math.min(200, limit)),
 		cursor,
-		tool,
-		receipt,
-		requestId,
-		mcpSessionId,
+		...filter,
 	});
 }
 

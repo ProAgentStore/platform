@@ -1,6 +1,7 @@
 // Shared helpers + the ctx threaded to every instance-tool group registrar. Split out of the
 // old monolithic instance-tools.ts (#135); behaviour-identical (same helpers, verbatim).
 import { z } from "zod";
+import { parseAuditTime } from "../audit-ledger.js";
 import { authedCall, type McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
 import { fitPage, type PageMeta } from "../wire-budget.js";
@@ -253,4 +254,18 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean; offset?:
 
 export function isRec(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null;
+}
+
+/** The outcome and time filters both MCP audit readers take (#1090) — one wording, two tools. */
+export const AUDIT_WINDOW_ARGS = {
+	action: z.string().min(1).max(100).optional().describe("Only calls that ended this way: completed | dry_run | denied | failed | error | invalid_input | unknown (events from before #1089 may carry other handler actions). Exact; a filtered page may hold fewer than limit events — keep following nextCursor."),
+	since: z.string().max(40).optional().describe("Only events at or after this time (ISO 8601 or epoch ms). The walk ends (nextCursor null) once it passes this time."),
+	until: z.string().max(40).optional().describe("Only events at or before this time (ISO 8601 or epoch ms). Newer pages come back empty but still continue — follow nextCursor."),
+};
+
+/** `since`/`until` as epoch ms, or null when either is present but not a time. */
+export function auditWindow(since?: string, until?: string): { since?: number; until?: number } | null {
+	const s = parseAuditTime(since);
+	const u = parseAuditTime(until);
+	return s === null || u === null ? null : { since: s, until: u };
 }

@@ -214,20 +214,63 @@ export function carriesReceipt(event: Record<string, unknown>, receipt: string):
 }
 
 /**
+ * A time bound as a caller writes it (#1090): epoch milliseconds or an ISO 8601 date. `undefined`
+ * when absent, `null` when present but not a time — a caller's typo must be refused, never read
+ * as "no bound".
+ */
+export function parseAuditTime(raw: string | undefined): number | undefined | null {
+	if (raw === undefined || raw.trim() === "") return undefined;
+	const n = /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : Date.parse(raw.trim());
+	return Number.isFinite(n) ? n : null;
+}
+
+/** The event time a ledger key encodes, read off the name — so a time bound costs no KV read. */
+function keyTime(name: string, prefix: string): number | null {
+	const inverted = name.slice(prefix.length, prefix.length + 13);
+	return /^\d{13}$/.test(inverted) ? MAX_MS - Number(inverted) : null;
+}
+
+/** Filters a ledger page applies (#1016, #1038, #1090). All exact; times inclusive. */
+export interface AuditFilter {
+	tool?: string;
+	/** The call's outcome (`completed`, `failed`, `denied`, …) — key metadata, so no read is spent. */
+	action?: string;
+	receipt?: string;
+	requestId?: string;
+	mcpSessionId?: string;
+	since?: number;
+	until?: number;
+}
+
+/**
  * One page of the ledger under `prefix`, newest first. A storage failure THROWS — the caller must
  * report it, never return the events it did get as though they were the whole page. A key that
  * lists but no longer reads expired or was deleted between the two calls; it is genuinely gone.
  */
 export async function readAuditPage(
 	kv: KVNamespace,
-	{ prefix, limit, cursor, tool, receipt, requestId, mcpSessionId }: { prefix: string; limit: number; cursor?: string; tool?: string; receipt?: string; requestId?: string; mcpSessionId?: string },
+	{ prefix, limit, cursor, ...filter }: { prefix: string; limit: number; cursor?: string } & AuditFilter,
 ): Promise<AuditPage> {
 	const [listed, coverage] = await Promise.all([
 		kv.list<AuditKeyMetadata>({ prefix, limit, ...(cursor ? { cursor } : {}) }),
 		readAuditCoverage(kv),
 	]);
+	const { tool, action, receipt, requestId, mcpSessionId, since, until } = filter;
+	// The listing is newest-first, so the first key older than `since` ends the walk: nothing after it
+	// can match. `until` cannot skip ahead (KV lists only from a cursor), so newer pages come back
+	// filtered — possibly empty — with `nextCursor` still continuing.
+	const inWindow = (ms: number | null) => ms === null || ((since === undefined || ms >= since) && (until === undefined || ms <= until));
+	const reachedSince = since !== undefined && listed.keys.some((k) => {
+		const ms = keyTime(k.name, prefix);
+		return ms !== null && ms < since;
+	});
 	// A key with no metadata is read and filtered by its value instead of being dropped unseen.
-	const wanted = tool ? listed.keys.filter((k) => !k.metadata?.tool || k.metadata.tool === tool) : listed.keys;
+	const wanted = listed.keys.filter(
+		(k) =>
+			inWindow(keyTime(k.name, prefix)) &&
+			(!tool || !k.metadata?.tool || k.metadata.tool === tool) &&
+			(!action || !k.metadata?.action || k.metadata.action === action),
+	);
 	const loaded = await Promise.all(
 		wanted.map(async (key) => {
 			const raw = await kv.get(key.name);
@@ -244,6 +287,7 @@ export async function readAuditPage(
 		(e): e is Record<string, unknown> =>
 			e !== null &&
 			(!tool || e.tool === tool) &&
+			(!action || e.action === action) &&
 			(!receipt || carriesReceipt(e, receipt)) &&
 			// The MCP request that wrote it (#1038) — exact; a request id repeats across sessions.
 			(!requestId || e.requestId === requestId) &&
@@ -252,7 +296,7 @@ export async function readAuditPage(
 	return {
 		events,
 		count: events.length,
-		nextCursor: listed.list_complete ? null : (listed.cursor ?? null),
+		nextCursor: listed.list_complete || reachedSince ? null : (listed.cursor ?? null),
 		coverage,
 		semantics: AUDIT_SEMANTICS,
 	};

@@ -6,6 +6,7 @@ import { buildAgentListing } from "./agent-listing.js";
 import { apiCall, authedCall, authRequired, chatReplyText, INVALID_JSON, type McpEnv, jsonResult, jsonText, parseJsonArg, text } from "./http.js";
 import { registerCodingSessionTools } from "./coding-tools.js";
 import { registerInstanceTools } from "./instance-tools/index.js";
+import { AUDIT_WINDOW_ARGS, auditWindow } from "./instance-tools/shared.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import { isUnknownOutcome } from "./async-outcome.js";
@@ -354,7 +355,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"mcp_audit_log",
-			"Read this account's MCP tool audit events (write, runtime, dry-run, denied, destructive), newest first. Returns {events, nextCursor, coverage}: pass nextCursor back as cursor for the next-older page; receipt finds the events for one run/queue/session/event id; request_id + session_id find what ONE MCP request did (every event records the JSON-RPC id and mcp-session-id of the call that wrote it), which is how to settle a write whose reply was lost; nextCursor null is the end of the 90-day ledger. coverage.complete false means older legacy events are still being indexed (coverage.migrationComplete false) or recent events have not yet reached both indexes (coverage.delivery: pending, dead, lost). An event is a receipt for the TOOL CALL, not for the work it started.",
+			"Read this account's MCP tool-call audit events, newest first: one event per call and how it ended (`action`: completed, dry_run, denied, failed, error, invalid_input, unknown — with failureClass, reason and explanation when it did not complete). Successful read-only calls are not recorded. Filter by tool, action, since/until, receipt, or request_id + session_id. Returns {events, nextCursor, coverage}: pass nextCursor back as cursor for the next-older page; receipt finds the events for one run/queue/session/event id; request_id + session_id find what ONE MCP request did (every event records the JSON-RPC id and mcp-session-id of the call that wrote it), which is how to settle a write whose reply was lost; nextCursor null is the end of the 90-day ledger. coverage.complete false means older legacy events are still being indexed (coverage.migrationComplete false) or recent events have not yet reached both indexes (coverage.delivery: pending, dead, lost). An event is a receipt for the TOOL CALL, not for the work it started.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -363,18 +364,21 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				receipt: z.string().min(1).max(200).optional().describe("Only events that ARE this event id or carry it as a whole value in input/result (a runId, queueEntryId, session_id, task id the call returned or acted on). Exact match; applied per page, so keep following nextCursor."),
 				request_id: z.coerce.string().min(1).max(200).optional().describe("Only events written by the MCP request with this JSON-RPC id (7 and \"7\" are the same). Ids restart in every session, so pair it with session_id. Exact match; applied per page."),
 				session_id: z.string().min(1).max(200).optional().describe("Only events written in this MCP session (the mcp-session-id header of the connection). Exact match; applied per page."),
+				...AUDIT_WINDOW_ARGS,
 			},
-			async ({ token, limit, cursor, tool, receipt, request_id, session_id }) => {
+			async ({ token, limit, cursor, tool, receipt, request_id, session_id, action, since, until }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
 				const denied = await requirePermission(this.safety(token), "read", "mcp_audit_log", { limit, cursor, tool, receipt });
 				if (denied) return denied;
+				const window = auditWindow(since, until);
+				if (!window) return text("Error: since/until must be ISO 8601 or epoch milliseconds.");
 				try {
 					// Fitted to the wire by asking the ledger for fewer events from the same cursor (#1090).
 					const page = await fitFetchedPage({
 						limit: limit || 50,
 						key: "events",
-						fetch: async (n) => (await listAuditEvents(this.safety(token), { limit: n, cursor, tool, receipt, requestId: request_id, mcpSessionId: session_id })) ?? { unavailable: true },
+						fetch: async (n) => (await listAuditEvents(this.safety(token), { limit: n, cursor, tool, receipt, requestId: request_id, mcpSessionId: session_id, action, since: window.since, until: window.until })) ?? { unavailable: true },
 					});
 					return page.startsWith('{"unavailable"') ? text("Error: the MCP audit ledger is unavailable on this connection (no audit store or no authenticated subject).") : text(page);
 				} catch (e) {

@@ -13,6 +13,7 @@ import {
 } from "../lib/mcp-audit-ledger.js";
 import { signSession } from "../lib/session.js";
 import { adminMcpAuditRoutes } from "./admin-mcp-audit.js";
+import { auditRoutes } from "./audit.js";
 import { mcpAuditRoutes, readMcpAuditEvents } from "./mcp-audit.js";
 
 /**
@@ -62,6 +63,7 @@ function testApp(kv?: KVNamespace) {
 	const app = new Hono();
 	app.route("/v1", mcpAuditRoutes);
 	app.route("/v1/admin", adminMcpAuditRoutes);
+	app.route("/v1/audit", auditRoutes);
 	app.onError((err, c) => {
 		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
 		throw err;
@@ -562,5 +564,74 @@ describe("the legacy backfill", () => {
 		const before = { ...f.ops };
 		await runAuditLedgerBackfill(f.kv, { now: f.clock.now });
 		expect(f.ops).toEqual({ ...before, get: before.get + 1 });
+	});
+});
+
+describe("outcome, time and request filters (#1090)", () => {
+	const base = Date.parse("2026-10-11T10:00:00.000Z");
+	function seed() {
+		const f = fakeKv();
+		writeLedger(f, "mine", base, "old-failed", { tool: "rename_instance", action: "failed", failureClass: "upstream", reason: "api_500" });
+		writeLedger(f, "mine", base + 60_000, "mid-ok", { tool: "rename_instance", action: "completed", requestId: "7", mcpSessionId: "sess-a" });
+		writeLedger(f, "mine", base + 120_000, "mid-denied", { tool: "delete_agent", action: "denied", reason: "missing_scope", requestId: "7", mcpSessionId: "sess-b" });
+		writeLedger(f, "mine", base + 180_000, "new-failed", { tool: "delete_agent", action: "failed", reason: "api_409" });
+		writeLedger(f, "theirs", base + 90_000, "their-failed", { action: "failed" });
+		return f;
+	}
+
+	it("action selects calls by how they ended, from key metadata, across pages", async () => {
+		const f = seed();
+		// A key listed WITHOUT metadata (as a legacy copy may be) is read and judged by its value.
+		const bare = auditIndexKey("mine", base + 30_000, "bare-ok");
+		f.data.set(bare, { value: JSON.stringify({ id: "bare-ok", tool: "rename_instance", action: "completed", time: new Date(base + 30_000).toISOString(), subject: "mine" }) });
+		const { app, env } = testApp(f.kv);
+		const { ids } = await readAll(app, env, "/v1/mcp-audit?limit=2&action=failed");
+		expect(ids).toEqual(["new-failed", "old-failed"]);
+	});
+
+	it("since ends the walk once it passes the bound; until skips newer events but keeps walking", async () => {
+		const f = seed();
+		for (let i = 1; i <= 8; i++) writeLedger(f, "mine", base - i * 60_000, `older-${i}`);
+		const { app, env } = testApp(f.kv);
+		const since = new Date(base + 60_000).toISOString();
+		const sinceWalk = await readAll(app, env, `/v1/mcp-audit?limit=2&since=${encodeURIComponent(since)}`);
+		expect(sinceWalk.ids).toEqual(["new-failed", "mid-denied", "mid-ok"]);
+		// The second page crossed the bound, so it was the last: the eight older events cost no more pages.
+		expect(sinceWalk.pages).toHaveLength(2);
+		const untilWalk = await readAll(app, env, `/v1/mcp-audit?limit=1&until=${base + 60_000}`);
+		expect(untilWalk.ids).toEqual(["mid-ok", "old-failed", ...Array.from({ length: 8 }, (_, i) => `older-${i + 1}`)]);
+		const both = await readAll(app, env, `/v1/mcp-audit?since=${base + 30_000}&until=${base + 150_000}&action=denied`);
+		expect(both.ids).toEqual(["mid-denied"]);
+	});
+
+	it("request_id + session_id find one MCP request's events — exact, a request id alone repeats", async () => {
+		const f = seed();
+		const { app, env } = testApp(f.kv);
+		expect((await readAll(app, env, "/v1/mcp-audit?request_id=7")).ids).toEqual(["mid-denied", "mid-ok"]);
+		expect((await readAll(app, env, "/v1/mcp-audit?request_id=7&session_id=sess-a")).ids).toEqual(["mid-ok"]);
+	});
+
+	it("an unparseable time is a 400, never an unbounded walk", async () => {
+		const { app, env } = testApp(seed().kv);
+		for (const q of ["since=yesterday", "until=2026-13-45T99:00"]) {
+			const { status, body } = await getPage(app, env, `/v1/mcp-audit?${q}`);
+			expect(status).toBe(400);
+			expect((body as unknown as { error: string }).error).toMatch(/since\/until/);
+		}
+	});
+
+	it("the admin sweep takes the same filters, across every account", async () => {
+		const f = seed();
+		const { app, env } = testApp(f.kv);
+		const { ids } = await readAll(app, env, `/v1/audit/mcp?action=failed&since=${base + 30_000}`);
+		expect(ids).toEqual(["new-failed", "their-failed"]);
+		expect((await getPage(app, env, "/v1/audit/mcp?since=nope")).status).toBe(400);
+	});
+
+	it("states the #1089 outcome vocabulary in its semantics", async () => {
+		const { app, env } = testApp(seed().kv);
+		const { body } = await getPage(app, env, "/v1/mcp-audit");
+		expect(body.semantics).toMatch(/invalid_input/);
+		expect(body.semantics).toMatch(/read-only calls are not recorded/);
 	});
 });

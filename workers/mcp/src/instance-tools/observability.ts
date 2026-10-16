@@ -3,7 +3,7 @@ import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import { fitFetchedPage, fitPage } from "../wire-budget.js";
-import type { InstanceToolsCtx } from "./shared.js";
+import { AUDIT_WINDOW_ARGS, type InstanceToolsCtx } from "./shared.js";
 
 /**
  * Read-only windows onto what an instance DID — its messages, its activity log, the
@@ -233,23 +233,23 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 
 	server.tool(
 		"admin_mcp_audit",
-		"ADMIN only: every account's MCP tool-call audit events, newest first (the cross-owner view of mcp_audit_log), or one account's with `user`. Same filters and continuation as mcp_audit_log: pass `nextCursor` back as `cursor` until it is null, which is the end of the 90-day ledger. `coverage` says whether legacy events are still being indexed and whether recent events have yet to reach both indexes (`coverage.delivery`), so an empty page is never proof nothing happened. An event is a receipt for the TOOL CALL, not for the work it started. Each reply fits the wire budget by asking the ledger for fewer events, never by dropping one. Anyone else is refused.",
+		"ADMIN only: every account's MCP tool-call audit events, newest first (the cross-owner view of mcp_audit_log), or one account's with `user`. Calls no account could be resolved for are filed here only, as subject \"unattributed\". Same filters (tool, action, since/until, receipt, request_id + session_id) and continuation as mcp_audit_log: pass `nextCursor` back as `cursor` until it is null, which is the end of the 90-day ledger. `coverage` says whether legacy events are still being indexed and whether recent events have yet to reach both indexes (`coverage.delivery`), so an empty page is never proof nothing happened. An event is a receipt for the TOOL CALL, not for the work it started. Each reply fits the wire budget by asking the ledger for fewer events, never by dropping one. Anyone else is refused.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			user: z.string().min(1).max(200).optional().describe("Only this account's events (its user id). Omit for every account."),
 			tool: z.string().min(1).max(100).optional().describe("Only events for this exact tool name. A filtered page may hold fewer than limit events; keep following nextCursor."),
 			receipt: z.string().min(1).max(200).optional().describe("Only events that ARE this id or carry it as a whole value (a runId, queueEntryId, session_id, task id). Exact; applied per page."),
+			request_id: z.coerce.string().min(1).max(200).optional().describe("Only events written by the MCP request with this JSON-RPC id. Ids restart in every session, so pair it with session_id."),
+			session_id: z.string().min(1).max(200).optional().describe("Only events written in this MCP session (its mcp-session-id)."),
+			...AUDIT_WINDOW_ARGS,
 			cursor: z.string().min(1).max(2048).optional().describe("nextCursor from the previous page. Omit for the newest page."),
 			limit: z.coerce.number().int().min(1).max(200).optional(),
 		},
-		async ({ token, user, tool, receipt, cursor, limit }) => {
+		async ({ token, user, tool, receipt, request_id, session_id, action, since, until, cursor, limit }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
-			if (user) qs.set("user", user);
-			if (tool) qs.set("tool", tool);
-			if (receipt) qs.set("receipt", receipt);
-			if (cursor) qs.set("cursor", cursor);
+			for (const [k, v] of Object.entries({ user, tool, receipt, request_id, session_id, action, since, until, cursor })) if (v) qs.set(k, v);
 			return text(
 				await fitFetchedPage({
 					limit: limit ?? 100,

@@ -1,6 +1,6 @@
 import { type Context, Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { AUDIT_INDEX_PREFIX, type AuditPage, readAuditPage } from "../lib/mcp-audit-ledger.js";
+import { AUDIT_INDEX_PREFIX, type AuditFilter, type AuditPage, parseAuditTime, readAuditPage } from "../lib/mcp-audit-ledger.js";
 import { redactSecrets } from "../lib/redact.js";
 import type { Env } from "../types.js";
 
@@ -54,15 +54,12 @@ export interface McpAuditEvent {
  */
 export const MCP_AUDIT_PRESERVE_KEYS = /^session[_-]?id$/i;
 
-export interface McpAuditQuery {
+export interface McpAuditQuery extends AuditFilter {
 	/** Ledger key prefix: `audit_idx:{subject}:` for one owner, `audit_all:` for the admin sweep. */
 	prefix: string;
 	limit: number;
 	/** The previous page's `nextCursor`. */
 	cursor?: string;
-	tool?: string;
-	/** Exact receipt id — see `carriesReceipt`. */
-	receipt?: string;
 }
 
 /**
@@ -85,13 +82,25 @@ export async function readMcpAuditEvents(kv: KVNamespace, query: McpAuditQuery):
 }
 
 /** Parse the shared `?cursor=` / `?tool=` / `?receipt=` query; `null` when any is out of bounds. */
-export function parseAuditPaging(query: { cursor?: string; tool?: string; receipt?: string }): { cursor?: string; tool?: string; receipt?: string } | null {
-	const cursor = query.cursor?.trim() || undefined;
-	const tool = query.tool?.trim() || undefined;
-	const receipt = query.receipt?.trim() || undefined;
-	if ((cursor && cursor.length > 2048) || (tool && tool.length > 100) || (receipt && receipt.length > 200)) return null;
-	return { cursor, tool, receipt };
+export function parseAuditPaging(query: Record<string, string | undefined>): Omit<McpAuditQuery, "prefix" | "limit"> | null {
+	const v = (k: string) => query[k]?.trim() || undefined;
+	const cursor = v("cursor");
+	const tool = v("tool");
+	const receipt = v("receipt");
+	const action = v("action");
+	const requestId = v("request_id");
+	const mcpSessionId = v("session_id");
+	const since = parseAuditTime(query.since);
+	const until = parseAuditTime(query.until);
+	if ((cursor && cursor.length > 2048) || (tool && tool.length > 100) || (action && action.length > 100)) return null;
+	if ([receipt, requestId, mcpSessionId].some((x) => x && x.length > 200)) return null;
+	if (since === null || until === null) return null;
+	return { cursor, tool, receipt, action, requestId, mcpSessionId, since, until };
 }
+
+/** The 400 for a query `parseAuditPaging` refused. */
+export const AUDIT_PAGING_LIMITS =
+	"cursor must be at most 2048 characters, tool and action 100, receipt, request_id and session_id 200; since/until must be ISO 8601 or epoch ms";
 
 /** Read a page, or answer 503 naming the failure — a failed read is never an empty history. */
 export async function auditPageOr503(c: Context, kv: KVNamespace, query: McpAuditQuery) {
@@ -109,8 +118,8 @@ export const mcpAuditRoutes = new Hono<{ Bindings: Env }>();
 
 /**
  * GET /mcp-audit — the CALLER's own MCP tool-call events, newest first.
- * Query: ?limit= (default 100, max 200) ?tool= (exact match) ?receipt= (exact event/run/queue/session id)
- * ?cursor= (a previous `nextCursor`).
+ * Query: ?limit= (default 100, max 200) ?tool= ?action= (exact) ?receipt= (exact event/run/queue/session id)
+ * ?request_id= ?session_id= (the MCP request that wrote it) ?since= ?until= ?cursor= (a previous `nextCursor`).
  */
 mcpAuditRoutes.get("/mcp-audit", async (c) => {
 	const session = await requireUser(c);
@@ -130,7 +139,7 @@ mcpAuditRoutes.get("/mcp-audit", async (c) => {
 
 	const limit = Math.max(1, Math.min(200, Number(c.req.query("limit")) || 100));
 	const paging = parseAuditPaging(c.req.query());
-	if (!paging) return c.json({ error: "cursor must be at most 2048 characters, tool at most 100 and receipt at most 200" }, 400);
+	if (!paging) return c.json({ error: AUDIT_PAGING_LIMITS }, 400);
 
 	// The prefix is the caller's own uid and nothing else reaches it — no `?user=` here, and a
 	// cursor only moves WITHIN the prefix it is listed under.

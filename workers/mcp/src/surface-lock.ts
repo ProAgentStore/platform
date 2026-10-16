@@ -1179,4 +1179,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.139": "sha256:f1fe8078a5b11cdf91634711dfba44779709c622987cd1fb635c98423905a6bf",
 	// #1097: reorder_board_item and coding_loop_queue_reorder; coding_loop_start gains queue_position.
 	"0.1.140": "sha256:8f415f001de06fdde4d30bb86d562e83ef8d8f97d4d9601de5bc448cd02a90c4",
+	// #1090: mcp_audit_log gains action + since/until; admin_mcp_audit gains action, since/until, request_id and session_id.
+	"0.1.141": "sha256:078f960fac5f539e31fd8f148e4c8dafeef3fb9fb7e0b0ec6d30ad7ab8f269ef",
 };

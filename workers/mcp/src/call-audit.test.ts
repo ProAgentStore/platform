@@ -267,4 +267,19 @@ describe("one audit event per MCP call, read back with its reason (#1089)", () =
 		];
 		for (const line of lines) expect(line.length, line).toBeLessThanOrEqual(AUDIT_VALUE_MAX);
 	});
+
+	it("mcp_audit_log reads back only the failures with action, and bounds by time (#1090)", async () => {
+		routes.push(on("/v1/instances/i1/name", { body: { success: true } }, "PUT"));
+		routes.push(on("/v1/instances/i2/name", { status: 500, body: {} }, "PUT"));
+		const c = await connect();
+		const before = Date.now();
+		await c.call("rename_instance", { instance_id: "i1", name: "A" });
+		await c.call("rename_instance", { instance_id: "i2", name: "B" });
+		const failed = (await readBack(c, { action: "failed" })).events;
+		expect(failed.map((e) => (e.input as { instance_id: string }).instance_id)).toEqual(["i2"]);
+		expect((await readBack(c, { since: String(before) })).events).toHaveLength(2);
+		const future = await readBack(c, { since: new Date(Date.now() + 60_000).toISOString() });
+		expect(future.events).toEqual([]);
+		expect(await c.text("mcp_audit_log", { since: "last tuesday" })).toMatch(/^Error: since\/until/);
+	});
 });
