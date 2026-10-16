@@ -13,7 +13,7 @@ beforeEach(() => {
 	(globalThis as unknown as { fetch: unknown }).fetch = vi.fn().mockResolvedValue({ ok: true });
 });
 
-import { api, clientBuild, isConnectivityError, reportClientError, setClientBuild, setToken } from "./client.js";
+import { api, classifyClientFailure, clientBuild, isConnectivityError, reportClientError, setClientBuild, setToken } from "./client.js";
 
 const mockFetch = () => (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
 
@@ -92,11 +92,12 @@ describe("reportClientError", () => {
 		expect(mockFetch()).toHaveBeenCalledTimes(1);
 	});
 
-	it("reports distinct errors separately", () => {
+	it("reports distinct errors separately", async () => {
 		setToken("tok");
 		reportClientError("api", "distinct-C-1");
 		reportClientError("api", "distinct-C-2");
-		expect(mockFetch()).toHaveBeenCalledTimes(2);
+		// One request at a time (#1088): the second goes out once the first is acknowledged.
+		await vi.waitFor(() => expect(mockFetch()).toHaveBeenCalledTimes(2));
 	});
 });
 
@@ -165,5 +166,21 @@ describe("isConnectivityError", () => {
 		]) {
 			expect(isConnectivityError(m)).toBe(false);
 		}
+	});
+});
+
+describe("classifyClientFailure — precise, not a word filter (#1088)", () => {
+	const fetchFailure = (m: string) => Object.assign(new TypeError(m));
+	it("an abort is the caller's; a transport failure is the network's — offline or online", () => {
+		expect(classifyClientFailure(Object.assign(new Error("The operation was aborted."), { name: "AbortError" }))).toBe("abort");
+		for (const m of ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."]) {
+			expect(classifyClientFailure(fetchFailure(m), true), m).toBe("network");
+			expect(classifyClientFailure(fetchFailure(m), false), m).toBe("offline");
+		}
+	});
+	it("a real error is an error — whatever words it contains, and even while offline", () => {
+		expect(classifyClientFailure(new Error("Upload timed out after the server cancelled it"), true)).toBe("error");
+		expect(classifyClientFailure(new TypeError("Cannot read properties of undefined (reading 'x')"), false)).toBe("error");
+		expect(classifyClientFailure(new TypeError("Failed to fetch dynamically imported module"), true)).toBe("error");
 	});
 });

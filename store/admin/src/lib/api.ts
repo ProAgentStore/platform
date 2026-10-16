@@ -1,6 +1,7 @@
+import { classifyClientFailure, reportClientError as sdkReport } from "@proagentstore/sdk/client";
 // Self-contained API + auth for the admin app. Reuses the SAME session token the
-// console stores ("pags:session"), and the SAME OAuth handoff (?session=), so the
-// admin app needs no @proagentstore/sdk dependency. Server-side, every /v1/admin/*
+// console stores ("pags:session"), and the SAME OAuth handoff (?session=). The one thing it takes from
+// @proagentstore/sdk is error delivery (#1088): one outbox for every surface. Server-side, every /v1/admin/*
 // route is behind requireAdmin — this is just the client.
 
 const API = "/admin/api";
@@ -48,14 +49,29 @@ export async function api<T = unknown>(path: string, opts: RequestInit = {}): Pr
 		...((opts.headers as Record<string, string>) || {}),
 	};
 	if (token) headers.Authorization = `Bearer ${token}`;
-	const res = await fetch(`${API}${path}`, { ...opts, headers });
+	let res: Response;
+	try {
+		res = await fetch(`${API}${path}`, { ...opts, headers });
+	} catch (e) {
+		// Handled failures are reported too (#1088): the page shows its own message, and the log keeps
+		// the fact. Classified, as the console does — an abort or offline failure is expected.
+		const kind = classifyClientFailure(e);
+		if (kind === "network" || kind === "error") reportClientError(kind === "network" ? "network" : "api", `${opts.method || "GET"} ${path} → network error`, { error: e instanceof Error ? e.message : String(e) });
+		throw e;
+	}
 	if (res.status === 401) {
 		setToken(null);
 		throw new ApiError(401, "Not signed in");
 	}
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as { error?: string };
-		throw new ApiError(res.status, accessGateNotice(res.status, body.error) || body.error || `HTTP ${res.status}`);
+		const accessGate = accessGateNotice(res.status, body.error);
+		// A 5xx is a failure; 402/409/429 are walls worth counting (the server files them as warnings). An
+		// expired Access session is the operator's to renew, not a platform failure — not reported.
+		if (!accessGate && (res.status >= 500 || [402, 403, 409, 429].includes(res.status))) {
+			reportClientError("api", `${opts.method || "GET"} ${path} → ${res.status}`, { error: (body.error ?? "").slice(0, 300) }, res.status);
+		}
+		throw new ApiError(res.status, accessGate || body.error || `HTTP ${res.status}`);
 	}
 	return res.json() as Promise<T>;
 }
@@ -76,18 +92,14 @@ export async function signIn(provider: "google" | "github" = "github") {
 	window.location.href = `${url}?app_id=${config.app_id}&response_mode=${config.response_mode}&return_to=${returnTo}`;
 }
 
-/** Best-effort: mirror a browser-side failure into the durable server error log
- *  (source client:*), so admin-app bugs are visible via list_errors, not just the
- *  user's DevTools. No-op when signed out (the endpoint needs a session). */
-export function reportClientError(source: string, message: string, context?: Record<string, unknown>) {
-	const token = getToken();
-	if (!token) return;
-	fetch(`${API}/v1/errors/client`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-		body: JSON.stringify({ source: `admin:${source}`, message: message.slice(0, 500), context }),
-		keepalive: true,
-	}).catch(() => {});
+/**
+ * Mirror an admin-app failure into the durable server error log (source `client:admin:*`), through the
+ * SDK's outbox (#1088): an event id, retried until acknowledged, kept across offline periods and reloads,
+ * repeats counted. Signed out it is still reported — anonymously — because a sign-in or Access failure is
+ * exactly the one an operator cannot read back from their own session.
+ */
+export function reportClientError(source: string, message: string, context?: Record<string, unknown>, status?: number) {
+	sdkReport(`admin:${source}`, message, context, status);
 }
 
 /** If we came back from OAuth with ?session=, persist it and clean the URL. */

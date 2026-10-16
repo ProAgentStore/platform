@@ -46,6 +46,8 @@ interface AdminMock {
 	requests: Array<{ method: string; path: string; body: Json | null }>;
 	/** Status/body to answer the agent DELETE with; consumed one per call. */
 	deleteResponses: Array<{ status: number; body: Json }>;
+	/** Error reports the admin app sent through the SDK outbox (#1088), with their Authorization. */
+	reports: Array<{ body: Json; auth: string | undefined }>;
 }
 
 const AGENT = {
@@ -68,7 +70,15 @@ async function mockAdmin(page: Page, instances: Json[] = []): Promise<AdminMock>
 		window.localStorage.setItem("pags:session", token);
 	}, TEST_TOKEN);
 
-	const mock: AdminMock = { requests: [], deleteResponses: [] };
+	const mock: AdminMock = { requests: [], deleteResponses: [], reports: [] };
+	// Error reports go straight to the platform API (#1088). Intercepted — that endpoint is production's
+	// durable log, and an e2e run must never write to it.
+	await page.route("https://api.proagentstore.online/**", async (route) => {
+		if (route.request().url().endsWith("/v1/errors/client")) {
+			mock.reports.push({ body: route.request().postDataJSON() as Json, auth: route.request().headers().authorization });
+		}
+		await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, durable: true }) });
+	});
 
 	await page.route(`${API}/**`, async (route) => {
 		const path = apiPath(route.request().url());
@@ -120,6 +130,34 @@ async function mockAdmin(page: Page, instances: Json[] = []): Promise<AdminMock>
 function openDelete(page: Page) {
 	return page.getByRole("button", { name: "Delete agent" }).click();
 }
+
+test.describe("admin error delivery (#1088)", () => {
+	test("a handled 5xx is reported through the SDK outbox, under the operator's session", async ({ page }) => {
+		const mock = await mockAdmin(page);
+		await page.route(`${API}/v1/admin/instances*`, (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }));
+		await page.goto("/admin/instances");
+		await expect.poll(() => mock.reports.filter((r) => r.body.source === "admin:api").length).toBeGreaterThan(0);
+		const [r] = mock.reports.filter((x) => x.body.source === "admin:api");
+		expect(r.body).toMatchObject({ status: 500, count: 1 });
+		expect(String(r.body.message)).toMatch(/^GET \/v1\/admin\/instances.* → 500$/);
+		expect(typeof r.body.id).toBe("string");
+		expect(r.auth).toBe(`Bearer ${TEST_TOKEN}`);
+	});
+
+	test("signed out, a failure is still reported — anonymously", async ({ page }) => {
+		const reports: Array<{ body: Json; auth: string | undefined }> = [];
+		await page.route("https://api.proagentstore.online/**", async (route) => {
+			if (route.request().url().endsWith("/v1/errors/client")) reports.push({ body: route.request().postDataJSON() as Json, auth: route.request().headers().authorization });
+			await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+		});
+		await page.route(`${API}/**`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+		await page.goto("/admin/");
+		await page.evaluate(() => window.dispatchEvent(new ErrorEvent("error", { message: "admin pre-auth probe", error: new Error("admin pre-auth probe") })));
+		await expect.poll(() => reports.filter((r) => r.body.message === "Error: admin pre-auth probe").length).toBe(1);
+		expect(reports[0].auth).toBeUndefined();
+		expect(reports[0].body.source).toBe("admin:window");
+	});
+});
 
 test.describe("admin destructive controls", () => {
 	test("nothing destructive fires on one click — the echo gate has to be satisfied first", async ({ page }) => {

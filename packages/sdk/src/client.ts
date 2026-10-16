@@ -5,6 +5,7 @@
 // so browser UIs don't pull in the backend `.` export (initPro/Stripe/etc).
 // See ../../PLAN-agent-os.md. (Base-URL override can come later if a UI needs it.)
 
+import { ErrorOutbox } from "./error-outbox.js";
 const API = "https://api.proagentstore.online";
 const SESSION_KEY = "pags:session";
 
@@ -16,9 +17,11 @@ export function getToken(): string | null {
  * True when an error message is transient CONNECTIVITY (offline / flaky wifi / aborted
  * navigation / CORS preflight), not a platform bug. Safari says "Load failed", Chrome
  * "Failed to fetch", Firefox "NetworkError". These fire once per in-flight request on
- * every network blip, so reporting them floods the durable log and buries real errors —
- * suppress at every reporting boundary (api() below AND the global handlers in main.tsx)
- * from this ONE definition so the two can't drift.
+ * every network blip, so reporting them floods the durable log and buries real errors.
+ *
+ * A WORD filter, and so too broad for a reporting boundary (#1088): it also matches real errors that
+ * merely mention "timed out" or "cancelled". `api()` and the global handlers now use
+ * {@link classifyClientFailure}; this stays for the voice paths, which classify error STRINGS.
  */
 export function isConnectivityError(message: string): boolean {
 	return /load failed|failed to fetch|networkerror|network connection was lost|network request failed|the request timed out|timed? ?out|cancelled|canceled|aborted/i.test(message);
@@ -59,38 +62,92 @@ export function clientBuild(): string {
 }
 
 /**
- * Best-effort client-error reporter → the durable server error log, so browser
- * failures (voice errors, unhandled exceptions, failed calls) are visible via
+ * Report a browser-side failure into the durable server error log, so it is visible through
  * GET /v1/errors and MCP list_errors — not just the user's DevTools console.
- * Deduped (a broken UI can't spam the log) and fire-and-forget via a DIRECT fetch
- * (never api(), which would recurse if api() itself is what failed).
+ *
+ * Delivered through a persisted outbox (#1088, `error-outbox.ts`): a stable event id, retried until the
+ * platform acknowledges it, kept across offline periods and reloads, with repeats counted rather than
+ * dropped. Sent with a DIRECT fetch — never `api()`, which would recurse if `api()` is what failed.
+ * Signed out is not a reason to stay silent (#424): the report is filed anonymously.
  */
-const _reportedAt = new Map<string, number>();
+let _outbox: ErrorOutbox | null = null;
+function outbox(): ErrorOutbox {
+	if (_outbox) return _outbox;
+	const browser = typeof window !== "undefined";
+	_outbox = new ErrorOutbox({
+		endpoint: `${API}/v1/errors/client`,
+		fetch: (url, init) => fetch(url, init as RequestInit),
+		storage: typeof localStorage !== "undefined" ? localStorage : null,
+		now: () => Date.now(),
+		online: () => typeof navigator === "undefined" || navigator.onLine !== false,
+		token: () => {
+			try { return getToken(); } catch { return null; }
+		},
+		schedule: (fn, ms) => { setTimeout(fn, ms); },
+		newId: () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `ev-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+	});
+	if (browser) {
+		// Back online: say how many requests failed while offline (once), then send what waited.
+		window.addEventListener("online", () => {
+			const n = _offlineFailures;
+			_offlineFailures = 0;
+			if (n > 0) reportClientError("network", `${n} request(s) failed while the browser was offline`, { offlineFailures: n });
+			void _outbox?.flush();
+		});
+		// What a previous page load could not deliver.
+		void _outbox.flush();
+	}
+	return _outbox;
+}
+
+// Started with the page, not with its first report (#1088): what a previous load could not deliver is sent
+// now, and the `online` listener is in place before anything fails offline. Reads storage and sends what is
+// due; it never throws.
+if (typeof window !== "undefined") {
+	queueMicrotask(() => {
+		try { outbox(); } catch { /* never block the app */ }
+	});
+}
+
 export function reportClientError(source: string, message: string, context?: Record<string, unknown>, status?: number): void {
 	try {
-		// NO token is not a reason to stay silent (#424). This used to `return` here, on the
-		// premise that "the log is per-user; nothing to attribute it to" — but the server has
-		// always written null-user rows (migration 0034: `user_id TEXT, -- nullable: some failures
-		// have no user context`), and the effect of the early return was that every sign-in and
-		// OAuth-callback failure was invisible. That is exactly the class a user cannot report
-		// from their side, because they never got a session to read their own errors with.
-		const token = getToken();
-		const key = `${source}|${message}`.slice(0, 200);
-		const now = Date.now();
-		const last = _reportedAt.get(key);
-		if (last && now - last < 30_000) return; // same error at most once / 30s
-		_reportedAt.set(key, now);
-		if (_reportedAt.size > 200) _reportedAt.clear();
-		void fetch(`${API}/v1/errors/client`, {
-			method: "POST",
-			keepalive: true,
-			headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			// `build` is top-level, not folded into `context`: it is part of the row's collapse
-			// identity server-side (#539), and a build id living only in `context` is exactly what
-			// a fold discards. It also has to be readable in `list_errors` without decoding JSON.
-			body: JSON.stringify({ source: String(source).slice(0, 40), message: String(message).slice(0, 2000), status, context, build: _build }),
-		}).catch(() => {});
+		outbox().report({ source: String(source).slice(0, 40), message: String(message).slice(0, 2000), status, context, build: _build });
 	} catch { /* reporting must never throw */ }
+}
+
+/**
+ * What a failure IS (#1088) — precise, not a guess from words in the message.
+ *
+ *  - `abort`   the caller cancelled it (`AbortError`): expected, never reported.
+ *  - `offline` a fetch that failed at the transport while the browser says it is offline: expected,
+ *              COUNTED, and the count is reported once it is back online — one row, not one per request.
+ *  - `network` a fetch that failed at the transport while online — the exact `TypeError` each browser
+ *              throws for it. Reported under `network`, which the server files as a warning.
+ *  - `error`   everything else: a real failure.
+ *
+ * It replaces a word filter (`timed out|cancelled|aborted|…`) that also hid real errors whose message
+ * merely contained one of those words.
+ */
+export type ClientFailureClass = "abort" | "offline" | "network" | "error";
+const FETCH_NETWORK_FAILURE = /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?|Network request failed|The network connection was lost\.?)$/;
+export function classifyClientFailure(err: unknown, online: boolean = typeof navigator === "undefined" || navigator.onLine !== false): ClientFailureClass {
+	const name = err && typeof err === "object" && "name" in err ? String((err as { name: unknown }).name) : "";
+	const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+	if (name === "AbortError") return "abort";
+	// Only a TRANSPORT failure is the network's: a bug thrown while the browser is offline is still a bug.
+	if (name === "TypeError" && FETCH_NETWORK_FAILURE.test(message.trim())) return online ? "network" : "offline";
+	return "error";
+}
+
+let _offlineFailures = 0;
+const _reported = new WeakSet<object>();
+/** True for an error `api()` already reported (or classified as expected) — so a global handler skips it. */
+export function wasReported(err: unknown): boolean {
+	return !!err && typeof err === "object" && _reported.has(err);
+}
+function markReported<E>(err: E): E {
+	if (err && typeof err === "object") _reported.add(err as object);
+	return err;
 }
 
 /**
@@ -127,11 +184,14 @@ export async function api<T = Record<string, unknown>>(
 		// CORS), not a platform bug — and on every blip it fires one report per in-flight
 		// request, flooding the durable log and burying real errors. Skip the common
 		// connectivity messages; still surface anything genuinely unusual.
-		const msg = e instanceof Error ? e.message : String(e);
-		if (!isConnectivityError(msg) && !path.startsWith("/v1/errors")) {
-			reportClientError("api", `${opts.method || "GET"} ${path} → network error`, { error: msg });
+		// Classified, not filtered by words (#1088): an abort is the caller's, offline is counted and
+		// reported once the browser is back, a transport failure while online is a `network` warning.
+		const kind = classifyClientFailure(e);
+		if (!path.startsWith("/v1/errors")) {
+			if (kind === "offline") _offlineFailures++;
+			else if (kind !== "abort") reportClientError(kind === "network" ? "network" : "api", `${opts.method || "GET"} ${path} → network error`, { error: e instanceof Error ? e.message : String(e) });
 		}
-		throw e;
+		throw markReported(e);
 	}
 	// Session expired/invalid mid-use: clear the dead token and signal the app so it
 	// can re-show Login, instead of leaving every subsequent call to throw "HTTP 401"
@@ -152,7 +212,7 @@ export async function api<T = Record<string, unknown>>(
 		if ((res.status >= 500 || DIAGNOSTIC_STATUSES.has(res.status)) && !path.startsWith("/v1/errors")) {
 			reportClientError("api", `${opts.method || "GET"} ${path} → ${res.status}`, { body: text.slice(0, 300) }, res.status);
 		}
-		throw new ApiError((data as Record<string, string>)?.error || `HTTP ${res.status}`, res.status, data);
+		throw markReported(new ApiError((data as Record<string, string>)?.error || `HTTP ${res.status}`, res.status, data));
 	}
 	return data as T;
 }

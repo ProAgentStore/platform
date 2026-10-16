@@ -63,7 +63,9 @@ export type ErrorLevel = "error" | "warn";
  * #511, #535 and #538 all reason from this telemetry and none of it goes away. Only the severity it
  * claims changes.
  */
-export const OBSERVATION_SOURCES: ReadonlySet<string> = new Set(["client:voice-decision"]);
+// `client:network` (#1088): a request that failed at the transport while the browser was online, or the
+// count of those that failed while it was offline — real and countable, but the network's, not a bug.
+export const OBSERVATION_SOURCES: ReadonlySet<string> = new Set(["client:voice-decision", "client:network"]);
 
 /**
  * The level a CLIENT-reported row is filed at, from the two things the server is willing to judge on:
@@ -123,6 +125,11 @@ export interface ErrorLogInput {
 	 * #539" or a server isolate that had no build var.
 	 */
 	build?: string | null;
+	/**
+	 * How many occurrences this report stands for (#1088) — a browser folds repeats of one failure into
+	 * one event. 1 when absent. Added to the row's `repeat_count`, so the log counts occurrences, not sends.
+	 */
+	occurrences?: number;
 }
 
 /**
@@ -208,10 +215,10 @@ export function sanitizeBuildId(raw: unknown): string | undefined {
  *
  * Returns true when an existing row absorbed the occurrence.
  */
-async function collapseRepeat(env: Pick<Env, "DB">, k: CollapseKey, context: string | null): Promise<boolean> {
+async function collapseRepeat(env: Pick<Env, "DB">, k: CollapseKey, context: string | null, occurrences = 1): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE error_log
-		    SET repeat_count = repeat_count + 1, last_seen_at = datetime('now'), last_context = ?7
+		    SET repeat_count = repeat_count + ?11, last_seen_at = datetime('now'), last_context = ?7
 		  WHERE id = (SELECT id FROM error_log
 		               WHERE source = ?1 AND message = ?2 AND level = ?3
 		                 AND status IS ?4 AND user_id IS ?5
@@ -219,7 +226,7 @@ async function collapseRepeat(env: Pick<Env, "DB">, k: CollapseKey, context: str
 		                 AND instance_id IS ?9 AND run_id IS ?10
 		               ORDER BY created_at DESC LIMIT 1)`,
 	)
-		.bind(k.source, k.message, k.level, k.status, k.userId, sqlTime(Date.now() - COLLAPSE_WINDOW_MS), context, k.build, k.instanceId, k.runId)
+		.bind(k.source, k.message, k.level, k.status, k.userId, sqlTime(Date.now() - COLLAPSE_WINDOW_MS), context, k.build, k.instanceId, k.runId, occurrences)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
 }
@@ -321,15 +328,16 @@ export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_K
 		// the failure mode if that assumption is ever wrong is total silence in the one component
 		// whose entire job is to not be silent, and a duplicate row is a trivially better outcome
 		// than no row.
-		if (await collapseRepeat(env, key, context).catch(() => false)) return "persisted";
+		const occurrences = Number.isInteger(e.occurrences) && (e.occurrences as number) > 1 ? Math.min(e.occurrences as number, 10_000) : 1;
+		if (await collapseRepeat(env, key, context, occurrences).catch(() => false)) return "persisted";
 		// The id and the time are minted ONCE (#1084): if this insert fails, the same row — same id,
 		// same moment — is what the spool replays, so a replay can never become a second fact.
 		id = crypto.randomUUID();
-		row = { created_at: sqlTime(), user_id: key.userId, source, status: key.status, message, context, level, build, instance_id: key.instanceId, run_id: key.runId };
+		row = { created_at: sqlTime(), user_id: key.userId, source, status: key.status, message, context, level, build, instance_id: key.instanceId, run_id: key.runId, repeat_count: occurrences };
 		await env.DB.prepare(
-			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at, created_at, instance_id, run_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)",
+			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at, created_at, instance_id, run_id, repeat_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12)",
 		)
-			.bind(id, row.user_id, source, row.status, message, context, level, build, row.created_at, key.instanceId, key.runId)
+			.bind(id, row.user_id, source, row.status, message, context, level, build, row.created_at, key.instanceId, key.runId, occurrences)
 			.run();
 		row = null;
 		// Mirror into the unified trace so failures appear inline in agent_trace next to

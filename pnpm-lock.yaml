@@ -206,6 +206,9 @@ importers:
 
   store/admin:
     dependencies:
+      '@proagentstore/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)

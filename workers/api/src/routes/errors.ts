@@ -37,7 +37,17 @@ export const errorRoutes = new Hono<{ Bindings: Env }>();
  * `durable: false, queued: true` when the database refused it and it is spooled for the cron to
  * replay (accepted, not yet stored); 503 `durable: false` when it could not be kept anywhere — lost,
  * and counted in MCP `telemetry_health`.
+ *
+ * ## Event ids and occurrence counts (#1088)
+ *
+ * The SDK's outbox retries a report until it is acknowledged, so the same report can arrive twice (the
+ * answer was lost, a reload replayed it, two tabs share one outbox). `id` makes that one row: its receipt is
+ * claimed first, and a repeat answers `duplicate: true` without writing. `count` is how many occurrences the
+ * event stands for — repeats the browser folded together — and is added to the row's `repeat_count`.
  */
+/** A browser error event id (#1088): what `crypto.randomUUID()` mints, or the SDK's fallback. */
+const CLIENT_EVENT_ID = /^[A-Za-z0-9._:-]{8,128}$/;
+
 errorRoutes.post("/client", async (c) => {
 	// Optional session: a valid token attributes the row, an absent or expired one still logs.
 	const session = await requireUser(c).catch(() => null);
@@ -47,6 +57,16 @@ errorRoutes.post("/client", async (c) => {
 	const rawSource = typeof body.source === "string" ? body.source : "app";
 	const source = `client:${rawSource}`.slice(0, 64);
 	const status = typeof body.status === "number" ? body.status : undefined;
+	// The event id and its occurrence count (#1088). A browser retries until acknowledged, so the id makes
+	// a re-send ONE row: the receipt is claimed first, and a report already received answers as stored.
+	const eventId = typeof body.id === "string" && CLIENT_EVENT_ID.test(body.id) ? body.id : null;
+	if (body.id !== undefined && !eventId) return c.json({ ok: false, error: "id must be an event id (8–128 letters, digits, . _ : -)" }, 400);
+	const count = typeof body.count === "number" && Number.isInteger(body.count) && body.count >= 1 ? Math.min(body.count, 10_000) : 1;
+	if (eventId) {
+		const claimed = await c.env.DB.prepare("INSERT OR IGNORE INTO client_error_receipts (report_id) VALUES (?1)").bind(eventId).run().catch(() => null);
+		if (claimed && (claimed.meta?.changes ?? 0) === 0) return c.json({ ok: true, durable: true, duplicate: true });
+		if (Math.random() < 0.02) await c.env.DB.prepare("DELETE FROM client_error_receipts WHERE received_at < datetime('now', '-30 days')").run().catch(() => undefined);
+	}
 	const written = await logError(c.env, {
 		source,
 		userId: session?.uid ?? null,
@@ -71,7 +91,10 @@ errorRoutes.post("/client", async (c) => {
 		context: body.context && typeof body.context === "object" ? (body.context as Record<string, unknown>) : undefined,
 		// The body is the caller's word (#1085): its instance counts only if this session owns it.
 		untrusted: true,
+		occurrences: count,
 	});
+	// Lost outright: release the receipt, so the browser's retry is recorded rather than called a duplicate.
+	if (written === "lost" && eventId) await c.env.DB.prepare("DELETE FROM client_error_receipts WHERE report_id = ?1").bind(eventId).run().catch(() => undefined);
 	if (written === "persisted") return c.json({ ok: true, durable: true });
 	if (written === "queued") return c.json({ ok: true, durable: false, queued: true }, 202);
 	return c.json({ ok: false, durable: false, error: "the report could not be stored" }, 503);

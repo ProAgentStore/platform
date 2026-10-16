@@ -1070,6 +1070,24 @@ test.describe("ProAgentStore Console smoke", () => {
 		expect(String(build)).toMatch(/^(dev|[0-9a-f]{7,64})$/);
 	});
 
+	test("a handled upload failure reaches the durable log — with its status, never the file's name (#1088)", async ({ page }) => {
+		// The uploader used to keep a failure in the row's local state only, so a broken upload was
+		// invisible to everyone but the person watching it. The failure is the platform refusing to open
+		// the multipart upload; the row still shows its error, and the log now has it too.
+		await mockSignedInConsole(page, { failPaths: ["/v1/instances/inst-1/files/multipart/create"] });
+		const reports: Array<Record<string, unknown>> = [];
+		await page.route(`${API}/v1/errors/client`, async (route) => {
+			reports.push(JSON.parse(route.request().postData() || "{}") as Record<string, unknown>);
+			await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, durable: true }) });
+		});
+		await page.goto("/console/instances/inst-1/knowledge");
+		await page.locator('input[type="file"]').first().setInputFiles({ name: "Jane-Doe-passport-scan.pdf", mimeType: "application/pdf", buffer: Buffer.alloc(150_000, 1) });
+		await expect.poll(() => reports.filter((r) => r.source === "upload").length).toBe(1);
+		const [r] = reports.filter((x) => x.source === "upload");
+		expect(r).toMatchObject({ message: "upload failed: HTTP 500", status: 500, count: 1, context: expect.objectContaining({ sizeBytes: 150_000 }) });
+		expect(JSON.stringify(r)).not.toContain("Jane-Doe");
+	});
+
 	test("signed-in creator console shows agents grid", async ({ page }) => {
 		await mockSignedInConsole(page, {
 			agents: [

@@ -13879,12 +13879,25 @@ paths:
                 source: { type: string, default: app, description: "Stored as `client:<source>`, truncated to 64 chars." }
                 status: { type: integer }
                 context: { type: object, additionalProperties: true }
+                id:
+                  type: string
+                  pattern: "^[A-Za-z0-9._:-]{8,128}$"
+                  description: |
+                    The browser's event id (#1088). The SDK outbox retries a report until it is acknowledged, so
+                    the same event can arrive twice; with an id it is written once, and a repeat answers
+                    `duplicate: true`. A malformed id is a 400.
+                count:
+                  type: integer
+                  minimum: 1
+                  maximum: 10000
+                  description: Occurrences this event stands for — repeats the browser folded together. Added to the row's `repeat_count`.
+                build: { type: string, description: "The bundle that reported it (#539)." }
       responses:
         "200":
-          description: Stored in the error log (`durable: true`).
+          description: Stored in the error log (`durable: true`), or already received under this `id` (`duplicate: true`).
           content:
             application/json:
-              schema: { type: object, properties: { ok: { type: boolean }, durable: { type: boolean } } }
+              schema: { type: object, properties: { ok: { type: boolean }, durable: { type: boolean }, duplicate: { type: boolean } } }
         "202":
           description: |
             Accepted, NOT yet stored (#1084): the database refused the row and it is spooled for the

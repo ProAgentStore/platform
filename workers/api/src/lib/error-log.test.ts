@@ -221,7 +221,9 @@ describe("logError — an identical repeat is counted, not re-inserted (#424)", 
 		// failing sweep into a single row updated forever, hiding when it started and whether it
 		// is still going.
 		expect(seen).toContain("created_at >= ?6");
-		expect(seen).toContain("repeat_count = repeat_count + 1");
+		// By the occurrences the report stands for (#1088) — 1 for every server caller, more for a browser
+		// event that folded repeats together.
+		expect(seen).toContain("repeat_count = repeat_count + ?11");
 		expect(seen).toContain("last_seen_at = datetime('now')");
 	});
 });
@@ -303,7 +305,8 @@ describe("deriveClientLevel — a statusless OBSERVATION is not a bug (#571)", (
 	it("declares the observation sources explicitly, and only those", () => {
 		// ADR 0002 G1 — assert the set, not an example. A source added here changes what `?level=error`
 		// returns for every account, so it is a decision someone signs rather than a quiet append.
-		expect([...OBSERVATION_SOURCES]).toEqual(["client:voice-decision"]);
+		// `client:network` (#1088): a transport failure is the network's, real and counted, but not a bug.
+		expect([...OBSERVATION_SOURCES]).toEqual(["client:voice-decision", "client:network"]);
 	});
 
 	it("routes the report through the same derivation the route uses", async () => {

@@ -8,7 +8,7 @@
  * re-selecting the same file and re-sending only the missing parts.
  */
 import { useCallback, useRef, useState } from "react";
-import { API, getToken } from "@proagentstore/sdk/client";
+import { API, getToken, reportClientError } from "@proagentstore/sdk/client";
 
 export interface UploadJob {
 	localId: string;
@@ -61,10 +61,10 @@ function putPart(
 			} else {
 				let msg = `HTTP ${xhr.status}`;
 				try { msg = (JSON.parse(xhr.responseText) as { error?: string }).error || msg; } catch { /* keep status */ }
-				reject(new Error(xhr.status === 409 ? `RESTART:${msg}` : msg));
+				reject(Object.assign(new Error(xhr.status === 409 ? `RESTART:${msg}` : msg), { status: xhr.status }));
 			}
 		};
-		xhr.onerror = () => reject(new Error("network error"));
+		xhr.onerror = () => reject(Object.assign(new Error("network error"), { network: true }));
 		xhr.onabort = () => reject(new Error("PAUSED"));
 		xhr.send(blob);
 	});
@@ -76,9 +76,29 @@ const authedJson = async <T>(path: string, init?: RequestInit): Promise<T> => {
 		headers: { Authorization: `Bearer ${getToken() ?? ""}`, "Content-Type": "application/json", ...(init?.headers || {}) },
 	});
 	const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-	if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+	if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
 	return data;
 };
+
+/**
+ * What an upload failure reports to the durable log (#1088), or null for one that is expected.
+ *
+ * The failure used to live only in the row's local state, so a broken upload was invisible to anyone but
+ * the person watching it. A refused part or completion is reported under `upload` with its status; a
+ * transport failure while online is a `network` warning; one while the browser is offline is expected and
+ * not reported. Never the file's name — it can carry personal data — only its size.
+ */
+export function uploadFailureReport(
+	err: unknown,
+	ctx: { size: number; online: boolean },
+): { source: string; message: string; status?: number; context: Record<string, unknown> } | null {
+	const e = (err && typeof err === "object" ? err : {}) as { message?: unknown; status?: unknown; network?: unknown };
+	const message = typeof e.message === "string" ? e.message : String(err);
+	const context = { sizeBytes: ctx.size, detail: message.slice(0, 200) };
+	if (e.network === true) return ctx.online ? { source: "network", message: "upload network error", context } : null;
+	if (typeof e.status === "number") return { source: "upload", message: `upload failed: HTTP ${e.status}`, status: e.status, context };
+	return { source: "upload", message: `upload failed: ${message.slice(0, 120)}`, context };
+}
 
 export function useUploader(instanceId: string | undefined, onDone: () => void) {
 	const [jobs, setJobs] = useState<UploadJob[]>([]);
@@ -178,6 +198,8 @@ export function useUploader(instanceId: string | undefined, onDone: () => void) 
 			setTimeout(() => setJobs((js) => js.filter((j) => j.localId !== localId)), 4000);
 		} catch (e) {
 			patch(localId, { status: "error", error: e instanceof Error ? e.message : String(e) });
+			const report = uploadFailureReport(e, { size: runtime.current.get(localId)?.file.size ?? 0, online: navigator.onLine !== false });
+			if (report) reportClientError(report.source, report.message, report.context, report.status);
 		}
 	}, [instanceId, onDone, patch]);
 

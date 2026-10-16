@@ -13,6 +13,31 @@
 		return;
 	}
 
+	/**
+	 * The widget's own failures reach the durable log (#1088) as `client:widget`. It runs on a CUSTOMER's
+	 * site, so: anonymous always, nothing written to that site's storage, only the widget's own handled
+	 * failures (never the host page's errors), never the visitor's message, at most 5 reports per page.
+	 * Each has an event id and is retried in memory (2 s, 10 s, 30 s) until the platform acknowledges it.
+	 */
+	let widgetReports = 0;
+	function reportWidgetError(message, context) {
+		if (widgetReports >= 5) return;
+		widgetReports++;
+		const body = JSON.stringify({
+			id: crypto?.randomUUID ? crypto.randomUUID() : `wid-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+			source: "widget",
+			message,
+			context: { agent: agentId, embedHost: location.hostname, ...context },
+			build: "widget",
+		});
+		const delays = [2000, 10000, 30000];
+		const attempt = (n) =>
+			fetch(`${API}/v1/errors/client`, { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" }, body })
+				.then((r) => (r.ok || [400, 413, 422].includes(r.status) ? null : Promise.reject(r.status)))
+				.catch(() => (n < delays.length ? new Promise((res) => setTimeout(res, delays[n])).then(() => attempt(n + 1)) : null));
+		void attempt(0);
+	}
+
 	let sessionId = null;
 	const _open = false;
 
@@ -85,12 +110,17 @@
 
 	// Load agent name
 	fetch(`${API}/v1/public/agents/${agentId}`)
-		.then((r) => r.json())
+		.then((r) => {
+			if (!r.ok && r.status !== 404) reportWidgetError(`agent load → ${r.status}`, { status: r.status });
+			return r.json();
+		})
 		.then((a) => {
 			if (a.name)
 				document.getElementById("pags-agent-name").textContent = a.name;
 		})
-		.catch(() => {});
+		.catch((e) => {
+			if (navigator.onLine !== false) reportWidgetError("agent load → network error", { error: String(e?.message || e).slice(0, 200) });
+		});
 
 	function esc(s) {
 		const d = document.createElement("div");
@@ -109,12 +139,17 @@
 		msgs.scrollTop = msgs.scrollHeight;
 		document.getElementById("pags-thinking").style.display = "";
 
+		let reported = false;
 		try {
 			const res = await fetch(`${API}/v1/public/agents/${agentId}/try`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ message: message, sessionId: sessionId }),
 			});
+			if (res.status >= 500) {
+				reported = true;
+				reportWidgetError(`try → ${res.status}`, { status: res.status });
+			}
 			const data = await res.json();
 			sessionId = data.sessionId || sessionId;
 			if (data.message)
@@ -122,6 +157,7 @@
 			if (data.error)
 				msgs.innerHTML += `<div class="pags-msg system">${esc(data.error)}</div>`;
 		} catch (e) {
+			if (!reported && navigator.onLine !== false) reportWidgetError("try → network error", { error: String(e?.message || e).slice(0, 200) });
 			msgs.innerHTML += `<div class="pags-msg system">Error: ${esc(e.message)}</div>`;
 		}
 		document.getElementById("pags-thinking").style.display = "none";
