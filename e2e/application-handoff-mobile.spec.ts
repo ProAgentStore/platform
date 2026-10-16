@@ -25,6 +25,16 @@ async function waitForFixture(url: string): Promise<void> {
 	throw new Error("The local mobile-handoff fixture did not start");
 }
 
+/**
+ * The mocked 409s and 503s below are real failures to the console's `api()`, which reports every one to
+ * `https://api.proagentstore.online/v1/errors/client`. Unrouted, each local or CI run wrote fixture rows
+ * (`instance-1/run-1`, "handoff closed", build `unset`) into PRODUCTION's error log (#1086). Answer the
+ * report here (10 per run, measured), so a run never reaches the deployed API.
+ */
+test.beforeEach(async ({ page }) => {
+	await page.route("**/v1/errors/client", (route) => route.fulfill({ status: 204, body: "" }));
+});
+
 test.beforeAll(async () => {
 	const port = await freePort();
 	fixtureBase = `http://127.0.0.1:${port}`;
