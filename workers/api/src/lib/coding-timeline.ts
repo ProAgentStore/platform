@@ -741,32 +741,30 @@ const TERMINAL_SWEEP_SESSIONS = 20;
  * Sweep sessions with more than {@link TERMINAL_KEEP_PER_SESSION} terminal rows,
  * pruning each one in a bounded pass. Returns total rows deleted.
  *
- * Wired into the per-minute cron alongside the other independent sweeps. Swallows its
- * own errors — a failed prune is a capacity nuisance, not data loss.
+ * Wired into the per-minute cron alongside the other independent sweeps. A failed prune is a
+ * capacity nuisance, not data loss — but it throws, so the cron records it (#1119).
  */
 export async function sweepTerminalSnapshots(env: Env): Promise<number> {
-	try {
-		// Find sessions that have exceeded the cap. Ordered by count DESC so the worst
-		// offenders are visited first. `idx_coding_timeline_session_type` covers the
-		// GROUP BY (session_id, type) efficiently.
-		const { results } = await env.DB.prepare(
-			`SELECT session_id FROM coding_timeline
-			  WHERE type = 'terminal'
-			  GROUP BY session_id
-			  HAVING COUNT(*) > ?1
-			  ORDER BY COUNT(*) DESC
-			  LIMIT ?2`,
-		)
-			.bind(TERMINAL_KEEP_PER_SESSION, TERMINAL_SWEEP_SESSIONS)
-			.all<{ session_id: string }>();
-		let deleted = 0;
-		for (const { session_id: sessionId } of results ?? []) {
-			deleted += await pruneTerminalSnapshots(env, sessionId);
-		}
-		return deleted;
-	} catch {
-		return 0;
+	// Throws on failure: the cron records it through `logUnhandled` like every other sweep (#1119).
+	// It used to swallow its own errors, so a broken sweep left no record anywhere.
+	// Find sessions that have exceeded the cap. Ordered by count DESC so the worst
+	// offenders are visited first. `idx_coding_timeline_session_type` covers the
+	// GROUP BY (session_id, type) efficiently.
+	const { results } = await env.DB.prepare(
+		`SELECT session_id FROM coding_timeline
+		  WHERE type = 'terminal'
+		  GROUP BY session_id
+		  HAVING COUNT(*) > ?1
+		  ORDER BY COUNT(*) DESC
+		  LIMIT ?2`,
+	)
+		.bind(TERMINAL_KEEP_PER_SESSION, TERMINAL_SWEEP_SESSIONS)
+		.all<{ session_id: string }>();
+	let deleted = 0;
+	for (const { session_id: sessionId } of results ?? []) {
+		deleted += await pruneTerminalSnapshots(env, sessionId);
 	}
+	return deleted;
 }
 
 /**

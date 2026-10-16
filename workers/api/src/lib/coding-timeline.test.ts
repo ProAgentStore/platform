@@ -365,7 +365,10 @@ describe("sweepTerminalSnapshots — finds over-cap sessions and prunes each (#4
 		expect(reads[0]).toContain("HAVING COUNT(*)");
 	});
 
-	it("returns 0 and swallows errors without throwing", async () => {
+	// #1119: the sweep used to swallow every error and return 0, so a broken sweep left no record and
+	// read as "nothing to prune". It now propagates the D1 error itself — the cron routes it to
+	// `logUnhandled` (`capture-acceptance.test.ts` drives that through the real `scheduled()`).
+	it("propagates D1 errors to caller (cron records them) — never a silent 0", async () => {
 		const DB = {
 			prepare() {
 				return {
@@ -379,7 +382,17 @@ describe("sweepTerminalSnapshots — finds over-cap sessions and prunes each (#4
 				};
 			},
 		};
-		expect(await sweepTerminalSnapshots({ DB } as unknown as Env)).toBe(0);
+		await expect(sweepTerminalSnapshots({ DB } as unknown as Env)).rejects.toThrow("D1 exploded");
+	});
+
+	it("a prune that fails part-way propagates too, rather than reporting a partial count as the result", async () => {
+		const { env } = sweepEnv([{ session_id: "s1" }, { session_id: "s2" }]);
+		const prepare = env.DB.prepare.bind(env.DB);
+		(env.DB as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+			if (sql.includes("DELETE")) throw new Error("D1_ERROR: database is locked");
+			return prepare(sql);
+		};
+		await expect(sweepTerminalSnapshots(env)).rejects.toThrow("database is locked");
 	});
 });
 
