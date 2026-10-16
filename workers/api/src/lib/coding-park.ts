@@ -27,6 +27,7 @@ import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { claimSessionDriver, getRepo } from "./coding-store.js";
 import { repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
 import { callRunner, type RunnerConn } from "./runner-client.js";
+import { resyncBeforeAnswer } from "./coding-resume-sync.js";
 
 /**
  * How long a parked question waits before the run stops (`decision`, which is continuable). Thirty
@@ -162,12 +163,12 @@ export async function releaseCheckout(env: Env, conn: RunnerConn, scope: ParkSco
  * Take the checkout back for a resume (#1077). Not released → nothing to do. Busy — another run, a
  * driver or a direct turn on the repo, or another active session (one per repo, by index) — → the
  * run keeps waiting, and is woken when the holder finishes ({@link releasedRunAwaitingCheckout}) or
- * by the minute backstop. Otherwise its own session is reactivated and its work put back by exact
- * id; a restore that would not apply cleanly changes nothing and blocks the resume, naming the ref.
+ * by the minute backstop. Otherwise its own session is reactivated; its work is put back later, by
+ * {@link putBackWork}, once the base has been re-synced (#1078).
  */
-export async function reacquireCheckout(env: Env, conn: RunnerConn, scope: ParkScope): Promise<{ ok: true } | { busy: string } | { blocked: string }> {
+export async function takeBackCheckout(env: Env, scope: ParkScope): Promise<{ ok: true; snapshot: string | null } | { busy: string }> {
 	const run = await env.DB.prepare("SELECT checkout_released_at, checkout_snapshot FROM agent_loop_runs WHERE run_id = ?1").bind(scope.runId).first<{ checkout_released_at: number | null; checkout_snapshot: string | null }>();
-	if (!run?.checkout_released_at) return { ok: true };
+	if (!run?.checkout_released_at) return { ok: true, snapshot: null };
 	const free = await repoFreeForRun(env, { instanceId: scope.instanceId, userId: scope.userId, repoId: scope.repoId, sessionId: scope.sessionId }, runnerEngineProbe(env, scope.instanceId, scope.userId));
 	if (!free.free) return { busy: "another run is working on the repository" };
 	const reactivated = await env.DB.prepare("UPDATE coding_sessions SET status = 'active', ended_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'suspended'")
@@ -175,18 +176,60 @@ export async function reacquireCheckout(env: Env, conn: RunnerConn, scope: ParkS
 		.run()
 		.then((r) => (r.meta?.changes ?? 0) > 0, () => false);
 	if (!reactivated) return { busy: "another session is open on the repository" };
-	if (run.checkout_snapshot) {
+	return { ok: true, snapshot: run.checkout_snapshot };
+}
+
+/**
+ * Put a resumed run's set-aside work back by its exact id (#1077), on the re-synced base (#1078),
+ * and clear its release. A restore that would not apply changes nothing and blocks the resume,
+ * naming the conflicting files and where the work is kept.
+ */
+export async function putBackWork(env: Env, conn: RunnerConn, scope: ParkScope, snapshot: string | null): Promise<{ ok: true } | { blocked: string }> {
+	if (snapshot) {
 		const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
-		const restored = await callRunner<{ restored?: boolean; refused?: string }>(conn, "/coding/park-restore", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId, snapshot: run.checkout_snapshot }).catch((e: unknown) => ({ restored: false, offline: e instanceof Error ? e.message : String(e) }) as { restored: false; offline: string; refused?: string });
-		if ("offline" in restored) {
-			// The machine is not there to put the work back: let go again and wait, rather than run on without it.
-			await env.DB.prepare("UPDATE coding_sessions SET status = 'suspended', updated_at = datetime('now') WHERE id = ?1 AND status = 'active'").bind(scope.sessionId).run();
-			return { busy: "the coding runner is not reachable to put its work back" };
+		let restored: { restored?: boolean; refused?: string; conflicts?: string[] };
+		try {
+			restored = await callRunner(conn, "/coding/park-restore", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId, snapshot });
+		} catch (e) {
+			restored = { restored: false, refused: `the coding runner could not put it back (${e instanceof Error ? e.message : String(e)})` };
 		}
-		if (!restored.restored) return { blocked: `${restored.refused ?? "its saved work could not be put back"}. Nothing was changed; the work is still set aside as ${run.checkout_snapshot} (\`refs/pags/parked/${scope.runId}\`, \`git stash apply ${run.checkout_snapshot}\`).` };
+		if (!restored.restored) {
+			const files = restored.conflicts?.length ? ` Conflicting files: ${restored.conflicts.map((f) => `\`${f}\``).join(", ")}.` : "";
+			return { blocked: `${restored.refused ?? "its saved work could not be put back"}.${files} Nothing was changed; the work is still set aside as ${snapshot} (\`refs/pags/parked/${scope.runId}\`, \`git stash apply ${snapshot}\`).` };
+		}
 	}
 	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_released_at = NULL, checkout_snapshot = NULL WHERE run_id = ?1").bind(scope.runId).run();
 	return { ok: true };
+}
+
+/**
+ * The whole resume of a parked run, in the only safe order (#1076–#1078):
+ *   1. take its checkout back (busy → keep waiting; nothing has changed yet);
+ *   2. bring the engine back — which also lets the runner resolve a managed clone through the session;
+ *   3. re-sync onto the current upstream with the start-of-run gate (blocked → stop, naming what moved);
+ *   4. put its set-aside work back on that base (a conflict → stop, naming the files);
+ * and only then is the owner's answer delivered, with what moved while it was parked.
+ */
+export async function resumeFromPark(
+	env: Env,
+	conn: RunnerConn,
+	input: ParkScope & RelaunchInput & { clientType?: string; repoName: string; driverId?: string; parkedForMs: number },
+): Promise<{ resumed: boolean; line: string; moved: string | null } | { busy: string } | { blocked: string }> {
+	const held = await takeBackCheckout(env, input);
+	if (!("ok" in held)) return held;
+	let engine: { resumed: boolean; line: string };
+	try {
+		engine = await relaunchAfterPark(env, conn, input);
+	} catch (e) {
+		// No machine to bring the engine back on: let go again and wait, rather than resume without its base re-synced and its work back.
+		await env.DB.prepare("UPDATE coding_sessions SET status = 'suspended', updated_at = datetime('now') WHERE id = ?1 AND status = 'active'").bind(input.sessionId).run();
+		return { busy: `the coding runner is not reachable (${e instanceof Error ? e.message : String(e)})` };
+	}
+	const sync = await resyncBeforeAnswer(env, conn, input);
+	if (!("ok" in sync)) return sync;
+	const work = await putBackWork(env, conn, input, held.snapshot);
+	if (!("ok" in work)) return work;
+	return { ...engine, moved: sync.moved };
 }
 
 /**

@@ -88,6 +88,18 @@ export interface ParkRestoreResult {
 	restored: boolean;
 	/** Why nothing was changed, when `restored` is false. */
 	refused?: string;
+	/** The files the saved work collides with on the current checkout (#1078), as git named them. */
+	conflicts?: string[];
+}
+
+/** The paths `git apply --check` names when it refuses — "patch failed: <path>:<line>", "<path>: does not match index", … */
+export function applyConflicts(stderr: string): string[] {
+	const out = new Set<string>();
+	for (const line of stderr.split("\n")) {
+		const m = line.match(/^error: patch failed: (.+):\d+$/) ?? line.match(/^error: (.+): (?:does not match index|already exists in working directory|does not exist in index|No such file or directory)$/);
+		if (m?.[1]) out.add(m[1]);
+	}
+	return [...out];
 }
 
 /** Put a parked run's work back by its exact id — only onto a clean tree, only if it applies cleanly. */
@@ -109,8 +121,9 @@ export function parkRestore(workDir: string, runId: string, snapshot: string): P
 	if (patch.trim()) {
 		try {
 			git(workDir, ["apply", "--check"], patch);
-		} catch {
-			return { restored: false, refused: "the saved work no longer applies cleanly to this checkout (it changed underneath while the run was parked)" };
+		} catch (e) {
+			const conflicts = applyConflicts(String((e as { stderr?: unknown }).stderr ?? ""));
+			return { restored: false, refused: "the saved work no longer applies cleanly to this checkout (it changed underneath while the run was parked)", conflicts };
 		}
 	}
 	// Untracked files: the stash's third parent. Any that already exists would be refused by git mid-apply.
@@ -121,7 +134,7 @@ export function parkRestore(workDir: string, runId: string, snapshot: string): P
 		untracked = [];
 	}
 	const clash = untracked.filter((p) => existsSync(join(workDir, p)));
-	if (clash.length) return { restored: false, refused: `${clash.length} file${clash.length === 1 ? "" : "s"} the saved work would create already exist${clash.length === 1 ? "s" : ""} (first: ${clash[0]})` };
+	if (clash.length) return { restored: false, refused: `${clash.length} file${clash.length === 1 ? "" : "s"} the saved work would create already exist${clash.length === 1 ? "s" : ""}`, conflicts: clash };
 	git(workDir, ["stash", "apply", snapshot]);
 	git(workDir, ["update-ref", "-d", ref, snapshot]);
 	return { restored: true };

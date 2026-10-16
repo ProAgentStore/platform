@@ -988,3 +988,83 @@ describe("a parked run releases its checkout and takes it back on resume (#1077)
 		expect(result.detail).toContain(`git stash apply ${SNAP}`);
 	});
 });
+
+// ── #1078: a resume re-syncs onto the current upstream BEFORE the answer is applied ─────────────────
+
+describe("a parked run is brought onto the current main before its answer is applied (#1078)", () => {
+	const SNAP = "b".repeat(40);
+	const ASK: CodingDecision = { needsInput: { field: "Ship behind a flag?", why: "irreversible", options: ["yes", "no"] } };
+	const BEHIND = { checked: true, branch: "main", upstream: "origin/main", localHead: "aaaaaaaa1", remoteHead: "bbbbbbbb2", ahead: 0, behind: 3, fetched: true };
+	const DIVERGED = { ...BEHIND, ahead: 1 };
+	const answer = (value: string) => recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value, via: "console" });
+	let upstream: "same" | "moved" | "diverged";
+	let fastForwarded: boolean;
+	const order = (path: string) => runnerCalls.findIndex((c) => c.path === path || (path === "fast-forward" && c.path === "/coding/git-write" && c.body.cmd === "fast-forward"));
+	beforeEach(() => {
+		seedLoopRun();
+		upstream = "same";
+		fastForwarded = false;
+		runner["/coding/takeover-status"] = () => ({ resolved: false });
+		runner["/coding/park-snapshot"] = () => ({ snapshot: SNAP, files: 1, clean: true, ref: "refs/pags/parked/run-1" });
+		runner["/coding/park-restore"] = () => ({ restored: true });
+		runner["/coding/sync"] = () => (upstream === "diverged" ? DIVERGED : upstream === "moved" && !fastForwarded ? BEHIND : IN_SYNC);
+		runner["/coding/git-write"] = () => {
+			fastForwarded = true;
+			return { ok: true, changed: true, branch: "main", upstream: "origin/main", from: "aaaaaaaa1", to: "bbbbbbbb2", commits: 3 };
+		};
+		runner["/coding/git"] = (b) => (b.cmd === "diff-stat" ? { output: " src/api.ts   | 12 +++---\n src/flag.ts  |  4 ++\n 2 files changed\n" } : { output: "## main...origin/main\n" });
+		decisions = [ASK, { action: { kind: "message", text: "Apply the owner's answer." } }, { finish: { status: "done", detail: "ok" } }];
+	});
+	const parkThen = (move: typeof upstream) => {
+		const journal = newJournal();
+		journal.onEvent = async () => {
+			upstream = move; // main moved on the remote while the run was parked
+			await answer("yes");
+			return undefined;
+		};
+		return journal;
+	};
+
+	it("fast-forwards BEFORE the answer turn, puts the work back on the new base, and the answer turn says what moved", async () => {
+		const { result } = await run(params({ loopRunId: "run-1" }), parkThen("moved"));
+		expect(result.outcome).toBe("done");
+		const snapshot = order("/coding/park-snapshot");
+		const ff = order("fast-forward");
+		const restore = order("/coding/park-restore");
+		const answerTurn = order("/coding/act");
+		expect(snapshot).toBeGreaterThan(-1);
+		expect(ff).toBeGreaterThan(snapshot);
+		expect(restore).toBeGreaterThan(ff);
+		expect(answerTurn).toBeGreaterThan(restore);
+		expect(decided[1].goal.userHint).toContain("yes");
+		expect(decided[1].goal.resumeNote).toContain("`main` moved: 3 commits (aaaaaaaa → bbbbbbbb), touching `src/api.ts`, `src/flag.ts`");
+		expect(decided[1].goal.resumeNote).toMatch(/Re-read any of those files/);
+	});
+
+	it("a base that did not move adds nothing to the answer turn", async () => {
+		await run(params({ loopRunId: "run-1" }), parkThen("same"));
+		expect(order("fast-forward")).toBe(-1);
+		expect(decided[1].goal.resumeNote).toBeUndefined();
+	});
+
+	it("a diverged base stops the run `needs you`, naming what moved — no answer applied, no merge, the work still set aside", async () => {
+		const { result } = await run(params({ loopRunId: "run-1" }), parkThen("diverged"));
+		expect(result.outcome).toBe("stuck");
+		expect(result.detail).toContain("could not bring it onto the current upstream");
+		expect(result.detail).toContain("Upstream changed `src/api.ts`, `src/flag.ts`");
+		expect(order("fast-forward")).toBe(-1);
+		expect(order("/coding/park-restore")).toBe(-1);
+		expect(order("/coding/act")).toBe(-1);
+		expect(loopRun().status).toBe("needs_human");
+		expect(one("SELECT checkout_snapshot FROM agent_loop_runs WHERE run_id = 'run-1'")).toEqual({ checkout_snapshot: SNAP });
+	});
+
+	it("work that conflicts with the new main stops the run naming the files, and stays recoverable", async () => {
+		runner["/coding/park-restore"] = () => ({ restored: false, refused: "the saved work no longer applies cleanly to this checkout", conflicts: ["src/api.ts"] });
+		const { result } = await run(params({ loopRunId: "run-1" }), parkThen("moved"));
+		expect(result.outcome).toBe("stuck");
+		expect(result.detail).toContain("Conflicting files: `src/api.ts`");
+		expect(result.detail).toContain(`git stash apply ${SNAP}`);
+		expect(order("/coding/act")).toBe(-1);
+	});
+});

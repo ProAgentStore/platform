@@ -108,11 +108,12 @@ export interface PauseDeps {
 		/** Wait for the question's event — no step runs while it waits. False when the wait timed out. */
 		wait: (questionId: string, k: number, timeoutMs: number) => Promise<boolean>;
 		/**
-		 * Take the checkout back and bring the engine back for the resume; the sentence says whether it
-		 * continued its conversation. `busy`: another run holds the checkout — keep waiting (#1077).
-		 * `blocked`: the run's saved work could not be put back, and nothing was changed.
+		 * Take the checkout back, bring the engine back, re-sync onto the current upstream and put the
+		 * set-aside work back (#1077, #1078). `line` says whether the engine continued its conversation;
+		 * `moved` is what changed on the base while it was parked. `busy`: the checkout is somebody
+		 * else's — keep waiting. `blocked`: the base or the work could not be brought back; nothing was changed.
 		 */
-		resumeEngine: (parkedForMs: number) => Promise<string | { busy: string } | { blocked: string }>;
+		resumeEngine: (parkedForMs: number) => Promise<{ line: string; moved: string | null } | { busy: string } | { blocked: string }>;
 	};
 	/**
 	 * Has the re-auth relay signed the engine in at or after `since` (#881)? What a run parked on
@@ -374,21 +375,23 @@ async function parkOnQuestion(
 			idle++;
 			continue;
 		}
-		const engine = await park.resumeEngine(deps.now() - parkedAt).catch(() => "The coding engine could not be restarted just now; the run reconnects it before its next instruction.");
-		if (typeof engine !== "string" && "busy" in engine) {
+		// A resume that failed half-way is not a resume: keep waiting (the backstop retries) rather than apply the answer on an unchecked base.
+		const engine = await park.resumeEngine(deps.now() - parkedAt).catch((e: unknown) => ({ busy: `the resume could not complete just now (${e instanceof Error ? e.message : String(e)})` }));
+		if ("busy" in engine) {
 			// The answer is in and the checkout is somebody else's right now (#1077): wait for it. The holder's end wakes this run first.
 			if (!saidBusy) await deps.announce(`⏳ **Your answer is in** — ${deps.repo} is busy (${engine.busy}), so this run resumes as soon as it is free.`);
 			saidBusy = true;
 			continue;
 		}
-		if (typeof engine !== "string") {
-			return { resume: false, result: { ...result, outcome: "stuck", detail: `Your answer is in, but the run could not take its checkout back: ${engine.blocked}` } };
+		if ("blocked" in engine) {
+			return { resume: false, result: { ...result, outcome: "stuck", detail: `Your answer is in, but the run could not continue: ${engine.blocked}` } };
 		}
 		await deps.applied?.().catch(() => undefined);
 		await deps.endTakeover().catch(() => undefined);
 		await deps.card("running");
-		await deps.announce(`▶️ **Resumed with your answer** on ${deps.repo}: ${label}. ${engine}`);
-		return { resume: true, ownerTurn: true, userHint: answerHint(result, options, status.value) };
+		await deps.announce(`▶️ **Resumed with your answer** on ${deps.repo}: ${label}. ${engine.line}${engine.moved ? `\n\n${engine.moved}` : ""}`);
+		// What moved on the base rides the SAME turn as the answer (#1078): the answer was given against the state before it.
+		return { resume: true, ownerTurn: true, userHint: answerHint(result, options, status.value), ...(engine.moved ? { resumeNote: engine.moved } : {}) };
 	}
 	return {
 		resume: false,

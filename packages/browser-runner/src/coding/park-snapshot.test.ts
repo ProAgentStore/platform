@@ -90,7 +90,7 @@ describe("parkSnapshot / parkRestore", () => {
 		// Run 2 committed a conflicting edit to the same line while run 1 was parked.
 		writeFileSync(join(dir, "a.txt"), "ONE\n");
 		git(dir, "commit", "-qam", "run 2");
-		expect(parkRestore(dir, RUN, id)).toMatchObject({ restored: false, refused: expect.stringMatching(/no longer applies cleanly/) });
+		expect(parkRestore(dir, RUN, id)).toMatchObject({ restored: false, refused: expect.stringMatching(/no longer applies cleanly/), conflicts: ["a.txt"] });
 		expect(git(dir, "status", "--porcelain")).toBe("");
 		expect(git(dir, "rev-parse", parkRef(RUN)).trim()).toBe(id);
 
@@ -98,7 +98,7 @@ describe("parkSnapshot / parkRestore", () => {
 		writeFileSync(join(dir, "new.ts"), "run 2's own new.ts\n");
 		git(dir, "add", "new.ts");
 		git(dir, "commit", "-qm", "run 2 adds new.ts");
-		expect(parkRestore(dir, RUN, id)).toMatchObject({ restored: false });
+		expect(parkRestore(dir, RUN, id)).toMatchObject({ restored: false, conflicts: ["new.ts"] });
 		expect(read(dir, "new.ts")).toBe("run 2's own new.ts\n");
 	});
 

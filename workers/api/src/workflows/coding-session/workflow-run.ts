@@ -2,7 +2,7 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-question-sweep.js";
 import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
-import { answerEventType, reacquireCheckout, recordParkedWorkflow, relaunchAfterPark, releaseCheckout } from "../../lib/coding-park.js";
+import { answerEventType, recordParkedWorkflow, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
 import {
 	runCodingLoop,
 	type CodingActionKind,
@@ -805,16 +805,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 						}),
 					wait: (questionId, k, timeoutMs) => step.waitForEvent(`answer-${round}-${k}`, { type: answerEventType(questionId), timeout: timeoutMs }).then(() => true, () => false),
 					resumeEngine: async (parkedForMs) => {
-						const r = (await runRetry(`unpark-${round}-${unparks++}`, async () => {
-							// #1077: the checkout first — busy keeps it parked (and waiting), blocked stops it, both before anything changes.
-							const held = await reacquireCheckout(env, conn, { runId: event.payload.loopRunId as string, instanceId, userId, sessionId, repoId });
-							if (!("ok" in held)) return held;
-							await recordLiveness(env, event.payload.loopRunId as string, Date.now(), null); // no longer parked, from this instant
-							return relaunchAfterPark(env, conn, { instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: event.payload.driverId ?? undefined, parkedForMs });
-						})) as { resumed: boolean; line: string } | { busy: string } | { blocked: string };
+						// #1076–#1078, in order: take the checkout back, relaunch, re-sync onto upstream, put the work back (`resumeFromPark`).
+						const r = (await runRetry(`unpark-${round}-${unparks++}`, () =>
+							resumeFromPark(env, conn, { runId: event.payload.loopRunId as string, instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: event.payload.driverId ?? undefined, parkedForMs }),
+						)) as { resumed: boolean; line: string; moved: string | null } | { busy: string } | { blocked: string };
 						if (!("line" in r)) return r;
+						await recordLiveness(env, event.payload.loopRunId as string, Date.now(), null).catch(() => undefined); // no longer parked, from this instant
 						if (!r.resumed) objective?.replaced(); // a fresh engine has read nothing: the objective is owed to it again (#1019)
-						return r.line;
+						return { line: r.line, moved: r.moved };
 					},
 				}
 			: undefined,
