@@ -1185,4 +1185,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.142": "sha256:42711350f7067747740ec59782c048b8cb7928a2d03726914ee9d1fd4c9da073",
 	// #1107: application_trace gains cursor + limit (paged, oldest first, wire-budgeted).
 	"0.1.143": "sha256:76f35804be318bbaa5fc74ef343a2b8b8d7827bda15d61b270d19348e95cbcaa",
+	// #1109: get_instance_operator_manual gains context_offset (the generated `context` is paged when it would not fit).
+	"0.1.144": "sha256:b85546933951009b9816349cad5747b19301501e4e2597eddc28d64cfbef06e2",
 };

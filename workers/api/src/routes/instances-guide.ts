@@ -19,6 +19,16 @@ import type { Env } from "../types.js";
  * a guide that enumerated the registry itself would be a second answer to "what may this instance
  * run", and the second answer is the one that drifts out of agreement with the gate.
  */
+/**
+ * The instance's ALLOWED tools with their schemas — the one read both the connection guide (#772) and
+ * the operator manual's generated `context` (#1109) render from, so the two cannot disagree with each
+ * other or with `list_instance_tools`.
+ */
+export async function allowedToolRows(env: Env, instanceId: string, userId: string, config: string | null): Promise<GuideToolRow[]> {
+	const policy = await instanceToolPolicy(env, instanceId, userId, config);
+	return projectToolListing(policy, { allowedOnly: true, schemas: true }) as GuideToolRow[];
+}
+
 export function registerGuideRoutes(router: Hono<{ Bindings: Env }>): void {
 	/**
 	 * GET /v1/instances/:instanceId/connection-guide
@@ -66,8 +76,7 @@ export function registerGuideRoutes(router: Hono<{ Bindings: Env }>): void {
 		// rows here would be ~38% of a payload (base.ts:52-98) spent on tools the reader cannot use.
 		// `schemas` — the field names ARE the deliverable; without them the guide restates the
 		// discovery problem #772 is about.
-		const policy = await instanceToolPolicy(c.env, instance.id, session.uid, instance.config);
-		const tools = projectToolListing(policy, { allowedOnly: true, schemas: true }) as GuideToolRow[];
+		const tools = await allowedToolRows(c.env, instance.id, session.uid, instance.config);
 
 		// Repos are a coding-surface fact; an agent with none simply has none, and `listRepos`
 		// answers that with an empty array rather than an error.

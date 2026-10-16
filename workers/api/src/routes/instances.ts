@@ -1,4 +1,5 @@
 import { retirementView } from "../lib/agent-retirement.js";
+import { registerOperatorManualRoutes } from "./instances-operator-manual.js";
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
@@ -1079,6 +1080,7 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 // Human-takeover proxies, Special Instructions, learned tips, and the ask-and-hold
 // input channel live in instances-apply.ts to keep this file focused.
 registerApplyRoutes(instanceRoutes);
+registerOperatorManualRoutes(instanceRoutes); // the owner's manual + its generated operating guide (#739, #1109)
 registerBehaviourRoutes(instanceRoutes);
 // Which notifications this agent may send the owner, per event and channel (#992).
 registerInstanceNotificationRoutes(instanceRoutes);

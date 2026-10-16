@@ -376,6 +376,8 @@ const FORWARDS: Record<string, string[]> = {
 	// same seam `GET /:id/tools` has always had — recorded here rather than left to look like a
 	// new one, and it is why `find_confirmation_link` can appear in the guide's tool list at all.
 	"instances.ts GET /:instanceId/connection-guide": ["/state"],
+	// The operator manual's generated `context` (#1109) reads the same tool policy, so the same `/state` seam.
+	"instances.ts GET /:instanceId/operator-manual": ["/state"],
 	// #1043: the coder brain's model is the instance Brain, read from its DO state.
 	"instances.ts GET /:instanceId/coder-brain": ["/state"],
 	"instances.ts GET /:instanceId/coder-questions": ["/state"],

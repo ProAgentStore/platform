@@ -1,8 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText } from "../http.js";
+import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
+import { pageText } from "../wire-budget.js";
 
 /**
  * The knobs on an instance and on an agent: typed settings, name, special instructions,
@@ -109,16 +110,20 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"get_instance_operator_manual",
-		"Read the operator manual for a subscribed instance — caller-facing notes about HOW this instance is meant to be driven (not an instruction to the agent). Returns { manual, rules, context }: `manual` is the stored document, `rules` echoes the agent's Special Instructions so you can see the standing orders that will make it refuse things, `context` is reserved.",
+		"Read the operator manual for a subscribed instance — caller-facing notes about HOW this instance is meant to be driven (not an instruction to the agent). Returns { manual, rules, context }: `manual` is the stored document, `rules` echoes the agent's Special Instructions so you can see the standing orders that will make it refuse things, and `context` is GENERATED on every read from the same rows list_instance_tools returns (#1109): how to operate the instance (discovery, call_instance_tool, the work queue, status and trace) and every tool it may run — purpose, arguments with types, read-only or changes-something, and a pasteable call_instance_tool call for the callable ones (chat-only ones are marked as reachable only through chat_with_instance). `context` is never stored; `manual` is the owner's own text, returned as written. When the reply would not fit the wire budget, `context` is paged: `contextPage` says where it stands — call again with `context_offset: contextPage.nextOffset`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
+			context_offset: z.coerce.number().int().min(0).optional().describe("Where to resume the generated `context` — the previous reply's `contextPage.nextOffset`. Omit for the start."),
 		},
-		async ({ token, instance_id }) => {
+		async ({ token, instance_id, context_offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const data = await authedCall(`/v1/instances/${instance_id}/operator-manual`, sessionToken, {}, env);
-			return jsonText(data);
+			const d = data as Record<string, unknown> | null;
+			if (!d || typeof d.context !== "string") return jsonText(data);
+			// The owner's manual (≤16k) and a whole-catalogue context (~41k) can together exceed the wire budget (#1109).
+			return text(pageText({ text: d.context, offset: context_offset, build: (slice, meta) => (meta ? { ...d, context: slice, contextPage: meta } : d) }).text);
 		},
 	);
 

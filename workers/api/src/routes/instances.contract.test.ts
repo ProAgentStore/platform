@@ -55,6 +55,7 @@ import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import type { Env } from "../types.js";
 import { registerApplyRoutes } from "./instances-apply.js";
+import { registerOperatorManualRoutes } from "./instances-operator-manual.js";
 import { registerBehaviourRoutes } from "./instances-behaviour.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
 import { registerChatRoutes } from "./instances-chat.js";
@@ -266,11 +267,12 @@ const ROUTES = [
 	"GET /:instanceId/instructions",
 	"PUT /:instanceId/instructions",
 	"GET /:instanceId/apply-tips",
-	"GET /:instanceId/operator-manual",
-	"PUT /:instanceId/operator-manual",
 	"POST /:instanceId/input",
 	"POST /:instanceId/takeover/:taskId/end",
 	"POST /:instanceId/apply",
+	// The operator manual + its generated guide (#1109) — its own module, mounted after the apply group.
+	"GET /:instanceId/operator-manual",
+	"PUT /:instanceId/operator-manual",
 	"GET /behaviour-schema",
 	"GET /:instanceId/behaviour",
 	"PUT /:instanceId/behaviour",
@@ -470,6 +472,7 @@ function routesOf(register: (app: Hono<{ Bindings: Env }>) => void): string[] {
 
 const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-apply.ts": registerApplyRoutes,
+	"instances-operator-manual.ts": registerOperatorManualRoutes,
 	"instances-behaviour.ts": registerBehaviourRoutes,
 	"instances-browse.ts": registerBrowseRoutes,
 	"instances-chat.ts": registerChatRoutes,
@@ -509,12 +512,11 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/instructions",
 		"PUT /:instanceId/instructions",
 		"GET /:instanceId/apply-tips",
-		"GET /:instanceId/operator-manual",
-		"PUT /:instanceId/operator-manual",
 		"POST /:instanceId/input",
 		"POST /:instanceId/takeover/:taskId/end",
 		"POST /:instanceId/apply",
 	],
+	"instances-operator-manual.ts": ["GET /:instanceId/operator-manual", "PUT /:instanceId/operator-manual"],
 	"instances-behaviour.ts": [
 		"GET /behaviour-schema",
 		"GET /:instanceId/behaviour",

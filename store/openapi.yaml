@@ -8019,7 +8019,9 @@ paths:
         agent instruction (that is Special Instructions). Returns `{ manual, rules, context }`:
         `manual` is the stored document, `rules` echoes the agent's Special Instructions so a
         caller reading the manual also sees the standing orders that will make the agent refuse
-        things, `context` is reserved for slice 3 (live rendered block).
+        things, and `context` is generated on every read (#1109): how to operate this instance and
+        every tool it may run (purpose, arguments, read-only or not, and a `call_instance_tool` example
+        for the callable ones), from the same rows `list_instance_tools` returns. Never stored.
       operationId: getOperatorManual
       tags: [Instances]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]

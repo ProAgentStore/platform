@@ -118,7 +118,7 @@ const MCP_INVOCATION = "call_instance_tool";
  * Never guesses a plausible value — see the module note. The field NAME goes inside the
  * placeholder because that is the thing the caller was guessing wrong.
  */
-function placeholderFor(name: string, spec: unknown): unknown {
+export function placeholderFor(name: string, spec: unknown): unknown {
 	const type = typeof spec === "object" && spec !== null ? (spec as { type?: unknown }).type : undefined;
 	switch (type) {
 		case "number":
@@ -138,7 +138,7 @@ function placeholderFor(name: string, spec: unknown): unknown {
 }
 
 /** The `{properties, required}` pair, when the schema declares them. Never throws. */
-function schemaShape(schema: unknown): { properties: Record<string, unknown>; required: string[] } {
+export function schemaShape(schema: unknown): { properties: Record<string, unknown>; required: string[] } {
 	if (typeof schema !== "object" || schema === null) return { properties: {}, required: [] };
 	const s = schema as { properties?: unknown; required?: unknown };
 	const properties =
