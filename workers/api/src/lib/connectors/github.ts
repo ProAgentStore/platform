@@ -24,7 +24,7 @@ import { githubAppConfigured } from "../github-app.js";
 import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssuesPage, readIssue, searchIssues } from "../github-issues.js";
 import { listPulls, readPull, readPullFiles, searchPulls } from "../github-prs.js";
 import { TOOL_RESULT_MAX_CHARS } from "../tool-result-cap.js";
-import { classifyStartFailure, fetchJobAnnotations, fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, runStartFailure, stripLogTimestamps, type WorkflowJob } from "../github-actions.js";
+import { attachStartFailures, classifyStartFailure, fetchJobAnnotations, fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps, type WorkflowJob } from "../github-actions.js";
 import { READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "../repo-file-window.js";
 import { listGithubTree, readGithubFile } from "../github-contents.js";
 
@@ -105,23 +105,14 @@ const workflowRunsHandler: ToolDef["handler"] = async (ctx, input) => {
 		return { content: res.status != null ? `GitHub returned ${res.status} for ${repo}` : `Could not reach GitHub for ${repo}`, success: false };
 	}
 	const runs = res.runs.map(mapWorkflowRun);
-	// Why a failed run never started (#1112), for the first few failed/cancelled runs on the page —
-	// bounded so a page of red runs costs at most a few extra reads.
-	let looked = 0;
-	for (const [i, raw] of res.runs.entries()) {
-		if (looked >= FAILURE_REASON_LOOKUPS) break;
-		if (raw.status !== "completed" || (raw.conclusion !== "failure" && raw.conclusion !== "cancelled")) continue;
-		looked++;
-		runs[i].failureReason = await runStartFailure(repo, r.token, Number(raw.id));
-	}
+	// Why a failed run never started (#1112), for the first few failed/cancelled runs on the page.
+	await attachStartFailures(repo, r.token, res.runs, runs);
 	// Paged (#898): clamped to 20 with no `page`, an older run was unreachable.
 	return { content: JSON.stringify({ runs, ...paging(page, n, runs.length === n) }, null, 2), success: true };
 };
 
 const num = (n: number): string => n.toLocaleString("en-US");
 
-/** How many failed runs on one github_workflow_runs page get their never-started reason looked up (#1112). */
-const FAILURE_REASON_LOOKUPS = 3;
 
 /** Said when GitHub-hosted minutes are the block — the fallback that does not need them. */
 const SELF_HOSTED_HINT = "Consider using a self-hosted or local runner to bypass GitHub-hosted minute limits.";

@@ -45,6 +45,7 @@
 import { localStamp } from "./agent-clock.js";
 import type { BuildRun } from "./build-history.js";
 import { latestHostedBuild } from "./hosted-repo.js";
+import { describeStartFailure } from "./github-actions.js";
 import type { Env } from "../types.js";
 
 /**
@@ -130,6 +131,8 @@ export function deploymentPrompt(
 		line =
 			`Latest GitHub Actions run${ident ? ` ${ident}` : ""} ${describeRun(build.run)}` +
 			`${stamp ? `, last updated ${stamp}` : ""}${age}.` +
+			// Why it never started (#1112) — billing and a code bug read alike without it.
+			(build.run.failureReason ? ` Reason: ${describeStartFailure(build.run.failureReason)}.` : "") +
 			(build.run.url ? ` ${build.run.url}` : "") +
 			"\nThat is the state AT THAT TIME and says nothing about anything since. A successful run is not" +
 			" proof that the site is up now, and it is not permission to say a change you made later has" +

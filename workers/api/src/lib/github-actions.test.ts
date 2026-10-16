@@ -182,6 +182,6 @@ describe("a job that never started says why, from GitHub's own annotation (#1112
 
 	it("runStartFailure: inaccessible annotations classify on no evidence — not_started, never minutes_exhausted", async () => {
 		vi.stubGlobal("fetch", fixtureFetch(INACCESSIBLE).fetch);
-		expect(await runStartFailure("acme/app", "tok", 900200)).toEqual({ classification: "not_started", verbatim: null });
+		expect(await runStartFailure("acme/app", "tok", 900200)).toEqual({ classification: "not_started", verbatim: null, unreadable: { status: 403 } });
 	});
 });

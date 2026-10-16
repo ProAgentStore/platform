@@ -39,6 +39,7 @@ import { listRepos } from "./coding-store.js";
 import { resolveAccountCeilings } from "./delegation-budget-store.js";
 import { logError } from "./error-log.js";
 import { listHostedBuilds, type HostedRepoRef } from "./hosted-repo.js";
+import { describeStartFailure } from "./github-actions.js";
 import { readInstanceConfigPair } from "./instance-config.js";
 import { type LoopStartInput, type LoopStartResult, loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { DEFAULT_MAX_OBJECTIVE_CHARS, clampIterations } from "./loop-limits.js";
@@ -101,7 +102,10 @@ export async function redDeployBlocking(env: Env, instanceId: string, userId: st
 	for (const repo of await reposUnderTheQueue(env, instanceId, userId)) {
 		const runs = await listHostedBuilds(env, userId, repo.ref, { page: 1, perPage: 20 }).catch(() => null);
 		const red = runs ? redDefaultBranchBuild(runs, repo.branch) : null;
-		if (red) return `${repo.label}'s default branch is red (${String(red.name || "build")} ${String(red.conclusion)}) — the queue waits for it to go green before starting new work.`;
+		if (!red) continue;
+		// Why it never started (#1112): a spending limit is not fixed by a commit, and the queue would wait on it forever.
+		const why = describeStartFailure(red.failureReason);
+		return `${repo.label}'s default branch is red (${String(red.name || "build")} ${String(red.conclusion)}${why ? ` — ${why}` : ""}) — the queue waits for it to go green before starting new work.`;
 	}
 	return null;
 }

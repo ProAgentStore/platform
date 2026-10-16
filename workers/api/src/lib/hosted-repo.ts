@@ -37,7 +37,7 @@
  */
 import { githubAppConfigured } from "./github-app.js";
 import { resolveGithubRead } from "./github-cache.js";
-import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
+import { attachStartFailures, fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
 import { listIssues, readIssue, type IssueDetail, type IssueSummary, type ListIssuesOpts } from "./github-issues.js";
 import { listPulls, readPull, type ListPullsOpts, type PullDetail, type PullSummary } from "./github-prs.js";
 import { listGitlabIssues, listGitlabPipelines, readGitlabIssue } from "./gitlab-api.js";
@@ -195,6 +195,10 @@ export async function readHostedPull(env: Env, userId: string, repo: HostedRepoR
  * "asked, and there are no builds yet". Never throws, because `/builds` fans this out per repo
  * and one repo's failure must not fail the response.
  */
+/** How long the never-started lookups may add to a build read (#1112): the latest run sits in a 3s chat-turn lookup. */
+const LATEST_REASON_BUDGET_MS = 1_500;
+const LIST_REASON_BUDGET_MS = 5_000;
+
 export async function latestHostedBuild(env: Env, userId: string, repo: HostedRepoRef): Promise<{ available: boolean; run: BuildRun | null }> {
 	if (!canReadHosted(repo, "builds")) return { available: false, run: null };
 	const slug = hostedCoordinate(repo);
@@ -209,7 +213,12 @@ export async function latestHostedBuild(env: Env, userId: string, repo: HostedRe
 			if (!token) return { available: false, run: null };
 			const res = await fetchWorkflowRuns(slug, token, { perPage: 1 }, { env, identity: { userId, authContext } });
 			if ("status" in res) return { available: false, run: null };
-			return { available: true, run: res.runs[0] ? mapWorkflowRun(res.runs[0]) : null };
+			const latest = res.runs[0];
+			if (!latest) return { available: true, run: null };
+			const runs = [mapWorkflowRun(latest)];
+			// Why it never started, if it did not (#1112) — inside the chat turn's 3s deploy lookup, so bounded well under it.
+			await attachStartFailures(slug, token, [latest], runs, { budgetMs: LATEST_REASON_BUDGET_MS });
+			return { available: true, run: runs[0] };
 		}
 		case "gitlab": {
 			const runs = await listGitlabPipelines(env, userId, slug, { perPage: 1 });
@@ -263,7 +272,11 @@ export async function listHostedBuilds(env: Env, userId: string, repo: HostedRep
 				{ env, identity: { userId, authContext } },
 			);
 			if ("status" in res) return null;
-			return res.runs.map(mapWorkflowRun);
+			const runs = res.runs.map(mapWorkflowRun);
+			// Why a failed run never started (#1112). Only with a token: the anonymous fallback shares
+			// ~60 requests/hour across every caller on the egress, and two reads per red run would spend it.
+			if (token) await attachStartFailures(slug, token, res.runs, runs, { budgetMs: LIST_REASON_BUDGET_MS });
+			return runs;
 		}
 		case "gitlab":
 			return listGitlabPipelines(env, userId, slug, { perPage: opts.perPage, page: opts.page });

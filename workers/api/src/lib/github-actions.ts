@@ -4,6 +4,7 @@
 // github_workflow_runs handler). #88: de-hardwire Coder's build-status fetch onto a shared client
 // so the github connector and the console routes read builds through the same code path.
 import type { BuildRun } from "./build-history.js";
+import { clipMarked } from "./clip-marked.js";
 import { githubConditionalJson, type GithubCacheIdentity } from "./github-cache.js";
 import type { Env } from "../types.js";
 
@@ -300,6 +301,8 @@ export interface StartFailure {
 	classification: StartFailureClassification;
 	/** GitHub's own words, unedited; null when it gave none we could read. */
 	verbatim: string | null;
+	/** The annotations could not be read (403: the GitHub App may lack `checks: read`) — so `not_started` rests on no reason at all. */
+	unreadable?: { status: number };
 }
 
 /** Explicit billing wording only — "payment" or "spending limit". Nothing else counts as evidence. */
@@ -333,7 +336,41 @@ export async function runStartFailure(repo: string, token: string | undefined, r
 	const job = jobs.jobs.find((j) => j.status === "completed" && j.steps.length === 0) ?? pickJob(jobs.jobs);
 	if (job?.status !== "completed" || job.steps.length > 0) return null;
 	const read = await fetchJobAnnotations(token, job);
-	return classifyStartFailure(job, read.ok ? read.annotations : []);
+	const failure = classifyStartFailure(job, read.ok ? read.annotations : []);
+	return failure && !read.ok ? { ...failure, unreadable: { status: read.status } } : failure;
+}
+
+/** How many failed runs in one list get their never-started reason looked up (#1112) — two GitHub reads each. */
+export const START_FAILURE_LOOKUPS = 3;
+
+/**
+ * Attach `failureReason` to the first {@link START_FAILURE_LOOKUPS} failed/cancelled runs of a page
+ * (#1112) — `mapped[i]` is `raw[i]` mapped. A lookup that does not finish inside `budgetMs` leaves its
+ * run UN-enriched (no `failureReason` key), never marked as having no reason: a chat turn's deploy
+ * line has 3s in total, and a slow annotation read must not cost it the line.
+ */
+export async function attachStartFailures(repo: string, token: string | undefined, raw: readonly Record<string, unknown>[], mapped: BuildRun[], opts: { budgetMs?: number } = {}): Promise<void> {
+	const picks: Array<{ r: Record<string, unknown>; i: number }> = [];
+	for (const [i, r] of raw.entries()) {
+		if (picks.length >= START_FAILURE_LOOKUPS) break;
+		if (r.status === "completed" && (r.conclusion === "failure" || r.conclusion === "cancelled")) picks.push({ r, i });
+	}
+	await Promise.all(
+		picks.map(async ({ r, i }) => {
+			const lookup = runStartFailure(repo, token, Number(r.id));
+			const reason = opts.budgetMs === undefined ? await lookup : await Promise.race([lookup, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), opts.budgetMs))]);
+			if (reason !== undefined) mapped[i].failureReason = reason;
+		}),
+	);
+}
+
+/** The reason a failed run never started, as a phrase for an agent or an owner (#1112). Empty when there is none to give. */
+export function describeStartFailure(reason: Pick<StartFailure, "verbatim" | "unreadable"> & { classification: string } | null | undefined): string {
+	if (!reason) return "";
+	const said = reason.verbatim ? ` — GitHub says: "${clipMarked(reason.verbatim, 300)}"` : "";
+	if (reason.classification === "minutes_exhausted") return `minutes_exhausted: the job was never started (Actions minutes or spending limit)${said}`;
+	if (reason.unreadable) return `the job never started, and GitHub's reason could not be read (annotations HTTP ${reason.unreadable.status || "unreachable"}${reason.unreadable.status === 403 ? " — the GitHub App may lack checks: read" : ""})`;
+	return `the job never started (no steps ran)${said}`;
 }
 
 /** Map one raw GitHub Actions run into the compact BuildRun the console + connector consume. */
