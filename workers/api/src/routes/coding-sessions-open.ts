@@ -14,7 +14,7 @@ import { authPromptGuidance, detectAuthPrompt, engineSignInBlock } from "../lib/
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { logEvent } from "../lib/events.js";
 import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
-import { READ_TIMEOUT_MS, callRunner, getBoundRunnerConn, relayConnected } from "../lib/runner-client.js";
+import { READ_TIMEOUT_MS, callRunner, getBoundRunnerConn, liveAliasForPin, relayConnected } from "../lib/runner-client.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { sessionAttachment } from "../lib/session-attachment.js";
 import { shouldPersistSnapshot, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
@@ -135,16 +135,24 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// apply do, else the legacy default runtime. A pinned/requested node that's offline is
 		// a hard 409 (don't silently run on a different machine than the user chose).
 		const requestedRunnerNode = normalizeRunnerNode(body.runnerNode) || await readInstanceRunnerNode(c.env, instanceId, uid).catch(() => "");
-		const runtimeNow = requestedRunnerNode
-			? await getRuntimeForNode(c.env, instanceId, uid, requestedRunnerNode)
-			: await getRuntime(c.env, instanceId, uid);
 		// Live check, not the DB `status` — that column isn't cleared when a runner drops, so a
 		// pinned machine that closed its laptop still reads "registered" and the old guard passed,
 		// stamping a session onto a dead node (silent `runnerConnected:false` instead of a clear 409).
-		if (requestedRunnerNode) {
-			const live = await relayConnected(c.env, instanceId, requestedRunnerNode).catch(() => false);
-			if (!runtimeNow || !live) throw new HttpError(409, `Runner node is not connected: ${requestedRunnerNode}`);
+		//
+		// Under every name the machine is PROVABLY known by (#1102), as `getBoundRunnerConn` routes:
+		// a pin outlives the hostname it was made with, and the runner reconnects under its current
+		// one. Probing only the literal pin refused the Mac mini pinned as `Macmini.modem` while its
+		// socket was live as `Sergeys-Mac-mini.local` — "Runner node is not connected" beside a
+		// listing that said connected, through restarts and re-attaches alike. Same machine_id only,
+		// so this never runs a session on a machine the user did not choose.
+		let runnerNode = requestedRunnerNode;
+		if (requestedRunnerNode && !(await relayConnected(c.env, instanceId, requestedRunnerNode).catch(() => false))) {
+			runnerNode = (await liveAliasForPin(c.env, instanceId, uid, requestedRunnerNode).catch(() => null)) ?? "";
 		}
+		const runtimeNow = runnerNode
+			? await getRuntimeForNode(c.env, instanceId, uid, runnerNode)
+			: requestedRunnerNode ? null : await getRuntime(c.env, instanceId, uid);
+		if (requestedRunnerNode && !runtimeNow) throw new HttpError(409, `Runner node is not connected: ${requestedRunnerNode}`);
 		// Stamp the owning machine so later commands route back to the same runner.
 		let session: CodingSessionRecord;
 		try {
