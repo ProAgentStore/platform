@@ -14,6 +14,8 @@ import ApplicationRunFace, { APPLICATION_CONFIRM, ApplicationRunControls, type A
 import ScanRunFace, { type ScanRunFields } from "../components/ScanRunFace";
 import { BoardLanesView, IssueControls, IssuesViewButton } from "../components/BoardLanes";
 import { type BoardIssueSyncResult, issueRepos } from "../lib/boardLanes";
+import { type CardOrder, CardOrderBar, useBoardOrder } from "../components/BoardOrder";
+import type { RunQueueMarker } from "../lib/boardOrder";
 
 /** `issues` (#895) is this tab's own: the lanes a coder's GitHub issues stand in. Not persisted —
  *  the server's `boardView` is kanban | list, and an apply agent's board has no issues to lane. */
@@ -57,6 +59,9 @@ interface BoardItem extends BoardIssueFields, ApplicationRunFields, ScanRunField
 	lane?: string | null;
 	priority?: number;
 	codingSessionId?: string;
+	/** #1097: the card's place in its column, and on a Waiting card whether (and how soon) it starts by itself. */
+	position?: number | null;
+	runQueue?: RunQueueMarker;
 }
 
 export default function BoardTab({ instanceId, apply }: { instanceId: string; apply?: boolean }) {
@@ -110,6 +115,8 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 	}, [instanceId]);
 
 	useEffect(() => { loadBoard(); }, [loadBoard]);
+	// #1099: drag / Top / Up / Down within a column — board order is run order (#1097).
+	const order = useBoardOrder(instanceId, items, setItems, (a, b) => columnFor(cols, a.status) === columnFor(cols, b.status), loadBoard);
 	// The fastest poll in the console (#272). 2.5s is right while a job is actually moving —
 	// a card can change column in that time and the board is where the user watches it. It is
 	// wrong for a settled board, which is what a board mostly is: the same seven columns of
@@ -308,6 +315,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 		retrying: retrying.has(item.jobKey),
 		onDelete: () => handleDeleteItem(item),
 		onPromote: item.ticketId ? undefined : () => handlePromote(item),
+		order: view === "issues" ? undefined : order.orderFor(item), // lanes are not columns
 	});
 
 	return (
@@ -367,6 +375,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 					Couldn't refresh the board: {error}
 				</div>
 			)}
+			{order.error && <div role="alert" className="mb-3 text-xs px-3 py-2 rounded-lg bg-danger-soft border border-danger-line text-danger">Couldn't reorder: {order.error}</div>}
 			{truncated && (
 				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-warning-soft border border-warning-line text-warning">
 					Showing your most recent jobs — some older jobs are hidden.
@@ -459,7 +468,8 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote }: {
+/** What the Kanban card and the List row both take — `itemProps` builds it once per card. */
+type CardProps = {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -478,7 +488,11 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 	onDelete: () => void;
 	/** Absent when the card already is a ticket (#757). */
 	onPromote?: () => void;
-}) {
+	/** #1099: this card's place controls; absent where order means nothing. */
+	order?: CardOrder;
+};
+
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote, order }: CardProps) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
 	// A moved card whose runs are gone stands alone — no run to open.
 	const openable = !!item.latestTaskId || !!item.codingSessionId;
@@ -486,7 +500,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 	const currentCol = columnFor(cols, item.status) ?? "";
 	const selectValue = item.userStatus ? currentCol : "__auto";
 	return (
-		<div className="relative bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent">
+		<div data-board-card={item.jobKey} className={`relative bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent ${order?.dragging ? "opacity-60" : ""}`}>
 			{(isFinished || !openable) && (
 				<button
 					type="button"
@@ -517,6 +531,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 			<BoardIssueFace item={item} onOpenSession={onOpenSession} />
 			<ApplicationRunFace item={item} />
 			<ScanRunFace item={item} />
+			<CardOrderBar item={item} order={order} />
 
 			{/* Wraps: Ask is a fourth control on this row, and a kanban column is narrow enough
 			    that Approve + Retry + the column select already filled it. */}
@@ -598,31 +613,14 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 }
 
 /** A compact one-line row for the List view — same actions as the Kanban card. */
-function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote }: {
-	item: BoardItem;
-	cols: BoardColumn[];
-	expanded: boolean;
-	onToggleAttempts: () => void;
-	onOpen: (taskId: string) => void;
-	onAsk: (taskId: string) => void;
-	onMove: (status: string) => void;
-	onRetry?: () => void;
-	onApprove?: () => void;
-	/** #978: run one of the application's permitted controls, through the shared action route. */
-	onApplicationAction?: (action: string) => void;
-	/** The application action in flight, if any — the button that sent it says so. */
-	applicationBusy?: string | null;
-	retrying?: boolean;
-	onDelete: () => void;
-	/** Absent when the card already is a ticket (#757). */
-	onPromote?: () => void;
-}) {
+function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote, order }: CardProps) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
 	const openable = !!item.latestTaskId || !!item.codingSessionId;
 	const currentCol = columnFor(cols, item.status) ?? "";
 	const selectValue = item.userStatus ? currentCol : "__auto";
 	return (
-		<div className="bg-paper hover:bg-panel-hover transition-colors">
+		<div data-board-card={item.jobKey} className={`relative bg-paper hover:bg-panel-hover transition-colors ${order?.dragging ? "opacity-60" : ""}`}>
+			<div className="px-3"><CardOrderBar item={item} order={order} /></div>
 			<div className="flex items-center gap-2 px-3 py-2 flex-wrap">
 				<button type="button" onClick={() => onOpen(item.latestTaskId)} disabled={!openable} className={`flex-1 min-w-[9rem] text-left ${openable ? "cursor-pointer" : "cursor-default"}`}>
 					<div className="flex items-baseline gap-2 min-w-0">

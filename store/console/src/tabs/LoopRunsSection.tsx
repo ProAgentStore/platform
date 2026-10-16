@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { objectiveCardKey, postBoardOrder } from "../lib/boardOrder";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
 import { canContinueRun, continueBody, endingLabel, previewLines, type ContinuePreview } from "../lib/loopContinue";
@@ -88,6 +89,8 @@ function when(ms: number): string {
 interface QueuedObjective {
 	id: string;
 	objective: string;
+	/** #1097: listed in START order (the board's Waiting column); `next` is the one that starts next. */
+	next?: boolean;
 }
 type LoopQueueResponse = { entries?: QueuedObjective[] };
 
@@ -214,6 +217,17 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 		await load();
 	};
 
+	/** Make a queued objective start next (#1099): it goes to the top of the board's Waiting column. */
+	const runNext = async (entryId: string) => {
+		setMsg("");
+		try {
+			await postBoardOrder(instanceId, objectiveCardKey(entryId), { to: "top" });
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : "Couldn't move it to the front");
+		}
+		await load();
+	};
+
 	if (runs.length === 0 && queued.length === 0) return null;
 
 	return (
@@ -225,11 +239,15 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 			</p>
 			{queued.length > 0 && (
 				<div className="mb-3" data-testid="loop-queue">
-					<div className="text-xs font-semibold text-muted mb-1">Queued — each starts on its own when the run ahead of it ends</div>
-					{queued.map((q) => (
-						<div key={q.id} className="flex items-center justify-between gap-2 border border-dashed border-line rounded-lg px-3 py-1.5 mb-1">
+					<div className="text-xs font-semibold text-muted mb-1">Queued, in the order they start — each starts on its own when the run ahead of it ends</div>
+					{queued.map((q, i) => (
+						<div key={q.id} data-testid="loop-queue-entry" className="flex items-center justify-between gap-2 border border-dashed border-line rounded-lg px-3 py-1.5 mb-1">
 							<span className="text-sm min-w-0 truncate" title={q.objective}>{q.objective}</span>
-							<Button size="sm" onClick={() => void cancelQueued(q.id)}>Cancel</Button>
+							<span className="flex items-center gap-1.5 shrink-0">
+								{q.next && <span className="text-2xs px-1.5 py-0.5 rounded bg-accent-soft text-accent font-semibold">Next to run</span>}
+								{i > 0 && <Button size="sm" onClick={() => void runNext(q.id)} title="Start this one before every other queued objective">Run next</Button>}
+								<Button size="sm" onClick={() => void cancelQueued(q.id)}>Cancel</Button>
+							</span>
 						</div>
 					))}
 				</div>
