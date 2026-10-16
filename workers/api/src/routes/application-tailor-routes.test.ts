@@ -517,7 +517,7 @@ describe("it pauses explicitly", () => {
 
 describe("settings and access", () => {
 	it("defaults to ~/jobs with machine sign-in, and patches", async () => {
-		expect((await call("GET", "/t1/application-tailor/settings")).body.settings).toEqual({ engine: "claude", authMode: "machine", workspace: "~/jobs", sources: { resume: "resume.md", profile: "profile.md" }, retainDays: 0, maxMinutes: 10 });
+		expect((await call("GET", "/t1/application-tailor/settings")).body.settings).toEqual({ engine: "claude", authMode: "machine", workspace: "~/jobs", sources: { resume: "resume.md", profile: "profile.md" }, retainDays: 0, maxMinutes: 10, stallMinutes: null });
 		const put = await call("PUT", "/t1/application-tailor/settings", { engine: "codex", sources: { answers: "answers/screening.md" }, retainDays: 30 });
 		expect(put.body.settings).toMatchObject({ engine: "codex", sources: { resume: "resume.md", profile: "profile.md", answers: "answers/screening.md" }, retainDays: 30 });
 		const row = await d1.DB.prepare("SELECT config FROM agent_instances WHERE id = 't1'").first<{ config: string }>();

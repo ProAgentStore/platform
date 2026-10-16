@@ -51,6 +51,7 @@
  */
 
 import { NOTIFICATION_TYPES, type NotificationKind, type NotificationPreferences, type NotificationRule, pushAllowedByPreference } from "./notifications.js";
+import { attentionEventSpec } from "./owner-attention.js";
 
 /** Re-exported so callers can name the rule type from the module that resolves it. */
 export type { NotificationRule };
@@ -241,10 +242,13 @@ export function resolveNotificationDelivery(ctx: NotificationContext, input: Pol
 		inapp: decide("inapp", { allowed: true, source: "default" }),
 		// The baseline is the pre-#992 behaviour, unchanged and still the floor for anything no rule
 		// mentions: the per-type mute, the instance scope, and "an alert always gets through".
-		push: decide("push", {
-			allowed: pushAllowedByPreference(input.account, ctx.type, ctx.severity, ctx.instanceId),
-			source: "baseline",
-		}),
+		// An event declared push-off-by-default (#1107, `run_progress`) starts there; a rule still turns it on.
+		push: decide(
+			"push",
+			ctx.event && attentionEventSpec(ctx.event)?.pushDefault === false
+				? { allowed: false, source: "default" }
+				: { allowed: pushAllowedByPreference(input.account, ctx.type, ctx.severity, ctx.instanceId), source: "baseline" },
+		),
 	};
 }
 

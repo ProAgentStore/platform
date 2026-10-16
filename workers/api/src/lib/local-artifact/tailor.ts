@@ -14,6 +14,7 @@
  */
 import { HttpError } from "../auth.js";
 import { syncApplicationCard } from "../applications/application-board.js";
+import { tailorRunSignals } from "../applications/run-signals.js";
 import { workKeyForLead } from "../job-lead-triage.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
@@ -259,7 +260,7 @@ async function dispatchTailoring(
 	now: number,
 	uploadedSources?: LocalArtifactUploadedSource[],
 ): Promise<TailorRun> {
-	const policy: TailorRunPolicy = { engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), ...(uploadedSources ? { uploadedSources: uploadedSources.map(({ text: _text, ...source }) => source) } : {}), retainDays: s.retainDays, maxMinutes: s.maxMinutes };
+	const policy: TailorRunPolicy = { engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), ...(uploadedSources ? { uploadedSources: uploadedSources.map(({ text: _text, ...source }) => source) } : {}), retainDays: s.retainDays, maxMinutes: s.maxMinutes, stallMinutes: s.stallMinutes };
 	const runId = crypto.randomUUID();
 	await createTailorRun(env, {
 		id: runId,
@@ -416,8 +417,15 @@ async function endLost(env: Env, uid: string, run: TailorRun, error: string, now
 	return failed ?? run;
 }
 
-/** Bring one run up to date from its runner. A runner that no longer holds it ends it, never "running" forever. */
+/** Bring one run up to date from its runner, then tell the owner what changed (#1107). */
 export async function syncTailorRun(env: Env, uid: string, run: TailorRun, now = Date.now()): Promise<TailorRun> {
+	const synced = await syncTailorRunFromRunner(env, uid, run, now);
+	await tailorRunSignals(env, uid, synced, now).catch(() => undefined);
+	return synced;
+}
+
+/** Bring one run up to date from its runner. A runner that no longer holds it ends it, never "running" forever. */
+async function syncTailorRunFromRunner(env: Env, uid: string, run: TailorRun, now: number): Promise<TailorRun> {
 	if (run.status !== "running") return run;
 	const silentSince = run.lastSyncedAt ?? run.startedAt ?? run.createdAt;
 	const lostByTime = now - silentSince > run.policy.maxMinutes * 60_000 + LOST_RUNNER_GRACE_MS;

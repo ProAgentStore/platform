@@ -64,9 +64,10 @@ import { cliAtLeast } from "../runner-upgrade.js";
 import { syncApplicationCard } from "../applications/application-board.js";
 import { deepLinkFor } from "../console-links.js";
 import { approvalStageOf, approvalState } from "./approval.js";
-import { type AttentionDeps, requestOwnerAttention } from "../owner-attention.js";
+import { requestOwnerAttention } from "../owner-attention.js";
+import { attentionDeps } from "../applications/attention-deps.js";
+import { applyRunSignals } from "../applications/run-signals.js";
 import { notifyUser } from "../../routes/push.js";
-import { parseAccountPreferences } from "../preferences.js";
 import { claimVerifiedOneClickRecovery, consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
 import { releaseApprovalIfNothingWasSent, upgradeQueuedRunPolicy } from "./approval-at-dispatch.js";
 import { submitGateFor } from "./submission-gate.js";
@@ -318,7 +319,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		browserProfile: s.browserProfile,
 		mode,
 		allowDomains: [...new Set([jobHost, ...s.allowDomains])],
-		limits: { maxMinutes: s.maxMinutes, maxPages: s.maxPages, maxActions: s.maxActions },
+		limits: { maxMinutes: s.maxMinutes, maxPages: s.maxPages, maxActions: s.maxActions, stallMinutes: s.stallMinutes },
 		gate: { allowed, gateId, checks },
 		...(opts.oneClickRecoveryId ? { approvalRecoveryId: opts.oneClickRecoveryId } : {}),
 		...(screenshotsOn ? {} : { screenshots: false as const }),
@@ -477,44 +478,6 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 }
 
 /**
- * How this consumer reaches the delivery stack (#991).
- *
- * Injected rather than imported inside `requestOwnerAttention` so the policy module stays testable
- * without the push stack, and so the push OUTCOME is read from the row that was written rather than
- * assumed: `notifyUser` is best-effort about the push by design, so "did it actually go" is a
- * question only the notifications table can answer.
- */
-const attentionDeps: AttentionDeps<Env> = {
-	notify: async (env, userId, type, title, body, url, opts) => { await notifyUser(env, userId, type, title, body, url, opts); },
-	pushed: async (env, userId, ids) => {
-		// Read the row that was just written, by the key the notifications table actually stores.
-		// `pushed_at` is set when an interruption was RAISED, and an attention event is an `alert`,
-		// which no per-type mute can suppress — so a null there means the 10-minute duplicate
-		// window swallowed it, and that is the one case worth telling the owner apart.
-		const row = await env.DB.prepare("SELECT pushed_at FROM notifications WHERE user_id = ?1 AND dedupe_key = ?2 ORDER BY created_at DESC LIMIT 1")
-			.bind(userId, ids.dedupeKey)
-			.first<{ pushed_at: string | null }>()
-			.catch(() => null);
-		if (!row) return "unavailable";
-		if (!row.pushed_at) return "deduped";
-		// An interruption was raised; whether a device received it depends on there being one. No
-		// subscription means the owner has nothing to buzz, and saying "notified" would be the lie.
-		const device = await env.DB.prepare("SELECT 1 FROM push_subscriptions WHERE user_id = ?1 LIMIT 1")
-			.bind(userId)
-			.first()
-			.catch(() => null);
-		return device ? "sent" : "unavailable";
-	},
-	preferences: async (env, userId) => {
-		const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1").bind(userId).first<{ preferences: string | null }>();
-		const prefs = parseAccountPreferences(row?.preferences);
-		// `parseAccountPreferences` has already sanitized both sections — this is the stored account,
-		// read through the one parser, not a second interpretation of the same JSON.
-		return { notifications: prefs.notifications, attention: prefs.attention };
-	},
-};
-
-/**
  * Tell the owner when an application is waiting for THEIR decision, and only then (#991).
  *
  * Raised from the one place that knows an application has just stopped, and gated on exactly the
@@ -627,8 +590,15 @@ async function stopTimedOutRun(env: Env, runtime: Awaited<ReturnType<typeof getL
 	return endTimedOut(env, uid, run, `The application exceeded its ${run.policy.limits.maxMinutes}-minute limit and PAGS stopped the local runner.`, now);
 }
 
-/** Bring one run up to date from its runner, mirroring a pause onto the application. */
+/** Bring one run up to date from its runner, then tell the owner what changed (#1107: progress, blockers, a stall). */
 export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = Date.now()): Promise<ApplyRun> {
+	const synced = await syncApplyRunFromRunner(env, uid, run, now);
+	await applyRunSignals(env, uid, synced, now).catch(() => undefined);
+	return synced;
+}
+
+/** Bring one run up to date from its runner, mirroring a pause onto the application. */
+async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now: number): Promise<ApplyRun> {
 	// A run recorded but never handed over (the Worker died between the two) is not left queued forever.
 	if (run.status === "queued") return now - run.createdAt > LOST_RUNNER_GRACE_MS ? endLost(env, uid, run, "The run was never handed to the runner.", now) : run;
 	if (run.status !== "running" && run.status !== "paused") {

@@ -7,6 +7,7 @@
  * itself, that "restore inherited" really removes the override, and that none of it reaches
  * another tenant's instance.
  */
+import { attentionEventSpec } from "../lib/owner-attention.js";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
@@ -58,6 +59,9 @@ beforeEach(() => {
 	  ('theirs', 'a1', 'u2', 'active', '{}')`);
 });
 afterEach(() => d1.close());
+
+/** Rows for an event the vocabulary declares push-off-by-default (#1107). */
+const offByDefault = (row: { event?: string }) => !!row.event && attentionEventSpec(row.event)?.pushDefault === false;
 
 describe("reading the policy", () => {
 	it("starts inherited — empty rules, and the account's state shown as what it is", async () => {
@@ -146,7 +150,8 @@ describe("writing it", () => {
 		const cfg = await configOf("mine");
 		expect(cfg.notifications, "absent, which is the state that means `inherit`").toBeUndefined();
 		expect(cfg.voice).toEqual({ speed: 130 });
-		for (const row of r.body.effective) expect(row.push.source).toBe("baseline");
+		// An event declared push-off-by-default (#1107, `run_progress`) starts at its own default; the rest at the baseline.
+		for (const row of r.body.effective) expect(row.push.source, row.event ?? row.type).toBe(offByDefault(row) ? "default" : "baseline");
 	});
 
 	it("an empty list is the same as inheriting, and stores nothing", async () => {
@@ -170,6 +175,6 @@ describe("tenant isolation", () => {
 		await call("PUT", "/mine/notifications", { allOff: true });
 		const other = await call("GET", "/other/notifications");
 		expect(other.body.rules).toEqual([]);
-		for (const row of other.body.effective) expect(row.push.allowed).toBe(true);
+		for (const row of other.body.effective) expect(row.push.allowed, row.event ?? row.type).toBe(!offByDefault(row));
 	});
 });

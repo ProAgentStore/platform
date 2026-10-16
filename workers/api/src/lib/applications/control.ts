@@ -22,6 +22,7 @@
  * HANDLES (owner-visible path + sha256), status and actionable pause reasons — never résumé text,
  * profile values, typed form values, cookies or the owner's answers.
  */
+import { normaliseTraceEntries, type PagedTraceEntry } from "./trace-page.js";
 import { HttpError } from "../auth.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, type JobLeadStatus, jobLeadStatus, jobLeadVersion } from "../job-lead-triage.js";
@@ -835,7 +836,7 @@ export interface TraceEntry {
  * handles; the audit keeps statuses and reasons); delivery payloads are NOT included, only their
  * correlation and status.
  */
-export async function applicationTrace(env: Env, uid: string, instanceId: string, applicationId: string): Promise<{ applicationId: string; correlation: Record<string, unknown>; entries: TraceEntry[] }> {
+export async function applicationTrace(env: Env, uid: string, instanceId: string, applicationId: string): Promise<{ applicationId: string; correlation: Record<string, unknown>; entries: PagedTraceEntry<TraceEntry>[] }> {
 	const { item } = await getQueueItem(env, uid, instanceId, { applicationId });
 	const app = (await getOwnedApplication(env, uid, applicationId)) as JobApplication;
 	const entries: TraceEntry[] = [];
@@ -866,10 +867,9 @@ export async function applicationTrace(env: Env, uid: string, instanceId: string
 	for (const a of await applicationAudit(env, applicationId, uid)) {
 		entries.push({ at: iso(a.at), source: "lifecycle", type: `${a.from}→${a.to}`, instanceId: a.actorInstanceId, runId: a.runId, detail: { version: a.version, actor: a.actor, ...(a.reason ? { reason: a.reason } : {}) } });
 	}
-	entries.sort((a, b) => a.at.localeCompare(b.at));
 	return {
 		applicationId,
 		correlation: { scoutInstanceId: app.sourceInstanceId, leadId: app.leadId, leadEventId: app.idempotencyKey, tailorInstanceId: app.instanceId, tailoringRunIds: tailorRuns, materialsReadyEventId: readyId, fillRunIds: fillRuns, status: item.status, submittedAt: app.submittedAt, submittedUrl: app.submittedUrl },
-		entries,
+		entries: normaliseTraceEntries(entries), // ISO, real time order across sources (#1107)
 	};
 }

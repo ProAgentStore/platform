@@ -107,7 +107,7 @@ describe("the Applications tools (#958, #953)", () => {
 		expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
 			"GET https://api.test/v1/instances/t1/application-queue?status=blocked",
 			"GET https://api.test/v1/instances/t1/application-queue/item?application_id=a1",
-			"GET https://api.test/v1/instances/t1/application-queue/a1/trace",
+			"GET https://api.test/v1/instances/t1/application-queue/a1/trace?limit=100",
 		]);
 	});
 

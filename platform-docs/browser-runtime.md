@@ -273,6 +273,28 @@ The push names the job by title and links to Settings, never to the posting.
 
 ### Application Runner fills (`runtime: "local_apply"`)
 
+**While an application runs, the owner hears it (#1107).** The Tailor and the Runner already record every
+step on their run's trace; each sync now also turns that trace into owner notifications, through the
+owner-attention policy (#991/#992) so each is controllable per instance, event and channel:
+
+- **`run_progress`** — one update per *stage* reached, never per field: on the listing, waiting at a
+  sign-in, signed in, filling the form, uploading documents, at a checkpoint, submitting (the Tailor:
+  reading sources, writing the materials). Each says the stage, the last action and the elapsed time.
+  It is listed in-app by default and only pushes if the owner turns push on for it.
+- **Blockers nothing announced before**, pushed at once: the listing expired (`blocker_required`), a
+  consent wall (`blocker_required`), an `auto_submit` run that was lost or timed out so nobody knows
+  whether it submitted (`decision_required`), and a Tailor that needs the owner's answers
+  (`input_required`). A sign-in or CAPTCHA pause, an unconfirmed submit and the final outcome keep their
+  own notifications below and are not repeated.
+- **`run_stalled`** — once per run, when no new event arrived within the stall threshold: the run's
+  `stallMinutes` setting, or automatically half its `maxMinutes` (at most 10, at least 5). A run paused
+  on a person is waiting, not stalled.
+
+Each is claimed on the run row before it is raised, so the per-minute sweep and an owner's read never
+announce it twice, and a run that ended more than 30 minutes ago never re-announces. Text carries stage
+names, counts and reason codes only — never a URL or a field's value. `application_trace` returns the
+ordered history, paged (`cursor`/`limit`).
+
 An Application Runner does not use these takeovers. Its `get_instance_browser_verification` reports
 `capability.declared: false`, and that is expected. A fill run escalates to the owner in two ways of its own:
 

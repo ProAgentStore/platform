@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { type McpScope, audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
+import { fitFetchedPage } from "../wire-budget.js";
 
 /** The exact sentence an owner assertion is confirmed with (#1073) — a copy of `NOT_SUBMITTED_CONFIRM` in workers/api/src/lib/local-apply/owner-assertion.ts, which this worker cannot import; the API checks it too. */
 const NOT_SUBMITTED_CONFIRM = "I checked the employer site and nothing was submitted";
@@ -133,8 +134,13 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"application_trace",
-		"One application's history on a single timeline: the Scout's triage of the lead, the outbox deliveries, the Tailor run, the Runner run(s) and every lifecycle move, with the ids that correlate them (lead event, tailoring runs, materials_ready event, fill runs). Classes, decisions and handles only — never typed values or document text. Read-only.",
-		{ ...who, application_id: z.string().describe("The application's id.") },
+		"One application's history on a single timeline: the Scout's triage of the lead, the outbox deliveries, the Tailor run, the Runner run(s) and every lifecycle move, with the ids that correlate them (lead event, tailoring runs, materials_ready event, fill runs). Classes, decisions and handles only — never typed values or document text. Oldest first, in real time order across sources, paged: pass `cursor: nextCursor` while `hasMore`; `total` is every entry. Works during a run (it includes the steps synced so far) and after. Read-only.",
+		{
+			...who,
+			application_id: z.string().describe("The application's id."),
+			cursor: z.string().max(600).optional().describe("A previous reply's `nextCursor`. Omit to start at the first entry."),
+			limit: z.coerce.number().int().min(1).max(500).optional().describe("Entries per page, 1-500 (default 100). A page is shortened further to fit the wire budget."),
+		},
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
 			const instance_id = instanceOf(input);
@@ -143,8 +149,18 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			if (!t) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "application_trace", { instance_id, application_id });
 			if (denied) return denied;
-			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-queue/${encodeURIComponent(application_id)}/trace`, t, {}, env)) as { error?: string };
-			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+			const cursor = typeof input.cursor === "string" && input.cursor ? `&cursor=${encodeURIComponent(input.cursor)}` : "";
+			let failed = "";
+			const page = await fitFetchedPage({
+				limit: typeof input.limit === "number" ? input.limit : 100,
+				key: "entries",
+				fetch: async (n) => {
+					const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-queue/${encodeURIComponent(application_id)}/trace?limit=${n}${cursor}`, t, {}, env)) as { error?: string };
+					if (data.error) failed = data.error;
+					return data;
+				},
+			});
+			return failed ? text(`Error: ${failed}`) : text(page);
 		},
 	);
 

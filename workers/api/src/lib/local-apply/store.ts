@@ -544,7 +544,8 @@ export interface ApplyRunPolicy {
 	browserProfile: string;
 	mode: LocalApplyMode;
 	allowDomains: string[];
-	limits: { maxMinutes: number; maxPages: number; maxActions: number };
+	/** `stallMinutes` from #1107; absent on a run recorded before it, which reads as automatic. */
+	limits: { maxMinutes: number; maxPages: number; maxActions: number; stallMinutes?: number | null };
 	gate: { allowed: boolean; gateId: string | null; checks: GateCheck[] };
 	/** Durable #1011 recovery claim, never exposed to the browser envelope. */
 	approvalRecoveryId?: string;

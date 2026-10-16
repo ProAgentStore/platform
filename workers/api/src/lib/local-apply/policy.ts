@@ -51,6 +51,8 @@ export interface ApplicationRunnerSettings {
 	/** Sites the runner may be on in addition to the job's own; also the auto-submit allow list. */
 	allowDomains: string[];
 	maxMinutes: number;
+	/** Minutes without a new event before the owner is told the run stalled (#1107). Null: automatic (`stallMinutesFor`). */
+	stallMinutes: number | null;
 	maxPages: number;
 	maxActions: number;
 	autoSubmit: AutoSubmitPolicy;
@@ -70,6 +72,7 @@ export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
 	sources: { profile: "profile.md" },
 	allowDomains: [],
 	maxMinutes: 20,
+	stallMinutes: null,
 	maxPages: 30,
 	maxActions: 300,
 	autoSubmit: { enabled: false, roles: [], locations: [], exclude: [], minSalary: null, dailyCap: 0, acknowledgedAt: null },
@@ -130,6 +133,10 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 		const e = typeof p.signInEmail === "string" ? p.signInEmail.trim().toLowerCase() : p.signInEmail;
 		if (e !== null && e !== "" && (typeof e !== "string" || e.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))) return { error: "signInEmail must be an email address, or null" };
 		next.signInEmail = e || null;
+	}
+	if (p.stallMinutes !== undefined) {
+		if (p.stallMinutes !== null && !intIn(p.stallMinutes, 1, 60)) return { error: "stallMinutes must be a whole number from 1 to 60, or null for automatic" };
+		next.stallMinutes = p.stallMinutes as number | null;
 	}
 	for (const [key, min, max] of [["maxMinutes", 1, 60], ["maxPages", 1, 200], ["maxActions", 1, 1000]] as const) {
 		if (p[key] === undefined) continue;

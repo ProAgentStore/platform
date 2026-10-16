@@ -1183,4 +1183,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.141": "sha256:078f960fac5f539e31fd8f148e4c8dafeef3fb9fb7e0b0ec6d30ad7ab8f269ef",
 	// #1108: task_action_log — one board card's ordered action log, any task type, cursor-paged.
 	"0.1.142": "sha256:42711350f7067747740ec59782c048b8cb7928a2d03726914ee9d1fd4c9da073",
+	// #1107: application_trace gains cursor + limit (paged, oldest first, wire-budgeted).
+	"0.1.143": "sha256:76f35804be318bbaa5fc74ef343a2b8b8d7827bda15d61b270d19348e95cbcaa",
 };

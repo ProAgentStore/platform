@@ -57,6 +57,11 @@ export interface OwnerAttentionEventSpec {
 	kind: "alert" | "update";
 	/** May the owner turn this event's PUSH off specifically? The in-app row is never optional. */
 	pushOptional: boolean;
+	/**
+	 * `false`: no push unless the owner turns it on (#1107) — the in-app row is still written. For
+	 * routine news that would be noise as a buzz. Absent: the account baseline decides, as before.
+	 */
+	pushDefault?: false;
 }
 
 export const OWNER_ATTENTION_EVENTS: OwnerAttentionEventSpec[] = [
@@ -106,6 +111,22 @@ export const OWNER_ATTENTION_EVENTS: OwnerAttentionEventSpec[] = [
 		id: "decision_required",
 		label: "A choice is needed",
 		description: "A run has finished what it can do on its own and is waiting for you to choose what happens next.",
+		kind: "alert",
+		pushOptional: true,
+	},
+	// #1107: a running job is not waiting on anyone, but the owner should not have to guess it is alive.
+	{
+		id: "run_progress",
+		label: "Run progress",
+		description: "A run moved to its next stage — on the page, signing in, filling, uploading, at a checkpoint, submitting. Listed in-app; it only buzzes your phone if you turn push on.",
+		kind: "update",
+		pushOptional: true,
+		pushDefault: false,
+	},
+	{
+		id: "run_stalled",
+		label: "Run stalled",
+		description: "A run has reported no progress for longer than its stall threshold. It may be stuck, or its machine may be asleep — nothing has been retried.",
 		kind: "alert",
 		pushOptional: true,
 	},

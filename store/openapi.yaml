@@ -521,6 +521,7 @@ components:
         sources: { type: object, properties: { resume: { type: string }, profile: { type: string }, answers: { type: string } } }
         retainDays: { type: integer, minimum: 0, maximum: 3650, description: Days to keep a generated folder; 0 = until the owner deletes it. }
         maxMinutes: { type: integer, minimum: 1, maximum: 60 }
+        stallMinutes: { type: integer, minimum: 1, maximum: 60, nullable: true, description: "Minutes without a new event before the owner is told the run stalled (#1107). Null: automatic — half of maxMinutes, at most 10, at least 5." }
     ApplicationArtifact:
       type: object
       properties:
@@ -565,6 +566,7 @@ components:
         sources: { type: object, properties: { profile: { type: string }, answers: { type: string } } }
         allowDomains: { type: array, items: { type: string }, description: Sites the run may be on besides the job's own; also the auto-submit allow list. }
         maxMinutes: { type: integer, minimum: 1, maximum: 60 }
+        stallMinutes: { type: integer, minimum: 1, maximum: 60, nullable: true, description: "Minutes without a new event before the owner is told the run stalled (#1107). Null: automatic — half of maxMinutes, at most 10, at least 5." }
         maxPages: { type: integer, minimum: 1, maximum: 200 }
         maxActions: { type: integer, minimum: 1, maximum: 1000 }
         autoSubmit:
@@ -9375,14 +9377,17 @@ paths:
   /v1/instances/{instanceId}/application-queue/{applicationId}/trace:
     get:
       summary: One application's correlated trace
-      description: The Scout's triage of the lead, the outbox deliveries, the Tailor run, the Runner run(s) and every lifecycle move on one timeline, with the ids that correlate them. Classes, decisions and handles only.
+      description: The Scout's triage of the lead, the outbox deliveries, the Tailor run, the Runner run(s) and every lifecycle move on one timeline, with the ids that correlate them. Classes, decisions and handles only. Entries carry ISO times in real time order across sources and a stable `id` (#1107). Without `cursor` or `limit` the whole timeline is returned (with `total`); with either, one page after `cursor`, oldest first, with `hasMore` and `nextCursor`.
       operationId: getApplicationTrace
       tags: [Instances]
       parameters:
         - { $ref: "#/components/parameters/InstanceId" }
         - { name: applicationId, in: path, required: true, schema: { type: string } }
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
       responses:
-        "200": { description: "`{ applicationId, correlation, entries }`.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "200": { description: "`{ applicationId, correlation, entries, total }`, plus `hasMore` and `nextCursor` when paged.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

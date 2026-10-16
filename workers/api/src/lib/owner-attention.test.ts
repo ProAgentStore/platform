@@ -47,6 +47,8 @@ describe("the event vocabulary is data, usable by any agent (#991)", () => {
 			"browser_verification_failed",
 			"browser_verification_completed",
 			"decision_required",
+			"run_progress",
+			"run_stalled",
 		]);
 		for (const e of OWNER_ATTENTION_EVENTS) {
 			expect(e.label.length, e.id).toBeGreaterThan(3);

@@ -7,6 +7,7 @@
 import type { Context, Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { QUEUE_STATUSES, type QueueStatus, applicationQueue, applicationTrace, getQueueItem, parseActionInput, performApplicationAction } from "../lib/applications/control.js";
+import { pageTraceEntries } from "../lib/applications/trace-page.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { transferPreparedApplication } from "../lib/applications/material-transfer.js";
@@ -57,8 +58,16 @@ export function registerApplicationsRoutes(router: Hono<{ Bindings: Env }>): voi
 		}));
 	});
 
+	// Whole timeline when neither `cursor` nor `limit` is given (the console's read, unchanged); a page
+	// otherwise — `entries` after `cursor`, oldest first, with `nextCursor` and `total` (#1107).
 	router.get("/:instanceId/application-queue/:applicationId/trace", async (c) => {
 		const { uid, instanceId } = await owned(c);
-		return c.json(await applicationTrace(c.env, uid, instanceId, c.req.param("applicationId")));
+		const trace = await applicationTrace(c.env, uid, instanceId, c.req.param("applicationId"));
+		const cursor = c.req.query("cursor");
+		const limit = c.req.query("limit");
+		if (cursor === undefined && limit === undefined) return c.json({ ...trace, total: trace.entries.length });
+		const page = pageTraceEntries(trace.entries, cursor, limit === undefined ? undefined : Number(limit));
+		if ("error" in page) return c.json({ error: page.error }, 400);
+		return c.json({ ...trace, ...page });
 	});
 }

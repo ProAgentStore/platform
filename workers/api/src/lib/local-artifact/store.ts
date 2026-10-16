@@ -33,6 +33,8 @@ export interface ApplicationTailorSettings {
 	/** Days to keep a generated folder; 0 = until the owner deletes it. */
 	retainDays: number;
 	maxMinutes: number;
+	/** Minutes without a new event before the owner is told tailoring stalled (#1107). Null: automatic. */
+	stallMinutes: number | null;
 }
 
 export const TAILOR_DEFAULTS: ApplicationTailorSettings = {
@@ -42,6 +44,7 @@ export const TAILOR_DEFAULTS: ApplicationTailorSettings = {
 	sources: { resume: "resume.md", profile: "profile.md" },
 	retainDays: 0,
 	maxMinutes: 10,
+	stallMinutes: null,
 };
 export const TAILOR_SETTINGS_KEY = "applicationTailor";
 
@@ -79,6 +82,11 @@ export function mergeTailorSettings(current: ApplicationTailorSettings, patch: u
 			if (path.trim().split("/")[0] === "applications") return { error: `source ${role} may not be inside applications/, where generated material lives` };
 			next.sources[role] = path.trim();
 		}
+	}
+	if (p.stallMinutes !== undefined) {
+		const v = p.stallMinutes;
+		if (v !== null && (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 60)) return { error: "stallMinutes must be a whole number from 1 to 60, or null for automatic" };
+		next.stallMinutes = v as number | null;
 	}
 	for (const [key, min, max] of [["retainDays", 0, 3650], ["maxMinutes", 1, 60]] as const) {
 		if (p[key] === undefined) continue;
@@ -465,6 +473,8 @@ export interface TailorRunPolicy {
 	uploadedSources?: Array<Omit<LocalArtifactUploadedSource, "text">>;
 	retainDays: number;
 	maxMinutes: number;
+	/** #1107; absent on a run recorded before it, which reads as automatic. */
+	stallMinutes?: number | null;
 }
 
 export type TraceEvent = Omit<LocalArtifactEvent, "type"> & { type: LocalArtifactEvent["type"] | "run.requested" | "runner.dispatched" | "run.ended" };
