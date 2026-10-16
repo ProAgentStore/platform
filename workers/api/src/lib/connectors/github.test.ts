@@ -86,11 +86,13 @@ beforeEach(() => {
 });
 
 describe("github connector — registration", () => {
-	it("registers all 10 tools with correct scopes (reads, plus the three issue writes)", () => {
+	it("registers all 12 tools with correct scopes (reads, plus the three issue writes)", () => {
 		const names = registryToolNameSet();
 		for (const n of [
 			"github_workflow_runs",
 			"github_workflow_run_logs",
+			"github_read_file",
+			"github_tree",
 			"github_list_issues",
 			"github_read_issue",
 			"github_list_issue_comments",
@@ -118,13 +120,15 @@ describe("github connector — registration", () => {
 		expect(getRegistryTool("github_update_issue")?.scope).toBe("write");
 	});
 
-	it("groups the 10 tools under the github connector for the catalog", () => {
+	it("groups the 12 tools under the github connector for the catalog", () => {
 		const grp = registryConnectorGroups().find((g) => g.connector === "github");
 		expect(grp).toBeDefined();
 		expect(grp?.tools).toEqual(
 			expect.arrayContaining([
 				"github_workflow_runs",
 				"github_workflow_run_logs",
+				"github_read_file",
+				"github_tree",
 				"github_list_issues",
 				"github_read_issue",
 				"github_list_issue_comments",
@@ -135,7 +139,7 @@ describe("github connector — registration", () => {
 				"github_update_issue",
 			]),
 		);
-		expect(grp?.tools).toHaveLength(10);
+		expect(grp?.tools).toHaveLength(12);
 	});
 
 	/**

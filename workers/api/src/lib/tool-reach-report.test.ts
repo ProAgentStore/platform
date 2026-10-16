@@ -103,6 +103,8 @@ const INTERNET = new Set<string>([
 	"github_create_issue",
 	"github_comment_issue",
 	"github_update_issue",
+	"github_read_file", // #1110 — the contents API, any repo the installation covers
+	"github_tree", // #1110
 	// ── meta ──
 	"whatsapp_send_message",
 	"instagram_send_dm",

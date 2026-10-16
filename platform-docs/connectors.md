@@ -31,7 +31,7 @@ resolved before the run and is refused at dispatch instead.
 
 | Connector | Auth | Scopes | Tools (examples) |
 |---|---|---|---|
-| `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_list_issue_comments`, `github_list_pulls`, `github_read_pull`, `github_workflow_runs`, `github_workflow_run_logs` (a job's log text, failed job and log tail first, windowed by line), `github_create_issue` (write), `github_comment_issue` (write), `github_update_issue` (write — close/reopen, relabel, assign) |
+| `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_list_issue_comments`, `github_list_pulls`, `github_read_pull`, `github_workflow_runs`, `github_workflow_run_logs` (a job's log text, failed job and log tail first, windowed by line), `github_read_file` (a file in any repo the installation covers, at a branch/tag/SHA, windowed by line — #1110), `github_tree` (one directory of such a repo — #1110), `github_create_issue` (write), `github_comment_issue` (write), `github_update_issue` (write — close/reopen, relabel, assign) |
 | `http` | vault API key | read + write | `http_request` (call any REST API as configuration) |
 | `web-search` | vault API key | read | `web_search` (Google Custom Search) |
 | `meta` | platform token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
@@ -42,6 +42,8 @@ resolved before the run and is refused at dispatch instead.
 | `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write), `transfer_conversation` (write) |
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
+
+**Remote repository reads (#1110).** `github_read_file` (`repo`, `path`, `ref?`, `startLine?`, `endLine?`) and `github_tree` (`repo`, `path?`, `ref?`) read any repository the owner's GitHub App installation covers, at any branch, tag or SHA, with no local checkout. They use the same installation token as the other `github_*` reads, so they add no new scope or grant, and a repository the installation does not cover answers 404. Both are read-only (`mutates: false`), and their output is fenced as untrusted. A file is returned as a window of numbered lines with the exact next call; files over 1 MB can be read up to their first 1 MB, and a binary file returns only its size and sha. **Status:** this is implemented support only — no seeded agent declares these tools yet. Enabling them on the Coders is a live capability change and is pending owner approval. Once an agent declares them, they can be called both from chat and through `call_instance_tool`.
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:
 a GitHub-App installation token, an OAuth refresh→access exchange, a key from the user's BYOK

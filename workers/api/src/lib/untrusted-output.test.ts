@@ -124,6 +124,8 @@ describe("the ingresses this closed", () => {
 		["github_list_pulls", "#746"],
 		["github_workflow_runs", "#746 — branch names and commit messages"],
 		["github_workflow_run_logs", "#781 — whatever a workflow printed, including on a public repo's PR from a fork"],
+		["github_read_file", "#1110 — any file in a remote repo, written by anyone with push access"],
+		["github_tree", "#1110 — file and directory names in a remote repo"],
 		["mcp_call_tool", "#748 — a remote MCP server's payload"],
 		["mcp_get_prompt", "#748 — the server's own prompt text"],
 		["mcp_list_tools", "#748 — server-authored tool descriptions (tool poisoning)"],
