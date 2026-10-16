@@ -1023,7 +1023,8 @@ describe("coding_session_fresh", () => {
 		const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1" });
 		expect(JSON.parse(res.content[0].text)).toMatchObject({ outcome: "unknown", poll: { tool: "coding_sessions_list", input: { instance_id: "i1" } } });
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
-		expect(h.auditEvents().some((e) => e.tool === "coding_session_fresh")).toBe(false);
+		// Never a `completed` row for a fresh session that was not created — the one event says it is unknown (#1089).
+		expect(h.auditEvents().filter((e) => e.tool === "coding_session_fresh").map((e) => e.action)).toEqual(["unknown"]);
 	});
 
 	it("does not audit a fresh session when creation fails (#831)", async () => {
@@ -1036,7 +1037,8 @@ describe("coding_session_fresh", () => {
 
 		const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
 		expect(JSON.parse(res.content[0].text)).toMatchObject({ error: "coding service unavailable" });
-		expect(h.auditEvents().some((e) => e.tool === "coding_session_fresh")).toBe(false);
+		// Never a `completed` row for a failed creation — the one event records the failure (#1089).
+		expect(h.auditEvents().filter((e) => e.tool === "coding_session_fresh").map((e) => e.action)).toEqual(["failed"]);
 	});
 });
 

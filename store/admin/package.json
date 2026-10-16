@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "pnpm --filter @proagentstore/sdk build && tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {

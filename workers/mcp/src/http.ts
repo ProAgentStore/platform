@@ -1,3 +1,4 @@
+import { noteUpstreamStatus } from "./call-audit.js";
 import { recordLatency } from "./latency.js";
 
 const API = "https://api.proagentstore.online";
@@ -138,6 +139,9 @@ export async function apiCall(
 	// Never let a non-2xx pass as success — always return a visible error object,
 	// whatever the body shape, so a tool can't silently format a failure as a result.
 	if (!res.ok) {
+		// The status, kept on the call being audited (#1089): the body below may replace `API <status>`
+		// with the API's own `error` text, which the audit must not copy.
+		noteUpstreamStatus(res.status);
 		return typeof json === "object" && json !== null
 			? { error: `API ${res.status}`, ...json }
 			: { error: `API ${res.status}`, detail: json };

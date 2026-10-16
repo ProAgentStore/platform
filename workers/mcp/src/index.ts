@@ -11,13 +11,14 @@ import { loginHandler } from "./oauth-provider.js";
 import { isUnknownOutcome } from "./async-outcome.js";
 import { currentCallCorrelation } from "./call-context.js";
 import { keepSseAlive } from "./sse-keepalive.js";
+import { currentCallAudit } from "./call-audit.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
 import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { timed, withRequestTiming } from "./latency.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
 import { registerServerInfoTool } from "./tools/server-info.js";
 import { newTokenSubjectCache, tokenSubjectResolver } from "./audit-subject.js";
-import { annotationsFor, annotationsForRisk, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
+import { annotationsFor, annotationsForRisk, outputSchemaFor, SERVER_INSTRUCTIONS, TOOL_RISK } from "./tool-metadata.js";
 import { newTouchThrottle, recordInstanceTouch, touchedInstance } from "./recent-instances.js";
 import { loadPinnedSurface, pinnedRiskFor, registerPinnedTools, withPinnedInstance } from "./pinned.js";
 import { loadTypeSurface, registerTypeTools, typeRiskFor, withPinnedType } from "./type-pinned.js";
@@ -102,7 +103,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	private safety(provided?: string): SafetyContext {
 		return {
 			env: this.env,
-			correlation: currentCallCorrelation,
+			correlation: currentCallCorrelation, callAudit: currentCallAudit, // the open call's record absorbs handler audits (#1089)
 			subject: provided ? undefined : this.subject,
 			scopes: provided ? null : this.scopes,
 			// A per-call `token` is an IDENTITY, not an anonymiser: it resolves to an audit
@@ -118,13 +119,14 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	 * before any registration happens: it carries the operator-suspension gate (#273) and
 	 * the tool metadata this server publishes (#561).
 	 */
-	private installRegistrationPipeline(metadata: (name: string) => Record<string, unknown> = platformMetadata, pinned?: string): void {
+	private installRegistrationPipeline(metadata: (name: string) => Record<string, unknown> = platformMetadata, pinned?: string, risk: (name: string) => McpScope | undefined = (n) => TOOL_RISK[n]): void {
 		installRegistrationPipeline(this.server as unknown as RegistrationTarget, {
 			gate: (name, provided) => suspensionBlock(this.env, this.token(provided), name),
 			metadata,
 			// Which instance the call was about, for `recent_instances` (#787): the `instance_id`
 			// argument on the platform-wide surface, the pinned instance on a `/mcp/i/<id>` session.
 			touch: (name, input, provided) => recordInstanceTouch(this.safety(provided), name, touchedInstance(input, pinned), this.touchThrottle),
+			safety: (provided) => this.safety(provided), readOnly: (name) => risk(name) === "read", // one outcome event per call (#1089)
 		});
 	}
 
@@ -136,14 +138,14 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	 */
 	private async initPinned(instanceId: string): Promise<void> {
 		const surface = await loadPinnedSurface(this.env, this.userToken, instanceId);
-		this.installRegistrationPipeline(riskMetadata(pinnedRiskFor(surface)), instanceId);
+		this.installRegistrationPipeline(riskMetadata(pinnedRiskFor(surface)), instanceId, pinnedRiskFor(surface));
 		registerServerInfoTool(this.server, this.env);
 		registerPinnedTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
 	/** A session pinned to one AGENT TYPE (#771): its declared tools, each with `instance_id`. See `type-pinned.ts`. */
 	private async initTypePinned(agentType: string): Promise<void> {
 		const surface = await loadTypeSurface(this.env, this.userToken, agentType);
-		this.installRegistrationPipeline(riskMetadata(typeRiskFor(surface)));
+		this.installRegistrationPipeline(riskMetadata(typeRiskFor(surface)), undefined, typeRiskFor(surface));
 		registerServerInfoTool(this.server, this.env);
 		registerTypeTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}

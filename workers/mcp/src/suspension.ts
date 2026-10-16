@@ -1,3 +1,4 @@
+import { noteGate } from "./call-audit.js";
 import { apiBase, type McpEnv, text, type TextResult } from "./http.js";
 
 /**
@@ -24,6 +25,9 @@ import { apiBase, type McpEnv, text, type TextResult } from "./http.js";
  * FAILS OPEN, matching that gate: a network blip or an API 5xx must not take the whole
  * MCP surface down. Only an explicit 403 blocks, because on `/v1/auth/me` a 403 can
  * only come from the suspension check (an invalid token is 401, an unknown user 404).
+ *
+ * Failing open is not failing silently (#1089): the verdict is noted on the call being gated, so
+ * the call's audit event says the check could not be made and why (`api_unreachable`, `api_5xx`).
  */
 export async function suspensionBlock(
 	env: McpEnv,
@@ -40,9 +44,18 @@ export async function suspensionBlock(
 		});
 		status = res.status;
 	} catch {
+		noteGate("unverified", "api_unreachable");
 		return null; // unreachable API → fail open
 	}
-	if (status !== 403) return null;
+	if (status >= 500) {
+		noteGate("unverified", "api_5xx");
+		return null;
+	}
+	if (status !== 403) {
+		noteGate("passed");
+		return null;
+	}
+	noteGate("denied", "suspended");
 	return text(
 		`Error: ${tool} is unavailable — this ProAgentStore account is suspended. Contact support if you believe this is a mistake.`,
 	);

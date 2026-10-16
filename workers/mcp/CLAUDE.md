@@ -50,12 +50,14 @@ behaves wrongly, the bug is usually in `workers/api`, not here.
 | Read-only mode | `src/safety.ts` | `requirePermission` denies any non-`read` scope when `ctx.readOnly` or `env.MCP_READ_ONLY === "1"`. Set the var in `wrangler.toml` `[vars]` to force it server-wide. |
 | Confirmation | `src/safety.ts` | `requireConfirmation(ctx, tool, confirm, expected)` — exact `===`. By convention `expected` is the tool's own name; `remove_repo` is the exception (`remove_all_repos`, and only when removing all). |
 | Dry run | `src/safety.ts` | `dryRun(ctx, tool, action, input, wouldDo)` returns `{dryRun:true, tool, action, wouldDo}` and audits `action:"dry_run"`. Always place it **after** the permission check and **before** the confirmation. A dry run must not touch the network — `contract.test.ts` fails any handler that does. |
+| Call outcome | `src/call-audit.ts`, `src/registration.ts` | ONE metadata-only event per tool call (#1089), opened at the SDK's `tools/call` boundary (so schema-validation failures are seen) and closed after the SDK answers. `action` is the outcome — `completed`, `dry_run`, `denied`, `failed` (returned error), `error` (thrown), `invalid_input`, `unknown` — with `failureClass`, `reason` (fixed vocabulary, an error's `name`, an API status; never a message, body or argument value), `explanation`, `gate`, `durationMs`, `receiptOf: "tool_call"`. A handler's own `audit()` during the call is ABSORBED into it (`SafetyContext.callAudit`), so a mutation leaves one row, not two. Successful read-only calls are not written; their failures, denials and a fail-open suspension check are. A call with no resolvable subject is filed under `subject: "unattributed"` in `audit_all:` only. |
 | Audit | `src/safety.ts` | `audit()` writes the event to `OAUTH_KV`'s time-ordered ledger with a 90-day TTL. No-ops without `OAUTH_KV` or a subject. Best-effort: it never throws — a failed write is logged (`mcp.audit_failed`), never surfaced in place of the action's result, since every write tool audits AFTER its write landed (#885). A per-call `token` argument still HAS a subject: `safety()` attaches `resolveSubject`, which `audit()`/`listAuditEvents()` await, and `index.ts`'s `resolveTokenSubject` verifies the session HMAC (memoised, one entry, `exp`-honouring) to get its `uid` (#702). Before that, `token` set `subject: undefined` and a scripted caller wrote NO row from any tool, mutating or not. Each event is written under TWO time-INVERTED keys (`audit-ledger.ts`, #1016) — `audit_idx:{subject}:…` and the admin sweep's `audit_all:…` — so KV's lexicographic order is newest-first and `listAuditEvents` pages with KV's own cursor at any volume. The old `audit:{subject}:{ISO}:{uuid}` keys sorted oldest-first and capped the reader at 1000 events (#704); the API Worker's cron backfills them. Cap 200 per page. |
 | Redaction | `src/safety.ts` | `redact()` runs on every audited event: key-name match (`token|secret|password|credential|authorization|api_key|…`) plus a value-shape regex (`sk-…`, `gh[pousr]_…`, `xox…`, `AIza…`, JWT, `Bearer …`). Strings truncate at 500 chars, recursion at depth 8. |
 
 `src/safety.ts` is the module other OFO stores are being told to vendor. Keep it
-dependency-light (it imports only `./http.js`, `./clip-marked.js` and `./audit-ledger.js`, none of
-which imports anything) and keep `safety.test.ts` passing.
+dependency-light (it imports only `./http.js`, `./clip-marked.js` and `./audit-ledger.js`; `http.js` in
+turn imports only `./latency.js` and `./call-audit.js`, which import nothing but `node:async_hooks`) and keep
+`safety.test.ts` passing.
 
 ## Code layout
 
@@ -76,6 +78,7 @@ src/
 ├── instance-tool-guidance.ts  the nested-tool routing sentences (#774) that BOTH
 │                         `SERVER_INSTRUCTIONS` and `PLATFORM_GUIDE` render — one copy, two channels
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
+├── call-audit.ts         the one outcome event every tool call closes with (#1089)
 ├── audit-ledger.ts       the audit ledger's time-inverted key layout + page reader (#1016)
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      15 tools — collections, records, agent files, KB search, activity

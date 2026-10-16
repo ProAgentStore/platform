@@ -195,7 +195,7 @@ describe("PagsMcp.init on an agent-type session (#771)", () => {
 		expect(call.method).toBe("POST");
 		expect(call.url).toBe("https://api.test/v1/instances/inst-2/tools/github_read_issue?agent=coder");
 		expect(JSON.parse(call.body!)).toEqual({ repo: "a/b", number: 7 });
-		const events = h.auditEvents().filter((e) => e.tool === "github_read_issue");
+		const events = h.auditEvents().filter((e) => e.action && e.tool === "github_read_issue");
 		expect(events[0].input).toMatchObject({ instance_id: "inst-2", agentType: "coder", argKeys: ["repo", "number"] });
 	});
 
@@ -204,7 +204,7 @@ describe("PagsMcp.init on an agent-type session (#771)", () => {
 		h.fetchStub.respond((u) => u.includes("/v1/instances/inst-helper/tools/"), { status: 400, body: { error: "This instance is helper, not coder — a /mcp/t/coder session runs only coder instances. Use /mcp/t/helper for it." } });
 		const res = await h.tools.get("github_read_issue")!.handler({ repo: "a/b", number: 1, instance_id: "inst-helper" });
 		expect(res.content[0].text).toMatch(/helper, not coder/);
-		expect(h.auditEvents().find((e) => e.tool === "github_read_issue")?.result).toEqual({ ok: false });
+		expect(h.auditEvents().find((e) => e.action && e.tool === "github_read_issue")?.result).toEqual({ ok: false });
 	});
 
 	it("gates a mutating tool as write — nothing is sent without it", async () => {

@@ -264,7 +264,7 @@ describe("PagsMcp.init on a pinned session", () => {
 		const h = await setup({ pinned: "inst-1" });
 		h.fetchStub.respond((u) => u.includes("/tools/github_create_issue"), { body: { success: false, content: "write consent required" } });
 		await h.tools.get("github_create_issue")!.handler({ repo: "a/b", title: "t" });
-		expect(h.auditEvents().find((e) => e.tool === "github_create_issue")?.result).toEqual({ ok: false });
+		expect(h.auditEvents().find((e) => e.action && e.tool === "github_create_issue")?.result).toEqual({ ok: false });
 	});
 
 	it("chat is gated as runtime, previews on dry_run without touching the network, and posts with origin mcp", async () => {

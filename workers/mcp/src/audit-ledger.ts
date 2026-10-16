@@ -113,10 +113,13 @@ export interface AuditPage {
 }
 
 export const AUDIT_SEMANTICS =
-	"Each event records an MCP tool call being dispatched, refused, dry-run or returned (`action`). " +
-	"`completed` means the TOOL CALL returned — not that the engine turn, run, deploy or external task " +
-	"it started has finished; follow the ids in `input`/`result` (instance_id, session_id, run/queue ids) " +
-	"to that work's own record.";
+	"Each event is ONE MCP tool call and how it ended (`action`): completed, dry_run, denied, failed (the tool " +
+	"returned an error), error (the tool threw), invalid_input (rejected before it ran) or unknown (it could not " +
+	"confirm its write). Anything but completed carries `failureClass`, `reason` and a plain `explanation`; " +
+	"`gate: unverified` means the suspension check could not be made and the call was allowed. Successful " +
+	"read-only calls are not recorded. `completed` means the TOOL CALL returned — not that the engine turn, run, " +
+	"deploy or external task it started has finished; follow the ids in `input`/`result` (instance_id, " +
+	"session_id, run/queue ids) to that work's own record.";
 
 async function readMigrationCoverage(kv: KVNamespace): Promise<Omit<AuditCoverage, "migrationComplete" | "delivery">> {
 	const raw = await kv.get(AUDIT_MIGRATION_KEY);

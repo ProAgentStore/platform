@@ -1,5 +1,7 @@
+import { type CallAuditRecord, callEvent, currentCallAudit, errorName, newCallRecord, noteArguments, withCallAudit } from "./call-audit.js";
 import { correlationFromExtra, withCallCorrelation } from "./call-context.js";
 import type { TextResult } from "./http.js";
+import { auditCallOutcome, type SafetyContext } from "./safety.js";
 import { recordLatency } from "./latency.js";
 import { titleFor } from "./tool-metadata.js";
 
@@ -28,6 +30,12 @@ import { titleFor } from "./tool-metadata.js";
  *    registrations onto the current path at once, and gives one seam where per-tool
  *    metadata is merged in. The call sites stay exactly as they are.
  *
+ * 3. **One audit event per call (#1089).** Every call — refused, previewed, failed, thrown, rejected
+ *    by schema validation, or completed — closes with exactly one metadata-only event, written here
+ *    rather than by each handler (see `call-audit.ts`). With the real SDK server underneath, the
+ *    record is opened at its `tools/call` handler, the only boundary a schema-validation failure or
+ *    an output-schema rejection passes through; the handler wrapper below fills it in.
+ *
  * The handler is always the last function argument across every `tool(...)` overload
  * (name+cb, name+desc+cb, name+desc+schema+cb), so it is found by scanning from the end
  * rather than by assuming an arity.
@@ -39,7 +47,11 @@ type AnyFn = (...args: unknown[]) => unknown;
 export interface RegistrationTarget {
 	tool: (...args: unknown[]) => unknown;
 	registerTool: (name: string, config: Record<string, unknown>, cb: AnyFn) => unknown;
+	/** The SDK's low-level server, when there is one: where `tools/call` is dispatched. */
+	server?: unknown;
 }
+
+type RequestHandler = (request: unknown, extra: unknown) => Promise<unknown>;
 
 export interface RegistrationOptions {
 	/** Returns a refusal to answer with INSTEAD of running the tool, or null to proceed.
@@ -55,6 +67,63 @@ export interface RegistrationOptions {
 	 * ignored and it must not throw; it never changes what the caller receives.
 	 */
 	touch?: (name: string, input: Record<string, unknown> | undefined, provided?: string) => Promise<void>;
+	/**
+	 * The audit context for a call made as `provided` (or as the connection). When given, every call
+	 * is recorded as one outcome event (#1089); the context's `callAudit` must read
+	 * `currentCallAudit` so the handler's own `audit()` calls are absorbed into it.
+	 */
+	safety?: (provided?: string) => SafetyContext;
+	/** True for a tool OUR risk table classes as read-only — never read off published annotations. */
+	readOnly?: (name: string) => boolean;
+}
+
+/** Close a call's record with its one event. Never throws, never changes what the caller receives. */
+async function finishCall(rec: CallAuditRecord, safety: (provided?: string) => SafetyContext): Promise<void> {
+	if (rec.finished) return;
+	rec.finished = true;
+	try {
+		const event = callEvent(rec);
+		if (event) await auditCallOutcome(safety(rec.provided), event);
+	} catch (e) {
+		console.warn(JSON.stringify({ event: "mcp.call_audit_failed", tool: rec.tool, error: errorName(e) }));
+	}
+}
+
+/**
+ * Wrap the SDK's `tools/call` dispatcher so the call's record exists BEFORE input validation. The
+ * handler map is the SDK's own (`Protocol._requestHandlers`); if a future SDK moves it, this returns
+ * false, the handler wrapper still records every call that reaches a handler, and the conformance
+ * test that drives a schema-invalid call through a real client fails.
+ */
+function wrapToolsCall(target: RegistrationTarget, registered: Map<string, boolean>, safety: (provided?: string) => SafetyContext): boolean {
+	const handlers = (target.server as { _requestHandlers?: unknown } | undefined)?._requestHandlers;
+	if (!(handlers instanceof Map)) return false;
+	const original = handlers.get("tools/call") as RequestHandler | undefined;
+	if (!original) return false;
+	handlers.set("tools/call", (request: unknown, extra: unknown) => {
+		const params = (request as { params?: { name?: unknown; arguments?: unknown } } | undefined)?.params;
+		const name = typeof params?.name === "string" && registered.has(params.name) ? params.name : "(unregistered)";
+		const rec = newCallRecord(name, registered.get(name) === true);
+		noteArguments(rec, params?.arguments);
+		const token = (params?.arguments as { token?: unknown } | undefined)?.token;
+		if (typeof token === "string" && token) rec.provided = token;
+		return withCallCorrelation(correlationFromExtra(extra), () =>
+			withCallAudit(rec, async () => {
+				try {
+					rec.final = await original(request, extra);
+					return rec.final;
+				} catch (e) {
+					// Thrown out of the SDK (a URL elicitation, or a fault in the SDK itself): no result reached the caller.
+					if (!rec.ran) rec.final = { isError: true, content: [{ type: "text", text: "protocol error" }] };
+					else rec.thrown ??= errorName(e);
+					throw e;
+				} finally {
+					await finishCall(rec, safety);
+				}
+			}),
+		);
+	});
+	return true;
 }
 
 export function installRegistrationPipeline(
@@ -62,6 +131,10 @@ export function installRegistrationPipeline(
 	opts: RegistrationOptions,
 ): void {
 	const registerTool = server.registerTool.bind(server);
+	// Every registered name → whether it is read-only, so the boundary can tell a known tool from an
+	// arbitrary caller-supplied name before any handler runs.
+	const registered = new Map<string, boolean>();
+	let boundaryWrapped = false;
 	server.tool = (...args: unknown[]) => {
 		let i = args.length - 1;
 		while (i >= 0 && typeof args[i] !== "function") i--;
@@ -73,13 +146,46 @@ export function installRegistrationPipeline(
 		}
 		const handler = args[i] as AnyFn;
 		const metadata = opts.metadata?.(name) ?? {};
+		const readOnly = opts.readOnly?.(name) === true;
+		registered.set(name, readOnly);
 		const run = async (...handlerArgs: unknown[]) => {
 			// A tool may carry its own `token` argument (acting as someone other than the
 			// connection), so gate the identity the handler will actually use, not just
 			// the connection's.
 			const first = handlerArgs[0] as { token?: unknown } | undefined;
 			const provided = typeof first?.token === "string" ? first.token : undefined;
+			const safety = opts.safety;
+			if (!safety) return execute(first, provided, handlerArgs);
+			// The record the `tools/call` boundary opened for THIS call, or a fresh one when this handler
+			// was reached another way (a test double, or a handler calling another tool in-process).
+			const outer = currentCallAudit();
+			const own = outer && !outer.claimed && outer.tool === name ? outer : undefined;
+			const rec = own ?? newCallRecord(name, readOnly);
+			rec.claimed = true;
+			rec.provided = provided;
+			if (!own) noteArguments(rec, first);
+			return withCallAudit(rec, async () => {
+				try {
+					rec.result = await execute(first, provided, handlerArgs, rec);
+					return rec.result;
+				} catch (e) {
+					rec.thrown = errorName(e);
+					throw e;
+				} finally {
+					// The boundary closes its own record once the SDK has answered; anything else closes here.
+					if (!own) {
+						rec.final = rec.result;
+						await finishCall(rec, safety);
+					}
+				}
+			});
+		};
+		const execute = async (first: { token?: unknown } | undefined, provided: string | undefined, handlerArgs: unknown[], rec?: CallAuditRecord) => {
 			const blocked = await opts.gate(name, provided);
+			if (rec) {
+				if (blocked) rec.gate = { check: "denied", reason: rec.gate?.reason ?? "gate" };
+				else rec.ran = true;
+			}
 			// The whole handler is one `tool` latency sample (#198) — the stage the incident's
 			// numbers were quoted in. A blocked call is not timed: nothing ran.
 			let result: unknown;
@@ -114,7 +220,7 @@ export function installRegistrationPipeline(
 			if (typeof arg === "object" && arg !== null) inputSchema = arg as Record<string, unknown>;
 		}
 
-		return registerTool(
+		const registeredTool = registerTool(
 			name,
 			{
 				title: titleFor(name),
@@ -124,6 +230,9 @@ export function installRegistrationPipeline(
 			},
 			gated,
 		);
+		// The SDK installs its `tools/call` dispatcher on the first registration; wrap it once, then.
+		if (!boundaryWrapped && opts.safety) boundaryWrapped = wrapToolsCall(server, registered, opts.safety);
+		return registeredTool;
 	};
 }
 

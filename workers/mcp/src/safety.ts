@@ -49,6 +49,12 @@ export interface SafetyContext {
 	 * host (`index.ts`, from `call-context.ts`), so this module stays import-free for vendoring.
 	 */
 	correlation?: () => { requestId?: string; mcpSessionId?: string } | undefined;
+	/**
+	 * The tool call in progress, when the host records one event per call (#1089, `call-audit.ts`).
+	 * While it is open, `audit()` hands its event to the call instead of writing it, so a handler's
+	 * own audit and the call's outcome become ONE row. Supplied by the host, like `correlation`.
+	 */
+	callAudit?: () => { finished: boolean; handlerEvents: Array<Record<string, unknown>> } | undefined;
 }
 
 /** The audit subject: the OAuth grant's, or the one a `token` argument resolves to. Exported for
@@ -142,6 +148,9 @@ export async function dryRun(
  */
 export const AUDIT_VALUE_MAX = 120;
 
+/** The subject of a call event no identity could be resolved for (#1089) — filed cross-owner only. */
+export const UNATTRIBUTED = "unattributed";
+
 const byteLength = (s: string): number => new TextEncoder().encode(s).length;
 
 /**
@@ -181,9 +190,10 @@ function summarize(value: unknown, depth = 0): unknown {
 /**
  * What an audit write did (#1084): `persisted` (both keys landed), `queued` (one landed and the other
  * is spooled for the API cron to finish), `lost` (nothing durable — logged and counted where KV still
- * answers), or `skipped` (no ledger bound, or an anonymous call with no subject to file it under).
+ * answers), `skipped` (no ledger bound, or an anonymous call with no subject to file it under), or
+ * `deferred` (handed to the open tool call, which writes it with its outcome — #1089).
  */
-export type AuditWrite = "persisted" | "queued" | "lost" | "skipped";
+export type AuditWrite = "persisted" | "queued" | "lost" | "skipped" | "deferred";
 
 /**
  * Record a tool call in the MCP audit log. BEST-EFFORT: it never throws (#885).
@@ -197,8 +207,27 @@ export async function audit(
 	ctx: SafetyContext,
 	event: Record<string, unknown>,
 ): Promise<AuditWrite> {
+	const call = ctx.callAudit?.();
+	if (call && !call.finished) {
+		call.handlerEvents.push(event);
+		return "deferred";
+	}
+	return writeBestEffort(ctx, event, false);
+}
+
+/**
+ * Write the ONE event that closes a tool call (#1089). Unlike a handler's `audit()`, a call with no
+ * resolvable subject — no sign-in, or a `token` argument that does not verify — is still recorded,
+ * as `subject: "unattributed"` in the cross-owner index only: it is evidence of a failed call, but it
+ * belongs to no owner, so no owner's ledger may show it.
+ */
+export async function auditCallOutcome(ctx: SafetyContext, event: Record<string, unknown>): Promise<AuditWrite> {
+	return writeBestEffort(ctx, event, true);
+}
+
+async function writeBestEffort(ctx: SafetyContext, event: Record<string, unknown>, unattributed: boolean): Promise<AuditWrite> {
 	try {
-		return await writeAudit(ctx, event);
+		return await writeAudit(ctx, event, unattributed);
 	} catch (e) {
 		console.warn(JSON.stringify({ event: "mcp.audit_failed", tool: event.tool ?? null, error: e instanceof Error ? e.message : String(e) }));
 		if (ctx.env.OAUTH_KV) await countAuditLoss(ctx.env.OAUTH_KV, Date.now());
@@ -206,11 +235,12 @@ export async function audit(
 	}
 }
 
-async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): Promise<AuditWrite> {
+async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>, unattributed: boolean): Promise<AuditWrite> {
 	const kv = ctx.env.OAUTH_KV;
 	if (!kv) return "skipped";
-	const subject = await subjectFor(ctx);
-	if (!subject) return "skipped";
+	const resolved = await subjectFor(ctx);
+	if (!resolved && !unattributed) return "skipped";
+	const subject = resolved ?? UNATTRIBUTED;
 	const ms = Date.now();
 	// Minted ONCE (#1084): both keys, and any replay of a missing one, carry this id — so a
 	// reconciled index holds the same event, never a second one.
@@ -229,11 +259,12 @@ async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): P
 		id,
 		time: new Date(ms).toISOString(),
 		subject,
+		...(resolved ? {} : { attributed: false }),
 	});
 	// Two keys, one value: the owner's time-ordered index and the cross-owner one the admin
 	// sweep reads (#1016). See `audit-ledger.ts` for why the time is inverted.
 	const metadata = auditKeyMetadata(recorded);
-	const keys = [auditIndexKey(subject, ms, id), auditGlobalKey(subject, ms, id)];
+	const keys = resolved ? [auditIndexKey(subject, ms, id), auditGlobalKey(subject, ms, id)] : [auditGlobalKey(subject, ms, id)];
 	const settled = await Promise.allSettled(keys.map((k) => kv.put(k, value, { expirationTtl: AUDIT_TTL_SECONDS, metadata })));
 	const missing = keys.filter((_, i) => settled[i].status === "rejected");
 	if (missing.length === 0) return "persisted";
