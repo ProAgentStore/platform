@@ -13,6 +13,7 @@ import type { Connector, OptionalGrant } from "../lib/connectors/types.js";
 import { connectorStateProvider } from "../lib/connector-oauth.js";
 import { completeConnectorOauth, startConnectorOauth } from "../lib/connector-oauth-flow.js";
 import { listConnectorAccounts } from "../lib/connector-accounts.js";
+import { appConnectorAccounts } from "../lib/connectors/app-accounts.js";
 import { OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
 
@@ -150,13 +151,15 @@ export function optionalGrantsFor(
 
 connectorRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
-	const [rows, reachByProvider] = await Promise.all([
+	const [rows, reachByProvider, githubAccounts] = await Promise.all([
 		c.env.DB.prepare(
 			"SELECT provider, account_id, created_at, account_label, granted_scopes FROM user_api_keys WHERE user_id = ?1 ORDER BY created_at DESC, account_id ASC",
 		)
 			.bind(session.uid)
 			.all<{ provider: string; account_id: string; created_at: string; account_label: string | null; granted_scopes: string | null }>(),
 		connectorGrantReachByProvider(c.env, session.uid),
+		// #1080: GitHub's accounts are its verified App installation bindings, not vault rows.
+		appConnectorAccounts(c.env, session.uid, { id: "github", auth: "app" }).then((a) => a ?? []),
 	]);
 	// GROUPED, not keyed (#715). This was `new Map(rows.map(r => [r.provider, r]))`, which with two
 	// Gmail rows silently kept whichever came last — the catalog would name one mailbox and the
@@ -177,6 +180,25 @@ connectorRoutes.get("/", async (c) => {
 			// Only a connector that HOLDS a credential can be "connected". A relay/no-auth one has
 			// nothing to connect, and reporting `connected:false` for it would read as a gap.
 			const holdsCredential = connector.auth === "oauth" || (connector.auth === "token" && !connector.tokenEnv);
+			// #1080: GitHub holds its credential as installation bindings — connected when it has one.
+			if (connector.id === "github" && connector.auth === "app") {
+				return {
+					id: connector.id, label: connector.label, auth: connector.auth, scopes: connector.scopes, grantModel: connector.grantModel,
+					unattended: unattendedClassOf(connector), tools: connector.tools.map((t) => t.name), configured: isConfigured(c.env, connector),
+					connected: githubAccounts.length > 0,
+					account: githubAccounts.length === 1 ? githubAccounts[0].accountId : null,
+					connectedAt: null,
+					accounts: githubAccounts.map((a) => ({ accountId: a.accountId, label: a.label, connectedAt: null, missingScopes: [], optionalGrants: [] })),
+					reach: null,
+					grantedScopes: null,
+					missingScopes: [],
+					optionalGrants: [],
+					// No generic connect flow: GitHub is connected, reconnected and synced by its own row on the
+					// Connections page (link flow + Sync installations, #1081), which these accounts reflect.
+					flow: connectFlow(connector),
+					accountChoice: "repository_owner",
+				};
+			}
 			return {
 				id: connector.id,
 				label: connector.label,

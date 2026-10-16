@@ -4,6 +4,7 @@ import { requirePro } from "../lib/billing.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { agentTypeMismatch } from "./agent-type-tools.js";
 import { listConnectorAccounts, pinnedAccountsFrom, resolveConnectorAccount } from "../lib/connector-accounts.js";
+import { APP_ACCOUNT_CHOICE, appConnectorAccounts } from "../lib/connectors/app-accounts.js";
 import { getRegistryTool, runRegistryTool } from "../lib/tool-registry.js";
 import { agentLacksTool, DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
@@ -87,8 +88,14 @@ toolRoutes.get("/:id/connector-accounts", async (c) => {
 
 	const out: Array<Record<string, unknown>> = [];
 	for (const connector of CONNECTORS) {
-		const accounts = await listConnectorAccounts(c.env, session.uid, connector.id);
+		// #1080: an `app` connector (GitHub) lists its installation bindings, chosen by the repository's owner.
+		const appAccounts = await appConnectorAccounts(c.env, session.uid, connector);
+		const accounts = appAccounts ?? (await listConnectorAccounts(c.env, session.uid, connector.id));
 		if (accounts.length === 0) continue;
+		if (appAccounts) {
+			out.push({ connector: connector.id, label: connector.label, accounts: accounts.map((a) => ({ accountId: a.accountId, label: a.label, connectedAt: a.connectedAt })), pinned: null, resolves: null, chosenBy: "repository_owner", blocked: null, note: APP_ACCOUNT_CHOICE });
+			continue;
+		}
 		const choice = pinned[connector.id];
 		const resolved = resolveConnectorAccount(accounts, choice, connector.label);
 		out.push({
@@ -123,6 +130,7 @@ toolRoutes.put("/:id/connector-accounts", async (c) => {
 	if (!connectorId) throw new HttpError(400, "connector required");
 	const connector = getConnector(connectorId);
 	if (!connector) throw new HttpError(404, `Unknown connector "${connectorId}"`);
+	if (connector.auth === "app") throw new HttpError(400, APP_ACCOUNT_CHOICE);
 
 	const requested = (body.accountId ?? "").trim();
 	if (requested) {

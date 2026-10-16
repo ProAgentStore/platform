@@ -453,6 +453,11 @@ describe("agentAccountChoices — which connectors this agent must be told about
 		expect(agentAccountChoices([instanceRow()]).map((r) => r.connector)).toEqual(["gmail"]);
 	});
 
+	it("never offers GitHub (#1080): its account is chosen per call by the repository's owner, and the server refuses a pin", () => {
+		const github = instanceRow({ connector: "github", label: "GitHub", chosenBy: "repository_owner", blocked: null, accounts: [{ accountId: "acme", label: "acme", connectedAt: null }, { accountId: "ChessClubs-online", label: "ChessClubs-online", connectedAt: null }] });
+		expect(agentAccountChoices([github, instanceRow()]).map((r) => r.connector)).toEqual(["gmail"]);
+	});
+
 	/**
 	 * AC3. The threshold is `needsPerAgentChoice`'s, not a second copy of it — with one account
 	 * every agent resolves to it and there is nothing to decide, so nobody who never adds a second

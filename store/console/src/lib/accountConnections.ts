@@ -93,6 +93,8 @@ export interface InstanceConnectorAccounts {
 	resolves: string | null;
 	/** Why it refuses, in the server's own words. `null` when it does not. */
 	blocked: { reason: string; message: string } | null;
+	/** #1080: GitHub's accounts are chosen per call by the repository's owner — there is no per-agent pick. */
+	chosenBy?: "repository_owner";
 }
 
 /**
@@ -104,7 +106,7 @@ export interface InstanceConnectorAccounts {
  * dead end this issue is about, one step further along.
  */
 export function agentAccountChoices(rows: InstanceConnectorAccounts[]): InstanceConnectorAccounts[] {
-	return rows.filter(needsPerAgentChoice);
+	return rows.filter((r) => r.chosenBy !== "repository_owner" && needsPerAgentChoice(r));
 }
 
 /**
