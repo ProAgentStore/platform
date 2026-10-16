@@ -1,22 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type KeyboardEvent, type Ref } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
+import RemoteBrowser, { type RemoteFrame } from "./RemoteBrowser";
+import { deviceKind } from "../lib/browserTakeovers";
 import type { ApplicationHandoffResumeResponse } from "../lib/types";
 
-/**
- * The only text-bearing relay this component can make.  It is intentionally a browser takeover
- * event, not an application-field action: the Runner rechecks that a login/CAPTCHA blocker is
- * still present before accepting it.  Callers clear the native control immediately afterwards.
- */
-export function mobileTakeoverText(value: string): { type: "text"; text: string } | null {
-	return value ? { type: "text", text: value } : null;
-}
-
-/** Mobile keyboards do not reliably emit physical key events, so expose only login-safe keys. */
-export function mobileTakeoverKey(key: "Enter" | "Backspace"): { type: "key"; key: string; code: string } {
-	return { type: "key", key, code: key === "Enter" ? "Enter" : "Backspace" };
-}
+// The phone entry lives with the remote browser it belongs to (#1105); re-exported for this view's callers.
+export { MobileTakeoverEntry, mobileTakeoverKey, mobileTakeoverText } from "./RemoteBrowser";
 
 /**
  * Live control for one #1013 Application Runner handoff.
@@ -40,7 +31,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	// a capability: this lets the API reject a stale, duplicate, or different-profile handoff.
 	const handoffPath = reconciliation ? "reconciliation/handoff" : "handoff";
 	const base = `/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(runId)}/${handoffPath}?handoff_id=${encodeURIComponent(handoffId)}`;
-	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
+	const [frame, setFrame] = useState<RemoteFrame | null>(null);
 	// Three lifetimes, three states. A frame poll owns ONLY `frameError`: a successful poll every 500ms
 	// used to clear the one shared error, erasing an input refusal or the read-only notice ~150ms after it
 	// appeared. An input refusal changes only with the next input's outcome; a resume notice only with the
@@ -51,16 +42,11 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	const [endError, setEndError] = useState("");
 	/** Only the latest input's outcome may set or clear `inputNotice` — an older send resolving late may not. */
 	const inputSeq = useRef(0);
-	const imageRef = useRef<HTMLImageElement>(null);
 	const mobileEntryRef = useRef<HTMLInputElement>(null);
-	const boxRef = useRef<HTMLDivElement>(null);
-	const lastMove = useRef(0);
-	const frameRef = useRef<typeof frame>(null);
-	frameRef.current = frame;
 
 	const poll = useCallback(async () => {
 		try {
-			const next = await api<{ frame: string; width: number; height: number }>(withPath(base, "frame"));
+			const next = await api<RemoteFrame>(withPath(base, "frame"));
 			if (!next?.frame || next.frame.length < 30) throw new Error("The runner has no live browser frame.");
 			setFrame(next);
 			setFrameError("");
@@ -75,7 +61,6 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	useEffect(() => { poll(); }, [poll]);
 	useTieredPolling(poll, { activeMs: 500, passiveMs: 500 }, false);
 	useEffect(() => {
-		boxRef.current?.focus();
 		const old = document.body.style.overflow;
 		document.body.style.overflow = "hidden";
 		return () => { document.body.style.overflow = old; };
@@ -95,60 +80,6 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 			return false;
 		}
 	}, [base]);
-	const toPoint = (clientX: number, clientY: number) => {
-		const image = imageRef.current;
-		if (!image || !frame) return null;
-		const rect = image.getBoundingClientRect();
-		if (!rect.width || !rect.height) return null;
-		return { x: Math.round(((clientX - rect.left) / rect.width) * frame.width), y: Math.round(((clientY - rect.top) / rect.height) * frame.height) };
-	};
-	const click = (e: MouseEvent) => {
-		const point = toPoint(e.clientX, e.clientY);
-		if (!point) return;
-		void send({ type: "click", ...point });
-		boxRef.current?.focus();
-		if (reconciliation) mobileEntryRef.current?.focus();
-		setTimeout(poll, 150);
-	};
-	const move = (e: MouseEvent) => {
-		const now = Date.now();
-		if (now - lastMove.current < 90) return;
-		lastMove.current = now;
-		const point = toPoint(e.clientX, e.clientY);
-		if (point) void send({ type: "move", ...point });
-	};
-	useEffect(() => {
-		const image = imageRef.current;
-		if (!image) return;
-		let lastWheel = 0;
-		const wheel = (event: WheelEvent) => {
-			event.preventDefault();
-			const now = Date.now();
-			if (now - lastWheel < 40) return;
-			lastWheel = now;
-			const current = frameRef.current;
-			const rect = image.getBoundingClientRect();
-			if (!current || !rect.width || !rect.height) return;
-			void send({ type: "scroll", x: Math.round(((event.clientX - rect.left) / rect.width) * current.width), y: Math.round(((event.clientY - rect.top) / rect.height) * current.height), deltaX: Math.round(event.deltaX), deltaY: Math.round(event.deltaY) });
-			setTimeout(poll, 120);
-		};
-		image.addEventListener("wheel", wheel, { passive: false });
-		return () => image.removeEventListener("wheel", wheel);
-	}, [poll, send]);
-	const key = (e: KeyboardEvent) => {
-		if (e.key === "Escape") { onClose(); return; }
-		if (e.key === "Tab") return;
-		e.preventDefault();
-		if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) void send({ type: "text", text: e.key });
-		else void send({ type: "key", key: e.key, code: e.code, keyCode: e.keyCode });
-		setTimeout(poll, 150);
-	};
-	const mobileText = (value: string) => {
-		const event = mobileTakeoverText(value);
-		if (event) void send(event);
-		setTimeout(poll, 150);
-	};
-	const mobileKey = (key: "Enter" | "Backspace") => { void send(mobileTakeoverKey(key)); setTimeout(poll, 150); };
 	const resume = async () => {
 		try {
 			const result = await api<ApplicationHandoffResumeResponse>(withPath(base, "resume"), { method: "POST" });
@@ -170,8 +101,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		} catch (e) { setEndError(`Couldn't end the handoff — the Runner may still have the browser. ${e instanceof Error ? e.message : String(e)}`); }
 	};
 
-	// biome-ignore lint/a11y/noNoninteractiveTabindex: this full-screen remote-control surface must capture keyboard input for the existing Runner browser.
-	return <div ref={boxRef} role="application" aria-label="Live Application Runner browser control" tabIndex={0} onKeyDown={key} className="fixed inset-0 z-[100] bg-black flex flex-col outline-none">
+	return <div role="dialog" aria-modal="true" aria-label="Live Application Runner browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
 		<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
 			<span className="font-bold text-ink text-sm">🖥 {reconciliation ? "Application reconciliation — read-only browser" : "Application Runner — live browser control"}</span>
 			<span className="text-xs text-muted-soft hidden md:inline">{reconciliation ? "Sign in or complete the site challenge only. This browser cannot fill, upload, submit, or clear the original uncertainty." : "Sign in or complete the site step in this existing browser, then resume. A sign-in alone never changes submission status."}</span>
@@ -181,54 +111,24 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 				<Button variant="secondary" size="md" onClick={onClose}>Close ✕</Button>
 			</div>
 		</div>
-		<MobileTakeoverEntry inputRef={mobileEntryRef} onText={mobileText} onKey={mobileKey} note={reconciliation ? "after authentication the read-only Runner rejects further input." : "this remains the existing owner-authorized live handoff only."} />
-		{endError && <div data-testid="application-handoff-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{endError}</div>}
-		{resumeNotice && <div data-testid="application-handoff-resume-notice" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{resumeNotice}</div>}
-		{inputNotice && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{inputNotice}</div>}
-		<div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black">
-			{frame ? (
-				// biome-ignore lint/a11y/useKeyWithClickEvents: remote browser clicks require pointer coordinates from the rendered screenshot.
-				<img ref={imageRef} src={frame.frame} width={1280} height={720} onClick={click} onMouseMove={move} draggable={false} alt="Live Application Runner browser" className="max-w-full max-h-full object-contain cursor-crosshair select-none" />
-			) : <div className="text-sm text-white/70 max-w-lg text-center px-4">{frameError ? <><div className="font-semibold text-danger mb-1">Live handoff unavailable</div><div className="text-xs text-white/60 break-words font-mono">{frameError}</div></> : "Connecting to the existing Runner browser…"}</div>}
-		</div>
+		<RemoteBrowser
+			frame={frame}
+			alt="Live Application Runner browser"
+			send={(input) => void send(input)}
+			refresh={poll}
+			onEscape={onClose}
+			entryRef={mobileEntryRef}
+			entryNote={reconciliation ? "after authentication the read-only Runner rejects further input." : "this remains the existing owner-authorized live handoff only."}
+			onTapped={reconciliation ? () => mobileEntryRef.current?.focus() : undefined}
+			defaultImmersive={deviceKind() === "mobile"}
+			notices={<>
+				{endError && <div data-testid="application-handoff-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{endError}</div>}
+				{resumeNotice && <div data-testid="application-handoff-resume-notice" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{resumeNotice}</div>}
+				{inputNotice && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{inputNotice}</div>}
+			</>}
+			placeholder={frameError ? <><div className="font-semibold text-danger mb-1">Live handoff unavailable</div><div className="text-xs text-white/60 break-words font-mono">{frameError}</div></> : "Connecting to the existing Runner browser…"}
+		/>
 	</div>;
-}
-
-/**
- * The phone's way in: a native input that summons the keyboard. A captured `<div>` gets no keystrokes on
- * a phone, so without this a remote sign-in page is visible but cannot be typed into (#1100). Used by
- * every live browser view the console opens.
- */
-export function MobileTakeoverEntry({ inputRef, onText, onKey, note }: { inputRef?: Ref<HTMLInputElement>; onText: (value: string) => void; onKey: (key: "Enter" | "Backspace") => void; note: string }) {
-	return (
-		<div className="shrink-0 flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-panel border-b border-line" data-testid="application-handoff-mobile-entry">
-			<label className="sr-only" htmlFor="application-handoff-mobile-entry">Secure sign-in or verification entry</label>
-			<input
-				id="application-handoff-mobile-entry"
-				ref={inputRef}
-				type="text"
-				inputMode="text"
-				enterKeyHint="next"
-				autoComplete="off"
-				autoCapitalize="none"
-				autoCorrect="off"
-				spellCheck={false}
-				data-testid="application-handoff-mobile-text-entry"
-				placeholder="Tap after selecting the login or code field"
-				className="min-w-0 flex-1 rounded border border-line bg-paper px-3 py-2 text-base text-ink"
-				onChange={(e) => {
-					onText(e.currentTarget.value);
-					// Native input is ephemeral: it exists to summon the phone keyboard, never as a credential
-					// store or a rendered echo. The remote page alone receives its text event.
-					e.currentTarget.value = "";
-				}}
-				onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Backspace") { e.preventDefault(); onKey(e.key); } }}
-			/>
-			<Button type="button" variant="secondary" size="sm" onClick={() => onKey("Backspace")}>Delete</Button>
-			<Button type="button" variant="secondary" size="sm" onClick={() => onKey("Enter")}>Continue</Button>
-			<p className="basis-full text-xs text-muted-soft">Phone-only sign-in/CAPTCHA control. Text is forwarded once and immediately cleared here; {note}</p>
-		</div>
-	);
 }
 
 /** Add a route segment before the query string; `${base}/input` would corrupt it. */

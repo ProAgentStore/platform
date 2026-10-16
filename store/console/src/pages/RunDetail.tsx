@@ -1,5 +1,5 @@
 import TakeoverBanner from "../components/TakeoverBanner";
-import { MobileTakeoverEntry, mobileTakeoverKey, mobileTakeoverText } from "../components/ApplicationHandoffLive";
+import RemoteBrowser, { type RemoteFrame } from "../components/RemoteBrowser";
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
 import { type LegacyShot, replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { deviceKind } from "../lib/browserTakeovers";
@@ -154,20 +154,15 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
  * land precisely regardless of how the frame is scaled in the browser.
  */
 function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanceId: string; taskId: string; kind: string; onResume: () => void; onClose: () => void }) {
-	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
+	const [frame, setFrame] = useState<RemoteFrame | null>(null);
 	const [connErr, setConnErr] = useState("");
 	// A failed End, kept separate from `connErr`: that one only renders in place of a missing
 	// frame, and an End typically fails while the frame is arriving perfectly well.
 	const [endErr, setEndErr] = useState("");
-	const imgRef = useRef<HTMLImageElement>(null);
-	const boxRef = useRef<HTMLDivElement>(null);
-	const lastMove = useRef(0);
-	const frameRef = useRef<{ frame: string; width: number; height: number } | null>(null);
-	frameRef.current = frame;
 
 	const poll = useCallback(async () => {
 		try {
-			const f = await api<{ frame: string; width: number; height: number }>(`/v1/instances/${instanceId}/takeover/${taskId}/frame?device=${deviceKind()}`);
+			const f = await api<RemoteFrame>(`/v1/instances/${instanceId}/takeover/${taskId}/frame?device=${deviceKind()}`);
 			if (f?.frame && f.frame.length > 30) { setFrame(f); setConnErr(""); }
 			else setConnErr("The runner returned an empty frame (no live page to capture).");
 		} catch (e) { setConnErr(e instanceof Error ? e.message : String(e)); }
@@ -191,9 +186,8 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	// ends a takeover is decided server-side. The catch-up fetch means the first thing they see
 	// on returning is a fresh frame, not the stale one they left.
 	useTieredPolling(poll, { activeMs: 500, passiveMs: 500 }, false);
-	// Full-screen overlay: focus for keyboard capture + lock body scroll while open.
+	// Full-screen overlay: lock body scroll while open (RemoteBrowser captures the keyboard).
 	useEffect(() => {
-		boxRef.current?.focus();
 		const prev = document.body.style.overflow;
 		document.body.style.overflow = "hidden";
 		return () => { document.body.style.overflow = prev; };
@@ -212,51 +206,6 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	const send = useCallback((body: Record<string, unknown>) =>
 		api(`/v1/instances/${instanceId}/takeover/${taskId}/input?device=${deviceKind()}`, { method: "POST", body: JSON.stringify(body) }).catch(() => {}), [instanceId, taskId]);
 
-	const toXY = (clientX: number, clientY: number) => {
-		const img = imgRef.current; if (!img || !frame) return null;
-		const r = img.getBoundingClientRect();
-		if (!r.width || !r.height) return null;
-		return { x: Math.round(((clientX - r.left) / r.width) * frame.width), y: Math.round(((clientY - r.top) / r.height) * frame.height) };
-	};
-
-	const onClick = (e: React.MouseEvent) => { const c = toXY(e.clientX, e.clientY); if (c) { send({ type: "click", ...c }); boxRef.current?.focus(); setTimeout(poll, 150); } };
-	const onMove = (e: React.MouseEvent) => { const now = Date.now(); if (now - lastMove.current < 90) return; lastMove.current = now; const c = toXY(e.clientX, e.clientY); if (c) send({ type: "move", ...c }); };
-
-	// Scroll must be a NATIVE, non-passive wheel listener (React's onWheel is passive, so
-	// preventDefault is ignored and the local overlay eats the gesture). Throttle + ROUND the
-	// deltas — CDP mouseWheel ignores fractional deltaY, which is why remote scroll did nothing.
-	useEffect(() => {
-		const img = imgRef.current;
-		if (!img) return;
-		let lastWheel = 0;
-		const onWheelNative = (ev: WheelEvent) => {
-			ev.preventDefault();
-			const now = Date.now();
-			if (now - lastWheel < 40) return;
-			lastWheel = now;
-			const f = frameRef.current;
-			const r = img.getBoundingClientRect();
-			if (!f || !r.width || !r.height) return;
-			send({
-				type: "scroll",
-				x: Math.round(((ev.clientX - r.left) / r.width) * f.width),
-				y: Math.round(((ev.clientY - r.top) / r.height) * f.height),
-				deltaX: Math.round(ev.deltaX),
-				deltaY: Math.round(ev.deltaY),
-			});
-			setTimeout(poll, 120);
-		};
-		img.addEventListener("wheel", onWheelNative, { passive: false });
-		return () => img.removeEventListener("wheel", onWheelNative);
-	}, [poll, send]); // attach once the frame (img) mounts
-	const onKey = (e: React.KeyboardEvent) => {
-		if (e.key === "Escape") { onClose(); return; }
-		if (e.key === "Tab") return; // let focus leave the panel
-		e.preventDefault();
-		if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) send({ type: "text", text: e.key });
-		else send({ type: "key", key: e.key, code: e.code, keyCode: e.keyCode });
-		setTimeout(poll, 150);
-	};
 	/**
 	 * End the takeover — the only control here whose failure is not self-evident on the next frame.
 	 *
@@ -279,17 +228,9 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 		}
 	};
 
-	// Full-screen, non-scrolling overlay: a fixed toolbar + the live frame filling the rest.
+	// Full-screen overlay: the takeover's own bar, then the remote page as a browser (#1105).
 	return (
-		<div
-			ref={boxRef}
-			role="application"
-			aria-label="Live remote browser control"
-			// biome-ignore lint/a11y/noNoninteractiveTabindex: this full-screen remote-control surface must capture keyboard input for the agent browser.
-			tabIndex={0}
-			onKeyDown={onKey}
-			className="fixed inset-0 z-[100] bg-black flex flex-col outline-none"
-		>
+		<div role="dialog" aria-modal="true" aria-label="Live remote browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
 			<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
 				<span className="font-bold text-ink text-sm">{kind === "captcha" ? "🔐 Live remote control — solve the verification" : "🖥 Live remote control"}</span>
 				<span className="text-xs text-muted-soft hidden md:inline">Click &amp; type here — sent live to the agent's browser (~2 fps).</span>
@@ -299,42 +240,26 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 					<button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg bg-panel border border-line text-muted text-sm hover:text-ink">Close ✕</button>
 				</div>
 			</div>
-			{/* A phone has no keyboard events to capture: this is how a sign-in page gets typed into (#1100). */}
-			<MobileTakeoverEntry
-				onText={(value) => { const ev = mobileTakeoverText(value); if (ev) send(ev); setTimeout(poll, 150); }}
-				onKey={(key) => { send(mobileTakeoverKey(key)); setTimeout(poll, 150); }}
-				note="it goes only to the page shown below."
-			/>
-			{endErr && (
-				<div data-testid="takeover-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">
-					{endErr}
-				</div>
-			)}
-			<div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black">
-				{frame ? (
-					// biome-ignore lint/a11y/useKeyWithClickEvents: remote browser clicks require pointer coordinates from the rendered screenshot.
-					<img
-							ref={imgRef}
-							src={frame.frame}
-							width={1280}
-							height={720}
-							onClick={onClick}
-							onMouseMove={onMove}
-						draggable={false}
-						alt="Live agent browser"
-						className="max-w-full max-h-full object-contain cursor-crosshair select-none"
-					/>
-				) : (
-					<div className="text-sm text-white/70 max-w-lg text-center px-4">
-						{connErr ? (
-							<>
-								<div className="font-semibold text-danger mb-1">Live view error</div>
-								<div className="text-xs text-white/60 break-words font-mono">{connErr}</div>
-							</>
-						) : "Connecting to the live browser…"}
+			<RemoteBrowser
+				frame={frame}
+				notices={endErr && (
+					<div data-testid="takeover-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">
+						{endErr}
 					</div>
 				)}
-			</div>
+				alt="Live agent browser"
+				send={send}
+				refresh={poll}
+				onEscape={onClose}
+				entryNote="it goes only to the page shown below."
+				defaultImmersive={deviceKind() === "mobile"}
+				placeholder={connErr ? (
+					<>
+						<div className="font-semibold text-danger mb-1">Live view error</div>
+						<div className="text-xs text-white/60 break-words font-mono">{connErr}</div>
+					</>
+				) : "Connecting to the live browser…"}
+			/>
 		</div>
 	);
 }

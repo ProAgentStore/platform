@@ -94,7 +94,9 @@ export interface CreateTaskRequest {
 
 /** A remote-control input event relayed to a human-takeover session. */
 export interface TakeoverInput {
-	type: "move" | "down" | "up" | "click" | "scroll" | "key" | "text";
+	/** `back` / `forward` / `reload` / `navigate` (+ `url`) are the live view's browser controls (#1105). */
+	type: "move" | "down" | "up" | "click" | "scroll" | "key" | "text" | "back" | "forward" | "reload" | "navigate";
+	url?: string;
 	x?: number;
 	y?: number;
 	deltaX?: number;

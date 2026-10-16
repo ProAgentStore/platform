@@ -160,7 +160,6 @@ const KNOWN_ANONYMOUS = {
 	"2f4347e0": "{ tools?: ToolPolicyEntry[] }",
 	"0ead8558": "{ activeTerminalTarget?: string | null }",
 	"67290c68": "{ nodes: TerminalNode[] }",
-	"c8cab155": "{ frame: string; width: number; height: number }",
 
 	// ── AgentDetail ───────────────────────────────────────────────────────────
 	"249888dd": "{ agents: CatalogAgent[] }",

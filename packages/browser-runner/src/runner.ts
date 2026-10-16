@@ -11,6 +11,7 @@ import { isTerminalTaskStatus, settleTaskOutcome } from "./apply-outcome.js";
 import { McpRuntime } from "./mcp-runtime.js";
 import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
+import { takeoverNavigation } from "./takeover-nav.js";
 import { resolveHandoffStatus } from "./handoff-status.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
@@ -464,7 +465,7 @@ export class LocalRunner {
 	 * size. Uses a continuous CDP screencast (not page.screenshot, which forces
 	 * a viewport metrics override and makes the real window flicker/zoom).
 	 */
-	async takeoverFrame(taskId: string): Promise<{ frame: string; width: number; height: number }> {
+	async takeoverFrame(taskId: string): Promise<{ frame: string; width: number; height: number; url: string }> {
 		const session = this.requireTakeover(taskId);
 		await this.ensureScreencast(taskId);
 		// Until the first screencast frame arrives, fall back to a single shot.
@@ -495,6 +496,7 @@ export class LocalRunner {
 			frame: `data:image/jpeg;base64,${session.latestFrame ?? ""}`,
 			width: session.cssW ?? session.width ?? 1280,
 			height: session.cssH ?? session.height ?? 720,
+			url: session.page.url(), // the live view's address bar (#1105)
 		};
 	}
 
@@ -507,6 +509,7 @@ export class LocalRunner {
 		const cdp = session.cdp;
 		const x = input.x ?? 0;
 		const y = input.y ?? 0;
+		if (await takeoverNavigation(session.page, input)) return; // back/forward/reload/address bar (#1105)
 		switch (input.type) {
 			case "move":
 				await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });

@@ -186,7 +186,7 @@ test("mobile — reconciliation keeps the authenticated read-only notice through
 const CARD = "app-b8586cf8-0987-4397-85ef-e4db9563cdd5";
 const TAKEOVER_ID = "30532b43-66b0-41c4-8906-021f8ebc31d7";
 
-async function mountCard(page: import("@playwright/test").Page, opts: { takeover: "requested" | "none"; mobileAllowed?: boolean }) {
+async function mountCard(page: import("@playwright/test").Page, opts: { takeover: "requested" | "none"; mobileAllowed?: boolean; frame?: Record<string, unknown> }) {
 	const calls: Array<{ method: string; path: string; query: string; body: unknown }> = [];
 	const takeover = opts.takeover === "none" ? null : {
 		id: TAKEOVER_ID, subjectKind: "runtime_task", subjectId: CARD, state: "requested", reason: "login_required", mobileAllowed: opts.mobileAllowed ?? true,
@@ -209,7 +209,7 @@ async function mountCard(page: import("@playwright/test").Page, opts: { takeover
 			takeover.state = (body as { state: string }).state;
 			return ok({ takeover, changed: true });
 		}
-		if (path === `/takeover/${CARD}/frame`) return ok(FRAME);
+		if (path === `/takeover/${CARD}/frame`) return ok(opts.frame ?? FRAME);
 		if (path === `/takeover/${CARD}/input`) return ok({ ok: true });
 		if (path === `/takeover/${CARD}/resume`) return ok({ signIn: { state: "closed", signedIn: { fingerprint: 1, verifiable: true } }, retry: { outcome: "started", runId: "run-2" } });
 		return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: `unexpected fixture route ${path}` }) });
@@ -245,6 +245,8 @@ test.describe("on a touch phone", () => {
 		await page.getByRole("button", { name: "Continue" }).click();
 		await expect.poll(() => calls.some((c) => c.path === `/takeover/${CARD}/input` && (c.body as { key?: string }).key === "Enter")).toBe(true);
 
+		// On a phone the view opens full-screen (#1105): leaving it is how the takeover's own bar comes back.
+		await page.getByTestId("remote-exit-fullscreen").click();
 		await page.getByRole("button", { name: "Resume — done" }).click();
 		await expect.poll(() => calls.some((c) => c.method === "POST" && c.path === `/takeover/${CARD}/resume`)).toBe(true);
 	});
@@ -264,5 +266,108 @@ test.describe("on a touch phone", () => {
 		await expect(banner).toContainText("Taking over from a phone is off");
 		await expect(banner.getByTestId("takeover-open")).toHaveCount(0);
 		expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+	});
+});
+
+// ── #1105: the live view on a phone is a browser — full-screen, zoom, and its own controls ──────────────
+//
+// The page in the report: SEEK's sign-in on dell-laptop, a 1280×720 CSS viewport, shown on a phone where
+// it was a postage stamp nobody could read or tap. The real RunDetail view on a touch phone; the API is
+// mocked and every relayed input recorded, so what reaches the page is the fact under test.
+
+const WIDE = {
+	frame: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1280' height='720'%3E%3Crect width='1280' height='720' fill='%23ddd'/%3E%3C/svg%3E",
+	width: 1280,
+	height: 720,
+	url: "https://login.seek.com/login",
+};
+
+async function openLive(page: import("@playwright/test").Page) {
+	const card = await mountCard(page, { takeover: "requested", frame: WIDE });
+	await page.getByTestId("takeover-banner").getByTestId("takeover-open").click();
+	await expect(page.getByAltText("Live agent browser")).toBeVisible();
+	const inputs = () => card.calls.filter((c) => c.path === `/takeover/${CARD}/input`).map((c) => c.body as Record<string, unknown>);
+	return { ...card, inputs };
+}
+
+test.describe("on a touch phone, the live view is a browser (#1105)", () => {
+	test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+	test("mobile — it opens full-screen, with one way out", async ({ page }) => {
+		await openLive(page);
+		const browser = page.getByTestId("remote-browser");
+		await expect(browser).toHaveAttribute("data-immersive", "true");
+		// Full-screen covers the takeover's own bar: nothing competes with the page but the one exit.
+		// The takeover's bar is still in the DOM, under the full-screen layer: a tap there reaches the layer.
+		const resume = await page.getByRole("button", { name: "Resume — done" }).boundingBox();
+		if (!resume) throw new Error("no Resume button");
+		const covered = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest("[data-testid='remote-browser']") !== null, [resume.x + resume.width / 2, resume.y + resume.height / 2]);
+		expect(covered).toBe(true);
+		await page.getByTestId("remote-exit-fullscreen").click();
+		await expect(browser).toHaveAttribute("data-immersive", "false");
+		await expect(page.getByRole("button", { name: "Resume — done" })).toBeVisible();
+		await expect(page.getByTestId("remote-exit-fullscreen")).toHaveCount(0);
+		// …and back in, from the controls.
+		await page.getByTestId("remote-fullscreen").click();
+		await expect(browser).toHaveAttribute("data-immersive", "true");
+	});
+
+	test("mobile — back, forward, reload and the address bar drive the remote page", async ({ page }) => {
+		const { inputs } = await openLive(page);
+		const address = page.getByTestId("remote-address");
+		await expect(address).toHaveValue("https://login.seek.com/login"); // where the page is, after SEEK's redirect
+		await page.getByTestId("remote-back").click();
+		await page.getByTestId("remote-forward").click();
+		await page.getByTestId("remote-reload").click();
+		await address.fill("au.seek.com/job/95289924");
+		await address.press("Enter");
+		await expect.poll(() => inputs().map((i) => i.type)).toEqual(expect.arrayContaining(["back", "forward", "reload", "navigate"]));
+		expect(inputs().find((i) => i.type === "navigate")).toEqual({ type: "navigate", url: "au.seek.com/job/95289924" });
+		// The address bar's typing is the bar's, never keystrokes into the remote page.
+		expect(inputs().some((i) => i.type === "text")).toBe(false);
+	});
+
+	test("mobile — double-tap zooms in without pressing the page, and a tap then lands on the right page point", async ({ page }) => {
+		const { inputs } = await openLive(page);
+		const stage = page.getByTestId("remote-stage");
+		const box = await stage.boundingBox();
+		if (!box) throw new Error("no stage");
+		const at = { x: box.x + 100, y: box.y + 60 };
+		await page.touchscreen.tap(at.x, at.y);
+		await page.touchscreen.tap(at.x, at.y);
+		await expect(stage).toHaveAttribute("data-scale", "2.5");
+		await page.waitForTimeout(500);
+		expect(inputs().filter((i) => i.type === "click")).toEqual([]); // a zoom presses nothing
+		// Zoomed about the tapped point, so the same point is still the same page pixel…
+		await page.touchscreen.tap(at.x, at.y);
+		await expect.poll(() => inputs().filter((i) => i.type === "click")).toHaveLength(1);
+		const page1 = { x: Math.round((100 / box.width) * 1280), y: Math.round((60 / box.height) * 720) };
+		// Within a CSS pixel: a touch point is sub-pixel, and WebKit rounds it differently from Chromium.
+		const first = inputs().find((i) => i.type === "click") as Record<string, number>;
+		expect(Math.abs(first.x - page1.x)).toBeLessThanOrEqual(1);
+		expect(Math.abs(first.y - page1.y)).toBeLessThanOrEqual(1);
+		// …and 50 screen px to its right is 50 / 2.5 = 20 stage px, not 50: a precise tap at zoom.
+		await page.touchscreen.tap(at.x + 50, at.y);
+		await expect.poll(() => inputs().filter((i) => i.type === "click")).toHaveLength(2);
+		const second = inputs().filter((i) => i.type === "click")[1];
+		expect(Math.abs(Number(second.x) - (first.x + (20 / box.width) * 1280))).toBeLessThanOrEqual(1);
+		expect(second.y).toBe(first.y);
+	});
+
+	test("mobile — a pinch zooms the page around the fingers", async ({ page, browserName }) => {
+		test.skip(browserName !== "chromium", "two-finger touch is driven through Chromium's DevTools protocol");
+		const { inputs } = await openLive(page);
+		const stage = page.getByTestId("remote-stage");
+		const box = await stage.boundingBox();
+		if (!box) throw new Error("no stage");
+		const cdp = await page.context().newCDPSession(page);
+		const cx = box.x + box.width / 2;
+		const cy = box.y + box.height / 2;
+		const fingers = (d: number) => [{ x: cx - d, y: cy, id: 1 }, { x: cx + d, y: cy, id: 2 }];
+		await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: fingers(20) });
+		for (const d of [30, 45, 60]) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: fingers(d) });
+		await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+		await expect.poll(async () => Number(await stage.getAttribute("data-scale"))).toBeGreaterThan(2.5);
+		expect(inputs().filter((i) => i.type === "click")).toEqual([]); // a pinch presses nothing
 	});
 });
