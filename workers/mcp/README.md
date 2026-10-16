@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**332 tool registrations.** 305 are always registered; 27 are gated to the console
+**342 tool registrations.** 315 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -554,6 +554,16 @@ immediately instead of a whole transcript.
 | `answer_instance_mcp_input_request` | Answer (retrying the remote call) or cancel a paused ask | runtime | yes | |
 | `grant_instance_connector_folder` | Grant a folder (folders only; files refused server-side) | write | yes | |
 | `delete_instance_connector_grant` | Revoke a grant | destructive | yes | `delete_instance_connector_grant` |
+| `list_http_profiles` | List your named HTTP credential profiles — metadata, origins, secret version, bindings; never a secret (#1123) | read | | |
+| `get_http_profile` | Read one HTTP credential profile's metadata and bindings; never the secret (#1123) | read | | |
+| `test_http_profile` | Storage-test a profile: secret present and decryptable, origins, bindings — no network, no part of the secret (#1123) | read | | |
+| `create_http_profile` | Create a named HTTP credential profile; the secret is encrypted at rest and never returned again (#1123) | write | yes | |
+| `update_http_profile` | Change a profile's name, description or allowed origins — never the secret (#1123) | write | yes | |
+| `rotate_http_profile_secret` | Replace a profile's secret; every bound instance uses the new one, `secret.version` increments (#1123) | write | yes | |
+| `delete_http_profile` | Delete a profile and every binding to it (#1123) | destructive | yes | `delete_http_profile` |
+| `list_instance_http_bindings` | The HTTP credential profiles one instance may use, by binding name — never a secret (#1123) | read | | |
+| `bind_http_profile` | Let an instance use one of your profiles under a binding name (#1123) | write | yes | |
+| `unbind_http_profile` | Remove a binding; the profile is kept (#1123) | write | yes | |
 | `get_instance_connector_account` | Which of your accounts the instance uses per connector (e.g. Gmail): `pinned`, what a call `resolves` to, and `blocked` when it would use none | read | | |
 | `set_instance_connector_account` | Pin the instance to one connected account; answers with the row read back. A blank `account_id` is refused — it never clears a pin | write | yes | |
 

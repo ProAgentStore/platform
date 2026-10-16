@@ -316,6 +316,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	usage_drivers: "read",
 	vector_stats: "read",
 	whoami: "read",
+	// #1123: HTTP credential profiles — metadata only, never a secret.
+	list_http_profiles: "read",
+	get_http_profile: "read",
+	test_http_profile: "read",
+	list_instance_http_bindings: "read",
 
 	// ── write: adds to or updates PAGS state, and this server grants it on a default
 	//    connection. Announced `readOnlyHint: false, destructiveHint: false`. ──
@@ -406,6 +411,12 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	upload_agent_file: "write",
 	upload_resume: "write",
 	write_instance_memory: "write",
+	// #1123: profile metadata, rotation and per-instance bindings — reversible owner state.
+	create_http_profile: "write",
+	update_http_profile: "write",
+	rotate_http_profile_secret: "write",
+	bind_http_profile: "write",
+	unbind_http_profile: "write",
 
 	// ── runtime: drives something whose effects this server does not model — a machine, a
 	//    deploy, an agent turn. Announced `destructiveHint: true`, which reads "MAY perform
@@ -515,6 +526,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	delete_supervision: "destructive",
 	forget_runner_node: "destructive",
 	unregister_instance_runtime: "destructive",
+	// #1123: deleting a profile drops its secret and every binding to it — not recoverable.
+	delete_http_profile: "destructive",
 };
 
 export { MCP_RISK_COUNTS } from "./tool-risk-counts.js";

@@ -20,6 +20,7 @@ import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
+import { registerHttpProfileTools } from "./http-profiles.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerBrowserVerificationTools } from "./browser-verification.js";
@@ -90,6 +91,8 @@ export function registerInstanceTools(
 	// Secure input / one-time secret handoff (#906) — ungated: every instance may need to receive
 	// secrets (Firebase codes, OTPs, passwords) from the owner outside the chat.
 	registerSecureInputTools(server, ctx);
+	// Named HTTP credential profiles + per-instance bindings (#1123) — ungated: metadata out, secrets never.
+	registerHttpProfileTools(server, ctx);
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);

@@ -14,6 +14,7 @@ import { billingRoutes } from "./routes/billing.js";
 import { chatRoutes } from "./routes/chat.js";
 import { instanceRoutes } from "./routes/instances.js";
 import { credentialRoutes } from "./routes/credentials.js";
+import { httpBindingRoutes, httpProfileRoutes } from "./routes/http-profiles.js";
 import { secureInputRoutes } from "./routes/secure-input.js";
 import { profileRoutes } from "./routes/profile.js";
 import { preferenceRoutes } from "./routes/preferences.js";
@@ -189,6 +190,8 @@ app.route("/v1/agents", chatRoutes); // /v1/agents/:id/chat, /ws, /messages, /me
 app.route("/v1/agents", runRoutes); // /v1/agents/:id/run, /executions
 app.route("/v1/instances", instanceRoutes); // /v1/instances/:agentId/subscribe, /my/instances, /:id/chat, etc.
 app.route("/v1/instances", credentialRoutes); // /v1/instances/:id/credentials (vault)
+app.route("/v1/instances", httpBindingRoutes); // /v1/instances/:id/http-bindings — which HTTP credential profiles an instance may use (#1123)
+app.route("/v1/http-profiles", httpProfileRoutes); // owner's named HTTP credential profiles — metadata out, secrets never (#1123)
 app.route("/v1/instances", secureInputRoutes); // /v1/instances/:id/secure-inputs (#906)
 app.route("/v1/instances", controllerAiSettingsRoutes); // /v1/instances/:id/controller-ai — provider-stall recovery settings (#907)
 app.route("/v1/profile", profileRoutes); // structured candidate profile

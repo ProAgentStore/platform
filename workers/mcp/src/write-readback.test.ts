@@ -595,6 +595,28 @@ const READBACK: Record<string, string | null> = {
 	"coding_session_fresh.engine_id": "coding_sessions_list",
 	"coding_session_open.engine_id": "coding_sessions_list",
 
+	// ── #1123: HTTP credential profiles + bindings ──
+	// `profile_id` is addressing for update/rotate/delete; for a binding it is the content (which
+	// profile the name points at), and reads back as such.
+	"create_http_profile.name": "list_http_profiles",
+	"create_http_profile.description": "list_http_profiles",
+	"create_http_profile.allowed_origins": "list_http_profiles",
+	// The credential itself. Never returned by any reader, by design: the profile reports only
+	// `secret.version` and `rotatedAt` — the same rule keeps the credentials vault off MCP.
+	"create_http_profile.secret": null,
+	"update_http_profile.profile_id": "get_http_profile",
+	"update_http_profile.name": "get_http_profile",
+	"update_http_profile.description": "get_http_profile",
+	"update_http_profile.allowed_origins": "get_http_profile",
+	"rotate_http_profile_secret.profile_id": "get_http_profile",
+	"rotate_http_profile_secret.secret": null,
+	"delete_http_profile.profile_id": "list_http_profiles",
+	"bind_http_profile.binding_name": "list_instance_http_bindings",
+	"bind_http_profile.profile_id": "list_instance_http_bindings",
+	"bind_http_profile.connector": "list_instance_http_bindings",
+	"unbind_http_profile.binding_name": "list_instance_http_bindings",
+	"unbind_http_profile.connector": "list_instance_http_bindings",
+
 	// ── subscribe ──
 	// The idempotency key is stored on the instance row as a dedup guard (#716). It is not
 	// a piece of content the subscriber manages; no reader surfaces it, and that is correct —

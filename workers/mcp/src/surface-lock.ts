@@ -1187,4 +1187,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.143": "sha256:76f35804be318bbaa5fc74ef343a2b8b8d7827bda15d61b270d19348e95cbcaa",
 	// #1109: get_instance_operator_manual gains context_offset (the generated `context` is paged when it would not fit).
 	"0.1.144": "sha256:b85546933951009b9816349cad5747b19301501e4e2597eddc28d64cfbef06e2",
+	// #1123: ten HTTP credential profile + binding tools (list/get/test/create/update/rotate/delete, list/bind/unbind bindings).
+	"0.1.145": "sha256:7d2bb71e86f66f3369b65cacb81433192af6fb17bec1ef7e79c44157ce11d1b8",
 };

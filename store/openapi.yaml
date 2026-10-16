@@ -341,6 +341,44 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    HttpProfile:
+      type: object
+      description: A named HTTP credential profile (#1123). Metadata only — the secret is never returned.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        strategy: { type: string, description: "`unspecified` until #1124." }
+        allowedOrigins: { type: array, items: { type: string } }
+        secret:
+          type: object
+          properties:
+            set: { type: boolean }
+            version: { type: integer }
+            rotatedAt: { type: string, nullable: true }
+        bindings:
+          type: array
+          items:
+            type: object
+            properties:
+              instanceId: { type: string }
+              connector: { type: string }
+              bindingName: { type: string }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    HttpBinding:
+      type: object
+      description: A profile bound to one instance and connector under a name (#1123). Never the secret.
+      properties:
+        bindingName: { type: string }
+        connector: { type: string }
+        profileId: { type: string }
+        profileName: { type: string }
+        description: { type: string }
+        strategy: { type: string }
+        allowedOrigins: { type: array, items: { type: string } }
+        secretVersion: { type: integer }
+        createdAt: { type: string }
     BrowserTakeoverState:
       type: string
       enum: [requested, active, resumed, ended, expired]
@@ -8435,6 +8473,236 @@ paths:
                   recoveryCodes: { type: string, nullable: true }
                   comments: { type: string, nullable: true }
                   recoveryHistory: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── HTTP credential profiles (#1123) ──────────────────────────────────────
+
+  /v1/http-profiles:
+    get:
+      summary: List the caller's HTTP credential profiles
+      description: |
+        Metadata only. A profile's secret is envelope-encrypted at rest and is never returned by
+        any route or MCP tool — there is no reveal. `secret` reports only that one is set, its
+        version and when it was last rotated.
+      operationId: listHttpProfiles
+      tags: [Credentials]
+      responses:
+        "200":
+          description: The caller's profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profiles: { type: array, items: { $ref: "#/components/schemas/HttpProfile" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      summary: Create an HTTP credential profile
+      description: |
+        `strategy` is `unspecified` for every profile until auth-strategy rendering (#1124) lands;
+        `allowedOrigins` is recorded but not yet enforced (#1125). Error messages never quote the secret.
+      operationId: createHttpProfile
+      tags: [Credentials]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, secret]
+              properties:
+                name: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" }
+                secret: { type: string, format: password, maxLength: 8192 }
+                description: { type: string, maxLength: 500 }
+                allowedOrigins: { type: array, maxItems: 20, items: { type: string, example: "https://discord.com" } }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { type: object, properties: { profile: { $ref: "#/components/schemas/HttpProfile" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: A profile with that name already exists }
+        "503": { description: Credential encryption is not configured }
+
+  /v1/http-profiles/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Read one HTTP credential profile (metadata only)
+      operationId: getHttpProfile
+      tags: [Credentials]
+      responses:
+        "200":
+          description: The profile
+          content:
+            application/json:
+              schema: { type: object, properties: { profile: { $ref: "#/components/schemas/HttpProfile" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Update a profile's metadata
+      description: Name, description and allowed origins. A `secret` here is refused — rotate it instead.
+      operationId: updateHttpProfile
+      tags: [Credentials]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                allowedOrigins: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { type: object, properties: { profile: { $ref: "#/components/schemas/HttpProfile" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: A profile with that name already exists }
+    delete:
+      summary: Delete a profile and every binding to it
+      operationId: deleteHttpProfile
+      tags: [Credentials]
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean }
+                  id: { type: string }
+                  unbound: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/http-profiles/{id}/rotate:
+    post:
+      summary: Replace a profile's secret
+      description: Bindings keep pointing at the profile, so every bound instance uses the new secret. `secret.version` increments.
+      operationId: rotateHttpProfileSecret
+      tags: [Credentials]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secret]
+              properties:
+                secret: { type: string, format: password, maxLength: 8192 }
+      responses:
+        "200":
+          description: Rotated
+          content:
+            application/json:
+              schema: { type: object, properties: { profile: { $ref: "#/components/schemas/HttpProfile" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/http-profiles/{id}/test:
+    get:
+      summary: Storage-test a profile
+      description: |
+        Checks the secret is present and decrypts, and reports origins and bindings. Sends nothing
+        over the network and returns no part of the secret; `scope` says what it does not establish.
+      operationId: testHttpProfile
+      tags: [Credentials]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The checks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profileId: { type: string }
+                  ok: { type: boolean }
+                  checks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        check: { type: string }
+                        ok: { type: boolean }
+                        detail: { type: string }
+                  scope: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/http-bindings:
+    get:
+      summary: List the HTTP credential profiles an instance may use
+      description: An instance reaches a profile only through one of its own bindings. Metadata only.
+      operationId: listInstanceHttpBindings
+      tags: [Credentials]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The instance's bindings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bindings: { type: array, items: { $ref: "#/components/schemas/HttpBinding" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/http-bindings/{bindingName}:
+    parameters:
+      - { $ref: "#/components/parameters/InstanceId" }
+      - { name: bindingName, in: path, required: true, schema: { type: string } }
+    put:
+      summary: Bind one of the caller's profiles to an instance under a name
+      description: Both the profile and the instance must belong to the caller. Re-binding a name points it at another profile.
+      operationId: bindHttpProfile
+      tags: [Credentials]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profileId]
+              properties:
+                profileId: { type: string }
+                connector: { type: string, default: http }
+      responses:
+        "200":
+          description: Bound
+          content:
+            application/json:
+              schema: { type: object, properties: { binding: { $ref: "#/components/schemas/HttpBinding" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Remove a binding from an instance
+      operationId: unbindHttpProfile
+      tags: [Credentials]
+      parameters:
+        - { name: connector, in: query, required: false, schema: { type: string, default: http } }
+      responses:
+        "200":
+          description: Unbound
+          content:
+            application/json:
+              schema: { type: object, properties: { unbound: { type: boolean } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

@@ -91,6 +91,8 @@ export const INSTANCE_CHILD_TABLES = [
 	"instance_runtime_tasks",
 	"instance_runtime_task_events",
 	"instance_runtime_nodes",
+	// #1123 — a binding names an instance; the profile it points at is the owner's and survives.
+	"http_credential_bindings",
 	"instance_connector_grants",
 	"instance_connector_consent",
 	"instance_mcp_consent",

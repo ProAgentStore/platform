@@ -12,6 +12,7 @@ import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
+import { registerHttpProfileTools } from "./http-profiles.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerBrowserVerificationTools } from "./browser-verification.js";
@@ -608,6 +609,17 @@ const TABLE: Record<string, Row> = {
 	// caller asking whether the platform is slow, so it has no scope gate and no auth refusal.
 	platform_health: ["account", "none", null, null, "token"],
 	write_instance_memory: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,key,token,type"],
+	// #1123 — named HTTP credential profiles + per-instance bindings.
+	list_http_profiles: ["httpProfiles", "read", null, null, "token"],
+	get_http_profile: ["httpProfiles", "read", null, null, "profile_id,token"],
+	test_http_profile: ["httpProfiles", "read", null, null, "profile_id,token"],
+	create_http_profile: ["httpProfiles", "write", null, "envelope", "allowed_origins,description,dry_run,name,secret,token"],
+	update_http_profile: ["httpProfiles", "write", null, "envelope", "allowed_origins,description,dry_run,name,profile_id,token"],
+	rotate_http_profile_secret: ["httpProfiles", "write", null, "envelope", "dry_run,profile_id,secret,token"],
+	delete_http_profile: ["httpProfiles", "destructive", "delete_http_profile", "envelope", "confirm,dry_run,profile_id,token"],
+	list_instance_http_bindings: ["httpProfiles", "read", null, null, "instance_id,token"],
+	bind_http_profile: ["httpProfiles", "write", null, "envelope", "binding_name,connector,dry_run,instance_id,profile_id,token"],
+	unbind_http_profile: ["httpProfiles", "write", null, "envelope", "binding_name,connector,dry_run,instance_id,token"],
 };
 
 /** Which registrar owns each tool — the seam #305 introduced, checked rather than
@@ -625,6 +637,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	connectors: registerConnectorGrantTools as any,
 	connectorAccounts: registerConnectorAccountTools as any,
 	guide: registerGuideTools as any,
+	httpProfiles: registerHttpProfileTools as any,
 	consoleLink: registerConsoleLinkTools as any,
 	localBrowser: registerLocalBrowserTools as any,
 	browserVerification: registerBrowserVerificationTools as any,
