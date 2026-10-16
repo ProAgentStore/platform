@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
+import type { Connection, ConnectionContext } from "agents";
+import { refuseReusedRequestIds } from "./request-isolation.js";
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
 import { buildAgentListing } from "./agent-listing.js";
@@ -100,6 +102,18 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	private tokenSubjectCache = newTokenSubjectCache();
 	/** When this session last recorded each instance it touched (#787) — see `recent-instances.ts`. */
 	private touchThrottle = newTouchThrottle();
+
+	/**
+	 * A POST whose JSON-RPC id is still in flight on another connection of this session is refused
+	 * before it is dispatched (#1111): the transport routes a reply by that id to the first connection
+	 * holding it, so two in-flight requests sharing an id receive each other's results. See
+	 * `request-isolation.ts`. Synchronous up to `super.onConnect`, which records this connection's ids
+	 * before yielding — so two POSTs arriving together cannot both pass the check.
+	 */
+	override onConnect(conn: Connection, ctx: ConnectionContext): Promise<void> {
+		if (refuseReusedRequestIds(ctx.request, this.getConnections(), conn).length) return Promise.resolve();
+		return super.onConnect(conn, ctx);
+	}
 
 	private safety(provided?: string): SafetyContext {
 		return {

@@ -380,6 +380,35 @@ This server does **not** set `isError`. A failure is one of:
 Check for both. A permission denial is a configuration fact, not a transient failure:
 retrying returns the identical message and writes another audit row.
 
+### Every mutation identifies its own call (#1111)
+
+A tool that can change something (anything not annotated `readOnlyHint: true`) appends one
+more text block after its result, and the same facts under
+`_meta["proagentstore.online/receipt"]`:
+
+```
+---MCP-RECEIPT---
+tool: rename_instance
+requestId: 7
+mcpSessionId: 9f3c…
+target: instance_id=…
+---END-RECEIPT---
+```
+
+Compare `tool`, `requestId` and `target` with the call you made before trusting the answer.
+The first content block is unchanged, so a client parsing `content[0].text` as JSON is
+unaffected. Read-only results carry no receipt.
+
+### Never reuse a request id while it is in flight
+
+Replies are routed by JSON-RPC request id within an MCP session, so two in-flight requests
+sharing an id would receive each other's results. This happened in production on
+2026-10-16: one client sent every call as id `0` on a single session (#1111). The server now
+**refuses** a request whose id is still in flight on another request in the same session:
+it answers with JSON-RPC error `-32600` ("Request id … is already in use by another request
+in flight in this MCP session, so this request was not run") and does not run it. Send
+every request with a new id. Reusing an id after its request has completed is not refused.
+
 ### A first call that blames your parameters did not come from this server
 
 Some clients report a first call on a fresh session as one of:

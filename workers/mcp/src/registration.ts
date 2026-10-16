@@ -1,5 +1,5 @@
 import { type CallAuditRecord, callEvent, currentCallAudit, errorName, newCallRecord, noteArguments, withCallAudit } from "./call-audit.js";
-import { correlationFromExtra, withCallCorrelation } from "./call-context.js";
+import { correlationFromExtra, currentCallCorrelation, withCallCorrelation } from "./call-context.js";
 import type { TextResult } from "./http.js";
 import { auditCallOutcome, type SafetyContext } from "./safety.js";
 import { recordLatency } from "./latency.js";
@@ -204,7 +204,10 @@ export function installRegistrationPipeline(
 			// After the handler, so a slow KV never delays the answer's computation — and only for a
 			// call that ran: a suspended account's attempts are not "work it was doing".
 			if (!blocked && opts.touch) await opts.touch(name, first as Record<string, unknown> | undefined, provided);
-			return metadata.outputSchema ? withStructuredContent(result) : result;
+			const shaped = metadata.outputSchema ? withStructuredContent(result) : result;
+			// A call that can change something says which call it was (#1111), so a caller can tell its
+			// own answer from anyone else's. Read-only results stay as they are.
+			return readOnly ? shaped : withCallReceipt(shaped, name, first as Record<string, unknown> | undefined);
 		};
 
 		// Every handler runs inside its own request's correlation (#1038), so whatever it audits
@@ -254,4 +257,34 @@ function withStructuredContent(result: unknown): unknown {
 	const shaped = result as { content?: Array<{ text?: string }>; structuredContent?: unknown };
 	if (shaped.structuredContent !== undefined) return result;
 	return { ...shaped, structuredContent: { error: shaped.content?.[0]?.text ?? "No result." } };
+}
+
+/** The `_meta` key a mutation's receipt is published under (#1111). */
+export const RECEIPT_META_KEY = "proagentstore.online/receipt";
+
+/** The input fields that name what a call acted on, most specific first. Values only — never content. */
+const TARGET_FIELDS = ["instance_id", "agent_id", "session_id", "run_id", "entry_id", "task_id", "job_key", "application_id", "trigger_id", "connection_id", "repo_id", "repo", "id"] as const;
+
+/** What a call acted on, as `field=value` — the first naming field its input carries, or "n/a". */
+export function receiptTarget(input: Record<string, unknown> | undefined): string {
+	for (const f of TARGET_FIELDS) {
+		const v = input?.[f];
+		if ((typeof v === "string" && v) || typeof v === "number") return `${f}=${String(v)}`;
+	}
+	return "n/a";
+}
+
+/**
+ * Attach the call's own receipt to a mutating tool's result (#1111): the tool, the JSON-RPC request id
+ * and MCP session it answers, and what it acted on — as `_meta` for clients and as a final text block
+ * for a model reading the content. An extra content item, never a change to the first: callers parse
+ * `content[0].text` as JSON. Ids the call never carried read "unknown" rather than vanish.
+ */
+export function withCallReceipt(result: unknown, tool: string, input: Record<string, unknown> | undefined): unknown {
+	const r = result as { content?: unknown; _meta?: Record<string, unknown> } | null;
+	if (!r || typeof r !== "object" || !Array.isArray(r.content)) return result;
+	const c = currentCallCorrelation();
+	const receipt = { tool, requestId: c?.requestId ?? "unknown", mcpSessionId: c?.mcpSessionId ?? "unknown", target: receiptTarget(input) };
+	const text = `---MCP-RECEIPT---\ntool: ${receipt.tool}\nrequestId: ${receipt.requestId}\nmcpSessionId: ${receipt.mcpSessionId}\ntarget: ${receipt.target}\n---END-RECEIPT---`;
+	return { ...r, content: [...r.content, { type: "text", text }], _meta: { ...(r._meta ?? {}), [RECEIPT_META_KEY]: receipt } };
 }

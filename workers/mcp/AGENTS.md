@@ -123,7 +123,14 @@ Connection methods and the full tool table: [`README.md`](./README.md).
     block on `initialize`; it is maintained alongside the tool surface, so prefer it to
     assumptions carried in from another MCP server.
 
-15. **Report a run's state in the platform's words, not your own.** `health` has four
+15. **Use a new JSON-RPC id for every request, and check a mutation's receipt (#1111).** Two
+    requests in flight on one session with the same id would receive each other's replies,
+    so the server refuses the second with JSON-RPC error `-32600` and does not run it. Every
+    tool that can change something ends its result with a `---MCP-RECEIPT---` block (also
+    `_meta["proagentstore.online/receipt"]`) naming the tool, request id, session and target:
+    check it matches the call you made.
+
+16. **Report a run's state in the platform's words, not your own.** `health` has four
     values — `working`, `waiting`, `stalled`, `ended` — and `ended` is returned for any run
     that is not `running`, so it is the usual answer from `check_instance_loop`. `ended`
     makes no claim that anything is running. Do not derive a verdict from `status` or from

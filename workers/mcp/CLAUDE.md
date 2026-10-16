@@ -79,6 +79,7 @@ src/
 │                         `SERVER_INSTRUCTIONS` and `PLATFORM_GUIDE` render — one copy, two channels
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── call-audit.ts         the one outcome event every tool call closes with (#1089)
+├── request-isolation.ts  refuses a POST whose JSON-RPC id is in flight elsewhere in the session (#1111)
 ├── audit-ledger.ts       the audit ledger's time-inverted key layout + page reader (#1016)
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      15 tools — collections, records, agent files, KB search, activity
