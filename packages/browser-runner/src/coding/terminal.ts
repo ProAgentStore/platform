@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { RunnerInputError } from "../errors.js";
 import { capturePane, createSession, killSession, listSessionsDetailed, runCommand as tmuxRunCommand, sendKey as tmuxSendKey, sendText as tmuxSendText, sessionExists, tmuxExec } from "./tmux.js";
 
 export type TerminalBackend = "tmux" | "kitty" | "iterm2";
@@ -27,7 +28,7 @@ export function splitTerminalTarget(raw: string, fallback?: TerminalBackend): { 
 	const value = String(raw || "").trim();
 	const m = value.match(/^(tmux|kitty|iterm2):(.+)$/i);
 	if (m) return { backend: m[1].toLowerCase() as TerminalBackend, id: m[2].trim() };
-	if (!fallback) throw new Error("A target must include a backend prefix like `tmux:main`, or pass `backend` separately.");
+	if (!fallback) throw new RunnerInputError("A target must include a backend prefix like `tmux:main`, or pass `backend` separately.");
 	return { backend: fallback, id: value };
 }
 
@@ -55,7 +56,7 @@ export function captureTerminalTarget(target: string, opts: { backend?: Terminal
 	const t = splitTerminalTarget(target, opts.backend);
 	switch (t.backend) {
 		case "tmux":
-			if (!sessionExists(t.id)) throw new Error(`No tmux session "${t.id}".`);
+			if (!sessionExists(t.id)) throw new RunnerInputError(`No tmux session "${t.id}".`, 404);
 			return capturePane(t.id, Math.min(Math.max(Number(opts.lines) || 200, 1), 2000));
 		case "kitty":
 			return kittyExec(["@", "get-text", "--match", `id:${t.id}`, "--extent", "all"], 5000);
@@ -231,10 +232,10 @@ function kittyForegroundCommand(id: string): string | null {
 
 export function runTerminalCommand(target: string, command: string, backend?: TerminalBackend): string {
 	const t = splitTerminalTarget(target, backend);
-	if (!command.trim()) throw new Error("A `command` is required.");
+	if (!command.trim()) throw new RunnerInputError("A `command` is required.");
 	switch (t.backend) {
 		case "tmux":
-			if (!sessionExists(t.id)) throw new Error(`No tmux session "${t.id}".`);
+			if (!sessionExists(t.id)) throw new RunnerInputError(`No tmux session "${t.id}".`, 404);
 			tmuxRunCommand(t.id, command);
 			return capturePane(t.id, 200);
 		case "kitty":
@@ -249,10 +250,10 @@ export function runTerminalCommand(target: string, command: string, backend?: Te
 
 export function sendTerminalKeys(target: string, opts: { backend?: TerminalBackend; text?: string; keys?: string[] }): string {
 	const t = splitTerminalTarget(target, opts.backend);
-	if (opts.text == null && (!opts.keys || opts.keys.length === 0)) throw new Error("Provide `text` and/or `keys` to send.");
+	if (opts.text == null && (!opts.keys || opts.keys.length === 0)) throw new RunnerInputError("Provide `text` and/or `keys` to send.");
 	switch (t.backend) {
 		case "tmux":
-			if (!sessionExists(t.id)) throw new Error(`No tmux session "${t.id}".`);
+			if (!sessionExists(t.id)) throw new RunnerInputError(`No tmux session "${t.id}".`, 404);
 			if (opts.text != null) tmuxSendText(t.id, opts.text);
 			for (const key of opts.keys ?? []) tmuxSendKey(t.id, key);
 			return capturePane(t.id, 200);
@@ -261,7 +262,7 @@ export function sendTerminalKeys(target: string, opts: { backend?: TerminalBacke
 			for (const key of opts.keys ?? []) kittyExec(["@", "send-key", "--match", `id:${t.id}`, kittyKeyName(key)]);
 			return captureTerminalTarget(t.id, { backend: "kitty" });
 		case "iterm2":
-			if ((opts.keys ?? []).length > 0) throw new Error("iTerm2 generic key events are not supported yet; send text or run a command.");
+			if ((opts.keys ?? []).length > 0) throw new RunnerInputError("iTerm2 generic key events are not supported yet; send text or run a command.");
 			itermSessionScript(t.id, `tell theSession to write text ${appleString(opts.text ?? "")}`);
 			return captureTerminalTarget(t.id, { backend: "iterm2" });
 	}
@@ -272,7 +273,7 @@ export function createTerminalTarget(opts: { backend: TerminalBackend; name?: st
 	switch (opts.backend) {
 		case "tmux": {
 			const name = String(opts.name || "").trim();
-			if (!name) throw new Error("A `name` is required for tmux.");
+			if (!name) throw new RunnerInputError("A `name` is required for tmux.");
 			if (sessionExists(name)) return { backend: "tmux", id: name, name, existed: true, workDir };
 			createSession(name, workDir, opts.command);
 			return { backend: "tmux", id: name, name, workDir };

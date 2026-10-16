@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { RunnerInputError } from "../errors.js";
 
 /**
  * Repo/workdir helpers for the coding engine.
@@ -259,11 +260,13 @@ export function ensureRepo(
 		if (entries.length > 0) {
 			// The owner's own folder (a monorepo subfolder, a plain project) — run in it untouched.
 			if (opts.ownFolder) return dir;
-			throw new Error(`Refusing to clone into non-empty directory "${dir}" (no .git found) — move it aside or point at an empty path.`);
+			// A refusal about the owner's folder, answered as one (#1116) — never a runner crash.
+			throw new RunnerInputError(`Refusing to clone into non-empty directory "${dir}" (no .git found) — move it aside or point at an empty path.`, 409);
 		}
 		if (opts.ownFolder && checkWorkdir(dir).insideWorkTree) {
-			throw new Error(
+			throw new RunnerInputError(
 				`"${dir}" is an empty folder inside another git checkout — not cloning a second repository into it. Point this repo at the checkout itself, or remove the folder.`,
+				409,
 			);
 		}
 		rmSync(dir, { recursive: true, force: true });

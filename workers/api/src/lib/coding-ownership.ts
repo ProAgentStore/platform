@@ -210,13 +210,14 @@ export function runnerEngineProbe(env: Env, instanceId: string, userId: string):
 
 /**
  * Did `/coding/capture` fail because the runner has no session with exactly this id? The runner
- * answers a missing session with 500 `{"error":"No coding session: <id>"}`, which `callRunner`
- * raises as `Runner /coding/capture → 500: <body>`. Anything else is not that answer.
+ * answers a missing session with `{"error":"No coding session: <id>"}` — 404 from #1116 on, 500 on an
+ * older installed runner — which `callRunner` raises as `Runner /coding/capture → <status>: <body>`.
+ * Anything else is not that answer.
  */
 export function captureSaysSessionAbsent(e: unknown, sessionId: string): boolean {
 	const msg = e instanceof Error ? e.message : "";
-	const prefix = "Runner /coding/capture → 500: ";
-	if (!msg.startsWith(prefix)) return false;
+	const prefix = ["Runner /coding/capture → 404: ", "Runner /coding/capture → 500: "].find((p) => msg.startsWith(p));
+	if (!prefix) return false;
 	try {
 		const body = JSON.parse(msg.slice(prefix.length)) as { error?: unknown };
 		return body?.error === `No coding session: ${sessionId}`;

@@ -239,7 +239,10 @@ describe("the probe: only the stamped machine's exact-session absence is `stoppe
 		expect(captureSaysSessionAbsent(new Error('Runner /coding/capture → 500: {"error":"No coding session: S1"}'), "S1")).toBe(true);
 		expect(captureSaysSessionAbsent(new Error('Runner /coding/capture → 500: {"error":"No coding session: S10"}'), "S1")).toBe(false);
 		expect(captureSaysSessionAbsent(new Error('Runner /coding/act → 500: {"error":"No coding session: S1"}'), "S1")).toBe(false);
-		expect(captureSaysSessionAbsent(new Error('Runner /coding/capture → 404: {"error":"No coding session: S1"}'), "S1")).toBe(false);
+		// #1116: a current runner answers that lookup 404 (an older one, 500) — the same sentence either way.
+		expect(captureSaysSessionAbsent(new Error('Runner /coding/capture → 404: {"error":"No coding session: S1"}'), "S1")).toBe(true);
+		// …but a 404 for the ROUTE (an older runner without the endpoint) is not that answer.
+		expect(captureSaysSessionAbsent(new Error('Runner /coding/capture → 404: {"error":"Not found"}'), "S1")).toBe(false);
 		expect(captureSaysSessionAbsent("No coding session: S1", "S1")).toBe(false);
 	});
 });

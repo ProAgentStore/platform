@@ -248,6 +248,9 @@ describe("makeRunnerGuard", () => {
 
 	it("names only the runner's own no-such-session answer as a lost session", () => {
 		expect(isRunnerSessionAbsent(new Error('Runner /coding/act → 500: {"error":"No coding session: csess_1"}'))).toBe(true);
+		// #1116: a current runner answers it 404 — a lookup, not a crash; still a lost session.
+		expect(isRunnerSessionAbsent(new Error('Runner /coding/act → 404: {"error":"No coding session: csess_1"}'))).toBe(true);
+		expect(isRunnerSessionAbsent(new Error('Runner /coding/act → 404: {"error":"Not found"}'))).toBe(false);
 		expect(isRunnerSessionAbsent(new Error("Runner /coding/act → 500: typecheck failed"))).toBe(false);
 		expect(isRunnerSessionAbsent(new Error('Runner /coding/act → 409: {"error":"No coding session: s1"}'))).toBe(false);
 		expect(isRunnerSessionAbsent("No coding session: s1")).toBe(false);

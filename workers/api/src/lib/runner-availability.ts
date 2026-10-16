@@ -301,10 +301,14 @@ export function makeRunnerGuard(cfg: {
 	}
 }
 
-/** The runner answered that it holds no coding session with the id asked about — it restarted and lost it (#1053). */
+/**
+ * The runner answered that it holds no coding session with the id asked about — it restarted and lost
+ * it (#1053). A runner from #1116 on answers 404 (a lookup, not a crash); an older one answered 500
+ * with the same sentence, and installed runners of both kinds are in the field.
+ */
 export function isRunnerSessionAbsent(e: unknown): boolean {
 	const msg = e instanceof Error ? e.message : "";
-	return /^Runner \/coding\/\S+ → 500: .*"error":"No coding session: /.test(msg);
+	return /^Runner \/coding\/\S+ → (404|500): .*"error":"No coding session: /.test(msg);
 }
 
 /**

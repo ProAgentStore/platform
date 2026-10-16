@@ -101,6 +101,36 @@ setTimeout(() => process.exit(7), 300);
 	});
 });
 
+describe("a caller's lookup is answered, not recorded as a crash (#1116)", () => {
+	/** What the owner's MCP `list_errors(source: "runner-crash")` showed as crashes on 2026-10-16. */
+	it("an unknown coding session → 404, a malformed terminal target → 400, an unknown tmux session → 404, an unknown task → 404 — same sentences, nothing recorded; a genuine failure still is", async () => {
+		const started = await startRunnerServer({ host: "127.0.0.1", port: 0, dataDir: dir, token: "secret", instanceId: "inst-1", headless: true });
+		const headers = { Authorization: "Bearer secret", "X-PAGS-Instance-Id": "inst-1", "Content-Type": "application/json" };
+		const post = async (path: string, body: unknown) => {
+			const res = await fetch(`${started.url}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
+			return { status: res.status, error: ((await res.json()) as { error?: string }).error ?? "" };
+		};
+		try {
+			expect(await post("/coding/capture", { sessionId: "csess_gone-1116" })).toEqual({ status: 404, error: "No coding session: csess_gone-1116" });
+			expect(await post("/terminal/run", { target: "main", command: "ls" })).toEqual({ status: 400, error: "A target must include a backend prefix like `tmux:main`, or pass `backend` separately." });
+			expect(await post("/terminal/capture", { target: "main" })).toMatchObject({ status: 400 });
+			expect(await post("/terminal/run", { target: "tmux:pags-1116-absent-session", command: "ls" })).toEqual({ status: 404, error: 'No tmux session "pags-1116-absent-session".' });
+			expect(await post("/tasks/task-gone-1116/approve", {})).toEqual({ status: 404, error: "Task not found: task-gone-1116" });
+			// None of that is a runner bug: no crash report was written for any of it.
+			expect(existsSync(file()) ? onDisk().reports : []).toEqual([]);
+
+			// A genuine failure on the runner's side is still a 500 AND a crash report.
+			started.runner.store.listTasks = () => {
+				throw new Error("disk went away");
+			};
+			expect((await fetch(`${started.url}/tasks`, { headers })).status).toBe(500);
+			expect(onDisk().reports).toEqual([expect.objectContaining({ kind: "request_failure", route: "GET /tasks" })]);
+		} finally {
+			await started.close();
+		}
+	});
+});
+
 describe("crash-safe files (#1087)", () => {
 	it("an interrupted write leaves the previous file intact, and its stray temp file is removed on the next open", () => {
 		const log = new CrashLog(file());

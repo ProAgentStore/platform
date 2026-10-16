@@ -520,7 +520,7 @@ export class CodingRuntime {
 				session.interrupt();
 				break;
 			default:
-				throw new Error(`Unknown coding action: ${(action as { kind: string }).kind}`);
+				throw new RunnerInputError(`Unknown coding action: ${(action as { kind: string }).kind}`);
 		}
 		return this.snapshot(sessionId);
 	}
@@ -706,7 +706,8 @@ export class CodingRuntime {
 
 	private require(sessionId: string): HeadlessSession {
 		const session = this.sessions.get(sessionId);
-		if (!session) throw new Error(`No coding session: ${sessionId}`);
+		// A caller naming a session this runner does not hold is a lookup, not a crash (#1116): 404, with the same sentence.
+		if (!session) throw new RunnerInputError(`No coding session: ${sessionId}`, 404);
 		return session;
 	}
 }

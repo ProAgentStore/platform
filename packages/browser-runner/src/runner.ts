@@ -254,7 +254,7 @@ export class LocalRunner {
 	async approveTask(id: string): Promise<RunnerTask> {
 		const task = this.requireTask(id);
 		if (task.status !== "needs_approval") {
-			throw new Error(`Task is not waiting for approval: ${task.status}`);
+			throw new RunnerInputError(`Task is not waiting for approval: ${task.status}`, 409);
 		}
 		task.status = "queued";
 		task.updatedAt = new Date().toISOString();
@@ -680,7 +680,7 @@ export class LocalRunner {
 		if (task.type === "browser.open") {
 			const url = String(task.input.url || "");
 			if (!url || !/^https?:\/\//.test(url)) {
-				throw new Error("browser.open requires an http(s) url");
+				throw new RunnerInputError("browser.open requires an http(s) url");
 			}
 			const context = await this.getBrowserContext();
 			const page = context.pages()[0] || (await context.newPage());
@@ -719,12 +719,12 @@ export class LocalRunner {
 			this.addTaskEvent(task, "browser.goto.completed", "Browser page loaded", output);
 			return output;
 		}
-		throw new Error(`Unknown task type: ${task.type}`);
+		throw new RunnerInputError(`Unknown task type: ${task.type}`);
 	}
 
 	private requireTask(id: string): RunnerTask {
 		const task = this.store.getTask(id);
-		if (!task) throw new Error(`Task not found: ${id}`);
+		if (!task) throw new RunnerInputError(`Task not found: ${id}`, 404);
 		return task;
 	}
 
