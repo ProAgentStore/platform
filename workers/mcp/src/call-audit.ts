@@ -15,7 +15,8 @@
  *    engine turn, run or deploy it started (`receiptOf: "tool_call"`).
  *  - `dry_run` — previewed; nothing changed.
  *  - `denied` — refused before acting: suspension, missing scope, read-only, confirmation, sign-in.
- *  - `failed` — the tool RETURNED an error (an `Error:` text, a JSON `error`, `isError`).
+ *  - `failed` — the tool RETURNED an error (an `Error:` text, a JSON `error`, `isError`), or reported it did
+ *    not succeed (`success: false`, or a handler audit with `result.ok === false` — a nested tool's refusal, #1118).
  *  - `error` — the handler THREW; whatever it started may or may not have landed.
  *  - `invalid_input` — the SDK rejected the call before the handler ran (schema, unknown tool).
  *  - `unknown` — the tool could not confirm whether its write landed (`outcome:"unknown"`).
@@ -119,13 +120,15 @@ export function classifyReturn(result: unknown): Verdict {
 	const body = textOf(result);
 	if (body !== undefined && /^\s*\{/.test(body)) {
 		try {
-			const parsed = JSON.parse(body) as { outcome?: unknown; error?: unknown; confirmation?: { reason?: unknown } };
+			const parsed = JSON.parse(body) as { outcome?: unknown; error?: unknown; success?: unknown; confirmation?: { reason?: unknown } };
 			if (parsed && typeof parsed === "object") {
 				if (parsed.outcome === "unknown") {
 					const r = parsed.confirmation?.reason;
 					return { action: "unknown", failureClass: "unconfirmed", reason: typeof r === "string" && UNKNOWN_REASONS.has(r) ? r : "unconfirmed" };
 				}
 				if (parsed.error) return errorVerdict(typeof parsed.error === "string" ? parsed.error : "", "error_field");
+				// A refusal answered as HTTP 200 `{success:false}` with no `error` (#1118): the tool said no.
+				if (parsed.success === false) return { action: "failed", failureClass: "returned_error", reason: "success_false" };
 			}
 		} catch {
 			// Not JSON after all: judged as text below.
@@ -166,6 +169,9 @@ export function decide(rec: CallAuditRecord): Verdict {
 	// A returned error whose text did not carry the status still had one: the API's answer, noted by `http.ts`.
 	if (returned.action === "failed" && returned.failureClass === "returned_error" && rec.upstreamStatus) return { action: "failed", failureClass: "upstream", reason: `api_${rec.upstreamStatus}` };
 	if (returned.action !== "completed") return returned;
+	// The handler judged the result itself and said it failed (#1118): a nested tool's `{success:false}`
+	// audits as `result.ok: false` (`auditOk`), and a paged reply need not carry `success` at its top level.
+	if (rec.handlerEvents.some((e) => (e.result as { ok?: unknown } | undefined)?.ok === false)) return { action: "failed", failureClass: "returned_error", reason: "success_false" };
 	const last = rec.handlerEvents.at(-1)?.action;
 	if (last === "unknown" || last === "unconfirmed") return { action: "unknown", failureClass: "unconfirmed", reason: "unconfirmed" };
 	if (last === "failed") return { action: "failed", failureClass: "returned_error", reason: "handler_failed" };
@@ -190,6 +196,7 @@ const EXPLAIN: Record<string, string> = {
 	output_validation: "The tool ran, but its result broke its output schema; the caller got a protocol error.",
 	protocol_error: "The MCP server answered with a protocol error.",
 	handler_failed: "The tool reported that its operation failed.",
+	success_false: "The tool answered success:false — it refused or did not do what was asked.",
 	is_error: "The tool returned an error result.",
 	error_text: "The tool returned an error result.",
 	error_field: "The tool returned an error result.",
