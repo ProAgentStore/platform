@@ -119,6 +119,15 @@ describe("starting a run", () => {
 		expect(spawned).toHaveLength(2);
 	});
 
+	it("a PAUSED run holds no slot (#1079): a second run starts beside it, and the cap still bounds working runs", async () => {
+		const rt = runtime();
+		rt.start(envelope({ browserProfile: "default" })); // pauses for consent before it does anything
+		await settle();
+		expect(rt.status({ runId: "run-1" }).state).toBe("paused");
+		expect(rt.start(envelope({ runId: "run-2", requestId: "req-2" })).status).toBe("running");
+		expect(() => rt.start(envelope({ runId: "run-3", requestId: "req-3" }))).toThrow(/already running 1 research run/);
+	});
+
 	it("runs in a home-relative folder the owner chose, and refuses one outside home", async () => {
 		const rt = runtime();
 		rt.start(envelope({ workspace: { kind: "path", path: "~/jobs" } }));

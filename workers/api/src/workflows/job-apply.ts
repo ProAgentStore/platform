@@ -7,6 +7,7 @@ import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { commitGuardSpec } from "../lib/commit-guard.js";
 import { fabricationBlockReason } from "../lib/fabrication-guard.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
+import { markCardApplied, recordPauseDecision } from "../lib/owner-decisions.js";
 import { decryptKey } from "../lib/crypto.js";
 import { deepLinkFor } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
@@ -378,6 +379,14 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			const reason = result.outcome === "captcha" ? "challenge" : result.outcome === "needs_input" ? "needs_input" : "stuck";
 			const label = result.outcome === "captcha" ? result.challenge ?? "captcha" : result.outcome === "needs_input" ? result.fieldNeeded ?? "a value" : result.detail ?? "this step";
 			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined }));
+			// #1079: the question is a durable decision on this card — an answer given after the window
+			// below closes is stored on it, and the next application to this posting uses it.
+			if (reason === "needs_input") {
+				await step.do(`decision-${round}`, async () => {
+					await recordPauseDecision(env, { instanceId, userId, kind: "job_apply", subjectId: taskId, taskId, scope: job.url, field: result.fieldNeeded ?? label, question: label }).catch(() => undefined);
+					return null;
+				});
+			}
 
 			// Reach out to the user — an in-app notification + web push (+ Slack if set) —
 			// so they know the application is paused waiting on THEM, instead of it sitting
@@ -457,7 +466,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			if (result.outcome === "needs_input" && providedValue && result.fieldNeeded) {
 				const field = result.fieldNeeded;
 				const value = providedValue;
-				await step.do(`save-input-${round}`, async () => { await saveAskAndHoldAnswer(env, userId, field, value); return null; });
+				await step.do(`save-input-${round}`, async () => {
+					await saveAskAndHoldAnswer(env, userId, field, value);
+					await markCardApplied(env, instanceId, taskId, taskId).catch(() => undefined); // this run consumed it (#1079)
+					return null;
+				});
 				job.providedAnswers = { ...(job.providedAnswers ?? {}), [field]: value };
 			}
 			// After a solved captcha, suppress re-detection on that SAME page (its

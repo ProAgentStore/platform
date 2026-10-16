@@ -686,7 +686,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	});
 	server.tool(
 		"resume_application",
-		"Release a paused fill once the owner has handled what it waits on (a captcha, a sign-in, a consent box in the runner's browser) — optionally with answers to its question, which become usable for that run only and are not stored by PAGS.",
+		"Release a paused fill once the owner has handled what it waits on (a captcha, a sign-in, a consent box in the runner's browser) — optionally with answers to its question. Answers are stored on the application first (#1079): delivered to a paused run, and kept for the next fill of this application when the run has already ended.",
 		resume.shape,
 		resume.handler,
 	);

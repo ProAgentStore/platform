@@ -176,7 +176,7 @@ describe("end to end: approved lead → materials_ready → filled and awaiting 
 		expect(paused.body.application).toMatchObject({ status: "blocked", blockReason: "missing_answer", blockQuestions: ["Expected salary?"] });
 		expect(JSON.stringify(paused.body.run.trace)).not.toContain("secret answer");
 
-		// The owner answers; the answer goes to the runner, not into PAGS's records.
+		// The owner answers; the answer goes to the runner and onto the application's decision (#1079), never into the application record.
 		runner("running", { lastSeq: 2, events: [{ seq: 2, type: "run.resumed", at: "2026-10-07T00:07:00Z" }] });
 		const resumed = await call("POST", `/ap/application-runs/${runId}/resume`, { answers: [{ question: "Expected salary?", answer: "150000 AUD" }] });
 		expect(resumed.body.run.status).toBe("running");
@@ -2008,3 +2008,44 @@ describe("explicit acknowledgement for standing auto-submit (#1039)", () => {
 	});
 });
 
+
+describe("a Runner answer is a durable decision on the application (#1079)", () => {
+	const decisions = () => d1.sqlite.prepare("SELECT question, answer, answered_via, task_id, scope, applied_ref FROM owner_decisions ORDER BY asked_at, rowid").all() as Array<Record<string, unknown>>;
+	const pause = () => runner("paused", { pause: { reason: "missing_answer", question: "Expected salary?" }, events: [{ seq: 1, type: "run.paused", at: "2026-10-07T00:06:00Z", pauseReason: "missing_answer" }] });
+
+	it("a question pause is recorded; the answer is stored FIRST, delivered, and marked as used by that run", async () => {
+		const runId = (await call("POST", "/ap/application-runs", readyApp("lead-d1"))).body.run.id as string;
+		pause();
+		await call("GET", `/ap/application-runs/${runId}`);
+		expect(decisions()).toEqual([expect.objectContaining({ question: "Expected salary?", answer: null, task_id: runId, scope: "lead-d1" })]);
+		runner("running", { lastSeq: 2, events: [{ seq: 2, type: "run.resumed", at: "2026-10-07T00:07:00Z" }] });
+		await call("POST", `/ap/application-runs/${runId}/resume`, { answers: [{ question: "Expected salary?", answer: "150000 AUD" }] });
+		expect(decisions()).toEqual([expect.objectContaining({ answer: "150000 AUD", answered_via: "console", applied_ref: runId })]);
+	});
+
+	it("an answer to a run that already ended is kept — not refused — and the next fill of that application is given it", async () => {
+		const first = (await call("POST", "/ap/application-runs", readyApp("lead-d2"))).body.run.id as string;
+		pause();
+		await call("GET", `/ap/application-runs/${first}`);
+		// The machine restarts: the run is lost before anyone answered.
+		answers["/local-apply/status"] = { status: 404, body: { error: "No application run" } };
+		await call("GET", `/ap/application-runs/${first}`);
+		const late = await call("POST", `/ap/application-runs/${first}/resume`, { answers: [{ question: "Expected salary?", answer: "150000 AUD" }] });
+		expect(late.status).toBe(200);
+		expect(sent.some((x) => x.path === "/local-apply/resume")).toBe(false);
+		expect(decisions()).toEqual([expect.objectContaining({ answer: "150000 AUD", applied_ref: null })]);
+
+		await d1.DB.prepare("UPDATE job_applications SET status = 'materials_ready' WHERE id = 'lead-d2'").run();
+		const next = await call("POST", "/ap/application-runs", { eventType: "job.application.materials_ready", eventId: "t1:lead-d2:again", applicationId: "lead-d2", tailorInstanceId: "t1", leadId: "lead-d2" });
+		const nextRun = next.body.run.id as string;
+		expect(dispatches().find((x) => x.body.runId === nextRun)?.body.ownerAnswers).toEqual([{ question: "Expected salary?", answer: "150000 AUD" }]);
+		expect(decisions()).toEqual([expect.objectContaining({ applied_ref: nextRun })]);
+	});
+
+	it("a resume with no answers on an ended run is still refused — there is nothing to keep", async () => {
+		const runId = (await call("POST", "/ap/application-runs", readyApp("lead-d3"))).body.run.id as string;
+		answers["/local-apply/status"] = { status: 404, body: { error: "No application run" } };
+		await call("GET", `/ap/application-runs/${runId}`);
+		expect((await call("POST", `/ap/application-runs/${runId}/resume`, {})).status).toBe(409);
+	});
+});

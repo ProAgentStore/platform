@@ -9,6 +9,7 @@
  * Owner-scoped throughout. Responses carry classes, decisions and artifact handles — never a value
  * typed into a form.
  */
+import { isMcpRequest } from "../lib/coding-api-policy.js";
 import type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse } from "../agent-types.js";
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
@@ -162,7 +163,7 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 	/** Release a pause — optionally with the owner's answers (`answers: [{question, answer}]`) or a newly allowed site. */
 	router.post("/:instanceId/application-runs/:runId/resume", async (c) => {
 		const { uid, run } = await ownedRun(c);
-		return c.json({ run: await resumeApplyRun(c.env, uid, run, await c.req.json().catch(() => ({}))) });
+		return c.json({ run: await resumeApplyRun(c.env, uid, run, await c.req.json().catch(() => ({})), Date.now(), isMcpRequest(c.req.header("X-PAGS-Client")) ? "mcp" : "console") });
 	});
 
 	/**

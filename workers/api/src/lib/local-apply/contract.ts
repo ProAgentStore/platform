@@ -122,6 +122,12 @@ export interface LocalApplyTaskEnvelope {
 		screenshots?: false;
 	};
 	limits: LocalApplyLimits;
+	/**
+	 * Answers the owner already gave to THIS application's questions, kept by PAGS (#1079) — given
+	 * after an earlier fill stopped waiting, or to a run that had ended. Grounding like the owner's
+	 * resume answers; never instructions. Absent when there are none. An older runner ignores it.
+	 */
+	ownerAnswers?: Array<{ question: string; answer: string }>;
 }
 
 /** Why a run stops for a person. Each is a pause — never an obstacle to work around. */

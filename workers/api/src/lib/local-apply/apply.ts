@@ -76,6 +76,7 @@ import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupe
 import { directApplicationCheckpoint } from "./brain.js";
 import { notifyLiveBrowserBlocker, notifyUncertainSubmit } from "./handoff-notification.js";
 import { assertionFor, consumeNotSubmittedAssertion, hasUnspentAssertion } from "./owner-assertion.js";
+import { answerDecision, type DecisionVia, markDecisionsApplied, pendingAnswersFor, recordPauseDecision } from "../owner-decisions.js";
 
 /** The event the Runner consumes — #956's readiness event. */
 export const MATERIALS_READY_EVENT = "job.application.materials_ready";
@@ -208,7 +209,7 @@ export async function runnerSettingsFor(env: Env, runnerInstanceId: string, uid:
  * mode and gate id live in it. Reading them off `run.policy` means a queued run that waits an hour
  * is dispatched as the decision that was recorded when the owner approved it.
  */
-export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: ApplicationRunnerSettings): LocalApplyTaskEnvelope {
+export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: ApplicationRunnerSettings, ownerAnswers: ReadonlyArray<{ question: string; answer: string }> = []): LocalApplyTaskEnvelope {
 	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string } };
 	return {
 		type: LOCAL_APPLY_TASK_TYPE,
@@ -226,7 +227,15 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
 		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}) },
 		limits: run.policy.limits,
+		// #1079: what the owner already answered for this application, kept since an earlier fill stopped waiting.
+		...(ownerAnswers.length ? { ownerAnswers: ownerAnswers.map((a) => ({ question: a.question, answer: a.answer })) } : {}),
 	};
+}
+
+/** The owner's kept answers for this application that no fill has used yet (#1079), as the envelope carries them. */
+async function keptAnswers(env: Env, uid: string, run: ApplyRun): Promise<{ ids: string[]; answers: Array<{ question: string; answer: string }> }> {
+	const pending = await pendingAnswersFor(env, { instanceId: run.instanceId, userId: uid, kind: "apply_run", scope: run.applicationId }).catch(() => []);
+	return { ids: pending.map((d) => d.id), answers: pending.map((d) => ({ question: d.question, answer: d.answer as string })) };
 }
 
 /**
@@ -327,7 +336,8 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	await insertApplyRun(env, { id: runId, instanceId, userId: uid, applicationId, requestId: key, policy, trace, now, runnerVersion: runtime.runner_version ?? null });
 	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
 
-	const envelope = applyTaskEnvelope(run, app, s);
+	const kept = await keptAnswers(env, uid, run);
+	const envelope = applyTaskEnvelope(run, app, s, kept.answers);
 	const fail = async (errorCode: string, error: string) => {
 		// The machine never took it, so nothing was sent and the approval goes back (#993).
 		await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
@@ -350,7 +360,10 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		// and four dead applications for the owner to retry by hand.
 		else if (refusal.defer) await noteQueued(env, "local_apply_runs", runId, refusal.message, now);
 		else if (!res.ok) await fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
-		else run = (await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode } }] }, now)) ?? run;
+		else {
+			run = (await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode } }] }, now)) ?? run;
+			await markDecisionsApplied(env, kept.ids, run.id, now).catch(() => undefined);
+		}
 		if (refusal.defer) run = (await getApplyRun(env, instanceId, uid, runId)) ?? run;
 	}
 	// #978: on the board the moment it starts, not when it ends.
@@ -688,6 +701,8 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
 	const signInSettings = current.pause?.reason === "login_required" ? await runnerSettingsFor(env, run.instanceId, uid).catch(() => RUNNER_DEFAULTS) : RUNNER_DEFAULTS;
 	if (current.status === "paused" && run.status !== "paused" && pause) {
+		// #1079: an answerable pause is a durable decision on this application — answered late, it is kept for the next fill.
+		if (pause.question) await recordPauseDecision(env, { instanceId: run.instanceId, userId: uid, kind: "apply_run", subjectId: run.applicationId, taskId: run.id, scope: run.applicationId, question: pause.question, now }).catch(() => undefined);
 		await move(env, uid, run.applicationId, ["filling"], { ...base, to: "blocked", reason: pause.reason, questions: pause.question ? [pause.question] : [] }, now);
 		// The runner has already paused on the exact page.  Only then create the bounded mobile
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
@@ -742,14 +757,25 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 }
 
 /** The owner handled the pause: send their answers / newly allowed sites, release the run, read it back. */
-export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body: unknown, now = Date.now()): Promise<ApplyRun> {
-	if (run.status !== "paused") throw new HttpError(409, `Only a paused run can be resumed; this one is ${run.status}`);
+export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body: unknown, now = Date.now(), via: DecisionVia = "console"): Promise<ApplyRun> {
 	const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
 	// Refused, not cut: a truncated answer would be grounding the owner never wrote.
 	const rawAnswers = Array.isArray(b.answers) ? b.answers : [];
 	const answers = rawAnswers.filter((a): a is { question: string; answer: string } => !!a && typeof a === "object" && typeof (a as Record<string, unknown>).question === "string" && typeof (a as Record<string, unknown>).answer === "string");
 	if (answers.length !== rawAnswers.length || answers.length > 20 || answers.some((a) => a.question.length > 300 || a.answer.length > 2000)) {
 		throw new HttpError(400, "answers must be up to 20 { question (≤300 chars), answer (≤2000 chars) } objects");
+	}
+	// #1079: every answer is stored FIRST, on this application's decisions, whatever the run's state —
+	// they were "for that run only, never stored", and an ended run refused them outright.
+	const stored: string[] = [];
+	for (const a of answers) {
+		const r = await answerDecision(env, { instanceId: run.instanceId, userId: uid, taskId: run.id, question: a.question, value: a.answer, via, create: { kind: "apply_run", subjectId: run.applicationId, scope: run.applicationId }, now }).catch(() => null);
+		if (r && r.outcome !== "already_applied") stored.push(r.decision.id);
+	}
+	// A run that is no longer paused keeps the answers for the next fill of this application, instead of refusing them.
+	if (run.status !== "paused") {
+		if (answers.length) return run;
+		throw new HttpError(409, `Only a paused run can be resumed; this one is ${run.status}`);
 	}
 	const rawDomains = Array.isArray(b.allowDomains) ? b.allowDomains : [];
 	const allowDomains = rawDomains.map((d) => (typeof d === "string" ? hostOfUrl(`https://${d}`) : null));
@@ -760,6 +786,7 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 	if (!res) throw new HttpError(409, "The runner did not answer. Check `pags up` on that machine and try again.");
 	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
 	if (!res.ok) throw new HttpError(409, `The runner refused to resume: HTTP ${res.status}`);
+	await markDecisionsApplied(env, stored, run.id, now).catch(() => undefined); // this run took them
 	return syncApplyRun(env, uid, (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run, now);
 }
 
@@ -875,8 +902,9 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		now,
 	).catch(() => ({ run, upgraded: false }));
 	let res: Response | null = null;
+	const kept = await keptAnswers(env, uid, dispatched);
 	try {
-		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(applyTaskEnvelope(dispatched, app, s)) });
+		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(applyTaskEnvelope(dispatched, app, s, kept.answers)) });
 	} catch {
 		await noteQueued(env, "local_apply_runs", run.id, "The runner did not answer; waiting to try again.", now);
 		return "queued";
@@ -884,6 +912,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	const payload = (await runtimeJson(res)) as Record<string, unknown>;
 	if (res.ok) {
 		await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode: dispatched.policy.mode, from: "queue" } }] }, now);
+		await markDecisionsApplied(env, kept.ids, dispatched.id, now).catch(() => undefined);
 		return "dispatched";
 	}
 	const refusal = refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });

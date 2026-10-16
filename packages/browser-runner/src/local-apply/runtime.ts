@@ -202,6 +202,16 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 	const limits = { maxMinutes: posInt(l.maxMinutes, 60) ?? 0, maxPages: posInt(l.maxPages, 200) ?? 0, maxActions: posInt(l.maxActions, 1000) ?? 0 };
 	if (Object.values(limits).some((v) => !v)) throw bad("limits are out of range");
 	const opt = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 300) : undefined);
+	// #1079: the owner's kept answers, within a resume's bounds — never an instruction. One over a bound is
+	// dropped, never cut: a shortened answer would be grounding the owner never wrote.
+	const ownerAnswers: Array<{ question: string; answer: string }> = [];
+	for (const a of Array.isArray(o.ownerAnswers) ? o.ownerAnswers : []) {
+		if (ownerAnswers.length >= LOCAL_APPLY_CAPS.answers) break;
+		const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
+		const question = typeof r.question === "string" ? r.question.trim() : "";
+		const answer = typeof r.answer === "string" ? r.answer.trim() : "";
+		if (question && answer && question.length <= LOCAL_APPLY_CAPS.questionChars && answer.length <= LOCAL_APPLY_CAPS.answerChars) ownerAnswers.push({ question, answer });
+	}
 	return {
 		type: LOCAL_APPLY_TASK_TYPE,
 		runId: o.runId as string,
@@ -218,6 +228,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		artifacts,
 		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}) },
 		limits,
+		...(ownerAnswers.length ? { ownerAnswers } : {}),
 	};
 }
 
@@ -430,6 +441,8 @@ export class LocalApplyRuntime {
 			if ("error" in v) throw new Blocked("artifact_changed", [`${v.error} Re-run tailoring for this application.`]);
 			blocks.push({ label: a.kind, text: v.text });
 		}
+		// #1079: answers the owner already gave this application, as a source — the same shape a resume's answers take.
+		if (e.ownerAnswers?.length) blocks.push({ label: "owner answers", text: e.ownerAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n") });
 		run.grounding = blocks.map((b) => b.text);
 
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("../local-browser/bridge-stdio.js", import.meta.url));

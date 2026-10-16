@@ -7,7 +7,7 @@ import type { Env } from "../../types.js";
 import { closeLiveTakeoverFor } from "../browser-takeovers.js";
 import { sqlLiteralList } from "../sql.js";
 import type { LocalBrowserEvent, LocalBrowserPlatformEventType, LocalBrowserResultEnvelope } from "./contract.js";
-import { ACTIVE_RUN_STATUSES, type EffectiveLocalBrowserPolicy, type LocalBrowserRunStatus, type LocalBrowserSettings, canTransition } from "./policy.js";
+import { ACTIVE_RUN_STATUSES, SLOT_HOLDING_STATUSES, type EffectiveLocalBrowserPolicy, type LocalBrowserRunStatus, type LocalBrowserSettings, canTransition } from "./policy.js";
 
 type DB = Pick<Env, "DB">;
 
@@ -108,6 +108,8 @@ const present = (r: RunRow): LocalBrowserRun => ({
 
 // Inlined, not bound: a closed set of constants (see `sqlLiteralList` for why that is the safe case).
 const ACTIVE_SQL = sqlLiteralList(ACTIVE_RUN_STATUSES);
+/** What counts against `maxConcurrent` (#1079): a paused run waits on a person and holds no slot. */
+const SLOT_SQL = sqlLiteralList(SLOT_HOLDING_STATUSES);
 
 // ── Settings (agent_instances.config.localBrowser) ───────────────────────────────────────────
 
@@ -157,7 +159,7 @@ export async function claimLocalBrowserRun(
 	const res = await env.DB.prepare(
 		`INSERT INTO local_browser_runs (id, instance_id, user_id, request_id, objective, status, policy, created_at, updated_at)
 		 SELECT ?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?7
-		  WHERE (SELECT COUNT(*) FROM local_browser_runs WHERE instance_id = ?2 AND user_id = ?3 AND status IN (${ACTIVE_SQL})) < ?8
+		  WHERE (SELECT COUNT(*) FROM local_browser_runs WHERE instance_id = ?2 AND user_id = ?3 AND status IN (${SLOT_SQL})) < ?8
 		 ON CONFLICT(instance_id, request_id) DO NOTHING`,
 	)
 		.bind(input.id, input.instanceId, input.userId, input.requestId, input.objective, JSON.stringify(input.policy), input.now, input.policy.limits.maxConcurrent)
@@ -167,7 +169,7 @@ export async function claimLocalBrowserRun(
 		.bind(input.instanceId, input.userId, input.requestId)
 		.first<RunRow>();
 	if (existing) return { kind: "existing", run: present(existing) };
-	const active = await env.DB.prepare(`SELECT COUNT(*) AS n FROM local_browser_runs WHERE instance_id = ?1 AND user_id = ?2 AND status IN (${ACTIVE_SQL})`)
+	const active = await env.DB.prepare(`SELECT COUNT(*) AS n FROM local_browser_runs WHERE instance_id = ?1 AND user_id = ?2 AND status IN (${SLOT_SQL})`)
 		.bind(input.instanceId, input.userId)
 		.first<{ n: number }>();
 	return { kind: "at_capacity", active: Number(active?.n ?? 0) };

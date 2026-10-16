@@ -6804,8 +6804,12 @@ paths:
         `already_applied` (202, a run already used an earlier answer; this one is kept in the
         history only). 409 only when the card has no question at all.
 
-        Anything else is the apply agent's browser handoff; a lost one (the runner restarted)
-        is reported as 409 rather than a misleading 200.
+        Anything else is the apply agent's browser handoff (#1079): when the application asked a
+        question, the answer is stored FIRST on its owner decision, then delivered to the live
+        run. If the run has stopped waiting (or no runner is connected) it is kept — saved to the
+        Profile and given to the next application to that posting — and the reply is 202
+        `kind: job_apply_late`, never the old 409 with nothing recorded. A lost handoff with no
+        recorded question is still 409.
       operationId: supplyApplyInput
       tags: [Apply]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -9005,7 +9009,7 @@ paths:
   /v1/instances/{instanceId}/application-runs/{runId}/resume:
     post:
       summary: Resume a paused application run
-      description: The owner handled the pause (captcha, sign-in, consent, a missing answer, a new site). Optional `answers` [{question, answer}] become groundable for the CLI on the runner — they are not stored by PAGS — and `allowDomains` admits a site. Resuming without an answer means "leave it blank".
+      description: The owner handled the pause (captcha, sign-in, consent, a missing answer, a new site). Optional `answers` [{question, answer}] are stored FIRST on the application's owner decisions (#1079), then become groundable for the CLI on the runner; on a run that has already ended they are kept, not refused, and the next fill of this application carries them (`ownerAnswers`). `allowDomains` admits a site. Resuming without an answer means "leave it blank"; an ended run with no answers is still 409.
       operationId: resumeApplicationRun
       tags: [Instances]
       parameters:
@@ -9310,7 +9314,7 @@ paths:
                 statement: { type: string, maxLength: 1000, description: "assert_not_submitted: what the owner checked, in their words — kept verbatim on the audit record." }
                 confirm: { type: string, description: "assert_not_submitted: exactly \"I checked the employer site and nothing was submitted\" (400 otherwise)." }
                 surface: { type: string, enum: [console, mcp], description: "Which owner surface acted; recorded on an assertion. Default console." }
-                answers: { type: array, maxItems: 20, description: "resume: for that run only, never stored. retry_tailoring (#1066): saved to the owner's Profile as reusable custom answers (never into a standard column) and given to this and every later Tailor run as a citable owner_answers source. An empty answer is skipped; an answer over 500 characters is refused with 400.", items: { type: object, properties: { question: { type: string, maxLength: 300 }, answer: { type: string, maxLength: 500 } } } }
+                answers: { type: array, maxItems: 20, description: "resume: stored on the application's owner decisions first (#1079), delivered to a paused run and given to the next fill. retry_tailoring (#1066): saved to the owner's Profile as reusable custom answers (never into a standard column) and given to this and every later Tailor run as a citable owner_answers source. An empty answer is skipped; an answer over 500 characters is refused with 400.", items: { type: object, properties: { question: { type: string, maxLength: 300 }, answer: { type: string, maxLength: 500 } } } }
       responses:
         "200": { description: "`{ item, result }` — the item as it now stands.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         "400": { $ref: "#/components/responses/BadRequest" }

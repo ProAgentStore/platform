@@ -3,6 +3,7 @@ import { closeLiveTakeoverFor, LIVE_TAKEOVER_STATES, latestTakeoverFor, transiti
 import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
 import { recordAnswer } from "../lib/coder-question-store.js";
+import { answerDecision, markDecisionsApplied, pendingAnswersFor } from "../lib/owner-decisions.js";
 import { wakeParkedRun } from "../lib/coding-park.js";
 import { isMcpRequest } from "../lib/coding-api-policy.js";
 import { logEvent } from "../lib/events.js";
@@ -20,7 +21,7 @@ import { findCredentialForHost } from "../lib/credentials.js";
 import { openBudget } from "../lib/delegation-budget-store.js";
 import { createLoopRun } from "../lib/agent-loop-store.js";
 import { BROWSER_RUN_ROUNDS, browserRunObjective } from "../lib/browser-run.js";
-import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers } from "../lib/profile.js";
+import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers, saveAskAndHoldAnswer } from "../lib/profile.js";
 import { parseResumeIntoProfile } from "../lib/resume-parse.js";
 import { timingSafeEqualStr } from "../lib/crypto.js";
 import { runShotKey } from "../lib/run-shots.js";
@@ -28,7 +29,7 @@ import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { deriveFromUrl } from "../lib/board.js";
 import { logError } from "../lib/error-log.js";
-import { callRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
+import { callRuntime, getLiveRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
 import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
 import { sqlTime } from "../lib/sql-time.js";
 
@@ -171,6 +172,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	try {
 		const cand = input.candidate ?? {};
 		const rawProfile = await getProfile(env, userId);
+		const decided = await pendingAnswersFor(env, { instanceId, userId, kind: "job_apply", scope: url }).catch(() => []);
 		const prof = profileToCandidate(rawProfile);
 		const prefs = profileToPreferences(rawProfile);
 		const cfg = await readInstanceConfig(env, instanceId, userId);
@@ -201,7 +203,8 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 			// Reuse answers the agent previously asked for via a ticket (saved to the
 			// Profile's custom JSON) so it never re-asks and never falls back to a
 			// wrong-country field — e.g. "australian working rights: Australian citizen".
-			providedAnswers: profileCustomAnswers(rawProfile),
+			// …and (#1079) answers the owner gave to THIS posting after an earlier run stopped waiting.
+			providedAnswers: { ...profileCustomAnswers(rawProfile), ...Object.fromEntries(decided.map((d) => [d.field ?? d.question, d.answer as string])) },
 			today: new Date().toISOString().slice(0, 10),
 		};
 
@@ -287,6 +290,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 				.catch(() => undefined);
 			throw new ApplyError(`Could not start the application: ${e instanceof Error ? e.message : String(e)}`, 500);
 		}
+		if (decided.length) await markDecisionsApplied(env, decided.map((d) => d.id), taskId).catch(() => undefined);
 		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0, loopRunId, ...(screenshotsOn ? {} : { screenshots: false as const }) } });
 		return { workflowId: instance.id, taskId };
 	} finally {
@@ -629,12 +633,26 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (body.taskId.startsWith(CODING_CARD_PREFIX)) {
 			return c.json({ ok: false, error: "No question was asked on that coding session, so there is nothing to answer." }, 409);
 		}
-		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
+		// #1079: a browser (JOB_APPLY) question is a durable decision too — the answer is written to it
+		// FIRST, then delivered. If the run has stopped waiting, it is kept and used next time, not refused.
+		const decided = await answerDecision(c.env, { instanceId, userId: session.uid, taskId: body.taskId, value, via });
+		if (decided?.outcome === "already_applied") {
+			return c.json({ ok: true, kind: "job_apply", outcome: "already_applied", delivered: false, recorded: true, decisionId: decided.decision.id, message: `That question was already answered, and ${decided.decision.appliedRef ?? "a run"} used the earlier answer. Your new answer is saved on the question's history, but nothing applied it.` }, 202);
+		}
+		const keepForNextRun = async () => {
+			const d = decided?.decision as NonNullable<typeof decided>["decision"];
+			await saveAskAndHoldAnswer(c.env, session.uid, d.field ?? d.question, value).catch(() => undefined);
+			await logEvent(c.env, { source: "apply", event: "apply.answered_late", message: "an answer arrived after the application stopped waiting; recorded for the next run", userId: session.uid, instanceId, level: "info", traceId: body.taskId, context: { decisionId: d.id, via } }).catch(() => undefined);
+			return c.json({ ok: true, kind: "job_apply_late", outcome: "recorded", delivered: false, recorded: true, decisionId: d.id, message: "The application had already stopped waiting, so this was not delivered to it. It is saved — on the question and in your Profile — and the next application to this posting uses it (Retry it from the board)." }, 202);
+		};
+		const runtime = decided ? await getLiveRuntime(c.env, instanceId, session.uid).catch(() => null) : await requireLiveRuntime(c.env, instanceId, session.uid);
+		if (!runtime) return keepForNextRun();
 		const res = await callRuntime(c.env, runtime, "/browser/input", {
 			method: "POST",
-			body: JSON.stringify({ taskId: body.taskId, value: String(body.value ?? "") }),
+			body: JSON.stringify({ taskId: body.taskId, value }),
 		});
 		const payload = (await runtimeJson(res)) as { ok?: boolean } | null;
+		if (payload && payload.ok === false && decided) return keepForNextRun();
 		// The runner reports a LOST handoff as `{ok:false}` with HTTP 200 (its own comment says
 		// "so the console can say session expired"), and this route passed the 200 straight
 		// through — so the console, which only alerts on a thrown error, showed success and

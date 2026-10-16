@@ -239,7 +239,9 @@ export class LocalBrowserRuntime {
 		const same = [...this.runs.values()].find((r) => r.envelope.instanceId === envelope.instanceId && r.envelope.requestId === envelope.requestId);
 		if (same) return { runId: same.envelope.runId, taskId: same.envelope.runId, status: same.state, existing: true };
 		if (this.runs.has(envelope.runId)) throw new RunnerInputError(`Run ${envelope.runId} already exists with another requestId`, 409);
-		const active = [...this.runs.values()].filter((r) => r.envelope.instanceId === envelope.instanceId && r.state !== "ended").length;
+		// A PAUSED run waits on a person and holds no slot (#1079) — the cloud counts the same way. Its own
+		// resume is the owner's act and is not refused, so the cap bounds STARTS; research is read-only.
+		const active = [...this.runs.values()].filter((r) => r.envelope.instanceId === envelope.instanceId && r.state === "running").length;
 		if (active >= envelope.limits.maxConcurrent) throw new RunnerInputError(`This machine is already running ${active} research run(s) for this agent (limit ${envelope.limits.maxConcurrent}).`, 409);
 		const selfUrl = this.deps.selfUrl();
 		if (!selfUrl) throw new RunnerInputError("The runner is still starting; try again in a moment.", 409);

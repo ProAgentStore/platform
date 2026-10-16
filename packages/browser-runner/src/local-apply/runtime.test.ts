@@ -163,6 +163,11 @@ describe("parseApplyEnvelope", () => {
 	])("refuses %s", (_label, over, msg) => {
 		expect(() => parseApplyEnvelope({ ...envelope(), ...over })).toThrow(msg as RegExp);
 	});
+	it("carries the owner's kept answers (#1079), bounded like a resume's, and drops anything that is not one", () => {
+		const e = parseApplyEnvelope({ ...envelope(), ownerAnswers: [{ question: "Expected salary?", answer: " 150000 AUD " }, { question: "x" }, "junk", { question: "", answer: "y" }, { question: "Too long?", answer: "z".repeat(100_000) }] });
+		expect(e.ownerAnswers).toEqual([{ question: "Expected salary?", answer: "150000 AUD" }]);
+		expect(parseApplyEnvelope(envelope()).ownerAnswers).toBeUndefined();
+	});
 	it("drops a gate sent with fill_and_review — the mode decides, not a stray field", () => {
 		const e = parseApplyEnvelope({ ...envelope(), policy: { mode: "fill_and_review", allowDomains: ["jobs.example.com"], submitGate: { gateId: "g" } } });
 		expect(e.policy.submitGate).toBeUndefined();

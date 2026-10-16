@@ -316,6 +316,13 @@ export function effectiveLocalBrowserPolicy(cap: LocalBrowserCapability, stored:
 /** A run's lifecycle. Terminal states never move again. */
 export type LocalBrowserRunStatus = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
 export const ACTIVE_RUN_STATUSES: readonly LocalBrowserRunStatus[] = ["queued", "running", "paused"];
+/**
+ * The runs that hold one of the instance's `maxConcurrent` slots (#1079). A PAUSED run is still open
+ * — it is synced, and resumable — but it is waiting for a person, not working, so it no longer stops
+ * a second run from starting. Research is read-only, so a second run beside a parked one cannot
+ * duplicate anything; the limit bounds the work in flight. The runner applies the same rule.
+ */
+export const SLOT_HOLDING_STATUSES: readonly LocalBrowserRunStatus[] = ["queued", "running"];
 const TRANSITIONS: Record<LocalBrowserRunStatus, readonly LocalBrowserRunStatus[]> = {
 	queued: ["running", "failed", "cancelled"],
 	running: ["paused", "completed", "failed", "cancelled"],
