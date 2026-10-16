@@ -338,6 +338,52 @@ describe("end to end: apply_requested → materials_ready, exactly once", () => 
 		expect(await d1.DB.prepare("SELECT status, block_reason FROM job_applications WHERE lead_id = 'email-expired'").first()).toMatchObject({ status: "blocked", block_reason: "job_unavailable" });
 	});
 
+	// #1098: a posting the owner pasted from a career site arrives with no title (no Scout read it). The Runner
+	// reads the live page first — exactly as for an email lead — and the page's own title names the lead.
+	const pasted = (id: string, url: string, over: Record<string, unknown> = {}) => {
+		const plan = planJobLeadTriage(
+			{ id, data: { url, title: null, company: null, source: "manual_url", source_domain: new URL(url).hostname, status: "unverified", ...over } } as never,
+			{ action: "apply", sourceInstanceId: "scout" },
+			{ now: "2026-10-07T00:00:00.000Z" },
+		);
+		if (!plan.ok || !plan.event) throw new Error("pasted fixture did not plan");
+		return plan.event;
+	};
+	const RACV = "https://careers.racv.com.au/job/Melbourne-Head-of-Engineering/1234567";
+
+	it("#1098: an untitled pasted career-site posting is read by the Runner first, and named by the page's own title", async () => {
+		const ev = pasted("paste-1", RACV);
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "live", jobUrl: RACV, applyUrl: RACV, evidence: "apply_control_present", title: "Head of Engineering | RACV Careers" } };
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		expect(sent.map((x) => x.path)).toEqual(["/local-apply/preflight", "/local-artifact/run"]);
+		expect(sent[0].body).toEqual({ jobUrl: RACV });
+		const task = sent.find((x) => x.path === "/local-artifact/run")?.body as { lead: { leadUrl: string; lead: Record<string, unknown> } };
+		expect(task.lead).toMatchObject({ leadUrl: RACV, lead: { title: "Head of Engineering | RACV Careers", source: "manual_url", url: RACV } });
+	});
+
+	it("#1098: a Runner that reports no title (an older CLI) still goes on — the lead is named by its site, never refused as malformed", async () => {
+		const ev = pasted("paste-2", RACV);
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "live", jobUrl: RACV, applyUrl: RACV, evidence: "apply_control_present" } };
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		const task = sent.find((x) => x.path === "/local-artifact/run")?.body as { lead: { lead: Record<string, unknown> } };
+		expect(task.lead.lead.title).toBe("Job posting on careers.racv.com.au");
+		expect(await d1.DB.prepare("SELECT block_reason FROM job_applications WHERE lead_id = 'paste-2'").first()).toMatchObject({ block_reason: null });
+	});
+
+	it("#1098: a pasted posting the Runner cannot read live is blocked before any materials — the owner is told why", async () => {
+		const ev = pasted("paste-3", RACV);
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "unverifiable", jobUrl: RACV, reason: "access_blocked" } };
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		expect(sent.map((x) => x.path)).toEqual(["/local-apply/preflight"]);
+		expect(await d1.DB.prepare("SELECT status, block_reason FROM job_applications WHERE lead_id = 'paste-3'").first()).toMatchObject({ status: "blocked", block_reason: "unverifiable_lead" });
+	});
+
+	it("#1098: a titled pasted lead (one the Scout's browser verified) is not read again", async () => {
+		const ev = pasted("paste-4", "https://www.seek.com.au/job/81234567", { title: "Staff Engineer", status: "new" });
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		expect(sent.map((x) => x.path)).toEqual(["/local-artifact/run"]);
+	});
+
 	it("concurrent distinct events for one work key return the one unchanged application before a second runtime task", async () => {
 		const eventFor = (leadId: string) => {
 			const plan = planJobLeadTriage(

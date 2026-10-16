@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateManualJobUrl } from "./manual-job-url.js";
+import { genericPostingUrl, validateManualJobUrl } from "./manual-job-url.js";
 
 describe("validateManualJobUrl (#1056)", () => {
 	it.each([
@@ -20,8 +20,11 @@ describe("validateManualJobUrl (#1056)", () => {
 		["https://127.0.0.1/job/81234567", "private_target"],
 		["https://10.0.0.5/viewjob?jk=0123456789abcdef", "private_target"],
 		["https://jobs.internal/job/1", "private_target"],
-		["https://careers.example.com/jobs/123", "provider_not_allowed"],
-		["https://www.seek.com.au.attacker.example/job/81234567", "provider_not_allowed"],
+		// #1098: a career site's home, search or category page is not ONE posting.
+		["https://careers.example.com/", "no_posting_id"],
+		["https://careers.example.com/careers", "no_posting_id"],
+		["https://careers.example.com/jobs?q=engineer&location=Melbourne", "no_posting_id"],
+		["https://careers.example.com/en-au/search?token=SECRET", "no_posting_id"],
 		["https://www.seek.com.au/jobs-in-information-communication-technology", "no_posting_id"],
 		["https://www.linkedin.com/jobs/search/?keywords=engineer", "no_posting_id"],
 		["https://www.linkedin.com/comm/jobs/view/abc?midToken=SECRET", "no_posting_id"],
@@ -30,5 +33,27 @@ describe("validateManualJobUrl (#1056)", () => {
 		expect(out).toMatchObject({ ok: false, reason });
 		expect(JSON.stringify(out)).not.toContain("SECRET");
 		expect(JSON.stringify(out)).not.toContain(raw);
+	});
+});
+
+describe("a posting on any other site (#1098)", () => {
+	it.each([
+		["https://careers.example.com/jobs/123", "https://careers.example.com/jobs/123"],
+		["https://racv.wd3.myworkdayjobs.com/en-US/RACV_Careers/job/Melbourne/Head-of-Engineering_R12345?utm_source=x", "https://racv.wd3.myworkdayjobs.com/en-US/RACV_Careers/job/Melbourne/Head-of-Engineering_R12345"],
+		["https://job-boards.greenhouse.io/acme?gh_jid=4567890&gh_src=SECRET", "https://job-boards.greenhouse.io/acme?gh_jid=4567890"],
+		["https://careers.example.com/jobs?jobId=R-20931&sessionId=SECRET&email=SECRET", "https://careers.example.com/jobs?jobId=R-20931"],
+		["https://CAREERS.example.com/job/42/#apply", "https://careers.example.com/job/42"],
+	])("accepts %s as ONE posting, keeping what identifies it and nothing personal", (raw, canonicalUrl) => {
+		const out = validateManualJobUrl(raw);
+		expect(out).toEqual({ ok: true, canonicalUrl, provider: "other" });
+		expect(JSON.stringify(out)).not.toContain("SECRET");
+	});
+
+	it("a lookalike of a known provider is just another site — the known provider's rules never apply to it", () => {
+		expect(validateManualJobUrl("https://www.seek.com.au.attacker.example/job/81234567")).toEqual({ ok: true, canonicalUrl: "https://www.seek.com.au.attacker.example/job/81234567", provider: "other" });
+	});
+
+	it("is the same URL however it was pasted, so a second paste dedupes", () => {
+		expect(genericPostingUrl("https://careers.example.com/job/42/?utm_campaign=a&b=2&a=1#x")).toBe(genericPostingUrl("https://careers.example.com/job/42?a=1&b=2&utm_source=z"));
 	});
 });

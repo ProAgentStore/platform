@@ -173,8 +173,10 @@ describe("unsafe, personalised or non-posting URLs", () => {
 	it.each([
 		["http://www.seek.com.au/job/81234567", "not_https"],
 		["https://169.254.169.254/latest/meta-data", "private_target"],
-		["https://careers.acme.example/jobs/81234567", "provider_not_allowed"],
 		["https://www.seek.com.au/jobs?keywords=engineer&sol=PERSONAL", "no_posting_id"],
+		// #1098: a career site's search or home is not ONE posting — refused for that, never for being another site.
+		["https://careers.racv.com.au/search?q=engineer&token=PERSONAL", "no_posting_id"],
+		["https://jobs.lever.co/", "no_posting_id"],
 	])("refuses %s with 422 %s — the receipt keeps the category and host, never the URL", async (url, reason) => {
 		const res = await intake(url);
 		expect(res.status).toBe(422);
@@ -232,5 +234,59 @@ describe("the lifecycle after browser verification — only verified active can 
 		const applied = await apply(body.leadId as string);
 		expect(applied.status).toBe(200);
 		expect(applied.body).toMatchObject({ transitioned: true, event: { eventType: "job.lead.apply_requested", leadUrl: SEEK_CANONICAL } });
+	});
+});
+
+/**
+ * #1098: a posting on ANY site — the company career pages the Scout's research surfaces (careers.racv.com.au, a
+ * Workday, Greenhouse or Lever portal) — becomes a lead. The Scout's browser may only verify its own allowed
+ * sites, so such a lead is stored `unverified`, as an email lead is: Apply is open, and the Application Runner
+ * reads the live page before anything is prepared (`application-tailor-routes.test.ts`).
+ */
+describe("a posting on any site, not only SEEK, Indeed or LinkedIn (#1098)", () => {
+	const WORKDAY = "https://racv.wd3.myworkdayjobs.com/en-US/RACV_Careers/job/Melbourne/Head-of-Engineering_R12345?source=LinkedIn&utm_medium=email";
+	const WORKDAY_CANONICAL = "https://racv.wd3.myworkdayjobs.com/en-US/RACV_Careers/job/Melbourne/Head-of-Engineering_R12345";
+	const apply = (leadId: string) => call(`/v1/instances/scout/job-leads/${leadId}/triage`, { action: "apply" });
+
+	it.each([
+		[WORKDAY, WORKDAY_CANONICAL],
+		["https://boards.greenhouse.io/acme/jobs/4567890?gh_src=PERSONAL&t=abc", "https://boards.greenhouse.io/acme/jobs/4567890?t=abc"],
+		["https://job-boards.greenhouse.io/acme?gh_jid=4567890&gh_src=x", "https://job-boards.greenhouse.io/acme?gh_jid=4567890"],
+		["https://jobs.lever.co/acme/8f1c2d3e-4b5a-6c7d-8e9f-0a1b2c3d4e5f#apply", "https://jobs.lever.co/acme/8f1c2d3e-4b5a-6c7d-8e9f-0a1b2c3d4e5f"],
+	])("%s becomes ONE unverified lead the owner can Apply to — never refused for its site", async (url, canonical) => {
+		const res = await intake(url);
+		expect(res.status).toBe(201);
+		expect(res.body).toMatchObject({ ok: true, duplicate: false, canonicalUrl: canonical, provider: "other", verificationState: "unverified", handoff: "none", receipt: { outcome: "created", provider: "other" } });
+		const stored = lead(res.body.leadId as string);
+		expect(stored?.data).toMatchObject({
+			url: canonical,
+			source: "manual_url",
+			source_domain: new URL(canonical).hostname,
+			status: "unverified",
+			lifecycle: [{ from: null, to: "unverified", action: "intake", version: 0 }],
+			verification: { state: "unverified", reason: "owner_selected_runner_verifies_on_apply", canonical_job_url: canonical },
+		});
+		// Not queued for the Scout's browser, which could only close it `unverifiable` on a site outside its list.
+		expect(verifications()).toEqual([]);
+		expect(deliveries()).toBe(0);
+		// Apply is open: the Runner's live-page read, not the intake, decides whether anything is prepared.
+		const applied = await apply(res.body.leadId as string);
+		expect(applied.status).toBe(200);
+		expect(applied.body).toMatchObject({ transitioned: true, event: { eventType: "job.lead.apply_requested", leadUrl: canonical, lead: { source: "manual_url" } } });
+	});
+
+	it("the same posting pasted again — another tracking source, a fragment — is a duplicate of the first lead", async () => {
+		const first = await intake(WORKDAY);
+		const again = await intake(`${WORKDAY_CANONICAL}?utm_source=newsletter#top`);
+		expect(again.status).toBe(200);
+		expect(again.body).toMatchObject({ ok: true, duplicate: true, leadId: first.body.leadId, receipt: { outcome: "duplicate" } });
+		expect(stores.get("scout")?.size).toBe(1);
+	});
+
+	it("keeps nothing personal from the pasted link, and no rejection is ever `provider_not_allowed`", async () => {
+		const res = await intake("https://careers.racv.com.au/job/Melbourne-Head-of-Engineering/1234567?sessionid=PERSONAL&email=me%40example.com&mkt_tok=PERSONAL");
+		expect(res.status).toBe(201);
+		expect(JSON.stringify([res.body, [...(stores.get("scout")?.values() ?? [])], receipts()])).not.toMatch(/PERSONAL|example\.com%40|me%40/);
+		expect(receipts().some((r) => r.rejection_reason === "provider_not_allowed")).toBe(false);
 	});
 });

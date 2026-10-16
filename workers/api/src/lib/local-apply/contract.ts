@@ -56,7 +56,8 @@ export type LocalApplyProfile = "isolated" | "default";
 
 /** Typed, redacted evidence from a read-only job-page/apply-control check. */
 export type LocalApplyPreflightResult =
-	| { state: "live"; jobUrl: string; applyUrl: string; evidence: "apply_control_present" }
+	/** `title`: the page's own title (CLI 0.4.137+), which names a pasted posting that arrived with none (#1098). */
+	| { state: "live"; jobUrl: string; applyUrl: string; evidence: "apply_control_present"; title?: string }
 	| { state: "unavailable"; jobUrl: string; reason: "expired" | "unavailable" }
 	| { state: "unverifiable"; jobUrl: string; reason: "navigation_failed" | "no_active_apply_path" | "access_blocked" };
 

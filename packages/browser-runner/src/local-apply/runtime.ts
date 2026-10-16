@@ -302,7 +302,8 @@ export class LocalApplyRuntime {
 			if (gone) return { state: "unavailable", jobUrl: parsed.toString(), reason: gone };
 			// An accessible Apply control is an active path, unlike a generic careers/search URL.
 			if (/(?:button|link)\s+"[^"]{0,80}\bapply(?: now| for| here)?\b|\bapply (?:now|for (?:this )?(?:job|role|position))\b|\bstart application\b/i.test(page)) {
-				return { state: "live", jobUrl: parsed.toString(), applyUrl: parsed.toString(), evidence: "apply_control_present" };
+				const title = page.match(/^\s*-?\s*Page Title:\s*(.+)$/m)?.[1]?.trim().slice(0, 300); // names a posting pasted with none (#1098)
+				return { state: "live", jobUrl: parsed.toString(), applyUrl: parsed.toString(), evidence: "apply_control_present", ...(title ? { title } : {}) };
 			}
 			return { state: "unverifiable", jobUrl: parsed.toString(), reason: "no_active_apply_path" };
 		} catch {

@@ -48,6 +48,8 @@ let pageUnavailable: "expired" | "unavailable" | null;
  * plain single-page form every other test here uses.
  */
 let seek: "ad" | "form" | null;
+/** The page title a Playwright snapshot reports (`- Page Title: …`), when the test sets one (#1098). */
+let pageTitle: string | null;
 let takeover: LocalApplyTakeoverAdapter;
 let takeoverOpen: string[];
 let takeoverInputs: unknown[];
@@ -65,7 +67,7 @@ const browser: BrowserTools = {
 			const url = seek === "ad" ? SEEK_AD : seek === "form" ? SEEK_FORM : "https://jobs.example.com/apply";
 			return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...(pageUnavailable ? { unavailable: pageUnavailable } : {}) })}` }] };
 		}
-		if (name === "browser_snapshot") return { content: [{ text: pageUnavailable ? "This job has expired and is no longer accepting applications." : seek === "ad" ? '- link "Apply" [ref=a1]' : '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]' }] };
+		if (name === "browser_snapshot") return { content: [{ text: (pageTitle ? `### Page\n- Page URL: https://jobs.example.com/role/42\n- Page Title: ${pageTitle}\n### Snapshot\n` : "") + (pageUnavailable ? "This job has expired and is no longer accepting applications." : seek === "ad" ? '- link "Apply" [ref=a1]' : '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]') }] };
 		if (name === "browser_click") {
 			clicks.push(String(args.target));
 			// Pressing the ad's Apply control is what puts the form on the screen.
@@ -136,6 +138,7 @@ beforeEach(() => {
 	clicks = [];
 	pageUnavailable = null;
 	seek = null;
+	pageTitle = null;
 	takeoverOpen = [];
 	takeoverInputs = [];
 	takeoverPages = [];
@@ -178,6 +181,24 @@ describe("email job-page preflight", () => {
 		});
 		expect(spawned).toEqual([]);
 		expect(() => rt.status({ runId: "run-1" })).toThrow(/No application run/);
+	});
+
+	it("reports the live page's own title, which names a posting the owner pasted with none (#1098)", async () => {
+		seek = "ad";
+		pageTitle = "Head of Engineering | RACV Careers";
+		await expect(runtime().preflight({ jobUrl: "https://jobs.example.com/role/42" })).resolves.toEqual({
+			state: "live",
+			jobUrl: "https://jobs.example.com/role/42",
+			applyUrl: "https://jobs.example.com/role/42",
+			evidence: "apply_control_present",
+			title: "Head of Engineering | RACV Careers",
+		});
+	});
+
+	it("with no title on the page, says nothing rather than inventing one", async () => {
+		seek = "ad";
+		const live = await runtime().preflight({ jobUrl: "https://jobs.example.com/role/42" });
+		expect(live).not.toHaveProperty("title");
 	});
 
 	it("marks an expired page unavailable rather than treating a recent email as live", async () => {

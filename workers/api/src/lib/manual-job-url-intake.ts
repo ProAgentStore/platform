@@ -2,15 +2,20 @@
  * Owner-selected job URL intake (#1056): the owner pastes ONE public job posting, and it enters the existing
  * pipeline exactly as a found lead would — never around it.
  *
- * - Only an allowlisted provider's canonical posting (`validateManualJobUrl`); the pasted URL is never stored.
+ * - Any public posting (`validateManualJobUrl`, #1098), reduced to its canonical URL; the pasted URL is never stored.
  * - Idempotent per owner and posting: the `created` receipt is claimed FIRST under a unique index, so two
  *   pastes racing cannot both create; the second, into any of the owner's Scouts, gets the first one's lead.
  * - The lead is written only through the Scout's job-lead create-or-get (work_key dedupe) — no generic
  *   collection write — and only into an instance the route has checked IS a job Scout.
- * - It is stored `awaiting_browser_verification`, never `unverified`: browser verification, behind the Scout's
- *   #1049 site policy and per-site consent, is the only way it becomes `new` with `verification.state: live`,
- *   and triage refuses Apply until then. Nothing is handed to the Tailor or Runner (`handoff: "none"`), and the
- *   Runner's final-submit approval is untouched.
+ * - A posting on Indeed, SEEK or LinkedIn is stored `awaiting_browser_verification`: browser verification, behind
+ *   the Scout's #1049 site policy and per-site consent, is the only way it becomes `new` with
+ *   `verification.state: live`, and triage refuses Apply until then.
+ * - A posting on any other site (#1098) — a career page the Scout's allowed sites do not cover, so its verifier
+ *   could only close it `unverifiable` — is stored `unverified`, as an email lead is: seen, not proven live. Apply
+ *   sends it to the Application Runner's read-only live-page preflight first (`local-artifact/tailor.ts`), which
+ *   may open the job's own site, and only a live page with an Apply control goes on to tailoring.
+ * - Nothing is handed to the Tailor or Runner at intake (`handoff: "none"`), and the Runner's final-submit
+ *   approval is untouched: an unknown site is never on its auto-submit allow list, so it fills and waits.
  */
 import type { Env } from "../types.js";
 import { enqueueBrowserVerification } from "./job-lead-queue.js";
@@ -97,7 +102,10 @@ export async function intakeManualJobUrl(env: Env, input: { instanceId: string; 
 	}
 
 	const at = new Date().toISOString();
-	const intake: JobLeadLifecycleEntry = { from: null, to: "awaiting_browser_verification", action: "intake", version: 0, at, note: "owner_selected" };
+	// A known provider waits for the Scout's browser; any other site is the Runner's to read on Apply (#1098).
+	const byRunner = provider === "other";
+	const status = byRunner ? "unverified" : "awaiting_browser_verification";
+	const intake: JobLeadLifecycleEntry = { from: null, to: status, action: "intake", version: 0, at, note: "owner_selected" };
 	const data = {
 		url: canonicalUrl,
 		title: null,
@@ -105,10 +113,12 @@ export async function intakeManualJobUrl(env: Env, input: { instanceId: string; 
 		source: "manual_url",
 		source_domain: new URL(canonicalUrl).hostname,
 		intake: { kind: "owner_selected", receipt_id: id, at },
-		status: "awaiting_browser_verification",
+		status,
 		lifecycle_version: 0,
 		lifecycle: [intake],
-		verification: { state: "awaiting_browser_verification", source: "manual_url", checked_at: null, canonical_job_url: canonicalUrl, active_apply_url: null, reason: "owner_selected_requires_browser_verification", evidence: null, attempts: 0 },
+		verification: byRunner
+			? { state: "unverified", source: "manual_url", checked_at: null, canonical_job_url: canonicalUrl, active_apply_url: null, reason: "owner_selected_runner_verifies_on_apply", evidence: null, attempts: 0 }
+			: { state: "awaiting_browser_verification", source: "manual_url", checked_at: null, canonical_job_url: canonicalUrl, active_apply_url: null, reason: "owner_selected_requires_browser_verification", evidence: null, attempts: 0 },
 	};
 	let lead: { id?: string; created?: boolean };
 	try {
@@ -130,6 +140,7 @@ export async function intakeManualJobUrl(env: Env, input: { instanceId: string; 
 		return answer(await receipt(env, id), true, lead.id, instanceId, await verificationStateOf(env, instanceId, lead.id));
 	}
 	await env.DB.prepare("UPDATE job_lead_intake_receipts SET lead_id = ?2 WHERE id = ?1").bind(id, lead.id).run();
+	if (byRunner) return answer(await receipt(env, id), false, lead.id, instanceId, "unverified");
 	// Through the Scout's #1049 site policy and per-site consent, like every lead the server cannot verify itself.
 	await enqueueBrowserVerification(env, { instanceId, userId, leadId: lead.id, workKey: workKeyForLead(data), canonicalUrl, expectedTitle: null, expectedCompany: null, reason: "owner_selected" });
 	return answer(await receipt(env, id), false, lead.id, instanceId, await verificationStateOf(env, instanceId, lead.id));

@@ -18,6 +18,7 @@ import { workKeyForLead } from "../job-lead-triage.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { moveApplication } from "../local-apply/store.js";
+import { hostOfUrl } from "../local-apply/policy.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { deliverEvent } from "../connections.js";
 import { readInstanceConfigPair } from "../instance-config.js";
@@ -157,7 +158,12 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	if (existing) return { kind: "existing", application: existing, run: existing.tailoringRunId ? await getTailorRun(env, instanceId, uid, existing.tailoringRunId) : null };
 
 	const now = Date.now();
-	const parsed = parseLocalArtifactLead(raw);
+	// #1098: an owner-pasted posting on a site no Scout verified arrives with no title. The Runner reads its page
+	// before anything is prepared (below); until then it is named by its site, never left malformed.
+	const rawLead = raw.lead && typeof raw.lead === "object" && !Array.isArray(raw.lead) ? (raw.lead as Record<string, unknown>) : null;
+	const untitledPaste = str(rawLead?.source) === "manual_url" && !str(rawLead?.title).trim();
+	const pastedHost = untitledPaste ? hostOfUrl(str(raw.leadUrl) || str(rawLead?.url)) : null;
+	const parsed = parseLocalArtifactLead(untitledPaste && pastedHost ? { ...raw, lead: { ...rawLead, title: `Job posting on ${pastedHost}` } } : raw);
 	const base = {
 		id: crypto.randomUUID(),
 		instanceId,
@@ -198,15 +204,17 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	// cannot reset its status/evidence or create another runtime task.
 	const existingWork = await getApplicationByWorkKey(env, instanceId, uid, workKey);
 	if (existingWork) return { kind: "existing", application: existingWork, run: existingWork.tailoringRunId ? await getTailorRun(env, instanceId, uid, existingWork.tailoringRunId) : null };
-	// Gmail's recent timestamp only establishes provenance. The downstream Runner must observe a
-	// specific live page and Apply control before even the Tailor starts preparation.
-	if (lead.lead.source?.toLowerCase() === "gmail") {
+	// Gmail's recent timestamp only establishes provenance, and a pasted posting on a site no Scout verified
+	// (#1098) only that the owner chose it. The downstream Runner must observe a specific live page and Apply
+	// control before even the Tailor starts preparation.
+	if (lead.lead.source?.toLowerCase() === "gmail" || untitledPaste) {
 		const validation = await preflightEmailLead(env, instanceId, uid, lead.leadUrl || lead.lead.url || "");
 		if (!validation.ok) {
 			const claim = await claimApplication(env, { ...base, workKey, lead: { ...lead, verification: { ...validation.result, checked_by: "application_runner", checked_at: iso(now) } }, status: "blocked", blockReason: validation.reason, blockQuestions: [validation.question] });
 			return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
 		}
-		lead = { ...lead, leadUrl: validation.result.applyUrl, lead: { ...lead.lead, url: validation.result.applyUrl } };
+		const title = untitledPaste && validation.result.title?.trim() ? clipMarked(validation.result.title.trim(), 300, { within: true }) : undefined;
+		lead = { ...lead, leadUrl: validation.result.applyUrl, lead: { ...lead.lead, url: validation.result.applyUrl, ...(title ? { title } : {}) } };
 		leadForStorage = { ...lead, verification: { ...validation.result, checked_by: "application_runner", checked_at: iso(now) } };
 	}
 	const pair = await readInstanceConfigPair(env, instanceId, uid);

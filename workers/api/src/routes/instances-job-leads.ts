@@ -79,9 +79,10 @@ export function registerJobLeadRoutes(router: Hono<{ Bindings: Env }>): void {
 	});
 
 	/**
-	 * Owner-selected job URL intake (#1056): ONE pasted public posting of an allowlisted provider becomes a lead
-	 * awaiting browser verification, behind the Scout's site consent — never a handoff, never a submit. 422 with
-	 * a reason category (never the URL) when it is not a canonical provider posting; `dry_run` writes nothing.
+	 * Owner-selected job URL intake (#1056, #1098): ONE pasted public posting on any site becomes a lead — awaiting
+	 * browser verification for Indeed/SEEK/LinkedIn, `unverified` (the Runner reads it on Apply) for any other —
+	 * never a handoff, never a submit. 422 with a reason category (never the URL) when it is not one public
+	 * posting; `dry_run` writes nothing.
 	 */
 	router.post("/:instanceId/job-leads/manual-url", async (c) => {
 		const session = await requireUser(c);

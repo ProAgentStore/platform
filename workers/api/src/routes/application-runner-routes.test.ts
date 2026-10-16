@@ -1929,6 +1929,40 @@ describe("a takeover requested AFTER the fill ended blocked on a sign-in streams
 	});
 });
 
+/**
+ * #1098: the Runner attempts an application on a site it has never seen — a company career page the owner pasted —
+ * and a hard block is handed to the owner, never reported as a submit. Auto-submit stays on the instance's own
+ * allow list: an unknown site is filled and waits for review, whatever the owner enabled for known ones.
+ */
+describe("an application on any site: attempted, never auto-submitted, a hard block handed to the owner (#1098)", () => {
+	const CAREERS = "https://careers.racv.com.au/job/Melbourne-Head-of-Engineering/1234567";
+
+	it("is dispatched with the job's own site allowed, in fill-and-review — the auto-submit gate refuses an unlisted site", async () => {
+		await enableAutoSubmit(); // auto-submit ON, for example.com only
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-1098", { url: CAREERS, title: "Head of Engineering" }));
+		expect(r.status).toBeLessThan(300);
+		const run = r.body.run;
+		expect(run.policy.mode).toBe("fill_and_review");
+		expect(run.policy.allowDomains).toContain("careers.racv.com.au");
+		expect(run.policy.gate.checks.find((c: { check: string }) => c.check === "domain_allowlisted")).toMatchObject({ ok: false });
+		const dispatched = dispatches()[0].body as { policy: { mode: string; allowDomains: string[]; submitGate?: unknown } };
+		expect(dispatched.policy).toMatchObject({ mode: "fill_and_review" });
+		expect(dispatched.policy.allowDomains).toContain("careers.racv.com.au");
+		expect(dispatched.policy.submitGate).toBeUndefined();
+	});
+
+	it("a sign-in wall the Runner cannot pass ends blocked with the owner's next step — never a submit", async () => {
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-1098b", { url: CAREERS, title: "Head of Engineering" }));
+		const runId = r.body.run.id as string;
+		const question = "Sign in to racv.com.au on this machine's application browser, then retry. Nothing was submitted.";
+		runner("ended", { lastSeq: 2, result: RESULT(runId, { outcome: "blocked", filled: 0, uploaded: [], blockReason: "login_required", questions: [question] }) });
+		const ended = await call("GET", `/ap/application-runs/${runId}`);
+		expect(ended.body.run.status).toBe("blocked");
+		expect(await appRow("lead-1098b")).toMatchObject({ status: "blocked", block_reason: "login_required", submit_attempted_at: null });
+		expect(JSON.parse(String((await appRow("lead-1098b"))?.block_questions))).toEqual([question]);
+	});
+});
+
 describe("deleting an agent", () => {
 	it.each([
 		["the Tailor (its applications and their audit go; the Runner's run rows stay)", "tailor-a", { apps: 0, audit: 0, runs: 1 }],
