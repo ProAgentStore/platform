@@ -475,7 +475,7 @@ const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
  */
 function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string; allowance?: AutoSubmitAllowance | null; onChanged: () => void }) {
 	const [s, setS] = useState<ApplicationRunnerSettingsView["settings"] | null>(null);
-	const [draft, setDraft] = useState({ profile: "", answers: "", allowDomains: "", roles: "", locations: "", exclude: "", minSalary: "", dailyCap: "0" });
+	const [draft, setDraft] = useState({ profile: "", answers: "", signInEmail: "", allowDomains: "", roles: "", locations: "", exclude: "", minSalary: "", dailyCap: "0" });
 	const [msg, setMsg] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [confirming, setConfirming] = useState(false);
@@ -486,7 +486,7 @@ function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string
 			const v = await api<ApplicationRunnerSettingsView>(`/v1/instances/${runnerId}/application-runner/settings`);
 			setS(v.settings);
 			const a = v.settings.autoSubmit;
-			setDraft({ profile: v.settings.sources.profile ?? "", answers: v.settings.sources.answers ?? "", allowDomains: v.settings.allowDomains.join(", "), roles: a.roles.join(", "), locations: a.locations.join(", "), exclude: a.exclude.join(", "), minSalary: a.minSalary === null ? "" : String(a.minSalary), dailyCap: String(a.dailyCap) });
+			setDraft({ profile: v.settings.sources.profile ?? "", answers: v.settings.sources.answers ?? "", signInEmail: v.settings.signInEmail ?? "", allowDomains: v.settings.allowDomains.join(", "), roles: a.roles.join(", "), locations: a.locations.join(", "), exclude: a.exclude.join(", "), minSalary: a.minSalary === null ? "" : String(a.minSalary), dailyCap: String(a.dailyCap) });
 			if (v.error) setMsg(v.error);
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
@@ -513,7 +513,7 @@ function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string
 	const save = async () => {
 		setMsg("");
 		try {
-			await put(rulesPayload(draftRules, { profile: draft.profile.trim() || null, answers: draft.answers.trim() || null }));
+			await put({ ...rulesPayload(draftRules, { profile: draft.profile.trim() || null, answers: draft.answers.trim() || null }), signInEmail: draft.signInEmail.trim() || null });
 			setMsg("Saved.");
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
@@ -561,6 +561,7 @@ function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string
 			<div className="grid sm:grid-cols-2 gap-2 mb-2">
 				{field("profile", "Profile file (in your workspace)", "profile.md")}
 				{field("answers", "Answers file (optional)", "answers.md")}
+				{field("signInEmail", "SEEK sign-in email (signs in with the emailed code)", "the address your SEEK account uses")}
 				{field("allowDomains", "Allowed sites", "boards.greenhouse.io, jobs.lever.co")}
 				{field("roles", "Approved roles", "engineer, developer")}
 				{field("locations", "Approved locations (optional)", "Sydney, Remote")}

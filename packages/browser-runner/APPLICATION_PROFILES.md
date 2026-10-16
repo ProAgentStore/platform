@@ -47,6 +47,26 @@ lives only in the browser profile.
    records which cookies appeared, then reopens the job page and carries on.
 3. **Later runs** check those cookies and press without asking.
 
+**SEEK signs itself in with the emailed code (#1106).** SEEK signs you in with a one-time code it emails
+to your account address. Set **SEEK sign-in email** in the Runner's submission policy (`signInEmail`) to
+the address your SEEK account uses. That address must be the Gmail this Runner is pinned to, with email
+access on (Settings → Permissions & Connections). After that, a SEEK sign-in pause is not handed to you:
+- PAGS has the runner open SEEK's sign-in, enter that address and press "Email me a sign in code".
+- PAGS reads the newest SEEK mail that arrived after the request and names a code. That is one search and
+  one message, read-only.
+- The runner types the code into the paused browser. Once SEEK lets the browser in, the run resumes and the
+  sign-in is recorded as above.
+
+The code is never stored or written to a trace. The trace keeps the mailbox and the Gmail message id. Not
+reaching the sign-in is an outcome with a reason, and you then get the ordinary sign-in handoff:
+- email access off;
+- the address is not the pinned mailbox — the run says which two differ;
+- no code within 5 minutes;
+- SEEK refusing the code;
+- a runner older than CLI 0.4.138.
+
+There is one try per run.
+
 **If the run ended before you signed in (#1100).** A sign-in pause lasts only as long as the run, and a
 run that runs out of time ends `blocked` (`login_required`). Taking over its board card then opens
 **this profile** at the job's page, with no run behind it. Sign in there and press Resume: the sign-in

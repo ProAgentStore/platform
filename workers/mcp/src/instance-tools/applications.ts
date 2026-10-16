@@ -458,6 +458,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 					maxMinutes: z.coerce.number().int().optional(),
 					maxPages: z.coerce.number().int().optional(),
 					maxActions: z.coerce.number().int().optional(),
+					signInEmail: z.string().nullable().optional().describe("The address your SEEK account uses (#1106). Set, a fill paused for a SEEK sign-in signs itself in with the code SEEK emails there, read from the Gmail this Runner is pinned to (which must be the same address, with email access on). null turns it off."),
 					autoSubmit: z
 						.object({
 							enabled: z.boolean().optional(),

@@ -41,7 +41,8 @@ import {
 	parseLocalApplyResult,
 	traceUrl,
 } from "./contract.js";
-import { type ApplicationRunnerSettings, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, hostOfUrl } from "./policy.js";
+import { type ApplicationRunnerSettings, RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, hostOfUrl } from "./policy.js";
+import { advanceEmailCodeSignIn, emailCodeWillTry } from "./email-code-sign-in.js";
 import {
 	type ApplicationMove,
 	type ApplyRun,
@@ -685,12 +686,14 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	const to = body.state === "paused" && pause ? "paused" : body.state === "running" ? "running" : run.status;
 	let current = (await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now)) ?? (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
+	const signInSettings = current.pause?.reason === "login_required" ? await runnerSettingsFor(env, run.instanceId, uid).catch(() => RUNNER_DEFAULTS) : RUNNER_DEFAULTS;
 	if (current.status === "paused" && run.status !== "paused" && pause) {
 		await move(env, uid, run.applicationId, ["filling"], { ...base, to: "blocked", reason: pause.reason, questions: pause.question ? [pause.question] : [] }, now);
 		// The runner has already paused on the exact page.  Only then create the bounded mobile
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
 		// successful login from a redirect.
-		await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
+		// #1106: a SEEK sign-in the email code can clear is not the owner's yet; they hear of it if it fails.
+		if (!(await emailCodeWillTry(env, current, signInSettings))) await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
 	} else if (current.status === "running" && run.status === "paused") {
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
@@ -698,6 +701,13 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	// A result is authoritative if it arrived at the deadline.  Otherwise a still-running CLI
 	// cannot turn status polling into an unbounded lease; PAGS stops and settles it itself.
 	if (timeLimitReached && current.status === "running") current = await stopTimedOutRun(env, runtime, uid, current, now);
+	if (current.status === "paused" && current.pause?.reason === "login_required") {
+		const signIn = await advanceEmailCodeSignIn(env, uid, current, signInSettings, now);
+		current = signIn.run;
+		if (signIn.outcome === "failed" && current.pause) await notifyLiveBrowserBlocker(env, uid, current, current.pause, now, attentionDeps).catch(() => undefined);
+		// The runner released its own pause: read it back now rather than a minute later.
+		if (signIn.outcome === "signed_in") return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
+	}
 	// Delivery is deliberately best-effort: the directive was persisted first. A later pull retries
 	// an unacknowledged directive with exactly the same checkpoint and decision.
 	if (current.status === "paused" && current.pause?.reason === "supervisor_checkpoint") {

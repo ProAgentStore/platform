@@ -98,7 +98,8 @@ const CONSENT_NAME = /\b(agree|consent|terms|privacy|acknowledge|certify|accept|
  * A field that is a credential: a sign-in, never an application answer. It includes the box an emailed or texted
  * one-time code goes into (#1014) — "Enter the 6-digit code we emailed you", "Sign-in code" — which has no password
  * field beside it, so the page check never sees a sign-in: the CLI is stopped at the field and the owner takes the
- * exact session over (#1013). The Runner holds no mailbox access and never reads, asks for or types a code itself.
+ * exact session over (#1013). The CLI never reads, asks for or types a code; on SEEK, PAGS may enter one into the
+ * paused browser itself (`email-code.ts`, #1106).
  * Ordinary "code" answers (a postcode, a promo or referral code) are not credentials.
  */
 export const CREDENTIAL_NAME =

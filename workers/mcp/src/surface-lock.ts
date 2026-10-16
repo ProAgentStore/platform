@@ -1175,4 +1175,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.137": "sha256:68d44cb4290a8e642a07093e300427ee45d625c84144712027b9ddbeee57f759",
 	// #1065: set_instance_local_browser_settings gains brief (the owner's saved search brief) and brief_from_memory (copy one user-set memory entry).
 	"0.1.138": "sha256:7d29864b89637151efcd41884ac40157e80ed122a8738ce2eebcf50e31e0eedc",
+	// #1106: set_application_runner_settings gains signInEmail (the SEEK account address for the email-code sign-in).
+	"0.1.139": "sha256:f1fe8078a5b11cdf91634711dfba44779709c622987cd1fb635c98423905a6bf",
 };

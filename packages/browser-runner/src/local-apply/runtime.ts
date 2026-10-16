@@ -35,6 +35,7 @@ import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
+import { runEmailCodeStep } from "./email-code.js";
 import type { SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
 import { confirmationSignals } from "./confirmation.js";
@@ -52,6 +53,7 @@ import {
 	type LocalApplyArtifactKind,
 	type LocalApplyBlockReason,
 	type LocalApplyDirectiveRequest,
+	type LocalApplyEmailCodeResult,
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
 	type LocalApplyPause,
@@ -628,6 +630,13 @@ export class LocalApplyRuntime {
 			if (outcome === "resumed") this.emit(run, { type: "run.resumed" });
 		}
 		for (const w of run.waiters.splice(0)) w(outcome);
+	}
+
+	/** The email-code sign-in (#1106) on a run paused for one: its own browser, its trace, and its release. */
+	emailCode(raw: unknown): Promise<LocalApplyEmailCodeResult> {
+		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
+		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
+		return runEmailCodeStep({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);
 	}
 
 	/** The owner acted: add their answers to what values may be grounded in, admit any site they allowed, release. */

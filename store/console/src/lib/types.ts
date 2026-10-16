@@ -924,6 +924,7 @@ export interface ApplicationRunnerSettingsView {
 		maxMinutes: number;
 		maxPages: number;
 		maxActions: number;
+		signInEmail: string | null; // #1106: the SEEK account's address, for the email-code sign-in
 		autoSubmit: { enabled: boolean; roles: string[]; locations: string[]; exclude: string[]; minSalary: number | null; dailyCap: number; acknowledgedAt?: string | null }; // acknowledgedAt (#1039): server-set when the owner acknowledged real submissions
 	};
 	error?: string;

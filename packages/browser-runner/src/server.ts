@@ -302,6 +302,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-apply/resume") {
 		return json(res, 200, runner.localApply.resume(await readJson(req)));
 	}
+	if (req.method === "POST" && path === "/local-apply/email-code") return json(res, 200, await runner.localApply.emailCode(await readJson(req)));
 	if (req.method === "POST" && path === "/local-apply/directive") {
 		return json(res, 200, runner.localApply.directive(await readJson(req)));
 	}

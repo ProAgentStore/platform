@@ -54,6 +54,12 @@ export interface ApplicationRunnerSettings {
 	maxPages: number;
 	maxActions: number;
 	autoSubmit: AutoSubmitPolicy;
+	/**
+	 * The address the owner's SEEK account is registered under (#1106). Set, a fill paused for a SEEK sign-in signs
+	 * itself in with the code SEEK emails there, read from the Gmail this Runner is pinned to — which must be this
+	 * same address. Null: every sign-in waits for the owner, as before.
+	 */
+	signInEmail: string | null;
 }
 
 export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
@@ -67,6 +73,7 @@ export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
 	maxPages: 30,
 	maxActions: 300,
 	autoSubmit: { enabled: false, roles: [], locations: [], exclude: [], minSalary: null, dailyCap: 0, acknowledgedAt: null },
+	signInEmail: null,
 };
 export const RUNNER_SETTINGS_KEY = "applicationRunner";
 
@@ -118,6 +125,11 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 			if (!out.includes(n)) out.push(n);
 		}
 		next.allowDomains = out;
+	}
+	if (p.signInEmail !== undefined) {
+		const e = typeof p.signInEmail === "string" ? p.signInEmail.trim().toLowerCase() : p.signInEmail;
+		if (e !== null && e !== "" && (typeof e !== "string" || e.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))) return { error: "signInEmail must be an email address, or null" };
+		next.signInEmail = e || null;
 	}
 	for (const [key, min, max] of [["maxMinutes", 1, 60], ["maxPages", 1, 200], ["maxActions", 1, 1000]] as const) {
 		if (p[key] === undefined) continue;

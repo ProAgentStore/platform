@@ -38,6 +38,16 @@ export const LOCAL_APPLY_CANCEL_PATH = "/local-apply/cancel";
 export const LOCAL_APPLY_PREFLIGHT_PATH = "/local-apply/preflight";
 /** Delivers a cloud-persisted supervisory decision to one paused checkpoint. */
 export const LOCAL_APPLY_DIRECTIVE_PATH = "/local-apply/directive";
+/**
+ * The email-code sign-in (#1106), on a run paused `login_required`: `{runId, step: "request", email}` has the runner
+ * enter the sign-in email and ask the site for a code; `{runId, step: "enter", code}` types the code PAGS read from
+ * the owner's Gmail and, once the site lets the browser in, releases the pause. The code is never stored or traced.
+ */
+export const LOCAL_APPLY_EMAIL_CODE_PATH = "/local-apply/email-code";
+/** Sites whose sign-in is a code emailed to the account address. SEEK's page was read live for #1106. */
+export const EMAIL_CODE_SIGN_IN_SITES: readonly string[] = ["seek.com", "seek.com.au", "seek.co.nz"];
+export type LocalApplyEmailCodeFailure = "unsupported_site" | "no_email_field" | "no_send_button" | "no_code_field" | "code_rejected";
+export type LocalApplyEmailCodeResult = { state: "code_requested" } | { state: "signed_in" } | { state: "failed"; reason: LocalApplyEmailCodeFailure };
 
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];
