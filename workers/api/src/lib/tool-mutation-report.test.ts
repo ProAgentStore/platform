@@ -93,6 +93,9 @@ const MUTATING = new Set<string>([
 	"set_direction",
 	"mcp_call_tool",
 	"sheets_append",
+	// Discord bot writes change externally visible channel state; reads and grant discovery do not.
+	"discord_send_message",
+	"discord_add_reaction",
 	// #713. Mail leaves under the owner's name and cannot be recalled — the most irreversible
 	// mutation on the platform, and the reason both sit behind the write-consent gate.
 	"gmail_reply",

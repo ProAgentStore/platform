@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allToolPolicyInputs, projectToolListing, resolveToolPolicy, type ToolListingRow } from "./instance-tool-policy.js";
+import { allToolPolicyInputs, LISTING_DESCRIPTION_MAX_CHARS, projectToolListing, resolveToolPolicy, type ToolListingRow } from "./instance-tool-policy.js";
 import { TOOL_TIERS, type ToolTier } from "./builtin-tool-policy.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { ToolDef } from "./connectors/types.js";
@@ -73,6 +73,13 @@ describe("the tool listing fits in a response (#569)", () => {
 				expect(row, `${row.name}: the listing dropped ${field}, which is part of the audit`).toHaveProperty(field);
 			}
 		}
+	});
+
+	it("bounds verbose descriptions with an explicit cut marker", () => {
+		const rows = projectToolListing(resolveToolPolicy(caps({}), [], allToolPolicyInputs(), []));
+		for (const row of rows) expect(row.description.length, row.name).toBeLessThanOrEqual(LISTING_DESCRIPTION_MAX_CHARS);
+		const long = rows.find((row) => row.name === "subordinate_status");
+		expect(long?.description).toContain("[cut: showing the first");
 	});
 
 	it("omits `disabled` / `writeConsent` exactly when default-valued, and never loses a verdict", () => {

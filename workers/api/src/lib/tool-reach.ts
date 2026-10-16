@@ -84,6 +84,7 @@ export type ToolReach = (typeof TOOL_REACHES)[number];
  * one of them gains a tool it is already classified rather than falling through to the default.
  */
 export const CONNECTOR_REACH: Readonly<Record<string, ToolReach>> = {
+	discord: "internet",
 	github: "internet",
 	meta: "internet",
 	// The runner relay: these land on the owner's own computer and nowhere else.
@@ -114,6 +115,8 @@ export const CONNECTOR_REACH: Readonly<Record<string, ToolReach>> = {
  * platform ones dominate and are listed anyway: an omission has to be a FAILURE, not a default.
  */
 export const TOOL_REACH: Readonly<Record<string, ToolReach>> = {
+	// Lists an instance's already-saved grant rows. It names Discord but does not call Discord.
+	discord_list_granted_channels: "platform",
 	// ── The agent's own storage: memory, tasks, board, knowledge, files, collections, context.
 	// All of it is this instance's DO / D1 / R2 / Vectorize, for this owner.
 	read_memory: "platform",

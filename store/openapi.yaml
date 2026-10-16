@@ -152,7 +152,7 @@ tags:
   - name: Preferences
     description: Account-wide voice and translation defaults
   - name: Connectors
-    description: Generic OAuth2 connector flow, GitHub App, Google Drive, Zoho WorkDrive, and Gmail
+    description: Generic OAuth2 connector flow, GitHub App, Google Drive, Zoho WorkDrive, Gmail, and Discord bots
   - name: Stats
     description: |
       Declarative per-agent stats cards and their values. A card names a source from a closed,
@@ -15900,6 +15900,120 @@ paths:
                   success: { type: boolean }
                   revoked: { $ref: "#/components/schemas/ConnectorReach" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/discord/guilds:
+    get:
+      summary: List guilds visible to my Discord bot
+      description: Uses the owner's encrypted Discord bot token. This is discovery for choosing a per-instance channel grant; it does not grant any agent access.
+      operationId: listDiscordGuilds
+      tags: [Connectors]
+      responses:
+        "200":
+          description: Guilds visible to the connected bot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  guilds:
+                    type: array
+                    items:
+                      type: object
+                      properties: { id: { type: string }, name: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/discord/guilds/{guildId}/channels:
+    get:
+      summary: List text channels visible to my Discord bot
+      description: Returns only text and announcement channels that the connected bot can see in the selected guild.
+      operationId: listDiscordGuildChannels
+      tags: [Connectors]
+      parameters:
+        - { name: guildId, in: path, required: true, schema: { type: string }, description: Discord guild snowflake. }
+      responses:
+        "200":
+          description: Grantable text channels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channels:
+                    type: array
+                    items:
+                      type: object
+                      properties: { id: { type: string }, name: { type: string }, type: { type: integer }, guildId: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/discord/instances/{instanceId}/grants:
+    get:
+      summary: Discord channels granted to this instance
+      description: The per-instance Discord boundary. A Discord-capable agent can read or post only through one of these grants.
+      operationId: listDiscordGrants
+      tags: [Connectors]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Channel grants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grants:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Grant a Discord text channel to this instance
+      description: Verifies the channel with the owner's connected bot before saving the grant. Voice, category, and inaccessible channels are refused.
+      operationId: createDiscordGrant
+      tags: [Connectors]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channelId]
+              properties:
+                channelId: { type: string, description: Discord text-channel snowflake. }
+      responses:
+        "201":
+          description: Verified channel grant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grant: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/discord/instances/{instanceId}/grants/{grantId}:
+    delete:
+      summary: Revoke a Discord channel grant
+      operationId: deleteDiscordGrant
+      tags: [Connectors]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: grantId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Success" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/drive/files:
     get:

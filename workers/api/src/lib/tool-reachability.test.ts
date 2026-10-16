@@ -115,6 +115,17 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 		"tmux Operator declares the backend-specific `tmux_send_message` instead (migration 0117, #482), " +
 		"which is the right tool for a tmux-only agent. No catalog agent has needed the generic form yet. " +
 		"Reachable the moment a creator declares it or a first-party agent has a reason to use it.",
+	// Discord is deliberately a building block for owner-created agents, not a first-party
+	// community agent with an implicit social presence. A creator declares it and the owner grants
+	// the exact channels that instance may use.
+	discord_list_granted_channels:
+		"No seeded agent should enumerate an owner's Discord bot channels. A creator declares this tool and the owner grants exact channels to that instance.",
+	discord_read_messages:
+		"Discord reads require a creator-declared agent and an owner-granted exact channel, rather than adding broad chat reads to a seeded agent.",
+	discord_send_message:
+		"Sending as the owner's bot is available to creator-declared agents only after an exact channel grant and connector write consent.",
+	discord_add_reaction:
+		"Bot reactions remain available to creator-declared agents with an exact channel grant, not a default seeded capability.",
 };
 
 // ── Leg 2's denominator: what any migration declares ─────────────────────────

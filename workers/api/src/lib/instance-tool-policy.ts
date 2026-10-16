@@ -35,6 +35,7 @@ import { listConsents } from "./connector-consent.js";
 // The chat path's own fail-closed reader of `AgentState.permissions.email` (#721). Imported so
 // there is exactly one, for the reason its own doc comment gives.
 import { emailPermitted } from "./connectors/gmail.js";
+import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 // The reason vocabulary + its wording moved to a LEAF (#381) so a pipeline step can refuse with
 // the same sentence without importing the catalog/registry/consent graph this module needs.
@@ -300,6 +301,13 @@ export interface ToolListingOptions {
 }
 
 /**
+ * Tool definitions retain their complete descriptions for invocation and server-side policy.
+ * The all-tools listing is an audit index, however, and must fit through a 64 KiB response cap.
+ * A long description is therefore marked and bounded at the wire boundary, never silently cut.
+ */
+export const LISTING_DESCRIPTION_MAX_CHARS = 800;
+
+/**
  * The listing as it goes over the wire (#569) — the one place the response's SIZE is decided.
  *
  * Measured on production instance bd43f4de-… (104 rows, 2026-08-15): 89,281 bytes, which exceeded
@@ -337,6 +345,7 @@ export function projectToolListing(policy: readonly ToolPolicyEntry[], opts: Too
 		const { jsonSchema, disabled, writeConsent, ...rest } = t;
 		return {
 			...rest,
+			description: clipMarked(t.description, LISTING_DESCRIPTION_MAX_CHARS, { within: true, what: "characters of this tool description" }),
 			...(disabled ? { disabled } : {}),
 			...(writeConsent !== "n/a" ? { writeConsent } : {}),
 			...(opts.schemas && t.allowed && jsonSchema !== undefined ? { jsonSchema } : {}),

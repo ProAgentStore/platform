@@ -7,6 +7,7 @@ import type { Connector, EnvTokenKey, ToolDef } from "./types.js";
 import { BROWSER_TOOLS } from "./browser.js";
 import { GOOGLE_DRIVE_CONNECTOR, ZOHO_WORKDRIVE_CONNECTOR } from "./connected-accounts.js";
 import { GMAIL_CONNECTOR } from "./gmail.js";
+import { DISCORD_CONNECTOR } from "./discord.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { MCP_TOOLS } from "./mcp.js";
@@ -33,6 +34,7 @@ const _assertEnvKey: _AssertEnvKey = true;
 void _assertEnvKey;
 
 export const CONNECTORS: Connector[] = [
+	DISCORD_CONNECTOR,
 	// github is a declarative manifest (#146): shape as data, tools keep their custom logic
 	// (repo validation, per_page clamp, issue delegation, create-issue POST) via the handler
 	// escape hatch. auth "app" → GitHub-App installation token (owner-scoped).

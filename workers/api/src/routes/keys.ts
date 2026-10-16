@@ -109,6 +109,15 @@ const PROVIDERS: Provider[] = [
 		docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
 	},
 	{
+		// A Discord Bot token, used only by the dedicated Discord connector. It is never
+		// revealed to browsers and is sent with Discord's required `Bot ` authorization prefix.
+		id: "discord",
+		name: "Discord bot token",
+		host: null,
+		keyPrefix: "",
+		docsUrl: "https://discord.com/developers/applications",
+	},
+	{
 		// The generic HTTP-connector api-key slot (user_api_keys provider "http"), read by
 		// lib/connectors/http.ts for `auth: { mode: "api-key" }` requests — e.g. a
 		// declarative pipeline calling Google Places with X-Goog-Api-Key. Not an AI provider;

@@ -1,0 +1,169 @@
+// Discord bot connector. A user supplies a bot token into the encrypted vault under
+// provider "discord"; each instance is then granted individual text channels.  This is
+// deliberately a bot integration, never automation of a normal Discord account.
+import { listConnectorGrants } from "../connector-grants.js";
+import { clipMarked } from "../clip-marked.js";
+import { safeFetch } from "../ssrf.js";
+import type { Connector, RegistryToolCtx, ToolDef } from "./types.js";
+
+const API = "https://discord.com/api/v10";
+const SNOWFLAKE = /^\d{16,22}$/;
+const MAX_MESSAGE_LENGTH = 2_000;
+
+type DiscordReply = { ok: true; data: unknown } | { ok: false; status: number; message: string };
+
+function snowflake(value: unknown): string | null {
+	const id = String(value ?? "").trim();
+	return SNOWFLAKE.test(id) ? id : null;
+}
+
+async function grantedChannel(ctx: RegistryToolCtx, grantId: unknown): Promise<{ channelId: string } | { error: string }> {
+	const id = String(grantId ?? "").trim();
+	if (!id) return { error: "grantId is required. Use discord_list_granted_channels first." };
+	if (!ctx.connectorClient) return { error: "Discord connector client is unavailable." };
+	try {
+		const grant = await ctx.connectorClient("discord").requireGrant(id);
+		if (grant.resourceType !== "discord_channel" || !snowflake(grant.resourceId)) {
+			return { error: "This Discord grant is not a text-channel grant." };
+		}
+		return { channelId: grant.resourceId };
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : "This agent has not been granted that Discord channel." };
+	}
+}
+
+async function botToken(ctx: RegistryToolCtx): Promise<string | null> {
+	try {
+		return (await ctx.connectorClient?.("discord").token()) || null;
+	} catch {
+		return null;
+	}
+}
+
+async function discordRequest(token: string, path: string, init: RequestInit = {}): Promise<DiscordReply> {
+	const headers = new Headers(init.headers);
+	headers.set("Authorization", `Bot ${token}`);
+	headers.set("Accept", "application/json");
+	if (init.body) headers.set("Content-Type", "application/json");
+	try {
+		const res = await safeFetch(`${API}${path}`, { ...init, headers });
+		const data = await res.json().catch(() => null) as { message?: unknown } | null;
+		if (!res.ok) {
+			const detail = typeof data?.message === "string" ? data.message : "request failed";
+			return { ok: false, status: res.status, message: `Discord returned ${res.status}: ${detail}` };
+		}
+		return { ok: true, data };
+	} catch {
+		return { ok: false, status: 0, message: "Discord could not be reached." };
+	}
+}
+
+const listGrantedChannels: ToolDef["handler"] = async (ctx) => {
+	if (!ctx.instanceId || !ctx.userId) return { content: "Discord channel grants are available only from a subscribed agent instance.", success: false };
+	const grants = await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord");
+	return {
+		content: JSON.stringify({ channels: grants.map((g) => ({ grantId: g.id, channelId: g.resourceId, name: g.resourceName, url: g.resourceUrl ?? null })) }, null, 2),
+		success: true,
+	};
+};
+
+const readMessages: ToolDef["handler"] = async (ctx, input) => {
+	const granted = await grantedChannel(ctx, input.grantId);
+	if ("error" in granted) return { content: granted.error, success: false };
+	const token = await botToken(ctx);
+	if (!token) return { content: "No Discord bot token is connected. Add one in Profile → API Keys → Discord bot token.", success: false };
+	const limit = Math.min(Math.max(Math.trunc(Number(input.limit) || 20), 1), 50);
+	const result = await discordRequest(token, `/channels/${granted.channelId}/messages?limit=${limit}`);
+	if (!result.ok) return { content: result.message, success: false };
+	// The shared tool-result cap applies after this; this local cap avoids spending an entire
+	// model turn on a single verbose channel history.
+	return { content: clipMarked(JSON.stringify(result.data, null, 2), 48_000, { within: true, what: "characters of Discord history" }), success: true };
+};
+
+const sendMessage: ToolDef["handler"] = async (ctx, input) => {
+	const granted = await grantedChannel(ctx, input.grantId);
+	if ("error" in granted) return { content: granted.error, success: false };
+	const content = String(input.content ?? "").trim();
+	if (!content) return { content: "content is required.", success: false };
+	if (content.length > MAX_MESSAGE_LENGTH) return { content: `Discord messages are limited to ${MAX_MESSAGE_LENGTH} characters.`, success: false };
+	const token = await botToken(ctx);
+	if (!token) return { content: "No Discord bot token is connected. Add one in Profile → API Keys → Discord bot token.", success: false };
+	const result = await discordRequest(token, `/channels/${granted.channelId}/messages`, {
+		method: "POST",
+		// Agents must name mentions deliberately in a later, reviewed capability. A plain send
+		// cannot turn untrusted text into a mass ping.
+		body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+	});
+	if (!result.ok) return { content: result.message, success: false };
+	const messageId = typeof (result.data as { id?: unknown } | null)?.id === "string" ? (result.data as { id: string }).id : null;
+	return { content: JSON.stringify({ sent: true, channelId: granted.channelId, messageId }, null, 2), success: true };
+};
+
+const addReaction: ToolDef["handler"] = async (ctx, input) => {
+	const granted = await grantedChannel(ctx, input.grantId);
+	if ("error" in granted) return { content: granted.error, success: false };
+	const messageId = snowflake(input.messageId);
+	const emoji = String(input.emoji ?? "").trim();
+	if (!messageId || !emoji || emoji.length > 128) return { content: "A Discord messageId and emoji are required.", success: false };
+	const token = await botToken(ctx);
+	if (!token) return { content: "No Discord bot token is connected. Add one in Profile → API Keys → Discord bot token.", success: false };
+	const result = await discordRequest(token, `/channels/${granted.channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, { method: "PUT" });
+	return result.ok
+		? { content: JSON.stringify({ reacted: true, channelId: granted.channelId, messageId, emoji }), success: true }
+		: { content: result.message, success: false };
+};
+
+export const DISCORD_CONNECTOR: Connector = {
+	id: "discord",
+	label: "Discord bot",
+	auth: "token",
+	scopes: { read: true, write: true },
+	writeMeaning: "Send messages and add reactions as the Discord bot you connected, but only in the channels you granted to this agent. Messages cannot be unsent through this connector.",
+	grantModel: "instance-resource",
+	tools: [
+		{
+			name: "discord_list_granted_channels",
+			description: "List the Discord text channels this agent has been granted. Use the returned grantId for Discord reads and writes.",
+			jsonSchema: { type: "object", properties: {} },
+			tier: "connector",
+			connector: "discord",
+			scope: "read",
+			mutates: false,
+			untrustedOutput: false,
+			handler: listGrantedChannels,
+		},
+		{
+			name: "discord_read_messages",
+			description: "Read up to 50 recent messages from one Discord channel explicitly granted to this agent.",
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, limit: { type: "number" } }, required: ["grantId"] },
+			tier: "connector",
+			connector: "discord",
+			scope: "read",
+			mutates: false,
+			untrustedOutput: true,
+			handler: readMessages,
+		},
+		{
+			name: "discord_send_message",
+			description: "Send one message as the connected Discord bot to a channel explicitly granted to this agent. Mentions are disabled for safety. WRITE — the message is really sent.",
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, content: { type: "string" } }, required: ["grantId", "content"] },
+			tier: "connector",
+			connector: "discord",
+			scope: "write",
+			mutates: true,
+			untrustedOutput: true,
+			handler: sendMessage,
+		},
+		{
+			name: "discord_add_reaction",
+			description: "Add one reaction as the connected Discord bot to a message in a channel explicitly granted to this agent. WRITE — the reaction is really added.",
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, messageId: { type: "string" }, emoji: { type: "string" } }, required: ["grantId", "messageId", "emoji"] },
+			tier: "connector",
+			connector: "discord",
+			scope: "write",
+			mutates: true,
+			untrustedOutput: true,
+			handler: addReaction,
+		},
+	],
+};

@@ -20,6 +20,7 @@ import { preferenceRoutes } from "./routes/preferences.js";
 import { keysRoutes } from "./routes/keys.js";
 import { emailRoutes } from "./routes/email.js";
 import { driveRoutes } from "./routes/drive.js";
+import { discordRoutes } from "./routes/discord.js";
 import { workdriveRoutes } from "./routes/workdrive.js";
 import { errorRoutes } from "./routes/errors.js";
 import { auditRoutes } from "./routes/audit.js";
@@ -208,6 +209,7 @@ app.route("/v1/instances", runEventRoutes); // /v1/instances/:id/run-events?sinc
 app.route("/v1/connectors", connectorRoutes); // generic OAuth2 authorize/callback for manifest oauth connectors (#147)
 app.route("/v1/mcp", mcpRoutes); // outbound MCP: DCR+PKCE authorize/callback (#180/#258) + first-party presets (#287)
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
+app.route("/v1/discord", discordRoutes); // owner bot discovery + per-instance channel grants
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes — all the user's CLIs
 app.route("/v1/terminals", terminalNativeRoutes); // per-machine native-control opt-in (#1057)
