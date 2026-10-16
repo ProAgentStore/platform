@@ -131,6 +131,8 @@ export interface SurfaceCaps {
 	tools?: string[];
 	/** The runner runtime the agent declares. `local_browser` is what shows the Research tab (#946). */
 	runtime?: string | null;
+	/** The server's source-mode verdict for this instance (`Instance.sourceMode`) — `"gmail"` for a Gmail Job Search Scout (#1115). */
+	sourceMode?: string | null;
 }
 
 /** Does a DECLARED allowlist contain any of these? Undefined (not declared) ⇒ permissive. */
@@ -145,11 +147,15 @@ const KB_TOOLS = ["search_knowledge", "list_knowledge", "read_knowledge", "add_k
 const COLLECTION_TOOLS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record", "delete_record"] as const;
 /** Instance file storage — what the Knowledge → Files sub-tab uploads into. */
 const FILE_TOOLS = ["upload_file", "list_files", "read_file", "delete_file"] as const;
-const GMAIL_SCOUT_TOOLS = ["gmail_search", "gmail_read_message"] as const;
-
-/** The source template declares exactly these two Gmail reads; other inbox agents keep their own UI. */
-function isGmailScout(caps: SurfaceCaps): boolean {
-	return caps.tools?.length === GMAIL_SCOUT_TOOLS.length && GMAIL_SCOUT_TOOLS.every((tool) => caps.tools?.includes(tool)) === true;
+/**
+ * A Gmail Job Search Scout, by the server's rule, not by its tools (#1115). The Scout routes accept an
+ * instance only when its (or its agent's) `source_mode` is `"gmail"`, and the instance list carries that
+ * verdict as `sourceMode`. Declaring `gmail_search` + `gmail_read_message` is not it: since #1095 the Job
+ * Application Runner declares exactly those two reads, and the tools-only check rendered the Scout
+ * section for it — whose status call the server then refused with 409.
+ */
+export function isGmailScout(caps: Pick<SurfaceCaps, "sourceMode">): boolean {
+	return caps.sourceMode === "gmail";
 }
 
 /**

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SURFACES, showsKnowledgeSubTab, surfaceOwnsHeader, visibleSurfaces } from "./surfaces";
+import { isGmailScout, SURFACES, showsKnowledgeSubTab, surfaceOwnsHeader, visibleSurfaces } from "./surfaces";
 
 describe("surfaceOwnsHeader — the header takeover is DECLARED, not hardcoded to one tab", () => {
 	it("grants it only to a surface that declares it", () => {
@@ -251,5 +251,23 @@ describe("Knowledge sub-tabs are gated by the same predicates as the surfaces (#
 		const src = codeOf("../tabs/KnowledgeTab.tsx");
 		expect(src).toContain("showsKnowledgeSubTab");
 		expect(src).toMatch(/\.filter\(\(t\) => showsKnowledgeSubTab\(caps, t\.id\)\)/);
+	});
+});
+
+describe("isGmailScout — the server's source_mode verdict, never the Gmail read tools (#1115)", () => {
+	const GMAIL_READS = ["gmail_search", "gmail_read_message"];
+	it("tools alone, with no source mode, are not a Scout", () => {
+		expect(isGmailScout({ sourceMode: null })).toBe(false);
+		expect(isGmailScout({ tools: GMAIL_READS } as Parameters<typeof isGmailScout>[0])).toBe(false);
+	});
+	it("the Application Runner — local_apply plus the same two Gmail reads — is not a Scout", () => {
+		expect(isGmailScout({ surfaces: ["chat", "settings"], tools: GMAIL_READS, runtime: "local_apply", sourceMode: null } as Parameters<typeof isGmailScout>[0])).toBe(false);
+	});
+	it("an instance the server lists with source mode gmail is a Scout", () => {
+		expect(isGmailScout({ sourceMode: "gmail" })).toBe(true);
+	});
+	it("SettingsTab renders GmailScoutSection — the only caller of /gmail-scout/status — only behind this rule", () => {
+		expect(codeOf("../tabs/SettingsTab.tsx")).toMatch(/\{isGmailScout && <GmailScoutSection/);
+		expect(codeOf("./surfaces.tsx")).toContain("isGmailScout={isGmailScout(caps)}");
 	});
 });

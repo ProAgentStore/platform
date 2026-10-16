@@ -192,3 +192,23 @@ describe("instance tags (#961)", () => {
 		expect((await call("/v1/instances/i-foreign/tags", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tags: ["x"] }) })).status).toBe(404);
 	});
 });
+
+describe("my/instances names a Gmail Scout by source_mode, never by its Gmail tools (#1115)", () => {
+	it("agent or instance source_mode gmail lists sourceMode; the Runner with the same Gmail reads does not", async () => {
+		const tools = { capabilities: { runtime: "local_apply", tools: ["gmail_search", "gmail_read_message"] } };
+		d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES
+			('ag-scout', 'u1', 't1115-scout', 'Scout', '${JSON.stringify({ source_mode: "gmail", capabilities: { tools: ["gmail_search", "gmail_read_message"] } })}'),
+			('ag-runner', 'u1', 't1115-runner', 'Runner', '${JSON.stringify(tools)}')`);
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES
+			('i-scout', 'ag-scout', 'u1', 'active', '{}'),
+			('i-scout-inst', 'ag', 'u1', 'active', '${JSON.stringify({ source_mode: "gmail" })}'),
+			('i-runner', 'ag-runner', 'u1', 'active', '{}')`);
+		const listed = (await call("/v1/instances/my/instances")).body.instances as Array<{ id: string; sourceMode?: string }>;
+		const mode = (id: string) => listed.find((i) => i.id === id)?.sourceMode;
+		expect(mode("i-scout")).toBe("gmail");
+		expect(mode("i-scout-inst")).toBe("gmail");
+		expect(mode("i-runner")).toBeUndefined();
+		expect(listed.find((i) => i.id === "i-runner")).not.toHaveProperty("sourceMode");
+		expect(mode("i-idle")).toBeUndefined();
+	});
+});

@@ -90,6 +90,11 @@ export interface Instance {
 	lastActivityAt?: string | null;
 	/** Present only when this agent's WORKFLOW is retired (#979) — see lib/retirement.ts. */
 	retirement?: InstanceRetirement;
+	/**
+	 * `"gmail"` only for a Gmail Job Search Scout, decided by the server's own rule — the instance's or
+	 * its agent's `source_mode`, the same check its mailbox routes gate on (#1115). Absent otherwise.
+	 */
+	sourceMode?: "gmail";
 	capabilities?: {
 		surfaces: string[];
 		runtime?: string;

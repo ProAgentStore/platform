@@ -2,7 +2,7 @@ import { retirementView } from "../lib/agent-retirement.js";
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
-import { GMAIL_SCOUT_SOURCE_MODE } from "../lib/gmail-scout/config.js";
+import { GMAIL_SCOUT_SOURCE_MODE, gmailScoutSourceMode } from "../lib/gmail-scout/config.js";
 import { composeInstanceActivity } from "../lib/instance-activity.js";
 import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { applySettingsPatch, settingsPatchRefusal, resolveSettingsValues } from "../lib/instance-settings.js";
@@ -411,6 +411,10 @@ instanceRoutes.get("/my/instances", async (c) => {
 			// THIS response because it is the one the console renders instances from and the one MCP's
 			// `my_instances` passes through, which is what makes the two unable to disagree.
 			...(fullCaps.retired ? { retirement: retirementView(fullCaps.retired, roster) } : {}),
+			// The Gmail Job Search Scout, by the SAME rule its mailbox routes gate on (#1115,
+			// `requireGmailScoutInstance`): the instance's or its agent's `source_mode`, never its tools —
+			// the Application Runner declares the same two Gmail reads. Present only for a Scout.
+			...(gmailScoutSourceMode(instance_config as string | null) || gmailScoutSourceMode(config as string | null) ? { sourceMode: GMAIL_SCOUT_SOURCE_MODE } : {}),
 			// env carries the fail-closed custom-surface gate (#186) — this is the one response the
 			// console renders tabs from, so it is the path that must consult it.
 			capabilities: lightCaps,
