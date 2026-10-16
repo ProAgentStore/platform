@@ -1,0 +1,6 @@
+{
+  "_about": "#1112 — a never-started job whose annotations the installation token may not read (no `checks: read`): HTTP 403. The reason must be reported as not accessible, never guessed.",
+  "jobs": { "total_count": 1, "jobs": [ { "id": 8002, "name": "deploy", "status": "completed", "conclusion": "failure", "html_url": "https://github.com/acme/app/actions/runs/900200/job/8002", "check_run_url": "https://api.github.com/repos/acme/app/check-runs/8002", "steps": [] } ] },
+  "annotationsResponse": { "status": 403, "body": { "message": "Resource not accessible by integration", "documentation_url": "https://docs.github.com/rest/checks/runs#list-check-run-annotations" } },
+  "log": { "status": 404 }
+}

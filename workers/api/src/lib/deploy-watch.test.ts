@@ -14,6 +14,7 @@ import { fetchWorkflowRuns } from "./github-actions.js";
 import { resolveGithubRead } from "./github-cache.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
+import { fixtureFetch, loadActionsFixture } from "./__fixtures__/github-actions/fixture-fetch.js";
 
 // The sweep's collaborators, stubbed so the tests below are about the WRITE it performs. Both
 // GitHub modules keep their real exports (`mapWorkflowRun` does the raw-run mapping the sweep
@@ -489,6 +490,35 @@ describe("runDeployWatch persists a watermark that only moves forward (#708)", (
 			expect(e.message).toContain("github 502");
 			expect(e.level).toBe("warn");
 		});
+	});
+
+	it("a failed deploy GitHub never started for billing says minutes_exhausted, verbatim (#1112)", async () => {
+		const { env } = sweepEnv();
+		vi.stubGlobal("fetch", fixtureFetch(loadActionsFixture("billing-annotation")).fetch);
+		vi.mocked(fetchWorkflowRuns).mockResolvedValue({ runs: [raw({ id: 38847192017, conclusion: "failure", head_sha: "613271f0c0ffee", updated_at: "2026-08-07T12:00:00Z" })] });
+		try {
+			await runDeployWatch(env);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+		expect(notifyUser).toHaveBeenCalledTimes(1);
+		const [, , , title, body] = vi.mocked(notifyUser).mock.calls[0];
+		expect(title).toBe("❌ Deploy failed 613271f");
+		expect(body).toBe(
+			'acme/app — Deploy API Worker failure. Open Builds to see why. | Reason: minutes_exhausted — "The job was not started because recent account payments have failed or your spending limit needs to be increased to enable additional minutes."',
+		);
+	});
+
+	it("a failed deploy that RAN (ordinary failure) is announced exactly as before", async () => {
+		const { env } = sweepEnv();
+		vi.stubGlobal("fetch", fixtureFetch(loadActionsFixture("ordinary-failure")).fetch);
+		vi.mocked(fetchWorkflowRuns).mockResolvedValue({ runs: [raw({ id: 900100, conclusion: "failure", head_sha: "a1b2c3d4e5f6", updated_at: "2026-08-07T12:00:00Z" })] });
+		try {
+			await runDeployWatch(env);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+		expect(vi.mocked(notifyUser).mock.calls[0][4]).toBe("acme/app — Deploy API Worker failure. Open Builds to see why.");
 	});
 
 	it("declines a page the cache served because GitHub was unreachable, and writes no watermark", async () => {

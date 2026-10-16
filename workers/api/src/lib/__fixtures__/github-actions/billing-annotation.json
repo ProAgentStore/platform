@@ -1,0 +1,7 @@
+{
+  "_about": "#1112 — a job GitHub never started because of billing: completed/failure, no steps, no log (404), and the reason as a check-run annotation. Synthetic ids; message text as GitHub words it.",
+  "run": { "id": 38847192017, "run_number": 177, "name": "Deploy to R2", "path": ".github/workflows/deploy.yml", "status": "completed", "conclusion": "failure", "event": "push", "head_branch": "main", "head_sha": "613271f0c0ffee000000000000000000000000ab", "html_url": "https://github.com/acme/interns/actions/runs/38847192017", "created_at": "2026-10-15T04:15:00Z", "updated_at": "2026-10-15T04:15:09Z" },
+  "jobs": { "total_count": 1, "jobs": [ { "id": 116800283063, "name": "deploy", "status": "completed", "conclusion": "failure", "html_url": "https://github.com/acme/interns/actions/runs/38847192017/job/116800283063", "check_run_url": "https://api.github.com/repos/acme/interns/check-runs/116800283063", "steps": [] } ] },
+  "annotations": [ { "path": ".github", "annotation_level": "failure", "title": "", "message": "The job was not started because recent account payments have failed or your spending limit needs to be increased to enable additional minutes." } ],
+  "log": { "status": 404 }
+}

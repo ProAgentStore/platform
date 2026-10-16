@@ -30,7 +30,8 @@
 import { deepLinkFor } from "./console-links.js";
 import { isDeployWorkflow } from "./deploy-watch.js";
 import { logError } from "./error-log.js";
-import { fetchWorkflowRuns } from "./github-actions.js";
+import { fetchWorkflowRuns, runStartFailure, type StartFailure } from "./github-actions.js";
+import { clipMarked } from "./clip-marked.js";
 import { type GithubCacheIdentity, githubConditionalJson, resolveGithubRead } from "./github-cache.js";
 import { notificationDedupeKey } from "./notifications.js";
 import { notifyUser } from "../routes/push.js";
@@ -77,6 +78,8 @@ export interface CiWorkflowHealth {
 	at: string | null;
 	/** A newer run of this workflow has not concluded yet. */
 	running: boolean;
+	/** Why the failing run never started, when it was looked up as it turned red (#1112). */
+	failureReason?: StartFailure;
 }
 
 /** A repo's verdict, WORST FIRST — the order the instance-level `state` is chosen by. Mirrored in workers/mcp's state-vocabulary.ts. */
@@ -187,7 +190,7 @@ export function decideCiAlerts(workflows: CiWorkflowHealth[], previous: CiAlerte
 
 /** The notification for workflows that just turned red. One per repo per sweep, however many went red. */
 export function ciFailureNotification(repoName: string, branch: string, failing: CiWorkflowHealth[]): { title: string; body: string } {
-	const names = failing.map((w) => `${w.workflow} (${w.conclusion ?? "failed"})`).join(", ");
+	const names = failing.map((w) => `${w.workflow} (${w.conclusion ?? "failed"})${startFailureSuffix(w.failureReason)}`).join(", ");
 	const deploy = failing.some((w) => w.kind === "deploy");
 	const sha = failing.find((w) => w.sha)?.sha?.slice(0, 7);
 	return {
@@ -195,6 +198,16 @@ export function ciFailureNotification(repoName: string, branch: string, failing:
 		body: `${names}${sha ? ` at ${sha}` : ""}. Open Builds to see why.`,
 	};
 }
+
+/** What a notification says about a run that never started (#1112). GitHub's words, verbatim, clipped only for length. */
+export function startFailureSuffix(reason: StartFailure | null | undefined): string {
+	if (reason?.classification === "minutes_exhausted") return ` (minutes_exhausted — "${clipMarked(reason.verbatim ?? "", 300)}")`;
+	if (reason?.classification === "not_started") return " (job never started)";
+	return "";
+}
+
+/** How many newly failing workflows per sweep get their never-started reason looked up (#1112). */
+export const CI_FAILURE_REASON_LOOKUPS = 3;
 
 /** The event identity of one alert, shared across every row that watches the same repository (#709's lesson). */
 export function ciAlertEventKey(githubRepo: string, failing: CiWorkflowHealth[]): string {
@@ -343,8 +356,22 @@ export async function checkRepoCi(env: Env, repo: RepoRow, now = new Date()): Pr
 		}),
 	);
 	const workflows = assessCiRuns([...res.runs, ...extra.flat()].map(toCiRun), branch, now.getTime());
+	// The reason a failing run never started (#1112) is looked up once, as it turns red, and kept on
+	// the verdict while the SAME run is the failing one — a sweep a minute later must not drop it.
+	for (const w of workflows) {
+		const kept = previous?.workflows?.find((p) => p.path === w.path && p.runId === w.runId && p.failureReason);
+		if (w.state === "failing" && kept?.failureReason) w.failureReason = kept.failureReason;
+	}
 	const health: RepoCiHealth = { state: overallCiState(workflows), branch, workflows, checkedAt: now.toISOString() };
 	const decision = decideCiAlerts(workflows, parseJson<CiAlerted>(repo.ci_alerted, {}));
+	let lookups = 0;
+	for (const w of decision.newlyFailing) {
+		if (lookups >= CI_FAILURE_REASON_LOOKUPS) break;
+		if (!w.runId || w.failureReason) continue;
+		lookups++;
+		const reason = await runStartFailure(repo.github_repo, token ?? undefined, Number(w.runId));
+		if (reason) w.failureReason = reason;
+	}
 	if (decision.newlyFailing.length) {
 		const eventKey = ciAlertEventKey(repo.github_repo, decision.newlyFailing);
 		// Another row watching the same repository may already have said it (#709).

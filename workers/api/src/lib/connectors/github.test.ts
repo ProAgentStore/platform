@@ -35,6 +35,7 @@ vi.mock("../github-issues.js", () => ({
 vi.mock("../github-prs.js", () => ({ listPulls, searchPulls, readPull, readPullFiles }));
 
 import { GITHUB_TOOLS } from "./github.js";
+import { fixtureFetch, loadActionsFixture } from "../__fixtures__/github-actions/fixture-fetch.js";
 import { getRegistryTool, registryConnectorGroups, registryToolNameSet, runRegistryTool } from "../tool-registry.js";
 import type { Env } from "../../types.js";
 
@@ -434,6 +435,64 @@ describe("github connector — github_workflow_run_logs dispatch", () => {
 		expect(r.content).toContain("GitHub returned 404 listing the jobs of run 500");
 		const denied = await tool("github_workflow_run_logs").handler(ctx({ connectorClient: tokenClient(null) }), { repo: "acme/widgets", run_id: 500 });
 		expect(denied.success).toBe(false);
+	});
+});
+
+describe("a run that never started says why — the #1112 fixtures through the real tools", () => {
+	const BILLING = loadActionsFixture("billing-annotation");
+	const BILLING_TEXT = "The job was not started because recent account payments have failed or your spending limit needs to be increased to enable additional minutes.";
+	const logs = (fx: ReturnType<typeof loadActionsFixture>, runId: number) => {
+		const gh = fixtureFetch(fx);
+		fetchMock.mockImplementation(gh.fetch);
+		return { gh, result: runRegistryTool("github_workflow_run_logs", { env: APP_ENV, userId: "u1", agentId: "i1", instanceId: "i1", connectorClient: tokenClient("gh-token-abc") }, { repo: "acme/interns", run_id: runId }) };
+	};
+
+	it("github_workflow_run_logs: a billing block is minutes_exhausted with GitHub's text verbatim and the self-hosted suggestion — not 'no log'", async () => {
+		const { gh, result } = logs(BILLING, 38847192017);
+		const r = await result;
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("Classification: minutes_exhausted");
+		expect(r.content).toContain(BILLING_TEXT);
+		expect(r.content).toContain("Consider using a self-hosted or local runner to bypass GitHub-hosted minute limits.");
+		expect(r.content).not.toMatch(/has no log/);
+		// GitHub's words are fenced as data; our classification is outside the fence.
+		expect(r.content.indexOf("Classification: minutes_exhausted")).toBeLessThan(r.content.indexOf(BILLING_TEXT));
+		// A job that never started has no log to fetch — only jobs + annotations were read.
+		expect(gh.urls.some((u) => u.includes("/logs"))).toBe(false);
+	});
+
+	it("github_workflow_run_logs: annotations the token cannot read are reported with their HTTP status, never guessed", async () => {
+		const { result } = logs(loadActionsFixture("inaccessible-annotations"), 900200);
+		const r = await result;
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("Annotations not accessible (HTTP 403): Resource not accessible by integration. Unable to determine start failure reason.");
+		expect(r.content).not.toMatch(/minutes_exhausted/);
+	});
+
+	it("github_workflow_run_logs: never started and no annotation says exactly that", async () => {
+		const { result } = logs({ ...BILLING, annotations: [] }, 38847192017);
+		const r = await result;
+		expect(r.content).toContain("Job never started (no steps recorded) and no annotation was available.");
+		expect(r.content).not.toMatch(/minutes_exhausted/);
+	});
+
+	it("github_workflow_run_logs: an ordinary failure still reads its log, and is never classified", async () => {
+		const { result } = logs(loadActionsFixture("ordinary-failure"), 900100);
+		const r = await result;
+		expect(r.content).toContain("Error: Process completed with exit code 1.");
+		expect(r.content).not.toMatch(/Classification|never started/);
+	});
+
+	it("github_workflow_runs: a failed run carries failureReason; a green one is not looked up", async () => {
+		const gh = fixtureFetch(BILLING);
+		fetchMock.mockImplementation(async (url: string) =>
+			url.includes("/actions/runs?") ? jsonResponse({ workflow_runs: [BILLING.run, { ...BILLING.run, id: 5, conclusion: "success" }] }) : gh.fetch(url),
+		);
+		const r = await tool("github_workflow_runs").handler(ctx(), { repo: "acme/interns" });
+		const runs = JSON.parse(r.content).runs as Array<{ conclusion: string; failureReason?: unknown }>;
+		expect(runs[0].failureReason).toEqual({ classification: "minutes_exhausted", verbatim: BILLING_TEXT });
+		expect(runs[1]).not.toHaveProperty("failureReason");
+		expect(gh.urls.filter((u) => u.includes("/jobs"))).toHaveLength(1);
 	});
 });
 

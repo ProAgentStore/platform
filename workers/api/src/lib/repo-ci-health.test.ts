@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types.js";
+import { fixtureFetch, loadActionsFixture } from "./__fixtures__/github-actions/fixture-fetch.js";
+
+// Every other GitHub read 404s, so a failing run's diagnosis finds nothing and no test reaches the network.
+beforeEach(() => vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 })));
+afterEach(() => vi.unstubAllGlobals());
 
 /**
  * #903: default-branch CI/deploy health for a coding instance's repos. The rules are pure and tested
@@ -24,7 +29,9 @@ vi.mock("./github-cache.js", () => ({
 		args.url.includes("/actions/workflows?") ? { ok: true, data: { workflows: github.workflows }, stale: false } : github.meta,
 	),
 }));
-vi.mock("./github-actions.js", () => ({
+// Runs come from `github`; the never-started diagnosis (#1112) is the REAL code, over a stubbed fetch.
+vi.mock("./github-actions.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./github-actions.js")>()),
 	fetchWorkflowRuns: vi.fn(async (_repo: string, _token: unknown, opts: { workflow?: string }) =>
 		opts.workflow ? { runs: github.perWorkflow[opts.workflow] ?? [] } : github.runs,
 	),
@@ -236,6 +243,34 @@ describe("checkRepoCi — what is stored and what is sent (#903)", () => {
 		expect(notified[0].body).toMatch(/CI \(failure\)/);
 		await checkRepoCi(env, asRow(row), now);
 		expect(notified).toHaveLength(1);
+	});
+
+	it("a newly failing workflow blocked by billing: the notification and the stored verdict say minutes_exhausted, verbatim (#1112)", async () => {
+		const fx = loadActionsFixture("billing-annotation");
+		vi.stubGlobal("fetch", fixtureFetch(fx).fetch);
+		const row = repoRow("r1", "acme/interns");
+		const env = fakeEnv([row]);
+		const red = run({ id: "38847192017", conclusion: "failure", workflowName: "Deploy to R2", workflowPath: deployPath });
+		github.runs = { runs: [raw(red)] };
+		await checkRepoCi(env, asRow(row), now);
+		const text = "The job was not started because recent account payments have failed or your spending limit needs to be increased to enable additional minutes.";
+		expect(notified).toHaveLength(1);
+		expect(notified[0].body).toContain(`Deploy to R2 (failure) (minutes_exhausted — "${text}")`);
+		const stored = JSON.parse(row.ci_health as unknown as string);
+		expect(stored.workflows[0].failureReason).toEqual({ classification: "minutes_exhausted", verbatim: text });
+		// The next sweep over the same failing run keeps the reason and does not look it up again.
+		vi.stubGlobal("fetch", async () => new Response("{}", { status: 500 }));
+		await checkRepoCi(env, asRow(row), now);
+		expect(JSON.parse(row.ci_health as unknown as string).workflows[0].failureReason.classification).toBe("minutes_exhausted");
+	});
+
+	it("an ordinary failure is notified as before — no reason invented", async () => {
+		vi.stubGlobal("fetch", fixtureFetch(loadActionsFixture("ordinary-failure")).fetch);
+		const row = repoRow("r1", "acme/app");
+		github.runs = { runs: [raw(run({ id: "900100", conclusion: "failure", workflowName: "CI" }))] };
+		await checkRepoCi(fakeEnv([row]), asRow(row), now);
+		expect(notified[0].body).toMatch(/^CI \(failure\) at [0-9a-z]{7}\. Open Builds to see why\.$/);
+		expect(notified[0].body).not.toMatch(/minutes_exhausted|never started/);
 	});
 
 	it("a deploy workflow failing says Deploy", async () => {

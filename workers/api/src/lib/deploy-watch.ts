@@ -1,6 +1,7 @@
 import { type DeepLink, deepLinkFor } from "./console-links.js";
 import { logError } from "./error-log.js";
-import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
+import { clipMarked } from "./clip-marked.js";
+import { fetchWorkflowRuns, mapWorkflowRun, runStartFailure, type StartFailure } from "./github-actions.js";
 import { resolveGithubRead } from "./github-cache.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
@@ -72,7 +73,8 @@ export type DeployNotifyDecision =
 	  }
 	/** `seenAt` is nullable on this arm too: a run whose `updated_at` we cannot parse is still a
 	 *  real deploy worth announcing, it just leaves the order unknown for one more sweep. */
-	| { notify: true; seenId: string; seenAt: string | null; title: string; body: string; url: DeepLink };
+	/** `failedRunId`: on a failed deploy, the run whose never-started reason the sweep looks up (#1112). */
+	| { notify: true; seenId: string; seenAt: string | null; title: string; body: string; url: DeepLink; failedRunId?: string };
 
 /**
  * How many recent runs one repo's sweep reads.
@@ -311,6 +313,7 @@ export function decideDeployNotification(
 			title: `❌ Deploy failed ${short}`,
 			body: `${repoName} — ${what} ${failed[0].conclusion || "failed"}. Open Builds to see why.`,
 			url: deepLink,
+			...(failed[0].id ? { failedRunId: failed[0].id } : {}),
 		};
 	}
 	const what = label(forCommit);
@@ -322,6 +325,13 @@ export function decideDeployNotification(
 		body: what ? `${repoName} is live — ${what}.` : `${repoName} is live.`,
 		url: deepLink,
 	};
+}
+
+/** What a failed-deploy notification adds about a run that never started (#1112). GitHub's words, verbatim, clipped only for length. */
+export function deployFailureReasonSuffix(reason: StartFailure | null): string {
+	if (reason?.classification === "minutes_exhausted") return ` | Reason: minutes_exhausted — "${clipMarked(reason.verbatim ?? "", 300)}"`;
+	if (reason?.classification === "not_started") return " | Reason: job never started (no steps)";
+	return "";
 }
 
 interface RepoRow {
@@ -504,10 +514,14 @@ export async function runDeployWatch(env: Env): Promise<void> {
 				deployDeepLink(repo.instance_id, repo.id),
 			);
 			if (decision.notify) {
+				// Why a failed deploy never started (#1112) — a billing block reads exactly like a code
+				// bug otherwise. One jobs read and one annotations read, only for a failure being announced.
+				const reason = decision.failedRunId ? await runStartFailure(repo.github_repo, token, Number(decision.failedRunId)).catch(() => null) : null;
+				const body = `${decision.body}${deployFailureReasonSuffix(reason)}`;
 				// The event is the commit, declared to the notification floor (#361) so that even if
 				// the watermark above were wrong again, one commit's deploy can buzz once per window.
 				// Belt and braces on purpose: this is the fourth defect in this area.
-				await notifyUser(env, repo.user_id, "deploy", decision.title, decision.body, decision.url, {
+				await notifyUser(env, repo.user_id, "deploy", decision.title, body, decision.url, {
 					key: deployEventKey(repo.github_repo, decision.seenId),
 					instanceId: repo.instance_id,
 				}).catch(() => undefined);

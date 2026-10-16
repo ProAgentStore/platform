@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchJobLog, JOB_LOG_FETCH_BYTES, mapWorkflowJob, pickJob, stripLogTimestamps, type WorkflowJob } from "./github-actions.js";
+import { classifyStartFailure, fetchJobAnnotations, fetchJobLog, JOB_LOG_FETCH_BYTES, mapWorkflowJob, pickJob, runStartFailure, stripLogTimestamps, type WorkflowJob } from "./github-actions.js";
+import { fixtureFetch, loadActionsFixture } from "./__fixtures__/github-actions/fixture-fetch.js";
 import { MAX_LINE_CHARS, READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "./repo-file-window.js";
 
-const job = (over: Partial<WorkflowJob>): WorkflowJob => ({ id: 1, name: "job", status: "completed", conclusion: "success", url: "", steps: [], ...over });
+const job = (over: Partial<WorkflowJob>): WorkflowJob => ({ id: 1, name: "job", status: "completed", conclusion: "success", url: "", steps: [], checkRunUrl: "", ...over });
 
 describe("pickJob — which job to read when none was named (#781)", () => {
 	it("prefers the first FAILED job, whatever its position", () => {
@@ -35,8 +36,8 @@ describe("stripLogTimestamps", () => {
 describe("mapWorkflowJob", () => {
 	it("keeps id, name, status, conclusion, url and the steps; tolerates missing fields", () => {
 		const j = mapWorkflowJob({ id: 7, name: "ci", status: "completed", conclusion: null, html_url: "u", steps: [{ number: 2, name: "Test", status: "completed", conclusion: "failure" }] });
-		expect(j).toEqual({ id: 7, name: "ci", status: "completed", conclusion: null, url: "u", steps: [{ number: 2, name: "Test", status: "completed", conclusion: "failure" }] });
-		expect(mapWorkflowJob({})).toEqual({ id: 0, name: "", status: "", conclusion: null, url: "", steps: [] });
+		expect(j).toEqual({ id: 7, name: "ci", status: "completed", conclusion: null, url: "u", checkRunUrl: "", steps: [{ number: 2, name: "Test", status: "completed", conclusion: "failure" }] });
+		expect(mapWorkflowJob({})).toEqual({ id: 0, name: "", status: "", conclusion: null, url: "", checkRunUrl: "", steps: [] });
 	});
 });
 
@@ -108,5 +109,79 @@ describe("tailWindowStart — the inverse of the forward renderer", () => {
 		const lines = ["short", "y".repeat(MAX_LINE_CHARS * 20), "end"];
 		// 20 × 2,000 characters would blow the budget uncut; cut to MAX_LINE_CHARS it fits.
 		expect(tailWindowStart(lines)).toBe(1);
+	});
+});
+
+describe("a job that never started says why, from GitHub's own annotation (#1112)", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const BILLING = loadActionsFixture("billing-annotation");
+	const ORDINARY = loadActionsFixture("ordinary-failure");
+	const INACCESSIBLE = loadActionsFixture("inaccessible-annotations");
+	const jobOf = (fx: ReturnType<typeof loadActionsFixture>) => mapWorkflowJob(fx.jobs.jobs[0]);
+	const BILLING_TEXT = "The job was not started because recent account payments have failed or your spending limit needs to be increased to enable additional minutes.";
+
+	it("keeps the job's check_run_url", () => {
+		expect(jobOf(BILLING).checkRunUrl).toBe("https://api.github.com/repos/acme/interns/check-runs/116800283063");
+	});
+
+	it("fetchJobAnnotations: the billing annotation, verbatim, read from the job's check run", async () => {
+		const gh = fixtureFetch(BILLING);
+		vi.stubGlobal("fetch", gh.fetch);
+		expect(await fetchJobAnnotations("tok", jobOf(BILLING))).toEqual({ ok: true, annotations: [{ annotation_level: "failure", message: BILLING_TEXT }] });
+		expect(gh.urls).toEqual(["https://api.github.com/repos/acme/interns/check-runs/116800283063/annotations?per_page=50"]);
+	});
+
+	it("fetchJobAnnotations: a 403 is ok:false with GitHub's own message — never an empty list", async () => {
+		vi.stubGlobal("fetch", fixtureFetch(INACCESSIBLE).fetch);
+		expect(await fetchJobAnnotations("tok", jobOf(INACCESSIBLE))).toEqual({ ok: false, status: 403, message: "Resource not accessible by integration" });
+	});
+
+	it("fetchJobAnnotations: a 404 and a network failure are ok:false too, and nothing throws", async () => {
+		vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+		expect(await fetchJobAnnotations("tok", jobOf(BILLING))).toMatchObject({ ok: false, status: 404 });
+		vi.stubGlobal("fetch", async () => {
+			throw new Error("network down");
+		});
+		expect(await fetchJobAnnotations("tok", jobOf(BILLING))).toEqual({ ok: false, status: 0, message: "network down" });
+	});
+
+	it("fetchJobAnnotations never follows a check_run_url that is not an api.github.com check run", async () => {
+		const spy = vi.fn();
+		vi.stubGlobal("fetch", spy);
+		expect(await fetchJobAnnotations("tok", { checkRunUrl: "https://evil.example/repos/a/b/check-runs/1" })).toMatchObject({ ok: false, status: 0 });
+		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("classifyStartFailure: explicit billing text → minutes_exhausted, verbatim", () => {
+		expect(classifyStartFailure(jobOf(BILLING), [{ annotation_level: "failure", message: BILLING_TEXT }])).toEqual({ classification: "minutes_exhausted", verbatim: BILLING_TEXT });
+		expect(classifyStartFailure(jobOf(BILLING), [{ annotation_level: "failure", message: "Your Spending Limit has been reached." }])?.classification).toBe("minutes_exhausted");
+	});
+
+	it("classifyStartFailure: completed, no steps, no annotation → not_started with no verbatim", () => {
+		expect(classifyStartFailure(jobOf(BILLING), [])).toEqual({ classification: "not_started", verbatim: null });
+	});
+
+	it("classifyStartFailure: an annotation WITHOUT billing words is not_started, never minutes_exhausted", () => {
+		const text = "No runner matching the specified labels was found: self-hosted, arm64";
+		expect(classifyStartFailure(jobOf(BILLING), [{ annotation_level: "failure", message: text }])).toEqual({ classification: "not_started", verbatim: text });
+	});
+
+	it("classifyStartFailure: a job that ran (it has steps), or is still running, is null — it has a log", () => {
+		expect(classifyStartFailure(jobOf(ORDINARY), [{ annotation_level: "failure", message: BILLING_TEXT }])).toBeNull();
+		expect(classifyStartFailure({ status: "in_progress", steps: [] }, [])).toBeNull();
+	});
+
+	it("runStartFailure: the billing fixture end to end; the ordinary failure is null and reads no annotations", async () => {
+		vi.stubGlobal("fetch", fixtureFetch(BILLING).fetch);
+		expect(await runStartFailure("acme/interns", "tok", 38847192017)).toEqual({ classification: "minutes_exhausted", verbatim: BILLING_TEXT });
+		const ordinary = fixtureFetch(ORDINARY);
+		vi.stubGlobal("fetch", ordinary.fetch);
+		expect(await runStartFailure("acme/app", "tok", 900100)).toBeNull();
+		expect(ordinary.urls.some((u) => u.includes("/annotations"))).toBe(false);
+	});
+
+	it("runStartFailure: inaccessible annotations classify on no evidence — not_started, never minutes_exhausted", async () => {
+		vi.stubGlobal("fetch", fixtureFetch(INACCESSIBLE).fetch);
+		expect(await runStartFailure("acme/app", "tok", 900200)).toEqual({ classification: "not_started", verbatim: null });
 	});
 });

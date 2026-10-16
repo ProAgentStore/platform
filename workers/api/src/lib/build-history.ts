@@ -20,6 +20,8 @@ export interface BuildRun {
 	branch?: string;
 	sha?: string;
 	updatedAt?: string;
+	/** Why a failed run never started, when it was looked up (#1112). Absent when not enriched. */
+	failureReason?: { classification: string; verbatim: string | null } | null;
 }
 
 /** Cap on stored/returned history — bounds KV value size and response size. */

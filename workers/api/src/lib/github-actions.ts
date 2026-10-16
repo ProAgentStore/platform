@@ -137,6 +137,8 @@ export interface WorkflowJob {
 	conclusion: string | null;
 	url: string;
 	steps: Array<{ number: number; name: string; status: string; conclusion: string | null }>;
+	/** The job's check run (#1112) — where GitHub puts the annotation saying why a job never started. */
+	checkRunUrl: string;
 }
 
 export type WorkflowJobsResult = { jobs: WorkflowJob[] } | { status: number | null };
@@ -149,6 +151,7 @@ export function mapWorkflowJob(raw: Record<string, unknown>): WorkflowJob {
 		status: typeof raw.status === "string" ? raw.status : "",
 		conclusion: typeof raw.conclusion === "string" ? raw.conclusion : null,
 		url: typeof raw.html_url === "string" ? raw.html_url : "",
+		checkRunUrl: typeof raw.check_run_url === "string" ? raw.check_run_url : "",
 		steps: steps.map((s) => ({
 			number: typeof s.number === "number" ? s.number : Number(s.number) || 0,
 			name: typeof s.name === "string" ? s.name : "",
@@ -245,6 +248,92 @@ const FAILED = new Set(["failure", "timed_out", "action_required"]);
 export function pickJob(jobs: readonly WorkflowJob[]): WorkflowJob | null {
 	if (!jobs.length) return null;
 	return jobs.find((j) => j.conclusion !== null && FAILED.has(j.conclusion)) ?? jobs.find((j) => j.status !== "completed") ?? jobs[jobs.length - 1];
+}
+
+// ── Why a job never started (#1112) ─────────────────────────────────────────────────────────
+//
+// A run blocked by billing — Actions minutes used up, a spending limit reached, a failed payment —
+// fails within seconds: every job `completed`/`failure` with NO steps and NO log. The log tool used
+// to stop at "GitHub has no log for job …", so an owner could not tell a billing block from a code
+// bug. GitHub's own reason is an ANNOTATION on the job's check run. It is read here, kept verbatim,
+// and classified only on explicit evidence in its text — never inferred from the run's shape.
+
+/** One check-run annotation, as GitHub returns it. */
+export interface GHAnnotation {
+	annotation_level: string;
+	message: string;
+	title?: string;
+}
+
+export type JobAnnotationsResult = { ok: true; annotations: GHAnnotation[] } | { ok: false; status: number; message: string };
+
+/** The check run a job's `check_run_url` names — only ever an api.github.com check run, so a URL from a response is never followed elsewhere. */
+const CHECK_RUN_URL = /^https:\/\/api\.github\.com\/repos\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/check-runs\/\d+$/;
+
+/**
+ * The annotations on a job's check run. Never throws: a refusal (403 — the GitHub App may not hold
+ * `checks: read`), a 404, or a network failure comes back as `ok: false` with the status, so a caller
+ * says "not accessible" rather than reading it as "no reason".
+ */
+export async function fetchJobAnnotations(token: string | undefined, job: Pick<WorkflowJob, "checkRunUrl">): Promise<JobAnnotationsResult> {
+	if (!CHECK_RUN_URL.test(job.checkRunUrl)) return { ok: false, status: 0, message: "the job carries no check run to read annotations from" };
+	try {
+		const res = await fetch(`${job.checkRunUrl}/annotations?per_page=50`, { headers: actionsHeaders(token), signal: AbortSignal.timeout(15_000) });
+		if (!res.ok) {
+			const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+			return { ok: false, status: res.status, message: typeof body?.message === "string" ? body.message : `GitHub answered HTTP ${res.status}` };
+		}
+		const data = (await res.json()) as unknown;
+		const annotations = (Array.isArray(data) ? data : []).flatMap((a): GHAnnotation[] => {
+			const r = (a ?? {}) as Record<string, unknown>;
+			if (typeof r.message !== "string") return [];
+			return [{ annotation_level: typeof r.annotation_level === "string" ? r.annotation_level : "", message: r.message, ...(typeof r.title === "string" && r.title ? { title: r.title } : {}) }];
+		});
+		return { ok: true, annotations };
+	} catch (e) {
+		return { ok: false, status: 0, message: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+export type StartFailureClassification = "minutes_exhausted" | "not_started";
+export interface StartFailure {
+	classification: StartFailureClassification;
+	/** GitHub's own words, unedited; null when it gave none we could read. */
+	verbatim: string | null;
+}
+
+/** Explicit billing wording only — "payment" or "spending limit". Nothing else counts as evidence. */
+const BILLING = /payment|spending limit/i;
+
+/**
+ * Did this job never start, and does GitHub say why? Pure.
+ *
+ * Null for a job that ran (it has steps) or has not finished — those have a log to read. A finished
+ * job with no steps is `not_started`; it is `minutes_exhausted` ONLY when an annotation's text names
+ * payments or a spending limit. The run's shape alone is never taken as a billing block: a broken
+ * workflow file or an unavailable runner label also never starts.
+ */
+export function classifyStartFailure(job: Pick<WorkflowJob, "status" | "steps">, annotations: readonly GHAnnotation[]): StartFailure | null {
+	if (job.status !== "completed" || job.steps.length > 0) return null;
+	const billing = annotations.find((a) => BILLING.test(a.message));
+	if (billing) return { classification: "minutes_exhausted", verbatim: billing.message };
+	return { classification: "not_started", verbatim: annotations.find((a) => a.message.trim())?.message ?? null };
+}
+
+/**
+ * Why a failed run never started, read off its jobs (#1112) — for the run lister and the two
+ * notifiers, which have a run id and nothing else. The never-started job is preferred, else the
+ * one `pickJob` would read. Null when the jobs cannot be read or the job ran. An annotation read
+ * that is refused classifies on no evidence, so it can only ever say `not_started`.
+ */
+export async function runStartFailure(repo: string, token: string | undefined, runId: number): Promise<StartFailure | null> {
+	if (!Number.isInteger(runId) || runId <= 0) return null;
+	const jobs = await fetchWorkflowJobs(repo, token, runId);
+	if (!("jobs" in jobs)) return null;
+	const job = jobs.jobs.find((j) => j.status === "completed" && j.steps.length === 0) ?? pickJob(jobs.jobs);
+	if (job?.status !== "completed" || job.steps.length > 0) return null;
+	const read = await fetchJobAnnotations(token, job);
+	return classifyStartFailure(job, read.ok ? read.annotations : []);
 }
 
 /** Map one raw GitHub Actions run into the compact BuildRun the console + connector consume. */

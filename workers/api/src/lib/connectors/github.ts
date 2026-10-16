@@ -17,14 +17,14 @@
 // Deliberately absent, and not an oversight: PR merge/close (`github_list_pulls`'s own description
 // records that the repo's merge policy governs that, and issue state does not reopen the question)
 // and issue DELETION (irreversible, and nothing has asked for it).
-import type { ToolDef, RegistryToolCtx } from "./types.js";
+import type { ToolDef, RegistryToolCtx, RegistryToolResult } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
 import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssuesPage, readIssue, searchIssues } from "../github-issues.js";
 import { listPulls, readPull, readPullFiles, searchPulls } from "../github-prs.js";
 import { TOOL_RESULT_MAX_CHARS } from "../tool-result-cap.js";
-import { fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps } from "../github-actions.js";
+import { classifyStartFailure, fetchJobAnnotations, fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, runStartFailure, stripLogTimestamps, type WorkflowJob } from "../github-actions.js";
 import { READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "../repo-file-window.js";
 import { listGithubTree, readGithubFile } from "../github-contents.js";
 
@@ -105,11 +105,47 @@ const workflowRunsHandler: ToolDef["handler"] = async (ctx, input) => {
 		return { content: res.status != null ? `GitHub returned ${res.status} for ${repo}` : `Could not reach GitHub for ${repo}`, success: false };
 	}
 	const runs = res.runs.map(mapWorkflowRun);
+	// Why a failed run never started (#1112), for the first few failed/cancelled runs on the page —
+	// bounded so a page of red runs costs at most a few extra reads.
+	let looked = 0;
+	for (const [i, raw] of res.runs.entries()) {
+		if (looked >= FAILURE_REASON_LOOKUPS) break;
+		if (raw.status !== "completed" || (raw.conclusion !== "failure" && raw.conclusion !== "cancelled")) continue;
+		looked++;
+		runs[i].failureReason = await runStartFailure(repo, r.token, Number(raw.id));
+	}
 	// Paged (#898): clamped to 20 with no `page`, an older run was unreachable.
 	return { content: JSON.stringify({ runs, ...paging(page, n, runs.length === n) }, null, 2), success: true };
 };
 
 const num = (n: number): string => n.toLocaleString("en-US");
+
+/** How many failed runs on one github_workflow_runs page get their never-started reason looked up (#1112). */
+const FAILURE_REASON_LOOKUPS = 3;
+
+/** Said when GitHub-hosted minutes are the block — the fallback that does not need them. */
+const SELF_HOSTED_HINT = "Consider using a self-hosted or local runner to bypass GitHub-hosted minute limits.";
+
+/**
+ * The reply for a job that never started (#1112), or null when it ran — then the caller's own
+ * "no log" answer stands. GitHub's annotation is the BODY (fenced: it is GitHub's text); the
+ * classification and the next step are ours, in the head.
+ */
+async function startFailureReply(token: string, job: WorkflowJob, label: string): Promise<RegistryToolResult | null> {
+	if (job.status !== "completed" || job.steps.length > 0) return null;
+	const read = await fetchJobAnnotations(token, job);
+	if (!read.ok) {
+		return { content: `${label} never started (no steps recorded). Annotations not accessible (HTTP ${read.status}): ${read.message}. Unable to determine start failure reason.`, success: false };
+	}
+	const failure = classifyStartFailure(job, read.annotations);
+	if (!failure) return null;
+	if (!failure.verbatim) return { head: `${label}: Job never started (no steps recorded) and no annotation was available. Classification: not_started.`, content: "", success: true };
+	const head =
+		failure.classification === "minutes_exhausted"
+			? `${label} never started. Classification: minutes_exhausted — GitHub's own reason is below, verbatim. ${SELF_HOSTED_HINT}`
+			: `${label} never started (no steps recorded). Classification: not_started — GitHub's annotation is below, verbatim.`;
+	return { head, content: failure.verbatim, success: true, origin: `GitHub's annotation on ${label}` };
+}
 
 /** A file or directory in ANY repo the installation covers, at any ref (#1110) — `lib/github-contents.ts`. */
 const readFileHandler: ToolDef["handler"] = async (ctx, input) => {
@@ -154,6 +190,11 @@ const workflowRunLogsHandler: ToolDef["handler"] = async (ctx, input) => {
 	const job = askedJob === null ? pickJob(jobs) : (jobs.find((j) => j.id === askedJob) ?? null);
 	if (!job) return { content: `No job with job_id ${String(input.job_id)} in run ${runId} of ${repo}. Its jobs are: ${jobsLine}`, success: false };
 
+	const label = `job "${job.name}" (job_id ${job.id}) of run ${runId} in ${repo}`;
+	// A job that finished with no steps never started — there is no log to fetch, and the reason is
+	// an annotation on its check run (#1112).
+	const notStarted = await startFailureReply(r.token, job, label);
+	if (notStarted) return notStarted;
 	const log = await fetchJobLog(repo, r.token, job.id);
 	if ("status" in log) {
 		if (log.status === 404 || log.status === 410) {
@@ -166,7 +207,6 @@ const workflowRunLogsHandler: ToolDef["handler"] = async (ctx, input) => {
 	const lines = text.split("\n");
 	if (text.endsWith("\n")) lines.pop();
 	const tailFirst = (input.startLine === undefined || input.startLine === null || input.startLine === "") && (input.endLine === undefined || input.endLine === null || input.endLine === "");
-	const label = `job "${job.name}" (job_id ${job.id}) of run ${runId} in ${repo}`;
 	const win = renderRepoFileWindow({
 		path: label,
 		content: text,
@@ -481,7 +521,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_workflow_runs",
 			untrustedOutput: true,
 			scope: "read",
-			description: "List recent GitHub Actions workflow runs for a repo (status, conclusion, branch, url) — check CI / deploy status. Paged by `nextPage`.",
+			description: "List recent GitHub Actions runs of a repo (status, conclusion, branch, url, failureReason) for CI/deploy status. Paged by `nextPage`.",
 			handler: "github_workflow_runs",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },

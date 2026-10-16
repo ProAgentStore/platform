@@ -1,0 +1,7 @@
+{
+  "_about": "#1112 — an ordinary failure: the job ran, a step failed, the log is there, no annotations. Must never be classified.",
+  "run": { "id": 900100, "run_number": 41, "name": "CI", "path": ".github/workflows/ci.yml", "status": "completed", "conclusion": "failure", "event": "push", "head_branch": "main", "head_sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "html_url": "https://github.com/acme/app/actions/runs/900100", "created_at": "2026-10-15T04:00:00Z", "updated_at": "2026-10-15T04:03:00Z" },
+  "jobs": { "total_count": 1, "jobs": [ { "id": 7001, "name": "test", "status": "completed", "conclusion": "failure", "html_url": "https://github.com/acme/app/actions/runs/900100/job/7001", "check_run_url": "https://api.github.com/repos/acme/app/check-runs/7001", "steps": [ { "number": 1, "name": "Set up job", "status": "completed", "conclusion": "success" }, { "number": 2, "name": "Run tests", "status": "completed", "conclusion": "failure" } ] } ] },
+  "annotations": [],
+  "log": { "status": 200, "text": "2026-10-15T04:02:58.0000000Z FAIL src/app.test.ts\n2026-10-15T04:02:59.0000000Z Error: Process completed with exit code 1.\n" }
+}
