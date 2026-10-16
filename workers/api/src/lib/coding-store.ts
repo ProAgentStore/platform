@@ -577,6 +577,7 @@ export async function resumeSessionsForNode(env: Env, instanceId: string, userId
 		 WHERE rowid IN (
 		   SELECT MAX(rowid) FROM coding_sessions
 		   WHERE instance_id = ?1 AND user_id = ?2 AND status = 'suspended' AND runner_node = ?3
+		     AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr WHERE lr.session_id = coding_sessions.id AND lr.status = 'running' AND lr.checkout_released_at IS NOT NULL)
 		   GROUP BY repo_id
 		 )
 		 AND repo_id NOT IN (

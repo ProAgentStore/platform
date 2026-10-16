@@ -24,8 +24,9 @@ import type { Env } from "../types.js";
 import { RESUME_WINDOW_MS, describeAge } from "./coding-session-continuity.js";
 import { startSessionOnRunnerConn, type RelaunchInput } from "./coding-session-relaunch.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
-import { claimSessionDriver } from "./coding-store.js";
-import type { RunnerConn } from "./runner-client.js";
+import { claimSessionDriver, getRepo } from "./coding-store.js";
+import { repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
+import { callRunner, type RunnerConn } from "./runner-client.js";
 
 /**
  * How long a parked question waits before the run stops (`decision`, which is continuable). Thirty
@@ -54,7 +55,7 @@ export async function recordParkedWorkflow(env: Pick<Env, "DB">, runId: string, 
  * run is not parked on a question, or the event could not be sent — never throws: every caller has
  * already written the durable fact, and the minute backstop covers a send that failed.
  */
-export async function wakeParkedRun(env: Pick<Env, "DB" | "CODING_SESSION">, runId: string, why: "answer" | "cancel" | "backstop"): Promise<boolean> {
+export async function wakeParkedRun(env: Pick<Env, "DB" | "CODING_SESSION">, runId: string, why: "answer" | "cancel" | "backstop" | "checkout"): Promise<boolean> {
 	try {
 		const row = await env.DB.prepare(
 			`SELECT r.workflow_instance_id AS wf, q.id AS qid FROM agent_loop_runs r JOIN coder_questions q ON q.run_id = r.run_id
@@ -86,6 +87,12 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 		  WHERE r.status = 'running' AND r.waiting_reason = 'decision' AND r.workflow_instance_id IS NOT NULL
 		    AND ((r.cancel_requested = 1 AND COALESCE(r.cancel_requested_at, 0) < ?1)
 		      OR (q.applied_at IS NULL AND ((q.answered_at IS NOT NULL AND q.answered_at < ?1) OR (q.state = 'unresolved' AND q.resolved_at < ?1))))
+		    -- #1077: a run that released its checkout is not re-woken while something else holds that
+		    -- repo (a run, or an open session) — it could only find it busy again. The holder's end wakes it.
+		    AND NOT (r.checkout_released_at IS NOT NULL AND r.cancel_requested = 0 AND EXISTS (
+		          SELECT 1 FROM coding_sessions mine JOIN coding_sessions other ON other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
+		           WHERE mine.id = r.session_id
+		             AND (other.status = 'active' OR EXISTS (SELECT 1 FROM agent_loop_runs o WHERE o.session_id = other.id AND o.status = 'running' AND o.checkout_released_at IS NULL))))
 		  LIMIT 25`,
 	)
 		.bind(due)
@@ -115,4 +122,85 @@ export async function relaunchAfterPark(
 	const started = await startSessionOnRunnerConn(env, conn, { ...input, fresh: why !== null, seed: seed || undefined });
 	if (started?.resumed === true) return { resumed: true, line: "The coding engine continued its own conversation." };
 	return { resumed: false, line: `The coding engine started fresh (${why ?? "its saved conversation was not on the machine"}), briefed from this repository's record.` };
+}
+
+// ── #1077: a parked run lets go of its checkout, and takes it back on resume ─────────────────────────
+
+type ParkScope = { runId: string; instanceId: string; userId: string; sessionId: string; repoId: string };
+
+/**
+ * Release the checkout of a run parked on a question (#1077, #1072 §B). Its uncommitted work is set
+ * aside first, on the runner, by an exact commit id on its own ref (`park-snapshot.ts`), and the
+ * checkout is released ONLY if the runner confirms it is clean. Then the run stops being an owner
+ * (`checkout_released_at`) and its session goes `suspended`, so the next run opens a session of its
+ * own — never this one, whose card is the run's and whose engine resume key is the run's
+ * conversation. A runner without the verb, or any failure, keeps the checkout held, as before.
+ */
+export async function releaseCheckout(env: Env, conn: RunnerConn, scope: ParkScope, now = Date.now()): Promise<{ released: boolean; line: string; onStop?: string }> {
+	const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
+	let saved: { snapshot: string | null; files: number; clean: boolean; ref: string | null };
+	try {
+		saved = await callRunner(conn, "/coding/park-snapshot", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId });
+	} catch (e) {
+		return { released: false, line: `The checkout stays held while it waits: its work could not be set aside on the machine (${e instanceof Error ? e.message : String(e)}; set-aside needs CLI 0.4.140 or later).` };
+	}
+	if (!saved?.clean) return { released: false, line: "The checkout stays held while it waits: it was not clean after setting the work aside." };
+	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_released_at = ?2, checkout_snapshot = ?3 WHERE run_id = ?1 AND status = 'running'").bind(scope.runId, now, saved.snapshot).run();
+	await env.DB.prepare("UPDATE coding_sessions SET status = 'suspended', driver_id = NULL, driver_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'")
+		.bind(scope.sessionId, scope.instanceId, scope.userId)
+		.run();
+	if (!saved.snapshot) return { released: true, line: "Its checkout is released for other work while it waits (it had no uncommitted changes)." };
+	const id = saved.snapshot;
+	return {
+		released: true,
+		line: `Its checkout is released for other work while it waits: ${saved.files} uncommitted file${saved.files === 1 ? " was" : "s were"} set aside as ${id} (\`${saved.ref}\`), put back when it resumes.`,
+		onStop: `Its uncommitted work is still set aside as ${id} (\`${saved.ref}\`); \`git stash apply ${saved.snapshot}\` in the checkout brings it back.`,
+	};
+}
+
+/**
+ * Take the checkout back for a resume (#1077). Not released → nothing to do. Busy — another run, a
+ * driver or a direct turn on the repo, or another active session (one per repo, by index) — → the
+ * run keeps waiting, and is woken when the holder finishes ({@link releasedRunAwaitingCheckout}) or
+ * by the minute backstop. Otherwise its own session is reactivated and its work put back by exact
+ * id; a restore that would not apply cleanly changes nothing and blocks the resume, naming the ref.
+ */
+export async function reacquireCheckout(env: Env, conn: RunnerConn, scope: ParkScope): Promise<{ ok: true } | { busy: string } | { blocked: string }> {
+	const run = await env.DB.prepare("SELECT checkout_released_at, checkout_snapshot FROM agent_loop_runs WHERE run_id = ?1").bind(scope.runId).first<{ checkout_released_at: number | null; checkout_snapshot: string | null }>();
+	if (!run?.checkout_released_at) return { ok: true };
+	const free = await repoFreeForRun(env, { instanceId: scope.instanceId, userId: scope.userId, repoId: scope.repoId, sessionId: scope.sessionId }, runnerEngineProbe(env, scope.instanceId, scope.userId));
+	if (!free.free) return { busy: "another run is working on the repository" };
+	const reactivated = await env.DB.prepare("UPDATE coding_sessions SET status = 'active', ended_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'suspended'")
+		.bind(scope.sessionId, scope.instanceId, scope.userId)
+		.run()
+		.then((r) => (r.meta?.changes ?? 0) > 0, () => false);
+	if (!reactivated) return { busy: "another session is open on the repository" };
+	if (run.checkout_snapshot) {
+		const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
+		const restored = await callRunner<{ restored?: boolean; refused?: string }>(conn, "/coding/park-restore", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId, snapshot: run.checkout_snapshot }).catch((e: unknown) => ({ restored: false, offline: e instanceof Error ? e.message : String(e) }) as { restored: false; offline: string; refused?: string });
+		if ("offline" in restored) {
+			// The machine is not there to put the work back: let go again and wait, rather than run on without it.
+			await env.DB.prepare("UPDATE coding_sessions SET status = 'suspended', updated_at = datetime('now') WHERE id = ?1 AND status = 'active'").bind(scope.sessionId).run();
+			return { busy: "the coding runner is not reachable to put its work back" };
+		}
+		if (!restored.restored) return { blocked: `${restored.refused ?? "its saved work could not be put back"}. Nothing was changed; the work is still set aside as ${run.checkout_snapshot} (\`refs/pags/parked/${scope.runId}\`, \`git stash apply ${run.checkout_snapshot}\`).` };
+	}
+	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_released_at = NULL, checkout_snapshot = NULL WHERE run_id = ?1").bind(scope.runId).run();
+	return { ok: true };
+}
+
+/**
+ * A run on this repo that released its checkout and now has its answer, waiting to take it back. A
+ * drain starts it FIRST (by waking it) instead of the next queued objective: it was there before them.
+ */
+export async function releasedRunAwaitingCheckout(env: Pick<Env, "DB">, instanceId: string, repoId: string): Promise<string | null> {
+	const row = await env.DB.prepare(
+		`SELECT r.run_id FROM agent_loop_runs r JOIN coding_sessions s ON s.id = r.session_id JOIN coder_questions q ON q.run_id = r.run_id
+		  WHERE r.instance_id = ?1 AND s.repo_id = ?2 AND r.status = 'running' AND r.checkout_released_at IS NOT NULL
+		    AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')
+		  ORDER BY r.parked_since ASC LIMIT 1`,
+	)
+		.bind(instanceId, repoId)
+		.first<{ run_id: string }>();
+	return row?.run_id ?? null;
 }

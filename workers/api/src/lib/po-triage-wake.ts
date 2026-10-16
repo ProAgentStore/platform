@@ -206,7 +206,7 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 async function repoHasRunningCoder(env: Env, iid: string, uid: string, repoId: string): Promise<boolean> {
 	const row = await env.DB.prepare(
 		`SELECT 1 AS hit FROM agent_loop_runs r LEFT JOIN coding_sessions s ON s.id = r.session_id
-		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND r.status = 'running' AND (s.repo_id = ?3 OR s.repo_id IS NULL) LIMIT 1`,
+		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND r.status = 'running' AND r.checkout_released_at IS NULL AND (s.repo_id = ?3 OR s.repo_id IS NULL) LIMIT 1`,
 	)
 		.bind(uid, iid, repoId)
 		.first<{ hit: number }>();

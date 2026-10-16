@@ -197,7 +197,7 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 
 		// One run at a time per instance. The coding driver refuses a second Pilot on a session by
 		// itself; the chat loop has no such claim, so the queue holds the line for every driver.
-		const running = await env.DB.prepare("SELECT 1 AS n FROM agent_loop_runs WHERE instance_id = ?1 AND user_id = ?2 AND status = 'running' LIMIT 1")
+		const running = await env.DB.prepare("SELECT 1 AS n FROM agent_loop_runs WHERE instance_id = ?1 AND user_id = ?2 AND status = 'running' AND checkout_released_at IS NULL LIMIT 1")
 			.bind(instanceId, userId)
 			.first<{ n: number }>();
 		if (running) return { started: false, reason: "busy" };

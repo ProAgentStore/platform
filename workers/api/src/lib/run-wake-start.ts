@@ -73,7 +73,7 @@ export async function startWakeLoop(
 	// agent is not a failed delivery and not a wake-up to drop: it WILL be free, so this throws
 	// and the outbox's own backoff is the wait. Dropping it here would lose the signal silently,
 	// which is the failure this issue is about.
-	const running = await env.DB.prepare("SELECT 1 AS n FROM agent_loop_runs WHERE instance_id = ?1 AND user_id = ?2 AND status = 'running' LIMIT 1")
+	const running = await env.DB.prepare("SELECT 1 AS n FROM agent_loop_runs WHERE instance_id = ?1 AND user_id = ?2 AND status = 'running' AND checkout_released_at IS NULL LIMIT 1")
 		.bind(target.instance_id, target.user_id)
 		.first<{ n: number }>();
 	if (running) throw new Error("That agent is already taking a turn; waiting for it to finish before waking it again.");

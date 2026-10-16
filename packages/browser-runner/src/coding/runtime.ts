@@ -1,4 +1,5 @@
 import { actDigest, type EngineInputs } from "./input-ledger.js";
+import { parkRestore, parkSnapshot } from "./park-snapshot.js";
 import { runObjective } from "./run-objective.js";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -289,6 +290,23 @@ export class CodingRuntime {
 		}
 		if (input.workDir) return resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()));
 		throw new InspectError("no session or workDir to inspect");
+	}
+
+	/** Where a parked run's checkout is (#1077): its declared folder, else the managed clone dir `start()` uses. */
+	private parkWorkDir(input: { workDir?: string; repoId?: string }): string {
+		if (input.workDir) return resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()));
+		if (input.repoId) return join(this.reposBaseDir, sanitizeSessionName(input.repoId));
+		throw new InspectError("no workDir or repoId for the parked checkout");
+	}
+
+	/** Set a parked run's uncommitted work aside on its own ref and leave the checkout clean (#1077, `park-snapshot.ts`). */
+	parkSnapshot(input: { workDir?: string; repoId?: string; runId: string }) {
+		return parkSnapshot(this.parkWorkDir(input), input.runId);
+	}
+
+	/** Put a parked run's work back by its exact id — onto a clean tree, only if it applies cleanly (#1077). */
+	parkRestore(input: { workDir?: string; repoId?: string; runId: string; snapshot: string }) {
+		return parkRestore(this.parkWorkDir(input), input.runId, input.snapshot);
 	}
 
 	/** Read one file inside the session's repo (traversal-guarded, size-capped). */

@@ -99,12 +99,20 @@ export interface PauseDeps {
 	 * with no loop-run row, which nothing could wake — falls back to the live poll below.
 	 */
 	park?: {
-		/** Record the park (its instance and its `waiting_until`), then drain and stop the engine PROCESS. The session row and the machine's resume key stay. */
-		begin: (questionId: string, until: number) => Promise<void>;
+		/**
+		 * Record the park (its instance and its `waiting_until`), drain and stop the engine PROCESS, and
+		 * release the checkout when its work could be set aside (#1077). `announce` says what happened to
+		 * the checkout; `onStop` is what an ending without a resume must tell the owner about their work.
+		 */
+		begin: (questionId: string, until: number) => Promise<{ announce?: string; onStop?: string } | undefined>;
 		/** Wait for the question's event — no step runs while it waits. False when the wait timed out. */
 		wait: (questionId: string, k: number, timeoutMs: number) => Promise<boolean>;
-		/** Bring the engine back for the resume; the sentence says whether it continued its conversation. */
-		resumeEngine: (parkedForMs: number) => Promise<string>;
+		/**
+		 * Take the checkout back and bring the engine back for the resume; the sentence says whether it
+		 * continued its conversation. `busy`: another run holds the checkout — keep waiting (#1077).
+		 * `blocked`: the run's saved work could not be put back, and nothing was changed.
+		 */
+		resumeEngine: (parkedForMs: number) => Promise<string | { busy: string } | { blocked: string }>;
 	};
 	/**
 	 * Has the re-auth relay signed the engine in at or after `since` (#881)? What a run parked on
@@ -352,14 +360,30 @@ async function parkOnQuestion(
 	const { result, label, options, questionId } = input;
 	const parkedAt = deps.now();
 	const until = parkedAt + DECISION_PARK_MS;
-	await park.begin(questionId, until);
-	for (let k = 0; k < MAX_PARK_WAKES; k++) {
+	const parked = (await park.begin(questionId, until)) ?? {};
+	if (parked.announce) await deps.announce(`⏸ ${parked.announce}`);
+	const onStop = parked.onStop ? ` ${parked.onStop}` : "";
+	let idle = 0;
+	let saidBusy = false;
+	for (let k = 0; idle < MAX_PARK_WAKES; k++) {
 		const woke = await park.wait(questionId, k, Math.max(1_000, until - deps.now()));
-		if (!(await deps.tick({ until }))) return { resume: false, result: { ...result, outcome: "cancelled", detail: "Stopped by you while it was parked on your answer." } };
+		if (!(await deps.tick({ until }))) return { resume: false, result: { ...result, outcome: "cancelled", detail: `Stopped by you while it was parked on your answer.${onStop}` } };
 		if (!woke) break;
 		const status = await deps.takeoverStatus().catch(() => ({ resolved: false }) as { resolved: boolean; value?: string });
-		if (!status.resolved) continue;
+		if (!status.resolved) {
+			idle++;
+			continue;
+		}
 		const engine = await park.resumeEngine(deps.now() - parkedAt).catch(() => "The coding engine could not be restarted just now; the run reconnects it before its next instruction.");
+		if (typeof engine !== "string" && "busy" in engine) {
+			// The answer is in and the checkout is somebody else's right now (#1077): wait for it. The holder's end wakes this run first.
+			if (!saidBusy) await deps.announce(`⏳ **Your answer is in** — ${deps.repo} is busy (${engine.busy}), so this run resumes as soon as it is free.`);
+			saidBusy = true;
+			continue;
+		}
+		if (typeof engine !== "string") {
+			return { resume: false, result: { ...result, outcome: "stuck", detail: `Your answer is in, but the run could not take its checkout back: ${engine.blocked}` } };
+		}
 		await deps.applied?.().catch(() => undefined);
 		await deps.endTakeover().catch(() => undefined);
 		await deps.card("running");
@@ -369,7 +393,7 @@ async function parkOnQuestion(
 	return {
 		resume: false,
 		stopReason: "decision",
-		result: { ...result, detail: `Waiting on you: ${label}. Nobody answered within ${Math.round(DECISION_PARK_MS / 86_400_000)} days, so the run stopped here. An answer is still recorded on the question; continue the run once it is in.` },
+		result: { ...result, detail: `Waiting on you: ${label}. Nobody answered within ${Math.round(DECISION_PARK_MS / 86_400_000)} days, so the run stopped here. An answer is still recorded on the question; continue the run once it is in.${onStop}` },
 	};
 }
 

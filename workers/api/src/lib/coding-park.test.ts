@@ -15,6 +15,12 @@ import { getCoderQuestion, storedAnswer } from "./coder-question-store.js";
 import { listIdleSessions } from "./coding-sweep-queries.js";
 import { reconcileOrphanedSessions } from "./coding-store.js";
 import { sweepStaleRuns } from "./run-sweeper.js";
+import { repoFreeForRun, repoOwners } from "./coding-ownership.js";
+import { describeBusyHolder } from "./loop-busy.js";
+import { resumeSessionsForNode } from "./coding-store.js";
+import { releasedRunAwaitingCheckout } from "./coding-park.js";
+import { tryDequeueAndStart } from "./objective-queue-start.js";
+import { enqueueObjective } from "./objective-queue.js";
 import type { Env } from "../types.js";
 
 const DAY = 86_400_000;
@@ -133,5 +139,58 @@ describe("nothing that reads silence as death touches a parked run", () => {
 		d1.exec("UPDATE agent_loop_runs SET status = 'cancelled'");
 		await runDueCoderQuestions(env);
 		expect(state()).toBe("expired");
+	});
+});
+
+// ── #1077: a released run owns nothing, and takes its place back first ──────────────────────────────
+
+describe("a run that released its checkout is not an owner of its repo (#1077)", () => {
+	/** Run 1 parked on its question with its checkout released: its session suspended, the work set aside. */
+	function released() {
+		parked();
+		d1.exec(`UPDATE agent_loop_runs SET checkout_released_at = ${Date.now()}, checkout_snapshot = '${"a".repeat(40)}' WHERE run_id = 'run-1'`);
+		d1.exec("UPDATE coding_sessions SET status = 'suspended', driver_id = NULL, runner_node = 'mac' WHERE id = 's1'");
+	}
+	const idle = async () => "idle" as const;
+	const scope = { instanceId: "i1", userId: "u1", repoId: "r1" };
+
+	it("a new run on the same repo is admitted — not refused `busy` — and the busy read names no holder", async () => {
+		released();
+		expect(await repoOwners(env, scope)).toEqual([]);
+		expect(await repoFreeForRun(env, { ...scope, sessionId: "s-new" }, idle)).toEqual({ free: true });
+		expect((await describeBusyHolder(env, { userId: "u1", instanceId: "i1", repoId: "r1" })).activeRun).toBeNull();
+	});
+
+	it("no change for a run that is working, or parked without having released: it still owns the repo", async () => {
+		parked();
+		expect((await repoOwners(env, scope)).map((o) => o.kind)).toEqual(["run"]);
+		expect(await repoFreeForRun(env, { ...scope, sessionId: "s-new" }, idle)).toMatchObject({ free: false });
+	});
+
+	it("a runner reconnecting does not reactivate the released run's session (the next run must not inherit it)", async () => {
+		released();
+		expect(await resumeSessionsForNode(env, "i1", "u1", "mac")).toBe(0);
+		expect((d1.sqlite.prepare("SELECT status FROM coding_sessions WHERE id = 's1'").get() as { status: string }).status).toBe("suspended");
+	});
+
+	it("once answered, it goes FIRST: a drain wakes it instead of starting the next queued objective", async () => {
+		released();
+		await enqueueObjective(env, { instanceId: "i1", userId: "u1", repoId: "r1", objective: "queued after it" });
+		expect(await releasedRunAwaitingCheckout(env, "i1", "r1")).toBeNull(); // not answered yet: the queue is free to run
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
+		expect(await releasedRunAwaitingCheckout(env, "i1", "r1")).toBe("run-1");
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toEqual({ drained: false });
+		expect(sent).toEqual([{ instance: "wf-1", type: answerEventType("q1"), why: "checkout" }]);
+		expect((d1.sqlite.prepare("SELECT status FROM instance_objective_queue").get() as { status: string }).status).toBe("pending");
+	});
+
+	it("the backstop does not re-wake it while another run holds the repo — the holder's end does", async () => {
+		released();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console", now: Date.now() - 2 * PARK_WAKE_BACKSTOP_MS });
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type) VALUES ('s2', 'i1', 'r1', 'u1', 'active', 'claude')");
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-2', 'u1', 'i1', 'y', 'running', 10, ${Date.now()}, 's2')`);
+		expect(await runDueParkWakes(env)).toBe(0);
+		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-2'; UPDATE coding_sessions SET status = 'ended' WHERE id = 's2'");
+		expect(await runDueParkWakes(env)).toBe(1);
 	});
 });

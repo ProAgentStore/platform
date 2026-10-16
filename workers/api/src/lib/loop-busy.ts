@@ -44,6 +44,7 @@ export async function describeBusyHolder(
 		   FROM agent_loop_runs r
 		   LEFT JOIN coding_sessions s ON s.id = r.session_id
 		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND r.status = 'running'
+		    AND r.checkout_released_at IS NULL -- parked with its checkout released: not the holder (#1077)
 		  ORDER BY r.started_at DESC`,
 	)
 		.bind(input.userId, input.instanceId)

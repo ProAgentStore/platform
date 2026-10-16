@@ -2,7 +2,7 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-question-sweep.js";
 import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
-import { answerEventType, recordParkedWorkflow, relaunchAfterPark } from "../../lib/coding-park.js";
+import { answerEventType, reacquireCheckout, recordParkedWorkflow, relaunchAfterPark, releaseCheckout } from "../../lib/coding-park.js";
 import {
 	runCodingLoop,
 	type CodingActionKind,
@@ -738,6 +738,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	let parkedAsk: WaitingAsk | null = null;
 	/** The `coder_questions` row that park's answer is read from (#1075); null for a takeover with no question. */
 	let parkedQuestionId: string | null = null;
+	/** Resume attempts on a park (#1077): each its own step, since a busy checkout is a retry, not a journalled answer. */
+	let unparks = 0;
 	const pauseDeps = (round: number, wait: RunWaitReason): PauseDeps => ({
 		repo: goal.repo,
 		timeZone: goal.timeZone,
@@ -790,14 +792,27 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 							// The engine PROCESS stops; its session row and its resume key stay. Its last acts are drained like the terminal path's.
 							const ended = await callRunner<{ acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
 							await recordEngineActs(env, { userId, sessionId, instanceId, traceId: runId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
-							return null;
-						}).then(() => undefined),
+							// #1077: let go of the checkout (its work set aside first), so queued work runs while this waits.
+							const r = await releaseCheckout(env, conn, { runId, instanceId, userId, sessionId, repoId });
+							return { announce: r.line, onStop: r.onStop, released: r.released };
+						}).then(async (r) => {
+							const p = r as { announce?: string; onStop?: string; released?: boolean };
+							if (p.released) await runRetry(`park-drain-${round}`, async () => {
+								await tryDequeueAndStart(env, instanceId, repoId, userId);
+								return null;
+							});
+							return p;
+						}),
 					wait: (questionId, k, timeoutMs) => step.waitForEvent(`answer-${round}-${k}`, { type: answerEventType(questionId), timeout: timeoutMs }).then(() => true, () => false),
 					resumeEngine: async (parkedForMs) => {
-						const r = (await runRetry(`unpark-${round}`, async () => {
+						const r = (await runRetry(`unpark-${round}-${unparks++}`, async () => {
+							// #1077: the checkout first — busy keeps it parked (and waiting), blocked stops it, both before anything changes.
+							const held = await reacquireCheckout(env, conn, { runId: event.payload.loopRunId as string, instanceId, userId, sessionId, repoId });
+							if (!("ok" in held)) return held;
 							await recordLiveness(env, event.payload.loopRunId as string, Date.now(), null); // no longer parked, from this instant
 							return relaunchAfterPark(env, conn, { instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: event.payload.driverId ?? undefined, parkedForMs });
-						})) as { resumed: boolean; line: string };
+						})) as { resumed: boolean; line: string } | { busy: string } | { blocked: string };
+						if (!("line" in r)) return r;
 						if (!r.resumed) objective?.replaced(); // a fresh engine has read nothing: the objective is owed to it again (#1019)
 						return r.line;
 					},

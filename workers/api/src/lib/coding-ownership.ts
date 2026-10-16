@@ -44,7 +44,8 @@ export async function repoOwners(env: Env, scope: Scope): Promise<RepoOwner[]> {
 	const runs = await env.DB.prepare(
 		`SELECT r.run_id, r.session_id, r.started_at FROM agent_loop_runs r
 		   JOIN coding_sessions s ON s.id = r.session_id
-		  WHERE r.instance_id = ?1 AND r.user_id = ?2 AND s.repo_id = ?3 AND r.status = 'running'`,
+		  WHERE r.instance_id = ?1 AND r.user_id = ?2 AND s.repo_id = ?3 AND r.status = 'running'
+		    AND r.checkout_released_at IS NULL -- a run parked on a question that let go of the checkout (#1077) owns nothing`,
 	)
 		.bind(scope.instanceId, scope.userId, scope.repoId)
 		.all<{ run_id: string; session_id: string | null; started_at: number }>();
@@ -152,7 +153,7 @@ export async function admitDirectTurn(env: Env, scope: Scope & { sessionId: stri
 		`UPDATE coding_sessions SET direct_turn_id = ?5, direct_turn_at = ?6, direct_turn_delivered_at = NULL
 		  WHERE id = ?4 AND instance_id = ?1 AND user_id = ?2 AND repo_id = ?3
 		    AND NOT EXISTS (SELECT 1 FROM coding_sessions o WHERE o.instance_id = ?1 AND o.repo_id = ?3 AND o.id <> ?4 AND (o.driver_id IS NOT NULL OR o.direct_turn_id IS NOT NULL))
-		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r JOIN coding_sessions rs ON rs.id = r.session_id WHERE r.instance_id = ?1 AND rs.repo_id = ?3 AND rs.id <> ?4 AND r.status = 'running')`,
+		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r JOIN coding_sessions rs ON rs.id = r.session_id WHERE r.instance_id = ?1 AND rs.repo_id = ?3 AND rs.id <> ?4 AND r.status = 'running' AND r.checkout_released_at IS NULL)`,
 	)
 		.bind(scope.instanceId, scope.userId, scope.repoId, scope.sessionId, turnId, now)
 		.run();

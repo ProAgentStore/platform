@@ -804,7 +804,7 @@ describe("a parked question costs nothing and resumes the same run (#1076)", () 
 		expect(result.outcome).toBe("done");
 		expect(atPark!.sleeps).toBe(0);
 		expect(atPark!.calls.filter((p) => p === "/coding/takeover-status")).toEqual([]);
-		expect(atPark!.calls.at(-1)).toBe("/coding/end");
+		expect(atPark!.calls).toContain("/coding/end");
 		expect(atPark!.row).toMatchObject({ status: "running", waiting_reason: "decision", workflow_instance_id: "run-1" });
 		expect(atPark!.row.waiting_until! - Date.now()).toBeGreaterThan(DECISION_PARK_MS - 60_000);
 		expect(journal.events).toHaveLength(1);
@@ -884,5 +884,107 @@ describe("a parked question costs nothing and resumes the same run (#1076)", () 
 		await run(params(), journal);
 		expect(journal.events).toEqual([]);
 		expect(journal.sleeps.some((s) => s.name.startsWith("wait-"))).toBe(true);
+	});
+});
+
+// ── #1077: a parked run lets go of its checkout, and takes it back on resume ────────────────────────
+
+describe("a parked run releases its checkout and takes it back on resume (#1077)", () => {
+	const SNAP = "a".repeat(40);
+	const ASK: CodingDecision = { needsInput: { field: "Ship behind a flag?", why: "irreversible", options: ["yes", "no"] } };
+	const answer = (value: string) => recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value, via: "console" });
+	const run1 = () => one<{ status: string; checkout_released_at: number | null; checkout_snapshot: string | null }>("SELECT status, checkout_released_at, checkout_snapshot FROM agent_loop_runs WHERE run_id = 'run-1'");
+	const session = (id: string) => one<{ status: string; driver_id: string | null } | undefined>(`SELECT status, driver_id FROM coding_sessions WHERE id = '${id}'`);
+	beforeEach(() => {
+		seedLoopRun();
+		d1.exec("UPDATE coding_sessions SET driver_id = 'drv-1', driver_at = 1 WHERE id = 's1'");
+		runner["/coding/takeover-status"] = () => ({ resolved: false });
+		runner["/coding/park-snapshot"] = () => ({ snapshot: SNAP, files: 2, clean: true, ref: "refs/pags/parked/run-1" });
+		runner["/coding/park-restore"] = () => ({ restored: true });
+		decisions = [ASK, { finish: { status: "done", detail: "ok" } }];
+	});
+
+	it("at the park: the work is set aside first, then the run stops owning the repo, its session is suspended (card + resume key kept), and the queue drains", async () => {
+		const journal = newJournal();
+		let atPark: { run: ReturnType<typeof run1>; s1: ReturnType<typeof session>; calls: string[] } | null = null;
+		journal.onEvent = async () => {
+			atPark = { run: run1(), s1: session("s1"), calls: runnerCalls.map((c) => c.path) };
+			await answer("yes");
+			return undefined;
+		};
+		await run(params({ loopRunId: "run-1", driverId: "drv-1" }), journal);
+		expect(atPark!.calls.indexOf("/coding/park-snapshot")).toBeGreaterThan(atPark!.calls.indexOf("/coding/end"));
+		expect(atPark!.run).toMatchObject({ status: "running", checkout_snapshot: SNAP });
+		expect(atPark!.run.checkout_released_at).toBeGreaterThan(0);
+		expect(atPark!.s1).toEqual({ status: "suspended", driver_id: null });
+		expect(journal.order).toContain("park-drain-0");
+		// The answer took it all back: work restored by its exact id, own session active again, release cleared.
+		expect(runnerCalls.find((c) => c.path === "/coding/park-restore")?.body).toMatchObject({ runId: "run-1", snapshot: SNAP, repoId: "r1" });
+		expect(run1()).toMatchObject({ status: "completed", checkout_released_at: null, checkout_snapshot: null });
+		expect(decided[1].goal.userHint).toContain("yes");
+	});
+
+	it("an answer while another run holds the checkout waits — same run identity — and resumes when that run finishes", async () => {
+		const journal = newJournal();
+		journal.onEvent = async (name) => {
+			if (name === "answer-0-0") {
+				// Run 2 started on the released repo, on a session of its own, and is working.
+				d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type) VALUES ('s2', 'i1', 'r1', 'u1', 'active', 'claude')");
+				d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-2', 'u1', 'i1', 'other', 'running', 10, ${Date.now()}, 's2')`);
+				await answer("yes");
+			} else {
+				d1.exec("UPDATE agent_loop_runs SET status = 'completed', finished_at = 1 WHERE run_id = 'run-2'; UPDATE coding_sessions SET status = 'ended' WHERE id = 's2'");
+			}
+			return undefined;
+		};
+		await run(params({ loopRunId: "run-1", driverId: "drv-1" }), journal);
+		expect(journal.events.map((e) => e.name)).toEqual(["answer-0-0", "answer-0-1"]);
+		// It did not resume over run 2: the restore came only after run 2 had finished.
+		expect(runnerCalls.filter((c) => c.path === "/coding/park-restore")).toHaveLength(1);
+		expect(run1()).toMatchObject({ status: "completed" });
+		expect(one("SELECT applied_run_id FROM coder_questions WHERE task_id = 'csess-s1'")).toEqual({ applied_run_id: "run-1" });
+	});
+
+	it("work that no longer applies is never forced: nothing changes, the run stops `needs you`, naming where the work is", async () => {
+		runner["/coding/park-restore"] = () => ({ restored: false, refused: "the saved work no longer applies cleanly to this checkout" });
+		const journal = newJournal();
+		journal.onEvent = async () => {
+			await answer("yes");
+			return undefined;
+		};
+		const { result } = await run(params({ loopRunId: "run-1", driverId: "drv-1" }), journal);
+		expect(result.outcome).toBe("stuck");
+		expect(result.detail).toContain(`refs/pags/parked/run-1`);
+		expect(result.detail).toContain(`git stash apply ${SNAP}`);
+		expect(loopRun().status).toBe("needs_human");
+	});
+
+	it("a runner that cannot set the work aside keeps the checkout held, exactly as before", async () => {
+		runner["/coding/park-snapshot"] = () => {
+			throw new Error("404 Not Found");
+		};
+		const journal = newJournal();
+		let atPark: ReturnType<typeof run1> | null = null;
+		journal.onEvent = async () => {
+			atPark = run1();
+			expect(session("s1")?.status).toBe("active");
+			await answer("yes");
+			return undefined;
+		};
+		await run(params({ loopRunId: "run-1", driverId: "drv-1" }), journal);
+		expect(atPark).toMatchObject({ checkout_released_at: null });
+		expect(journal.order).not.toContain("park-drain-0");
+		expect(runnerCalls.some((c) => c.path === "/coding/park-restore")).toBe(false);
+	});
+
+	it("a cancel while released ends the run and says where its set-aside work is", async () => {
+		const journal = newJournal();
+		journal.onEvent = async () => {
+			await requestCancel(env, "u1", "run-1");
+			return undefined;
+		};
+		const { result } = await run(params({ loopRunId: "run-1", driverId: "drv-1" }), journal);
+		expect(result.outcome).toBe("cancelled");
+		expect(result.detail).toContain(`git stash apply ${SNAP}`);
 	});
 });

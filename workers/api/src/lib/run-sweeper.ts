@@ -25,6 +25,7 @@ import { RUN_WAIT_REASONS } from "./agent-loop-store.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
 import { recordRunEvent } from "./run-events.js";
+import { tryDequeueAndStart } from "./objective-queue-start.js";
 
 /**
  * How long a run may be silent before it is presumed dead.
@@ -218,7 +219,30 @@ async function closeRuns(
 	// carries its own finished_at, so `recordRunEvent` skips it rather than calling a finish a stall.
 	for (const r of rows) await recordRunEvent(env, r.run_id, "run.stalled", now);
 	await claimUnaccountedWork(env, rows, now, stopReason);
+	await drainQueues(env, rows);
 	return res.meta?.changes ?? 0;
+}
+
+/**
+ * A run the sweeper closed frees its repo the same as one that ended by itself, so its queue drains
+ * (#1077): the workflow's terminal path never ran, and before this nothing else would start what was
+ * queued behind it. One drain per repo; `tryDequeueAndStart` never throws, and re-checks admission —
+ * a repo the closed run left work in refuses `recovery_required`, which keeps the entry queued.
+ */
+async function drainQueues(env: Env, rows: SweptRunRow[]): Promise<void> {
+	const seen = new Set<string>();
+	for (const r of rows.filter((x) => x.session_id)) {
+		// Best-effort, like the claim above: a drain that cannot run must not turn a sweep into a failure.
+		try {
+			const repo = await env.DB.prepare("SELECT repo_id FROM coding_sessions WHERE id = ?1").bind(r.session_id).first<{ repo_id: string | null }>();
+			const key = `${r.instance_id}:${repo?.repo_id ?? ""}`;
+			if (!repo?.repo_id || seen.has(key)) continue;
+			seen.add(key);
+			await tryDequeueAndStart(env, r.instance_id, repo.repo_id, r.user_id);
+		} catch {
+			// The repo's next drain (a run ending, a resume, the next sweep) will start it.
+		}
+	}
 }
 
 /**
