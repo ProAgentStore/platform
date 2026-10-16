@@ -168,7 +168,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 
 	const probe = new CodingRunProbe(); // Where this run was, and how big its payload, if it dies (#529).
 	/** Who this run is, for the trace. Same `traceId` rule as `recordCodingFailure` (#580 AC4). */
-	const traceCtx = { userId, instanceId, sessionId, runId: event.payload.loopRunId ?? null, repo: goal.repo };
+	const traceCtx = { userId, instanceId, sessionId, runId: event.payload.loopRunId ?? null, repo: goal.repo, cardId: (event.payload.boardTaskId as string | undefined) ?? null };
 	/**
 	 * The reason a PLATFORM interruption is reported under, overriding the outcome's own (#546).
 	 *
@@ -467,7 +467,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// absence let run 73ffc073 merge its own PRs to `main` and report only "done".
 		await recordEngineActs(
 			env,
-			{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
+			{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null, cardId: traceCtx.cardId },
 			reported,
 		).catch(() => undefined);
 		// MERGE AUTHORITY, the enforcing half (#314). The instruction screen keeps the Pilot from
@@ -791,7 +791,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 							await recordLiveness(env, runId, Date.now(), { reason: "decision", until, ask: parkedAsk });
 							// The engine PROCESS stops; its session row and its resume key stay. Its last acts are drained like the terminal path's.
 							const ended = await callRunner<{ acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
-							await recordEngineActs(env, { userId, sessionId, instanceId, traceId: runId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
+							await recordEngineActs(env, { userId, sessionId, instanceId, traceId: runId, cardId: traceCtx.cardId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
 							// #1077: let go of the checkout (its work set aside first), so queued work runs while this waits.
 							const r = await releaseCheckout(env, conn, { runId, instanceId, userId, sessionId, repoId });
 							return { announce: r.line, onStop: r.onStop, released: r.released };
@@ -1194,7 +1194,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			).catch(() => undefined);
 			await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, closingUsageRecords);
 			const closing = sanitizeEngineActs(snap.acts);
-			await recordEngineActs(env, { userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null }, closing).catch(() => undefined);
+			await recordEngineActs(env, { userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null, cardId: traceCtx.cardId }, closing).catch(() => undefined);
 			// A coding run routinely ends WITH the merge, so this drain is where the incident's own
 			// shape lands. Nothing is left to halt, but the breach still has to be recorded (#314).
 			await recordAuthorityViolations(

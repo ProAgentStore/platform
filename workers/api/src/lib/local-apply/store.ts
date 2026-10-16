@@ -677,6 +677,11 @@ export async function insertApplyRun(env: DB, r: { id: string; instanceId: strin
 	return (res.meta?.changes ?? 0) > 0;
 }
 
+/**
+ * The run row keeps the NEWEST this many trace events (#1108). It kept the first 500 and silently
+ * dropped every later one, so past 500 a long fill stopped recording exactly where it was going —
+ * its end. The card's action log (`task-action-log.ts`) is the unbounded record of the run's steps.
+ */
 export const MAX_APPLY_TRACE = 500;
 
 /** Move a run — compare-and-set on the status it was read in — appending trace events. Null when it lost a race. */
@@ -687,7 +692,7 @@ export async function updateApplyRun(
 	now: number,
 ): Promise<ApplyRun | null> {
 	const to = u.to ?? run.status;
-	const trace = [...run.trace, ...(u.events ?? [])].slice(0, MAX_APPLY_TRACE);
+	const trace = [...run.trace, ...(u.events ?? [])].slice(-MAX_APPLY_TRACE);
 	const res = await env.DB.prepare(
 		`UPDATE local_apply_runs
 		    SET status = ?1, pause = CASE WHEN ?2 THEN ?3 ELSE pause END, result = COALESCE(?4, result), engine_auth = COALESCE(?5, engine_auth),

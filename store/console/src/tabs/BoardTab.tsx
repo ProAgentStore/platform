@@ -10,6 +10,7 @@ import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, 
 import Button from "../components/Button";
 import Card from "../components/Card";
 import BoardIssueFace, { type BoardIssueFields } from "../components/BoardIssueFace";
+import { CardActionLog } from "../components/ActionLog";
 import ApplicationRunFace, { APPLICATION_CONFIRM, ApplicationRunControls, type ApplicationRunFields } from "../components/ApplicationRunFace";
 import ScanRunFace, { type ScanRunFields } from "../components/ScanRunFace";
 import { BoardLanesView, IssueControls, IssuesViewButton } from "../components/BoardLanes";
@@ -293,7 +294,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 
 	// Shared per-card wiring so the Kanban card and the List row behave identically.
 	const itemProps = (item: BoardItem) => ({
-		item,
+		item, instanceId,
 		cols,
 		expanded: expanded === item.jobKey,
 		onToggleAttempts: () => setExpanded(expanded === item.jobKey ? null : item.jobKey),
@@ -471,6 +472,7 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 /** What the Kanban card and the List row both take — `itemProps` builds it once per card. */
 type CardProps = {
 	item: BoardItem;
+	instanceId: string;
 	cols: BoardColumn[];
 	expanded: boolean;
 	onToggleAttempts: () => void;
@@ -492,7 +494,7 @@ type CardProps = {
 	order?: CardOrder;
 };
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote, order }: CardProps) {
+function ItemCard({ item, instanceId, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote, order }: CardProps) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
 	// A moved card whose runs are gone stands alone — no run to open.
 	const openable = !!item.latestTaskId || !!item.codingSessionId;
@@ -532,6 +534,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 			<ApplicationRunFace item={item} />
 			<ScanRunFace item={item} />
 			<CardOrderBar item={item} order={order} />
+			{item.latestTaskId && <CardActionLog instanceId={instanceId} taskId={item.latestTaskId} running={!isFinished} />}
 
 			{/* Wraps: Ask is a fourth control on this row, and a kanban column is narrow enough
 			    that Approve + Retry + the column select already filled it. */}

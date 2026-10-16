@@ -27,7 +27,9 @@
  * cost the objective. That is the same rule `recordCodingFailure` states, and the reason both
  * swallow.
  */
+import { codingCardId } from "./coding-board.js";
 import { logEvent } from "./events.js";
+import { type ActionStatus, writeActionEntry } from "./task-action-log.js";
 import type { Env } from "../types.js";
 
 /**
@@ -64,6 +66,36 @@ export interface CodingTraceCtx {
 	/** The loop-run id — the key `agent_trace?trace_id=` is queried by. Falls back to the session. */
 	runId?: string | null;
 	repo?: string | null;
+	/** The board ticket this run works, when it was started from one — its log is that card's (#1108). Else the session's card. */
+	cardId?: string | null;
+}
+
+/** How a lifecycle event reads on the card's action log (#1108). Null: trace only. */
+function cardAction(event: CodingRunEvent, context: Record<string, unknown>): { actionType: string; status: ActionStatus } | null {
+	switch (event) {
+		case "coding.run.start":
+			return { actionType: "checkpoint", status: "running" };
+		case "coding.run.park":
+			return { actionType: "checkpoint", status: "skipped" };
+		case "coding.run.interrupted":
+		case "coding.run.self_heal":
+		case "coding.run.turn_recovery":
+			return { actionType: "checkpoint", status: "running" };
+		case "coding.run.blocked":
+		case "coding.run.input_unknown":
+			return { actionType: "blocker", status: "error" };
+		case "coding.run.end": {
+			const outcome = String(context.outcome ?? "");
+			return { actionType: "outcome", status: outcome === "done" ? "ok" : outcome === "cancelled" ? "skipped" : "error" };
+		}
+		default:
+			return null;
+	}
+}
+
+/** The card a coding run's actions land on: its board ticket, else its session's card. */
+export function codingActionCard(ctx: Pick<CodingTraceCtx, "cardId" | "sessionId">): string {
+	return ctx.cardId || codingCardId(ctx.sessionId);
 }
 
 /**
@@ -95,4 +127,18 @@ export async function traceCodingRun(
 		traceId: ctx.runId ?? ctx.sessionId,
 		context: { sessionId: ctx.sessionId, runId: ctx.runId ?? null, repo: ctx.repo ?? null, ...context },
 	}).catch(() => undefined);
+	const action = cardAction(event, context);
+	if (action) {
+		const runKey = ctx.runId ?? ctx.sessionId;
+		await writeActionEntry(env, {
+			instanceId: ctx.instanceId,
+			userId: ctx.userId,
+			taskId: codingActionCard(ctx),
+			actor: "coding-engine",
+			...action,
+			summary: event === "coding.run.start" ? `Coding run started — ${message}` : message,
+			// A replayed workflow step must not log its start or end twice.
+			...(event === "coding.run.start" || event === "coding.run.end" ? { dedupeKey: `${runKey}:${event}` } : {}),
+		});
+	}
 }

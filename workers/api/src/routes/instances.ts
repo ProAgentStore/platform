@@ -37,6 +37,7 @@ import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerBoardOrderRoutes } from "./board-order-routes.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
+import { registerTaskActionRoutes } from "./instances-task-actions.js";
 import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
@@ -1150,6 +1151,7 @@ instanceRoutes.delete("/:instanceId/runtime", async (c) => {
  * `instances.contract.test.ts` pins the ordered table, so this cannot be tidied by accident.
  */
 registerTaskRoutes(instanceRoutes);
+registerTaskActionRoutes(instanceRoutes); // a card's ordered action log, every task type (#1108)
 // Board order is run order (#1097): placing a card, beside the board writes above.
 registerBoardOrderRoutes(instanceRoutes);
 registerRuntimeBuilderRoutes(instanceRoutes);

@@ -53,6 +53,8 @@
  * floor. Unverifiable evidence never downgrades an act, and never adds a qualifier to one.
  */
 import { logEvent } from "./events.js";
+import { codingCardId } from "./coding-board.js";
+import { writeActionEntry } from "./task-action-log.js";
 import { splitHeredocs } from "./heredoc.js";
 import type { Env } from "../types.js";
 
@@ -612,10 +614,24 @@ export function engineActRowId(sessionId: string, recordId: string): string {
  */
 export async function recordEngineActs(
 	env: Env,
-	ctx: { userId: string; instanceId: string; sessionId: string; traceId?: string | null },
+	ctx: { userId: string; instanceId: string; sessionId: string; traceId?: string | null; cardId?: string | null },
 	acts: EngineActReport[],
 ): Promise<void> {
 	for (const act of acts) {
+		// The card's paper trail (#1108): one line per act, idempotent on the act's own id. A push or
+		// commit is a `commit`; anything else the engine did is a `tool_call`. No link is invented — an
+		// act carries a command and a target, never a resolved commit sha.
+		await writeActionEntry(env, {
+			instanceId: ctx.instanceId,
+			userId: ctx.userId,
+			taskId: ctx.cardId || codingCardId(ctx.sessionId),
+			actor: "coding-engine",
+			actionType: act.kind.startsWith("push") ? "commit" : act.kind.startsWith("pr.") ? "pull_request" : "tool_call",
+			summary: describeEngineAct(act),
+			status: act.ok === false ? "error" : "ok",
+			at: act.atReliable ? Date.parse(act.at) : undefined,
+			dedupeKey: engineActRowId(ctx.sessionId, act.id),
+		});
 		await logEvent(env, {
 			id: engineActRowId(ctx.sessionId, act.id),
 			source: "coding",

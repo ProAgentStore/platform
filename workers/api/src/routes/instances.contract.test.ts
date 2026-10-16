@@ -61,6 +61,7 @@ import { registerChatRoutes } from "./instances-chat.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
+import { registerTaskActionRoutes } from "./instances-task-actions.js";
 import { registerBoardOrderRoutes } from "./board-order-routes.js";
 import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
@@ -408,6 +409,8 @@ const ROUTES = [
 	"DELETE /:instanceId/tasks/:taskId",
 	"POST /:instanceId/tasks/:taskId/cancel",
 	"GET /:instanceId/task-events",
+	// A card's ordered action log, every task type (#1108) — `instances-task-actions.ts`.
+	"GET /:instanceId/tasks/:taskId/actions",
 	// Board order is run order (#1097) — `board-order-routes.ts`, registered right after the tasks group.
 	"POST /:instanceId/board/order",
 	"POST /:instanceId/site-builder/run",
@@ -473,6 +476,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-files.ts": registerFileUploadRoutes,
 	"instances-knowledge.ts": registerKnowledgeRoutes,
 	"instances-tasks.ts": registerTaskRoutes,
+	"instances-task-actions.ts": registerTaskActionRoutes,
 	"board-order-routes.ts": registerBoardOrderRoutes,
 	"instances-site-builder.ts": registerRuntimeBuilderRoutes,
 	"instances-deploy.ts": registerDeployStatusRoutes,
@@ -635,6 +639,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/knowledge/ingest-url",
 		"GET /:instanceId/knowledge",
 	],
+	"instances-task-actions.ts": ["GET /:instanceId/tasks/:taskId/actions"],
 	"instances-tasks.ts": [
 		"GET /:instanceId/tasks",
 		"GET /:instanceId/board",
@@ -987,6 +992,7 @@ const GATES: Record<string, [number, number]> = {
 	"DELETE /:instanceId/tasks/:taskId": [401, 404],
 	"POST /:instanceId/tasks/:taskId/cancel": [401, 404],
 	"GET /:instanceId/task-events": [401, 404],
+	"GET /:instanceId/tasks/:taskId/actions": [401, 404],
 	"POST /:instanceId/site-builder/run": [401, 404],
 	"GET /:instanceId/site-builder/:runId": [401, 404],
 	"POST /:instanceId/site-builder/:runId/cancel": [401, 404],

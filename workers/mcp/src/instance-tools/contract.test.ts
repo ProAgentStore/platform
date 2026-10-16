@@ -592,6 +592,7 @@ const TABLE: Record<string, Row> = {
 	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,idempotency_key,token"],
 	system_status: ["coding", "none", null, null, "instance_id,token"],
 	ticket_thread: ["board", "none", null, null, "instance_id,task_id,token"],
+	task_action_log: ["board", "read", null, null, "cursor,instance_id,limit,task_id,token"],
 	unregister_instance_runtime: ["runtime", "destructive", "unregister_instance_runtime", "envelope", "confirm,dry_run,instance_id,token"],
 	update_instance_knowledge: ["knowledge", "write", null, "envelope", "content,document_id,dry_run,instance_id,title,token"],
 	update_profile: ["account", "write", null, "envelope", "dry_run,fields,token"],

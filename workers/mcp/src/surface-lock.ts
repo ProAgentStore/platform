@@ -1181,4 +1181,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.140": "sha256:8f415f001de06fdde4d30bb86d562e83ef8d8f97d4d9601de5bc448cd02a90c4",
 	// #1090: mcp_audit_log gains action + since/until; admin_mcp_audit gains action, since/until, request_id and session_id.
 	"0.1.141": "sha256:078f960fac5f539e31fd8f148e4c8dafeef3fb9fb7e0b0ec6d30ad7ab8f269ef",
+	// #1108: task_action_log — one board card's ordered action log, any task type, cursor-paged.
+	"0.1.142": "sha256:42711350f7067747740ec59782c048b8cb7928a2d03726914ee9d1fd4c9da073",
 };

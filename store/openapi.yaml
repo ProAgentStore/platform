@@ -5686,6 +5686,55 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/instances/{instanceId}/tasks/{taskId}/actions:
+    get:
+      summary: Read a board card's action log
+      description: |
+        Every step the agent took on ONE board card, oldest first, for any task type — a coding run
+        (start, each tool call / push / PR act, blockers, outcome), an application (Tailor and
+        Runner transitions, the submitted URL) or a browser task (its steps and result). Artifact
+        URLs keep origin and path only (#1069). Page with `cursor` = the previous reply's
+        `nextCursor`; follow a running task by polling with `cursor` = its `tail`, which returns
+        only what is new. `total` counts the whole log. Owner-only (#1108).
+      operationId: getTaskActionLog
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        "200":
+          description: One page of the card's action log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId: { type: string }
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        ts: { type: string, format: date-time }
+                        actor: { type: string }
+                        instanceId: { type: string }
+                        actionType: { type: string }
+                        summary: { type: string }
+                        status: { type: string, enum: [running, ok, error, skipped] }
+                        artifacts:
+                          type: array
+                          items: { type: object, properties: { label: { type: string }, url: { type: string } } }
+                        source: { type: string }
+                  hasMore: { type: boolean }
+                  nextCursor: { type: string, nullable: true }
+                  tail: { type: string, nullable: true }
+                  total: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/tasks/{taskId}/thread:
     get:
       summary: Read a ticket's conversation

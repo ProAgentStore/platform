@@ -394,22 +394,24 @@ describe("engineActRowId — a duplicated merge reads as a second merge", () => 
 });
 
 /** A D1 stub that records the SQL + bindings of every prepared statement. */
+/** `calls` are the trace writes; `actions` the card's action-log writes (#1108), kept apart so each is asserted on its own. */
 function fakeDb() {
 	const calls: Array<{ sql: string; binds: unknown[] }> = [];
+	const actions: Array<{ sql: string; binds: unknown[] }> = [];
 	const DB = {
 		prepare(sql: string) {
 			const entry = { sql, binds: [] as unknown[] };
 			return {
 				bind(...binds: unknown[]) {
 					entry.binds = binds;
-					calls.push(entry);
+					(sql.includes("instance_runtime_task_events") ? actions : calls).push(entry);
 					return this;
 				},
 				run: async () => ({}),
 			};
 		},
 	};
-	return { calls, env: { DB } as unknown as Env };
+	return { calls, actions, env: { DB } as unknown as Env };
 }
 
 describe("recordEngineActs — the sink is the EXISTING trace, not a fifth record", () => {
@@ -423,6 +425,17 @@ describe("recordEngineActs — the sink is the EXISTING trace, not a fifth recor
 			expect(calls[0].sql).toContain("ON CONFLICT(id) DO NOTHING");
 			expect(calls[0].binds[0]).toBe("act:s1:toolu_1:0");
 		});
+	});
+
+	it("also lands each act ONCE on its card's action log — the existing per-card stream, keyed on the act (#1108)", async () => {
+		const { actions, env } = fakeDb();
+		await recordEngineActs(env, { userId: "u1", instanceId: "i1", sessionId: "s1" }, sanitizeEngineActs([act()]));
+		expect(actions).toHaveLength(1);
+		expect(actions[0].binds[3]).toBe("csess-s1"); // task_id: the session's card
+		expect(actions[0].binds[7]).toBe("act:s1:toolu_1:0"); // dedupeKey: the same id the trace row has
+		const ticket = fakeDb();
+		await recordEngineActs(ticket.env, { userId: "u1", instanceId: "i1", sessionId: "s1", cardId: "ticket-9" }, sanitizeEngineActs([act()]));
+		expect(ticket.actions[0].binds[3]).toBe("ticket-9");
 	});
 
 	it("marks an irreversible act `warn` and a reversible one `info`", async () => {

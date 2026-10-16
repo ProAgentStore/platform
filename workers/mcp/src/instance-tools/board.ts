@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authRequired, authedCall, jsonText, text, type McpEnv } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
 import { clearFinishedSentence } from "../state-vocabulary.js";
+import { fitFetchedPage } from "../wire-budget.js";
 import { groupBoard, type InstanceToolsCtx, isRec } from "./shared.js";
 
 /**
@@ -465,6 +466,32 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 				turnCount: turns.length,
 				note: TICKET_GROUNDING_NOTE,
 			});
+		},
+	);
+
+	server.tool(
+		"task_action_log",
+		"The ordered action log of ONE board card — every step the agent took on it, oldest first, for any task type: a coding run (started, each tool call/push/PR act, blockers, outcome), an application (Tailor and Runner transitions, the submitted URL) or a browser task (its steps and result). Each entry: `ts`, `actor`, `instanceId`, `actionType`, `summary`, `status` (whether the step is still running, succeeded, failed or was skipped) and `artifacts` (links, query strings removed). Works during and after the run. Page with `cursor: nextCursor` while `hasMore`; to follow a running task, call again with `cursor: tail` and only new entries come back. `total` is the whole log, so a page is never read as all of it. Get task_id from instance_board. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("The instance the card is on, from my_instances."),
+			task_id: z.string().describe("The card's task id — `latestTaskId` from an instance_board card."),
+			cursor: z.string().max(400).optional().describe("A previous reply's `nextCursor` (more history) or `tail` (only what is new). Omit to start at the first entry."),
+			limit: z.coerce.number().int().min(1).max(50).optional().describe("Entries per page, 1-50 (default 20). A page is shortened further if it would not fit the wire budget."),
+		},
+		async ({ token, instance_id, task_id, cursor, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "task_action_log", { instance_id, task_id });
+			if (denied) return denied;
+			const base = `/v1/instances/${encodeURIComponent(instance_id)}/tasks/${encodeURIComponent(task_id)}/actions`;
+			return text(
+				await fitFetchedPage({
+					limit: limit ?? 20,
+					key: "entries",
+					fetch: (n) => authedCall(`${base}?limit=${n}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, sessionToken, {}, env),
+				}),
+			);
 		},
 	);
 

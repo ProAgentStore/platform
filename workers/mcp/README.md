@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**331 tool registrations.** 304 are always registered; 27 are gated to the console
+**332 tool registrations.** 305 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -433,6 +433,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `delete_agent_task` | Remove a standing task for good (`status: complete` retires it instead) | destructive | yes | `delete_agent_task` |
 | `instance_task_events` | Recent runtime events | — | | |
 | `ticket_thread` | Read one ticket's question-and-answer thread | — | | |
+| `task_action_log` | Read one board card's ordered action log — every step, any task type, paged by cursor (#1108) | — | | |
 | `ask_ticket` | Ask one ticket about its own record — explains, never acts | write | yes | |
 
 ### Runtime registration

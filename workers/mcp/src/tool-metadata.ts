@@ -311,6 +311,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	review_local_browser_finding: "write",
 	system_status: "read",
 	ticket_thread: "read",
+	task_action_log: "read",
 	usage_summary: "read",
 	usage_drivers: "read",
 	vector_stats: "read",

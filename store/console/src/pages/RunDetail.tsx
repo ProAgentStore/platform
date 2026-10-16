@@ -13,6 +13,7 @@ import { isRunFinished } from "../lib/runStatus";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import Card from "../components/Card";
+import ActionLog from "../components/ActionLog";
 
 /**
  * A real, routed run-detail page (not a popup) for any browser-runtime task: a
@@ -500,6 +501,14 @@ export default function RunDetail() {
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
 			<RunReplay frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : `No screenshots for this run${running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}`} />
+
+			{/* ── The card's ordered action log (#1108), the same one every task type writes ── */}
+			{instanceId && taskId && (
+				<Card className="mb-5">
+					<h2 className="text-sm font-bold mb-3">Action log — each step, in order</h2>
+					<ActionLog instanceId={instanceId} taskId={taskId} running={!!running} />
+				</Card>
+			)}
 
 			{/* ── Full timestamped activity log ─────────────────────────────── */}
 			<Card>

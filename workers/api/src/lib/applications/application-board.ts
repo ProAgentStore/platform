@@ -29,6 +29,7 @@ import { type ApplicationCardPayload, parseApplicationCard } from "./application
 import type { FillProgress } from "./fill-progress.js";
 import type { ApplicationExecutionProjection } from "./execution-projection.js";
 import type { JobApplication } from "../local-artifact/store.js";
+import { type ActionStatus, writeActionEntry } from "../task-action-log.js";
 import { upsertWorkCard } from "../work-card.js";
 import type { Env } from "../../types.js";
 
@@ -210,7 +211,7 @@ export async function syncApplicationCard(
 	userId: string,
 	run: { id: string; instanceId: string; applicationId: string; status: string; pause?: { reason?: string } | null; runnerVersion?: string | null },
 	kind: ApplicationRunKind,
-	opts: { checkpoint?: ApplicationCardFacts["checkpoint"] } = {},
+	opts: { checkpoint?: ApplicationCardFacts["checkpoint"]; log?: boolean } = {},
 ): Promise<void> {
 	try {
 		const { getQueueItem } = await import("./control.js");
@@ -252,8 +253,49 @@ export async function syncApplicationCard(
 				execution,
 			},
 		});
+		// The card's paper trail (#1108): one line per run TRANSITION, keyed so the repeated syncs of
+		// an unchanged run record it once. Not on the reconciliation backfill, which would stamp an
+		// old transition with today's time.
+		const action = applicationRunAction(kind, run.status, run.pause?.reason ?? null);
+		if (action && opts.log !== false) {
+			await writeActionEntry(env, {
+				instanceId: pipeline.runners[0] ?? run.instanceId,
+				userId,
+				taskId: applicationCardId(run.applicationId),
+				actor: kind === "fill" ? "runner" : "tailor",
+				...action,
+				...(run.status === "submitted" && app.submittedUrl ? { artifacts: [{ label: "submitted application", url: app.submittedUrl }] } : {}),
+				dedupeKey: `${run.id}:${run.status}:${run.pause?.reason ?? ""}`,
+			});
+		}
 	} catch {
 		/* visibility only — never fail the run that triggered it */
+	}
+}
+
+/** How one run status reads on the application card's log (#1108). Null: not a step worth a line. */
+export function applicationRunAction(kind: ApplicationRunKind, status: string, pauseReason: string | null): { actionType: string; status: ActionStatus; summary: string } | null {
+	const who = kind === "fill" ? "Runner" : "Tailor";
+	switch (status) {
+		case "running":
+			return { actionType: "checkpoint", status: "running", summary: kind === "fill" ? "Runner started filling the application" : "Tailor started preparing the materials" };
+		case "paused":
+		case "needs_human":
+			return { actionType: "blocker", status: "running", summary: `${who} paused${pauseReason ? ` — ${pauseReason}` : ""}` };
+		case "awaiting_review":
+			return { actionType: "checkpoint", status: "ok", summary: "Runner filled the form — waiting for review before submit" };
+		case "submitted":
+			return { actionType: "submit", status: "ok", summary: "Runner submitted the application" };
+		case "completed":
+			return { actionType: "outcome", status: "ok", summary: "Tailor finished the materials" };
+		case "blocked":
+			return { actionType: "blocker", status: "error", summary: `${who} blocked${pauseReason ? ` — ${pauseReason}` : ""}` };
+		case "failed":
+			return { actionType: "outcome", status: "error", summary: `${who} run failed` };
+		case "cancelled":
+			return { actionType: "outcome", status: "skipped", summary: `${who} run cancelled` };
+		default:
+			return null;
 	}
 }
 
@@ -355,6 +397,7 @@ export async function reconcileApplicationCards(env: Env, userId: string, instan
 				const { listSupervisorCheckpoints } = await import("../local-apply/supervision.js");
 				const latest = fill.status === "paused" && fill.pause?.reason === "supervisor_checkpoint" ? (await listSupervisorCheckpoints(env, fill).catch(() => [])).at(-1) ?? null : null;
 				await syncApplicationCard(env, userId, fill, "fill", {
+					log: false,
 					...(latest ? { checkpoint: { checkpointId: latest.checkpointId, phase: latest.facts.phase, directive: latest.directive?.directive ?? null } } : {}),
 				});
 				reconciled++;
@@ -363,7 +406,7 @@ export async function reconcileApplicationCards(env: Env, userId: string, instan
 			if (!app.tailoringRunId) continue;
 			// `syncApplicationCard` resolves the home itself (the pipeline's Runner, else the Tailor),
 			// so this passes the run's OWN instance and the home rule stays in one place.
-			await syncApplicationCard(env, userId, { id: app.tailoringRunId, instanceId: app.instanceId, applicationId: app.id, status: tailoringCardStatus(app.status) }, "tailor");
+			await syncApplicationCard(env, userId, { id: app.tailoringRunId, instanceId: app.instanceId, applicationId: app.id, status: tailoringCardStatus(app.status) }, "tailor", { log: false });
 			reconciled++;
 		}
 		return { reconciled, remaining: Math.max(0, total - reconciled) };
