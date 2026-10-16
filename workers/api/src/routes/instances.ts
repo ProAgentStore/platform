@@ -33,6 +33,7 @@ import { registerNativeRoutes } from "./instances-native.js";
 import { registerTraceRoutes } from "./instances-trace.js";
 import { registerBrowserScreenshotsRoutes } from "./instances-browser-screenshots.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
+import { registerBoardOrderRoutes } from "./board-order-routes.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
@@ -1141,6 +1142,8 @@ instanceRoutes.delete("/:instanceId/runtime", async (c) => {
  * `instances.contract.test.ts` pins the ordered table, so this cannot be tidied by accident.
  */
 registerTaskRoutes(instanceRoutes);
+// Board order is run order (#1097): placing a card, beside the board writes above.
+registerBoardOrderRoutes(instanceRoutes);
 registerRuntimeBuilderRoutes(instanceRoutes);
 registerChatRoutes(instanceRoutes);
 registerKnowledgeRoutes(instanceRoutes);

@@ -1,4 +1,6 @@
 import { clipMarked } from "./clip-marked.js";
+import { type RunQueueMarker, markRunQueue, objectiveCards, sortBoardItems, ticketQueueEnabled } from "./board-order.js";
+import { listQueue } from "./objective-queue.js";
 import { assertJobKey } from "./write-limits.js";
 import { type ApplicationCardPayload, parseApplicationCard } from "./applications/application-card-payload.js";
 import { applicationRunsForCards, reconcileApplicationCard } from "./applications/application-runs.js";
@@ -165,6 +167,12 @@ export interface BoardItemView {
 	 * are cleared. Absent means the card is still only a grouping of its runs.
 	 */
 	ticketId?: string;
+	/** Where the owner placed it in its column (#1097); null = never placed (after the placed cards, oldest first). */
+	position?: number | null;
+	/** A queued objective (#1097): the pending `instance_objective_queue` entry this card is. */
+	queueEntry?: { id: string; repoId: string | null; createdAt: string };
+	/** On a Waiting card (#1097): which queue starts it and whether it is next — or why nothing will. */
+	runQueue?: RunQueueMarker;
 }
 
 /** The cached GitHub issue fields a board card stores and displays (#682). */
@@ -391,9 +399,9 @@ function serializeIssueCache(issue: IssueSummary, repo: string): string {
 export async function buildInstanceBoard(env: Env, instanceId: string, userId: string, opts: { repo?: string } = {}): Promise<InstanceBoard> {
 	const [tasks, overlayRows, boardCfg, threadRows, storedTickets] = await Promise.all([
 		mirroredRuntimeTasks(env, instanceId, userId, BOARD_TASK_LIMIT),
-		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at, github_issue_number, github_issue_cache FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
+		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at, github_issue_number, github_issue_cache, position FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
-			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string; github_issue_number: number | null; github_issue_cache: string | null }>(),
+			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string; github_issue_number: number | null; github_issue_cache: string | null; position: number | null }>(),
 		boardConfigForInstance(env, instanceId, userId),
 		// Per-ticket conversation turns (#150), so a card can say it has been questioned. One
 		// grouped read for the whole board rather than a read per card; the partial index from
@@ -414,7 +422,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		if (r.task_id) threadTurnsByTask.set(r.task_id, Number(r.n) || 0);
 	}
 
-	const overlay = new Map<string, { user_status: string | null; title: string; subtitle: string; url: string; updated_at: string; github_issue_number: number | null; github_issue_cache: string | null }>();
+	const overlay = new Map<string, { user_status: string | null; title: string; subtitle: string; url: string; updated_at: string; github_issue_number: number | null; github_issue_cache: string | null; position: number | null }>();
 	for (const r of overlayRows.results ?? []) overlay.set(r.job_key, r);
 
 	// One card per job — newest attempt represents the card.
@@ -594,8 +602,13 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 
 	// A repo filter keeps the cards that ARE (or work on) an issue of that repo — `owner/repo`, any case.
 	const repo = opts.repo?.trim().toLowerCase();
+	// Queued objectives are cards (#1097), and every card's place in its column is the run order.
+	items.push(...objectiveCards(await listQueue(env, instanceId)));
+	for (const item of items) item.position = overlay.get(item.jobKey)?.position ?? null;
+	const ticketsById = new Map(storedTickets.tickets.map((t) => [t.id, t]));
+	sortBoardItems(items, ticketsById);
+	markRunQueue(items, ticketsById, await ticketQueueEnabled(env, instanceId, userId).catch(() => false));
 	const shown = repo ? items.filter((i) => i.githubIssue?.repo?.toLowerCase() === repo) : items;
-	shown.sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
 
 	return { columns, items: shown, view, truncated: tasks.length >= BOARD_TASK_LIMIT };
 }
@@ -719,7 +732,7 @@ export async function liveBoardItemMeta(
 	return { title: card.title, subtitle: card.subtitle, url: card.url };
 }
 
-/** Set (or clear, when status is null/empty) the human status override for a job. */
+/** Set (or clear, when status is null/empty) the human status override for a job. A MOVE clears its place (#1097). */
 export async function setBoardItemStatus(
 	env: Env,
 	instanceId: string,
@@ -748,6 +761,7 @@ export async function setBoardItemStatus(
        title = COALESCE(?5, board_items.title),
        subtitle = COALESCE(?6, board_items.subtitle),
        url = COALESCE(?7, board_items.url),
+       position = CASE WHEN board_items.user_status IS excluded.user_status THEN board_items.position END,
        updated_at = excluded.updated_at`,
 	)
 		.bind(

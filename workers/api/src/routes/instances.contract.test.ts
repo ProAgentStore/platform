@@ -61,6 +61,7 @@ import { registerChatRoutes } from "./instances-chat.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
+import { registerBoardOrderRoutes } from "./board-order-routes.js";
 import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
@@ -190,6 +191,7 @@ const BODIES: Record<string, unknown> = {
 	"POST /:instanceId/system-message": { content: "probe" },
 	"POST /:instanceId/loop-decide": { objective: "probe", messages: [], iteration: 1, maxIterations: 2 },
 	"POST /:instanceId/board/status": { jobKey: "j1", status: "" },
+	"POST /:instanceId/board/order": { jobKey: "j1", to: "top" },
 	"POST /:instanceId/tasks/direct": { title: "probe" },
 	"POST /:instanceId/tasks/:taskId/hint": { hint: "probe" },
 	"POST /:instanceId/tasks/:taskId/thread": { message: "probe" },
@@ -406,6 +408,8 @@ const ROUTES = [
 	"DELETE /:instanceId/tasks/:taskId",
 	"POST /:instanceId/tasks/:taskId/cancel",
 	"GET /:instanceId/task-events",
+	// Board order is run order (#1097) — `board-order-routes.ts`, registered right after the tasks group.
+	"POST /:instanceId/board/order",
 	"POST /:instanceId/site-builder/run",
 	"GET /:instanceId/site-builder/:runId",
 	"POST /:instanceId/site-builder/:runId/cancel",
@@ -469,6 +473,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-files.ts": registerFileUploadRoutes,
 	"instances-knowledge.ts": registerKnowledgeRoutes,
 	"instances-tasks.ts": registerTaskRoutes,
+	"board-order-routes.ts": registerBoardOrderRoutes,
 	"instances-site-builder.ts": registerRuntimeBuilderRoutes,
 	"instances-deploy.ts": registerDeployStatusRoutes,
 	"instances-identity.ts": registerIdentityResyncRoutes,
@@ -653,6 +658,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/tasks/:taskId/cancel",
 		"GET /:instanceId/task-events",
 	],
+	"board-order-routes.ts": ["POST /:instanceId/board/order"],
 	"instances-deploy.ts": [
 		"GET /:instanceId/deploy-status",
 		"GET /:instanceId/deploy-history",
@@ -956,6 +962,7 @@ const GATES: Record<string, [number, number]> = {
 	// Issue sync (#895). Owner-only: it reads GitHub with the owner's installation.
 	"POST /:instanceId/board/issues/sync": [401, 404],
 	"POST /:instanceId/board/status": [401, 404],
+	"POST /:instanceId/board/order": [401, 404],
 	"GET /:instanceId/board-config": [401, 404],
 	"PUT /:instanceId/board-config": [401, 404],
 	// GitHub issue link/unlink (#682). Owner-only: linking a card to an issue is a

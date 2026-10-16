@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**329 tool registrations.** 302 are always registered; 27 are gated to the console
+**331 tool registrations.** 304 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -409,6 +409,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_board_config` | Read board columns + preferred view | — | | |
 | `set_instance_board_config` | Override columns / view per instance | write | yes | |
 | `set_board_item_status` | Move a card, or reset it to automation | write | yes | |
+| `reorder_board_item` | Place a card in its column (`to: top/bottom`, `before`/`after` a card in the same column) — board order is run order (#1097) | write | yes | |
 | `promote_board_item` | Make a card a first-class ticket — its runs are stored as its history (idempotent, #757) | write | yes | |
 | `link_board_item_issue` | Link a board card to a GitHub issue (`repo` + `issue_number`); reads GitHub once, changes nothing there (#895) | write | yes | |
 | `unlink_board_item_issue` | Remove a card's GitHub issue link (#895) | write | yes | |
@@ -511,6 +512,7 @@ immediately instead of a whole transcript.
 | `coding_loop_stop` | Cooperative stop; omit `run_id` to stop the newest running one | write | no ([why](#tools-with-no-dry-run)) | |
 | `coding_loop_queue` | The objectives queued behind the current run (`coding_loop_start` with `queue_if_busy`), FIFO — the top one starts automatically when the active run ends. `status: "all"` + `cursor` pages every entry ever queued with what became of it — a keyset cursor, stable while entries arrive; `offset` is the weaker legacy form (#1017) | read | | |
 | `coding_loop_queue_cancel` | Withdraw a queued objective before it starts; only a pending entry can be withdrawn | write | no ([why](#tools-with-no-dry-run)) | |
+| `coding_loop_queue_reorder` | Change which queued objective starts next (`to: next/last`, `before`/`after` an entry) without stopping the run in flight (#1097) | write | yes | |
 | `coding_loop_lifecycle` | One objective's lifecycle — requested → queued/deduplicated/not started → admitted/deferred/cancelled/admission failed → run → run finished — by `request_id`, `queue_entry_id` or `run_id`, oldest first with a stable `seq` cursor; each event names its actor (`owner`, verified uid + claimed client, or `platform`); a deduplicated request reaches the objective it joined; `coverage`/`coverage_gaps` say whether the recorded history is whole, separately from paging's `complete`. Read-only; replays nothing (#1017) | read | | |
 
 ### Triggers

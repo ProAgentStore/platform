@@ -323,6 +323,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	ask_ticket: "write",
 	clear_finished_tasks: "write",
 	coding_loop_queue_cancel: "write",
+	coding_loop_queue_reorder: "write", // #1097 — changes which queued entry starts first; starts nothing
 	coding_loop_stop: "write",
 	coding_repo_add: "write",
 	retarget_repository_binding: "write",
@@ -351,6 +352,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_agent_stats_schema: "write",
 	set_board_item_status: "write",
 	promote_board_item: "write", // #757 — makes a card a first-class ticket; idempotent
+	reorder_board_item: "write", // #1097 — places a card in its column; board order is run order
 	link_board_item_issue: "write", // #895 — links a card to a GitHub issue; reads GitHub, changes nothing there
 	unlink_board_item_issue: "write", // #895 — removes that link; reversible, nothing deleted
 	sync_board_issues: "write", // #895 — writes issue cards from GitHub's issues; never starts work

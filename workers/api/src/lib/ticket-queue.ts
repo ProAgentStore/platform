@@ -49,16 +49,9 @@ import { attachTicketRuns } from "./tickets.js";
 import { mirrorRuntimeTask } from "../routes/instances-runtime.js";
 import type { Env } from "../types.js";
 
-/**
- * The card statuses the queue may start. `needs_human` and `blocked` are deliberately absent — they
- * mean a person is the blocker — and so is `failed`. Compare `RUNNABLE_STATUSES` (what a HUMAN may
- * approve), which includes all three; reusing it here is the mistake #757 §5 names.
- */
-export const QUEUE_RUNNABLE_STATUSES: readonly string[] = ["queued", "needs_approval"];
-
-export function isQueueRunnable(status: unknown): boolean {
-	return typeof status === "string" && QUEUE_RUNNABLE_STATUSES.includes(status);
-}
+// The runnable statuses and the queue switch live with the ordering rule the board shares (#1097).
+export { QUEUE_RUNNABLE_STATUSES, isQueueRunnable, ticketQueueEnabled } from "./board-order.js";
+import { boardOrderSql, isQueueRunnable, ticketQueueEnabled } from "./board-order.js";
 
 export type TicketAuthority = "human" | "agent";
 
@@ -114,13 +107,6 @@ export async function redDeployBlocking(env: Env, instanceId: string, userId: st
 }
 
 // ── Owner controls ───────────────────────────────────────────────────────────────────────────────
-
-export async function ticketQueueEnabled(env: Env, instanceId: string, userId: string): Promise<boolean> {
-	const row = await env.DB.prepare("SELECT enabled FROM ticket_queues WHERE instance_id = ?1 AND user_id = ?2")
-		.bind(instanceId, userId)
-		.first<{ enabled: number }>();
-	return row?.enabled === 1;
-}
 
 /** Turn the queue on or off for an instance. The caller has already proved ownership. */
 export async function setTicketQueueEnabled(env: Env, instanceId: string, userId: string, enabled: boolean): Promise<void> {
@@ -219,11 +205,13 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 		const { results } = await env.DB.prepare(
 			// A ticket whose own budget is exhausted is parked (#865) — skipped here, so it neither
 			// blocks the tickets behind it nor retries every minute until a person raises it.
+			// In BOARD order (#1097): a card the owner placed higher in its column starts first.
 			`SELECT t.id, t.title, t.description, t.repo_id, t.issue_number FROM tickets t
 			   LEFT JOIN delegation_budgets b ON b.id = t.budget_id AND b.user_id = t.user_id
+			   LEFT JOIN board_items bi ON bi.instance_id = t.instance_id AND bi.user_id = t.user_id AND bi.job_key = t.job_key
 			  WHERE t.instance_id = ?1 AND t.user_id = ?2 AND t.pickup_authority = 'agent' AND t.queue_picked_at IS NULL
 			    AND (b.id IS NULL OR b.status = 'open')
-			  ORDER BY t.created_at, t.id LIMIT 50`,
+			  ORDER BY ${boardOrderSql("bi", "t.created_at", "t.id")} LIMIT 50`,
 		)
 			.bind(instanceId, userId)
 			.all<{ id: string; title: string; description: string; repo_id: string | null; issue_number: number | null }>();

@@ -435,6 +435,15 @@ const READBACK: Record<string, string | null> = {
 	// ── board ──
 	"set_board_item_status.status": "instance_board",
 	"promote_board_item.job_key": "instance_board", // read back as the card's `ticketId` (#757)
+	// #1097: a card's place reads back as its `position`, and the queue's order with `next` marked.
+	"reorder_board_item.job_key": "instance_board",
+	"reorder_board_item.to": "instance_board",
+	"reorder_board_item.before": "instance_board",
+	"reorder_board_item.after": "instance_board",
+	"coding_loop_queue_reorder.entry_id": "coding_loop_queue",
+	"coding_loop_queue_reorder.to": "coding_loop_queue",
+	"coding_loop_queue_reorder.before": "coding_loop_queue",
+	"coding_loop_queue_reorder.after": "coding_loop_queue",
 	// #895: the link reads back as the card's `issue`; sync's effect is the cards themselves.
 	"link_board_item_issue.job_key": "instance_board",
 	"link_board_item_issue.repo": "instance_board",
@@ -499,6 +508,7 @@ const READBACK: Record<string, string | null> = {
 	// `coding_loop_queue` until it becomes a run — at which point this reader is the right one
 	// again. One entry per argument, so the reader named is the one for the started case (#788).
 	"coding_loop_start.objective": "coding_loop_status",
+	"coding_loop_start.queue_position": "coding_loop_queue", // #1097: the queued entry's place and `next`
 	"coding_loop_start.request_id": "coding_loop_status",
 	"coding_loop_start.max_iterations": "coding_loop_status",
 	// A repair run's record carries the platform's fixed objective label, which is what the status

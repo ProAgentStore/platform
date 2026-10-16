@@ -119,6 +119,10 @@ export interface BoardItem {
 	issueRun?: { runId: string; sessionId?: string | null; status: string; waitingReason?: string | null };
 	closingCommit?: { sha: string; url: string };
 	priority?: number;
+	/** #1097: the card's place in its column (null = never placed), a queued objective's entry, and who starts it. */
+	position?: number | null;
+	queueEntry?: { id: string; repoId: string | null; createdAt: string };
+	runQueue?: { queue: "objective" | "ticket"; next: boolean } | { queue: null; reason: string };
 }
 
 /**
@@ -191,6 +195,11 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean; offset?:
 			lane: it.lane || undefined,
 			run: it.issueRun ? { runId: it.issueRun.runId, status: it.issueRun.status, waitingReason: it.issueRun.waitingReason || undefined } : undefined,
 			closedBy: it.closingCommit?.sha,
+			// #1097: board order is run order — the card's place, the queue entry it is, and whether the
+			// platform starts it (and next) or never will. Absent when not placed / not Waiting.
+			position: typeof it.position === "number" ? it.position : undefined,
+			queueEntryId: it.queueEntry?.id,
+			runQueue: it.runQueue,
 		};
 		const colId = columnFor(cols, String(it.status ?? ""));
 		const title = colId ? (cols.find((c) => c.id === colId)?.title ?? colId) : "Other";

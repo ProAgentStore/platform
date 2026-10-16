@@ -8,6 +8,7 @@
 // because "start it, or queue it if you cannot" is one decision and splitting it across two routes
 // would let a caller reach the queue without ever attempting the start.
 
+import { objectiveJobKey, objectiveNextFlags } from "../lib/board-order.js";
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
@@ -46,7 +47,10 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 			return c.json({ scope: "all", ...page, complete: !more });
 		}
 		const repoParam = c.req.query("repo_id");
-		const entries = await listQueue(c.env, instanceId, repoParam === undefined ? undefined : repoParam || null);
+		// In start order (#1097: board order), each with its card key and whether it starts next.
+		const pending = await listQueue(c.env, instanceId, repoParam === undefined ? undefined : repoParam || null);
+		const next = objectiveNextFlags(pending);
+		const entries = pending.map((e, i) => ({ ...e, jobKey: objectiveJobKey(e.id), next: next[i] }));
 		// What the queue sits BEHIND, and the starts still on their way INTO it (#935). A start inside
 		// its confirmation window has not enqueued anything yet, so a caller that fanned out N
 		// `queue_if_busy` starts and then read this saw an empty queue — read as "none of them landed".

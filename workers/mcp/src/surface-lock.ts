@@ -1177,4 +1177,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.138": "sha256:7d29864b89637151efcd41884ac40157e80ed122a8738ce2eebcf50e31e0eedc",
 	// #1106: set_application_runner_settings gains signInEmail (the SEEK account address for the email-code sign-in).
 	"0.1.139": "sha256:f1fe8078a5b11cdf91634711dfba44779709c622987cd1fb635c98423905a6bf",
+	// #1097: reorder_board_item and coding_loop_queue_reorder; coding_loop_start gains queue_position.
+	"0.1.140": "sha256:8f415f001de06fdde4d30bb86d562e83ef8d8f97d4d9601de5bc448cd02a90c4",
 };

@@ -305,6 +305,7 @@ describe("buildInstanceBoard", () => {
 				if (sql.includes("instance_runtime_tasks")) {
 					return { results: tasks.map((t) => ({ payload: JSON.stringify(t) })) };
 				}
+				if (sql.includes("instance_objective_queue")) return { results: [] }; // #1097: no queued objectives
 				if (sql.includes("board_items")) return { results: overlayRows };
 				if (sql.includes("instance_runtime_task_events")) {
 					// The count must be filtered to the two conversation types — that table also
@@ -434,6 +435,7 @@ describe("liveBoardItemMeta", () => {
 				: null,
 			all: (sql) => {
 				if (sql.includes("instance_runtime_tasks")) return { results: tasks.map((t) => ({ payload: JSON.stringify(t) })) };
+				if (sql.includes("instance_objective_queue")) return { results: [] }; // #1097: no queued objectives
 				if (sql.includes("board_items")) return { results: overlayRows };
 				return { results: [] };
 			},

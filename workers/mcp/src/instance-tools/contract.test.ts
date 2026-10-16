@@ -311,7 +311,7 @@ const TABLE: Record<string, Row> = {
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	clear_instance_voice_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,token"],
 	delete_instance_task: ["runtime", "destructive", "delete_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
-	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,issue,max_iterations,objective,queue_if_busy,repair_checkout,repo_id,request_id,token"],
+	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,issue,max_iterations,objective,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).
@@ -320,6 +320,7 @@ const TABLE: Record<string, Row> = {
 	coding_loop_lifecycle: ["coding", "read", null, null, "cursor,instance_id,limit,queue_entry_id,request_id,run_id,token"],
 	coding_loop_queue: ["coding", "read", null, null, "cursor,instance_id,offset,repo_id,status,token"],
 	coding_loop_queue_cancel: ["coding", "write", null, null, "entry_id,instance_id,token"],
+	coding_loop_queue_reorder: ["coding", "write", null, "envelope", "after,before,dry_run,entry_id,instance_id,to,token"],
 	connector_status: ["connectors", "none", null, null, "provider,token"],
 	create_agent_task: ["agentTasks", "write", null, "envelope", "description,dry_run,instance_id,title,token"],
 	create_agent_version: ["agentAuthoring", "destructive", "create_agent_version", "envelope", "agent_id,confirm,description,dry_run,token"],
@@ -515,6 +516,7 @@ const TABLE: Record<string, Row> = {
 	set_agent_stats_schema: ["stats", "write", null, "envelope", "agent_id,cards,dry_run,token"],
 	set_board_item_status: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,status,token"],
 	promote_board_item: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,token"],
+	reorder_board_item: ["board", "write", null, "envelope", "after,before,dry_run,instance_id,job_key,to,token"],
 	link_board_item_issue: ["board", "write", null, "envelope", "dry_run,instance_id,issue_number,job_key,repo,token"],
 	unlink_board_item_issue: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,token"],
 	sync_board_issues: ["board", "write", null, "envelope", "dry_run,instance_id,token"],

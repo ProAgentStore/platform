@@ -242,12 +242,13 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			max_iterations: z.coerce.number().int().min(1).max(50).optional().describe("Maximum loop iterations (default 10). The server clamps this to your account's loop ceiling."),
 			repo_id: z.string().optional().describe("Which of the instance's repos the run works on — an id from coding_repos_list. Optional when the instance has exactly one repo; REQUIRED when it has more than one (omitted, the call is refused with the list of registered repo_ids). A repo_id that is not on this instance is refused, never replaced by another repo. The per-repo run lock and queue_if_busy apply to THIS repo."),
 			request_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).optional().describe("Stable idempotency key for this start. Reuse it with the same arguments after a lost response; coding_loop_status lists the durable start receipt. A new objective needs a new key."),
-			queue_if_busy: z.boolean().optional().describe("When the repo is already being worked on, QUEUE this objective instead of failing. Answers `{queued:true, entry}` instead of a run id, and the platform starts it automatically the moment the active run reaches a terminal state — done, failed or max iterations. Queue is FIFO per repo; read it with coding_loop_queue and withdraw an entry with coding_loop_queue_cancel. Only the BUSY refusal queues: an agent with no repository, no runner, or an unusable checkout still fails immediately, because waiting fixes none of those. Off by default — without it, a busy instance is still an error."),
+			queue_if_busy: z.boolean().optional().describe("When the repo is already being worked on, QUEUE this objective instead of failing. Answers `{queued:true, entry}` instead of a run id, and the platform starts it automatically the moment the active run reaches a terminal state — done, failed or max iterations. Queued at the end by default (queue_position `next` puts it first); the queue is per repo and in board order — read it with coding_loop_queue, reorder with coding_loop_queue_reorder, withdraw with coding_loop_queue_cancel. Only the BUSY refusal queues: an agent with no repository, no runner, or an unusable checkout still fails immediately, because waiting fixes none of those. Off by default — without it, a busy instance is still an error."),
+			queue_position: z.enum(["end", "next"]).optional().describe("With queue_if_busy (#1097): `end` (default) appends behind everything queued; `next` queues it at the TOP of the board's Waiting column, so it starts before every entry already queued, the moment its repo frees up — without stopping the run in flight."),
 			issue: z.coerce.number().int().min(1).optional().describe("The GitHub issue (number, in this repo) this run works on (#895): the run is linked to that issue's board card, and the coding session names it. Omitted, the objective's own subject is used when it leads with one (\"Fix issue #12: …\"), recorded as inferred."),
 			repair_checkout: z.boolean().optional().describe("Start a REPAIR run instead of a work run: when a run was blocked because the checkout is behind or has diverged (the block message ends by naming this flag), this lets the agent fix THAT itself — the platform writes the objective (get onto the branch, in sync with upstream, clean tree), the run is let through the pre-flight sync gate, and it may do nothing else: no ticket work, no pushes, and nothing is ever deleted — work in the way is parked on a `wip/` branch the report names. Coding agents only. Off by default."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, and the spend it would commit, without starting it."),
 		},
-		async ({ token, instance_id, objective, max_iterations, repo_id, request_id, queue_if_busy, issue, repair_checkout, dry_run }) => {
+		async ({ token, instance_id, objective, max_iterations, repo_id, request_id, queue_if_busy, queue_position, issue, repair_checkout, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const maxIter = max_iterations ?? 10;
@@ -272,7 +273,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 					method: "POST",
 					effect: repair
 						? `${instance_id} would run a REPAIR run: bring its checkout onto its branch and in sync with upstream without discarding anything, for up to ${maxIter} steps, and do no other work.`
-						: `${instance_id} would work on this objective by itself, for up to ${maxIter} steps, and keep going after this call returns.${queue_if_busy ? " If the repo is busy it would be QUEUED instead, and started when the active run ends." : ""}`,
+						: `${instance_id} would work on this objective by itself, for up to ${maxIter} steps, and keep going after this call returns.${queue_if_busy ? ` If the repo is busy it would be QUEUED instead${queue_position === "next" ? ", at the top, ahead of every queued entry," : ""} and started when the active run ends.` : ""}`,
 					objective: objective ?? null,
 					objectiveBytes: new TextEncoder().encode(objective ?? "").length,
 					repoId: repoId ?? null,
@@ -290,10 +291,10 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 					method: "POST",
 					// `requireRepoChoice` (#877): this caller can name the repo, so on a multi-repo instance an
 					// omitted repo_id is refused with the list rather than resolved to whichever was touched last.
-					body: JSON.stringify({ requestId, objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, repoId, requireRepoChoice: true, queueIfBusy: queue_if_busy === true, repairCheckout: repair, ...(issue ? { issue } : {}) }),
+					body: JSON.stringify({ requestId, objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, repoId, requireRepoChoice: true, queueIfBusy: queue_if_busy === true, ...(queue_position ? { queuePosition: queue_position } : {}), repairCheckout: repair, ...(issue ? { issue } : {}) }),
 				},
 				env,
-				{ tool: "coding_loop_start", possibleOutcomes: ["provisioning", "started", "queued", "not_started"], poll: { tool: "coding_loop_status", input: { instance_id: id } }, retry: { tool: "coding_loop_start", input: { instance_id: id, request_id: requestId, objective, max_iterations, repo_id, queue_if_busy, issue, repair_checkout } } },
+				{ tool: "coding_loop_start", possibleOutcomes: ["provisioning", "started", "queued", "not_started"], poll: { tool: "coding_loop_status", input: { instance_id: id } }, retry: { tool: "coding_loop_start", input: { instance_id: id, request_id: requestId, objective, max_iterations, repo_id, queue_if_busy, queue_position, issue, repair_checkout } } },
 			);
 			if ((data as { outcome?: string }).outcome === "unknown") return jsonText({ ...(data as object), requestId, startState: "unknown" });
 			if ((data as { startState?: string }).startState === "provisioning") return jsonText(data);
@@ -401,14 +402,15 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 	// can see what's queued and cancel before it starts", and a queue you can add to and never
 	// read is worse than the 409 it replaces: the 409 at least told you nothing had happened.
 	//
-	// Read + withdraw, and deliberately NOT reorder. FIFO is the whole contract — "the moment the
-	// active run ends, the next one starts" — and a reorder verb turns the order into something a
-	// caller has to check rather than something it can rely on. Cancel and re-queue expresses any
-	// reordering anyone actually needs, in terms that keep the invariant true.
+	// Read, withdraw — and, since #1097, reorder. The #788 argument against a reorder verb was that
+	// FIFO made the order something a caller could rely on rather than check. #1097 found the cost: an
+	// urgent fix filed last ran last, and the only way ahead was stopping in-flight work. The order is
+	// now the BOARD's (each entry is a Waiting card), still reliable — `coding_loop_queue` returns it
+	// with `next` marked, and both drains start exactly that — and append stays the default.
 
 	server.tool(
 		"coding_loop_queue",
-		"List the objectives queued behind an instance's current run — the ones added with coding_loop_start's `queue_if_busy`. FIFO: the top entry is what starts next, automatically, the moment the active run reaches a terminal state. Each entry carries its `id` (pass it to coding_loop_queue_cancel), the objective, `maxIterations`, `repoId` (null means whichever repo frees up first) and when it was queued. Pending entries ONLY — once an entry starts it becomes a run, and coding_loop_status by its `runId` is where its account continues. Beside `entries` (#935): `activeRun` — the run the queue is waiting behind (`runId`, `objective`, `startedAt`), null when none — and `inFlightStarts`, starts accepted in the last five minutes that are still provisioning and so have not reached the queue yet (`requestId`, `objective`, `ageMs`). A fan-out of queue_if_busy starts therefore never reads as an empty queue while they are still landing. Empty `entries` + an `activeRun` means nothing is lined up behind it; all three empty means the queue has drained and nothing is on its way.",
+		"List the objectives queued behind an instance's current run — the ones added with coding_loop_start's `queue_if_busy`. In START order (#1097): each entry is a card in the board's Waiting column, ordered by where the owner placed it (`position`; null = never placed, after the placed ones, oldest first) — so append is the default and coding_loop_queue_reorder changes it. `next: true` marks the entry that starts, automatically, the moment its repo's active run reaches a terminal state (one per repo; a repo-agnostic entry goes to whichever repo frees first). Each entry carries its `id` (pass it to coding_loop_queue_cancel or coding_loop_queue_reorder), its card `jobKey`, the objective, `maxIterations`, `repoId` (null means whichever repo frees up first) and when it was queued. Pending entries ONLY — once an entry starts it becomes a run, and coding_loop_status by its `runId` is where its account continues. Beside `entries` (#935): `activeRun` — the run the queue is waiting behind (`runId`, `objective`, `startedAt`), null when none — and `inFlightStarts`, starts accepted in the last five minutes that are still provisioning and so have not reached the queue yet (`requestId`, `objective`, `ageMs`). A fan-out of queue_if_busy starts therefore never reads as an empty queue while they are still landing. Empty `entries` + an `activeRun` means nothing is lined up behind it; all three empty means the queue has drained and nothing is on its way.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
@@ -454,6 +456,57 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			if ((data as { error?: string }).error) return jsonText(data);
 			await audit(safetyFor(token), { tool: "coding_loop_queue_cancel", action: "completed", input: { instance_id: id, entry_id }, result: { ok: true } });
 			return jsonText({ ...(data as object), entryId: entry_id });
+		},
+	);
+
+	// #1097: what starts next. A thin alias over reorder_board_item — each pending entry IS a Waiting card
+	// (`objective:<id>`) — for a caller that holds an entry id from coding_loop_queue. `write`, not
+	// `runtime`: it spends nothing and starts nothing; it changes which queued entry the drain takes first.
+	server.tool(
+		"coding_loop_queue_reorder",
+		"Change which queued objective starts next, without stopping the run in flight. Takes the `id` from coding_loop_queue and where to put it — `to: next` (ahead of every queued entry), `to: last` (behind every queued entry), or `before` / `after` another entry's id; exactly one. The queue is the board's Waiting column, so this is the same order instance_board shows and reorder_board_item sets; both drains start exactly that order. Answers with the queue in its new order, `next` marked. Only a PENDING entry can be moved: one that already started is a run.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug"),
+			entry_id: z.string().describe("The queue entry id (objq-…) from coding_loop_queue. Not a run id."),
+			to: z.enum(["next", "last"]).optional().describe("`next`: start it before every other queued entry. `last`: after every other queued entry."),
+			before: z.string().optional().describe("Place it immediately before this other entry id."),
+			after: z.string().optional().describe("Place it immediately after this other entry id."),
+			dry_run: z.boolean().optional().describe("Describe the move without making it."),
+		},
+		async ({ token, instance_id, entry_id, to, before, after, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, entry_id, to, before, after };
+			const denied = await requirePermission(safetyFor(token), "write", "coding_loop_queue_reorder", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "coding_loop_queue_reorder", "reorder the objective queue", input, {
+					endpoint: `/v1/instances/${instance_id}/board/order`,
+					method: "POST",
+					effect: `Queue entry ${entry_id} would be moved ${to === "next" ? "to the front of the queue" : to === "last" ? "to the back of the queue" : before ? `before ${before}` : `after ${after}`}. The run in flight is not touched.`,
+				});
+			}
+			if ([to, before, after].filter((v) => v !== undefined && v !== "").length !== 1) return jsonText({ error: "give exactly one of to, before or after" });
+			const id = await resolveId(sessionToken, instance_id);
+			const card = (entry: string) => `objective:${entry}`;
+			let place: Record<string, string>;
+			if (to === "next") place = { to: "top" };
+			else if (before) place = { before: card(before) };
+			else if (after) place = { after: card(after) };
+			else {
+				// "last" means behind every queued entry NOW — after the last one, which gives the
+				// entries ahead of it their places. `bottom` would only mean "never placed", which an
+				// entry queued later would still follow.
+				const queue = (await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/queue`, sessionToken, {}, env)) as { error?: string; entries?: Array<{ id: string }> };
+				if (queue.error) return jsonText(queue);
+				const others = (queue.entries ?? []).filter((e) => e.id !== entry_id);
+				place = others.length ? { after: card(others[others.length - 1].id) } : { to: "bottom" };
+			}
+			const moved = (await authedCall(`/v1/instances/${encodeURIComponent(id)}/board/order`, sessionToken, { method: "POST", body: JSON.stringify({ jobKey: card(entry_id), ...place }) }, env)) as { error?: string };
+			if (moved.error) return jsonText(moved);
+			await audit(safetyFor(token), { tool: "coding_loop_queue_reorder", action: "completed", input: { ...input, instance_id: id }, result: { ok: true } });
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/queue`, sessionToken, {}, env));
 		},
 	);
 

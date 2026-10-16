@@ -135,6 +135,33 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 		},
 	);
 
+	// #1097: board order is run order. `write`: it starts nothing; it decides what the drains take first.
+	server.tool(
+		"reorder_board_item",
+		"Place a card within its column — board order is run order (#1097). In the Waiting column the order is what the platform starts next: queued objectives (cards `objective:<entry id>`) start top-first when their repo frees up, and released tickets top-first on the ticket queue's next sweep; instance_board marks each Waiting card's `runQueue` and the one that is `next`. Say where — `to: top` (first in the column), `to: bottom` (back to the default: after every placed card, oldest first), or `before` / `after` another card's job_key in the SAME column; exactly one — a card in another column is refused (409), never moved. Moving a card to another column (set_board_item_status) clears its place. Answers with the column in its new order.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			job_key: z.string().describe("The card's jobKey from instance_board"),
+			to: z.enum(["top", "bottom"]).optional().describe("`top`: first in its column. `bottom`: back to the default order (never placed)."),
+			before: z.string().optional().describe("Place it immediately before this card's jobKey (same column)."),
+			after: z.string().optional().describe("Place it immediately after this card's jobKey (same column)."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, job_key, to, before, after, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, job_key, to, before, after };
+			const denied = await requirePermission(safetyFor(token), "write", "reorder_board_item", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${instance_id}/board/order`;
+			if (dry_run) return dryRun(safetyFor(token), "reorder_board_item", "place a board card in its column", input, { endpoint, method: "POST" });
+			const data = await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ jobKey: job_key, to, before, after }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "reorder_board_item", action: "completed", input, result: { ok: true } });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"promote_board_item",
 		"Make a board card a first-class ticket (#757): its runs are then stored as the ticket's history instead of disappearing when they are cleared, and the card keeps its identity with no run behind it. Address the card by `job_key` from instance_board. Idempotent — promoting a card that already is a ticket returns the same ticket (`created:false`). Changes nothing else: the card's column, actions and approvals are exactly as before. A card created by create_ticket is already a ticket.",

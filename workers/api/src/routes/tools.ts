@@ -1155,11 +1155,14 @@ toolRoutes.post("/:id/loop", async (c) => {
 		repoId?: string;
 		requireRepoChoice?: boolean;
 		queueIfBusy?: boolean;
+		/** With `queueIfBusy`: `next` queues it at the top of Waiting, ahead of every queued entry (#1097). */
+		queuePosition?: "end" | "next";
 		repairCheckout?: boolean;
 		/** The GitHub issue this run works on (#895); its card is linked to the run. */
 		issue?: number;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
+	if (body.queuePosition !== undefined && body.queuePosition !== "end" && body.queuePosition !== "next") throw new HttpError(400, "queuePosition must be end or next");
 	if (body.requestId !== undefined && (typeof body.requestId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.requestId))) throw new HttpError(400, "requestId must contain 1–128 letters, numbers, underscores or hyphens");
 	// A REPAIR run needs no words from the caller (#804): the Pilot's objective is the platform's
 	// brief either way, and the run record carries a fixed label when none were given.
@@ -1237,7 +1240,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId, objective });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
-				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null });
+				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, position: body.queuePosition });
 				// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
 				// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
 				// it is waiting.

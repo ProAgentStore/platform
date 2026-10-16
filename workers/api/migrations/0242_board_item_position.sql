@@ -1,0 +1,11 @@
+-- #1097: board order is run order.
+--
+-- Every start order was a FIFO and none was the board's: the objective queue drained by
+-- `created_at`, the ticket queue by `tickets.created_at`, and the board sorted by "last moved".
+-- `position` is where a card sits in its column, on the overlay every card kind already has
+-- (`board_items` is keyed on `job_key`; a queued objective is `objective:<entry id>`). Both drains
+-- and both read surfaces order by `(position IS NULL), position, <created>, id`:
+--   NULL  = never placed — after the placed cards, in creation order. Append stays the default.
+--   value = fractional: before/after a card is the midpoint of its neighbours, `top` is min − 1.
+-- A move to another column clears it (the card joins the end of its new column).
+ALTER TABLE board_items ADD COLUMN position REAL;

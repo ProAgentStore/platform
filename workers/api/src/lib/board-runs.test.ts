@@ -354,6 +354,7 @@ function fixtureEnv(fixture: FixtureSession[]): Env {
 							if (sql.includes("FROM agent_loop_runs")) return { results: loopRows };
 							if (sql.includes("FROM coding_sessions")) return { results: sessionRows };
 							if (sql.includes("FROM board_items")) return { results: [] };
+							if (sql.includes("FROM instance_objective_queue")) return { results: [] }; // #1097
 							if (sql.includes("instance_runtime_task_events")) return { results: [] };
 							throw new Error(`unstubbed query: ${sql}`);
 						},

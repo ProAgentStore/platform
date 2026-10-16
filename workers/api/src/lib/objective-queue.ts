@@ -13,6 +13,7 @@ import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
+import { boardOrderSql, objectiveJobKey } from "./board-order.js";
 
 /** Every status an entry can hold. See the migration for what each one means. */
 export const QUEUE_STATUSES = ["pending", "running", "started", "cancelled", "failed"] as const;
@@ -39,6 +40,7 @@ interface ObjectiveQueueRow {
 	request_id?: string | null;
 	actor_uid?: string | null;
 	client_claimed?: string | null;
+	position?: number | null;
 }
 
 export interface ObjectiveQueueEntry {
@@ -60,12 +62,22 @@ export interface ObjectiveQueueEntry {
 	finishedAt: number | null;
 	/** The start request that queued it (#1017); null for an entry queued before 0212 or without a request key. */
 	requestId?: string | null;
+	/** Its place on the board (#1097), on a pending listing: null = never placed (queued in arrival order). */
+	position?: number | null;
 	/** Who queued it, as far as the platform can verify (#1017). `unknown` = before attribution existed. */
 	attribution?: { kind: "owner"; uid: string; verified: true; clientClaimed: string | null } | { kind: "unknown"; legacy: true };
 }
 
 const COLUMNS =
 	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed";
+
+/**
+ * The queue in BOARD order (#1097): each entry is a card (`objective:<id>`), and where the owner placed it
+ * in its column decides when it starts. Never placed = after the placed ones, oldest first — append.
+ */
+const ORDERED_FROM = `instance_objective_queue q LEFT JOIN board_items b ON b.instance_id = q.instance_id AND b.user_id = q.user_id AND b.job_key = 'objective:' || q.id`;
+const ORDERED_COLUMNS = `${COLUMNS.split(", ").map((c) => `q.${c}`).join(", ")}, b.position AS position`;
+const ORDER = boardOrderSql("b", "q.created_at", "q.id");
 
 function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 	return {
@@ -83,6 +95,7 @@ function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 		startedAt: row.started_at ?? null,
 		finishedAt: row.finished_at ?? null,
 		requestId: row.request_id ?? null,
+		...(row.position !== undefined ? { position: row.position } : {}),
 		attribution: row.actor_uid ? { kind: "owner", uid: row.actor_uid, verified: true, clientClaimed: row.client_claimed ?? null } : { kind: "unknown", legacy: true },
 	};
 }
@@ -98,10 +111,12 @@ export interface EnqueueInput {
 	objective: string;
 	maxIterations?: number | null;
 	metadata?: string | null;
+	/** `next` (#1097) puts it at the top of the board's Waiting column, so it starts before every queued entry. */
+	position?: "end" | "next";
 }
 
 /**
- * Add one objective to the back of the queue.
+ * Add one objective to the back of the queue — or, with `position: "next"`, to the front (#1097).
  *
  * `maxIterations` is stored RAW rather than sanitized. The account ceiling it is clamped against is
  * resolved per-run (`resolveAccountCeilings`), and an entry may sit here across a ceiling change —
@@ -118,6 +133,16 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 	)
 		.bind(id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt)
 		.run();
+	if (input.position === "next") {
+		// Above every placed card on the instance — so above everything in its column, placed or not.
+		await env.DB.prepare(
+			`INSERT INTO board_items (instance_id, user_id, job_key, user_status, title, subtitle, url, position)
+			 VALUES (?1, ?2, ?3, NULL, '', '', '', (SELECT COALESCE(MIN(position), 1) - 1 FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND position IS NOT NULL))
+			 ON CONFLICT(instance_id, user_id, job_key) DO UPDATE SET position = excluded.position`,
+		)
+			.bind(input.instanceId, input.userId, objectiveJobKey(id))
+			.run();
+	}
 	return {
 		id,
 		instanceId: input.instanceId,
@@ -136,7 +161,7 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 }
 
 /**
- * What is still waiting, oldest first.
+ * What is still waiting, in the order it will start (#1097: board order, else oldest first).
  *
  * With a `repoId` this is the ELIGIBLE set for that repo — its own entries plus the repo-agnostic
  * ones — which is the same predicate `dequeueNext` claims from, so a caller can see exactly what
@@ -146,9 +171,9 @@ export async function listQueue(env: Env, instanceId: string, repoId?: string | 
 	const res =
 		repoId === undefined
 			? await env.DB.prepare(
-					`SELECT ${COLUMNS} FROM instance_objective_queue
-					  WHERE instance_id = ?1 AND status = 'pending'
-					  ORDER BY created_at ASC, id ASC`,
+					`SELECT ${ORDERED_COLUMNS} FROM ${ORDERED_FROM}
+					  WHERE q.instance_id = ?1 AND q.status = 'pending'
+					  ORDER BY ${ORDER}`,
 				)
 					.bind(instanceId)
 					.all<ObjectiveQueueRow>()
@@ -156,9 +181,9 @@ export async function listQueue(env: Env, instanceId: string, repoId?: string | 
 					// `repo_id = ?2` is NULL (not true) when ?2 is null, so this one predicate serves both
 					// the named-repo case and the chat-driver case — the latter correctly seeing only the
 					// repo-agnostic entries.
-					`SELECT ${COLUMNS} FROM instance_objective_queue
-					  WHERE instance_id = ?1 AND status = 'pending' AND (repo_id IS NULL OR repo_id = ?2)
-					  ORDER BY created_at ASC, id ASC`,
+					`SELECT ${ORDERED_COLUMNS} FROM ${ORDERED_FROM}
+					  WHERE q.instance_id = ?1 AND q.status = 'pending' AND (q.repo_id IS NULL OR q.repo_id = ?2)
+					  ORDER BY ${ORDER}`,
 				)
 					.bind(instanceId, repoId ?? null)
 					.all<ObjectiveQueueRow>();
@@ -189,14 +214,21 @@ export async function cancelQueueEntry(env: Env, id: string, userId: string): Pr
 	)
 		.bind(id, userId, Date.now())
 		.run();
-	return (res.meta?.changes ?? 0) > 0;
+	const cancelled = (res.meta?.changes ?? 0) > 0;
+	if (cancelled) await dropObjectiveCard(env, id);
+	return cancelled;
+}
+
+/** A queue entry that left the queue is no longer a card: its board place goes with it (#1097). */
+async function dropObjectiveCard(env: Env, id: string): Promise<void> {
+	await env.DB.prepare("DELETE FROM board_items WHERE job_key = ?1").bind(objectiveJobKey(id)).run();
 }
 
 /** How many candidates one dequeue will try before giving up to a concurrent drain. */
 const CLAIM_CANDIDATES = 5;
 
 /**
- * Claim the oldest eligible entry, atomically.
+ * Claim the first eligible entry in board order, atomically.
  *
  * D1 has no `SELECT … FOR UPDATE`, so the claim is the conditional UPDATE: `status = 'pending'` in
  * the predicate means exactly one of two concurrent drains can move a given row, and `changes`
@@ -207,9 +239,10 @@ const CLAIM_CANDIDATES = 5;
  */
 export async function dequeueNext(env: Env, instanceId: string, repoId: string | null): Promise<ObjectiveQueueEntry | null> {
 	const candidates = await env.DB.prepare(
-		`SELECT ${COLUMNS} FROM instance_objective_queue
-		  WHERE instance_id = ?1 AND status = 'pending' AND (repo_id IS NULL OR repo_id = ?2)
-		  ORDER BY created_at ASC, id ASC
+		// The linearization point of a reorder (#1097): one committed before this SELECT decides this start.
+		`SELECT ${ORDERED_COLUMNS} FROM ${ORDERED_FROM}
+		  WHERE q.instance_id = ?1 AND q.status = 'pending' AND (q.repo_id IS NULL OR q.repo_id = ?2)
+		  ORDER BY ${ORDER}
 		  LIMIT ?3`,
 	)
 		.bind(instanceId, repoId ?? null, CLAIM_CANDIDATES)
@@ -248,6 +281,7 @@ export async function finishQueueEntry(
 	)
 		.bind(id, status, stopReason ? stopReason.slice(0, 500) : null, runId ?? null, Date.now())
 		.run();
+	await dropObjectiveCard(env, id);
 }
 
 /**

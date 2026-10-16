@@ -42,6 +42,8 @@ export interface Ticket {
 	issueCache?: string | null;
 	/** `human` until a person releases the ticket to the queue (#864). */
 	pickupAuthority?: "human" | "agent";
+	/** Set when the queue claimed it (#864): no longer waiting to start (#1097). */
+	queuePickedAt?: string | null;
 }
 
 /** A stored attempt: one run attached to a ticket, with its last observed state. */
@@ -64,6 +66,7 @@ interface TicketRow {
 	issue_number?: number | null;
 	issue_cache?: string | null;
 	pickup_authority?: "human" | "agent";
+	queue_picked_at?: string | null;
 }
 
 const toTicket = (r: TicketRow): Ticket => ({
@@ -74,7 +77,10 @@ const toTicket = (r: TicketRow): Ticket => ({
 	description: r.description,
 	createdBy: r.created_by,
 	createdAt: r.created_at,
-	...(r.issue_number != null ? { repoId: r.repo_id ?? null, issueNumber: r.issue_number, issueCache: r.issue_cache ?? null, pickupAuthority: r.pickup_authority ?? "human" } : {}),
+	...(r.issue_number != null ? { repoId: r.repo_id ?? null, issueNumber: r.issue_number, issueCache: r.issue_cache ?? null } : {}),
+	// Any ticket may be released to the queue (`setTicketAuthority`), so both are read for every one (#1097).
+	...(r.pickup_authority ? { pickupAuthority: r.pickup_authority } : {}),
+	...(r.queue_picked_at ? { queuePickedAt: r.queue_picked_at } : {}),
 });
 
 /**
@@ -120,7 +126,7 @@ export async function getTicket(env: Env, instanceId: string, userId: string, ti
 /** Every ticket on an instance with its stored runs — what the board overlays onto its cards. */
 export async function ticketsForInstance(env: Env, instanceId: string, userId: string): Promise<{ tickets: Ticket[]; runs: TicketRun[] }> {
 	const [t, r] = await Promise.all([
-		env.DB.prepare("SELECT id, instance_id, job_key, title, description, created_by, created_at, repo_id, issue_number, issue_cache, pickup_authority FROM tickets WHERE instance_id = ?1 AND user_id = ?2")
+		env.DB.prepare("SELECT id, instance_id, job_key, title, description, created_by, created_at, repo_id, issue_number, issue_cache, pickup_authority, queue_picked_at FROM tickets WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
 			.all<TicketRow>()
 			.catch(() => ({ results: [] as TicketRow[] })),

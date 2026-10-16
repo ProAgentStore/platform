@@ -5264,6 +5264,45 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/board/order:
+    post:
+      summary: Place a card in its column — board order is run order
+      description: |
+        Places one card within its column (#1097). In the Waiting column this order is what the platform
+        starts next: queued objectives (cards `objective:<entry id>`) and released tickets start top-first.
+        Exactly one of `before`, `after` or `to`. `to: top` puts it first; `to: bottom` clears its place
+        (never placed: after the placed cards, oldest first — the append default). A `before`/`after` card in
+        another column is refused (409), never moved. A move to another column clears a card's place.
+      operationId: reorderBoardItem
+      tags: [Board]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobKey]
+              properties:
+                jobKey: { type: string, description: The card to place. }
+                before: { type: string, description: Place it immediately before this card (same column). }
+                after: { type: string, description: Place it immediately after this card (same column). }
+                to: { type: string, enum: [top, bottom] }
+      responses:
+        "200":
+          description: The column, in its new order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  column: { type: object, properties: { id: { type: string }, title: { type: string } } }
+                  items: { type: array, items: { type: object } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/instances/{instanceId}/board-config:
     get:
       summary: Read the instance board configuration

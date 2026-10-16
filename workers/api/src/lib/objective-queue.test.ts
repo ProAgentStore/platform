@@ -112,7 +112,8 @@ describe("listQueue", () => {
 		const entries = await listQueue(env, "i1");
 		expect(entries.map((e) => e.id)).toEqual(["objq-a", "objq-b"]);
 		expect(calls[0].sql).toContain("status = 'pending'");
-		expect(calls[0].sql).toContain("ORDER BY created_at ASC");
+		// #1097: in board order — placed entries by position, then the never-placed ones oldest first.
+		expect(calls[0].sql).toContain("ORDER BY (b.position IS NULL), b.position, q.created_at, q.id");
 	});
 
 	it("without a repo filter it does NOT narrow by repo — one bind, the instance", async () => {
@@ -125,7 +126,7 @@ describe("listQueue", () => {
 	it("with a repo filter it shows that repo's entries AND the repo-agnostic ones", async () => {
 		const { env, calls } = buildEnv({ rows: [] });
 		await listQueue(env, "i1", "r1");
-		expect(calls[0].sql).toContain("(repo_id IS NULL OR repo_id = ?2)");
+		expect(calls[0].sql).toContain("(q.repo_id IS NULL OR q.repo_id = ?2)");
 		expect(calls[0].args).toEqual(["i1", "r1"]);
 	});
 
@@ -163,7 +164,7 @@ describe("dequeueNext", () => {
 		expect(claimed?.id).toBe("objq-a");
 		expect(claimed?.status).toBe("running");
 		expect(claimed?.startedAt).toBeGreaterThan(0);
-		expect(calls[0].sql).toContain("(repo_id IS NULL OR repo_id = ?2)");
+		expect(calls[0].sql).toContain("(q.repo_id IS NULL OR q.repo_id = ?2)");
 		expect(calls[1].sql).toContain("SET status = 'running'");
 		// The claim, and the whole reason this is safe: only a row still `pending` can be moved.
 		expect(calls[1].sql).toContain("status = 'pending'");
