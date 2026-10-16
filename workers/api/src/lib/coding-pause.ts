@@ -31,6 +31,7 @@ import type { LoopStopReason } from "./agent-loop.js";
 import type { CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
 import { codingCardId } from "./coding-board.js";
+import { DECISION_PARK_MS, MAX_PARK_WAKES } from "./coding-park.js";
 
 /** Max polls for a human to resolve a stuck/needs-input handoff. 180 × 5s = 15 min. */
 export const HANDOFF_WAIT_POLLS = 180;
@@ -93,6 +94,18 @@ export interface PauseDeps {
 	 * second answer is reported "already applied" rather than taken for a pending one. Best-effort.
 	 */
 	applied?: () => Promise<void>;
+	/**
+	 * Park on a captured QUESTION at zero compute instead of polling for it (#1076). Absent — a run
+	 * with no loop-run row, which nothing could wake — falls back to the live poll below.
+	 */
+	park?: {
+		/** Record the park (its instance and its `waiting_until`), then drain and stop the engine PROCESS. The session row and the machine's resume key stay. */
+		begin: (questionId: string, until: number) => Promise<void>;
+		/** Wait for the question's event — no step runs while it waits. False when the wait timed out. */
+		wait: (questionId: string, k: number, timeoutMs: number) => Promise<boolean>;
+		/** Bring the engine back for the resume; the sentence says whether it continued its conversation. */
+		resumeEngine: (parkedForMs: number) => Promise<string>;
+	};
 	/**
 	 * Has the re-auth relay signed the engine in at or after `since` (#881)? What a run parked on
 	 * `needs_reauth` polls — the relay is driven by the owner from another device, so this record is
@@ -167,12 +180,14 @@ export interface QuestionWait {
 	waitMs: number;
 	humanMs: number;
 	brain: boolean;
+	/** The `coder_questions` row (#1075) — what a park waits on and reads its answer from (#1076). */
+	questionId?: string;
 }
 
 /** What `ask` returned, when it is a {@link QuestionWait} — a publish-only `ask` returns nothing. */
 function asQuestionWait(v: unknown): QuestionWait | null {
 	const w = v as Partial<QuestionWait> | null | undefined;
-	return w && typeof w.waitMs === "number" && typeof w.humanMs === "number" ? { waitMs: w.waitMs, humanMs: w.humanMs, brain: w.brain === true } : null;
+	return w && typeof w.waitMs === "number" && typeof w.humanMs === "number" ? { waitMs: w.waitMs, humanMs: w.humanMs, brain: w.brain === true, ...(typeof w.questionId === "string" ? { questionId: w.questionId } : {}) } : null;
 }
 
 /** Past the first 15 minutes a brain-held question is polled once a minute — the sweep's own cadence. */
@@ -180,7 +195,7 @@ export const BRAIN_WAIT_POLL_MS = 60_000;
 
 export type PauseVerdict =
 	| { resume: true; userHint?: string; resumeNote?: string; ownerTurn?: boolean }
-	| { resume: false; result: CodingResult };
+	| { resume: false; result: CodingResult; stopReason?: LoopStopReason };
 
 /**
  * Read one round's verdict: resume the run, or hand back the result it ends on.
@@ -221,7 +236,14 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: result.detail ?? "", field: result.fieldNeeded ?? label, taskId: cardId }).catch(() => undefined)) : null;
 	const giveUpMs = Math.max(HANDOFF_GIVE_UP_MS, wait?.waitMs ?? 0);
 	const minutes = Math.round((wait?.brain ? wait.humanMs : giveUpMs) / 60_000);
-	const clock = wait?.brain ? `You have ${minutes} minutes to answer before the coder brain may decide (only if the issue already settles it).` : `You have ${minutes} minutes to respond before the run gives up.`;
+	// #1076: a captured question PARKS — no compute, no deadline worth racing — rather than polling.
+	const parkOn = deps.park && wait?.questionId ? wait.questionId : null;
+	const anyTime = "Answer any time: the run is parked, using no compute, and continues from where it stopped.";
+	const clock = wait?.brain
+		? `You have ${minutes} minutes to answer before the coder brain may decide (only if the issue already settles it).${parkOn ? ` ${anyTime}` : ""}`
+		: parkOn
+			? anyTime
+			: `You have ${minutes} minutes to respond before the run gives up.`;
 	// The board FIRST, before the two pushes. It is the surface that persists, so if anything after
 	// this throws, the durable record still says the run is waiting on somebody — rather than the
 	// state that produced #553, where the notification fired and the board said everything was fine.
@@ -243,9 +265,11 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// sat here for the full fifteen minutes and then reported that they had been waiting on someone.
 	await deps.announce(
 		reason === "needs_input"
-			? `❓ **Coder has a question** — paused on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`
+			? `❓ **Coder has a question** — ${parkOn ? "parked" : "paused"} on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain || parkOn ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`
 			: `🙋 **Coder needs you** — paused on ${deps.repo}: ${label}. Open the session and take over; the run resumes where it stopped. If nobody does within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`,
 	);
+
+	if (parkOn && deps.park) return parkOnQuestion(deps, deps.park, { result, label, options, questionId: parkOn });
 
 	let resolved = false;
 	let value: string | undefined;
@@ -299,12 +323,53 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	return {
 		resume: true,
 		ownerTurn: true,
-		userHint:
-			reason === "needs_input" && value && result.fieldNeeded
-				? options.length
-					? `The owner answered your question "${result.fieldNeeded}": ${value}`
-					: `${result.fieldNeeded}: ${value}`
-				: undefined,
+		userHint: reason === "needs_input" ? answerHint(result, options, value) : undefined,
+	};
+}
+
+/** What the run is told when the owner answered: the answer, as one owner turn. */
+function answerHint(result: CodingResult, options: string[], value: string | undefined): string | undefined {
+	if (!value || !result.fieldNeeded) return undefined;
+	return options.length ? `The owner answered your question "${result.fieldNeeded}": ${value}` : `${result.fieldNeeded}: ${value}`;
+}
+
+/**
+ * Park on the question at ZERO compute (#1076): record the park, stop the engine process, and wait
+ * for the question's event. No sleep loop, no runner poll, no heartbeat — and nothing ticks, so the
+ * park publishes `waiting_until` (its 30-day end), which is what keeps the run sweeper and
+ * `runHealth` calling it waiting rather than dead.
+ *
+ * Every wake re-reads D1: the cancel flag first (so `stop_work` reaches a parked run, #790), then the
+ * answer from the question's row (#1075). A wake that finds neither — a duplicate event, a backstop
+ * re-send racing an answer this run already applied — waits again. The answer resumes THIS run: the
+ * same run id, the same Workflow instance, its timeline and its `learned` notes where they were.
+ */
+async function parkOnQuestion(
+	deps: PauseDeps,
+	park: NonNullable<PauseDeps["park"]>,
+	input: { result: CodingResult; label: string; options: string[]; questionId: string },
+): Promise<PauseVerdict> {
+	const { result, label, options, questionId } = input;
+	const parkedAt = deps.now();
+	const until = parkedAt + DECISION_PARK_MS;
+	await park.begin(questionId, until);
+	for (let k = 0; k < MAX_PARK_WAKES; k++) {
+		const woke = await park.wait(questionId, k, Math.max(1_000, until - deps.now()));
+		if (!(await deps.tick({ until }))) return { resume: false, result: { ...result, outcome: "cancelled", detail: "Stopped by you while it was parked on your answer." } };
+		if (!woke) break;
+		const status = await deps.takeoverStatus().catch(() => ({ resolved: false }) as { resolved: boolean; value?: string });
+		if (!status.resolved) continue;
+		const engine = await park.resumeEngine(deps.now() - parkedAt).catch(() => "The coding engine could not be restarted just now; the run reconnects it before its next instruction.");
+		await deps.applied?.().catch(() => undefined);
+		await deps.endTakeover().catch(() => undefined);
+		await deps.card("running");
+		await deps.announce(`▶️ **Resumed with your answer** on ${deps.repo}: ${label}. ${engine}`);
+		return { resume: true, ownerTurn: true, userHint: answerHint(result, options, status.value) };
+	}
+	return {
+		resume: false,
+		stopReason: "decision",
+		result: { ...result, detail: `Waiting on you: ${label}. Nobody answered within ${Math.round(DECISION_PARK_MS / 86_400_000)} days, so the run stopped here. An answer is still recorded on the question; continue the run once it is in.` },
 	};
 }
 

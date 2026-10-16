@@ -25,9 +25,17 @@ export interface RelaunchInput {
 	branch?: string;
 	token?: string;
 	tokenUsername?: string;
+	/**
+	 * Start the engine WITHOUT its saved conversation (#1076): a run resumed from a park past the
+	 * resume window. A runner older than this flag ignores it and resumes anyway — which is why the
+	 * caller reports the machine's `resumed` answer, never this intent.
+	 */
+	fresh?: boolean;
+	/** The context brief for an engine that comes up with no conversation of its own (ADR 0005). */
+	seed?: string;
 }
 
-export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input: RelaunchInput): Promise<{ sessionId?: string }> {
+export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input: RelaunchInput): Promise<{ sessionId?: string; resumed?: boolean; seeded?: boolean }> {
 	const { instanceId, userId, sessionId, repoId } = input;
 	// Resolve the session's exact CLI command, its workDir, and its engine env (API key / OAuth
 	// token) FRESH here — the same fields `startSessionOnRunner` passes. Without them, a runner
@@ -36,7 +44,7 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 	// does not land in workflow state — matching how the runner token is kept out of it elsewhere.
 	const [sess, repo] = await Promise.all([getSession(env, instanceId, userId, sessionId), getRepo(env, instanceId, userId, repoId)]);
 	const engineEnv = sess ? await resolveEngineEnv(env, instanceId, userId, sess) : undefined;
-	return callRunner<{ sessionId?: string }>(conn, "/coding/start", {
+	return callRunner<{ sessionId?: string; resumed?: boolean; seeded?: boolean }>(conn, "/coding/start", {
 		sessionId,
 		repoId,
 		workDir: repo?.workdir || undefined,
@@ -51,5 +59,7 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 		// restart, which is exactly when nobody is looking.
 		ghScope: repo?.githubRepo ? [repo.githubRepo] : undefined,
 		env: engineEnv,
+		fresh: input.fresh || undefined,
+		seed: input.seed || undefined,
 	});
 }

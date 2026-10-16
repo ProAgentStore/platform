@@ -73,6 +73,12 @@ export interface HeadlessSessionConfig {
 	 */
 	resumeFrom?: string;
 	/**
+	 * Start WITHOUT a saved conversation, even this session's own (#1076): the cloud resuming a run
+	 * parked past the window in which continuing a conversation is still worth its tokens. The engine
+	 * writes its new key on its first turn, replacing the old one.
+	 */
+	fresh?: boolean;
+	/**
 	 * A context brief built by the cloud from `coding_timeline`, delivered as the lead of this
 	 * session's FIRST turn if — and only if — the engine came up with no conversation of its own
 	 * (ADR 0005, #693).
@@ -360,11 +366,11 @@ export class HeadlessSession {
 		// Our own key first, the cloud's nominated predecessor second. See `resumeFrom`. Codex uses
 		// a distinct key namespace: a vendor thread id is not interchangeable with Claude's id.
 		this.claudeSessionId =
-			config.clientType === "claude"
+			config.clientType === "claude" && !config.fresh
 				? readState(config.statePath, config.id, "claude") ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom, "claude") : null)
 				: null;
 		this.codexThreadId =
-			config.clientType === "codex" && this.mode === "stream-json"
+			config.clientType === "codex" && this.mode === "stream-json" && !config.fresh
 				? readCodexState(config.statePath, config.id) ?? (config.resumeFrom ? readCodexState(config.statePath, config.resumeFrom) : null)
 				: null;
 		// AFTER both lines above, because `resumedConversation` reads them: the brief is the fallback,

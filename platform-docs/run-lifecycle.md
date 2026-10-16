@@ -80,7 +80,7 @@ What running out *means* is entailed by the reason, and the two kinds demand opp
 | `human` | it is waiting for YOU to answer a handoff | **gives up** — the run stops waiting, and the owner has until then to act |
 | `platform_interrupt` | it was interrupted by something other than the work and a retry is scheduled | **resumes** — the run continues by itself, and the owner does nothing |
 | `engine_auth` | the coding engine is not signed in — sign it in with coding_engine_reauth, from any device | **gives up** — the run stops waiting, and the owner has until then to act |
-| `decision` | it is waiting for YOUR ANSWER to a question | **gives up** — the run stops waiting, and the owner has until then to act |
+| `decision` | it is PARKED, waiting for YOUR ANSWER to a question | **gives up** — the run stops waiting, and the owner has until then to act |
 
 <!-- /generated:run-wait-reasons -->
 

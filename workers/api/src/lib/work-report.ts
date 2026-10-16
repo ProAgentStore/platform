@@ -103,6 +103,7 @@ export const PARK_LIMIT_MS: Record<RunWaitReason, number> = {
 	human: 30 * 60 * 1000,
 	// The same 15-minute give-up as a takeover (#960): it is the same pause loop, only answerable
 	// from a conversation. Doubled for the same reason `human` is.
+	// A parked question (#1076) publishes its 30-day end as `waitingUntil`, which outranks this budget.
 	decision: 30 * 60 * 1000,
 	engine_limit: 8 * 60 * 60 * 1000,
 	// The same 15-minute give-up as a handoff (`coding-pause.ts`'s `waitForSignIn`), doubled for the
@@ -343,7 +344,8 @@ const PARKS: Record<RunWaitReason, Park> = {
 	engine_limit: { why: "the coding CLI's own usage limit has to reset", deadline: "resume" },
 	human: { why: "it is waiting for YOU to answer a handoff", deadline: "give_up" },
 	// #960: answerable from a conversation — the clause below adds the question and how to answer it.
-	decision: { why: "it is waiting for YOUR ANSWER to a question", deadline: "give_up" },
+	// #1076: a captured question parks at zero compute until it is answered (up to 30 days, its `waitingUntil`).
+	decision: { why: "it is PARKED, waiting for YOUR ANSWER to a question", deadline: "give_up" },
 	engine_auth: { why: "the coding engine is not signed in — sign it in with coding_engine_reauth, from any device", deadline: "give_up" },
 	// "Being resumed" only while a retry is actually SCHEDULED — see `waitClause` for the park without one (#855).
 	platform_interrupt: { why: "it was interrupted by something other than the work and a retry is scheduled", deadline: "resume" },

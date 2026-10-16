@@ -62,6 +62,8 @@ export interface StartCodingInput {
 	 * exactly what every re-open did before this existed.
 	 */
 	resumeFrom?: string;
+	/** Start without any saved conversation, this session's own included (#1076). An older cloud omits it. */
+	fresh?: boolean;
 	/**
 	 * The platform's own record of this repository, rendered as a context brief, for the engine to
 	 * lead its FIRST turn with if it comes up without a conversation of its own (ADR 0005, #693).
@@ -404,6 +406,7 @@ export class CodingRuntime {
 				env: input.env,
 				statePath: defaultStatePath(this.reposBaseDir),
 				resumeFrom: input.resumeFrom,
+				fresh: input.fresh === true,
 				seed: input.seed,
 				ghScope: input.ghScope,
 				bin: input.bin,

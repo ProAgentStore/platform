@@ -3,6 +3,7 @@ import { closeLiveTakeoverFor, LIVE_TAKEOVER_STATES, latestTakeoverFor, transiti
 import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
 import { recordAnswer } from "../lib/coder-question-store.js";
+import { wakeParkedRun } from "../lib/coding-park.js";
 import { isMcpRequest } from "../lib/coding-api-policy.js";
 import { logEvent } from "../lib/events.js";
 import { postIssueComment } from "../lib/github-issues.js";
@@ -600,8 +601,10 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		}
 		const coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
 		if (coding) {
+			// #1076: a run PARKED on the question is woken and reads the answer from the row; the runner push is for a live wait.
 			// With nothing on the row (a question that was never captured) the push is the only delivery, so its failure is the reply.
-			const delivered = await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(
+			const woke = recorded ? await wakeParkedRun(c.env, coding.runId, "answer") : false;
+			const delivered = woke || await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(
 				() => true,
 				(e: unknown) => {
 					if (!recorded) throw e;
@@ -609,7 +612,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 				},
 			);
 			const base = { ok: true, kind: "coding", runId: coding.runId, sessionId: coding.sessionId, recorded: !!recorded, questionId: q?.id ?? null };
-			if (delivered) return c.json({ ...base, outcome: "delivered", delivered: true, message: "Delivered to the waiting run." });
+			if (delivered) return c.json({ ...base, outcome: "delivered", delivered: true, message: woke ? "Delivered to the parked run; it resumes from where it stopped." : "Delivered to the waiting run." });
 			return c.json({ ...base, outcome: "stored", delivered: false, message: "Saved on the question. The coding runner could not be reached just now; the waiting run reads your answer from the question on its next check." }, 202);
 		}
 		if (recorded && q) {

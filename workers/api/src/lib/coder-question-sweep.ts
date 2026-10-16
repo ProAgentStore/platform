@@ -18,7 +18,8 @@ import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { readCoderBrain, type CoderBrainSettings } from "./coder-brain.js";
 import { type BrainModelCall, type DecisionContext, byokBrainCall, decideCoderQuestion } from "./coder-brain-decide.js";
-import { type CoderQuestion, captureCoderQuestion, openCoderQuestions, transitionCoderQuestion } from "./coder-question-store.js";
+import { type CoderQuestion, captureCoderQuestion, openCoderQuestions, transitionCoderQuestion, unresolvedInstruction } from "./coder-question-store.js";
+import { runDueParkWakes, wakeParkedRun } from "./coding-park.js";
 import { gatherGrounding } from "./coder-brain-grounding.js";
 import { resolveCodingPause } from "./coding-answer.js";
 import { appendTimeline, lastTerminal } from "./coding-timeline.js";
@@ -62,7 +63,12 @@ export function defaultEffects(env: Env): CoderQuestionEffects {
 			const url = q.taskId ? deepLinkFor({ kind: "task", instanceId: q.instanceId, taskId: q.taskId }) : deepLinkFor({ kind: "coding-session", instanceId: q.instanceId, sessionId: q.sessionId });
 			await notifyUser(env, q.userId, "coder_question", title, body, url, { kind: alert ? "alert" : "update", instanceId: q.instanceId, key: `coder-question:${q.id}:${title}` }).catch(() => undefined);
 		},
-		deliver: (q, value) => resolveCodingPause(env, q.instanceId, q.userId, q.sessionId, value),
+		// A run parked on the question (#1076) reads the value from the row once woken; the runner push is
+		// only for a run still in a live wait, and is not needed (or possible) for a parked one.
+		deliver: async (q, value) => {
+			if (q.runId && (await wakeParkedRun(env, q.runId, "answer"))) return;
+			await resolveCodingPause(env, q.instanceId, q.userId, q.sessionId, value);
+		},
 		context: async (q) => {
 			const issue = q.repo && q.issueNumber ? await readIssue(env, q.userId, q.repo, q.issueNumber).catch(() => null) : null;
 			const comments = q.repo && q.issueNumber ? await listIssueComments(env, q.userId, q.repo, q.issueNumber).catch(() => []) : [];
@@ -114,13 +120,20 @@ export async function captureAndAnnounceQuestion(
 	if (isNew) {
 		const by = brain?.enabled
 			? `If nobody answers within ${brain.humanTimeoutMinutes} minutes, the coder brain may decide — only if this issue, its comments and CLAUDE.md settle it — and will say so here.`
-			: `The run waits ${Math.round(waitMs / 60_000)} minutes for an answer.`;
+			: "The run is parked until it is answered — answer any time; it continues from where it stopped.";
 		if (q.repo && q.issueNumber) {
 			const ok = await effects.postComment(q, `**❓ The coder stopped on a question:** ${q.question}${optionsLine(q)}${q.why ? `\n\nWhy it asks: ${q.why}` : ""}\n\nAnswer it on the run's card or with \`answer_instance_input\`. ${by}`).catch(() => false);
 			await effects.audit(q, ok ? `Question posted on ${repoIssue(q)}: ${q.question}` : `Question recorded; it could not be posted on ${repoIssue(q)}.`);
 		} else await effects.audit(q, `Question recorded (no issue linked): ${q.question}`);
 	}
 	return { question: q, waitMs, humanMs };
+}
+
+/** Is this question's run parked on it, waiting at zero compute (#1076)? */
+async function parkedOn(env: Env, q: CoderQuestion): Promise<boolean> {
+	if (!q.runId) return false;
+	const r = await env.DB.prepare("SELECT 1 AS hit FROM agent_loop_runs WHERE run_id = ?1 AND status = 'running' AND waiting_reason = 'decision' AND workflow_instance_id IS NOT NULL").bind(q.runId).first();
+	return !!r;
 }
 
 /** One sweep tick. Returns what it did, for the scheduled() log and the tests. */
@@ -131,7 +144,8 @@ export async function runDueCoderQuestions(env: Env, now = Date.now(), effects?:
 		out.checked++;
 		const fx: CoderQuestionEffects = { ...base, ...effects };
 		try {
-			if (now >= q.expiresAt) {
+			// A question whose run is PARKED on it (#1076) is still being waited for, whatever its clock said.
+			if (now >= q.expiresAt && !(await parkedOn(env, q))) {
 				if (await transitionCoderQuestion(env, q.id, ["waiting_human", "brain_deciding", "escalated"], "expired", "the run stopped waiting with no answer", { resolvedAt: now }, now)) {
 					out.expired++;
 					await fx.audit(q, "Question expired: the run stopped waiting without an answer.");
@@ -154,6 +168,9 @@ export async function runDueCoderQuestions(env: Env, now = Date.now(), effects?:
 			await fx.audit(q, `Coder brain sweep error: ${e instanceof Error ? clipMarked(e.message, 200, { within: true }) : String(e)}`).catch(() => undefined);
 		}
 	}
+	// The resumption backstop (#1076): a parked run whose answer, brain decision or cancel is on record
+	// but whose wake event was lost is woken here, on the same every-minute tick.
+	await runDueParkWakes(env, now).catch(() => 0);
 	return out;
 }
 
@@ -204,13 +221,7 @@ async function decide(env: Env, q: CoderQuestion, brain: CoderBrainSettings, fx:
 
 async function unresolve(q: CoderQuestion, fx: CoderQuestionEffects, now: number, env: Env): Promise<boolean> {
 	if (!(await transitionCoderQuestion(env, q.id, ["escalated"], "unresolved", "no answer after escalation; the coder finishes what it can", { resolvedAt: now }, now))) return false;
-	const issueRef = q.issueNumber ? `issue #${q.issueNumber}` : "the issue";
-	const instruction = [
-		`UNRESOLVED DECISION — nobody answered "${q.question}" and the coder brain declined (${q.reason ?? "no reason recorded"}).`,
-		"Do NOT decide it yourself. Finish everything that does not depend on this decision, run the checks, and commit straight to main (no branches, no pull requests).",
-		`Then close ${issueRef} with a comment containing: the question; the options${q.options.length ? ` (${q.options.join(", ")})` : ""}; why the brain declined; what was done (the commit SHAs); what is left; and the exact decision needed to finish.`,
-	].join(" ");
-	await fx.deliver(q, instruction);
+	await fx.deliver(q, unresolvedInstruction(q));
 	await fx.postComment(q, `**⏹ Decision unresolved:** ${q.question}${optionsLine(q)}\n\nThe coder brain declined because ${q.reason ?? "no reason recorded"}, and nobody answered after escalation. The coder is finishing everything that does not depend on it, will commit to main, and will close this issue listing what was done, what is left and the decision needed.`).catch(() => false);
 	await fx.notify(q, "⏹ Coder question unresolved", `${repoIssue(q)}: "${q.question}" went unanswered. The coder is finishing what it can and will close the issue with what is left.`, true);
 	await fx.audit(q, "Unresolved: the coder was told to finish what it can, commit to main and close the issue with the full details.");

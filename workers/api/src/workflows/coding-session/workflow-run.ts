@@ -2,6 +2,7 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-question-sweep.js";
 import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
+import { answerEventType, recordParkedWorkflow, relaunchAfterPark } from "../../lib/coding-park.js";
 import {
 	runCodingLoop,
 	type CodingActionKind,
@@ -778,6 +779,30 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		},
 		// #1075: the answer is read from the question's ROW first, so it survives a runner restart.
 		takeoverStatus: () => runRetry(`hstatus-${round}-${n++}`, () => codingPauseStatus(env, conn, sessionId, parkedQuestionId)) as Promise<{ resolved: boolean; value?: string }>,
+		// #1076: a captured question parks at zero compute; only a run with a loop-run row can be woken.
+		park: event.payload.loopRunId
+			? {
+					begin: (_questionId, until) =>
+						runRetry(`park-${round}`, async () => {
+							const runId = event.payload.loopRunId as string;
+							await recordParkedWorkflow(env, runId, event.instanceId ?? runId);
+							await recordLiveness(env, runId, Date.now(), { reason: "decision", until, ask: parkedAsk });
+							// The engine PROCESS stops; its session row and its resume key stay. Its last acts are drained like the terminal path's.
+							const ended = await callRunner<{ acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
+							await recordEngineActs(env, { userId, sessionId, instanceId, traceId: runId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
+							return null;
+						}).then(() => undefined),
+					wait: (questionId, k, timeoutMs) => step.waitForEvent(`answer-${round}-${k}`, { type: answerEventType(questionId), timeout: timeoutMs }).then(() => true, () => false),
+					resumeEngine: async (parkedForMs) => {
+						const r = (await runRetry(`unpark-${round}`, async () => {
+							await recordLiveness(env, event.payload.loopRunId as string, Date.now(), null); // no longer parked, from this instant
+							return relaunchAfterPark(env, conn, { instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: event.payload.driverId ?? undefined, parkedForMs });
+						})) as { resumed: boolean; line: string };
+						if (!r.resumed) objective?.replaced(); // a fresh engine has read nothing: the objective is owed to it again (#1019)
+						return r.line;
+					},
+				}
+			: undefined,
 		applied: async () => void (parkedQuestionId && (await runRetry(`applied-${round}`, () => markAnswerApplied(env, parkedQuestionId as string, event.payload.loopRunId ?? null)))),
 		endTakeover: () => runRetry(`resume-${round}`, () => callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {})).then(() => undefined),
 		reauthCompletedSince: (since) => reauthCompletedSince(env, instanceId, userId, since),
@@ -1049,6 +1074,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			const pause = await resolvePause(pauseDeps(round, parkReason), { round, result, state: waitState });
 			if (!pause.resume) {
 				result = pause.result;
+				if (pause.stopReason) crashReason = pause.stopReason; // `decision` (#1076): a park that ran out, continuable
 				break;
 			}
 			// The human answered the handoff — this run has an owner turn in it, so a report that

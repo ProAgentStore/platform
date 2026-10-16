@@ -291,15 +291,32 @@ export async function recordAnswer(env: Pick<Env, "DB">, input: RecordAnswerInpu
 }
 
 /**
+ * What the coder is told when nobody answered and the brain declined (#1025 §4): finish what does not
+ * depend on the decision, and close the issue with what is left. Composed from the row, so the minute
+ * sweep's delivery and a parked run's read of the row (#1076) say the same thing.
+ */
+export function unresolvedInstruction(q: Pick<CoderQuestion, "question" | "reason" | "options" | "issueNumber">): string {
+	const issueRef = q.issueNumber ? `issue #${q.issueNumber}` : "the issue";
+	return [
+		`UNRESOLVED DECISION — nobody answered "${q.question}" and the coder brain declined (${q.reason ?? "no reason recorded"}).`,
+		"Do NOT decide it yourself. Finish everything that does not depend on this decision, run the checks, and commit straight to main (no branches, no pull requests).",
+		`Then close ${issueRef} with a comment containing: the question; the options${q.options.length ? ` (${q.options.join(", ")})` : ""}; why the brain declined; what was done (the commit SHAs); what is left; and the exact decision needed to finish.`,
+	].join(" ");
+}
+
+/**
  * #1075: the answer a parked run should resume with, read from the ROW — so it survives a runner
- * restart. A person's answer (any state, even recorded after `expired`) or the brain's decision, as long
- * as no run has consumed it yet. Null when there is nothing to apply.
+ * restart, and (#1076) reaches a run waiting at zero compute. A person's answer (any state, even
+ * recorded after `expired`), the brain's decision, or its unresolved instruction, as long as no run
+ * has consumed it yet. Null when there is nothing to apply.
  */
 export async function storedAnswer(env: Pick<Env, "DB">, questionId: string): Promise<{ value?: string; by: "human" | "brain" } | null> {
-	const r = await env.DB.prepare("SELECT state, answered_by, decision, reason, answered_at, applied_at FROM coder_questions WHERE id = ?1").bind(questionId).first<Row>();
-	if (!r || r.answered_at == null || r.applied_at != null) return null;
-	if (r.answered_by === "human") return { value: r.decision ? String(r.decision) : undefined, by: "human" };
-	if (r.state === "answered_brain" && r.decision) return { value: `Decided by the coder brain: ${r.decision}. Reason: ${r.reason ?? "none recorded"}`, by: "brain" };
+	const r = await env.DB.prepare("SELECT * FROM coder_questions WHERE id = ?1").bind(questionId).first<Row>();
+	if (!r || r.applied_at != null) return null;
+	const q = asQuestion(r);
+	if (q.answeredAt != null && q.answeredBy === "human") return { value: q.decision ?? undefined, by: "human" };
+	if (q.answeredAt != null && q.state === "answered_brain" && q.decision) return { value: `Decided by the coder brain: ${q.decision}. Reason: ${q.reason ?? "none recorded"}`, by: "brain" };
+	if (q.state === "unresolved") return { value: unresolvedInstruction(q), by: "brain" };
 	return null;
 }
 

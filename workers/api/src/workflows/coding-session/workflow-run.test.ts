@@ -40,6 +40,9 @@ import { ownerDirectivesBlock } from "../../lib/coding-owner-directives.js";
 import { setControllerAiSleepForTest } from "../../lib/controller-ai-recovery.js";
 import { UserAiProviderError } from "../../lib/user-ai.js";
 import type { Env } from "../../types.js";
+import { recordAnswer } from "../../lib/coder-question-store.js";
+import { requestCancel, isResumableStopReason } from "../../lib/agent-loop-store.js";
+import { DECISION_PARK_MS } from "../../lib/coding-park.js";
 
 // ── The harness ─────────────────────────────────────────────────────────────────────────────────
 
@@ -49,8 +52,12 @@ interface Journal {
 	sleeps: { name: string; ms: number }[];
 	/** Called as each sleep starts — a test's window onto what the run looks like while it waits. */
 	onSleep?: (name: string, ms: number) => void;
+	/** Every `waitForEvent` the run made (#1076): a park waits here, at zero compute. */
+	events: { name: string; type: string; timeout: unknown }[];
+	/** Called while the run waits on an event; resolve `"timeout"` to make the wait time out. Default: the event arrives. */
+	onEvent?: (name: string, type: string) => unknown;
 }
-const newJournal = (): Journal => ({ done: new Map(), order: [], sleeps: [] });
+const newJournal = (): Journal => ({ done: new Map(), order: [], sleeps: [], events: [] });
 
 function fakeStep(journal: Journal): WorkflowStep {
 	const step = {
@@ -65,6 +72,15 @@ function fakeStep(journal: Journal): WorkflowStep {
 		async sleep(name: string, ms: number) {
 			journal.sleeps.push({ name, ms });
 			journal.onSleep?.(name, ms);
+		},
+		// Journalled like `do`: a replay returns the event it already received. A timeout throws, as Cloudflare's does.
+		async waitForEvent(name: string, opts: { type: string; timeout?: unknown }) {
+			if (journal.done.has(name)) return journal.done.get(name);
+			journal.events.push({ name, type: opts.type, timeout: opts.timeout });
+			if ((await journal.onEvent?.(name, opts.type)) === "timeout") throw new Error(`waitForEvent ${name} timed out`);
+			const ev = { payload: {}, timestamp: new Date(), type: opts.type };
+			journal.done.set(name, ev);
+			return ev;
 		},
 	};
 	return step as unknown as WorkflowStep;
@@ -760,5 +776,113 @@ describe("controller AI-provider stall recovery in the Pilot's decide (#907)", (
 		expect(slept).toEqual([]);
 		expect(decideSteps).toBeGreaterThanOrEqual(1);
 		expect(trace("controller_ai.stall")).toEqual([]);
+	});
+});
+
+// ── #1076: a question parks the run at ZERO compute, and an answer resumes the same run ──────────────
+
+describe("a parked question costs nothing and resumes the same run (#1076)", () => {
+	const ASK: CodingDecision = { needsInput: { field: "Keep the old API or drop it?", why: "breaking change", options: ["keep it", "drop it"] } };
+	const answer = (value: string) => recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value, via: "console" });
+	const parkRow = () => one<{ status: string; waiting_reason: string | null; waiting_until: number | null; workflow_instance_id: string | null }>("SELECT status, waiting_reason, waiting_until, workflow_instance_id FROM agent_loop_runs WHERE run_id = 'run-1'");
+	beforeEach(() => {
+		seedLoopRun();
+		// The runner forgets: the park stopped its engine, so it has no takeover to report resolved.
+		runner["/coding/takeover-status"] = () => ({ resolved: false });
+		decisions = [ASK, { finish: { status: "done", detail: "ok" } }];
+	});
+	afterEach(() => vi.useRealTimers());
+
+	it("while parked: no sleep loop, no runner poll, the engine stopped, the park recorded with its 30-day end", async () => {
+		const journal = newJournal();
+		let atPark: { calls: string[]; row: ReturnType<typeof parkRow>; sleeps: number } | null = null;
+		journal.onEvent = async () => {
+			atPark = { calls: runnerCalls.map((c) => c.path), row: parkRow(), sleeps: journal.sleeps.length };
+			await answer("drop it");
+		};
+		const { result } = await run(params({ loopRunId: "run-1" }), journal);
+		expect(result.outcome).toBe("done");
+		expect(atPark!.sleeps).toBe(0);
+		expect(atPark!.calls.filter((p) => p === "/coding/takeover-status")).toEqual([]);
+		expect(atPark!.calls.at(-1)).toBe("/coding/end");
+		expect(atPark!.row).toMatchObject({ status: "running", waiting_reason: "decision", workflow_instance_id: "run-1" });
+		expect(atPark!.row.waiting_until! - Date.now()).toBeGreaterThan(DECISION_PARK_MS - 60_000);
+		expect(journal.events).toHaveLength(1);
+		expect(journal.events[0].type).toMatch(/^answer-[0-9a-f-]{36}$/);
+	});
+
+	it("the answer — read from D1 — resumes the SAME run: same run id, an owner turn, the answer marked applied by it", async () => {
+		const journal = newJournal();
+		journal.onEvent = async () => {
+			await answer("drop it");
+			return undefined;
+		};
+		await run(params({ loopRunId: "run-1" }), journal);
+		expect(decided[1].goal).toMatchObject({ ownerTurns: 1, userHint: 'The owner answered your question "Keep the old API or drop it?": drop it' });
+		expect(loopRun()).toMatchObject({ status: "completed", waiting_reason: null });
+		expect(one("SELECT applied_run_id FROM coder_questions WHERE task_id = 'csess-s1'")).toEqual({ applied_run_id: "run-1" });
+		// The engine came back on the same session id, to adopt its own resume key.
+		expect(runnerCalls.filter((c) => c.path === "/coding/start").at(-1)?.body).toMatchObject({ sessionId: "s1" });
+	});
+
+	it("a wake with nothing to act on (a duplicate event) waits again rather than resuming", async () => {
+		const journal = newJournal();
+		journal.onEvent = async (name) => {
+			if (name.endsWith("-1")) await answer("keep it");
+		};
+		await run(params({ loopRunId: "run-1" }), journal);
+		expect(journal.events.map((e) => e.name)).toEqual(["answer-0-0", "answer-0-1"]);
+		expect(decided[1].goal.userHint).toContain("keep it");
+	});
+
+	it("within 4 days a Claude engine is relaunched to continue its conversation; past them it starts fresh, seeded", async () => {
+		const within = newJournal();
+		within.onEvent = async () => {
+			await answer("drop it");
+			return undefined;
+		};
+		await run(params({ loopRunId: "run-1" }), within);
+		expect(runnerCalls.filter((c) => c.path === "/coding/start").at(-1)?.body.fresh).toBeUndefined();
+
+		d1.exec("DELETE FROM agent_loop_runs; DELETE FROM coder_questions");
+		seedLoopRun();
+		runnerCalls = [];
+		decisions = [ASK, { finish: { status: "done", detail: "ok" } }];
+		const past = newJournal();
+		past.onEvent = async () => {
+			vi.useFakeTimers({ now: Date.now() + 5 * 86_400_000, toFake: ["Date"] });
+			await answer("drop it");
+		};
+		await run(params({ loopRunId: "run-1" }), past);
+		expect(runnerCalls.filter((c) => c.path === "/coding/start").at(-1)?.body).toMatchObject({ sessionId: "s1", fresh: true });
+	});
+
+	it("stays cancellable: stop_work on a parked run ends it `cancelled` through the normal terminal path, which drains the queue", async () => {
+		const journal = newJournal();
+		journal.onEvent = async () => {
+			await requestCancel(env, "u1", "run-1");
+			return undefined;
+		};
+		const { result } = await run(params({ loopRunId: "run-1" }), journal);
+		expect(result.outcome).toBe("cancelled");
+		expect(loopRun().status).toBe("cancelled");
+		expect(journal.order).toContain("objective-queue-drain");
+	});
+
+	it("an unanswered park times out as `decision` — continuable, `needs_human`, never `failed`", async () => {
+		const journal = newJournal();
+		journal.onEvent = async () => "timeout" as const;
+		await run(params({ loopRunId: "run-1" }), journal);
+		expect(loopRun()).toMatchObject({ status: "needs_human", stop_reason: "decision" });
+		expect(isResumableStopReason("decision")).toBe(true);
+	});
+
+	it("a run with no loop-run row (nothing could wake it) keeps the live wait", async () => {
+		d1.exec("DELETE FROM agent_loop_runs");
+		ownerAnswers("drop it");
+		const journal = newJournal();
+		await run(params(), journal);
+		expect(journal.events).toEqual([]);
+		expect(journal.sleeps.some((s) => s.name.startsWith("wait-"))).toBe(true);
 	});
 });

@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { recordAnswer } from "../lib/coder-question-store.js";
+import { wakeParkedRun } from "../lib/coding-park.js";
 import { isMcpRequest } from "../lib/coding-api-policy.js";
 import { HttpError } from "../lib/auth.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
@@ -231,7 +232,9 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		// `body.value` is the human's answer to a blocked engine — a 2FA code, a field the agent could
 		// not fill, a choice it asked for (#960). One delivery path with `/input`: `lib/coding-answer.ts`.
 		// #1025/#1075: a person's answer is written to the open question first, and wins over a coder-brain decision.
-		await recordAnswer(c.env, { instanceId, userId: uid, sessionId: c.req.param("sessionId"), value: typeof body.value === "string" ? body.value : undefined, via: isMcpRequest(c.req.header("X-PAGS-Client")) ? "mcp" : "console" });
+		const recorded = await recordAnswer(c.env, { instanceId, userId: uid, sessionId: c.req.param("sessionId"), value: typeof body.value === "string" ? body.value : undefined, via: isMcpRequest(c.req.header("X-PAGS-Client")) ? "mcp" : "console" });
+		// #1076: a run parked on that question reads it from the row once woken; nothing to push to its stopped engine.
+		if (recorded?.question.runId && (await wakeParkedRun(c.env, recorded.question.runId, "answer"))) return c.json({ ok: true });
 		await resolveCodingPause(c.env, instanceId, uid, c.req.param("sessionId"), typeof body.value === "string" ? body.value : undefined);
 		return c.json({ ok: true });
 	});

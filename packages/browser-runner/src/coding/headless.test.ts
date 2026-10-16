@@ -385,6 +385,14 @@ describe("HeadlessSession (stream-json engine)", () => {
 		expect(new HeadlessSession({ id: "cold1", workDir: dir, clientType: "claude", bin, statePath, resumeFrom: "never-seen" }).resumedConversation).toBe(false);
 	});
 
+	it("`fresh` starts without any saved conversation, its own included — a park resumed past the window (#1076)", () => {
+		const statePath = defaultStatePath(dir);
+		writeFileSync(statePath, JSON.stringify({ parked1: "sess-old", other: "sess-other" }));
+		expect(new HeadlessSession({ id: "parked1", workDir: dir, clientType: "claude", bin, statePath }).resumedConversation).toBe(true);
+		const fresh = new HeadlessSession({ id: "parked1", workDir: dir, clientType: "claude", bin, statePath, resumeFrom: "other", fresh: true });
+		expect(fresh.resumedConversation).toBe(false);
+	});
+
 	it("never reports a resumed conversation for a raw engine", () => {
 		// `--resume` is a Claude Code flag and `buildClaudeArgs` is only reached in stream-json mode,
 		// so a resume key on a codex/grok session is inert. Reporting true would make the cloud tell

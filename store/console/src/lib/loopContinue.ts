@@ -25,7 +25,7 @@
  */
 
 /** The endings the server will continue. Kept in the order `RESUMABLE_STOP_REASONS` lists them. */
-export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost"] as const;
+export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision"] as const;
 
 /** The fields of a loop run that decide whether Continue is offered (`LoopRunView` has more). */
 export interface LoopRunContinueLike {
@@ -146,6 +146,7 @@ const REASON_LABEL: Record<string, string> = {
 	constraint_refused: "Stopped: your rules are too long to send",
 	// #1053. A runner restart cut a turn off and it could not be resumed exactly once — check the worktree first.
 	turn_lost: "Lost a turn to a runner restart",
+	decision: "Parked on your answer; the 30-day wait ran out",
 };
 
 /**

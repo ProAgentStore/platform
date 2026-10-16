@@ -81,6 +81,8 @@ export async function listIdleSessions(env: Env, cutoff: number, limit: number):
 		  WHERE s.status = 'active'
 		    AND COALESCE(s.last_activity_at, CAST(strftime('%s', s.updated_at) AS INTEGER) * 1000) < ?1
 		    AND (s.driver_at IS NULL OR s.driver_at < ?2)
+		    -- #1076: a run parked on a question keeps its session — row, card and resume key — however long it waits.
+		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr WHERE lr.session_id = s.id AND lr.status = 'running' AND lr.waiting_reason = 'decision' AND lr.workflow_instance_id IS NOT NULL)
 		  ORDER BY COALESCE(s.last_activity_at, 0) ASC
 		  LIMIT ?3`,
 	)

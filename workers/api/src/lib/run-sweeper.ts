@@ -288,9 +288,12 @@ async function sweepLoopRuns(env: Env, cutoff: number, now: number): Promise<num
 	const { results } = await env.DB.prepare(
 		`SELECT run_id, instance_id, user_id, session_id, objective FROM agent_loop_runs
 		  WHERE status = 'running' AND COALESCE(last_alive_at, last_progress_at, started_at) < ?1
+		    AND NOT (waiting_reason IS NOT NULL AND waiting_until IS NOT NULL AND waiting_until > ?3)
 		  LIMIT ?2`,
 	)
-		.bind(cutoff, SWEEP_LIMIT)
+		// A park that published its end (#1076: a question parked at zero compute ticks NOTHING) is the
+		// platform's own stated fact, as in the wedged-park pass and `runHealth` — not a dead workflow.
+		.bind(cutoff, SWEEP_LIMIT, now)
 		.all<SweptRunRow>();
 	// `failed`, not `escalated`: nothing about a dead workflow says a human can resolve it by
 	// answering a question. `statusFor("failed")` is the `failed` status, which is honest.
