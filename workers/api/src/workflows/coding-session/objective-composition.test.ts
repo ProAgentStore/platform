@@ -38,12 +38,18 @@ import type { CodingDecision, CodingGoal } from "../../lib/coding-loop.js";
 import { realSchemaD1, type RealSchemaD1, seedTenant } from "../../lib/d1-sqlite.js";
 import { getLoopRun } from "../../lib/agent-loop-store.js";
 import { MAX_OBJECTIVE_CONSTRAINT_CHARS } from "../../lib/coding-objective-delivery.js";
+import { IDLE_POLL_FAST_MS } from "../../lib/coding-idle-poll.js";
 import { continueRefusal } from "../../routes/loop-continue-routes.js";
 import { activeConstraints, constraintLines, constraintSources } from "../../lib/coding-scope-constraints.js";
 import { RunnerUnreachableError } from "../../lib/runner-unreachable.js";
 import type { Env } from "../../types.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import { runCodingSessionWorkflow } from "./workflow-run.js";
+
+// Real engine PROCESSES are spawned per test, and now given real time to read (see `fakeStep.sleep`), so the 5s
+// default — chosen for pure functions — is not this file's budget. 60s, from a deliberately loaded run (eight copies
+// of this file at once took up to ~10s a test), the same reasoning as the integration project's 120s; a real hang still fails.
+vi.setConfig({ testTimeout: 60_000 });
 
 /** The inert engine: reads stream-json turns, logs what it read and under which pid, answers. Never runs anything. */
 const engineScript = (log: string) => `#!/usr/bin/env node
@@ -173,9 +179,28 @@ function fakeStep(j: Journal): WorkflowStep {
 				throw e;
 			}
 		},
-		async sleep() {
+		// A durable sleep is REAL seconds in production (the idle wait's shortest poll is IDLE_POLL_FAST_MS, 2s), and the
+		// engine process keeps working through it. A fixed 15ms compressed the run's whole 480-second idle window
+		// (`awaitEngineIdle` counts the REQUESTED delay) into ~3s of wall clock, so on a loaded machine a real engine's
+		// node startup outlasted it: the run gave up on a turn nobody had read yet — the act B never read, the duplicate
+		// turn, the replacement's extra turn in CI. So each sleep yields real time until the live engine is between
+		// turns, bounded by the interval asked for and by that 2s floor. Nothing about what is asserted changes.
+		async sleep(_name: string, ms = 0) {
 			if (evicted) throw new Evicted("sleep");
 			await wait(15);
+			const m = byName.get(live.node) ?? target;
+			const t0 = Date.now();
+			while (Date.now() - t0 < Math.min(ms, IDLE_POLL_FAST_MS)) {
+				let busy = false;
+				try {
+					const snap = m.rt.snapshot("s1");
+					busy = snap.alive && snap.runState !== "idle";
+				} catch {
+					busy = false; // no session on this machine: nothing to give time to
+				}
+				if (!busy) break;
+				await wait(20);
+			}
 		},
 	} as unknown as WorkflowStep;
 }
