@@ -6793,9 +6793,19 @@ paths:
       summary: Supply a value the agent asked for
       description: |
         The ask-and-hold (`needs_input`) handoff: the prompt forbids fabricating a required
-        value, so the run pauses and asks. This delivers the answer to the live runner and
-        resumes. A lost handoff (the runner restarted) is reported as 409 rather than a
-        misleading 200.
+        value, so the run pauses and asks. Console and MCP `answer_instance_input` call this.
+
+        A CODING question (#1075) is answered on its durable `coder_questions` row FIRST, in any
+        state (open, expired, run ended), and only then pushed to a live run, best-effort. The
+        parked run reads the row, so a runner restart cannot lose the answer. `outcome` says
+        what happened: `delivered` (200, a live run got it), `stored` (202, live run, runner
+        unreachable; the run reads it from the row), `recorded` (202, `kind: coding_late`, the
+        run had stopped; kept unapplied on the row and posted on its issue) or
+        `already_applied` (202, a run already used an earlier answer; this one is kept in the
+        history only). 409 only when the card has no question at all.
+
+        Anything else is the apply agent's browser handoff; a lost one (the runner restarted)
+        is reported as 409 rather than a misleading 200.
       operationId: supplyApplyInput
       tags: [Apply]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -7370,6 +7380,8 @@ paths:
         The questions this coder's runs stopped on (#1025), newest first: state (waiting_human, brain_deciding,
         answered_human, answered_brain, escalated, unresolved, expired), who answered, the brain's decision, confidence,
         reason and model, and the full state history. Plus the brain settings. `state` filters; `limit` 1-100.
+        #1075: `answeredVia` (console, mcp, brain), `answeredAt`, and `appliedAt` / `appliedRunId` — when and by which
+        run the answer was consumed (null while it still waits to be used, including a late answer kept for a resume).
       operationId: listCoderQuestions
       tags: [Instances]
       parameters:

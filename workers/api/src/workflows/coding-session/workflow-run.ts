@@ -1,5 +1,7 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-question-sweep.js";
+import { markAnswerApplied } from "../../lib/coder-question-store.js";
+import { codingPauseStatus } from "../../lib/coding-answer.js";
 import {
 	runCodingLoop,
 	type CodingActionKind,
@@ -733,6 +735,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	/** The pause machine's effects (#541). `conn` is read at call time: the guard re-points it. */
 	/** The question a `decision` park is waiting on (#960), set by `ask` and carried by every tick of that park. */
 	let parkedAsk: WaitingAsk | null = null;
+	/** The `coder_questions` row that park's answer is read from (#1075); null for a takeover with no question. */
+	let parkedQuestionId: string | null = null;
 	const pauseDeps = (round: number, wait: RunWaitReason): PauseDeps => ({
 		repo: goal.repo,
 		timeZone: goal.timeZone,
@@ -740,7 +744,10 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		taskId: event.payload.boardTaskId,
 		sessionId,
 		now: () => Date.now(),
-		takeover: (label, reason) => runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined),
+		takeover: (label, reason) => {
+			parkedQuestionId = null;
+			return runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined);
+		},
 		// A QUESTION, published (#960): the `agent.needs_input` event on the card — the console's answer
 		// box reads it, options as a `from:` list — and the `decision` park with the ask on the run, at
 		// once rather than at the first tick, so coding_loop_status says what is being asked now.
@@ -763,11 +770,15 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				// #1025: the question, durably — posted on the issue, timed by the minute sweep. Inside
 				// the step, so a replay returns the journalled wait instead of capturing it twice.
 				const captured = await captureAndAnnounceQuestion(env, { instanceId, userId, sessionId, runId: event.payload.loopRunId ?? null, taskId: ask.taskId, question: ask.question, options: ask.options, why: ask.why || null }).catch(() => null);
-				return captured ? { waitMs: captured.waitMs, humanMs: captured.humanMs, brain: captured.waitMs > HUMAN_ONLY_WAIT_MS } : null;
+				return captured ? { waitMs: captured.waitMs, humanMs: captured.humanMs, brain: captured.waitMs > HUMAN_ONLY_WAIT_MS, questionId: captured.question.id } : null;
+			}).then((w) => {
+				parkedQuestionId = (w as { questionId?: string } | null)?.questionId ?? null; // journalled, so a replay knows the row too
+				return w;
 			});
 		},
-		takeoverStatus: () =>
-			runRetry(`hstatus-${round}-${n++}`, () => callRunner(conn, "/coding/takeover-status", { sessionId })) as Promise<{ resolved: boolean; value?: string }>,
+		// #1075: the answer is read from the question's ROW first, so it survives a runner restart.
+		takeoverStatus: () => runRetry(`hstatus-${round}-${n++}`, () => codingPauseStatus(env, conn, sessionId, parkedQuestionId)) as Promise<{ resolved: boolean; value?: string }>,
+		applied: async () => void (parkedQuestionId && (await runRetry(`applied-${round}`, () => markAnswerApplied(env, parkedQuestionId as string, event.payload.loopRunId ?? null)))),
 		endTakeover: () => runRetry(`resume-${round}`, () => callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {})).then(() => undefined),
 		reauthCompletedSince: (since) => reauthCompletedSince(env, instanceId, userId, since),
 		// An ended-and-started engine has read nothing its predecessor read: the objective is owed to it again (#1019).

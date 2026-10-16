@@ -89,6 +89,11 @@ export interface PauseDeps {
 	/** Close the takeover once it is resolved. */
 	endTakeover: () => Promise<void>;
 	/**
+	 * Record that this run consumed the question's answer (#1075: `applied_at` / `applied_run_id`), so a
+	 * second answer is reported "already applied" rather than taken for a pending one. Best-effort.
+	 */
+	applied?: () => Promise<void>;
+	/**
 	 * Has the re-auth relay signed the engine in at or after `since` (#881)? What a run parked on
 	 * `needs_reauth` polls — the relay is driven by the owner from another device, so this record is
 	 * the only thing the two sides share.
@@ -284,6 +289,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 		};
 	}
 
+	await deps.applied?.().catch(() => undefined);
 	await deps.endTakeover();
 	// Somebody answered — the run is working again, so it leaves "Needs you". Not left for the
 	// terminal write: a run can take several handoffs across its 12 rounds, and a card that stayed

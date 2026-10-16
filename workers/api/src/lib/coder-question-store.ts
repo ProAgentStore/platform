@@ -10,6 +10,7 @@ import { clipMarked } from "./clip-marked.js";
 import { redactText } from "./local-browser/contract.js";
 
 export type CoderQuestionState = "waiting_human" | "brain_deciding" | "answered_human" | "answered_brain" | "escalated" | "unresolved" | "expired";
+export type AnswerVia = "console" | "mcp" | "brain";
 export const OPEN_QUESTION_STATES: readonly CoderQuestionState[] = ["waiting_human", "brain_deciding", "escalated"];
 
 export interface CoderQuestion {
@@ -38,6 +39,11 @@ export interface CoderQuestion {
 	/** #1026: the source labels the brain cited, and the risks it named — on a decision, and on a decline when given. */
 	evidence: string[];
 	risks: string[];
+	/** #1075: the door the answer came through, when it was recorded, and when (and by which run) it was consumed. */
+	answeredVia: AnswerVia | null;
+	answeredAt: number | null;
+	appliedAt: number | null;
+	appliedRunId: string | null;
 	history: Array<{ at: number; from: CoderQuestionState | null; to: CoderQuestionState; note: string }>;
 }
 
@@ -77,6 +83,10 @@ function asQuestion(r: Row): CoderQuestion {
 		promptHash: r.prompt_hash ? String(r.prompt_hash) : null,
 		evidence: json<string[]>(r.evidence, []),
 		risks: json<string[]>(r.risks, []),
+		answeredVia: (r.answered_via as AnswerVia | null) ?? null,
+		answeredAt: num(r.answered_at),
+		appliedAt: num(r.applied_at),
+		appliedRunId: r.applied_run_id ? String(r.applied_run_id) : null,
 		history: json(r.history, []),
 	};
 }
@@ -160,16 +170,17 @@ export async function transitionCoderQuestion(
 	from: readonly CoderQuestionState[],
 	to: CoderQuestionState,
 	note: string,
-	fields: Partial<{ escalatedAt: number; resolvedAt: number; answeredBy: "human" | "brain"; decision: string; confidence: number; reason: string; model: string; promptHash: string; evidence: string[]; risks: string[] }> = {},
+	fields: Partial<{ escalatedAt: number; resolvedAt: number; answeredBy: "human" | "brain"; answeredVia: AnswerVia; answeredAt: number; decision: string; confidence: number; reason: string; model: string; promptHash: string; evidence: string[]; risks: string[] }> = {},
 	now = Date.now(),
 ): Promise<boolean> {
-	const placeholders = from.map((_, i) => `?${i + 14}`).join(", ");
+	const placeholders = from.map((_, i) => `?${i + 16}`).join(", ");
 	const res = await env.DB.prepare(
 		`UPDATE coder_questions SET state = ?2,
 		        escalated_at = COALESCE(?3, escalated_at), resolved_at = COALESCE(?4, resolved_at), answered_by = COALESCE(?5, answered_by),
 		        decision = COALESCE(?6, decision), confidence = COALESCE(?7, confidence), reason = COALESCE(?8, reason),
 		        model = COALESCE(?9, model), prompt_hash = COALESCE(?10, prompt_hash),
 		        evidence = COALESCE(?12, evidence), risks = COALESCE(?13, risks),
+		        answered_via = COALESCE(?14, answered_via), answered_at = COALESCE(?15, answered_at),
 		        history = json_insert(history, '$[#]', json(?11))
 		  WHERE id = ?1 AND state IN (${placeholders})`,
 	)
@@ -187,6 +198,8 @@ export async function transitionCoderQuestion(
 			JSON.stringify({ at: now, from: from.length === 1 ? from[0] : null, to, note }),
 			fields.evidence ? JSON.stringify(fields.evidence) : null,
 			fields.risks ? JSON.stringify(fields.risks) : null,
+			fields.answeredVia ?? null,
+			fields.answeredAt ?? null,
 			...from,
 		)
 		.run();
@@ -194,38 +207,109 @@ export async function transitionCoderQuestion(
 }
 
 /**
- * A person answered the question waiting on this session. Wins from every open state — including
- * `brain_deciding`, whose in-flight decision is then discarded by its own failed swap.
+ * A person's answer as the row keeps it: credential-shaped text redacted and clipped (#1026), since
+ * these routes also carry values like a 2FA code. Undefined for an empty answer (a bare "done").
  */
-/**
- * A person answered. `answer` (#1026) is recorded as the decision, so the brain's later grounding sees what the owner
- * chose before — credential-shaped text redacted and clipped, since these routes also carry values like a 2FA code.
- */
-export async function markHumanAnswered(env: Pick<Env, "DB">, instanceId: string, sessionId: string, now = Date.now(), answer?: string): Promise<string | null> {
-	const open = await env.DB.prepare("SELECT id FROM coder_questions WHERE instance_id = ?1 AND session_id = ?2 AND state IN ('waiting_human','brain_deciding','escalated') ORDER BY asked_at DESC LIMIT 1")
-		.bind(instanceId, sessionId)
-		.first<{ id: string }>();
-	if (!open) return null;
-	const decision = answer?.trim() ? clipMarked(redactText(answer.trim()), 300, { within: true }) : undefined;
-	const moved = await transitionCoderQuestion(env, open.id, OPEN_QUESTION_STATES, "answered_human", "answered by a person", { answeredBy: "human", resolvedAt: now, ...(decision ? { decision } : {}) }, now);
-	return moved ? open.id : null;
+export function answerForRecord(answer: string | undefined): string | undefined {
+	const t = answer?.trim();
+	return t ? clipMarked(redactText(t), 300, { within: true }) : undefined;
+}
+
+export interface RecordAnswerInput {
+	instanceId: string;
+	userId: string;
+	/** The card the question was asked on — what `/input` and `answer_instance_input` carry. */
+	taskId?: string | null;
+	/** The session, for the takeover route, which knows no card: matches only a question still open. */
+	sessionId?: string | null;
+	value: string | undefined;
+	via: Exclude<AnswerVia, "brain">;
+	now?: number;
 }
 
 /**
- * #1074: an answer that arrives AFTER the run stopped waiting. The question is `expired` and its run
- * is gone, so nothing can be delivered — but the answer is the owner's decision, and dropping it
- * ("no question is waiting") made them re-send it as a fresh objective. It is recorded on the
- * question instead (redacted and clipped like any person's answer, since these routes carry values
- * like a 2FA code), the state stays `expired`, and the history says it came late. Null when this
- * card has no expired question, or the answer is empty.
+ * What `recordAnswer` did with the answer.
+ *   answered        → an open question (or one the brain answered and no run has used yet) now holds it
+ *   revised         → the owner replaced their own earlier answer before any run used it
+ *   late            → the question had expired; the answer is kept on it for the resume / next run
+ *   already_applied → a run already consumed an earlier answer; this one is recorded in the history only
  */
-export async function recordLateAnswer(env: Pick<Env, "DB">, instanceId: string, userId: string, taskId: string, answer: string, now = Date.now()): Promise<CoderQuestion | null> {
-	const decision = answer.trim() ? clipMarked(redactText(answer.trim()), 300, { within: true }) : "";
-	if (!decision) return null;
-	const q = await env.DB.prepare("SELECT id FROM coder_questions WHERE instance_id = ?1 AND user_id = ?2 AND task_id = ?3 AND state = 'expired' ORDER BY asked_at DESC LIMIT 1")
-		.bind(instanceId, userId, taskId)
-		.first<{ id: string }>();
-	if (!q) return null;
-	const recorded = await transitionCoderQuestion(env, q.id, ["expired"], "expired", "answered by a person after the run stopped waiting", { answeredBy: "human", resolvedAt: now, decision }, now);
-	return recorded ? getCoderQuestion(env, q.id) : null;
+export type RecordedOutcome = "answered" | "revised" | "late" | "already_applied";
+
+/**
+ * #1075: the ONE writer of a person's answer. Every door (`POST /input`, MCP `answer_instance_input`,
+ * the takeover route) calls this FIRST, before it tries to deliver anything to a live run — the row is
+ * the source of truth, the runner push is only a way to wake a live engine sooner.
+ *
+ * Accepts the answer in ANY state of the card's question: open, expired, after its run ended, after the
+ * brain decided. Null only when there is no question to record it on — a card with none, or an empty
+ * answer to a question that is not open (nothing to keep). A person wins until a run has CONSUMED an
+ * answer (`applied_at`); after that a second answer is recorded in the history and reported as
+ * `already_applied`, never silently dropped and never rewriting what the run acted on.
+ */
+export async function recordAnswer(env: Pick<Env, "DB">, input: RecordAnswerInput): Promise<{ question: CoderQuestion; outcome: RecordedOutcome } | null> {
+	const now = input.now ?? Date.now();
+	const decision = answerForRecord(input.value);
+	const open = OPEN_QUESTION_STATES.map((s) => `'${s}'`).join(",");
+	// A compare-and-swap that loses to a concurrent writer (the sweep expiring it, the brain deciding)
+	// re-reads and tries again against the state that won.
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const row = await env.DB.prepare(
+			`SELECT * FROM coder_questions WHERE instance_id = ?1 AND user_id = ?2
+			    AND (CASE WHEN ?3 IS NOT NULL THEN task_id = ?3 ELSE session_id = ?4 AND state IN (${open}) END)
+			  ORDER BY state IN (${open}) DESC, asked_at DESC, rowid DESC LIMIT 1`,
+		)
+			.bind(input.instanceId, input.userId, input.taskId ?? null, input.sessionId ?? "")
+			.first<Row>();
+		if (!row) return null;
+		const q = asQuestion(row);
+		const isOpen = OPEN_QUESTION_STATES.includes(q.state);
+		if (!decision && !isOpen) return null;
+		const fields = { answeredBy: "human" as const, answeredVia: input.via, answeredAt: now, resolvedAt: now, ...(decision ? { decision } : {}) };
+		let outcome: RecordedOutcome;
+		let moved: boolean;
+		if (q.appliedAt) {
+			outcome = "already_applied";
+			moved = await transitionCoderQuestion(env, q.id, [q.state], q.state, `answered again via ${input.via} after run ${q.appliedRunId ?? "?"} used the earlier answer; recorded, not applied: ${decision}`, {}, now);
+		} else if (isOpen) {
+			outcome = "answered";
+			moved = await transitionCoderQuestion(env, q.id, OPEN_QUESTION_STATES, "answered_human", `answered by a person (${input.via})`, fields, now);
+		} else if (q.state === "expired") {
+			outcome = "late";
+			moved = await transitionCoderQuestion(env, q.id, ["expired"], "expired", `answered by a person (${input.via}) after the run stopped waiting`, fields, now);
+		} else if (q.state === "answered_human") {
+			outcome = "revised";
+			moved = await transitionCoderQuestion(env, q.id, ["answered_human"], "answered_human", `answer revised by a person (${input.via}) before any run used it`, fields, now);
+		} else {
+			// answered_brain / unresolved, not yet consumed: the person's answer wins (#1025).
+			outcome = "answered";
+			moved = await transitionCoderQuestion(env, q.id, [q.state], "answered_human", `answered by a person (${input.via}) before any run used the ${q.state === "answered_brain" ? "brain's decision" : "unresolved instruction"}`, fields, now);
+		}
+		if (moved) return { question: (await getCoderQuestion(env, q.id)) as CoderQuestion, outcome };
+	}
+	return null;
+}
+
+/**
+ * #1075: the answer a parked run should resume with, read from the ROW — so it survives a runner
+ * restart. A person's answer (any state, even recorded after `expired`) or the brain's decision, as long
+ * as no run has consumed it yet. Null when there is nothing to apply.
+ */
+export async function storedAnswer(env: Pick<Env, "DB">, questionId: string): Promise<{ value?: string; by: "human" | "brain" } | null> {
+	const r = await env.DB.prepare("SELECT state, answered_by, decision, reason, answered_at, applied_at FROM coder_questions WHERE id = ?1").bind(questionId).first<Row>();
+	if (!r || r.answered_at == null || r.applied_at != null) return null;
+	if (r.answered_by === "human") return { value: r.decision ? String(r.decision) : undefined, by: "human" };
+	if (r.state === "answered_brain" && r.decision) return { value: `Decided by the coder brain: ${r.decision}. Reason: ${r.reason ?? "none recorded"}`, by: "brain" };
+	return null;
+}
+
+/** A run consumed the question's answer. Once: a replay or a second consumer leaves the first record. */
+export async function markAnswerApplied(env: Pick<Env, "DB">, questionId: string, runId: string | null, now = Date.now()): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE coder_questions SET applied_at = ?2, applied_run_id = ?3, history = json_insert(history, '$[#]', json_object('at', ?2, 'from', state, 'to', state, 'note', ?4))
+		  WHERE id = ?1 AND applied_at IS NULL`,
+	)
+		.bind(questionId, now, runId, `answer applied by run ${runId ?? "(no run id)"}`)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }

@@ -8,7 +8,7 @@ import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { setCoderBrain } from "./coder-brain.js";
 import { citedSources, declineAfterModel, sourceLabels, type DecisionContext } from "./coder-brain-decide.js";
 import { linkedIssueNumbers, namedFiles } from "./coder-brain-grounding.js";
-import { getCoderQuestion, markHumanAnswered } from "./coder-question-store.js";
+import { getCoderQuestion, recordAnswer } from "./coder-question-store.js";
 import { type CoderQuestionEffects, captureAndAnnounceQuestion, defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
 import type { Env } from "../types.js";
 
@@ -189,7 +189,7 @@ describe("grounding helpers", () => {
 	it("earlier answers on the instance — a person's included — reach the next decision, with any secret redacted", async () => {
 		const fx = effects(0.9, [], { comments: [], notified: [], contextCalls: 0 });
 		await askFixtures(fx, { instanceId: "coder", sessionId: "s7" }); // the same coder, so its history is the next decision's
-		await markHumanAnswered(env, "coder", "s7", Date.now(), "hold for review, token sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345");
+		await recordAnswer(env, { instanceId: "coder", userId: "u1", sessionId: "s7", value: "hold for review, token sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345", via: "console" });
 		const seen: string[] = [];
 		const { question } = await askLayout(effects(0.9, seen, { comments: [], notified: [], contextCalls: 0 }));
 		await runDueCoderQuestions(env, question.askedAt + 31 * MIN, effects(0.9, seen, { comments: [], notified: [], contextCalls: 0 }));

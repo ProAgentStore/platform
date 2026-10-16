@@ -10,8 +10,9 @@
  */
 import { HttpError } from "./auth.js";
 import { parseWaitingAsk, type WaitingAsk } from "./agent-loop-store.js";
+import { answerForRecord, storedAnswer } from "./coder-question-store.js";
 import { getSession, touchSessionActivity } from "./coding-store.js";
-import { callRunner } from "./runner-client.js";
+import { callRunner, type RunnerConn } from "./runner-client.js";
 import { getSessionRunnerConn } from "../routes/coding-shared.js";
 import type { Env } from "../types.js";
 
@@ -49,4 +50,18 @@ export async function resolveCodingPause(env: Env, instanceId: string, userId: s
 		() => false,
 	);
 	if (!delivered) throw new HttpError(502, "Couldn't hand your answer to the coding runner — it's still waiting. Try again.");
+}
+
+/**
+ * Has a parked run's question been answered, and with what (#1075)? The ROW decides: an answer recorded
+ * on it resumes the run even when the runner restarted and forgot its takeover. The runner is the
+ * secondary signal — the only one for a takeover with no question — and supplies the value AS TYPED
+ * when it holds the same answer (the row keeps it redacted and clipped at 300 characters).
+ */
+export async function codingPauseStatus(env: Env, conn: RunnerConn, sessionId: string, questionId: string | null): Promise<{ resolved: boolean; value?: string }> {
+	const stored = questionId ? await storedAnswer(env, questionId) : null;
+	if (!stored) return (await callRunner(conn, "/coding/takeover-status", { sessionId })) as { resolved: boolean; value?: string };
+	const live = (await callRunner(conn, "/coding/takeover-status", { sessionId }).catch(() => null)) as { resolved?: boolean; value?: string } | null;
+	if (live?.resolved && (stored.by === "brain" || answerForRecord(live.value) === stored.value)) return { resolved: true, value: live.value };
+	return { resolved: true, value: stored.value };
 }

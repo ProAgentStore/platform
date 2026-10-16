@@ -6,7 +6,7 @@
  *   waiting_human ─(human timeout, brain on)→ brain_deciding ─┬→ answered_brain  (delivered through the
  *                                                              │                   same answer path a person uses)
  *                                                              └→ escalated ─(escalation timeout)→ unresolved
- *   any open state ─(a person answers)→ answered_human      (wins at any point — markHumanAnswered)
+ *   any open state ─(a person answers)→ answered_human      (wins until a run uses an answer — recordAnswer)
  *   any open state ─(the run stopped waiting)→ expired
  *
  * Brain off: nothing here acts — the question stays with the person (and expires when the run
@@ -173,7 +173,7 @@ async function decide(env: Env, q: CoderQuestion, brain: CoderBrainSettings, fx:
 		const d = outcome.result;
 		// The compare-and-swap is the human-precedence check: if a person answered while the model ran,
 		// this fails and the decision is discarded — never delivered, never posted.
-		const won = await transitionCoderQuestion(env, q.id, ["brain_deciding"], "answered_brain", `decided: ${d.decision}`, { answeredBy: "brain", resolvedAt: now, decision: d.decision, confidence: d.confidence, reason: d.reason, model: brain.model, promptHash: outcome.promptHash, evidence: d.evidence, risks: d.risks }, now);
+		const won = await transitionCoderQuestion(env, q.id, ["brain_deciding"], "answered_brain", `decided: ${d.decision}`, { answeredBy: "brain", answeredVia: "brain", answeredAt: now, resolvedAt: now, decision: d.decision, confidence: d.confidence, reason: d.reason, model: brain.model, promptHash: outcome.promptHash, evidence: d.evidence, risks: d.risks }, now);
 		if (!won) {
 			await fx.audit(q, "A person answered while the brain was deciding — the brain's decision was discarded.");
 			return "none";

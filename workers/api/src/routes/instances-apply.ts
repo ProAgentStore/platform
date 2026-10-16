@@ -2,7 +2,8 @@ import { endCardTakeover, fillGate, fillRunForCard, relayCardTakeover } from "..
 import { closeLiveTakeoverFor, LIVE_TAKEOVER_STATES, latestTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
 import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
-import { markHumanAnswered, recordLateAnswer } from "../lib/coder-question-store.js";
+import { recordAnswer } from "../lib/coder-question-store.js";
+import { isMcpRequest } from "../lib/coding-api-policy.js";
 import { logEvent } from "../lib/events.js";
 import { postIssueComment } from "../lib/github-issues.js";
 import { clipMarked } from "../lib/clip-marked.js";
@@ -573,8 +574,14 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 
 	/**
 	 * Supply the value an agent asked for (ask-and-hold / needs_input handoff), routed by RUN KIND
-	 * (#960): a coding run parked on a question asked on this card is answered through its coding
-	 * pause; anything else is the apply agent's browser handoff, as before.
+	 * (#960): a coding question is answered on its `coder_questions` row; anything else is the apply
+	 * agent's browser handoff, as before.
+	 *
+	 * #1075: a coding answer is WRITTEN TO THE ROW FIRST, in any state the question is in, and only then
+	 * pushed to a live run, best-effort — the parked run reads the row, so a push the runner missed still
+	 * lands. The console and MCP `answer_instance_input` both come here: one write, one reply. The reply
+	 * always says what happened (`outcome`): delivered to a live run, stored for it, recorded after the
+	 * run stopped, or recorded as a second answer to one already applied.
 	 */
 	router.post("/:instanceId/input", async (c) => {
 		const session = await requireUser(c);
@@ -582,29 +589,42 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { taskId?: string; value?: string };
 		if (!body.taskId) return c.json({ error: "taskId required" }, 400);
+		const value = String(body.value ?? "");
+		const via = isMcpRequest(c.req.header("X-PAGS-Client")) ? "mcp" : "console";
+		// #1025: a person's answer wins at any point — written before delivery, so a brain decision in
+		// flight loses its compare-and-swap and is discarded.
+		const recorded = await recordAnswer(c.env, { instanceId, userId: session.uid, taskId: body.taskId, value, via });
+		const q = recorded?.question;
+		if (recorded?.outcome === "already_applied") {
+			return c.json({ ok: true, kind: "coding", outcome: "already_applied", delivered: false, recorded: true, questionId: q?.id, appliedRunId: q?.appliedRunId ?? null, message: `That question was already answered, and run ${q?.appliedRunId ?? "(unknown)"} acted on the earlier answer. Your new answer is saved on the question's history, but nothing applied it.` }, 202);
+		}
 		const coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
 		if (coding) {
-			// #1025: a person's answer wins at any point — the question is theirs before it is delivered,
-			// so a brain decision in flight loses its compare-and-swap and is discarded.
-			await markHumanAnswered(c.env, instanceId, coding.sessionId, Date.now(), String(body.value ?? ""));
-			await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, String(body.value ?? ""));
-			return c.json({ ok: true, kind: "coding", runId: coding.runId, sessionId: coding.sessionId });
+			// With nothing on the row (a question that was never captured) the push is the only delivery, so its failure is the reply.
+			const delivered = await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(
+				() => true,
+				(e: unknown) => {
+					if (!recorded) throw e;
+					return false;
+				},
+			);
+			const base = { ok: true, kind: "coding", runId: coding.runId, sessionId: coding.sessionId, recorded: !!recorded, questionId: q?.id ?? null };
+			if (delivered) return c.json({ ...base, outcome: "delivered", delivered: true, message: "Delivered to the waiting run." });
+			return c.json({ ...base, outcome: "stored", delivered: false, message: "Saved on the question. The coding runner could not be reached just now; the waiting run reads your answer from the question on its next check." }, 202);
 		}
-		// A coding session's card with no question waiting is not a lost BROWSER session — say what it is.
+		if (recorded && q) {
+			// #1074: the run stopped waiting, but the owner's answer is still their decision. It is on the row
+			// (unapplied, for a resume), and posted under the question on its issue, which the next run reads.
+			const issue = q.repo && q.issueNumber ? q.issueNumber : null;
+			const posted = issue && q.decision
+				? await postIssueComment(c.env, session.uid, q.repo as string, issue, `**Answer received after the run stopped waiting.** The question was: ${clipMarked(q.question, 300, { within: true })}\n\n> ${q.decision}\n\nThe run that asked had already stopped, so this was not delivered to it. It is recorded here for the next run on this issue.`).catch(() => false)
+				: false;
+			await logEvent(c.env, { source: "tool", event: "coder_question.answered_late", message: "an answer arrived after the run stopped waiting; recorded, not delivered", userId: session.uid, instanceId, level: "info", context: { questionId: q.id, sessionId: q.sessionId, issue, postedToIssue: posted, via, state: q.state } }).catch(() => undefined);
+			return c.json({ ok: true, kind: "coding_late", outcome: "recorded", delivered: false, recorded: true, questionId: q.id, postedToIssue: posted ? issue : null, message: `The run had already stopped waiting, so your answer was not delivered to it. It is saved on the question${posted ? ` and posted on issue #${issue}, where the next run on that issue will read it` : ""}.` }, 202);
+		}
+		// A coding session's card with no question on it is not a lost BROWSER session — say what it is.
 		if (body.taskId.startsWith(CODING_CARD_PREFIX)) {
-			// #1074: the run stopped waiting, but the owner's answer is still their decision. Record it on
-			// the expired question and post it under the question on its issue, which the next run on that
-			// issue reads — rather than drop it.
-			const late = await recordLateAnswer(c.env, instanceId, session.uid, body.taskId, String(body.value ?? ""));
-			if (late) {
-				const issue = late.repo && late.issueNumber ? late.issueNumber : null;
-				const posted = issue
-					? await postIssueComment(c.env, session.uid, late.repo as string, issue, `**Answer received after the run stopped waiting.** The question was: ${clipMarked(late.question, 300, { within: true })}\n\n> ${late.decision}\n\nThe run that asked had already stopped, so this was not delivered to it. It is recorded here for the next run on this issue.`).catch(() => false)
-					: false;
-				await logEvent(c.env, { source: "tool", event: "coder_question.answered_late", message: "an answer arrived after the run stopped waiting; recorded, not delivered", userId: session.uid, instanceId, level: "info", context: { questionId: late.id, sessionId: late.sessionId, issue, postedToIssue: posted } }).catch(() => undefined);
-				return c.json({ ok: true, kind: "coding_late", delivered: false, recorded: true, questionId: late.id, postedToIssue: posted ? issue : null, message: `The run had already stopped waiting, so your answer was not delivered to it. It is saved on the question${posted ? ` and posted on issue #${issue}, where the next run on that issue will read it` : ""}.` }, 202);
-			}
-			return c.json({ ok: false, error: "No question is waiting on that coding session — it was already answered, or the run stopped waiting." }, 409);
+			return c.json({ ok: false, error: "No question was asked on that coding session, so there is nothing to answer." }, 409);
 		}
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, "/browser/input", {

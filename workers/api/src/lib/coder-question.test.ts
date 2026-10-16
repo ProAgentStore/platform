@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { coderBrainFrom, readCoderBrain, setCoderBrain } from "./coder-brain.js";
 import { type DecisionContext, GUARDRAILS, brainPrompt, declineAfterModel, declineBeforeModel, decideCoderQuestion, parseBrainReply } from "./coder-brain-decide.js";
-import { getCoderQuestion, markHumanAnswered } from "./coder-question-store.js";
+import { getCoderQuestion, recordAnswer } from "./coder-question-store.js";
 import { type CoderQuestionEffects, HUMAN_ONLY_WAIT_MS, captureAndAnnounceQuestion, defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
 import type { Env } from "../types.js";
 
@@ -109,7 +109,7 @@ describe("brain on", () => {
 	it("AC2 — a human answer before the timeout: the brain never runs", async () => {
 		const { effects, log } = fakes();
 		const { question } = await ask(effects);
-		expect(await markHumanAnswered(env, "coder", "s1")).toBe(question.id);
+		expect((await recordAnswer(env, { instanceId: "coder", userId: "u1", sessionId: "s1", value: "compact", via: "console" }))?.question.id).toBe(question.id);
 		await runDueCoderQuestions(env, atAsk(question) + 31 * MIN, effects);
 		expect(log.modelCalls).toBe(0);
 		expect(await getCoderQuestion(env, question.id)).toMatchObject({ state: "answered_human", answeredBy: "human" });
@@ -167,7 +167,7 @@ describe("brain on", () => {
 	});
 
 	it("a human answer wins even while the brain is deciding — the decision is discarded, never delivered", async () => {
-		const { effects, log } = fakes({ onModel: async () => void (await markHumanAnswered(env, "coder", "s1")) });
+		const { effects, log } = fakes({ onModel: async () => void (await recordAnswer(env, { instanceId: "coder", userId: "u1", sessionId: "s1", value: undefined, via: "console" })) });
 		const { question } = await ask(effects);
 		const id = question.id;
 		await runDueCoderQuestions(env, question.askedAt + 31 * MIN, effects);

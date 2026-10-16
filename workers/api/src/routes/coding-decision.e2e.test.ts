@@ -108,6 +108,9 @@ function step(onSleep: (name: string) => Promise<void>): WorkflowStep {
 const params = (): CodingSessionParams =>
 	({ instanceId: "i1", userId: "u1", sessionId: "s1", repoId: "r1", runnerNode: "n1", loopRunId: "run-1", goal: { objective: "retire the v1 API", repo: "owner/repo", clientType: "claude" } }) as CodingSessionParams;
 
+const question = () =>
+	d1.sqlite.prepare("SELECT state, answered_via, decision, applied_at, applied_run_id FROM coder_questions WHERE task_id = 'csess-s1'").get() as { state: string; answered_via: string; decision: string; applied_at: number | null; applied_run_id: string | null };
+
 async function post(taskId: string, value: string) {
 	const app = new Hono<{ Bindings: Env }>();
 	app.route("/v1/instances", instanceRoutes);
@@ -149,15 +152,43 @@ describe("a coding run asks, waits on a decision, and resumes with the owner's a
 		expect(JSON.parse(ev.payload).data.why).toBe("breaking change for two clients — from: keep it, drop it");
 
 		// The public path delivered it to the CODING pause, not the browser map, and said so.
-		expect(answered).toEqual({ status: 200, body: { ok: true, kind: "coding", runId: "run-1", sessionId: "s1" } });
+		expect(answered).toMatchObject({ status: 200, body: { ok: true, kind: "coding", outcome: "delivered", runId: "run-1", sessionId: "s1", recorded: true } });
 		// The SAME run resumed with the answer, acted on it, and finished.
 		expect(decided[1].userHint).toBe('The owner answered your question "Keep the v1 API or drop it?": drop it');
 		expect(acts.join("\n")).toContain("Drop the v1 API as the owner chose.");
 		expect(result).toMatchObject({ outcome: "done" });
 		const after = await getLoopRun(env, "u1", "run-1");
 		expect(after).toMatchObject({ status: "completed", waitingReason: null, waitingAsk: null });
-		// Answered once: a second answer finds nothing waiting, rather than a "session is gone".
-		expect((await post("csess-s1", "keep it")).status).toBe(409);
+		// #1075: the row records who answered, through which door, and which run used it.
+		expect(question()).toMatchObject({ state: "answered_human", answered_via: "console", decision: "drop it", applied_run_id: "run-1" });
+		expect(question().applied_at).toBeGreaterThan(0);
+		// A second answer is recorded and reported "already applied" — never silently dropped, never a "session is gone".
+		const again = await post("csess-s1", "keep it");
+		expect(again).toMatchObject({ status: 202, body: { outcome: "already_applied", recorded: true, delivered: false, appliedRunId: "run-1" } });
+		expect(question().decision).toBe("drop it");
+	});
+
+	it("#1075: the runner restarts mid-park and forgets the answer — the run still resumes with it, read from the question's row", async () => {
+		decisions = [
+			toDecision({ name: "ask_owner", arguments: { question: "Keep the v1 API or drop it?", options: ["keep it", "drop it"] } }),
+			toDecision({ name: "send_message", arguments: { text: "Drop the v1 API as the owner chose." } }),
+			{ finish: { status: "done", detail: "v1 removed" } },
+		];
+		let answered: Awaited<ReturnType<typeof post>> | null = null;
+		const result = await runCodingSessionWorkflow(
+			env,
+			{ payload: params() } as WorkflowEvent<CodingSessionParams>,
+			step(async (name) => {
+				if (answered || !/^wait-\d+-\d+$/.test(name) || !pause.open) return;
+				answered = await post("csess-s1", "drop it");
+				// The runner restarts: its in-memory takeover map is gone, so it reports not-resolved from now on.
+				pause = { open: true, resolved: false };
+			}),
+		);
+		expect(answered).toMatchObject({ status: 200, body: { outcome: "delivered", recorded: true } });
+		expect(decided[1].userHint).toBe('The owner answered your question "Keep the v1 API or drop it?": drop it');
+		expect(result).toMatchObject({ outcome: "done" });
+		expect(question()).toMatchObject({ state: "answered_human", decision: "drop it", applied_run_id: "run-1" });
 	});
 
 	it("an unanswered question gives up on the handoff clock and stops as escalated, saying nobody answered", async () => {

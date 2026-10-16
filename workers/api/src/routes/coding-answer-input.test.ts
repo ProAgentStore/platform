@@ -73,11 +73,11 @@ beforeEach(() => {
 });
 afterEach(() => d1.close());
 
-async function answer(taskId: string, value: string) {
+async function answer(taskId: string, value: string, headers: Record<string, string> = {}) {
 	const app = new Hono<{ Bindings: Env }>();
 	app.route("/v1/instances", instanceRoutes);
 	app.onError((e, c) => (e instanceof HttpError ? c.json({ error: e.message }, e.status as 400) : c.json({ error: String(e) }, 500)));
-	const res = await app.request("/v1/instances/i1/input", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ taskId, value }) }, env());
+	const res = await app.request("/v1/instances/i1/input", { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ taskId, value }) }, env());
 	// biome-ignore lint/suspicious/noExplicitAny: a JSON response read field by field in assertions.
 	return { status: res.status, body: (await res.json()) as Record<string, any> };
 }
@@ -97,10 +97,10 @@ describe("an answer reaches the pause it answers (#960)", () => {
 		expect(sent).toEqual([{ path: `/coding/takeover/${SID}/resolve`, body: { value: "yes" } }]);
 	});
 
-	it("a coding card with nothing waiting says so — not that a browser session is gone", async () => {
+	it("a coding card with no question at all says so — not that a browser session is gone", async () => {
 		const r = await answer(CARD, "yes");
 		expect(r.status).toBe(409);
-		expect(r.body.error).toMatch(/No question is waiting on that coding session/);
+		expect(r.body.error).toMatch(/No question was asked on that coding session/);
 		expect(r.body.error).not.toMatch(/runner restarted/);
 		expect(sent).toEqual([]);
 	});
@@ -154,7 +154,7 @@ describe("an answer that arrives after the run stopped waiting is kept, not drop
 		expect(r.body).toMatchObject({ ok: true, kind: "coding_late", delivered: false, recorded: true, questionId: "q1", postedToIssue: 1013 });
 		expect(r.body.message).toMatch(/not delivered.*posted on issue #1013/);
 		expect(row()).toMatchObject({ state: "expired", answered_by: "human", decision: "YES — allow it" });
-		expect(JSON.parse(row().history).at(-1)).toMatchObject({ from: "expired", to: "expired", note: "answered by a person after the run stopped waiting" });
+		expect(JSON.parse(row().history).at(-1)).toMatchObject({ from: "expired", to: "expired", note: "answered by a person (console) after the run stopped waiting" });
 		expect(posted).toEqual([{ repo: "ProAgentStore/platform", issue: 1013, body: expect.stringContaining("> YES — allow it") }]);
 		expect(posted[0].body).toMatch(/Answer received after the run stopped waiting/);
 		// Nothing reached a runner: the run is gone.
@@ -178,3 +178,97 @@ describe("an answer that arrives after the run stopped waiting is kept, not drop
 	});
 });
 
+
+describe("the question's row is the source of truth for an answer (#1075)", () => {
+	const ask = (state = "waiting_human", extra = "") =>
+		d1.exec(
+			`INSERT INTO coder_questions (id, instance_id, user_id, session_id, run_id, task_id, repo, issue_number, question, options, state, asked_at, expires_at${extra ? ", applied_at, applied_run_id, answered_by, answered_at, decision" : ""})
+			 VALUES ('q1', 'i1', 'u1', '${SID}', 'run1', '${CARD}', 'ProAgentStore/platform', 1075, 'Ship it behind a flag?', '["yes","no"]', '${state}', 1, ${Date.now() + 60_000}${extra})`,
+		);
+	type Stored = { state: string; answered_by: string | null; answered_via: string | null; answered_at: number | null; applied_at: number | null; applied_run_id: string | null; decision: string | null; history: string };
+	const row = () => d1.sqlite.prepare("SELECT state, answered_by, answered_via, answered_at, applied_at, applied_run_id, decision, history FROM coder_questions WHERE id = 'q1'").get() as Stored;
+	beforeEach(() => {
+		posted.length = 0;
+	});
+
+	it("a live waiter: the answer is written to the row FIRST, then delivered, and the reply says delivered", async () => {
+		ask();
+		await park();
+		const r = await answer(CARD, "yes");
+		expect(r.status).toBe(200);
+		expect(r.body).toMatchObject({ ok: true, kind: "coding", outcome: "delivered", delivered: true, recorded: true, questionId: "q1", runId: "run1" });
+		expect(row()).toMatchObject({ state: "answered_human", answered_by: "human", answered_via: "console", decision: "yes", applied_at: null });
+		expect(row().answered_at).toBeGreaterThan(0);
+		expect(sent).toEqual([{ path: `/coding/takeover/${SID}/resolve`, body: { value: "yes" } }]);
+	});
+
+	it("a live waiter whose runner can't be reached: the answer is still stored, and the reply says the run reads it from the row", async () => {
+		ask();
+		await park();
+		getRunnerConn.mockImplementation(async () => null);
+		const r = await answer(CARD, "no");
+		expect(r.status).toBe(202);
+		expect(r.body).toMatchObject({ ok: true, kind: "coding", outcome: "stored", delivered: false, recorded: true, questionId: "q1" });
+		expect(r.body.message).toMatch(/reads your answer from the question/);
+		expect(row()).toMatchObject({ state: "answered_human", decision: "no" });
+	});
+
+	it("an answer sent after the run was cancelled but before the question's expires_at is recorded, not refused with 409", async () => {
+		ask(); // still `waiting_human` — the sweep has not reached expires_at
+		d1.exec("UPDATE agent_loop_runs SET status = 'cancelled' WHERE run_id = 'run1'");
+		const r = await answer(CARD, "yes");
+		expect(r.status).toBe(202);
+		expect(r.body).toMatchObject({ ok: true, kind: "coding_late", recorded: true, delivered: false, questionId: "q1", postedToIssue: 1075 });
+		expect(row()).toMatchObject({ state: "answered_human", answered_via: "console", decision: "yes", applied_at: null });
+		expect(sent).toEqual([]);
+	});
+
+	it("MCP and the console are equal paths: the same row, the same reply, only answered_via differs", async () => {
+		ask();
+		await park();
+		const viaMcp = await answer(CARD, "yes", { "X-PAGS-Client": "mcp" });
+		const mcpRow = row();
+		d1.exec("DELETE FROM coder_questions");
+		ask();
+		const viaConsole = await answer(CARD, "yes");
+		expect(viaMcp).toEqual(viaConsole);
+		expect(mcpRow).toMatchObject({ state: "answered_human", answered_via: "mcp", decision: "yes" });
+		expect(row()).toMatchObject({ state: "answered_human", answered_via: "console", decision: "yes" });
+	});
+
+	it("a second answer to a decision a run already applied is recorded and reported as already applied — never dropped, never rewriting it", async () => {
+		ask("answered_human", ", 5000, 'run1', 'human', 4000, 'yes'");
+		await park(); // even with a park on the card, nothing is delivered for an applied decision
+		const r = await answer(CARD, "actually no");
+		expect(r.status).toBe(202);
+		expect(r.body).toMatchObject({ ok: true, kind: "coding", outcome: "already_applied", recorded: true, delivered: false, questionId: "q1", appliedRunId: "run1" });
+		expect(row()).toMatchObject({ state: "answered_human", decision: "yes", applied_at: 5000, applied_run_id: "run1" });
+		expect(JSON.parse(row().history).at(-1).note).toMatch(/answered again via console after run run1 used the earlier answer; recorded, not applied: actually no/);
+		expect(sent).toEqual([]);
+	});
+
+	it("an owner may revise an answer no run has used yet; the row holds the latest", async () => {
+		ask();
+		d1.exec("UPDATE agent_loop_runs SET status = 'cancelled' WHERE run_id = 'run1'");
+		await answer(CARD, "yes");
+		await answer(CARD, "no");
+		expect(row()).toMatchObject({ state: "answered_human", decision: "no", applied_at: null });
+		expect(JSON.parse(row().history).at(-1).note).toMatch(/answer revised by a person \(console\) before any run used it/);
+	});
+
+	it("an answer days after the question expired is stored on its row and readable through GET coder-questions (MCP coder_questions)", async () => {
+		ask("expired");
+		const days = Date.now() + 3 * 24 * 60 * 60_000;
+		vi.useFakeTimers({ now: days, toFake: ["Date"] });
+		try {
+			expect((await answer(CARD, "drop it")).status).toBe(202);
+		} finally {
+			vi.useRealTimers();
+		}
+		const app = new Hono<{ Bindings: Env }>();
+		app.route("/v1/instances", instanceRoutes);
+		const res = await app.request("/v1/instances/i1/coder-questions", {}, env());
+		const { questions } = (await res.json()) as { questions: Array<Record<string, unknown>> };
+		expect(questions[0]).toMatchObject({ id: "q1", state: "expired", answeredBy: "human", answeredVia: "console", answeredAt: days, decision: "drop it", appliedAt: null });
+	});
+});
