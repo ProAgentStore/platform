@@ -299,6 +299,8 @@ function buildApp(opts: {
 									return { config: opts.instanceConfig ?? "{}" };
 								}
 								if (!owns.has(`${id}::${uid}`)) return null;
+								// The attach gate's read (#1114) joins the agent: a coding agent with a local runtime, the kind a runner attaches.
+								if (sql.includes("JOIN agents")) return { status: "active", slug: "coder-repo", category: null, config: JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding" } }) };
 								return { id, agent_id: "a1", user_id: uid, status: "active", config: opts.instanceConfig ?? "{}", created_at: "", updated_at: "" };
 							}
 							// Per-MACHINE registration (a multi-machine account). Checked before the default

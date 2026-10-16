@@ -15,8 +15,8 @@
  * probe run through that socket right after, and `remedy` the next step when it failed — an attach
  * once answered `attached: true` for a runner whose health never came back.
  *
- * #1114: a PAUSED instance is answered before any machine is asked — no runner attaches a paused
- * agent, and the reason used to arrive after the window had answered "not yet confirmed". A window
+ * #1114: an instance no runner would attach — paused, canceled, or an agent with no local runtime
+ * (`attachBlocker`, the CLI's own eligibility rule) — is answered before any machine is asked, and the reason used to arrive after the window had answered "not yet confirmed". A window
  * that expires now answers from the attach's own progress (`cause`), and every attempt and outcome is
  * recorded (`lib/runner-attach-report.ts`).
  */
@@ -24,7 +24,7 @@ import type { Hono } from "hono";
 import { withinConfirmationWindow } from "../lib/confirmation-window.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
-import { type AttachCause, heartbeatContext, instanceStatus, newAttachProgress, PAUSED_DETAIL, recordAttach, windowExpiredCause } from "../lib/runner-attach-report.js";
+import { type AttachCause, attachBlocker, heartbeatContext, newAttachProgress, recordAttach, windowExpiredCause } from "../lib/runner-attach-report.js";
 import { attachedOnMachine, attachOnRepin, attachAgentOnNode } from "../lib/runner-repin.js";
 import { normalizeRunnerNode, readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -75,10 +75,12 @@ export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 		const { to } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
 		if (!to) return c.json({ runnerNode: null });
 		const base = { instanceId, userId: session.uid, node: to, via: "pin" as const, forced: false };
-		// Paused (#1114): the pin is saved, nothing is asked to attach, and the answer says why.
-		if ((await instanceStatus(c.env, instanceId, session.uid)) === "paused") {
-			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", cause: "paused", detail: PAUSED_DETAIL, durationMs: 0 }));
-			return c.json({ runnerNode: to, attachment: { node: to, attached: false, cause: "paused", detail: PAUSED_DETAIL } });
+		// No runner would take it — paused, canceled, or no local runtime (#1114): the pin is saved,
+		// nothing is asked to attach, and the answer says why.
+		const blocked = await attachBlocker(c.env, instanceId, session.uid);
+		if (blocked) {
+			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", ...blocked, durationMs: 0 }));
+			return c.json({ runnerNode: to, attachment: { node: to, attached: false, ...blocked } });
 		}
 		const startedAt = Date.now();
 		const progress = newAttachProgress(startedAt);
@@ -105,10 +107,11 @@ export function registerRunnerAttachRoutes(router: Hono<{ Bindings: Env }>): voi
 		if (!node) throw new HttpError(400, "This agent is not pinned to a machine — name one with runnerNode (see instance_runner_node's `nodes`), or pin it with set_instance_runner_node.");
 		const forced = body.force !== false;
 		const base = { instanceId, userId: session.uid, node, via: "force_attach" as const, forced };
-		// Paused (#1114): nothing can attach it, so nothing is asked — 409 with the reason.
-		if ((await instanceStatus(c.env, instanceId, session.uid)) === "paused") {
-			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", cause: "paused", detail: PAUSED_DETAIL, durationMs: 0 }));
-			return c.json({ node, attached: false, cause: "paused", detail: PAUSED_DETAIL, error: PAUSED_DETAIL }, 409);
+		// No runner would take it — paused, canceled, or no local runtime (#1114): nothing is asked — 409 with the reason.
+		const blocked = await attachBlocker(c.env, instanceId, session.uid);
+		if (blocked) {
+			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", ...blocked, durationMs: 0 }));
+			return c.json({ node, attached: false, ...blocked, error: blocked.detail }, 409);
 		}
 		const startedAt = Date.now();
 		const progress = newAttachProgress(startedAt);

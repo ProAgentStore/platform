@@ -226,7 +226,7 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
 ### Runner attach (pin and force attach, #1114)
 
 - **Capture:** `recordAttach` (`lib/runner-attach-report.ts`) for every attempt from `set_instance_runner_node` and `force_runner_attach`, including outcomes that settle after the 15 s window.
-- **Records:** the instance's activity log (`runner.attach`: node, via, forced, outcome, cause, duration); and for a real failure (`no_socket`, `runner_timeout`, `runner_unresponsive`, `refused`, `stale_registration`, `old_runner`) an `error_log` row, source `runner.attach`, warn, with the machine's last heartbeat as context on a timeout.
+- **Records:** the instance's activity log (`runner.attach`: node, via, forced, outcome, cause, duration); and for a real failure (`no_socket`, `runner_timeout`, `runner_unresponsive`, `refused`, `stale_registration`, `old_runner`) an `error_log` row, source `runner.attach`, warn, with the machine's last heartbeat as context on a timeout. The three states no runner would attach — `paused`, `not_active` (canceled), `no_runtime` (a cloud-only agent) — are answered before any machine is asked and recorded as activity only, never as errors; they are the CLI's own eligibility rule (`isEligible`), held equal by `runtime-attach-eligibility.test.ts`.
 - **Exclusions:** `paused` and an attached outcome are activity only, never an error row.
 - **Reader:** `list_errors(source: runner.attach)`, `instance_activity`.
 - **Local:** `runner-attach-1114.test.ts`.

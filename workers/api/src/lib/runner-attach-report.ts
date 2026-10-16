@@ -23,6 +23,7 @@
  * heartbeat sample beside it so a reader can weigh it — a busy machine and a dead socket look
  * alike from here, and the sample cannot tell them apart.
  */
+import { agentCapabilities } from "./agent-capabilities.js";
 import { logError } from "./error-log.js";
 import { compareCliVersions, stampMs } from "./machine-identity.js";
 import { RUNNER_CONTROL_MIN_CLI } from "./runner-features.js";
@@ -33,6 +34,8 @@ import type { Env } from "../types.js";
 /** Why an attach did not land. Absent on an attach that did. */
 export type AttachCause =
 	| "paused" // the instance is paused; no runner attaches a paused agent
+	| "not_active" // the instance is canceled; no runner attaches it either
+	| "no_runtime" // the agent declares no local runtime; `pags up` never holds a socket for it
 	| "no_socket" // nothing on the machine holds a relay socket to ask, or the one it opened never appeared
 	| "runner_timeout" // the runner was asked and did not answer in the time measured
 	| "runner_unresponsive" // every socket on the machine is connected but answers nothing
@@ -196,13 +199,37 @@ export async function recordAttach(env: Env, r: AttachRecord): Promise<void> {
 }
 
 /** The instance's lifecycle status, or null when it cannot be read. */
-export async function instanceStatus(env: Pick<Env, "DB">, instanceId: string, userId: string): Promise<string | null> {
-	try {
-		const row = await env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ status: string }>();
-		return row?.status ?? null;
-	} catch {
-		return null; // unreadable: the attach goes ahead and reports what the machine does
-	}
-}
-
 export const PAUSED_DETAIL = "Instance is paused — resume it (resume_instance) to attach. No runner attaches a paused agent; the pin and the paused status are unchanged.";
+const NOT_ACTIVE_DETAIL = "Instance is canceled — no runner attaches a canceled agent, so nothing was asked. Subscribe to the agent again (subscribe_agent) to run it; the pin is unchanged.";
+const NO_RUNTIME_DETAIL = "This agent runs in the cloud and declares no local runtime, so no `pags up` ever holds a socket for it — there is nothing to attach, and nothing was asked. The pin is saved but does not change where it runs.";
+
+/**
+ * Why no runner would attach this instance, whatever the machine does — or null when one can (#1114).
+ *
+ * This is the runner's own eligibility rule (`isEligible`, CLI `runner/membership.ts`), stated on
+ * this side: an instance is attached only while `active` and only when its agent declares a local
+ * `runtime`. The CLI also never receives a paused or canceled instance from `/my/instances`. The
+ * route used to check `paused` alone, so a canceled instance or a cloud-only agent still sent the
+ * machine an attach it was bound to ignore and answered "not yet confirmed" — the same blind answer
+ * this issue is about. `runtime-attach-eligibility.test.ts` holds the two rules together.
+ *
+ * Unreadable (a D1 error, a row that vanished): null, so the attach goes ahead and reports what the
+ * machine does rather than inventing a reason.
+ */
+export async function attachBlocker(env: Pick<Env, "DB">, instanceId: string, userId: string): Promise<{ cause: "paused" | "not_active" | "no_runtime"; detail: string } | null> {
+	let row: { status: string; slug: string | null; category: string | null; config: string | null } | null;
+	try {
+		row = await env.DB.prepare(
+			"SELECT i.status, a.slug, a.category, a.config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
+		)
+			.bind(instanceId, userId)
+			.first();
+	} catch {
+		return null;
+	}
+	if (!row) return null;
+	if (row.status === "paused") return { cause: "paused", detail: PAUSED_DETAIL };
+	if (row.status !== "active") return { cause: "not_active", detail: NOT_ACTIVE_DETAIL };
+	if (agentCapabilities({ slug: row.slug ?? "", category: row.category ?? "", config: row.config ?? "" }).runtime == null) return { cause: "no_runtime", detail: NO_RUNTIME_DETAIL };
+	return null;
+}
