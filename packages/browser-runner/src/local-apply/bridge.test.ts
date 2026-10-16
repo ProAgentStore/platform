@@ -531,6 +531,100 @@ describe("pauses — a person handles it, the run never works around it", () => 
 	});
 });
 
+/**
+ * #1100: a SEEK "Apply" that lands on SEEK's sign-in page. `login.seek.com/login` offers Google, Apple or
+ * an emailed code — NO password field — so the page check (which looked only for one) never saw a sign-in.
+ * Four live fills (abb37433, 804bed49, 7a923d6f, 7fb1e4f5 on dell-laptop, CLI 0.4.134) ended
+ * `awaiting_review` with `filled: 0`, each summary saying "sign in to SEEK, then re-run" — and a card that
+ * is not `login_required` offers the owner no sign-in (#1100 round 2 keys the post-run sign-in on it).
+ */
+describe("a sign-in page reached by the Apply click is a sign-in, not an empty review (#1100)", () => {
+	const JOB = "https://au.seek.com/job/95195437";
+	const SIGN_IN = "https://login.seek.com/login";
+	const SEEK = { allow: ["au.seek.com", "seek.com"] };
+	async function onSeekAd(hostOpts: Parameters<typeof fakeHost>[0] = {}, browserOpts: Parameters<typeof fakeBrowser>[1] = {}) {
+		const b = fakeBrowser({}, browserOpts);
+		const h = fakeHost({ ...SEEK, ...hostOpts });
+		let asked = 0;
+		const cloud = h.host.supervisorCheckpoint;
+		h.host.supervisorCheckpoint = async (c) => {
+			asked++;
+			return cloud(c);
+		};
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: JOB });
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "seek-95195437-initial", phase: "initial" });
+		return { bridge, ...b, ...h, asked: () => asked };
+	}
+
+	it("run 804bed49: /apply redirects to the sign-in AFTER it landed — the next checkpoint holds for the owner, and an unanswered hold ends login_required", async () => {
+		const { bridge, history, pauses, asked, events } = await onSeekAd();
+		await bridge.callTool("browser_click", { target: "e20" }); // "Apply": opens nothing this tab can see
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "seek-95195437-signin-wall", phase: "post_navigation" });
+		await bridge.callTool("browser_navigate", { url: `${JOB}/apply` }); // landed reads /apply, before the redirect
+		expect(pauses).toHaveLength(0);
+		history.push(SIGN_IN); // SEEK's redirect completes
+		const cloudBefore = asked();
+		const res = await bridge.callTool("supervisor_checkpoint", { checkpointId: "seek-95195437-login-required", phase: "post_navigation" });
+		// The runner held for the owner itself — the sign-in the takeover exists for — instead of
+		// asking the cloud, whose answer to a blocker is `stop` → `incomplete`.
+		expect(pauses).toEqual([{ reason: "login_required", url: SIGN_IN, domain: "login.seek.com", question: "Sign in to seek.com on this machine's application browser, then retry. Nothing was submitted." }]);
+		expect(asked()).toBe(cloudBefore);
+		expect(res.isError).toBe(true);
+		expect(bridge.blocked).toMatchObject({ reason: "login_required" });
+		// What the CLI did next in the live run: ready_for_review. Not a review — the recorded sign-in.
+		const review = await bridge.callTool("ready_for_review", { summary: "Blocked at sign-in" });
+		expect(review.isError).toBe(true);
+		expect(bridge.reviewReady).toBe(false);
+		expect(events.some((e) => e.type === "review.ready")).toBe(false);
+	});
+
+	it("runs abb37433 / 7fb1e4f5: the Apply opened the sign-in where no landing saw it — ready_for_review records login_required, not awaiting_review count 0", async () => {
+		const { bridge, history, events } = await onSeekAd();
+		await bridge.callTool("browser_click", { target: "e20" });
+		history.push(SIGN_IN); // the browser is now on the sign-in tab the CLI read
+		const review = await bridge.callTool("ready_for_review", { summary: "Clicking Apply opened a SEEK Candidate Sign In page" });
+		expect(review.isError).toBe(true);
+		expect(review.content[0].text).toMatch(/recorded as login required/);
+		expect(bridge.reviewReady).toBe(false);
+		expect(bridge.blocked).toEqual({ reason: "login_required", questions: ["Sign in to seek.com on this machine's application browser, then retry. Nothing was submitted."] });
+		expect(events.some((e) => e.type === "review.ready")).toBe(false);
+		expect(events.find((e) => e.type === "browser.blocked")).toMatchObject({ url: SIGN_IN, domain: "login.seek.com", detail: { reason: "login_required" } });
+	});
+
+	it("a sign-in page with no password field pauses on landing, like one with a password does", async () => {
+		const { pauses } = await onSeekAd({}, { clicks: { e20: SIGN_IN } }).then(async (r) => {
+			await r.bridge.callTool("browser_click", { target: "e20" });
+			return r;
+		});
+		expect(pauses[0]).toMatchObject({ reason: "login_required", domain: "login.seek.com" });
+	});
+
+	it("when the owner signs in at the hold, the run carries on — no blocker is left behind", async () => {
+		const { bridge, history, pauses } = await onSeekAd({
+			resume: () => {
+				history.push(`${JOB}/apply`); // signed in: SEEK sends the browser back to the form
+				return "resumed";
+			},
+		});
+		history.push(SIGN_IN);
+		const res = await bridge.callTool("supervisor_checkpoint", { checkpointId: "seek-login", phase: "post_navigation" });
+		expect(pauses[0].reason).toBe("login_required");
+		expect(res.isError).toBeFalsy();
+		expect(res.content[0].text).toMatch(/owner signed in/);
+		expect(bridge.blocked).toBeNull();
+	});
+
+	it("an ordinary page with nothing entered still reviews as before — only a sign-in page changes the outcome", async () => {
+		const { bridge, events } = await onSeekAd();
+		await bridge.callTool("ready_for_review", { summary: "Nothing to fill" });
+		expect(bridge.blocked).toBeNull();
+		expect(bridge.reviewReady).toBe(true);
+		expect(events.some((e) => e.type === "review.ready")).toBe(true);
+	});
+});
+
 describe("upload_artifact — an approved file, once", () => {
 	it("attaches each approved artifact once, by its verified path", async () => {
 		const { bridge, sent, events } = await onForm();

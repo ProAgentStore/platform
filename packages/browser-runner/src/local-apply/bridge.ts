@@ -145,6 +145,7 @@ interface PageState {
 	unavailable: LocalApplyUnavailableReason | null;
 }
 
+const signInQuestion = (site: string) => `Sign in to ${site} on this machine's application browser, then retry. Nothing was submitted.`;
 const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 const textOf = (r: { content?: Array<{ text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -318,7 +319,9 @@ export class ApplyBridge {
 		const v = res && !res.isError ? (evaluateResult(textOf(res)) as Partial<PageState> | null) : null;
 		if (!v || typeof v.url !== "string") return null;
 		const unavailable = v.unavailable === "expired" || v.unavailable === "unavailable" ? v.unavailable : null;
-		return { url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: !!v.login, duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed, unavailable };
+		// A sign-in page by its ADDRESS too (#1100): SEEK's `login.seek.com/login` has no password field, so an
+		// "Apply" that bounced there ran on to `awaiting_review` with nothing filled. Same rule as the submit path.
+		return { url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: looksLikeSignIn(v.url, !!v.login), duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed, unavailable };
 	}
 
 	private blockerOf(s: PageState): LocalApplyPauseReason | null {
@@ -348,14 +351,19 @@ export class ApplyBridge {
 		this.host.emit({ type: "browser.navigated", url: state.url, domain: host });
 		const blocker = this.blockerOf(state);
 		if (!blocker) return text(toolText);
+		return this.holdFor(blocker, state);
+	}
+
+	/** A page that needs a person: pause for the owner, and remember a sign-in they complete (#1094). */
+	private async holdFor(blocker: LocalApplyPauseReason, state: PageState): Promise<ToolResult> {
+		const host = hostOf(state.url) ?? "";
 		this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: blocker } });
 		const site = blocker === "login_required" && host ? siteKeyOf(host) : null;
 		if (site) await this.host.sessions?.beginSignIn(site).catch(() => undefined);
-		const ok = await this.pauseFor({ reason: blocker, url: state.url, domain: host }, async () => {
+		const ok = await this.pauseFor({ reason: blocker, url: state.url, domain: host, ...(site ? { question: signInQuestion(site) } : {}) }, async () => {
 			const after = await this.inspect();
 			return !!after && this.blockerOf(after) === null;
 		});
-		// A sign-in the owner completed here is remembered for this browser profile (#1094).
 		if (ok && site) await this.recordSignIn(site);
 		if (!ok) return text(`${host} needs a person (${blocker.replace(/_/g, " ")}) and it was not resolved. Do not work around it. Stop now.`, true);
 		return text("Resumed after the owner handled it. Take a browser_snapshot to read the page.");
@@ -549,6 +557,12 @@ export class ApplyBridge {
 		const phase: LocalApplySupervisorPhase | null = args.phase === "initial" || args.phase === "post_navigation" || args.phase === "before_submit" || args.phase === "uncertain" ? args.phase : null;
 		if (!phase) return text("supervisor_checkpoint needs phase initial, post_navigation, before_submit or uncertain.", true);
 		const state = await this.inspect();
+		// A sign-in reached after the last landing — a late redirect (#1100, run 804bed49): hold for the owner as
+		// on landing. Reported to the cloud as a blocker it was stopped, and ended `incomplete`.
+		if (state?.login && !this.blocked) {
+			const held = await this.holdFor("login_required", state);
+			return held.isError ? held : text("The owner signed in. Take a browser_snapshot to read the page, then call supervisor_checkpoint again.");
+		}
 		const blockers = new Set<LocalApplySupervisorBlocker>();
 		if (state?.captcha) blockers.add("captcha");
 		if (state?.login) blockers.add("login_required");
@@ -597,8 +611,16 @@ export class ApplyBridge {
 		return text(`Recorded the runner-verified ${reason} listing notice. Stop now.`);
 	}
 
-	private review(summary: string): ToolResult {
+	private async review(summary: string): Promise<ToolResult> {
 		this.summary = summary; // bounded where the result is built (runtime.ts `end`)
+		// Nothing entered, on a sign-in page (#1100; runs abb37433, 7fb1e4f5): the outcome is the owner's sign-in,
+		// not an empty form "awaiting review" — a card that is not `login_required` offers them no sign-in at all.
+		const state = !this.filled && !this.uploaded.size && !this.blocked ? await this.inspect() : null;
+		const host = state?.login ? hostOf(state.url) : null;
+		if (state && host) {
+			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: "login_required" } });
+			this.blocked = { reason: "login_required", questions: [signInQuestion(siteKeyOf(host))] };
+		}
 		// #989: "ready for review" with nothing entered is not a review state.
 		//
 		// The live run ended `awaiting_review` with `filled: 0, uploaded: 0` seconds after the cloud
@@ -662,7 +684,7 @@ export class ApplyBridge {
 					],
 				};
 			}
-			this.review(oneClick ? "Stopped at a one-click apply control: it can send the application outright, and this run fills and waits for review." : "Stopped at the final submit: this run fills and waits for review.");
+			await this.review(oneClick ? "Stopped at a one-click apply control: it can send the application outright, and this run fills and waits for review." : "Stopped at the final submit: this run fills and waits for review.");
 			return text(
 				oneClick
 					? 'That control ("' + String(forward.element ?? "") + '") can send the application in one click, and this run is fill-and-review: it was NOT pressed. Approve this application if you want it sent. Stop now.'
