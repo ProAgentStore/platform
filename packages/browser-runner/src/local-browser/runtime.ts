@@ -47,6 +47,7 @@ import {
 	redactSourceFailure,
 	redactText,
 	secretEnvValues,
+	traceUrl,
 } from "./contract.js";
 import { bridgeUnused, buildEngineSpec, finalText, missingLogin, observedEngineAuth, researchPrompt, signInHelp } from "./engine.js";
 
@@ -369,9 +370,11 @@ export class LocalBrowserRuntime {
 
 	private emit(run: Run, ev: Omit<LocalBrowserEvent, "at">): void {
 		if (run.events.length >= MAX_EVENTS) return;
-		const { detail: raw, ...rest } = ev;
+		// Origin and path only, before anything leaves the machine (#1069) — the cloud reduces it again.
+		const { detail: raw, url: rawUrl, ...rest } = ev;
+		const url = rawUrl ? traceUrl(rawUrl) : "";
 		const detail = redactDetail(raw, 0, run.secrets);
-		run.events.push({ ...rest, ...(detail && Object.keys(detail).length ? { detail } : {}), at: new Date(this.now()).toISOString(), seq: ++run.seq });
+		run.events.push({ ...rest, ...(url ? { url } : {}), ...(detail && Object.keys(detail).length ? { detail } : {}), at: new Date(this.now()).toISOString(), seq: ++run.seq });
 	}
 
 	private pause(run: Run, reason: LocalBrowserPauseReason, detail: Record<string, unknown>): Promise<"resumed" | "stopped"> {

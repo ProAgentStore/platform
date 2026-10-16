@@ -86,4 +86,8 @@ run is using the profile, and only one such sign-in can be open per profile.
 - **One run at a time per profile.** A second run on a profile that is in use is refused with a plain
   message.
 - **Traces store page URLs as origin and path only (#1069).** A sign-in page's OAuth state, nonce, PKCE
-  values and session ids are never written to a run's trace.
+  values and session ids are never written to a run's trace. The same rule covers a confirmed submit's
+  page and an unavailable posting's page in a fill result, and the Scout's research trace (whose
+  findings keep their own links whole: a finding's URL is the lead). It applies on the runner before
+  anything leaves the machine, again in the cloud when the event is parsed, and on every READ, so rows
+  recorded before the fix are reduced when shown without being rewritten or purged.

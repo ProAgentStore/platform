@@ -3,6 +3,7 @@
  * `instance_id` AND `user_id`, so a missed ownership check cannot become a cross-tenant read.
  */
 import type { Env } from "../../types.js";
+import { traceUrl } from "../local-apply/contract.js";
 import {
 	LOCAL_ARTIFACT_AUTH_MODES,
 	LOCAL_ARTIFACT_ENGINES,
@@ -182,6 +183,14 @@ const json = <T>(s: string | null): T | null => {
 	}
 };
 
+/** Archive evidence's page URL, origin and path only (#1069) — the reason and its time are kept as recorded. */
+function safeEvidence(e: unknown): unknown {
+	if (!e || typeof e !== "object" || Array.isArray(e)) return e;
+	const { url, ...rest } = e as Record<string, unknown>;
+	const kept = typeof url === "string" ? traceUrl(url) : "";
+	return kept ? { ...rest, url: kept } : rest;
+}
+
 const presentApp = (r: AppRow): JobApplication => ({
 	id: r.id,
 	instanceId: r.instance_id,
@@ -207,9 +216,10 @@ const presentApp = (r: AppRow): JobApplication => ({
 	fillRunId: r.fill_run_id ?? null,
 	submitAttemptedAt: r.submit_attempted_at ?? null,
 	submittedAt: r.submitted_at ?? null,
-	submittedUrl: r.submitted_url ?? null,
+	// Origin and path only, on read too (#1069): a submit recorded before the write path reduced it is not rewritten.
+	submittedUrl: r.submitted_url ? traceUrl(r.submitted_url) || null : null,
 	archiveReason: r.archive_reason ?? null,
-	archiveEvidence: json(r.archive_evidence),
+	archiveEvidence: safeEvidence(json(r.archive_evidence)),
 	leadDispositionSyncedAt: r.lead_disposition_synced_at ?? null,
 });
 

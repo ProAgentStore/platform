@@ -565,8 +565,10 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 		const at = str(s.at, 40);
 		const gateId = str(s.gateId, 100);
 		if (mode !== "auto_submit") return { error: "a submitted outcome requires a run in auto_submit mode" };
-		if (!url || !isHttpUrl(url) || !at || Number.isNaN(Date.parse(at)) || !gateId) return { error: "a submitted outcome needs the confirmed url, its time and the gateId" };
-		out.submitted = { url, at, gateId };
+		if (!url || !isHttpUrl(url) || !traceUrl(url) || !at || Number.isNaN(Date.parse(at)) || !gateId) return { error: "a submitted outcome needs the confirmed url, its time and the gateId" };
+		// A page URL kept as a fact keeps origin and path only, as a trace's does (#1069): a confirmation
+		// page's query can carry session or application tokens, and the receipt is the page, not its query.
+		out.submitted = { url: traceUrl(url), at, gateId };
 		out.submitAttempted = true;
 	}
 	// #975 — accepted ONLY as the closed vocabulary it declares. A runner that sends prose here gets
@@ -598,10 +600,10 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 			const reason = oneOf(LOCAL_APPLY_UNAVAILABLE_REASONS, evidence.reason);
 			const url = str(evidence.url, 2000);
 			const observedAt = str(evidence.observedAt, 40);
-			if (!reason || !url || !isHttpUrl(url) || !observedAt || Number.isNaN(Date.parse(observedAt)) || evidence.source !== "page_notice") {
+			if (!reason || !url || !isHttpUrl(url) || !traceUrl(url) || !observedAt || Number.isNaN(Date.parse(observedAt)) || evidence.source !== "page_notice") {
 				return { error: "a job_unavailable result needs runner-verified unavailable evidence (reason, url, observedAt, source)" };
 			}
-			out.unavailable = { reason, url, observedAt, source: "page_notice" };
+			out.unavailable = { reason, url: traceUrl(url), observedAt, source: "page_notice" };
 		} else if (o.unavailable !== undefined) return { error: "unavailable evidence is only valid for a job_unavailable result" };
 	}
 	else if (o.unavailable !== undefined) return { error: "unavailable evidence is only valid for a job_unavailable result" };

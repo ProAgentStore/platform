@@ -38,10 +38,12 @@ let spawned: Array<{ command: string; args: string[]; opts: { cwd: string; env: 
 let browsersStopped: number;
 let now: number;
 
+/** The page the stub browser reports it is on (#1069 sets a sign-in page with a query). */
+let pageUrl = "https://seek.com.au/jobs";
 const browser: BrowserTools = {
 	listTools: async () => [{ name: "browser_navigate", inputSchema: {} }, { name: "browser_snapshot", inputSchema: {} }],
 	callTool: async (name, args = {}) =>
-		name === "browser_evaluate" ? { content: [{ text: `### Result\n${JSON.stringify({ url: "https://seek.com.au/jobs", title: "Jobs" })}` }] } : { content: [{ text: `${name} ${JSON.stringify(args)}` }] },
+		name === "browser_evaluate" ? { content: [{ text: `### Result\n${JSON.stringify({ url: pageUrl, title: "Jobs" })}` }] } : { content: [{ text: `${name} ${JSON.stringify(args)}` }] },
 };
 
 function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error } = {}) {
@@ -200,6 +202,30 @@ describe("the owner's screenshot switch (#1064)", () => {
 		expect(called).not.toContain("browser_take_screenshot");
 		expect(rt.shots({ runId: "run-1" }).shots).toEqual([]);
 		expect(rt.status({ runId: "run-1" }).events.some((e) => e.type === "screenshot.captured")).toBe(false);
+	});
+});
+
+describe("trace URLs leave the machine as origin and path only (#1069)", () => {
+	it("a navigation to a page with OAuth/session parameters records origin and path; a finding keeps its own link whole", async () => {
+		const SIGN_IN = "https://seek.com.au/login?state=SYNTH-STATE&nonce=SYNTH-NONCE&code_challenge=SYNTHCC&JobseekerSessionId=SYNTH-SESS#frag-SYNTH";
+		pageUrl = SIGN_IN;
+		try {
+			const rt = runtime();
+			rt.start(envelope());
+			await settle();
+			await rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: SIGN_IN } });
+			await rt.bridge({ runId: "run-1", op: "call", name: "record_finding", args: { title: "Dev", url: "https://seek.com.au/job/1?jobId=42", evidence: "Dev — Sydney" } });
+			await rt.bridge({ runId: "run-1", op: "call", name: "finish_research", args: { summary: "1 role" } });
+			spawned[0].child.exit(0);
+			const s = rt.status({ runId: "run-1" });
+			const urls = s.events.filter((e) => e.url).map((e) => [e.type, e.url]);
+			expect(urls).toEqual([["browser.navigated", "https://seek.com.au/login"], ["finding.parsed", "https://seek.com.au/job/1"]]);
+			expect(JSON.stringify(s.events)).not.toMatch(/SYNTH|jobId/);
+			// The finding IS the lead: its link stays whole in the result.
+			expect(s.result?.findings?.[0]?.url).toBe("https://seek.com.au/job/1?jobId=42");
+		} finally {
+			pageUrl = "https://seek.com.au/jobs";
+		}
 	});
 });
 

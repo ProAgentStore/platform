@@ -5,7 +5,7 @@
 import type { Env } from "../../types.js";
 import { type ApplicationStatus, type JobApplication, writeBackToLead } from "../local-artifact/store.js";
 import { fingerprintOf, jobIdentityOf, sameFingerprint, type ApprovalFingerprint } from "./approval.js";
-import type { LocalApplyEvent, LocalApplyMode, LocalApplyPause, LocalApplyPlatformEventType } from "./contract.js";
+import { type LocalApplyEvent, type LocalApplyMode, type LocalApplyPause, type LocalApplyPlatformEventType, traceUrl } from "./contract.js";
 import type { LocalApplyHandoffTerminalReason } from "./handoff-contract.js";
 import type { GateCheck } from "./policy.js";
 
@@ -608,6 +608,26 @@ const json = <T>(s: string | null): T | null => {
 	}
 };
 
+/**
+ * A stored URL as a reader may see it (#1069): origin and path. Rows written before the write path
+ * reduced them still hold the full page URL — a sign-in page's OAuth state, nonce, PKCE challenge and
+ * session ids — and are reduced here, on every read, instead of being rewritten or purged.
+ */
+const safeUrl = (v: unknown): string | undefined => (typeof v === "string" && v ? traceUrl(v) || undefined : undefined);
+function withSafeUrl<T extends object>(o: T | null | undefined): T | null {
+	if (!o || typeof o !== "object") return o ?? null;
+	const rec = o as Record<string, unknown>;
+	if (!("url" in rec)) return o;
+	const { url, ...rest } = rec;
+	const kept = safeUrl(url);
+	return (kept ? { ...rest, url: kept } : rest) as T;
+}
+function safeResult(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const r = raw as Record<string, unknown>;
+	return { ...r, ...(r.submitted ? { submitted: withSafeUrl(r.submitted as object) } : {}), ...(r.unavailable ? { unavailable: withSafeUrl(r.unavailable as object) } : {}) };
+}
+
 const present = (r: RunRow): ApplyRun => ({
 	id: r.id,
 	instanceId: r.instance_id,
@@ -615,14 +635,14 @@ const present = (r: RunRow): ApplyRun => ({
 	requestId: r.request_id,
 	status: r.status,
 	policy: json<ApplyRunPolicy>(r.policy) as ApplyRunPolicy,
-	pause: json<LocalApplyPause>(r.pause),
-	result: json(r.result),
+	pause: withSafeUrl(json<LocalApplyPause>(r.pause)),
+	result: safeResult(json(r.result)),
 	engineAuth: r.engine_auth,
 	errorCode: r.error_code,
 	error: r.error,
 	runnerNode: r.runner_node,
 	runnerVersion: r.runner_version ?? null,
-	trace: json<ApplyTraceEvent[]>(r.trace) ?? [],
+	trace: (json<ApplyTraceEvent[]>(r.trace) ?? []).map((e) => withSafeUrl(e) as ApplyTraceEvent),
 	runnerSeq: Number(r.runner_seq ?? 0),
 	lastSyncedAt: r.last_synced_at,
 	createdAt: r.created_at,

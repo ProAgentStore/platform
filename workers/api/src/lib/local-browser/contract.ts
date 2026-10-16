@@ -352,6 +352,20 @@ const str = (v: unknown, max: number): string | null => (typeof v === "string" &
 const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 const oneOf = <T extends string>(list: readonly T[], v: unknown): T | null => (list.includes(v as T) ? (v as T) : null);
 
+/**
+ * A page URL as a trace may keep it (#1069): origin and path — no query, no fragment, no credentials
+ * (`origin` never carries a `user:pass@`). The same rule as the local-apply contract's `traceUrl`;
+ * restated here because each vendored contract imports nothing. Empty when it is not an http(s) URL.
+ */
+export function traceUrl(raw: string): string {
+	try {
+		const u = new URL(raw);
+		return u.protocol === "http:" || u.protocol === "https:" ? `${u.origin}${u.pathname}` : "";
+	} catch {
+		return "";
+	}
+}
+
 /** A validated event, or null. */
 export function parseLocalBrowserEvent(raw: unknown): LocalBrowserEvent | null {
 	if (!raw || typeof raw !== "object") return null;
@@ -360,8 +374,13 @@ export function parseLocalBrowserEvent(raw: unknown): LocalBrowserEvent | null {
 	const at = str(o.at, 40);
 	if (!type || !at || Number.isNaN(Date.parse(at))) return null;
 	const event: LocalBrowserEvent = { type, at };
+	// Origin and path only (#1069): a research trace keeps where the browser went, never a page's query
+	// or fragment — a sign-in page's OAuth state/nonce/PKCE values or a session id ride there.
 	const url = str(o.url, 2000);
-	if (url && isHttpUrl(url)) event.url = url;
+	if (url && isHttpUrl(url)) {
+		const kept = traceUrl(url);
+		if (kept) event.url = kept;
+	}
 	const domain = str(o.domain, 253);
 	if (domain) event.domain = domain.toLowerCase();
 	const pauseReason = oneOf(LOCAL_BROWSER_PAUSE_REASONS, o.pauseReason);

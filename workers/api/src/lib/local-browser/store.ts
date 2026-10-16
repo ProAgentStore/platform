@@ -6,7 +6,7 @@
 import type { Env } from "../../types.js";
 import { closeLiveTakeoverFor } from "../browser-takeovers.js";
 import { sqlLiteralList } from "../sql.js";
-import type { LocalBrowserEvent, LocalBrowserPlatformEventType, LocalBrowserResultEnvelope } from "./contract.js";
+import { type LocalBrowserEvent, type LocalBrowserPlatformEventType, type LocalBrowserResultEnvelope, traceUrl } from "./contract.js";
 import { ACTIVE_RUN_STATUSES, SLOT_HOLDING_STATUSES, type EffectiveLocalBrowserPolicy, type LocalBrowserRunStatus, type LocalBrowserSettings, canTransition } from "./policy.js";
 
 type DB = Pick<Env, "DB">;
@@ -290,7 +290,8 @@ export async function listLocalBrowserEvents(env: DB, instanceId: string, userId
 		type: r.type,
 		at: r.at,
 		recordedAt: r.recorded_at,
-		...(r.url ? { url: r.url } : {}),
+		// Origin and path only, on read too (#1069): rows recorded before the write path reduced them are not rewritten.
+		...(r.url && traceUrl(r.url) ? { url: traceUrl(r.url) } : {}),
 		...(r.domain ? { domain: r.domain } : {}),
 		...(r.pause_reason ? { pauseReason: r.pause_reason as LocalBrowserEvent["pauseReason"] } : {}),
 		...(r.consent_id ? { consentId: r.consent_id } : {}),
