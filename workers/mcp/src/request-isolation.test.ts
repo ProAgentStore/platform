@@ -40,7 +40,7 @@ vi.mock("agents/mcp", () => ({
 
 const { PagsMcp } = await import("./index.js");
 const { McpAgent } = await import("agents/mcp");
-const { REUSED_ID_ERROR_CODE, idsInFlightElsewhere, requestIdsIn } = await import("./request-isolation.js");
+const { REUSED_ID_ERROR_CODE, idsInFlightElsewhere, idsRepeatedWithin, requestIdsIn } = await import("./request-isolation.js");
 const { RECEIPT_META_KEY, installRegistrationPipeline, receiptTarget } = await import("./registration.js");
 
 interface FakeConn {
@@ -143,6 +143,26 @@ describe("PagsMcp.onConnect refuses a request id already in flight in its sessio
 		const errs = errorsIn(batch);
 		expect(errs.map((e) => [e.body.id, e.close])).toEqual([[6, false], [5, true]]);
 		expect(errs[0].body.error.message).toMatch(/another request in the same batch reuses/);
+	});
+
+	it("a batch that repeats ONE id within itself is refused whole and never dispatched — two replies with one id cannot be told apart", async () => {
+		const s = session();
+		const batch = await open(s, "c1", [call(7, "github_read_issue"), call(7, "github_read_issue")]);
+		expect(dispatched).toEqual([]);
+		const errs = errorsIn(batch);
+		expect(errs.map((e) => [e.body.id, e.body.error.code, e.close])).toEqual([
+			[7, REUSED_ID_ERROR_CODE, false],
+			[7, REUSED_ID_ERROR_CODE, true],
+		]);
+		// Distinct ids in one batch are still fine.
+		await open(s, "c2", [call(8, "repo_tree"), call(9, "repo_find")]);
+		expect(dispatched.map((d) => d.conn)).toEqual(["c2"]);
+	});
+
+	it("the pure rule for repeats: each repeat after the first counts, by JSON-RPC identity (0 ≠ \"0\")", () => {
+		expect(idsRepeatedWithin([1, 2, 1, 1])).toEqual([1, 1]);
+		expect(idsRepeatedWithin([0, "0"])).toEqual([]);
+		expect(idsRepeatedWithin([])).toEqual([]);
 	});
 
 	it("follows JSON-RPC: 0 and \"0\" are different ids; notifications and GET streams carry none and pass", async () => {

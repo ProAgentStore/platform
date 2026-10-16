@@ -125,7 +125,8 @@ Connection methods and the full tool table: [`README.md`](./README.md).
 
 15. **Use a new JSON-RPC id for every request, and check a mutation's receipt (#1111).** Two
     requests in flight on one session with the same id would receive each other's replies,
-    so the server refuses the second with JSON-RPC error `-32600` and does not run it. Every
+    so the server refuses the second with JSON-RPC error `-32600` and does not run it — as it
+    refuses a batch that repeats one id within itself, whole. Every
     tool that can change something ends its result with a `---MCP-RECEIPT---` block (also
     `_meta["proagentstore.online/receipt"]`) naming the tool, request id, session and target:
     check it matches the call you made.

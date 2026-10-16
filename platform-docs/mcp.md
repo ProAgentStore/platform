@@ -407,7 +407,9 @@ sharing an id would receive each other's results. This happened in production on
 **refuses** a request whose id is still in flight on another request in the same session:
 it answers with JSON-RPC error `-32600` ("Request id … is already in use by another request
 in flight in this MCP session, so this request was not run") and does not run it. Send
-every request with a new id. Reusing an id after its request has completed is not refused.
+every request with a new id. A batch that carries the same id twice is refused whole, for the
+same reason: two replies with one id cannot be told apart. Reusing an id after its request has
+completed is not refused.
 
 ### A first call that blames your parameters did not come from this server
 

@@ -93,6 +93,14 @@ export function idsInFlightElsewhere(incoming: readonly RequestId[], connections
 	return incoming.filter((id) => held.some((h) => sameId(h, id)));
 }
 
+/**
+ * Ids this POST carries more than once. A batch that repeats an id gets two replies with that one id,
+ * and the caller cannot tell which reply answers which request — the same crossing, inside one POST.
+ */
+export function idsRepeatedWithin(incoming: readonly RequestId[]): RequestId[] {
+	return incoming.filter((id, i) => incoming.some((other, j) => j < i && sameId(other, id)));
+}
+
 /** The JSON-RPC error a refused request gets. Names the rule, so the client can be fixed from the message alone. */
 export function reusedIdError(id: RequestId, clashed = true): { jsonrpc: "2.0"; id: RequestId; error: { code: number; message: string } } {
 	return {
@@ -108,13 +116,14 @@ export function reusedIdError(id: RequestId, clashed = true): { jsonrpc: "2.0"; 
 }
 
 /**
- * Refuse a POST whose request ids are in flight elsewhere in the session, before it is dispatched.
+ * Refuse a POST whose request ids are in flight elsewhere in the session, or repeat within the POST
+ * itself (a batch reusing one id), before it is dispatched.
  * Answers every request in the POST (a batch is refused whole: its replies share one stream), then
  * closes it. Returns the refused ids; empty means "dispatch as normal".
  */
 export function refuseReusedRequestIds(request: Request, connections: Iterable<IsolationConnection>, self: IsolationConnection): RequestId[] {
 	const incoming = requestIdsIn(postedBody(request));
-	const clashing = idsInFlightElsewhere(incoming, connections, self);
+	const clashing = [...idsInFlightElsewhere(incoming, connections, self), ...idsRepeatedWithin(incoming)];
 	if (!clashing.length) return [];
 	incoming.forEach((id, i) => {
 		const error = reusedIdError(id, clashing.some((c) => sameId(c, id)));
