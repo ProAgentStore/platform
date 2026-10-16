@@ -297,6 +297,20 @@ describe("github connector — github_workflow_runs dispatch", () => {
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/GitHub returned 404 for acme\/widgets/);
 	});
+
+	it("adds a classified provider reason to a completed failed run", async () => {
+		const message = "The job was not started because recent account payments have failed or your spending limit needs to be increased";
+		fetchMock.mockImplementation(async (url: string) => {
+			if (url.includes("/actions/runs?") || url.endsWith("/actions/runs?per_page=5")) return jsonResponse({ workflow_runs: [{ id: 500, status: "completed", conclusion: "failure", name: "Deploy", html_url: "run" }] });
+			if (url.includes("/actions/runs/500/jobs")) return jsonResponse({ jobs: [{ id: 22, name: "deploy", status: "completed", conclusion: "failure", started_at: null, check_run_url: "https://api.github.com/repos/acme/widgets/check-runs/7001" }] });
+			if (url.includes("/check-runs/7001/annotations")) return jsonResponse([{ message }]);
+			return jsonResponse({}, false, 404);
+		});
+		const r = await tool("github_workflow_runs").handler(ctx(), { repo: "acme/widgets" });
+		expect(r.success).toBe(true);
+		expect(JSON.parse(r.content).runs[0].failureReason).toEqual({ category: "actions_billing_blocked", message });
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
 });
 
 /**
@@ -406,6 +420,44 @@ describe("github connector — github_workflow_run_logs dispatch", () => {
 		expect(r.success).toBe(false);
 		expect(r.content).toContain('no log for job "ci" (job_id 22)');
 		expect(r.content).toContain("90 days");
+	});
+
+	it("surfaces the exact billing annotation when a never-started job has no log", async () => {
+		const message = "The job was not started because recent account payments have failed or your spending limit needs to be increased";
+		let logResponse: Response = textResponse("", false, 404);
+		fetchMock.mockImplementation(async (url: string) => {
+			if (url.includes("/actions/runs/500/jobs")) return jsonResponse({ jobs: [{ id: 22, name: "deploy", status: "completed", conclusion: "failure", started_at: null, check_run_url: "https://api.github.com/repos/acme/widgets/check-runs/7001", steps: [] }] });
+			if (url.includes("/actions/jobs/22/logs")) return logResponse;
+			if (url.startsWith("https://api.github.com/repos/acme/widgets/check-runs/7001/annotations")) return jsonResponse([{ message }]);
+			return jsonResponse({}, false, 404);
+		});
+		for (const emptyLog of [false, true]) {
+			fetchMock.mockClear();
+			logResponse = emptyLog ? textResponse("") : textResponse("", false, 404);
+			const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500 });
+			expect(r.success).toBe(false);
+			expect(r.content).toContain("Failure category: actions_billing_blocked");
+			expect(r.content).toContain(message);
+			expect(r.content).toContain("self-hosted runner");
+			expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+				expect.stringContaining("/actions/runs/500/jobs"),
+				expect.stringContaining("/actions/jobs/22/logs"),
+				expect.stringContaining("/check-runs/7001/annotations"),
+			]);
+		}
+	});
+
+	it("keeps the existing no-log response when annotations are unavailable", async () => {
+		fetchMock.mockImplementation(async (url: string) => {
+			if (url.includes("/actions/runs/500/jobs")) return jsonResponse({ jobs: [{ id: 22, name: "deploy", status: "completed", conclusion: "failure", started_at: null, check_run_url: "https://api.github.com/repos/acme/widgets/check-runs/7001", steps: [] }] });
+			if (url.includes("/actions/jobs/22/logs")) return textResponse("", false, 404);
+			if (url.includes("/check-runs/7001/annotations")) return jsonResponse({}, false, 403);
+			return jsonResponse({}, false, 404);
+		});
+		const r = await tool("github_workflow_run_logs").handler(ctx(), { repo: "acme/widgets", run_id: 500 });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain('no log for job "deploy"');
+		expect(r.content).not.toContain("actions_billing_blocked");
 	});
 
 	it("requires a numeric run_id and explains where it comes from", async () => {

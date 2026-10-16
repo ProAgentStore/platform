@@ -14,6 +14,7 @@ const github = vi.hoisted(() => ({
 	token: "tok" as string | null,
 	workflows: [] as Array<{ path: string; state: string }>,
 	perWorkflow: {} as Record<string, unknown[]>,
+	failureReason: null as { category: "actions_billing_blocked"; message: string } | null,
 }));
 const notified = vi.hoisted(() => [] as Array<{ userId: string; title: string; body: string; key?: string }>);
 
@@ -25,9 +26,11 @@ vi.mock("./github-cache.js", () => ({
 	),
 }));
 vi.mock("./github-actions.js", () => ({
+	describeActionFailure: (reason: { message: string }) => `GitHub's reason: ${reason.message}. Check the account's payments and spending limit. If GitHub-hosted minutes are the constraint, consider a self-hosted runner.`,
 	fetchWorkflowRuns: vi.fn(async (_repo: string, _token: unknown, opts: { workflow?: string }) =>
 		opts.workflow ? { runs: github.perWorkflow[opts.workflow] ?? [] } : github.runs,
 	),
+	fetchWorkflowFailureReason: vi.fn(async () => github.failureReason),
 }));
 vi.mock("../routes/push.js", () => ({
 	notifyUser: vi.fn(async (_env: Env, userId: string, _type: string, title: string, body: string, _url: string, opts: { key?: string }) => {
@@ -37,6 +40,7 @@ vi.mock("../routes/push.js", () => ({
 vi.mock("./error-log.js", () => ({ logError: vi.fn(async () => undefined) }));
 
 const { assessCiRuns, checkRepoCi, CI_STALE_AFTER_MS, decideCiAlerts, instanceRepoCi, overallCiState } = await import("./repo-ci-health.js");
+const { fetchWorkflowFailureReason } = await import("./github-actions.js");
 type CiRun = Parameters<typeof assessCiRuns>[0][number];
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
@@ -205,7 +209,7 @@ function fakeEnv(rows: Array<Record<string, unknown>>, notifications: Array<{ us
 		},
 	} as unknown as Env;
 }
-const repoRow = (id: string, githubRepo: string) => ({ id, instance_id: "inst1", user_id: "u1", name: githubRepo.split("/")[1], github_repo: githubRepo, ci_health: null, ci_alerted: null });
+const repoRow = (id: string, githubRepo: string) => ({ id, instance_id: "inst1", user_id: "u1", name: githubRepo.split("/")[1], github_repo: githubRepo, ci_health: null as string | null, ci_alerted: null as string | null });
 const asRow = (r: Record<string, unknown>) => r as unknown as Parameters<typeof checkRepoCi>[1];
 const now = new Date(NOW);
 
@@ -215,6 +219,8 @@ describe("checkRepoCi — what is stored and what is sent (#903)", () => {
 		github.meta = { ok: true, data: { default_branch: "main" }, stale: false };
 		github.runs = { runs: [] };
 		github.token = "tok";
+		github.failureReason = null;
+		vi.mocked(fetchWorkflowFailureReason).mockClear();
 	});
 
 	it("green → stored passing, no notification", async () => {
@@ -236,6 +242,63 @@ describe("checkRepoCi — what is stored and what is sent (#903)", () => {
 		expect(notified[0].body).toMatch(/CI \(failure\)/);
 		await checkRepoCi(env, asRow(row), now);
 		expect(notified).toHaveLength(1);
+	});
+
+	it("billing diagnosis reaches the notification and stored Coder report without changing the failing verdict", async () => {
+		const reason = {
+			category: "actions_billing_blocked" as const,
+			message: "The job was not started because recent account payments have failed or your spending limit needs to be increased",
+		};
+		github.failureReason = reason;
+		github.runs = { runs: [raw(run({ id: "777", conclusion: "failure", workflowName: "Deploy API", workflowPath: deployPath }))] };
+		const row = repoRow("r1", "o/app");
+		const env = fakeEnv([row]);
+		const health = await checkRepoCi(env, asRow(row), now);
+
+		expect(health.state).toBe("failing");
+		expect(health.workflows[0].failureReason).toEqual(reason);
+		expect(notified[0].body).toContain("actions_billing_blocked");
+		expect(notified[0].body).toContain(reason.message);
+		expect(notified[0].body).toContain("self-hosted runner");
+		expect(JSON.parse(row.ci_health as unknown as string).workflows[0].failureReason).toEqual(reason);
+		expect(fetchWorkflowFailureReason).toHaveBeenCalledWith("o/app", "tok", 777);
+
+		const report = await instanceRepoCi(env, "inst1", "u1");
+		expect(report?.attention).toContain("actions_billing_blocked");
+		expect(report?.attention).toContain(reason.message);
+		expect(report?.repos[0]).toMatchObject({ workflows: [{ failureReason: reason }] });
+		await checkRepoCi(env, asRow(row), now);
+		expect(fetchWorkflowFailureReason).toHaveBeenCalledTimes(1);
+		expect(notified).toHaveLength(1);
+	});
+
+	it("enriches an already failing run that predates the diagnosis field", async () => {
+		github.failureReason = { category: "actions_billing_blocked", message: "The job was not started because recent account payments have failed or your spending limit needs to be increased" };
+		github.runs = { runs: [raw(run({ id: "777", conclusion: "failure", workflowName: "Deploy API", workflowPath: deployPath }))] };
+		const row = repoRow("r1", "o/app");
+		row.ci_health = JSON.stringify({
+			state: "failing",
+			branch: "main",
+			checkedAt: iso(2),
+			workflows: [{ workflow: "Deploy API", path: deployPath, kind: "deploy", state: "failing", conclusion: "failure", runId: "777", url: "u", sha: "sha7777777", at: iso(3), running: false }],
+		});
+		row.ci_alerted = JSON.stringify({ [deployPath]: "777" });
+
+		const health = await checkRepoCi(fakeEnv([row]), asRow(row), now);
+		expect(health.workflows[0].failureReason).toEqual(github.failureReason);
+		expect(fetchWorkflowFailureReason).toHaveBeenCalledWith("o/app", "tok", 777);
+	});
+
+	it("keeps annotation lookup failures best-effort and retries them after a short cooldown", async () => {
+		github.runs = { runs: [raw(run({ id: "778", conclusion: "failure" }))] };
+		const row = repoRow("r1", "o/app");
+		const env = fakeEnv([row]);
+		await checkRepoCi(env, asRow(row), now);
+		expect(JSON.parse(row.ci_health as unknown as string)).toMatchObject({ state: "failing", workflows: [{ runId: "778", failureReasonCheckedAt: now.toISOString() }] });
+		await checkRepoCi(env, asRow(row), new Date(now.getTime() + 60_000));
+		expect(fetchWorkflowFailureReason).toHaveBeenCalledTimes(1);
+		await checkRepoCi(env, asRow(row), new Date(now.getTime() + 15 * 60_000));
+		expect(fetchWorkflowFailureReason).toHaveBeenCalledTimes(2);
 	});
 
 	it("a deploy workflow failing says Deploy", async () => {

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchJobLog, JOB_LOG_FETCH_BYTES, mapWorkflowJob, pickJob, stripLogTimestamps, type WorkflowJob } from "./github-actions.js";
+import { classifyCheckRunAnnotations, fetchCheckRunAnnotations, fetchJobLog, fetchWorkflowFailureReason, JOB_LOG_FETCH_BYTES, mapWorkflowJob, pickJob, stripLogTimestamps, type WorkflowJob } from "./github-actions.js";
 import { MAX_LINE_CHARS, READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "./repo-file-window.js";
 
-const job = (over: Partial<WorkflowJob>): WorkflowJob => ({ id: 1, name: "job", status: "completed", conclusion: "success", url: "", steps: [], ...over });
+const job = (over: Partial<WorkflowJob>): WorkflowJob => ({ id: 1, name: "job", status: "completed", conclusion: "success", url: "", startedAt: null, checkRunId: null, steps: [], ...over });
+const BILLING_MESSAGE = "The job was not started because recent account payments have failed or your spending limit needs to be increased";
+const response = (body: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body }) as unknown as Response;
 
 describe("pickJob — which job to read when none was named (#781)", () => {
 	it("prefers the first FAILED job, whatever its position", () => {
@@ -35,8 +37,58 @@ describe("stripLogTimestamps", () => {
 describe("mapWorkflowJob", () => {
 	it("keeps id, name, status, conclusion, url and the steps; tolerates missing fields", () => {
 		const j = mapWorkflowJob({ id: 7, name: "ci", status: "completed", conclusion: null, html_url: "u", steps: [{ number: 2, name: "Test", status: "completed", conclusion: "failure" }] });
-		expect(j).toEqual({ id: 7, name: "ci", status: "completed", conclusion: null, url: "u", steps: [{ number: 2, name: "Test", status: "completed", conclusion: "failure" }] });
-		expect(mapWorkflowJob({})).toEqual({ id: 0, name: "", status: "", conclusion: null, url: "", steps: [] });
+		expect(j).toEqual({ id: 7, name: "ci", status: "completed", conclusion: null, url: "u", startedAt: null, checkRunId: null, steps: [{ number: 2, name: "Test", status: "completed", conclusion: "failure" }] });
+		expect(mapWorkflowJob({})).toEqual({ id: 0, name: "", status: "", conclusion: null, url: "", startedAt: null, checkRunId: null, steps: [] });
+	});
+
+	it("retains the start time and accepts only the expected repository check-run URL", () => {
+		expect(mapWorkflowJob({ started_at: "2026-10-15T01:02:03Z", check_run_url: "https://api.github.com/repos/acme/widgets/check-runs/42" }, "acme/widgets")).toMatchObject({ startedAt: "2026-10-15T01:02:03Z", checkRunId: 42 });
+		expect(mapWorkflowJob({ started_at: null, check_run_url: "https://attacker.example/repos/acme/widgets/check-runs/42" }, "acme/widgets")).toMatchObject({ startedAt: null, checkRunId: null });
+		expect(mapWorkflowJob({ check_run_url: "https://api.github.com/repos/acme/other/check-runs/42" }, "acme/widgets").checkRunId).toBeNull();
+	});
+});
+
+describe("check-run annotations — exact billing classification", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("classifies only the known provider message and preserves its original text", () => {
+		expect(classifyCheckRunAnnotations([{ message: BILLING_MESSAGE, title: "", rawDetails: "" }])).toEqual({ category: "actions_billing_blocked", message: BILLING_MESSAGE });
+		expect(classifyCheckRunAnnotations([{ message: `${BILLING_MESSAGE} for this repository`, title: "", rawDetails: "" }])).toBeNull();
+		expect(classifyCheckRunAnnotations([{ message: "Process completed with exit code 1", title: "", rawDetails: "" }])).toBeNull();
+	});
+
+	it("reads every annotation page with the Actions token", async () => {
+		const firstPage = Array.from({ length: 100 }, () => ({ message: "", title: "", raw_details: "" }));
+		const fetchMock = vi.fn(async (url: string) => response(url.includes("page=2") ? [{ message: BILLING_MESSAGE }] : firstPage));
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await fetchCheckRunAnnotations("acme/widgets", "tok", 42);
+		if (!("annotations" in result)) throw new Error("expected annotations");
+		expect(result.annotations).toHaveLength(101);
+		expect(result.annotations[0]).toEqual({ message: "", title: "", rawDetails: "" });
+		expect(result.annotations.at(-1)).toMatchObject({ message: BILLING_MESSAGE });
+		expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+			"https://api.github.com/repos/acme/widgets/check-runs/42/annotations?per_page=100",
+			"https://api.github.com/repos/acme/widgets/check-runs/42/annotations?per_page=100&page=2",
+		]);
+		expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toMatchObject({ Authorization: "token tok" });
+		expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+	});
+
+	it("preserves HTTP and network failures as statuses", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => response({}, 403)));
+		expect(await fetchCheckRunAnnotations("acme/widgets", "tok", 42)).toEqual({ status: 403 });
+		vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+		expect(await fetchCheckRunAnnotations("acme/widgets", "tok", 42)).toEqual({ status: null });
+	});
+
+	it("joins a never-started failed job to its provider annotation", async () => {
+		const fetchMock = vi.fn(async (url: string) => {
+			if (url.includes("/actions/runs/500/jobs")) return response({ jobs: [{ id: 9, status: "completed", conclusion: "failure", started_at: null, check_run_url: "https://api.github.com/repos/acme/widgets/check-runs/42" }] });
+			return response([{ message: BILLING_MESSAGE }]);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		expect(await fetchWorkflowFailureReason("acme/widgets", "tok", 500)).toEqual({ category: "actions_billing_blocked", message: BILLING_MESSAGE });
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });
 

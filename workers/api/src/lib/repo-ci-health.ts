@@ -30,7 +30,7 @@
 import { deepLinkFor } from "./console-links.js";
 import { isDeployWorkflow } from "./deploy-watch.js";
 import { logError } from "./error-log.js";
-import { fetchWorkflowRuns } from "./github-actions.js";
+import { describeActionFailure, fetchWorkflowFailureReason, fetchWorkflowRuns, type GithubActionFailureReason } from "./github-actions.js";
 import { type GithubCacheIdentity, githubConditionalJson, resolveGithubRead } from "./github-cache.js";
 import { notificationDedupeKey } from "./notifications.js";
 import { notifyUser } from "../routes/push.js";
@@ -77,6 +77,10 @@ export interface CiWorkflowHealth {
 	at: string | null;
 	/** A newer run of this workflow has not concluded yet. */
 	running: boolean;
+	/** GitHub's provider diagnosis for a never-started workflow job, when available. */
+	failureReason?: GithubActionFailureReason;
+	/** Last best-effort annotation lookup, used to bound retries when Checks access is unavailable. */
+	failureReasonCheckedAt?: string;
 }
 
 /** A repo's verdict, WORST FIRST — the order the instance-level `state` is chosen by. Mirrored in workers/mcp's state-vocabulary.ts. */
@@ -190,9 +194,10 @@ export function ciFailureNotification(repoName: string, branch: string, failing:
 	const names = failing.map((w) => `${w.workflow} (${w.conclusion ?? "failed"})`).join(", ");
 	const deploy = failing.some((w) => w.kind === "deploy");
 	const sha = failing.find((w) => w.sha)?.sha?.slice(0, 7);
+	const reasons = [...new Set(failing.flatMap((w) => (w.failureReason ? [`${w.failureReason.category}: ${describeActionFailure(w.failureReason)}`] : [])))];
 	return {
 		title: `❌ ${deploy ? "Deploy" : "CI"} failing on ${branch} — ${repoName}`,
-		body: `${names}${sha ? ` at ${sha}` : ""}. Open Builds to see why.`,
+		body: `${names}${sha ? ` at ${sha}` : ""}.${reasons.length ? ` ${reasons.join(" ")}` : ""} Open Builds to see why.`,
 	};
 }
 
@@ -342,7 +347,9 @@ export async function checkRepoCi(env: Env, repo: RepoRow, now = new Date()): Pr
 			return "runs" in one ? one.runs : [];
 		}),
 	);
-	const workflows = assessCiRuns([...res.runs, ...extra.flat()].map(toCiRun), branch, now.getTime());
+	const assessed = assessCiRuns([...res.runs, ...extra.flat()].map(toCiRun), branch, now.getTime());
+	const previousByPath = new Map((previous?.workflows ?? []).map((workflow) => [workflow.path, workflow]));
+	const workflows = await enrichFailureReasons(repo.github_repo, token, assessed, previousByPath, now);
 	const health: RepoCiHealth = { state: overallCiState(workflows), branch, workflows, checkedAt: now.toISOString() };
 	const decision = decideCiAlerts(workflows, parseJson<CiAlerted>(repo.ci_alerted, {}));
 	if (decision.newlyFailing.length) {
@@ -358,6 +365,49 @@ export async function checkRepoCi(env: Env, repo: RepoRow, now = new Date()): Pr
 	}
 	await writeHealth(env, repo.id, health, decision.alerted);
 	return health;
+}
+
+async function enrichFailureReasons(
+	repo: string,
+	token: string | null,
+	workflows: CiWorkflowHealth[],
+	previousByPath: ReadonlyMap<string, CiWorkflowHealth>,
+	now: Date,
+): Promise<CiWorkflowHealth[]> {
+	const enriched = [...workflows];
+	const candidates = workflows
+		.map((workflow, index) => ({ workflow, index, previous: previousByPath.get(workflow.path) }))
+		.filter(({ workflow, previous }) => {
+			if (workflow.state !== "failing" || workflow.runId === null || !workflow.runId) return false;
+			if (previous?.runId !== workflow.runId) return true;
+			if (previous.failureReason) return false;
+			const checkedAt = previous.failureReasonCheckedAt ? Date.parse(previous.failureReasonCheckedAt) : Number.NaN;
+			return !Number.isFinite(checkedAt) || now.getTime() - checkedAt >= 15 * 60_000;
+		});
+	let next = 0;
+	const workers = Array.from({ length: Math.min(3, candidates.length) }, async () => {
+		while (next < candidates.length) {
+			const candidate = candidates[next++];
+			const runId = Number(candidate.workflow.runId);
+			if (!Number.isSafeInteger(runId) || runId <= 0) continue;
+			const failureReason = await fetchWorkflowFailureReason(repo, token ?? undefined, runId);
+			enriched[candidate.index] = {
+				...candidate.workflow,
+				...(failureReason ? { failureReason } : {}),
+				failureReasonCheckedAt: now.toISOString(),
+			};
+		}
+	});
+	await Promise.all(workers);
+	return enriched.map((workflow) => {
+		const previous = previousByPath.get(workflow.path);
+		if (workflow.state !== "failing" || workflow.runId === null || previous?.runId !== workflow.runId) return workflow;
+		return {
+			...workflow,
+			...(workflow.failureReason || !previous.failureReason ? {} : { failureReason: previous.failureReason }),
+			...(workflow.failureReasonCheckedAt || !previous.failureReasonCheckedAt ? {} : { failureReasonCheckedAt: previous.failureReasonCheckedAt }),
+		};
+	});
 }
 
 /** One sweep. Never throws — the cron's other sweeps are independent failure domains. */
@@ -432,7 +482,11 @@ export async function instanceRepoCi(env: Env, instanceId: string, userId: strin
 	});
 	const states = repos.map((r) => (r.state === "unchecked" ? "unknown" : r.state));
 	const state = CI_STATES.find((s) => states.includes(s)) ?? "none";
-	const failing = repos.flatMap((r) => ("workflows" in r ? r.workflows.filter((w) => w.state === "failing").map((w) => `${r.githubRepo}: ${w.workflow}`) : []));
+	const failing = repos.flatMap((r) =>
+		"workflows" in r
+			? r.workflows.filter((w) => w.state === "failing").map((w) => `${r.githubRepo}: ${w.workflow}${w.failureReason ? ` (${w.failureReason.category}) ${describeActionFailure(w.failureReason)}` : ""}`)
+			: [],
+	);
 	const attention = failing.length
 		? `Default-branch CI/deploy is failing — ${failing.join("; ")}. This is the repository's pipeline, not this run's health.`
 		: undefined;

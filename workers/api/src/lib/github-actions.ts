@@ -136,12 +136,43 @@ export interface WorkflowJob {
 	/** success | failure | cancelled | skipped | timed_out | action_required | null while running */
 	conclusion: string | null;
 	url: string;
+	/** Null when GitHub completed a job without starting a runner. */
+	startedAt: string | null;
+	/** The check run is the source of GitHub's provider annotations. */
+	checkRunId: number | null;
 	steps: Array<{ number: number; name: string; status: string; conclusion: string | null }>;
 }
 
 export type WorkflowJobsResult = { jobs: WorkflowJob[] } | { status: number | null };
 
-export function mapWorkflowJob(raw: Record<string, unknown>): WorkflowJob {
+export interface CheckRunAnnotation {
+	message: string;
+	title: string;
+	rawDetails: string;
+}
+
+export type CheckRunAnnotationsResult = { annotations: CheckRunAnnotation[] } | { status: number | null };
+
+export interface GithubActionFailureReason {
+	category: "actions_billing_blocked";
+	message: string;
+}
+
+function checkRunIdForRepo(rawUrl: unknown, repo: string): number | null {
+	if (typeof rawUrl !== "string") return null;
+	try {
+		const url = new URL(rawUrl);
+		const match = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/check-runs\/(\d+)\/?$/);
+		if (url.origin !== "https://api.github.com" || !match) return null;
+		const targetRepo = `${decodeURIComponent(match[1])}/${decodeURIComponent(match[2])}`;
+		const id = Number(match[3]);
+		return targetRepo.toLowerCase() === repo.toLowerCase() && Number.isSafeInteger(id) && id > 0 ? id : null;
+	} catch {
+		return null;
+	}
+}
+
+export function mapWorkflowJob(raw: Record<string, unknown>, repo = ""): WorkflowJob {
 	const steps = Array.isArray(raw.steps) ? (raw.steps as Array<Record<string, unknown>>) : [];
 	return {
 		id: typeof raw.id === "number" ? raw.id : Number(raw.id) || 0,
@@ -149,6 +180,8 @@ export function mapWorkflowJob(raw: Record<string, unknown>): WorkflowJob {
 		status: typeof raw.status === "string" ? raw.status : "",
 		conclusion: typeof raw.conclusion === "string" ? raw.conclusion : null,
 		url: typeof raw.html_url === "string" ? raw.html_url : "",
+		startedAt: typeof raw.started_at === "string" && raw.started_at.length ? raw.started_at : null,
+		checkRunId: checkRunIdForRepo(raw.check_run_url, repo),
 		steps: steps.map((s) => ({
 			number: typeof s.number === "number" ? s.number : Number(s.number) || 0,
 			name: typeof s.name === "string" ? s.name : "",
@@ -172,7 +205,7 @@ export async function fetchWorkflowJobs(repo: string, token: string | undefined,
 			const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100${page > 1 ? `&page=${page}` : ""}`, { headers: actionsHeaders(token), signal: AbortSignal.timeout(15_000) });
 			if (!res.ok) return { status: res.status };
 			const data = (await res.json()) as { jobs?: Array<Record<string, unknown>>; total_count?: number };
-			const batch = (data.jobs ?? []).map(mapWorkflowJob);
+			const batch = (data.jobs ?? []).map((job) => mapWorkflowJob(job, repo));
 			jobs.push(...batch);
 			if (batch.length < 100 || (typeof data.total_count === "number" && jobs.length >= data.total_count)) break;
 		}
@@ -180,6 +213,68 @@ export async function fetchWorkflowJobs(repo: string, token: string | undefined,
 	} catch {
 		return { status: null };
 	}
+}
+
+/** Fetch every annotation page for one known check run. The run URL is never fetched directly. */
+export async function fetchCheckRunAnnotations(repo: string, token: string | undefined, checkRunId: number): Promise<CheckRunAnnotationsResult> {
+	const annotations: CheckRunAnnotation[] = [];
+	try {
+		for (let page = 1; page <= 10; page++) {
+			const res = await fetch(`https://api.github.com/repos/${repo}/check-runs/${checkRunId}/annotations?per_page=100${page > 1 ? `&page=${page}` : ""}`, {
+				headers: actionsHeaders(token),
+				signal: AbortSignal.timeout(15_000),
+			});
+			if (!res.ok) return { status: res.status };
+			const data = (await res.json()) as Array<Record<string, unknown>>;
+			const batch = (Array.isArray(data) ? data : []).map((annotation) => ({
+				message: typeof annotation.message === "string" ? annotation.message : "",
+				title: typeof annotation.title === "string" ? annotation.title : "",
+				rawDetails: typeof annotation.raw_details === "string" ? annotation.raw_details : "",
+			}));
+			annotations.push(...batch);
+			if (batch.length < 100) break;
+		}
+		return { annotations };
+	} catch {
+		return { status: null };
+	}
+}
+
+const BILLING_BLOCK_MESSAGE = "the job was not started because recent account payments have failed or your spending limit needs to be increased";
+const NEVER_STARTED_FAILURES = new Set(["failure", "startup_failure"]);
+
+/** Only the known GitHub billing annotation is classified; its original text is retained. */
+export function classifyCheckRunAnnotations(annotations: readonly CheckRunAnnotation[]): GithubActionFailureReason | null {
+	for (const annotation of annotations) {
+		for (const text of [annotation.message, annotation.title, annotation.rawDetails]) {
+			const normalized = text.trim().replace(/\s+/g, " ").replace(/[.!]+$/, "").toLowerCase();
+			if (normalized === BILLING_BLOCK_MESSAGE) return { category: "actions_billing_blocked", message: text };
+		}
+	}
+	return null;
+}
+
+export function describeActionFailure(reason: GithubActionFailureReason): string {
+	const punctuation = /[.!?]$/.test(reason.message.trim()) ? "" : ".";
+	return `GitHub's reason: ${reason.message}${punctuation} Check the account's payments and spending limit. If GitHub-hosted minutes are the constraint for this workflow, consider a self-hosted runner.`;
+}
+
+/** Best-effort diagnosis for a completed failed job that never started a runner. */
+export async function fetchJobFailureReason(repo: string, token: string | undefined, job: WorkflowJob): Promise<GithubActionFailureReason | null> {
+	if (job.status !== "completed" || job.startedAt !== null || !NEVER_STARTED_FAILURES.has(job.conclusion ?? "") || job.checkRunId === null) return null;
+	const result = await fetchCheckRunAnnotations(repo, token, job.checkRunId);
+	return "annotations" in result ? classifyCheckRunAnnotations(result.annotations) : null;
+}
+
+/** Best-effort diagnosis for a run; annotation access never changes the run's primary result. */
+export async function fetchWorkflowFailureReason(repo: string, token: string | undefined, runId: number): Promise<GithubActionFailureReason | null> {
+	const result = await fetchWorkflowJobs(repo, token, runId);
+	if (!("jobs" in result)) return null;
+	for (const job of result.jobs) {
+		const reason = await fetchJobFailureReason(repo, token, job);
+		if (reason) return reason;
+	}
+	return null;
 }
 
 /**
