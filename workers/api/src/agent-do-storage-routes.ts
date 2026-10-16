@@ -511,6 +511,14 @@ export async function getActivity(
 	return json({ events, total, offset, nextOffset: offset + events.length < total ? offset + events.length : null });
 }
 
+/** Append one `runner.attach` activity event (#1114). The body is the API Worker's own record, not a caller's. */
+export async function logRunnerAttach(engine: Pick<AgentStorageEngine, "logEvent">, request: Request): Promise<Response> {
+	const body = (await request.json().catch(() => ({}))) as { userId?: unknown; data?: unknown };
+	const data = body.data && typeof body.data === "object" ? (body.data as Record<string, unknown>) : {};
+	const event = await engine.logEvent("runner.attach", typeof body.userId === "string" ? body.userId : undefined, data);
+	return json({ event });
+}
+
 // ── Summaries ───────────────────────────────────────────────────────────────
 
 export async function getSummaries(

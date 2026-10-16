@@ -170,6 +170,7 @@ export interface ActivityEvent {
 		| "webhook.received"
 		| "summary.generated"
 		| "email.confirmation_link_found"
+		| "runner.attach"
 		| "error";
 	agentId: string;
 	userId?: string;

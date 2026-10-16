@@ -392,6 +392,9 @@ export class AgentDO extends DurableObject<Env> {
 			// Activity log
 			if (path === "/activity" && request.method === "GET")
 				return this.withEngine((e) => storageRoutes.getActivity(e, url));
+			// A runner attach attempt and its outcome (#1114) — internal: only the API Worker reaches a DO.
+			if (path === "/activity/runner-attach" && request.method === "POST")
+				return this.withEngine((e) => storageRoutes.logRunnerAttach(e, request));
 
 			// Summaries
 			if (path === "/summaries" && request.method === "GET")

@@ -20,6 +20,7 @@
  * reply waits out one poll interval before answering `attached: false`.
  */
 import { aliasNodesFor, type NodeRegistration, stampMs } from "./machine-identity.js";
+import { type AttachCause, type AttachProgress, heartbeatContext, type HeartbeatContext, machineRegistrations, type StaleFlag, staleRegistration } from "./runner-attach-report.js";
 import { callRunner, evictStaleRunnerSocket, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { attachHealthRemedy, classifyHealthProbeFailure, type PostAttachHealth } from "./runner-health.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
@@ -57,15 +58,16 @@ const ago = (ms: number) => {
  * the machine last reported in is what tells the two apart — recently means up, so the move is
  * `unconfirmed` rather than failed.
  */
-function noCarrierAnswer(node: string, names: ReadonlySet<string>, rows: readonly NodeRegistration[], now: number): { unconfirmed?: true; detail: string } {
+function noCarrierAnswer(node: string, names: ReadonlySet<string>, rows: readonly NodeRegistration[], now: number): { unconfirmed?: true; cause: AttachCause; detail: string } {
 	const seen = Math.max(0, ...rows.filter((r) => names.has(normalizeRunnerNode(r.node))).map((r) => stampMs(r.lastSeenAt)));
 	if (seen > 0 && now - seen <= RECENTLY_SEEN_MS) {
 		return {
 			unconfirmed: true,
+			cause: "no_socket",
 			detail: `\`pags up\` on ${node} reported in ${ago(now - seen)} ago but holds no relay socket for any of your agents, so it could not be asked directly. It picks this agent up on its own within about 20 s now that the pin names ${node} — call instance_runner_node to confirm.`,
 		};
 	}
-	return { detail: `No \`pags up\` is running on ${node}${seen > 0 ? ` (last seen ${ago(now - seen)} ago)` : ""} — nothing there holds a relay socket to hand this agent to. Start it there; it takes the agent on its own once it is running.` };
+	return { cause: "no_socket", detail: `No \`pags up\` is running on ${node}${seen > 0 ? ` (last seen ${ago(now - seen)} ago)` : ""} — nothing there holds a relay socket to hand this agent to. Start it there; it takes the agent on its own once it is running.` };
 }
 
 /** Said when the budget ran out before the move could be confirmed either way. */
@@ -88,11 +90,19 @@ export interface RepinAttachment {
 	/** The runner's health through the new socket (#1032) — `attached` is the transport alone. */
 	health?: PostAttachHealth;
 	remedy?: string;
+	/** Why it did not attach, measured (#1114). Absent when attached. */
+	cause?: AttachCause;
+	/** The target machine's registration is old — flagged, never pruned (#1114). */
+	stale?: StaleFlag;
+	/** On a timeout: the machine's last heartbeat, as context only (#1114). */
+	machineAtLastHeartbeat?: HeartbeatContext;
 }
 
 export interface RepinDeps {
 	sleep?: (ms: number) => Promise<void>;
 	now?: () => number;
+	/** Written as the attach advances, so a route whose window expires can say how far it got (#1114). */
+	progress?: AttachProgress;
 }
 
 /** What {@link attachAgentOnNode} achieved on one machine, and — when it did not — the specific reason. */
@@ -115,6 +125,12 @@ export interface AgentAttachment {
 	detail?: string;
 	/** The caller's deadline ran out before the attach could be confirmed either way. */
 	unconfirmed?: true;
+	/** Why it did not attach, measured (#1114). Absent when attached. */
+	cause?: AttachCause;
+	/** The target machine's registration is old — flagged, never pruned (#1114). */
+	stale?: StaleFlag;
+	/** On a timeout: the machine's last heartbeat, as context only (#1114). */
+	machineAtLastHeartbeat?: HeartbeatContext;
 }
 
 /** The runner-reply shape of a targeted membership sync (#856). Older CLIs answer without `holding`. */
@@ -202,10 +218,31 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 	const now = opts.now ?? Date.now;
 	const rows = opts.rows ?? (await nodeRegistrations(env, userId));
 	const result = await attachTransport(env, instanceId, userId, node, { ...opts, rows });
-	if (!result.attached) return { ...result, transport: "not_attached" };
+	if (opts.progress) opts.progress.phase = "done";
+	if (!result.attached) return { ...(await withFailureFacts(env, userId, node, rows, result, now())), transport: "not_attached" };
 	const health = await healthAfterAttach(env, instanceId, userId, [node, ...aliasNodesFor(node, rows)], (opts.deadline ?? Number.POSITIVE_INFINITY) - now());
 	const remedy = attachHealthRemedy(node, health.state);
 	return { ...result, transport: "attached", health, ...(remedy ? { remedy } : {}) };
+}
+
+/**
+ * What a failed attach adds about the target machine (#1114): its registration flagged when stale —
+ * and, when nothing there held a socket, that staleness IS the cause — and, on a timeout, the last
+ * heartbeat as context. Reads only; a failed read adds nothing rather than failing the answer.
+ */
+async function withFailureFacts<T extends { cause?: AttachCause; detail?: string }>(env: Env, userId: string, node: string, rows: readonly NodeRegistration[], result: T, now: number): Promise<T & { stale?: StaleFlag; machineAtLastHeartbeat?: HeartbeatContext }> {
+	const names = [node, ...aliasNodesFor(node, rows)];
+	const stale = staleRegistration(await machineRegistrations(env, userId, names), names, now);
+	const out: T & { stale?: StaleFlag; machineAtLastHeartbeat?: HeartbeatContext } = { ...result, ...(stale ? { stale } : {}) };
+	if (stale && result.cause === "no_socket") {
+		out.cause = "stale_registration";
+		out.detail = `Stale registration on ${node} (${stale.reason}). ${result.detail ?? ""}`.trim();
+	}
+	if (result.cause === "runner_timeout" || result.cause === "runner_unresponsive") {
+		const heartbeat = await heartbeatContext(env, userId, names, now);
+		if (heartbeat) out.machineAtLastHeartbeat = heartbeat;
+	}
+	return out;
 }
 
 async function attachTransport(env: Env, instanceId: string, userId: string, node: string, opts: AgentAttachOptions): Promise<Omit<AgentAttachment, "transport" | "health" | "remedy">> {
@@ -220,7 +257,12 @@ async function attachTransport(env: Env, instanceId: string, userId: string, nod
 		return false;
 	};
 
+	const progress = opts.progress;
+	const phase = (p: AttachProgress["phase"]) => {
+		if (progress) progress.phase = p;
+	};
 	// 1. The agent's own slot: attached already, or cleared of whatever stale socket held it.
+	phase("evicting");
 	let evicted = 0;
 	for (const n of targetNames) {
 		const verdict = await evictStaleRunnerSocket(env, instanceId, n);
@@ -231,6 +273,7 @@ async function attachTransport(env: Env, instanceId: string, userId: string, nod
 	// 2. Ask the machine's runner, through the first of this owner's sockets there that answers.
 	const carriers = await liveCarriers(env, userId, rows, targetNames);
 	if (carriers.length === 0) {
+		phase("no_carrier");
 		return { node, attached: false, evicted, ...noCarrierAnswer(node, targetNames, rows, now()) };
 	}
 	let answered: SyncReply | null = null;
@@ -240,6 +283,11 @@ async function attachTransport(env: Env, instanceId: string, userId: string, nod
 	for (const carrier of carriers) {
 		if (left() < MIN_COMMAND_MS) break;
 		try {
+			phase("sync_sent");
+			if (progress) {
+				progress.syncSentAt = now();
+				progress.carrier = carrier.instanceId;
+			}
 			answered = (await callRunner<SyncReply>(carrier, MEMBERSHIP_SYNC_PATH, { attach: instanceId, force: opts.force }, { timeoutMs: Math.min(SYNC_TIMEOUT_MS, left()) })) ?? {};
 			break;
 		} catch (e) {
@@ -260,19 +308,23 @@ async function attachTransport(env: Env, instanceId: string, userId: string, nod
 			refusal = `The \`pags up\` on ${node} could not be asked to attach this agent (${message}).`;
 		}
 	}
+	if (!answered && !oldRunner) phase(refusal ? "refused" : "sync_unanswered");
 	// Out of time with no answer: nothing definite to say about this machine, and saying "refused" would be false.
-	if (!answered && !oldRunner && left() < MIN_COMMAND_MS) return { node, attached: false, evicted, unconfirmed: true, detail: unconfirmedDetail(node) };
-	if (refusal && !answered && !oldRunner) return { node, attached: false, evicted, detail: refusal };
+	if (!answered && !oldRunner && left() < MIN_COMMAND_MS) return { node, attached: false, evicted, unconfirmed: true, cause: "runner_timeout", detail: unconfirmedDetail(node) };
+	if (refusal && !answered && !oldRunner) return { node, attached: false, evicted, cause: "refused", detail: refusal };
 	if (!answered && !oldRunner) {
 		return {
 			node,
 			attached: false,
 			evicted,
+			cause: "runner_unresponsive",
 			detail: `Every relay socket \`pags up\` holds on ${node} is connected but not answering (${unresponsive} tried) — the runner there is frozen or gone, so nothing on that machine can be asked to attach this agent. Restart \`pags up\` on ${node}.`,
 		};
 	}
 
 	// 3. The relay's answer, after the runner has had time to open the socket.
+	phase("waiting_open");
+	if (progress && answered) progress.answeredAt = now();
 	const fullWait = now() + (answered ? OPEN_WAIT_MS : POLL_WAIT_MS);
 	const waitUntil = Math.min(fullWait, now() + left());
 	let attached = await attachedOnTarget();
@@ -281,12 +333,13 @@ async function attachTransport(env: Env, instanceId: string, userId: string, nod
 		attached = await attachedOnTarget();
 	}
 	if (attached) return { node, attached, evicted };
-	if (waitUntil < fullWait) return { node, attached, evicted, unconfirmed: true, detail: unconfirmedDetail(node) };
+	if (waitUntil < fullWait) return { node, attached, evicted, unconfirmed: true, cause: answered ? "no_socket" : "runner_timeout", detail: unconfirmedDetail(node) };
 	const refused = answered?.holding === false;
 	return {
 		node,
 		attached,
 		evicted,
+		cause: refused ? "refused" : oldRunner ? "old_runner" : "no_socket",
 		detail: opts.force
 			? refused
 				? `The \`pags up\` on ${node} did not take this agent even when forced — it is not one that machine may run (pinned to another machine, paused, or without a runtime).`
@@ -325,8 +378,8 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 
 	// 1. Attach on the target — without force: a repin moves the agent, it does not take a slot another
 	// runner still answers in. When that is what stands in the way, the detail names the tool that does.
-	const { attached, detail, unconfirmed, health, remedy } = await attachAgentOnNode(env, instanceId, userId, node, { force: false, rows, sleep, now, deadline });
-	const checked = { ...(health ? { health } : {}), ...(remedy ? { remedy } : {}) };
+	const { attached, detail, unconfirmed, health, remedy, cause, stale, machineAtLastHeartbeat } = await attachAgentOnNode(env, instanceId, userId, node, { force: false, rows, sleep, now, deadline, progress: deps.progress });
+	const checked = { ...(health ? { health } : {}), ...(remedy ? { remedy } : {}), ...(cause && !attached ? { cause } : {}), ...(stale ? { stale } : {}), ...(machineAtLastHeartbeat ? { machineAtLastHeartbeat } : {}) };
 	let cut = unconfirmed === true;
 
 	// 2. Detach from every other machine that still holds this agent. Its own socket carries the

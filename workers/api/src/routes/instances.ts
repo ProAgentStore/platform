@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { GMAIL_SCOUT_SOURCE_MODE, gmailScoutSourceMode } from "../lib/gmail-scout/config.js";
+import { staleRegistration } from "../lib/runner-attach-report.js";
 import { composeInstanceActivity } from "../lib/instance-activity.js";
 import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { applySettingsPatch, settingsPatchRefusal, resolveSettingsValues } from "../lib/instance-settings.js";
@@ -652,12 +653,15 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 					break;
 				}
 			}
+			const stale = staleRegistration(registrations, names);
 			return {
 				node,
 				...(names.length > 1 ? { aka: names.slice(1) } : {}),
 				connected,
 				nodeOnline: connected ? true : await machineOnline(names),
 				...runnerVersionView(freshestVersion(names, registrations)),
+				// Old registration (#1114): flagged for the owner, never pruned — forget_runner_node removes one.
+				...(stale ? { stale } : {}),
 			};
 		}),
 	);

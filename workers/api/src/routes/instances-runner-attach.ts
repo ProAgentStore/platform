@@ -14,11 +14,17 @@
  * `attached` is TRANSPORT only (#1032): the relay holds this agent's socket. `health` is the `/health`
  * probe run through that socket right after, and `remedy` the next step when it failed — an attach
  * once answered `attached: true` for a runner whose health never came back.
+ *
+ * #1114: a PAUSED instance is answered before any machine is asked — no runner attaches a paused
+ * agent, and the reason used to arrive after the window had answered "not yet confirmed". A window
+ * that expires now answers from the attach's own progress (`cause`), and every attempt and outcome is
+ * recorded (`lib/runner-attach-report.ts`).
  */
 import type { Hono } from "hono";
 import { withinConfirmationWindow } from "../lib/confirmation-window.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
+import { type AttachCause, heartbeatContext, instanceStatus, newAttachProgress, PAUSED_DETAIL, recordAttach, windowExpiredCause } from "../lib/runner-attach-report.js";
 import { attachedOnMachine, attachOnRepin, attachAgentOnNode } from "../lib/runner-repin.js";
 import { normalizeRunnerNode, readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -40,6 +46,21 @@ function attachSettled<T>(operation: Promise<T>, node: string, detail: (reason: 
 	});
 }
 
+type Recorded = { attached?: boolean; unconfirmed?: true; cause?: AttachCause; detail?: string; machineAtLastHeartbeat?: unknown; stale?: unknown };
+/** Record what an attach settled to (#1114) — chained onto the operation, so it lands after the window too. */
+function recorded<T extends Recorded>(env: Env, base: { instanceId: string; userId: string; node: string; via: "pin" | "force_attach"; forced: boolean }, startedAt: number, operation: Promise<T>): Promise<T> {
+	return operation.then(async (r) => {
+		await recordAttach(env, {
+			...base,
+			outcome: r.attached ? "attached" : r.unconfirmed ? "unconfirmed" : "not_attached",
+			...(r.attached ? {} : { cause: r.cause ?? "runner_timeout", detail: r.detail }),
+			durationMs: Date.now() - startedAt,
+			context: { ...(r.machineAtLastHeartbeat ? { machineAtLastHeartbeat: r.machineAtLastHeartbeat } : {}), ...(r.stale ? { stale: r.stale } : {}) },
+		});
+		return r;
+	});
+}
+
 export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 	/** Pin (or clear, with an empty/null value) the node this instance runs on.
 	 *
@@ -53,12 +74,20 @@ export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
 		const { to } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
 		if (!to) return c.json({ runnerNode: null });
+		const base = { instanceId, userId: session.uid, node: to, via: "pin" as const, forced: false };
+		// Paused (#1114): the pin is saved, nothing is asked to attach, and the answer says why.
+		if ((await instanceStatus(c.env, instanceId, session.uid)) === "paused") {
+			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", cause: "paused", detail: PAUSED_DETAIL, durationMs: 0 }));
+			return c.json({ runnerNode: to, attachment: { node: to, attached: false, cause: "paused", detail: PAUSED_DETAIL } });
+		}
+		const startedAt = Date.now();
+		const progress = newAttachProgress(startedAt);
 		const attachment = await withinConfirmationWindow(
-			attachSettled(attachOnRepin(c.env, instanceId, session.uid, to), to, (why) => `The pin to ${to} is saved, but whether it attached there could not be confirmed (${why}). Call instance_runner_node to check current placement before retrying.`),
+			recorded(c.env, base, startedAt, attachSettled(attachOnRepin(c.env, instanceId, session.uid, to, { progress }), to, (why) => `The pin to ${to} is saved, but whether it attached there could not be confirmed (${why}). Call instance_runner_node to check current placement before retrying.`)),
 			async () => (await attachedOnMachine(c.env, instanceId, session.uid, to).catch(() => false))
 				// Attached already — what is still open is only the OLD machine letting go, which a frozen one can take the whole window to not do (#922).
 				? { node: to, attached: true, unconfirmed: true as const, detail: `Attached on ${to}. Whether every other machine has let it go is not yet confirmed — each drops it on its own poll, since the pin moved; instance_runner_node shows where it is attached.` }
-				: { node: to, attached: false, unconfirmed: true as const, detail: `The pin to ${to} is saved; attachment and release of other machines are not yet confirmed. Call instance_runner_node to check current placement.` },
+				: await windowAnswer(c.env, base, progress, `The pin to ${to} is saved. `),
 			(operation) => c.executionCtx.waitUntil(operation),
 		);
 		return c.json({ runnerNode: to, attachment });
@@ -74,13 +103,36 @@ export function registerRunnerAttachRoutes(router: Hono<{ Bindings: Env }>): voi
 		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; force?: unknown };
 		const node = normalizeRunnerNode(body.runnerNode) || (await readInstanceRunnerNode(c.env, instanceId, session.uid).catch(() => ""));
 		if (!node) throw new HttpError(400, "This agent is not pinned to a machine — name one with runnerNode (see instance_runner_node's `nodes`), or pin it with set_instance_runner_node.");
+		const forced = body.force !== false;
+		const base = { instanceId, userId: session.uid, node, via: "force_attach" as const, forced };
+		// Paused (#1114): nothing can attach it, so nothing is asked — 409 with the reason.
+		if ((await instanceStatus(c.env, instanceId, session.uid)) === "paused") {
+			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", cause: "paused", detail: PAUSED_DETAIL, durationMs: 0 }));
+			return c.json({ node, attached: false, cause: "paused", detail: PAUSED_DETAIL, error: PAUSED_DETAIL }, 409);
+		}
+		const startedAt = Date.now();
+		const progress = newAttachProgress(startedAt);
 		const attachment = await withinConfirmationWindow(
-			attachSettled(attachAgentOnNode(c.env, instanceId, session.uid, node, { force: body.force !== false }), node, (why) => `The attach request on ${node} could not be confirmed (${why}). Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.`),
+			recorded(c.env, base, startedAt, attachSettled(attachAgentOnNode(c.env, instanceId, session.uid, node, { force: forced, progress }), node, (why) => `The attach request on ${node} could not be confirmed (${why}). Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.`)),
 			async () => (await attachedOnMachine(c.env, instanceId, session.uid, node).catch(() => false))
 				? { node, attached: true, transport: "attached" as const, health: { state: "not_attempted" as const, error: "The attach outlived this request's window, so the runner's health was not checked here. Run coding_diagnostics before relying on it." } }
-				: { node, attached: false, unconfirmed: true as const, detail: `The attach request on ${node} has not yet been confirmed. Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.` },
+				: await windowAnswer(c.env, base, progress, ""),
 			(operation) => c.executionCtx.waitUntil(operation),
 		);
 		return c.json(attachment);
 	});
+}
+
+/**
+ * The answer when the confirmation window expires before the attach settles (#1114): the measured
+ * cause from how far the attach got, the machine's last heartbeat beside a timeout as context, and an
+ * activity/error record of the unconfirmed attempt. The settled outcome is recorded again when it lands.
+ */
+async function windowAnswer(env: Env, base: { instanceId: string; userId: string; node: string; via: "pin" | "force_attach"; forced: boolean }, progress: ReturnType<typeof newAttachProgress>, prefix: string) {
+	const now = Date.now();
+	const { cause, detail } = windowExpiredCause(progress, base.node, now);
+	const heartbeat = cause === "runner_timeout" ? await heartbeatContext(env, base.userId, [base.node], now) : null;
+	const answer = { node: base.node, attached: false, unconfirmed: true as const, cause, phase: progress.phase, detail: `${prefix}${detail}`, ...(heartbeat ? { machineAtLastHeartbeat: heartbeat } : {}) };
+	await recordAttach(env, { ...base, outcome: "unconfirmed", cause, detail: answer.detail, durationMs: now - progress.startedAt, ...(heartbeat ? { context: { machineAtLastHeartbeat: heartbeat } } : {}) });
+	return answer;
 }

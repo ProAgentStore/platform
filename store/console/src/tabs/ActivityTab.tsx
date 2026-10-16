@@ -44,6 +44,7 @@ const META: Record<string, { icon: string; label: (d: Record<string, unknown>) =
 	"webhook.received": { icon: "🪝", label: () => "Webhook received" },
 	"summary.generated": { icon: "📝", label: () => "Conversation summarized" },
 	"email.confirmation_link_found": { icon: "✉️", label: () => "Confirmation link found" },
+	"runner.attach": { icon: "🔌", label: (d) => `Runner attach on ${s(d.node)}: ${s(d.outcome)}${d.cause ? ` (${s(d.cause)})` : ""}` },
 	error: { icon: "⚠️", label: (d) => `Error: ${s(d.message).slice(0, 140)}` },
 };
 
