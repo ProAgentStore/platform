@@ -24,6 +24,20 @@ vi.mock("../lib/auth.js", async () => {
 	return { ...actual, requireUser: async () => current };
 });
 
+// #1082: the checklist judges GitHub by the LIVE access check. GitHub itself is not here, so the fake
+// answers as the real one does for an installed App: a verified binding row is access, none is
+// `not-authorized`.
+vi.mock("../lib/github-app.js", async () => {
+	const actual = await vi.importActual<typeof import("../lib/github-app.js")>("../lib/github-app.js");
+	return {
+		...actual,
+		resolveGithubAccess: async (e: Env, uid: string, owner: string) => {
+			const row = await e.DB.prepare("SELECT 1 AS n FROM github_installations WHERE user_id = ?1 AND lower(account_login) = lower(?2)").bind(uid, owner).first();
+			return row ? { ok: true, token: "t" } : { ok: false, ...actual.githubAccessDenial({ state: "not-authorized", owner }) };
+		},
+	};
+});
+
 const { registerRunnerSetupRoutes } = await import("./instances-runner-setup.js");
 const { toolRoutes } = await import("./tools.js");
 const { terminalRoutes } = await import("./terminals.js");

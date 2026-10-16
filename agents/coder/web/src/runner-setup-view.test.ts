@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type RunnerSetupAnswer, type RunnerSetupStep, runnerSetupLink, runnerSetupView } from "./runner-setup-view";
+import { type RunnerSetupAnswer, type RunnerSetupStep, githubConnectOwners, githubSyncSentence, runnerSetupLink, runnerSetupView } from "./runner-setup-view";
 
 const CODING = "/instances/i1/coding";
 const step = (s: RunnerSetupStep["step"], done: boolean, link?: string): RunnerSetupStep => ({ step: s, done, instruction: `do ${s}`, link });
@@ -54,5 +54,28 @@ describe("runnerSetupLink — where a step's link goes", () => {
 		expect(runnerSetupLink("javascript:alert(1)", CODING)).toBeNull();
 		expect(runnerSetupLink("http://example.com", CODING)).toBeNull();
 		expect(runnerSetupLink(undefined, CODING)).toBeNull();
+	});
+});
+
+describe("Connect GitHub (#1082)", () => {
+	const answer = (github: Partial<RunnerSetupStep>): RunnerSetupAnswer => ({ instanceId: "i1", ready: false, steps: [{ step: "github_app", done: false, instruction: "x", ...github }] });
+
+	it("offers to connect exactly the owners where the App is installed but this account is not authorized", () => {
+		const owners = [{ owner: "ChessClubs-online", state: "not-authorized" }, { owner: "acme", state: "ok" }, { owner: "nope", state: "not-installed" }];
+		expect(githubConnectOwners(answer({ owners }))).toEqual(["ChessClubs-online"]);
+	});
+
+	it("offers nothing once access works, or before the server reports owners", () => {
+		expect(githubConnectOwners(answer({ done: true, owners: [{ owner: "a", state: "not-authorized" }] }))).toEqual([]);
+		expect(githubConnectOwners(answer({}))).toEqual([]);
+		expect(githubConnectOwners(null)).toEqual([]);
+	});
+
+	it("says what the sync did per owner — never a refusal as success", () => {
+		expect(githubSyncSentence({ account: "ChessClubs-online", result: "bound" })).toBe("ChessClubs-online: connected.");
+		expect(githubSyncSentence({ account: "x", result: "not_bound", reason: "not_member" })).toMatch(/not connected — your linked GitHub account is not a member/);
+		expect(githubSyncSentence({ account: "x", result: "not_bound", reason: "app_cannot_read_members" })).toMatch(/Reconnect GitHub/);
+		expect(githubSyncSentence({ account: "x", result: "not_installed" })).toMatch(/not installed/);
+		expect(githubSyncSentence({ account: "x", result: "not_bound", reason: "something_new" })).toMatch(/not connected — something new/);
 	});
 });

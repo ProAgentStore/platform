@@ -10,8 +10,11 @@
  *   runner_connected  — any of the owner's registrations heartbeat inside the window
  *                       (`heartbeatFresh`): the CLI is installed, signed in and `pags up` is running.
  *   instance_attached — THIS instance's registration (default row or a node) is fresh.
- *   github_app        — the owner has a VERIFIED installation (`listUserInstallations`) on the bound
- *                       repository's owner; before a repository is bound, on any account.
+ *   github_app        — GitHub access WORKS for every bound GitHub repository's owner (#1082): the same
+ *                       live `resolveGithubAccess` every real GitHub call makes, so an App that was
+ *                       uninstalled, an org the account cannot use (`not-authorized`) or a lost
+ *                       membership reads not done. Before a GitHub repository is bound it is "not
+ *                       applicable yet" — never done on the strength of some other account's binding.
  *   repo_bound        — a repository is bound WITH a local folder (#883: a folderless binding is
  *                       `needs_path`, and every repo read tool refuses it) and `admitRepoForRun`
  *                       would admit a run on it.
@@ -23,8 +26,8 @@
  */
 import { admitRepoForRun } from "./coding-repo-admission.js";
 import { listRepos } from "./coding-store.js";
-import { codingSessionLink, instanceBoardLink } from "./console-links.js";
-import { listUserInstallations } from "./github-app.js";
+import { codingSessionLink, instanceBoardLink, preferencesLink } from "./console-links.js";
+import { type GithubAccessState, githubAccessDenial, resolveGithubAccess } from "./github-app.js";
 import { heartbeatFresh } from "./runtime-attachment.js";
 import type { Env } from "../types.js";
 
@@ -36,7 +39,12 @@ export interface RunnerSetupStep {
 	done: boolean;
 	instruction: string;
 	link?: string;
+	/** `github_app` only (#1082): each bound GitHub owner and whether access works there — the Coding tab's Connect GitHub reads it. */
+	owners?: Array<{ owner: string; state: "ok" | GithubAccessState }>;
 }
+
+/** Where Sync installations / Reconnect GitHub live in the console — the control `not-authorized` needs. */
+export const GITHUB_CONNECTIONS_LINK = preferencesLink();
 
 const CLI_INSTALL = "npm i -g @proagentstore/cli";
 
@@ -71,12 +79,49 @@ function githubInstallLink(env: Env): string | undefined {
 	return env.GITHUB_APP_SLUG ? `https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new` : undefined;
 }
 
+/**
+ * The `github_app` step (#1082): a LIVE check of every bound GitHub repository's owner. It used to read
+ * `github_installations` rows for `repos[0]` only, so the step stayed green while the move it hid had
+ * failed, and it sent everyone to the App's install page — wrong when the App is installed but this
+ * account is not authorized there. Each refusal now carries its own remedy and link.
+ */
+async function githubStep(env: Env, userId: string, repos: Awaited<ReturnType<typeof listRepos>>): Promise<RunnerSetupStep> {
+	const owners = [...new Map(repos.filter((r) => r.provider === "github").map((r) => (r.githubRepo ?? r.repoSlug ?? "").split("/")[0]?.trim() ?? "").filter(Boolean).map((o) => [o.toLowerCase(), o])).values()];
+	if (!owners.length) {
+		return repos.length
+			? { step: "github_app", done: true, instruction: repos.length === 1 ? `Not needed: ${repos[0].name} is not hosted on GitHub.` : "Not needed: none of the bound repositories is hosted on GitHub." }
+			: { step: "github_app", done: false, instruction: "Not applicable yet: bind a GitHub repository first (the next step). Its owner's GitHub access is then checked here." };
+	}
+	const reach = await Promise.all(
+		owners.map(async (owner) => {
+			const access = await resolveGithubAccess(env, userId, owner, { diagnose: true }).catch((e) => ({ ok: false as const, ...githubAccessDenial({ state: "transient", owner, detail: e instanceof Error ? e.message : String(e) }) }));
+			return { owner, access };
+		}),
+	);
+	const failing = reach.filter((r) => !r.access.ok);
+	const states = reach.map(({ owner, access }) => ({ owner, state: access.ok ? ("ok" as const) : access.state }));
+	if (!failing.length) return { step: "github_app", done: true, instruction: `GitHub access works for ${owners.join(", ")}.`, owners: states };
+	const [first] = failing;
+	const denial = first.access.ok ? null : first.access;
+	const others = failing.slice(1).map((f) => `${f.owner} (${f.access.ok ? "ok" : f.access.state})`);
+	const remedy =
+		denial?.state === "not-authorized"
+			? `Press Connect GitHub on the Coding tab — it syncs your GitHub installations — or use Preferences → Connections → GitHub → Sync installations (or Reconnect), or the MCP tool sync_github_installations with owner "${first.owner}".`
+			: (denial?.remedy ?? "");
+	return {
+		step: "github_app",
+		done: false,
+		instruction: `${denial?.message ?? ""} ${remedy}${others.length ? ` Also not reachable: ${others.join(", ")}.` : ""}`.trim(),
+		...(denial?.state === "not-authorized" ? { link: GITHUB_CONNECTIONS_LINK } : denial?.state === "not-installed" ? { link: githubInstallLink(env) } : {}),
+		owners: states,
+	};
+}
+
 export async function runnerSetupChecklist(env: Env, instanceId: string, userId: string, now = Date.now()): Promise<{ ready: boolean; steps: RunnerSetupStep[] }> {
-	const [anySeen, instanceSeen, repos, installs, engine] = await Promise.all([
+	const [anySeen, instanceSeen, repos, engine] = await Promise.all([
 		latestHeartbeat(env, userId),
 		latestHeartbeat(env, userId, instanceId),
 		listRepos(env, instanceId, userId),
-		listUserInstallations(env, userId),
 		engineState(env, instanceId, userId),
 	]);
 	const runnerUp = heartbeatFresh(anySeen, now);
@@ -84,23 +129,7 @@ export async function runnerSetupChecklist(env: Env, instanceId: string, userId:
 	const repo = repos[0] ?? null;
 	const coding = codingSessionLink(instanceId);
 
-	const owner = repo?.provider === "github" ? (repo.githubRepo ?? repo.repoSlug ?? "").split("/")[0] ?? "" : "";
-	const accounts = installs.map((i) => i.account.toLowerCase());
-	const github: RunnerSetupStep = repo && repo.provider !== "github"
-		? { step: "github_app", done: true, instruction: `Not needed: ${repo.name} is not hosted on GitHub.` }
-		: owner
-			? {
-				step: "github_app",
-				done: accounts.includes(owner.toLowerCase()),
-				instruction: `Install the ProAgentStore GitHub App on ${owner} (Coding tab → Connect GitHub), so this agent can read and comment on its issues.`,
-				link: githubInstallLink(env),
-			}
-			: {
-				step: "github_app",
-				done: accounts.length > 0,
-				instruction: "Install the ProAgentStore GitHub App on the account that owns your repository (Coding tab → Connect GitHub).",
-				link: githubInstallLink(env),
-			};
+	const github = await githubStep(env, userId, repos);
 
 	const admission = repo ? admitRepoForRun(repo) : null;
 	const needsPath = repo?.cloneStatus === "needs_path" || Boolean(repo && !(repo.workdir ?? "").trim());

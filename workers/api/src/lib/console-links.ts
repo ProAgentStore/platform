@@ -35,6 +35,11 @@ export function profileLink(): string {
 	return `${BASE}/profile`;
 }
 
+/** Preferences — where the account's connections live (GitHub: Connect / Reconnect / Sync installations, #1082). */
+export function preferencesLink(): string {
+	return `${BASE}/preferences`;
+}
+
 /** The notification feed — every row readable, each with its own link (#897). */
 export function notificationsLink(): string {
 	return `${BASE}/notifications`;

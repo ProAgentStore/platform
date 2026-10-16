@@ -9,6 +9,8 @@ export interface RunnerSetupStep {
 	done: boolean;
 	instruction: string;
 	link?: string;
+	/** `github_app` (#1082): each bound GitHub owner and whether access works there. */
+	owners?: Array<{ owner: string; state: string }>;
 }
 
 export interface RunnerSetupAnswer {
@@ -20,7 +22,7 @@ export interface RunnerSetupAnswer {
 export const RUNNER_SETUP_TITLES: Record<RunnerSetupStepId, string> = {
 	runner_connected: "Install the CLI and run pags up",
 	instance_attached: "Attach this agent to your machine",
-	github_app: "Install the GitHub App",
+	github_app: "Connect GitHub",
 	repo_bound: "Bind your repository",
 	engine_signed_in: "Sign in to the coding engine",
 };
@@ -74,4 +76,28 @@ export function runnerSetupView(answer: RunnerSetupAnswer | null, codingPath: st
 			link: runnerSetupLink(s.link, codingPath),
 		})),
 	};
+}
+
+/**
+ * The owners Connect GitHub can fix (#1082): the App is installed there but this account is not
+ * authorized — a sync of the installations binds them. An owner without the App needs installing first,
+ * which the step's own link covers.
+ */
+export function githubConnectOwners(answer: RunnerSetupAnswer | null): string[] {
+	const step = answer?.steps?.find((s) => s.step === "github_app");
+	if (!step || step.done) return [];
+	return (step.owners ?? []).filter((o) => o.state === "not-authorized").map((o) => o.owner);
+}
+
+/** One owner's answer from `POST /v1/github/installations/sync`, as a sentence. */
+export function githubSyncSentence(org: { account: string; result: string; reason?: string }): string {
+	if (org.result === "bound" || org.result === "already_bound") return `${org.account}: connected.`;
+	if (org.result === "not_installed") return `${org.account}: the ProAgentStore App is not installed there — install it first.`;
+	const why: Record<string, string> = {
+		not_member: "your linked GitHub account is not a member of it",
+		membership_pending: "your invitation to it is still pending — accept it on GitHub",
+		app_cannot_read_members: "the App cannot read its members — Reconnect GitHub in Preferences → Connections",
+		oauth_app_restricted: "it restricts third-party access — approve ProAgentStore, then Reconnect GitHub",
+	};
+	return `${org.account}: not connected — ${why[org.reason ?? ""] ?? (org.reason ?? "the check failed").replace(/_/g, " ")}.`;
 }

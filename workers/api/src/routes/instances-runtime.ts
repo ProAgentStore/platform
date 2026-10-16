@@ -215,7 +215,7 @@ export function runtimeSetupTask(
 	const install = "npm i -g @proagentstore/cli";
 	const steps = [`Install the CLI: ${install}`, "Sign in: pags login", "Connect: pags up (leave it running)"];
 	if (opts.coding) {
-		steps.push("Install the GitHub App on your repository's owner (Coding tab → Connect GitHub)", "Add your repository in the Coding tab");
+		steps.push("Give the platform GitHub access to your repository's owner: install the GitHub App there, then Connect GitHub (Coding tab, or Preferences → Connections → GitHub)", "Add your repository in the Coding tab");
 	}
 	return {
 		id: runtimeSetupTaskId(instanceId),

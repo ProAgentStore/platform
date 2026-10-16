@@ -801,7 +801,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				<EngineTurnBanner report={lastTurn} />
 
 				{claudeSignedOut && soloView === "terminal" && <ClaudeSignedOutBanner onOpenProfile={() => navigate("/profile")} onRestart={restartSession} />}
-				{!openSession && soloView === "terminal" && <RunnerSetupChecklist instanceId={instanceId} runnerOnline={runnerOnline} />}
+				{soloView === "terminal" && <RunnerSetupChecklist instanceId={instanceId} runnerOnline={runnerOnline} compact={!!openSession} />}
 
 				{/* The checkout is unusable, and the field that fixes it (#67). This surface reported it
 				    as the two truncated words "Path unusable" in the caption above and nothing else —

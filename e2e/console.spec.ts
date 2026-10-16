@@ -2815,19 +2815,41 @@ test.describe("Coding tab — local runner setup checklist (#869)", () => {
 		await expect(card).toBeVisible();
 		await expect(card).toContainText("2 of 5 done");
 		// The first step not done is the current one.
-		await expect(card.locator('li[aria-current="step"]')).toContainText("Install the GitHub App");
+		await expect(card.locator('li[aria-current="step"]')).toContainText("Connect GitHub");
 		await expect(card.locator("li")).toHaveCount(5);
 		// Done steps drop their instruction; open ones keep it.
 		await expect(card).not.toContainText("pags login");
 		await expect(card).toContainText("Install the ProAgentStore GitHub App on acme");
 		// The external link opens in a new tab; the link back to this Coding tab is not offered.
-		const gh = card.getByRole("link", { name: /Install the GitHub App/ });
+		const gh = card.getByRole("link", { name: /Connect GitHub/ });
 		await expect(gh).toHaveAttribute("href", "https://github.com/apps/proagentstore/installations/new");
 		await expect(gh).toHaveAttribute("target", "_blank");
 		await expect(card.getByRole("button", { name: /Bind your repository/ })).toHaveCount(0);
 		// An in-app link routes under the console base.
 		await card.getByRole("button", { name: /Sign in to the coding engine/ }).click();
 		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/board$/);
+	});
+
+	test("Connect GitHub (#1082): an installed-but-not-authorized owner is synced from the Coding tab, and the result is said", async ({ page }) => {
+		const notAuthorized = {
+			...notReady,
+			steps: notReady.steps.map((s) =>
+				s.step === "github_app"
+					? { ...s, instruction: 'The ProAgentStore GitHub App is installed on "acme", but this account is not authorized to use it. Press Connect GitHub on the Coding tab.', link: "/console/preferences", owners: [{ owner: "acme", state: "not-authorized" }] }
+					: s,
+			),
+		};
+		await mockCoder(page, { status: 200, body: notAuthorized });
+		const synced: unknown[] = [];
+		await page.route("**/v1/github/installations/sync", async (route) => {
+			synced.push(route.request().postDataJSON());
+			await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ orgs: [{ account: "acme", result: "bound" }] }) });
+		});
+		await page.goto("/console/instances/inst-1/coding");
+		const card = page.getByRole("region", { name: /Set up your local runner/ });
+		await card.getByRole("button", { name: "Connect GitHub", exact: true }).click();
+		await expect.poll(() => synced).toEqual([{ owner: "acme" }]);
+		await expect(card.getByRole("status")).toHaveText("acme: connected.");
 	});
 
 	test("renders nothing once setup is done, or when the checklist cannot be read", async ({ page }) => {
