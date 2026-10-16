@@ -85,6 +85,12 @@ const EXCLUSIONS = [
 		match: /^GET \/v1\/instances\/\{\}\/browser-artifacts/,
 	},
 	{
+		label: "The live takeover frame",
+		why:
+			"A JPEG of the owner's own page, ~2 per second, for the person driving the takeover in the console (#1100, #1105) — the same reason as the replay screenshots above: MCP results are text, and a live picture of the owner's pages is not something to stream into an agent's transcript. MCP keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`). The route was always console-only; it was counted once the console named its shape (#1105).",
+		match: /^GET \/v1\/instances\/\{\}\/takeover\/\{\}\/frame$/,
+	},
+	{
 		label: "The credentials vault — site logins, passwords, PINs, recovery codes",
 		why: "Secrets. Console → Knowledge → Credentials.",
 		match: /^[A-Z]+ \/v1\/instances\/\{\}\/credentials/,
