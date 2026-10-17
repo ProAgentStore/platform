@@ -1,3 +1,5 @@
+import { plainMarkdown } from "../lib/agentText";
+import MarkdownText from "../components/MarkdownText";
 import { useCallback, useEffect, useState } from "react";
 import { objectiveCardKey, postBoardOrder } from "../lib/boardOrder";
 import { api } from "@proagentstore/sdk/client";
@@ -242,7 +244,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 					<div className="text-xs font-semibold text-muted mb-1">Queued, in the order they start — each starts on its own when the run ahead of it ends</div>
 					{queued.map((q, i) => (
 						<div key={q.id} data-testid="loop-queue-entry" className="flex items-center justify-between gap-2 border border-dashed border-line rounded-lg px-3 py-1.5 mb-1">
-							<span className="text-sm min-w-0 truncate" title={q.objective}>{q.objective}</span>
+							<span className="text-sm min-w-0 truncate" title={plainMarkdown(q.objective)}>{plainMarkdown(q.objective)}</span>
 							<span className="flex items-center gap-1.5 shrink-0">
 								{q.next && <span className="text-2xs px-1.5 py-0.5 rounded bg-accent-soft text-accent font-semibold">Next to run</span>}
 								{i > 0 && <Button size="sm" onClick={() => void runNext(q.id)} title="Start this one before every other queued objective">Run next</Button>}
@@ -257,7 +259,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 				return (
 					<div key={r.runId} className="border border-line rounded-lg px-3 py-2 mb-1.5">
 						<div className="flex items-start justify-between gap-2">
-							<span className="text-sm min-w-0 truncate" title={r.objective}>{r.objective}</span>
+							<span className="text-sm min-w-0 truncate" title={plainMarkdown(r.objective)}>{plainMarkdown(r.objective)}</span>
 							{ctl.phase !== "ended" ? (
 								<Button
 									size="sm"
@@ -325,7 +327,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 						{/* What the wait is FOR. Without it a multi-minute settling window reads as a hang. */}
 						{ctl.hint && <div className="text-xs text-muted mt-1">{ctl.hint}</div>}
 						{r.detail && ctl.phase === "ended" && (
-							<div className="text-xs text-muted mt-1 line-clamp-2">{r.detail}</div>
+							<MarkdownText text={r.detail} className="text-xs text-muted mt-1 line-clamp-2" />
 						)}
 						{/*
 						  * The checkpoint itself. Every line comes from the server — including the

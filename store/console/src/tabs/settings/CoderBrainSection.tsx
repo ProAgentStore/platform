@@ -1,3 +1,4 @@
+import { plainMarkdown } from "../../lib/agentText";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Card from "../../components/Card";
@@ -68,7 +69,7 @@ export default function CoderBrainSection({ instanceId }: { instanceId: string }
 			<div className="mt-4" data-testid="coder-questions">
 				<h3 className="text-xs text-muted-soft mb-1">Recent questions</h3>
 				<ul className="flex flex-col gap-1 text-xs">
-					{questions.map((q) => <li key={q.id}>{new Date(q.askedAt).toLocaleString()} · {questionSummary(q)}</li>)}
+					{questions.map((q) => <li key={q.id}>{new Date(q.askedAt).toLocaleString()} · {plainMarkdown(questionSummary(q))}</li>)}
 				</ul>
 			</div>
 		) : null}

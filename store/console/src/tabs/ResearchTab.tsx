@@ -1,3 +1,4 @@
+import { plainMarkdown } from "../lib/agentText";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -143,7 +144,7 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 							<li key={r.id}>
 								<button type="button" onClick={() => navigate(`/instances/${instanceId}/research/${encodeURIComponent(r.id)}`)} className="w-full text-left py-2 flex gap-3 items-baseline hover:bg-panel-hover">
 									<span className={`text-xs font-semibold shrink-0 w-28 ${TONE_CLASS[s.tone]}`}>{s.label}</span>
-									<span className="text-sm truncate flex-1">{r.objective}</span>
+									<span className="text-sm truncate flex-1">{plainMarkdown(r.objective)}</span>
 									<span className="text-xs text-muted-soft shrink-0">{r.result ? `${r.result.findings.length} found` : new Date(r.createdAt).toLocaleString()}</span>
 								</button>
 							</li>

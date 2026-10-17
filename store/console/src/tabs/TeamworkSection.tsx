@@ -1,3 +1,4 @@
+import { plainMarkdown } from "../lib/agentText";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { formatTime } from "@proagentstore/sdk/ui";
@@ -595,7 +596,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 											{trace?.length === 0 && <div className="text-2xs text-muted">No events recorded for this run.</div>}
 											{trace?.map((e, i) => (
 												<div key={e.id || `${e.ts}-${i}`} className={`text-2xs ${e.level === "error" ? "text-danger" : "text-muted"} break-words`}>
-													<code>{e.event}</code> {e.message}
+													<code>{e.event}</code> {plainMarkdown(e.message ?? "")}
 												</div>
 											))}
 										</div>

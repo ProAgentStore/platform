@@ -1,3 +1,4 @@
+import MarkdownText from "../components/MarkdownText";
 import { useState, useEffect, useCallback, useRef } from "react";
 import Button from "../components/Button";
 import LoadFailed from "../components/LoadFailed";
@@ -550,7 +551,7 @@ export default function AgentDetail() {
 								<div key={m.key} className="bg-panel border border-line rounded-lg p-3">
 									<span className="font-semibold text-sm">{m.key}</span>
 									<span className="text-xs text-purple-400 ml-2">{m.type}</span>
-									<div className="text-sm text-muted mt-1">{m.content}</div>
+									<MarkdownText text={m.content} className="text-sm text-muted mt-1" />
 								</div>
 							))}
 						</div>

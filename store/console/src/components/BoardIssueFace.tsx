@@ -1,3 +1,4 @@
+import { plainMarkdown } from "../lib/agentText";
 import { issueLabel } from "../lib/boardLanes";
 
 /** The issue fields a board card carries (#895) — `githubIssue`, `issueRun`, `closingCommit` from `GET /board`. */
@@ -31,7 +32,7 @@ export default function BoardIssueFace({ item, onOpenSession }: { item: BoardIss
 				))}
 				{issue.assignees?.length ? <span className="text-muted-soft">@{issue.assignees.join(", @")}</span> : null}
 			</div>
-			{issue.summary && <p className="text-muted line-clamp-2 break-words">{issue.summary}</p>}
+			{issue.summary && <p className="text-muted line-clamp-2 break-words">{plainMarkdown(issue.summary)}</p>}
 			<div className="flex flex-wrap items-center gap-2">
 				{run?.sessionId && (
 					<button type="button" onClick={() => onOpenSession(run.sessionId as string)} className="text-accent hover:underline" title="Open the coding session working on this issue">

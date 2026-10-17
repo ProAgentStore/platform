@@ -1,3 +1,4 @@
+import { plainMarkdown } from "../lib/agentText";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -514,13 +515,13 @@ function ItemCard({ item, instanceId, cols, expanded, onToggleAttempts, onOpen, 
 				</button>
 			)}
 			<button type="button" onClick={() => onOpen(item.latestTaskId)} disabled={!openable} className={`text-left w-full ${openable ? "cursor-pointer" : "cursor-default"}`}>
-				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{item.title}</h3>
-				{item.subtitle && <p className="text-2xs text-muted-soft mb-1 line-clamp-1">{item.subtitle}</p>}
-				{item.description && <p className="text-xs text-muted line-clamp-2 mb-2">{item.description}</p>}
+				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{plainMarkdown(item.title)}</h3>
+				{item.subtitle && <p className="text-2xs text-muted-soft mb-1 line-clamp-1">{plainMarkdown(item.subtitle)}</p>}
+				{item.description && <p className="text-xs text-muted line-clamp-2 mb-2">{plainMarkdown(item.description)}</p>}
 				{item.reasoning && (
 					<div className="text-2xs text-muted bg-panel/50 border-l-2 border-accent/50 rounded-r px-2 py-1 mb-2 line-clamp-4 whitespace-pre-wrap break-words">
 						<span className="text-accent font-semibold">Why: </span>
-						{item.reasoning}
+						{plainMarkdown(item.reasoning)}
 					</div>
 				)}
 				<div className="flex gap-1.5 flex-wrap items-center text-2xs">
@@ -627,10 +628,10 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 			<div className="flex items-center gap-2 px-3 py-2 flex-wrap">
 				<button type="button" onClick={() => onOpen(item.latestTaskId)} disabled={!openable} className={`flex-1 min-w-[9rem] text-left ${openable ? "cursor-pointer" : "cursor-default"}`}>
 					<div className="flex items-baseline gap-2 min-w-0">
-						<span className="text-sm font-bold truncate">{item.title}</span>
-						{item.subtitle && <span className="text-2xs text-muted-soft truncate hidden sm:inline">{item.subtitle}</span>}
+						<span className="text-sm font-bold truncate">{plainMarkdown(item.title)}</span>
+						{item.subtitle && <span className="text-2xs text-muted-soft truncate hidden sm:inline">{plainMarkdown(item.subtitle)}</span>}
 					</div>
-					{item.description && <p className="text-xs text-muted line-clamp-1">{item.description}</p>}
+					{item.description && <p className="text-xs text-muted line-clamp-1">{plainMarkdown(item.description)}</p>}
 				</button>
 				<span className={`shrink-0 px-1.5 py-0.5 rounded text-2xs font-medium ${statusClass(item.status)}`}>{item.status}</span>
 				{item.userStatus && <span className="shrink-0 text-2xs text-muted-soft hidden sm:inline" title={`Automation: ${item.runStatus}`}>moved</span>}

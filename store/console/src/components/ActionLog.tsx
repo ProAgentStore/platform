@@ -1,3 +1,4 @@
+import MarkdownText from "./MarkdownText";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -85,7 +86,7 @@ export default function ActionLog({ instanceId, taskId, running }: { instanceId:
 								<span className="px-1 rounded border border-line">{e.actionType}</span>
 								<span>{e.actor}</span>
 							</div>
-							<p className="break-words whitespace-pre-wrap">{e.summary}</p>
+							<MarkdownText text={e.summary} />
 							{e.artifacts.length > 0 && (
 								<div className="flex flex-wrap gap-2 text-2xs">
 									{e.artifacts.map((a) => (

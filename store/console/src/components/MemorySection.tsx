@@ -3,6 +3,7 @@
  * delete the agent's persistent memory. Edits are tagged source:"user" so the
  * prompt marks them (user-set) and the agent won't overwrite them unasked.
  */
+import MarkdownText from "./MarkdownText";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { MemoryEntry } from "../lib/types";
@@ -140,7 +141,7 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 									</div>
 								</div>
 							) : (
-								<div className="text-sm text-muted mt-1">{m.content}</div>
+								<MarkdownText text={m.content} className="text-sm text-muted mt-1" />
 							)}
 						</Card>
 					))}

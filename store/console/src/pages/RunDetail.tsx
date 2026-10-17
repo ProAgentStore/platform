@@ -14,6 +14,8 @@ import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import Card from "../components/Card";
 import ActionLog from "../components/ActionLog";
+import MarkdownText from "../components/MarkdownText";
+import { questionOptions, whyWithoutOptions } from "../lib/agentText";
 
 /**
  * A real, routed run-detail page (not a popup) for any browser-runtime task: a
@@ -118,8 +120,9 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 			{turns.length > 0 && (
 				<div className="flex flex-col gap-2 mb-3">
 					{turns.map((t) => (
-						<div key={t.id} className={`text-sm rounded-lg px-3 py-2 whitespace-pre-line break-words ${t.role === "user" ? "bg-accent-soft text-ink self-end max-w-[85%]" : "bg-paper border border-line text-ink self-start max-w-[95%]"}`}>
-							{linkify(t.text)}
+						<div key={t.id} className={`text-sm rounded-lg px-3 py-2 break-words ${t.role === "user" ? "bg-accent-soft text-ink self-end max-w-[85%] whitespace-pre-line" : "bg-paper border border-line text-ink self-start max-w-[95%]"}`}>
+							{/* The agent's answer is markdown (#1129); the owner's own words stay as typed. */}
+							{t.role === "user" ? linkify(t.text) : <MarkdownText text={t.text} />}
 							<div className="text-2xs text-muted-soft mt-1">{t.role === "user" ? "You" : "Agent"}{t.at ? ` · ${fmtStamp(t.at)}` : ""}</div>
 						</div>
 					))}
@@ -275,6 +278,8 @@ export default function RunDetail() {
 	const [task, setTask] = useState<RuntimeTask | null>(null);
 	const [events, setEvents] = useState<RuntimeEvent[]>([]);
 	const [inputVal, setInputVal] = useState("");
+	// With options on offer, the free-text box appears only when the owner asks for it (#1129).
+	const [otherAnswer, setOtherAnswer] = useState(false);
 	const [takeoverOpen, setTakeoverOpen] = useState(false);
 	const fieldLabelId = useId();
 	// Which attempt of the job this run is (JSW-style: each retry is a separate,
@@ -348,12 +353,13 @@ export default function RunDetail() {
 	// `data: { field, why }` from `request_user_info` — the field name is exactly what the brain
 	// already knew it needed. Fall back to scraping the message only for events from an older runner
 	// that predates the structured payload.
-	const needsInputData = needsInputEv?.data as { field?: string; why?: string } | undefined;
+	const needsInputData = needsInputEv?.data as { field?: string; why?: string; options?: unknown } | undefined;
 	const field = needsInputData?.field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
 	const why = needsInputData?.why ?? "";
 	const paren = why || (detail.match(/\(([^)]*)\)/)?.[1] ?? "");
-	const fromIdx = paren.toLowerCase().indexOf("from:");
-	const options = fromIdx >= 0 ? paren.slice(fromIdx + 5).split(",").map((s) => s.trim()).filter((s) => s && s.length < 70).slice(0, 16) : [];
+	// The agent's own options first (#1129) — the `from:` text is only an older runner's fallback.
+	const options = questionOptions(needsInputData, paren);
+	const whyText = whyWithoutOptions(why);
 
 	const sendValue = async (v: string) => {
 		const t = v.trim(); if (!t) return;
@@ -436,11 +442,11 @@ export default function RunDetail() {
 			{/* ── Ticket content: description + the WHY (reasoning/audit) ──────── */}
 			{(task?.description || task?.reasoning) && (
 				<Card className="mb-5">
-					{task?.description && <div className="text-sm text-ink mb-3 whitespace-pre-line break-words">{linkify(task.description)}</div>}
+					{task?.description && <MarkdownText text={task.description} className="text-sm text-ink mb-3" />}
 					{task?.reasoning && (
 						<div>
 							<h2 className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-1.5">Why — what the agent did &amp; decided</h2>
-							<div className="text-sm text-ink whitespace-pre-line break-words leading-relaxed">{linkify(task.reasoning)}</div>
+							<MarkdownText text={task.reasoning} className="text-sm text-ink leading-relaxed" />
 						</div>
 					)}
 				</Card>
@@ -459,26 +465,33 @@ export default function RunDetail() {
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
 					<div className="text-lg font-bold text-ink">✏️ The agent needs one answer to continue</div>
 					<div className="text-sm text-muted mt-0.5 mb-3">It won’t guess personal or legal details — answer once and it keeps going.</div>
-					<div id={fieldLabelId} className="text-base font-semibold text-ink">{field}</div>
+					{/* The question is the agent's text: markdown, so bold and numbered decisions read as written (#1129). */}
+					<div id={fieldLabelId}>
+						<MarkdownText text={field} className="text-base font-semibold text-ink" />
+					</div>
+					{whyText && <MarkdownText text={whyText} className="text-sm text-muted mt-1" />}
 					{options.length > 0 && (
 						<div className="mt-3">
 							<div className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-2">Tap your answer</div>
 							<div className="flex flex-wrap gap-2">
 								{options.map((opt) => (
-									<button key={opt} type="button" onClick={() => sendValue(opt)} className="px-3.5 py-2 rounded-lg bg-panel border border-line hover:border-accent hover:bg-accent-soft text-sm text-ink font-medium">{opt}</button>
+									<button key={opt} type="button" onClick={() => sendValue(opt)} className="px-3.5 py-2.5 min-h-11 rounded-lg bg-panel border border-line hover:border-accent hover:bg-accent-soft text-sm text-ink font-medium text-left break-words max-w-full">{opt}</button>
 								))}
 							</div>
-							<div className="text-xs text-muted-soft mt-3 mb-1.5">…or type a different answer</div>
+							{/* Options ARE the answer (#1129): free text is an explicit escape, never the default beside them. */}
+							{!otherAnswer && (
+								<button type="button" onClick={() => setOtherAnswer(true)} className="text-xs text-accent underline mt-3">None of these — type a different answer</button>
+							)}
 						</div>
 					)}
-					<div className="flex gap-2 mt-2">
+					{(options.length === 0 || otherAnswer) && <div className="flex gap-2 mt-2">
 						{/* The agent's question is already rendered above; point at it instead of
 						    duplicating it into a placeholder that vanishes mid-answer. This is the
 						    field where someone types a legal name or a salary because the agent
 						    refused to guess — losing the question while typing is the worst case. */}
 						<input aria-labelledby={fieldLabelId} value={inputVal} onChange={(e) => setInputVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
 						<button type="button" disabled={!inputVal.trim()} onClick={() => sendValue(inputVal)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base disabled:opacity-40 shrink-0">Send</button>
-					</div>
+					</div>}
 				</div>
 			)}
 
@@ -527,14 +540,14 @@ export default function RunDetail() {
 								<div key={ev.id} className="flex gap-3 py-1.5 border-b border-line last:border-0 text-sm">
 									<span className="text-xs font-mono text-muted-soft shrink-0 w-[124px] pt-0.5">{fmtStamp(ev.createdAt)}</span>
 									<div className="min-w-0 flex-1">
-										<div className={levelClass(ev.type)}>{linkify(humanEvent(ev))}</div>
+										<MarkdownText text={humanEvent(ev)} className={levelClass(ev.type)} />
 										{gmailUrl && (
 											<div className="text-xs mt-0.5">
 												{emailFrom && <span className="text-muted-soft">from {emailFrom} · </span>}
 												<a href={gmailUrl} target="_blank" rel="noreferrer" className="text-accent font-semibold hover:underline">Open in Gmail →</a>
 											</div>
 										)}
-										{thought && <div className="text-xs text-muted-soft mt-0.5 line-clamp-2">{linkify(thought)}</div>}
+										{thought && <MarkdownText text={thought} className="text-xs text-muted-soft mt-0.5 line-clamp-2" />}
 									</div>
 								</div>
 							);

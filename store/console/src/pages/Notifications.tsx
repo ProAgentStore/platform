@@ -1,3 +1,4 @@
+import { plainMarkdown } from "../lib/agentText";
 import { useState, useEffect, useCallback } from "react";
 import Button from "../components/Button";
 import Page from "../components/Page";
@@ -108,9 +109,9 @@ export default function Notifications() {
 												Needs you
 											</span>
 										)}
-										{n.title}
+										{plainMarkdown(n.title)}
 									</div>
-									{n.body && <div className="text-sm text-muted mt-0.5">{n.body}</div>}
+									{n.body && <div className="text-sm text-muted mt-0.5 break-words">{plainMarkdown(n.body)}</div>}
 									<div className="text-xs text-muted-soft mt-1">{formatWhen(n)}</div>
 								</div>
 								{!n.read && <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1" />}

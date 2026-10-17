@@ -1,3 +1,4 @@
+import MarkdownText from "../components/MarkdownText";
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
 import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
@@ -417,7 +418,7 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 					{pause?.url && <p className="text-xs text-muted">At {pause.url} — open the runner's browser window on your machine to handle it, then Resume.</p>}
 					{questions.map((q) => (
 						<div key={q} className="mt-1">
-							<p className="text-xs">{q}</p>
+							<MarkdownText text={q} className="text-xs" />
 							{(item.actions.includes("resume") || item.actions.includes("retry_tailoring")) && (
 								<input aria-label={q} value={answers[q] ?? ""} onChange={(e) => setAnswers({ ...answers, [q]: e.target.value })} className="w-full bg-paper border border-line rounded px-2 py-1 text-sm" placeholder="Your answer (leave empty to skip it)" />
 							)}

@@ -1,3 +1,5 @@
+import { plainMarkdown } from "../../lib/agentText";
+import MarkdownText from "../../components/MarkdownText";
 import RunReplay, { useBrowserArtifacts } from "../../components/RunReplay";
 import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../../lib/runReplay";
 import TakeoverBanner from "../../components/TakeoverBanner";
@@ -101,7 +103,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 					</Button>
 				)}
 			</div>
-			<h2 className="text-base font-bold">{run.objective}</h2>
+			<h2 className="text-base font-bold break-words">{plainMarkdown(run.objective)}</h2>
 
 			{banner && (
 				<Card className="border-warning-line bg-warning-soft" role="alert">
@@ -179,7 +181,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 					<p className="text-xs text-muted mb-3">
 						Nothing is stored until you save it{run.policy.collection ? ` — saved findings go to “${run.policy.collection.name}”` : ". Set a results collection in Settings to save findings"}.
 					</p>
-					{run.result?.summary && <p className="text-sm mb-3">{run.result.summary}</p>}
+					{run.result?.summary && <MarkdownText text={run.result.summary} className="text-sm mb-3" />}
 					{findings.length === 0 && <p className="text-sm text-muted">No findings.</p>}
 					<ul className="flex flex-col gap-3">
 						{findings.map((f, i) => {
