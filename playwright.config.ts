@@ -68,7 +68,15 @@ export default defineConfig({
 	projects: [
 		{
 			name: "chromium",
-			use: { ...devices["Desktop Chrome"] },
+			/**
+			 * The browser cannot reach production's API (#1120). A spec's `page.route` still answers
+			 * first, so a mocked request is unchanged; an UNMOCKED one — including the SDK reporting its
+			 * own failure to `/v1/errors/client` — fails here instead of writing fixture rows into
+			 * production's error log, which is how `instance-1/run-1/handoff-1` rows got there (#1086).
+			 * Vitest has the same rule (`vitest.setup-no-production.mjs`). The Node-side `request`
+			 * fixture is not the browser and is unaffected: the live API smoke still reads production.
+			 */
+			use: { ...devices["Desktop Chrome"], launchOptions: { args: ["--host-resolver-rules=MAP api.proagentstore.online ~NOTFOUND"] } },
 		},
 		/**
 		 * WebKit, for the mobile geometry guards only (#384).
