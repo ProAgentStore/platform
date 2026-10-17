@@ -20,6 +20,7 @@
 // (/coding/tree|read-file|git|git-remote) are the same read-only, traversal-guarded,
 // byte-capped ones the Co-pilot uses — see packages/browser-runner/src/coding/inspect.ts,
 // where resolveInside() and gitArgv() carry the safety.
+import { globLiteral, globMatches, isGlob } from "../path-glob.js";
 import type { RegistryToolCtx, ToolDef } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 import { runnerUpgradeMessage, runnerUpgradeRefusal } from "../runner-upgrade.js";
@@ -702,12 +703,12 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			mutates: false,
 			untrustedOutput: true,
 			description: isFind
-				? "Find files in the local repository by NAME or path fragment — the fast way to answer 'where is X?'. Searches every tracked and every new-but-uncommitted file at ANY depth, so use this instead of walking repo_tree when you know roughly what the file is called. Case-insensitive substring match on the whole path, so `event_form` finds `admin/lib/features/events/ui/pages/event_form_dialog.dart`."
+				? "Find files in the local repository by NAME or path fragment — the fast way to answer 'where is X?'. Searches every tracked and every new-but-uncommitted file at ANY depth, so use this instead of walking repo_tree when you know roughly what the file is called. Case-insensitive substring match on the whole path, so `event_form` finds `admin/lib/features/events/ui/pages/event_form_dialog.dart`. GLOBS work too (#1070): `*` (within one folder/file name), `**` (across folders), `?`, `[abc]` / `[!abc]` — `*.test.js` finds every file ending .test.js, `*e2e*` everything in or named e2e, `src/**/*.ts` is anchored at the repo root (a pattern with a `/` is; one without matches any file or folder name at any depth). A glob with no literal text at all (`*`) is refused — use repo_tree to browse."
 				: "Search the CONTENTS of the local repository for a piece of text — where a symbol is defined, where a function is called, which files mention a string. Matches a literal string, NOT a regular expression, so `foo(` and `a.b` are searched exactly as written. Returns file, line number and the matching line. Use repo_find when you are looking for a file by its name instead.",
 			jsonSchema: {
 				type: "object" as const,
 				properties: {
-					pattern: { type: "string", description: isFind ? "Part of the file name or path to look for, e.g. `event_form_dialog` or `features/events`." : "The literal text to find, e.g. `class EventFormDialog` or `canManageEvents`." },
+					pattern: { type: "string", description: isFind ? "Part of the file name or path to look for, e.g. `event_form_dialog` or `features/events` — or a glob: `*.test.js`, `*_test.dart`, `*e2e*`, `**/handlers/*.js`." : "The literal text to find, e.g. `class EventFormDialog` or `canManageEvents`." },
 					path: { type: "string", description: "Limit the search to one folder, relative to the repo root (optional)." },
 				},
 				required: ["pattern"],
@@ -717,10 +718,15 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				if ("error" in t) return { content: t.error, success: false };
 				const pattern = String(input.pattern ?? "").trim();
 				if (!pattern) return { content: "A `pattern` is required — the text or file name to look for.", success: false };
+				// A glob (#1070). The runner is sent its literal text as the substring — what an OLD runner
+				// searches by — and the glob itself, which a current runner matches over the whole file list.
+				const glob = isFind && isGlob(pattern) ? pattern : null;
+				const literal = glob ? globLiteral(glob) : pattern;
+				if (glob && !literal) return { content: `\`${pattern}\` is a glob with no literal text to search by. Add part of the name (e.g. \`*.test.js\`, \`*e2e*\`), or use repo_tree to browse a folder.`, success: false };
 				const sync = syncVerdictFor(t);
-				let res: { matches?: Array<{ path: string; line?: number; text?: string }>; shown?: number; total?: number; truncated?: boolean; omittedPerFile?: Record<string, number>; error?: string };
+				let res: { matches?: Array<{ path: string; line?: number; text?: string }>; shown?: number; total?: number; truncated?: boolean; omittedPerFile?: Record<string, number>; error?: string; glob?: boolean };
 				try {
-					res = await callRunner(t.conn, "/coding/search", { workDir: t.workDir, pattern, path: input.path, mode: isFind ? "path" : "content" }, { timeoutMs: READ_TIMEOUT_MS });
+					res = await callRunner(t.conn, "/coding/search", { workDir: t.workDir, pattern: literal, ...(glob ? { glob } : {}), path: input.path, mode: isFind ? "path" : "content" }, { timeoutMs: READ_TIMEOUT_MS });
 				} catch (e) {
 					// The whole reason this is a separate endpoint: a 404 is unambiguous.
 					const old = await runnerTooOld(ctx, e, "search this repository");
@@ -732,10 +738,22 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 					const problem = await workdirProblem(t.conn, t.workDir);
 					return { content: problem ?? err, success: false };
 				}
-				const matches = res.matches ?? [];
+				// A runner that did not apply the glob (it predates it) answered for the literal: filter here. Its
+				// candidates were capped, so a cut list makes the filtered answer a LOWER bound, said as one.
+				const oldRunnerGlob = glob !== null && res.glob !== true;
+				const candidates = res.matches ?? [];
+				const candidateTotal = res.total;
+				const candidatesCut = oldRunnerGlob && (Boolean(res.truncated) || (res.total ?? candidates.length) > candidates.length);
+				const matches = oldRunnerGlob ? candidates.filter((m) => globMatches(glob, m.path)) : candidates;
+				if (oldRunnerGlob) res = { ...res, total: candidatesCut ? undefined : matches.length, truncated: candidatesCut };
+				const lowerBound = candidatesCut
+					? `(your runner predates glob search: it returned ${candidates.length} of ${candidateTotal ?? "?"} paths containing "${literal}", and ${matches.length} of those match ${pattern} — there may be more. Update the runner (runner_update), or narrow with \`path\`.)`
+					: "";
+				if (candidatesCut && !matches.length) return { head: lowerBound, content: "", success: true, tail: await syncTailFor(sync) };
 				if (!matches.length) {
 					const problem = await workdirProblem(t.conn, t.workDir);
 					if (problem) return { content: problem, success: false };
+					if (glob) return { head: `(no file or folder matches the glob "${pattern}"${input.path ? ` under ${String(input.path)}` : ""})`, content: "", success: true, tail: await syncTailFor(sync) };
 					// A real, useful answer — and one the agent may state plainly. Saying "nothing
 					// matches" is only honest because the search had no depth limit to hide behind —
 					// and because the tail says whether the tree searched is the CURRENT one (#785):
@@ -773,7 +791,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				const perFileNote = perFile.length
 					? `(only the first matches per file are shown; not shown: ${perFile.slice(0, 10).map(([p, n]) => `${p} +${n}`).join(", ")}${perFile.length > 10 ? `, and ${perFile.length - 10} more file(s)` : ""} — search that file with \`path\`)\n`
 					: "";
-				const note = `${cut ? `(showing ${kept.length.toLocaleString("en-US")} of ${res.total === undefined ? "?" : res.total.toLocaleString("en-US")} — narrow with \`path\` or a more specific \`pattern\`)\n` : ""}${perFileNote}`;
+				const note = lowerBound || `${cut ? `(showing ${kept.length.toLocaleString("en-US")} of ${res.total === undefined ? "?" : res.total.toLocaleString("en-US")} — narrow with \`path\` or a more specific \`pattern\`)\n` : ""}${perFileNote}`;
 				return {
 					head: note.trim(),
 					content: kept.join("\n"),

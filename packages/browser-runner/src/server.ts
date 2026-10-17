@@ -480,7 +480,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// unambiguously as "this machine is too old" — an unknown `cmd` would arrive as a 400 that reads
 	// identically to a real search failure.
 	if (req.method === "POST" && path === "/coding/search") {
-		const b = await readJson<{ sessionId?: string; workDir?: string; pattern: string; path?: string; mode?: "content" | "path"; maxResults?: number }>(req);
+		const b = await readJson<{ sessionId?: string; workDir?: string; pattern: string; path?: string; mode?: "content" | "path"; maxResults?: number; glob?: string }>(req);
 		try {
 			return json(res, 200, runner.coding.search(b));
 		} catch (e: unknown) {

@@ -1,3 +1,4 @@
+import { globMatches, isGlob } from "./path-glob.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
@@ -321,9 +322,11 @@ export interface RepoSearchResult {
 	truncated: boolean;
 	/** Matches past the per-file cap, by file (#898) — counted, where `--max-count` dropped them unseen. */
 	omittedPerFile?: Record<string, number>;
+	/** Path mode matched `glob` rather than the substring (#1070) — said, so the cloud knows not to re-filter. */
+	glob?: true;
 }
 
-export function repoSearch(workDir: string, opts: { pattern: string; path?: string; mode?: RepoSearchMode; maxResults?: number }): RepoSearchResult {
+export function repoSearch(workDir: string, opts: { pattern: string; path?: string; mode?: RepoSearchMode; maxResults?: number; glob?: string }): RepoSearchResult {
 	requireWorkTree(workDir);
 	const pattern = (opts.pattern ?? "").trim();
 	if (!pattern) throw new InspectError("a search `pattern` is required");
@@ -359,9 +362,12 @@ export function repoSearch(workDir: string, opts: { pattern: string; path?: stri
 	const lines = out.split("\n").filter((l) => l !== "");
 	if (mode === "path") {
 		// The pattern never reaches git here — the filter is a plain case-insensitive substring
-		// over the path, which is what "find the file called X" actually means.
-		const all = lines.filter((p) => p.toLowerCase().includes(pattern.toLowerCase())).map((p) => ({ path: p }));
-		return { mode, pattern, matches: all.slice(0, limit), shown: Math.min(all.length, limit), total: all.length, truncated: all.length > limit };
+		// over the path, which is what "find the file called X" actually means. A `glob` (#1070) is
+		// matched instead, over the WHOLE list, so `total` counts real matches, not the literal's.
+		const glob = (opts.glob ?? "").trim();
+		const useGlob = glob !== "" && isGlob(glob);
+		const all = lines.filter((p) => (useGlob ? globMatches(glob, p) : p.toLowerCase().includes(pattern.toLowerCase()))).map((p) => ({ path: p }));
+		return { mode, pattern, matches: all.slice(0, limit), shown: Math.min(all.length, limit), total: all.length, truncated: all.length > limit, ...(useGlob ? { glob: true as const } : {}) };
 	}
 	const all = lines.map(parseGrepLine).filter((m): m is { path: string; line: number; text: string } => m !== null);
 	const perFile = new Map<string, number>();

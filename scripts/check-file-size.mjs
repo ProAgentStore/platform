@@ -728,7 +728,7 @@ const PINS = {
 	"workers/api/src/lib/connectors/mcp.ts": 1371,
 	// New at #883: the no-repository refusal gained the coding_repo_add / coding_repo_remove remedies an
 	// MCP caller can act on. The refusal's branches are asserted together, so they stay in one place.
-	"workers/api/src/lib/connectors/repo-local.ts": 821, // +13 at #898: truncation made visible (paging, marked cuts, refused over-length writes). +1 at #954: `startColumn` on repo_read_file.
+	"workers/api/src/lib/connectors/repo-local.ts": 839, // +18 at #1070: repo_find globs — the old-runner fallback filter and its lower-bound note (the matcher itself is lib/path-glob.ts). +13 at #898: truncation made visible (paging, marked cuts, refused over-length writes). +1 at #954: `startColumn` on repo_read_file.
 	// New at #847: GitHub binding uniqueness is repo persistence, so findExistingRepoBinding stays with the D1 repo store rather than creating a one-query sibling. +12 at #579: retireDisplacedRuns announces the runs it closes as `run.stalled`; the read of which rows it closed belongs beside the write that closed them.
 	// +35 at #883/#879: `effectiveCloneStatus` (a folderless binding is `needs_path`, derived where rows are
 	// mapped so every reader agrees) and `claimFreeSessionDriver` (apply-now's never-steal claim, beside

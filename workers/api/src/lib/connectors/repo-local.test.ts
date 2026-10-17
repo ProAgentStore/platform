@@ -1098,3 +1098,73 @@ describe("every read tool says when the checkout is BEHIND (#785)", () => {
 		expect(paths.indexOf("/coding/sync")).toBeLessThan(paths.indexOf("/coding/search"));
 	});
 });
+
+// #1070: `repo_find` took its pattern as a plain substring, so `*.test.js` returned NOTHING — no path
+// contains an asterisk — and an agent concluded a repository with ~90 test files had none.
+describe("repo_find globs (#1070)", () => {
+	/** The runner answers `/coding/search` with `reply`; every other runner call (sync, checks) with `{}`. */
+	const runnerSays = (reply: Record<string, unknown>) =>
+		callRunner.mockImplementation(async (_conn: unknown, path: string) => (path === "/coding/search" ? reply : {}));
+	const searchBody = () => callRunner.mock.calls.find((c: unknown[]) => c[1] === "/coding/search")?.[2] as Record<string, unknown> | undefined;
+	const paths = (n: number, f: (i: number) => string) => Array.from({ length: n }, (_, i) => ({ path: f(i) }));
+	/** The paths listed inside the untrusted-output frame (its preamble and the head note excluded). */
+	const listed = (content: string) => content.split("\n").filter((l) => l && !l.startsWith("<") && !l.startsWith("(") && !l.startsWith("The following came from"));
+
+	it("sends a current runner the glob and its literal, and lists what it matched with the runner's exact count", async () => {
+		runnerSays({ glob: true, matches: paths(50, (i) => `src/m${i}/t${i}.test.js`), shown: 50, total: 90, truncated: true });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "*.test.js" });
+		expect(searchBody()).toMatchObject({ pattern: ".test.js", glob: "*.test.js", mode: "path" });
+		expect(r.success).toBe(true);
+		expect(r.head).toMatch(/showing 50 of 90/);
+		expect(r.content).toContain("src/m0/t0.test.js");
+	});
+
+	it("an OLD runner (no `glob` echo, list not cut): the cloud filters by the glob — `.snap` beside a test file is not a match", async () => {
+		runnerSays({ matches: [{ path: "src/a.test.js" }, { path: "src/a.test.js.snap" }, { path: "lib/b.test.js" }], shown: 3, total: 3, truncated: false });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "*.test.js" });
+		expect(listed(r.content)).toEqual(["src/a.test.js", "lib/b.test.js"]);
+		expect(r.head ?? "").not.toMatch(/may be more/);
+	});
+
+	it("an OLD runner whose candidate list was cut: the answer is a lower bound and says so — never a bare 'no file'", async () => {
+		runnerSays({ matches: paths(50, (i) => (i < 30 ? `t${i}.test.js` : `t${i}.test.js.snap`)), shown: 50, total: 120, truncated: true });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "*.test.js" });
+		expect(r.head).toMatch(/predates glob search: it returned 50 of 120 paths containing "\.test\.js", and 30 of those match \*\.test\.js — there may be more\. Update the runner \(runner_update\)/);
+		expect(listed(r.content)).toHaveLength(30);
+
+		runnerSays({ matches: paths(50, (i) => `t${i}.test.js.snap`), shown: 50, total: 400, truncated: true });
+		const none = await tool("repo_find").handler(ctx(), { pattern: "*.test.js" });
+		expect(listed(none.content)).toEqual([]);
+		expect(`${none.head ?? ""}\n${none.content}`).toMatch(/0 of those match .* there may be more/);
+		expect(`${none.head ?? ""}\n${none.content}`).not.toMatch(/no file/);
+	});
+
+	it("the issue's other patterns reach the runner with a usable literal: `*e2e*` → e2e, `**/handlers/*.js` → handlers", async () => {
+		runnerSays({ glob: true, matches: [{ path: "e2e/login.spec.ts" }], shown: 1, total: 1, truncated: false });
+		await tool("repo_find").handler(ctx(), { pattern: "*e2e*" });
+		expect(searchBody()).toMatchObject({ pattern: "e2e", glob: "*e2e*" });
+		callRunner.mockReset();
+		runnerSays({ glob: true, matches: [], shown: 0, total: 0, truncated: false });
+		const r = await tool("repo_find").handler(ctx(), { pattern: "**/handlers/*.js" });
+		expect(searchBody()).toMatchObject({ pattern: "handlers", glob: "**/handlers/*.js" });
+		expect(r.head).toMatch(/no file or folder matches the glob "\*\*\/handlers\/\*\.js"/);
+	});
+
+	it("a glob with no literal text is refused with what to do — the runner is not asked to search", async () => {
+		const r = await tool("repo_find").handler(ctx(), { pattern: "*" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/glob with no literal text .* repo_tree/);
+		expect(searchBody()).toBeUndefined();
+	});
+
+	it("a plain substring is unchanged: no `glob` is sent, and repo_grep never treats `*` as a glob", async () => {
+		runnerSays({ matches: [{ path: "admin/event_form_dialog.dart" }], shown: 1, total: 1, truncated: false });
+		await tool("repo_find").handler(ctx(), { pattern: "event_form" });
+		expect(searchBody()).toEqual(expect.not.objectContaining({ glob: expect.anything() }));
+		callRunner.mockReset();
+		runnerSays({ matches: [], shown: 0, total: 0, truncated: false });
+		await tool("repo_grep").handler(ctx(), { pattern: "a * b" });
+		expect(searchBody()).toMatchObject({ pattern: "a * b", mode: "content" });
+		expect(searchBody()).toEqual(expect.not.objectContaining({ glob: expect.anything() }));
+	});
+});

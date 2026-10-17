@@ -352,7 +352,7 @@ export class CodingRuntime {
 	 * meant walking `tree` by hand, and a path deeper than the tree's four-level cap was not
 	 * reachable in any number of calls that did not already know the answer.
 	 */
-	search(input: { sessionId?: string; workDir?: string; pattern: string; path?: string; mode?: RepoSearchMode; maxResults?: number }) {
+	search(input: { sessionId?: string; workDir?: string; pattern: string; path?: string; mode?: RepoSearchMode; maxResults?: number; glob?: string }) {
 		return repoSearch(this.resolveWorkDir(input), input);
 	}
 
