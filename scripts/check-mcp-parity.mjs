@@ -102,6 +102,12 @@ const EXCLUSIONS = [
 		match: /^(PUT|DELETE) \/v1\/keys\/\{\}$/,
 	},
 	{
+		label: "Discord bot channel setup",
+		why:
+			"The owner chooses a channel from the bot's own Discord server list in Permissions. It is an owner-facing configuration boundary, coupled to the bot token held in the credentials vault; agents use the resulting declared Discord tools but cannot enumerate servers or widen their own channel grants through MCP.",
+		match: /^(GET|POST|DELETE) \/v1\/discord\/(guilds|instances\/\{\}\/grants)/,
+	},
+	{
 		label: "Credentials for an outbound MCP server",
 		why:
 			"Same rule as the vault, on the newer surface: the console stores the bearer or OAuth secret an instance uses to reach someone else's MCP server, and it is never read back or written over MCP. `list_instance_tools` reports whether a connection HAS one.",
