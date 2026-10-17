@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import ToolPermissions from "../../components/ToolPermissions";
 import AgentAccountChoice from "../../components/AgentAccountChoice";
+import { DiscordConnectorPanel, type DiscordConnectorGrant } from "../../components/DiscordConnectorPanel";
 import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
 import type { InstancePermissionRequest, InstancePermissionRequestDecisionResponse, InstancePermissionRequestResponse } from "../../lib/types";
@@ -10,7 +11,7 @@ import { permissionCardActions, permissionCardExpiry, permissionCardInstanceLabe
 
 interface ConnectorGrant {
 	id: string;
-	provider: "google_drive" | "zoho_workdrive";
+	provider: "google_drive" | "zoho_workdrive" | "discord";
 	resourceId: string;
 	resourceName: string;
 	resourceType: string;
@@ -47,6 +48,8 @@ interface Props {
 	workdriveMsg: string;
 	workdriveGrantRef: string;
 	workdriveGrants: ConnectorGrant[];
+	discordGrants: DiscordConnectorGrant[];
+	discordMsg: string;
 	connectorPolicy: InstanceConnectorPolicy[] | null;
 	onEmailPermissionChange: (on: boolean) => Promise<void>;
 	onDriveGrantRefChange: (value: string) => void;
@@ -55,6 +58,8 @@ interface Props {
 	onWorkdriveGrantRefChange: (value: string) => void;
 	onAddWorkdriveGrant: () => Promise<void>;
 	onRemoveWorkdriveGrant: (grant: ConnectorGrant) => Promise<void>;
+	onAddDiscordGrant: (channelId: string) => Promise<void>;
+	onRemoveDiscordGrant: (grant: DiscordConnectorGrant) => Promise<void>;
 }
 
 export default function ConnectorsSection({
@@ -72,6 +77,8 @@ export default function ConnectorsSection({
 	workdriveMsg,
 	workdriveGrantRef,
 	workdriveGrants,
+	discordGrants,
+	discordMsg,
 	connectorPolicy,
 	onEmailPermissionChange,
 	onDriveGrantRefChange,
@@ -80,6 +87,8 @@ export default function ConnectorsSection({
 	onWorkdriveGrantRefChange,
 	onAddWorkdriveGrant,
 	onRemoveWorkdriveGrant,
+	onAddDiscordGrant,
+	onRemoveDiscordGrant,
 }: Props) {
 	const focusRef = useRef<HTMLDivElement>(null);
 	const [request, setRequest] = useState<InstancePermissionRequest | null>(null);
@@ -112,6 +121,10 @@ export default function ConnectorsSection({
 	const showsWorkdrive = useMemo(
 		() => showsFileConnector(workdriveStatus, connectorPolicy, "zoho_workdrive"),
 		[workdriveStatus, connectorPolicy],
+	);
+	const showsDiscord = useMemo(
+		() => connectorPolicy?.find((policy) => policy.id === "discord")?.allowed !== false,
+		[connectorPolicy],
 	);
 
 	return (
@@ -165,6 +178,8 @@ export default function ConnectorsSection({
 					onRemoveGrant={(g) => onRemoveWorkdriveGrant(g as ConnectorGrant)}
 				/>
 			)}
+
+			{showsDiscord && <DiscordConnectorPanel grants={discordGrants} message={discordMsg} onAddGrant={onAddDiscordGrant} onRemoveGrant={onRemoveDiscordGrant} />}
 
 			{showsEmail && (
 				<div className="mt-4" data-testid="settings-gmail-group">

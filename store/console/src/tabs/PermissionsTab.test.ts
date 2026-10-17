@@ -46,6 +46,8 @@ describe("each tab renders its own content", () => {
 		expect(html).toContain("Permissions &amp; Connections");
 		expect(html).not.toContain('data-testid="instance-id-value"');
 		expect(html).not.toContain('data-testid="settings-brain-section"');
+		expect(html).toContain('data-testid="discord-connector-panel"');
+		expect(html).toContain("Discord bot");
 	});
 
 	it("Settings keeps the instance, brain and runner — and no longer holds Permissions & Connections", () => {

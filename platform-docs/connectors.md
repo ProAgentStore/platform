@@ -44,6 +44,11 @@ resolved before the run and is refused at dispatch instead.
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 | `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_send_message`, `discord_add_reaction` |
 
+To connect Discord, store a **Discord bot token** in **Profile → API Keys & connector credentials**.
+Then, on the particular agent's **Permissions** tab, select a server and text channel to grant.
+The bot needs its normal Discord permissions in that channel; sending messages or reactions also
+requires that instance's Discord write consent.
+
 **Remote repository reads (#1110).** `github_read_file` (`repo`, `path`, `ref?`, `startLine?`, `endLine?`) and `github_tree` (`repo`, `path?`, `ref?`) read any repository the owner's GitHub App installation covers, at any branch, tag or SHA, with no local checkout. They use the same installation token as the other `github_*` reads, so they add no new scope or grant, and a repository the installation does not cover answers 404. Both are read-only (`mutates: false`), and their output is fenced as untrusted. A file is returned as a window of numbered lines with the exact next call; files over 1 MB can be read up to their first 1 MB, and a binary file returns only its size and sha. **Status:** this is implemented support only — no seeded agent declares these tools yet. Enabling them on the Coders is a live capability change and is pending owner approval. Once an agent declares them, they can be called both from chat and through `call_instance_tool`.
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:

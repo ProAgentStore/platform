@@ -4,6 +4,7 @@ import LoadFailed from "../components/LoadFailed";
 import type { InstanceConnectorPolicy } from "../lib/connectorState";
 import { permissionRequestFocus } from "../lib/permissionRequestFocus";
 import ConnectorsSection, { type DriveStatus, type WorkdriveStatus } from "./settings/ConnectorsSection";
+import type { DiscordConnectorGrant } from "../components/DiscordConnectorPanel";
 import type { ConnectorGrant } from "./TriggersSection";
 
 interface Props {
@@ -29,6 +30,8 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
 	const [workdriveGrantRef, setWorkdriveGrantRef] = useState("");
 	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
+	const [discordGrants, setDiscordGrants] = useState<DiscordConnectorGrant[]>([]);
+	const [discordMsg, setDiscordMsg] = useState("");
 	const [connectorPolicy, setConnectorPolicy] = useState<InstanceConnectorPolicy[] | null>(null);
 	const [loadFailures, setLoadFailures] = useState<string[]>([]);
 
@@ -64,6 +67,12 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 				setWorkdriveGrants(d.grants || []);
 			} catch {
 				failed.push("your WorkDrive folders");
+			}
+			try {
+				const d = await api<{ grants?: DiscordConnectorGrant[] }>(`/v1/discord/instances/${instanceId}/grants`);
+				setDiscordGrants(d.grants || []);
+			} catch {
+				failed.push("your Discord channels");
 			}
 			try {
 				const p = await api<{ connectors?: InstanceConnectorPolicy[] }>(`/v1/instances/${instanceId}/connectors`);
@@ -157,6 +166,21 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 		}
 	};
 
+	const addDiscordGrant = async (channelId: string) => {
+		const d = await api<{ grant: DiscordConnectorGrant }>(`/v1/discord/instances/${instanceId}/grants`, {
+			method: "POST",
+			body: JSON.stringify({ channelId }),
+		});
+		setDiscordGrants((grants) => [d.grant, ...grants.filter((grant) => grant.id !== d.grant.id && grant.resourceId !== d.grant.resourceId)]);
+		setDiscordMsg(`Granted this agent access to ${d.grant.resourceName}.`);
+	};
+
+	const removeDiscordGrant = async (grant: DiscordConnectorGrant) => {
+		await api(`/v1/discord/instances/${instanceId}/grants/${grant.id}`, { method: "DELETE" });
+		setDiscordGrants((grants) => grants.filter((entry) => entry.id !== grant.id));
+		setDiscordMsg(`Removed access to ${grant.resourceName}.`);
+	};
+
 	const toggleEmailPermission = async (on: boolean) => {
 		setEmailPermission(on);
 		try {
@@ -195,6 +219,8 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 				workdriveMsg={workdriveMsg}
 				workdriveGrantRef={workdriveGrantRef}
 				workdriveGrants={workdriveGrants}
+				discordGrants={discordGrants}
+				discordMsg={discordMsg}
 				connectorPolicy={connectorPolicy}
 				onEmailPermissionChange={toggleEmailPermission}
 				onDriveGrantRefChange={setDriveGrantRef}
@@ -203,6 +229,8 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 				onWorkdriveGrantRefChange={setWorkdriveGrantRef}
 				onAddWorkdriveGrant={addWorkdriveGrant}
 				onRemoveWorkdriveGrant={removeWorkdriveGrant}
+				onAddDiscordGrant={addDiscordGrant}
+				onRemoveDiscordGrant={removeDiscordGrant}
 			/>
 		</div>
 	);

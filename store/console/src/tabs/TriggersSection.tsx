@@ -68,10 +68,11 @@ interface TriggerActionOffer {
 	requires: string | null;
 }
 type ConnectorProviderType = "google_drive" | "zoho_workdrive";
+export type ConnectorGrantProvider = ConnectorProviderType | "discord";
 
 export interface ConnectorGrant {
 	id: string;
-	provider: ConnectorProviderType;
+	provider: ConnectorGrantProvider;
 	resourceId: string;
 	resourceName: string;
 	resourceType: string;

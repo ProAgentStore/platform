@@ -179,7 +179,7 @@ export default function Profile() {
 			accountId = prompt("Cloudflare account ID:");
 			if (!accountId) return;
 		}
-		const key = prompt(`${providerName} API key:`);
+		const key = prompt(providerId === "discord" ? "Discord bot token:" : `${providerName} API key:`);
 		if (!key) return;
 		try {
 			await api(`/v1/keys/${providerId}`, { method: "PUT", body: JSON.stringify({ key, accountId }) });
@@ -348,8 +348,8 @@ export default function Profile() {
 
 				{/* API Keys */}
 				<div className="mb-6">
-					<h3 className="text-base font-semibold mb-3">API Keys</h3>
-					<p className="text-sm text-muted mb-3">Store your AI provider keys. Encrypted with AES-256-GCM.</p>
+					<h3 className="text-base font-semibold mb-3">API Keys &amp; connector credentials</h3>
+					<p className="text-sm text-muted mb-3">Store your AI provider keys and connector credentials. Encrypted with AES-256-GCM.</p>
 					{keysErr ? (
 						<LoadFailed what="your API keys" detail={keysErr} onRetry={loadKeys} testId="keys-load-failed" compact />
 					) : keysLoading ? <p className="text-sm text-muted">Loading keys...</p> : (
