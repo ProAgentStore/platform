@@ -102,6 +102,12 @@ const SAFE_ID = /^[A-Za-z0-9_.:-]{1,300}$/;
 const HASH = /^[a-f0-9]{64}$/;
 /** One application at a time per agent: two runs on one employer's form is how duplicates happen. */
 const MAX_ACTIVE = 1;
+/**
+ * Pauses that wait on a DECISION, not on the page (#1121): the owner's stored answer satisfies them on
+ * a fresh fill, so a run paused on one gives the machine back. Every other pause — sign-in, CAPTCHA,
+ * consent, a redirect, the supervisor's checkpoint — needs this exact live page and keeps it.
+ */
+const PARKABLE_PAUSES: ReadonlySet<LocalApplyPause["reason"]> = new Set(["missing_answer", "screening_ambiguity"]);
 
 interface Run {
 	envelope: LocalApplyTaskEnvelope;
@@ -599,6 +605,21 @@ export class LocalApplyRuntime {
 
 	private pause(run: Run, p: LocalApplyPause): Promise<"resumed" | "stopped"> {
 		if (run.state === "ended" || run.cancelled) return Promise.resolve("stopped");
+		// #1121: a question only the owner can answer does not need this page — park it. The run ENDS
+		// `blocked` with the question, the browser and the CLI stop, and the machine's one slot is free
+		// for the next application. The owner's answer is stored (#1079) and re-fills this application
+		// from a fresh page, with the answer as a source. Never once a submit was attempted: that run
+		// must not be filled again (#1013, #1073), so it keeps holding the slot and its page.
+		if (run.state === "running" && PARKABLE_PAUSES.has(p.reason) && !run.bridge?.submitAttempted) {
+			this.emit(run, { type: "run.paused", pauseReason: p.reason });
+			this.end(run, {
+				outcome: "blocked",
+				blockReason: p.reason,
+				questions: p.question ? [p.question] : [],
+				summary: "Parked for the owner's answer; this machine was freed. Nothing was submitted.",
+			});
+			return Promise.resolve("stopped");
+		}
 		if (run.state === "running") {
 			run.activeMs += this.now() - run.activeSince;
 			run.state = "paused";

@@ -119,11 +119,12 @@ function envelope(over: Partial<LocalApplyTaskEnvelope> = {}): LocalApplyTaskEnv
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
-const call = (rt: LocalApplyRuntime, name: string, args: Record<string, unknown> = {}) => rt.bridge({ runId: "run-1", op: "call", name, args }) as Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
-async function approve(rt: LocalApplyRuntime, checkpointId = "initial:1", phase = "initial") {
-	const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId, phase });
+const callOn = (rt: LocalApplyRuntime, runId: string, name: string, args: Record<string, unknown> = {}) => rt.bridge({ runId, op: "call", name, args }) as Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
+const call = (rt: LocalApplyRuntime, name: string, args: Record<string, unknown> = {}) => callOn(rt, "run-1", name, args);
+async function approve(rt: LocalApplyRuntime, checkpointId = "initial:1", phase = "initial", runId = "run-1") {
+	const checkpoint = callOn(rt, runId, "supervisor_checkpoint", { checkpointId, phase });
 	await settle();
-	rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId, directive: "continue" });
+	rt.directive({ runId, schemaVersion: 1, checkpointId, directive: "continue" });
 	return checkpoint;
 }
 
@@ -372,31 +373,42 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		expect(rt.authorizeBridge("run-1", token)).toBe(true);
 	});
 
-	it("pauses for a missing answer, carries the question on status, and grounds the owner's answer after resume", async () => {
+	it("#1121: a question parks the run — it ends blocked with the question, and the machine is free for the next application", async () => {
 		const rt = runtime();
 		rt.start(envelope());
 		await settle();
 		await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
 		await call(rt, "browser_snapshot");
-		const asked = call(rt, "request_answer", { question: "Expected salary?" });
+		const asked = await call(rt, "request_answer", { question: "Expected salary?" });
+		expect(asked.isError, "the CLI is told to stop, not left waiting").toBe(true);
+		const st = rt.status({ runId: "run-1" });
+		expect(st.state).toBe("ended");
+		expect(st.result).toMatchObject({ outcome: "blocked", blockReason: "missing_answer", questions: ["Expected salary?"], submitAttempted: false });
+		expect(st.events.map((e) => e.type)).toContain("run.paused");
+		// The slot is free: a SECOND application's fill starts on this machine at once.
+		expect(rt.start({ ...envelope(), runId: "run-2", requestId: "t2:lead-2:1:materials", applicationId: "app-2" })).toMatchObject({ runId: "run-2", existing: false });
 		await settle();
-		expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "paused", pause: { reason: "missing_answer", question: "Expected salary?" } });
-		// While it waits, nothing else reaches the page — a CLI that gave up on its own call is told to stop.
-		expect((await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).content[0].text).toMatch(/paused for the owner/);
-		rt.resume({ runId: "run-1", answers: [{ question: "Expected salary?", answer: "150000 AUD" }] });
-		expect((await asked).isError).toBeFalsy();
-		await approve(rt, "after-answer:1", "uncertain");
-		expect((await call(rt, "browser_type", { target: "e1", text: "150000 AUD", source_quote: "A: 150000 AUD" })).isError).toBeFalsy();
+		expect(spawned).toHaveLength(2);
 	});
 
-	it("a cancel while paused ends the run failed and releases the waiting call", async () => {
+	it("#1121: a screening ambiguity parks the same way", async () => {
 		const rt = runtime();
 		rt.start(envelope());
 		await settle();
-		const asked = call(rt, "request_answer", { question: "Expected salary?" });
+		await call(rt, "request_answer", { question: "Is a contract role acceptable?", kind: "screening_ambiguity" });
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "blocked", blockReason: "screening_ambiguity" });
+	});
+
+	it("#1121: a live-page pause — the supervisor's checkpoint — still holds the machine; a cancel then ends it failed", async () => {
+		const rt = runtime();
+		rt.start(envelope());
 		await settle();
+		const waiting = call(rt, "supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+		await settle();
+		expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "paused", pause: { reason: "supervisor_checkpoint" } });
+		expect(() => rt.start({ ...envelope(), runId: "run-2", requestId: "t2:lead-2:1:materials", applicationId: "app-2" })).toThrow(/one at a time/);
 		rt.cancel({ runId: "run-1" });
-		await asked;
+		await waiting;
 		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: "Cancelled by the owner" });
 	});
 
@@ -687,26 +699,42 @@ describe.each([["claude"], ["codex"]] as const)("%s: a connected-runner applicat
 		// 3. FIELD FILL — grounded in the owner's own approved source.
 		expect((await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
 
-		// 4. PAUSE — a value the CLI does not have stops the run and asks, rather than inventing one.
-		const asked = call(rt, "request_answer", { question: "Expected salary?" });
-		await settle();
-		expect(rt.status({ runId: "run-1" }).pause).toMatchObject({ reason: "missing_answer" });
-		rt.resume({ runId: "run-1", answers: [{ question: "Expected salary?", answer: "Market rate" }] });
-		// The answer becomes a SOURCE the CLI must quote; it is deliberately not echoed back to it.
-		expect((await asked).content[0].text).toMatch(/owner answered/);
+		// 4. PARK (#1121) — a value the CLI does not have stops the run and asks, rather than inventing
+		// one, and the run gives the machine back instead of holding the page while the owner decides.
+		await call(rt, "request_answer", { question: "Expected salary?" });
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "blocked", blockReason: "missing_answer", filled: 1, submitAttempted: false });
 
-		// 5. AUTHORIZED SUBMIT — the gate the cloud issued is what lets the click through.
-		await approve(rt, "before-submit:1", "before_submit");
-		const submit = await call(rt, "browser_click", { target: "e2" });
+		// 5. RE-FILL — the owner's stored answer arrives on a FRESH fill of the same application as a
+		// source the CLI must quote (#1079 `ownerAnswers`); it is never echoed back to the CLI.
+		const gate = { mode: "auto_submit" as const, allowDomains: ["jobs.example.com"], submitGate: { gateId: "gate-2" } };
+		rt.start(envelope({ engine, runId: "run-2", requestId: "t1:lead-1:1:materials:retry:1", policy: gate, ownerAnswers: [{ question: "Expected salary?", answer: "Market rate" }] }));
+		await settle();
+		expect(spawned).toHaveLength(2);
+		await callOn(rt, "run-2", "browser_navigate", { url: "https://jobs.example.com/apply" });
+		await callOn(rt, "run-2", "browser_snapshot");
+		await approve(rt, "initial:2", "initial", "run-2");
+		expect((await callOn(rt, "run-2", "browser_type", { target: "e1", text: "Market rate", source_quote: "A: Market rate" })).isError).toBeFalsy();
+
+		// 6. AUTHORIZED SUBMIT — the gate the cloud issued is what lets the click through.
+		await approve(rt, "before-submit:1", "before_submit", "run-2");
+		const submit = await callOn(rt, "run-2", "browser_click", { target: "e2" });
 		// The gate let it through and it REACHED THE PAGE — which under fill_and_review is refused
 		// outright (the other test in this file asserts that). The fake site shows no confirmation
 		// page, so the runner correctly reports it as pressed-but-unconfirmed and stops: a submit is
 		// recorded as attempted, never as succeeded on the runner's word alone.
 		expect(submit.content[0]?.text).toMatch(/pressed/);
 		expect(clicks, "the authorized submit actually reached the page").toContain("e2");
+
+		// 7. NEVER PARKED AFTER A SUBMIT (#1121, #1013): a parked run is re-filled, and this application must
+		// not be filled again. Once the submit was pressed the bridge refuses every tool — a question too —
+		// so the run is not parked: it keeps the machine until it ends as submit_unconfirmed.
+		const late = await callOn(rt, "run-2", "request_answer", { question: "Anything else?" });
+		expect(late.content[0].text).toMatch(/finished for this run/);
+		expect(rt.status({ runId: "run-2" }).state).toBe("running");
+		expect(() => rt.start({ ...envelope({ engine }), runId: "run-3", requestId: "t3:lead-3:1:materials", applicationId: "app-3" })).toThrow(/one at a time/);
 		child.exit(0);
 
-		const st = rt.status({ runId: "run-1" });
+		const st = rt.status({ runId: "run-2" });
 		expect(st.state).toBe("ended");
 		expect(st.result, "the submit is recorded as attempted, not as confirmed").toMatchObject({ submitAttempted: true, blockReason: "submit_unconfirmed" });
 		expect(st.result?.blockReason, "a run that used the bridge is never bridge_unused").not.toBe("bridge_unused");

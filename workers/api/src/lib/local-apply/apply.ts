@@ -727,6 +727,15 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 }
 
 /** The owner handled the pause: send their answers / newly allowed sites, release the run, read it back. */
+/** The block reasons an owner's answer resolves — a question, not the page (#1121). */
+const ANSWERABLE_BLOCKS: ReadonlySet<string> = new Set(["missing_answer", "screening_ambiguity"]);
+
+/** Did the runner end this run parked on a question, with nothing submitted? Read from its own typed result. */
+function parkedOnAQuestion(run: ApplyRun): boolean {
+	const r = run.result as { outcome?: unknown; blockReason?: unknown; submitAttempted?: unknown } | null;
+	return run.status === "blocked" && r?.outcome === "blocked" && typeof r.blockReason === "string" && ANSWERABLE_BLOCKS.has(r.blockReason) && r.submitAttempted === false;
+}
+
 export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body: unknown, now = Date.now(), via: DecisionVia = "console"): Promise<ApplyRun> {
 	const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
 	// Refused, not cut: a truncated answer would be grounding the owner never wrote.
@@ -744,8 +753,17 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 	}
 	// A run that is no longer paused keeps the answers for the next fill of this application, instead of refusing them.
 	if (run.status !== "paused") {
-		if (answers.length) return run;
-		throw new HttpError(409, `Only a paused run can be resumed; this one is ${run.status}`);
+		if (!answers.length) throw new HttpError(409, `Only a paused run can be resumed; this one is ${run.status}`);
+		// #1121: a run the runner PARKED on this question gave its machine back; the answer re-fills the
+		// application from a fresh page, carrying the stored answer (`keptAnswers` → `ownerAnswers`).
+		// Through `retryFill`, so the submit-attempt guard (#1013/#1073), one-click recovery and the
+		// queue (a busy machine queues it, FIFO) all apply exactly as for an owner's retry.
+		const app = stored.length && parkedOnAQuestion(run) ? await getOwnedApplication(env, uid, run.applicationId) : null;
+		if (app && app.fillRunId === run.id && app.status === "blocked" && ANSWERABLE_BLOCKS.has(app.blockReason ?? "") && !app.submitAttemptedAt) {
+			const refill = await retryFill(env, run.instanceId, uid, app);
+			return refill.run ?? run;
+		}
+		return run;
 	}
 	const rawDomains = Array.isArray(b.allowDomains) ? b.allowDomains : [];
 	const allowDomains = rawDomains.map((d) => (typeof d === "string" ? hostOfUrl(`https://${d}`) : null));

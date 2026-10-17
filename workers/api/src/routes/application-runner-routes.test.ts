@@ -2042,6 +2042,62 @@ describe("a Runner answer is a durable decision on the application (#1079)", () 
 		expect(decisions()).toEqual([expect.objectContaining({ applied_ref: nextRun })]);
 	});
 
+	describe("#1121: a run PARKED on a question gave its machine back; the owner's answer re-fills the application", () => {
+		/** The runner reports the run parked; the live application carries its materials_ready event (what a re-fill fills from), which `readyApp` does not. */
+		const parked = (runId: string, over: Record<string, unknown> = {}) => {
+			runner("ended", { result: RESULT(runId, { outcome: "blocked", blockReason: "missing_answer", questions: ["Expected salary?"], filled: 2, summary: "Parked for the owner's answer.", ...over }) });
+			const id = d1.sqlite.prepare("SELECT application_id FROM local_apply_runs WHERE id = ?").get(runId) as { application_id: string };
+			d1.sqlite.prepare("UPDATE job_applications SET ready_event = ? WHERE id = ?").run(JSON.stringify({ eventId: `t1:${id.application_id}:1:materials`, applicationId: id.application_id }), id.application_id);
+		};
+		const SALARY = [{ question: "Expected salary?", answer: "150000 AUD" }];
+
+		it("the answer starts ONE fresh fill carrying the stored answer — nothing is sent to the ended run", async () => {
+			const first = (await call("POST", "/ap/application-runs", readyApp("lead-p1"))).body.run.id as string;
+			parked(first);
+			await call("GET", `/ap/application-runs/${first}`);
+			expect(await appRow("lead-p1")).toMatchObject({ status: "blocked", block_reason: "missing_answer" });
+
+			const res = await call("POST", `/ap/application-runs/${first}/resume`, { answers: SALARY });
+			expect(res.status).toBe(200);
+			const refill = dispatches().filter((x) => x.body.applicationId === "lead-p1");
+			expect(refill).toHaveLength(2);
+			expect(refill[1].body.runId).not.toBe(first);
+			expect(refill[1].body.ownerAnswers).toEqual(SALARY);
+			expect(sent.some((x) => x.path === "/local-apply/resume")).toBe(false);
+			expect(await appRow("lead-p1")).toMatchObject({ status: "filling", fill_run_id: refill[1].body.runId });
+			expect(decisions()).toEqual([expect.objectContaining({ answer: "150000 AUD", applied_ref: refill[1].body.runId })]);
+			// A repeated answer to the same parked run never starts a second fill.
+			await call("POST", `/ap/application-runs/${first}/resume`, { answers: SALARY });
+			expect(dispatches().filter((x) => x.body.applicationId === "lead-p1")).toHaveLength(2);
+		});
+
+		it("never re-fills when the parked run's own result says a submit was attempted (#1013/#1073) — the answer is kept", async () => {
+			const first = (await call("POST", "/ap/application-runs", readyApp("lead-p2"))).body.run.id as string;
+			parked(first, { submitAttempted: true });
+			await call("GET", `/ap/application-runs/${first}`);
+			expect((await call("POST", `/ap/application-runs/${first}/resume`, { answers: SALARY })).status).toBe(200);
+			expect(dispatches().filter((x) => x.body.applicationId === "lead-p2")).toHaveLength(1);
+			expect(decisions()).toEqual([expect.objectContaining({ answer: "150000 AUD", applied_ref: null })]);
+		});
+
+		it("a run blocked on a LIVE-PAGE reason (sign-in) is not re-filled by an answer", async () => {
+			const first = (await call("POST", "/ap/application-runs", readyApp("lead-p3"))).body.run.id as string;
+			parked(first, { blockReason: "login_required", questions: ["Sign in to example.com"] });
+			await call("GET", `/ap/application-runs/${first}`);
+			await call("POST", `/ap/application-runs/${first}/resume`, { answers: SALARY });
+			expect(dispatches().filter((x) => x.body.applicationId === "lead-p3")).toHaveLength(1);
+		});
+
+		it("an answer to an OLDER run of the application — not its current fill — starts nothing", async () => {
+			const first = (await call("POST", "/ap/application-runs", readyApp("lead-p4"))).body.run.id as string;
+			parked(first);
+			await call("GET", `/ap/application-runs/${first}`);
+			await d1.DB.prepare("UPDATE job_applications SET fill_run_id = 'a-newer-run' WHERE id = 'lead-p4'").run();
+			await call("POST", `/ap/application-runs/${first}/resume`, { answers: SALARY });
+			expect(dispatches().filter((x) => x.body.applicationId === "lead-p4")).toHaveLength(1);
+		});
+	});
+
 	it("a resume with no answers on an ended run is still refused — there is nothing to keep", async () => {
 		const runId = (await call("POST", "/ap/application-runs", readyApp("lead-d3"))).body.run.id as string;
 		answers["/local-apply/status"] = { status: 404, body: { error: "No application run" } };
