@@ -8,13 +8,14 @@
  * research pages it must NOT stop for (a job list with a search box, an article that merely
  * mentions "access denied").
  */
-import { type Browser, chromium } from "playwright";
+import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { launchTestChromium } from "../test-chromium.js";
 import { INSPECT_PAGE } from "./bridge.js";
 
 let browser: Browser;
 beforeAll(async () => {
-	browser = await chromium.launch();
+	browser = await launchTestChromium();
 });
 afterAll(async () => {
 	await browser?.close();

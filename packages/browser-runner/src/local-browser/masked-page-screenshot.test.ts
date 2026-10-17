@@ -7,9 +7,10 @@
  * Two layers: a fake page for the order and the fail-closed rule, and a real Chromium page proving the
  * blur is IN the page at the moment of capture and gone straight after.
  */
-import { type Browser, chromium } from "playwright";
+import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { captureScreenshotDataUrl } from "../challenge.js";
+import { launchTestChromium } from "../test-chromium.js";
 import { maskedPageScreenshot, MASK_FORM_CONTROLS, UNMASK_FORM_CONTROLS } from "./replay.js";
 
 /** A page that records what it was asked, in order. */
@@ -65,7 +66,7 @@ describe("maskedPageScreenshot — the order and the fail-closed rule (#1067)", 
 describe("in a real page (#1067)", () => {
 	let browser: Browser;
 	beforeAll(async () => {
-		browser = await chromium.launch();
+		browser = await launchTestChromium();
 	});
 	afterAll(async () => {
 		await browser?.close();
