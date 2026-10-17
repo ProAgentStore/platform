@@ -31,15 +31,28 @@ beforeEach(() => {
 	runUserWorkersAi.mockReset();
 	setControllerAiSleepForTest(async () => undefined);
 });
-afterEach(() => setControllerAiSleepForTest(null));
+afterEach(() => {
+	setControllerAiSleepForTest(null);
+	vi.useRealTimers();
+});
 
 describe("the Loop orchestrator (#907)", () => {
 	it("recovers a stalled decision and passes each attempt the policy's deadlines", async () => {
+		// #1128: `totalMs` is the time LEFT in the 240s ceiling — `withControllerAiRecovery` reads the clock at
+		// its start and again for each attempt, so a millisecond boundary crossed between the two reads
+		// (CI run 38974304633) correctly hands attempt 1 239999. The clock is frozen so that "no time has
+		// elapsed" is TRUE here rather than a coincidence, and the policy's deadlines are what production
+		// computes. Clamping to the time left is pinned with an injected clock in controller-ai-recovery.test.ts.
+		vi.useFakeTimers({ toFake: ["Date"] });
 		runUserWorkersAi.mockRejectedValueOnce(stall()).mockResolvedValueOnce({ response: '{"decision":"continue","nextInstruction":"run the tests","reason":"not done"}' });
 		const out = await runLoopDecide(env, "u1", "inst1", decideInput);
 		expect(out).toMatchObject({ decision: "continue", nextInstruction: "run the tests" });
 		expect(runUserWorkersAi).toHaveBeenCalledTimes(2);
-		expect((runUserWorkersAi.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 });
+		const deadlines = runUserWorkersAi.mock.calls.map((c) => (c[3] as { streamDeadlines: unknown }).streamDeadlines);
+		expect(deadlines).toEqual([
+			{ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 },
+			{ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 2 },
+		]);
 	});
 
 	it("does not retry a non-stall failure", async () => {
