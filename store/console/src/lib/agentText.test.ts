@@ -1,7 +1,7 @@
 /** #1129 — agent text renders as markdown, and a question's options always become buttons. */
 import { describe, expect, it } from "vitest";
 import { renderMd } from "@proagentstore/sdk/ui";
-import { plainMarkdown, questionOptions, splitInlineNumberedList, whyWithoutOptions } from "./agentText";
+import { partsAnswer, plainMarkdown, questionOptions, questionParts, splitInlineNumberedList, whyWithoutOptions } from "./agentText";
 
 describe("splitInlineNumberedList (#1129)", () => {
 	it("puts an inline 1. 2. 3. sequence on its own lines, so it renders as a list", () => {
@@ -39,5 +39,24 @@ describe("plainMarkdown — a one-line preview without raw markers (#1129)", () 
 		expect(plainMarkdown("**Notification channel** — use `email`, see [docs](https://x.example/a)")).toBe("Notification channel — use email, see docs");
 		expect(plainMarkdown("## Heading\n- item")).toBe("Heading\n• item");
 		expect(plainMarkdown("a * b * c")).toBe("a * b * c");
+	});
+});
+
+describe("a multi-part question's decisions (#1129)", () => {
+	const parts = [
+		{ question: "Notification channel?", options: ["Email", "Push"] },
+		{ question: "Retry automatically?", options: ["Yes", "No"] },
+	];
+
+	it("reads the structured parts, each with at least two options — fewer than two parts is not a multi-part question", () => {
+		expect(questionParts({ parts })).toEqual(parts);
+		expect(questionParts({ parts: [parts[0], { question: "Broken?", options: ["only"] }] })).toEqual([]);
+		expect(questionParts({ parts: [parts[0]] })).toEqual([]);
+		expect(questionParts({ parts: "1. a 2. b" })).toEqual([]);
+		expect(questionParts(undefined)).toEqual([]);
+	});
+
+	it("sends one answer naming each decision with its pick, in order", () => {
+		expect(partsAnswer(parts, { 0: "Push", 1: "No" })).toBe("1. Notification channel: Push\n2. Retry automatically: No");
 	});
 });

@@ -14,7 +14,7 @@ const QUESTION = "Three decisions: 1. **Notification channel** — email or push
 const LONG = "Use the platform default notification channel, which is email to the owner, and nothing else";
 const OPTIONS = ["Email, then push", "Push only", LONG];
 
-async function mockTicket(page: Page, opts: { options?: string[] } = {}) {
+async function mockTicket(page: Page, opts: { options?: string[]; data?: Record<string, unknown> } = {}) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
 	const answers: string[] = [];
 	await page.route(`${API}/**`, async (route) => {
@@ -29,7 +29,7 @@ async function mockTicket(page: Page, opts: { options?: string[] } = {}) {
 		if (path === "/v1/instances/inst-1/task-events") {
 			return json({
 				events: [
-					{ id: "e1", taskId: "t1", type: "agent.needs_input", createdAt: "2026-10-17T00:01:00Z", message: `Needs your input — ${QUESTION}`, data: { field: QUESTION, why: "the alert config needs it", options: opts.options ?? OPTIONS } },
+					{ id: "e1", taskId: "t1", type: "agent.needs_input", createdAt: "2026-10-17T00:01:00Z", message: `Needs your input — ${QUESTION}`, data: { field: QUESTION, why: "the alert config needs it", options: opts.options ?? OPTIONS, ...opts.data } },
 				],
 			});
 		}
@@ -98,6 +98,54 @@ test.describe("agent text is markdown, and options are buttons (#1129)", () => {
 		await expect(long).toBeVisible();
 		const box = await long.boundingBox();
 		expect(box && box.x >= 0 && box.x + box.width <= 390).toBe(true);
+		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+	});
+
+	test("a cut question opens to its full text, one tap away (#1129)", async ({ page }) => {
+		const full = `${QUESTION} Also: the **escalation** contact is the on-call owner, and the rest of this sentence was past the cut.`;
+		await mockTicket(page, { data: { field: `${QUESTION.slice(0, 60)}… [cut: showing the first 60 of ${full.length} characters]`, fullQuestion: full } });
+		await page.goto("/console/instances/inst-1/tasks/t1");
+		await expect(page.getByText("[cut: showing the first 60")).toBeVisible();
+		await page.getByRole("button", { name: "Show the full question" }).click();
+		await expect(page.locator("strong", { hasText: "escalation" })).toBeVisible();
+		await expect(page.getByText("past the cut")).toBeVisible();
+		await expect(page.getByText("[cut:")).toHaveCount(0);
+		await page.getByRole("button", { name: "Show less" }).click();
+		await expect(page.getByText("[cut: showing the first 60")).toBeVisible();
+	});
+
+	const PARTS = [
+		{ question: "**Notification channel**?", options: ["Email", "Push"] },
+		{ question: "Threshold?", options: ["5 failures", "10 failures"] },
+		{ question: "Retry automatically?", options: ["Yes", "No"] },
+	];
+
+	test("a question holding several decisions gets one button group per decision, then one Send (#1129)", async ({ page }) => {
+		const mock = await mockTicket(page, { options: [], data: { field: "Three settings for the alerts:", parts: PARTS } });
+		await page.goto("/console/instances/inst-1/tasks/t1");
+		const groups = page.getByTestId("question-parts").locator("fieldset");
+		await expect(groups).toHaveCount(3);
+		await expect(groups.first().locator("strong", { hasText: "Notification channel" })).toBeVisible();
+		// No free-text box while the decisions have options.
+		await expect(page.getByRole("textbox", { name: /Three settings/ })).toHaveCount(0);
+		const send = page.getByRole("button", { name: "Send", exact: true });
+		await groups.nth(0).getByRole("button", { name: "Push" }).click();
+		await groups.nth(1).getByRole("button", { name: "10 failures" }).click();
+		await expect(send).toBeDisabled(); // every decision is answered before it sends
+		await groups.nth(2).getByRole("button", { name: "No" }).click();
+		await expect(groups.nth(2).getByRole("button", { name: "No" })).toHaveAttribute("aria-pressed", "true");
+		await send.click();
+		await expect.poll(() => mock.answers).toEqual(["1. **Notification channel**: Push\n2. Threshold: 10 failures\n3. Retry automatically: No"]);
+	});
+
+	test("mobile — at phone width the decision groups wrap inside the screen and nothing scrolls sideways (#1129)", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await mockTicket(page, { options: [], data: { field: "Three settings for the alerts:", parts: [...PARTS, { question: "Where should a failure that repeats overnight be escalated?", options: [LONG, "Nowhere"] }] } });
+		await page.goto("/console/instances/inst-1/tasks/t1");
+		const long = page.getByRole("button", { name: LONG });
+		await expect(long).toBeVisible();
+		const box = await long.boundingBox();
+		expect(box && box.x >= 0 && box.x + box.width <= 390 && box.height >= 44).toBe(true);
 		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 	});
 });

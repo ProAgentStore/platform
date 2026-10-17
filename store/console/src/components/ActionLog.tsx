@@ -90,7 +90,8 @@ export default function ActionLog({ instanceId, taskId, running }: { instanceId:
 							{e.artifacts.length > 0 && (
 								<div className="flex flex-wrap gap-2 text-2xs">
 									{e.artifacts.map((a) => (
-										<a key={a.url} href={a.url} target="_blank" rel="noopener noreferrer" className="text-accent underline break-all">
+										// A phone-sized tap target (#1129) — a 16px-tall commit link is hard to hit; desktop is unchanged.
+										<a key={a.url} href={a.url} target="_blank" rel="noopener noreferrer" className="text-accent underline break-all inline-flex items-center min-h-11 sm:min-h-0">
 											{a.label}
 										</a>
 									))}
@@ -101,7 +102,7 @@ export default function ActionLog({ instanceId, taskId, running }: { instanceId:
 				))}
 			</ol>
 			{hasMore && (
-				<button type="button" onClick={() => void fetchFrom(cursor)} className="mt-1 text-2xs text-accent underline">
+				<button type="button" onClick={() => void fetchFrom(cursor)} className="mt-1 text-2xs text-accent underline min-h-11 sm:min-h-0">
 					Load more ({entries.length} of {total})
 				</button>
 			)}
@@ -114,7 +115,7 @@ export function CardActionLog({ instanceId, taskId, running }: { instanceId: str
 	const [open, setOpen] = useState(false);
 	return (
 		<div className="mt-2">
-			<button type="button" onClick={() => setOpen(!open)} className="text-2xs text-muted hover:text-accent" aria-expanded={open}>
+			<button type="button" onClick={() => setOpen(!open)} className="text-2xs text-muted hover:text-accent min-h-11 sm:min-h-0" aria-expanded={open}>
 				{open ? "▾ Hide log" : "▸ Action log"}
 			</button>
 			{open && (

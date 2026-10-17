@@ -156,7 +156,8 @@ export default function Layout() {
 					<span className={`flex items-center shrink-0 ${navHidden ? "gap-1.5" : "gap-2.5"}`}>
 						<ConversationPill />
 						<CopyPageLink size={navHidden ? 16 : 18} />
-						<NavLink to="/notifications" className="relative no-underline text-muted" title="Notifications">
+						{/* A phone-sized tap area around an 18px icon (#1129), drawn by an absolute ::after so no box grows or moves. */}
+						<NavLink to="/notifications" className="relative no-underline text-muted after:absolute after:-inset-2" title="Notifications">
 							<Bell size={navHidden ? 16 : 18} />
 							{unreadCount > 0 && (
 								<span className="absolute -top-1 -right-1.5 bg-danger text-white text-2xs w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
@@ -164,7 +165,7 @@ export default function Layout() {
 								</span>
 							)}
 						</NavLink>
-							<NavLink to="/profile" className="flex items-center text-muted no-underline hover:text-ink">
+							<NavLink to="/profile" className="relative flex items-center text-muted no-underline hover:text-ink after:absolute after:-inset-2">
 								<img src={user.avatar} alt="" width={navHidden ? 22 : 26} height={navHidden ? 22 : 26} className={`rounded-full border-2 border-line ${navHidden ? "w-[22px] h-[22px]" : "w-[26px] h-[26px]"}`} />
 							</NavLink>
 					</span>

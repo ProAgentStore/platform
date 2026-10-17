@@ -184,6 +184,25 @@ describe("a coding run asks, PARKS at zero compute, and resumes with the owner's
 		expect(question().decision).toBe("drop it");
 	});
 
+	it("a long, multi-part question reaches the card whole: its uncut text and one option list per decision (#1129)", async () => {
+		const asked = `${"Before I wire the alerts, three things are yours to decide. ".repeat(8)}Pick one per line.`;
+		decisions = [
+			toDecision({
+				name: "ask_owner",
+				arguments: { question: asked, parts: [{ question: "Notification channel?", options: ["Email", "Push"] }, { question: "Retry automatically?", options: ["Yes", "No"] }], why: "the alert config needs it" },
+			}),
+		];
+		await runCodingSessionWorkflow(env, { payload: params() } as WorkflowEvent<CodingSessionParams>, step(async () => undefined, async () => "timeout"));
+		const ev = d1.sqlite.prepare("SELECT payload FROM instance_runtime_task_events WHERE task_id = 'csess-s1' AND type = 'agent.needs_input'").get() as { payload: string };
+		const data = JSON.parse(ev.payload).data;
+		expect(data.field).toMatch(/\[cut: showing the first \d+ of \d+ characters\]$/);
+		expect(data.fullQuestion).toBe(asked);
+		expect(data.parts).toEqual([{ question: "Notification channel?", options: ["Email", "Push"] }, { question: "Retry automatically?", options: ["Yes", "No"] }]);
+		// The question captured for the issue and the Coder Brain lists the decisions it holds.
+		const captured = d1.sqlite.prepare("SELECT question FROM coder_questions WHERE task_id = 'csess-s1'").get() as { question: string };
+		expect(captured.question).toContain("1. Notification channel? — Email / Push\n2. Retry automatically? — Yes / No");
+	});
+
 	it("an unanswered park times out after 30 days and stops `decision` — continuable, never `failed`", async () => {
 		decisions = [toDecision({ name: "ask_owner", arguments: { question: "Which region?", options: ["eu", "us"] } })];
 		const result = await runCodingSessionWorkflow(

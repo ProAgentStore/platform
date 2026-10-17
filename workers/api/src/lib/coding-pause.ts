@@ -28,6 +28,7 @@ import {
 	type EngineWaitState,
 } from "./coding-wait.js";
 import type { LoopStopReason } from "./agent-loop.js";
+import type { AskPart } from "./coding-ask.js";
 import type { CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
 import { codingCardId } from "./coding-board.js";
@@ -84,7 +85,7 @@ export interface PauseDeps {
 	 * the run (what coding_loop_status, the fleet and the board read). Optional so a test or a caller
 	 * with nothing to publish to still pauses; the workflow always provides it.
 	 */
-	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string }) => Promise<unknown>;
+	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string; fullQuestion?: string; parts?: AskPart[] }) => Promise<unknown>;
 	/** Has the human resolved it, and with what value? */
 	takeoverStatus: () => Promise<{ resolved: boolean; value?: string }>;
 	/** Close the takeover once it is resolved. */
@@ -242,7 +243,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// A QUESTION is published as one (#960): its event on the card and its park on the run, before the
 	// pushes below point anyone at it. Best-effort for the same reason the card is — a lost event is a
 	// visibility bug; failing the pause is a work bug.
-	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: result.detail ?? "", field: result.fieldNeeded ?? label, taskId: cardId }).catch(() => undefined)) : null;
+	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: result.detail ?? "", field: result.fieldNeeded ?? label, taskId: cardId, ...(result.fullQuestion ? { fullQuestion: result.fullQuestion } : {}), ...(result.parts?.length ? { parts: result.parts } : {}) }).catch(() => undefined)) : null;
 	const giveUpMs = Math.max(HANDOFF_GIVE_UP_MS, wait?.waitMs ?? 0);
 	const minutes = Math.round((wait?.brain ? wait.humanMs : giveUpMs) / 60_000);
 	// #1076: a captured question PARKS — no compute, no deadline worth racing — rather than polling.

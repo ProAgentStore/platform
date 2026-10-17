@@ -1,3 +1,4 @@
+import { ASK_QUESTION_FULL_MAX, askOptions, askParts, type AskPart } from "./coding-ask.js";
 import type { EngineInputs } from "./coding-engine-inputs.js";
 import type { ObjectiveOrigin } from "./coding-objective-origin.js";
 import { clipMarked } from "./clip-marked.js";
@@ -196,7 +197,7 @@ export interface CodingDecision {
 	 * between options (`ask_owner`, #960) — in which case `field` is the question itself and
 	 * `options` the answers offered. Both are answered from a conversation, not by taking over.
 	 */
-	needsInput?: { field: string; why?: string; options?: string[] };
+	needsInput?: { field: string; why?: string; options?: string[]; fullQuestion?: string; parts?: AskPart[] };
 	/**
 	 * The Engine reported ITS OWN usage/rate limit (#541). `at` is the reset instant it named, as an
 	 * ISO-8601 string that must carry an explicit offset to be believed — see `coding-wait.ts`.
@@ -220,6 +221,10 @@ export interface CodingResult {
 	fieldNeeded?: string;
 	/** On `needs_input` from `ask_owner` (#960): the answers offered. Empty/absent for a free-form value. */
 	options?: string[];
+	/** On `needs_input` from `ask_owner` (#1129): the question uncut, when `fieldNeeded` had to be cut. */
+	fullQuestion?: string;
+	/** On `needs_input` from `ask_owner` (#1129): one decision per part, each with its own options. */
+	parts?: AskPart[];
 	/** On `waiting`: the reset instant the Engine named, unvalidated — the planner decides what it is worth. */
 	waitUntil?: string;
 	steps: number;
@@ -383,7 +388,8 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		if (decision.needsInput) {
 			const options = decision.needsInput.options ?? [];
 			transcript.push(`needs_input: ${decision.needsInput.field}${options.length ? ` [${options.join(" | ")}]` : ""}`);
-			return { outcome: "needs_input", detail: decision.needsInput.why, fieldNeeded: decision.needsInput.field, ...(options.length ? { options } : {}), steps: step, transcript };
+			const { fullQuestion, parts } = decision.needsInput;
+			return { outcome: "needs_input", detail: decision.needsInput.why, fieldNeeded: decision.needsInput.field, ...(options.length ? { options } : {}), ...(fullQuestion ? { fullQuestion } : {}), ...(parts?.length ? { parts } : {}), steps: step, transcript };
 		}
 		if (!decision.action) {
 			// No action and no terminal verdict → treat prose as a stuck signal.
@@ -647,15 +653,24 @@ export const CODING_TOOLS = [
 	{
 		name: "ask_owner",
 		description:
-			"Ask the OWNER to choose, when the next step depends on a decision that is theirs to make and nothing in the objective, the rules or the repo settles it. Give one short question and 2–6 short options; the run pauses until they answer from chat or the console, and their answer comes back to you.",
+			"Ask the OWNER to choose, when the next step depends on a decision that is theirs to make and nothing in the objective, the rules or the repo settles it. Give one short question and 2–6 short options; the run pauses until they answer from chat or the console, and their answer comes back to you. When the owner must make SEVERAL separate decisions, give `parts` instead of `options` — one { question, options } per decision — and they answer each with a tap.",
 		parameters: {
 			type: "object",
 			properties: {
-				question: { type: "string", description: "One short question, answerable by picking an option." },
+				question: { type: "string", description: "One short question, answerable by picking an option. With `parts`, the one line that introduces them." },
 				options: { type: "array", items: { type: "string" }, description: "2–6 short, distinct answers." },
+				parts: {
+					type: "array",
+					description: "2–4 separate decisions, each answered on its own. Use instead of `options` when one question holds several choices.",
+					items: {
+						type: "object",
+						properties: { question: { type: "string" }, options: { type: "array", items: { type: "string" } } },
+						required: ["question", "options"],
+					},
+				},
 				why: { type: "string", description: "What depends on it — one line." },
 			},
-			required: ["question", "options"],
+			required: ["question"],
 		},
 	},
 	// THE VERB THAT DID NOT EXIST (#541). Without it, "the CLI is rate-limited until 22:30" had only
@@ -899,9 +914,14 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 		case "request_user_info":
 			return { needsInput: { field: str(a.field) || "a value", why: str(a.why) } };
 		case "ask_owner": {
-			const question = clipMarked(str(a.question).trim(), ASK_QUESTION_MAX, { within: true });
+			const asked = str(a.question).trim();
+			const question = clipMarked(asked, ASK_QUESTION_MAX, { within: true });
 			if (!question) return { stuck: { why: "Asked the owner a question but did not say what it was." } };
-			return { needsInput: { field: question, why: str(a.why).trim(), options: askOptions(a.options) } };
+			// The question stays phone-sized everywhere it travels (#960); the ticket page can also show it
+			// uncut (#1129), so the owner is never left with `[cut: …]` and no way to read the rest.
+			const fullQuestion = question === asked ? undefined : clipMarked(asked, ASK_QUESTION_FULL_MAX, { within: true });
+			const parts = askParts(a.parts);
+			return { needsInput: { field: question, why: str(a.why).trim(), options: parts.length ? [] : askOptions(a.options), ...(fullQuestion ? { fullQuestion } : {}), ...(parts.length ? { parts } : {}) } };
 		}
 		case "wait_for_reset":
 			// `at` is passed through UNVALIDATED. Judging it here would put the timezone rule in two
@@ -912,28 +932,8 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 	}
 }
 
-/** Bounds on an `ask_owner` (#960) — a phone-sized question; a longer one is cut WITH a marker, options past them are dropped. */
+/** Bounds on an `ask_owner` (#960) — a phone-sized question; a longer one is cut WITH a marker. Options: `coding-ask.ts`. */
 export const ASK_QUESTION_MAX = 300;
-export const ASK_OPTIONS_MAX = 6;
-export const ASK_OPTION_CHARS = 80;
-
-/**
- * The options of an `ask_owner`, cleaned: strings, trimmed, de-duplicated, at most six, each short.
- * A comma becomes a semicolon because the console reads the options back out of a `from: a, b, c`
- * list (`RunDetail.tsx`) — one option must not become two. Fewer than two is a free-form question.
- */
-export function askOptions(raw: unknown): string[] {
-	const out: string[] = [];
-	for (const o of Array.isArray(raw) ? raw : []) {
-		if (typeof o !== "string") continue;
-		const v = o.replace(/,/g, ";").replace(/\s+/g, " ").trim();
-		if (!v || v.length > ASK_OPTION_CHARS || out.includes(v)) continue;
-		out.push(v);
-		if (out.length === ASK_OPTIONS_MAX) break;
-	}
-	return out.length >= 2 ? out : [];
-}
-
 /** The loop's `needs_reauth` ending (#881): what the engine said, and what fixes it. */
 export function reauthDetail(block: EngineAuthPrompt, clientType: CodingGoal["clientType"]): string {
 	const said = block.evidence ? ` It said: "${block.evidence}".` : "";

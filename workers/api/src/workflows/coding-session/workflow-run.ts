@@ -3,6 +3,7 @@ import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-
 import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
 import { answerEventType, recordParkedWorkflow, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
+import { askAnnouncement } from "../../lib/coding-ask.js";
 import {
 	runCodingLoop,
 	type CodingActionKind,
@@ -766,13 +767,15 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 					taskId: ask.taskId,
 					type: "agent.needs_input",
 					message: `Needs your input — ${ask.field}${why ? ` (${why})` : ""}`,
-					data: { field: ask.field, why, options: ask.options, sessionId },
+					// The uncut question and a multi-part ask's decisions (#1129) ride beside the phone-sized
+					// field, for the ticket page's "show the full question" and its button group per decision.
+					data: { field: ask.field, why, options: ask.options, sessionId, ...(ask.fullQuestion ? { fullQuestion: ask.fullQuestion } : {}), ...(ask.parts?.length ? { parts: ask.parts } : {}) },
 					createdAt: new Date().toISOString(),
 				});
 				if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now(), { reason: "decision", ask });
 				// #1025: the question, durably — posted on the issue, timed by the minute sweep. Inside
 				// the step, so a replay returns the journalled wait instead of capturing it twice.
-				const captured = await captureAndAnnounceQuestion(env, { instanceId, userId, sessionId, runId: event.payload.loopRunId ?? null, taskId: ask.taskId, question: ask.question, options: ask.options, why: ask.why || null }).catch(() => null);
+				const captured = await captureAndAnnounceQuestion(env, { instanceId, userId, sessionId, runId: event.payload.loopRunId ?? null, taskId: ask.taskId, question: askAnnouncement(ask), options: ask.options, why: ask.why || null }).catch(() => null);
 				return captured ? { waitMs: captured.waitMs, humanMs: captured.humanMs, brain: captured.waitMs > HUMAN_ONLY_WAIT_MS, questionId: captured.question.id } : null;
 			}).then((w) => {
 				parkedQuestionId = (w as { questionId?: string } | null)?.questionId ?? null; // journalled, so a replay knows the row too

@@ -15,7 +15,7 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import Card from "../components/Card";
 import ActionLog from "../components/ActionLog";
 import MarkdownText from "../components/MarkdownText";
-import { questionOptions, whyWithoutOptions } from "../lib/agentText";
+import { partsAnswer, questionOptions, questionParts, whyWithoutOptions } from "../lib/agentText";
 
 /**
  * A real, routed run-detail page (not a popup) for any browser-runtime task: a
@@ -60,6 +60,18 @@ function levelClass(type: string): string {
 	if (/needs_input|handoff|captcha/.test(type)) return "text-amber-500";
 	if (type === "job.email") return "text-accent";
 	return "text-muted";
+}
+
+/**
+ * One tappable answer to the agent's question (#1129) — the single option list and each decision of a
+ * multi-part question draw the same control. `pressed` marks a decision's current pick.
+ */
+function OptionButton({ label, pressed, onClick }: { label: string; pressed?: boolean; onClick: () => void }) {
+	return (
+		<button type="button" aria-pressed={pressed} onClick={onClick} className={`px-3.5 py-2.5 min-h-11 rounded-lg border text-sm text-ink font-medium text-left break-words max-w-full hover:border-accent hover:bg-accent-soft ${pressed ? "bg-accent-soft border-accent" : "bg-panel border-line"}`}>
+			{label}
+		</button>
+	);
 }
 
 interface TicketTurn { id: string; role: "user" | "agent"; text: string; at: string }
@@ -280,6 +292,8 @@ export default function RunDetail() {
 	const [inputVal, setInputVal] = useState("");
 	// With options on offer, the free-text box appears only when the owner asks for it (#1129).
 	const [otherAnswer, setOtherAnswer] = useState(false);
+	const [showFullQuestion, setShowFullQuestion] = useState(false);
+	const [picks, setPicks] = useState<Record<number, string>>({});
 	const [takeoverOpen, setTakeoverOpen] = useState(false);
 	const fieldLabelId = useId();
 	// Which attempt of the job this run is (JSW-style: each retry is a separate,
@@ -353,13 +367,17 @@ export default function RunDetail() {
 	// `data: { field, why }` from `request_user_info` — the field name is exactly what the brain
 	// already knew it needed. Fall back to scraping the message only for events from an older runner
 	// that predates the structured payload.
-	const needsInputData = needsInputEv?.data as { field?: string; why?: string; options?: unknown } | undefined;
+	const needsInputData = needsInputEv?.data as { field?: string; why?: string; options?: unknown; parts?: unknown; fullQuestion?: unknown } | undefined;
 	const field = needsInputData?.field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
 	const why = needsInputData?.why ?? "";
 	const paren = why || (detail.match(/\(([^)]*)\)/)?.[1] ?? "");
 	// The agent's own options first (#1129) — the `from:` text is only an older runner's fallback.
 	const options = questionOptions(needsInputData, paren);
 	const whyText = whyWithoutOptions(why);
+	// #1129: the question uncut, when the phone-sized `field` had to be cut; and a multi-part question's
+	// decisions, each answered with its own button group and sent together.
+	const fullQuestion = typeof needsInputData?.fullQuestion === "string" && needsInputData.fullQuestion.trim() ? needsInputData.fullQuestion : "";
+	const parts = questionParts(needsInputData);
 
 	const sendValue = async (v: string) => {
 		const t = v.trim(); if (!t) return;
@@ -417,7 +435,8 @@ export default function RunDetail() {
 	return (
 		<Page width={1100}>
 			<div className="flex items-center justify-between gap-2 mb-3">
-				<button type="button" onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent">
+				{/* A full-height tap target (#1129): the bare text link was 20px tall on a phone. */}
+				<button type="button" onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent min-h-11 pr-3 -ml-1 pl-1">
 					<ArrowLeft size={15} /> Back
 				</button>
 				<Button variant="danger" size="lg" onClick={remove}>
@@ -467,15 +486,42 @@ export default function RunDetail() {
 					<div className="text-sm text-muted mt-0.5 mb-3">It won’t guess personal or legal details — answer once and it keeps going.</div>
 					{/* The question is the agent's text: markdown, so bold and numbered decisions read as written (#1129). */}
 					<div id={fieldLabelId}>
-						<MarkdownText text={field} className="text-base font-semibold text-ink" />
+						<MarkdownText text={showFullQuestion && fullQuestion ? fullQuestion : field} className="text-base font-semibold text-ink" />
 					</div>
+					{/* The question is cut to phone size where it travels; the whole of it is one tap away here (#1129). */}
+					{fullQuestion && (
+						<button type="button" onClick={() => setShowFullQuestion(!showFullQuestion)} aria-expanded={showFullQuestion} className="text-xs text-accent underline mt-1 min-h-11 sm:min-h-0">
+							{showFullQuestion ? "Show less" : "Show the full question"}
+						</button>
+					)}
 					{whyText && <MarkdownText text={whyText} className="text-sm text-muted mt-1" />}
-					{options.length > 0 && (
+					{/* A question holding several decisions (#1129): one button group per decision, then one Send. */}
+					{parts.length > 0 && (
+						<div className="mt-3 flex flex-col gap-4" data-testid="question-parts">
+							{parts.map((part, i) => (
+								<fieldset key={part.question} className="min-w-0">
+									<legend className="text-sm font-semibold text-ink mb-2"><MarkdownText text={`${i + 1}. ${part.question}`} /></legend>
+									<div className="flex flex-wrap gap-2">
+										{part.options.map((opt) => (
+											<OptionButton key={opt} label={opt} pressed={picks[i] === opt} onClick={() => setPicks({ ...picks, [i]: opt })} />
+										))}
+									</div>
+								</fieldset>
+							))}
+							<div>
+								<Button variant="primary" size="lg" disabled={parts.some((_, i) => !picks[i])} onClick={() => sendValue(partsAnswer(parts, picks))}>Send</Button>
+								{!otherAnswer && (
+									<button type="button" onClick={() => setOtherAnswer(true)} className="block text-xs text-accent underline mt-3">None of these — type a different answer</button>
+								)}
+							</div>
+						</div>
+					)}
+					{parts.length === 0 && options.length > 0 && (
 						<div className="mt-3">
 							<div className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-2">Tap your answer</div>
 							<div className="flex flex-wrap gap-2">
 								{options.map((opt) => (
-									<button key={opt} type="button" onClick={() => sendValue(opt)} className="px-3.5 py-2.5 min-h-11 rounded-lg bg-panel border border-line hover:border-accent hover:bg-accent-soft text-sm text-ink font-medium text-left break-words max-w-full">{opt}</button>
+									<OptionButton key={opt} label={opt} onClick={() => sendValue(opt)} />
 								))}
 							</div>
 							{/* Options ARE the answer (#1129): free text is an explicit escape, never the default beside them. */}
@@ -484,7 +530,7 @@ export default function RunDetail() {
 							)}
 						</div>
 					)}
-					{(options.length === 0 || otherAnswer) && <div className="flex gap-2 mt-2">
+					{((options.length === 0 && parts.length === 0) || otherAnswer) && <div className="flex gap-2 mt-2">
 						{/* The agent's question is already rendered above; point at it instead of
 						    duplicating it into a placeholder that vanishes mid-answer. This is the
 						    field where someone types a legal name or a salary because the agent
@@ -537,8 +583,10 @@ export default function RunDetail() {
 							const gmailUrl = typeof data.gmailUrl === "string" ? data.gmailUrl : "";
 							const emailFrom = typeof data.from === "string" ? data.from : "";
 							return (
-								<div key={ev.id} className="flex gap-3 py-1.5 border-b border-line last:border-0 text-sm">
-									<span className="text-xs font-mono text-muted-soft shrink-0 w-[124px] pt-0.5">{fmtStamp(ev.createdAt)}</span>
+								// On a phone the stamp sits above its message (#1129): a fixed 124px column left the
+								// message about half the width of a 390px screen.
+								<div key={ev.id} className="flex flex-col sm:flex-row gap-0.5 sm:gap-3 py-1.5 border-b border-line last:border-0 text-sm">
+									<span className="text-xs font-mono text-muted-soft shrink-0 sm:w-[124px] sm:pt-0.5">{fmtStamp(ev.createdAt)}</span>
 									<div className="min-w-0 flex-1">
 										<MarkdownText text={humanEvent(ev)} className={levelClass(ev.type)} />
 										{gmailUrl && (

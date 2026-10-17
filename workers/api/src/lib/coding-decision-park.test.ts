@@ -8,7 +8,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { getLoopRun, recordIteration, recordLiveness, type WaitingAsk } from "./agent-loop-store.js";
 import { codingCardId } from "./coding-board.js";
-import { ASK_OPTION_CHARS, ASK_OPTIONS_MAX, ASK_QUESTION_MAX, askOptions, CODING_TOOLS, runCodingLoop, systemPrompt, toDecision, type CodingDeps, type CodingPaneSnapshot } from "./coding-loop.js";
+import { ASK_OPTION_CHARS, ASK_OPTIONS_MAX, askAnnouncement, askOptions, askParts } from "./coding-ask.js";
+import { ASK_QUESTION_MAX, CODING_TOOLS, runCodingLoop, systemPrompt, toDecision, type CodingDeps, type CodingPaneSnapshot } from "./coding-loop.js";
 import { askCardId, resolvePause, type PauseDeps } from "./coding-pause.js";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import { deriveFleetStatus, type FleetFacts } from "./fleet-snapshot.js";
@@ -32,6 +33,54 @@ describe("ask_owner is a verb the Pilot has, and a choice it does not make (#960
 		const field = toDecision({ name: "ask_owner", arguments: { question: "q".repeat(ASK_QUESTION_MAX + 40), options: ["a", "b"] } }).needsInput?.field ?? "";
 		expect(field.length).toBeLessThanOrEqual(ASK_QUESTION_MAX);
 		expect(field).toMatch(/\[cut: showing the first \d+ of 340 characters\]$/);
+	});
+
+	it("a cut question carries itself uncut beside the phone-sized field, for the ticket page to expand (#1129)", () => {
+		const asked = `${"Three decisions to make before I go on. ".repeat(10)}End.`;
+		const d = toDecision({ name: "ask_owner", arguments: { question: asked, options: ["a", "b"] } }).needsInput;
+		expect(d?.field.length).toBeLessThanOrEqual(ASK_QUESTION_MAX);
+		expect(d?.fullQuestion).toBe(asked.trim());
+		// A question that fits is not carried twice.
+		expect(toDecision({ name: "ask_owner", arguments: { question: "Which DB?", options: ["D1", "KV"] } }).needsInput).not.toHaveProperty("fullQuestion");
+	});
+
+	it("several decisions in one question are parts, each with its own options — not one flat option list (#1129)", () => {
+		const d = toDecision({
+			name: "ask_owner",
+			arguments: {
+				question: "Three settings for the alerts:",
+				options: ["ignored when parts are given", "x"],
+				parts: [
+					{ question: "Notification channel?", options: ["Email", "Push", "Email, then push"] },
+					{ question: "Threshold?", options: ["5 failures", "10 failures"] },
+					{ question: "Retry automatically?", options: ["Yes", "No"] },
+				],
+			},
+		}).needsInput;
+		expect(d).toEqual({
+			field: "Three settings for the alerts:",
+			why: "",
+			options: [],
+			parts: [
+				{ question: "Notification channel?", options: ["Email", "Push", "Email; then push"] },
+				{ question: "Threshold?", options: ["5 failures", "10 failures"] },
+				{ question: "Retry automatically?", options: ["Yes", "No"] },
+			],
+		});
+	});
+
+	it("parts are cleaned like options: a part without two options is dropped, at most four, and one part is not a multi-part question (#1129)", () => {
+		expect(askParts([{ question: "A?", options: ["1"] }, { question: "B?", options: ["x", "y"] }])).toEqual([]);
+		expect(askParts([{ question: "", options: ["x", "y"] }, { question: "B?", options: ["x", "y"] }, { question: "C?", options: ["p", "q"] }])).toHaveLength(2);
+		expect(askParts(Array.from({ length: 6 }, (_, i) => ({ question: `Q${i}?`, options: ["x", "y"] })))).toHaveLength(4);
+		expect(askParts("not a list")).toEqual([]);
+		// With no usable parts the flat options still stand.
+		expect(toDecision({ name: "ask_owner", arguments: { question: "Q?", options: ["a", "b"], parts: [{ question: "only one", options: ["x", "y"] }] } }).needsInput?.options).toEqual(["a", "b"]);
+	});
+
+	it("announced off the card, a multi-part question lists its decisions under it (#1129)", () => {
+		expect(askAnnouncement({ question: "Alerts:", parts: [{ question: "Channel?", options: ["Email", "Push"] }, { question: "Retry?", options: ["Yes", "No"] }] })).toBe("Alerts:\n1. Channel? — Email / Push\n2. Retry? — Yes / No");
+		expect(askAnnouncement({ question: "Which DB?" })).toBe("Which DB?");
 	});
 
 	it("cleans options: strings only, trimmed, de-duplicated, short, at most six", () => {

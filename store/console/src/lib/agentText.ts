@@ -77,3 +77,30 @@ export function questionOptions(data: { options?: unknown } | null | undefined, 
 export function whyWithoutOptions(why: string): string {
 	return why.replace(/\s*(?:—\s*)?from:.*$/is, "").trim();
 }
+
+/** One decision of a multi-part question (#1129): its own question and its own options. */
+export interface QuestionPart {
+	question: string;
+	options: string[];
+}
+
+/**
+ * A multi-part question's decisions (#1129), from the structured `data.parts` the loop emits — each
+ * with a question and at least two options, or the part is not one. Fewer than two parts is not a
+ * multi-part question, and the page falls back to the single option list.
+ */
+export function questionParts(data: { parts?: unknown } | null | undefined): QuestionPart[] {
+	const raw = Array.isArray(data?.parts) ? data.parts : [];
+	const parts: QuestionPart[] = [];
+	for (const p of raw) {
+		const question = typeof p?.question === "string" ? p.question.trim() : "";
+		const options = Array.isArray(p?.options) ? [...new Set((p.options as unknown[]).filter((o): o is string => typeof o === "string" && o.trim() !== "").map((o) => o.trim()))] : [];
+		if (question && options.length >= 2) parts.push({ question, options });
+	}
+	return parts.length >= 2 ? parts.slice(0, 4) : [];
+}
+
+/** The one answer a multi-part question sends (#1129): each decision named with its pick, in order. */
+export function partsAnswer(parts: QuestionPart[], picks: Record<number, string>): string {
+	return parts.map((p, i) => `${i + 1}. ${p.question.replace(/[\s?:]+$/, "")}: ${picks[i]}`).join("\n");
+}
