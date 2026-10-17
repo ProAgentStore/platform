@@ -129,3 +129,32 @@ describe("a click that opens a new tab is followed, so the run sees where it led
 		expect(b.current()).toBe(SIGN_IN);
 	});
 });
+
+describe("a run that fills nothing says so — never review.ready count 0 (#1133)", () => {
+	it("the ad never led to a form: the run is recorded incomplete, with the reason, and nothing reads as awaiting review", async () => {
+		const b = tabbedBrowser(); // Apply opens nothing: the run is still on the job ad
+		const hh = host();
+		const bridge = await onAd(b, hh);
+		await bridge.callTool("browser_click", { target: "e20" });
+		const review = await bridge.callTool("ready_for_review", { summary: "Nothing to fill" });
+		expect(review.isError).toBe(true);
+		expect(review.content[0]?.text).toMatch(/Nothing was entered on this application, so there is nothing to review: the run is recorded as incomplete/);
+		expect(bridge.reviewReady).toBe(false);
+		expect(bridge.blocked).toEqual({ reason: "incomplete", questions: [expect.stringMatching(/ended without entering anything on this application \(it stopped at au\.seek\.com\) — it found no form it could fill/)] });
+		expect(hh.events).toContainEqual({ type: "policy.decision", detail: { tool: "ready_for_review", class: "review", decision: "refused", reason: "incomplete", count: 0 } });
+		expect(hh.events.some((e) => e.type === "review.ready")).toBe(false);
+	});
+
+	it("a run that filled a field still reviews, with its count", async () => {
+		const b = tabbedBrowser();
+		const hh = host();
+		const bridge = await onAd(b, hh);
+		b.go(FORM);
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "seek-95035981-form", phase: "post_navigation" });
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
+		await bridge.callTool("ready_for_review", { summary: "Filled" });
+		expect(bridge.reviewReady).toBe(true);
+		expect(hh.events.find((e) => e.type === "review.ready")).toEqual({ type: "review.ready", detail: { class: "review", count: 1 } });
+	});
+});

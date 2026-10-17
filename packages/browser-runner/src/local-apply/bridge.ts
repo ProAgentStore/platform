@@ -621,6 +621,18 @@ export class ApplyBridge {
 			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: "login_required" } });
 			this.blocked = { reason: "login_required", questions: [signInQuestion(siteKeyOf(host))] };
 		}
+		// Nothing entered, no sign-in, no other blocker (#1133): the run never found a form it could fill — a
+		// layout it did not recognise, a form that never opened. That is a failure to fill, recorded with its
+		// reason, never `review.ready` count 0: an owner reading "awaiting review" is told a form is waiting,
+		// and a retry repeats the same silent no-op.
+		else if (!this.filled && !this.uploaded.size && !this.blocked) {
+			this.blocked = {
+				reason: "incomplete",
+				questions: [
+					`The run ended without entering anything on this application${state?.url ? ` (it stopped at ${hostOf(state.url) ?? "the site"})` : ""} — it found no form it could fill, or the form never opened. Nothing was submitted. Open the application yourself, or retry once the page shows its form.`,
+				],
+			};
+		}
 		// #989: "ready for review" with nothing entered is not a review state.
 		//
 		// The live run ended `awaiting_review` with `filled: 0, uploaded: 0` seconds after the cloud

@@ -616,12 +616,13 @@ describe("a sign-in page reached by the Apply click is a sign-in, not an empty r
 		expect(bridge.blocked).toBeNull();
 	});
 
-	it("an ordinary page with nothing entered still reviews as before — only a sign-in page changes the outcome", async () => {
+	it("an ordinary page with nothing entered is not a review either — it is recorded as incomplete, not a sign-in (#1133)", async () => {
 		const { bridge, events } = await onSeekAd();
-		await bridge.callTool("ready_for_review", { summary: "Nothing to fill" });
-		expect(bridge.blocked).toBeNull();
-		expect(bridge.reviewReady).toBe(true);
-		expect(events.some((e) => e.type === "review.ready")).toBe(true);
+		const res = await bridge.callTool("ready_for_review", { summary: "Nothing to fill" });
+		expect(res.isError).toBe(true);
+		expect(bridge.blocked).toMatchObject({ reason: "incomplete" });
+		expect(bridge.reviewReady).toBe(false);
+		expect(events.some((e) => e.type === "review.ready")).toBe(false);
 	});
 });
 
