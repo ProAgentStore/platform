@@ -321,6 +321,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_http_profile: "read",
 	test_http_profile: "read",
 	list_instance_http_bindings: "read",
+	// #1132: the native Discord bot — its live status, what it can reach, and an instance's grants. Never the token.
+	discord_bot_status: "read",
+	list_discord_guilds: "read",
+	list_discord_channels: "read",
+	list_instance_discord_grants: "read",
 
 	// ── write: adds to or updates PAGS state, and this server grants it on a default
 	//    connection. Announced `readOnlyHint: false, destructiveHint: false`. ──
@@ -417,6 +422,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	rotate_http_profile_secret: "write",
 	bind_http_profile: "write",
 	unbind_http_profile: "write",
+	// #1132: connecting/rotating the bot (verified with Discord first) and granting one channel — reversible owner state.
+	connect_discord_bot: "write",
+	grant_instance_discord_channel: "write",
 
 	// ── runtime: drives something whose effects this server does not model — a machine, a
 	//    deploy, an agent turn. Announced `destructiveHint: true`, which reads "MAY perform
@@ -528,6 +536,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	unregister_instance_runtime: "destructive",
 	// #1123: deleting a profile drops its secret and every binding to it — not recoverable.
 	delete_http_profile: "destructive",
+	// #1132: disconnecting drops the bot token and every Discord grant; a revoke cuts an agent off a channel.
+	disconnect_discord_bot: "destructive",
+	revoke_instance_discord_grant: "destructive",
 };
 
 export { MCP_RISK_COUNTS } from "./tool-risk-counts.js";

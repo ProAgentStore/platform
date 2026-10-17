@@ -98,14 +98,8 @@ const EXCLUSIONS = [
 	{
 		label: "API-key **values**",
 		why:
-			"`keys_status` returns provider names only. There is no reveal tool and no route that returns a stored key, and there is no tool that WRITES one either — a key sent through a tool call is a secret in a transcript. Gmail refresh tokens are never revealable at all.",
+			"`keys_status` returns provider names only. There is no reveal tool and no route that returns a stored key, and no tool writes a provider key slot — a key sent through a tool call is a secret in a transcript. The two deliberate exceptions take a credential IN and never return it: `create_http_profile` / `rotate_http_profile_secret` (#1123) and `connect_discord_bot`, which Discord verifies before storing (#1132). Gmail refresh tokens are never revealable at all.",
 		match: /^(PUT|DELETE) \/v1\/keys\/\{\}$/,
-	},
-	{
-		label: "Discord bot channel setup",
-		why:
-			"The owner chooses a channel from the bot's own Discord server list in Permissions. It is an owner-facing configuration boundary, coupled to the bot token held in the credentials vault; agents use the resulting declared Discord tools but cannot enumerate servers or widen their own channel grants through MCP.",
-		match: /^(GET|POST|DELETE) \/v1\/discord\/(guilds|instances\/\{\}\/grants)/,
 	},
 	{
 		label: "Credentials for an outbound MCP server",

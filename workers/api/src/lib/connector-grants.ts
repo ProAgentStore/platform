@@ -106,12 +106,14 @@ export async function deleteConnectorGrant(
 	userId: string,
 	provider: ConnectorProvider,
 	grantId: string,
-): Promise<void> {
-	await env.DB.prepare(
+): Promise<boolean> {
+	const res = await env.DB.prepare(
 		"DELETE FROM instance_connector_grants WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND provider = ?4",
 	)
 		.bind(grantId, instanceId, userId, provider)
 		.run();
+	// Whether a grant was actually removed — a revoke of an id that is already gone is not a success.
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 /** How many grants a user holds for one connector, and across how many agents. */

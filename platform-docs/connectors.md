@@ -49,6 +49,15 @@ Then, on the particular agent's **Permissions** tab, select a server and text ch
 The bot needs its normal Discord permissions in that channel; sending messages or reactions also
 requires that instance's Discord write consent.
 
+The same lifecycle is available over MCP (#1132), owner-scoped and never returning the token:
+`connect_discord_bot` (verified with Discord before it is stored; a token for a different bot revokes
+the old grants), `discord_bot_status`, `list_discord_guilds` → `list_discord_channels` →
+`grant_instance_discord_channel` (the stable grant id the agent's tools take; re-granting returns the
+same id), `list_instance_discord_grants`, `revoke_instance_discord_grant`, and `disconnect_discord_bot`
+(removes the token and every Discord grant). Write consent stays a separate step
+(`set_instance_connector_consent`). Connect, rotate, disconnect, grant and revoke each write a
+`discord.*` audit event with ids only — never the token or message content.
+
 **Remote repository reads (#1110).** `github_read_file` (`repo`, `path`, `ref?`, `startLine?`, `endLine?`) and `github_tree` (`repo`, `path?`, `ref?`) read any repository the owner's GitHub App installation covers, at any branch, tag or SHA, with no local checkout. They use the same installation token as the other `github_*` reads, so they add no new scope or grant, and a repository the installation does not cover answers 404. Both are read-only (`mutates: false`), and their output is fenced as untrusted. A file is returned as a window of numbered lines with the exact next call; files over 1 MB can be read up to their first 1 MB, and a binary file returns only its size and sha. **Status:** this is implemented support only — no seeded agent declares these tools yet. Enabling them on the Coders is a live capability change and is pending owner approval. Once an agent declares them, they can be called both from chat and through `call_instance_tool`.
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:

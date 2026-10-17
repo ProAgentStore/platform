@@ -19,6 +19,7 @@ import { registerBoardTools } from "./board.js";
 import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
+import { registerDiscordTools } from "./discord.js";
 import { registerGuideTools } from "./guide.js";
 import { registerHttpProfileTools } from "./http-profiles.js";
 import { registerConsoleLinkTools } from "./console-link.js";
@@ -93,6 +94,7 @@ export function registerInstanceTools(
 	registerSecureInputTools(server, ctx);
 	// Named HTTP credential profiles + per-instance bindings (#1123) — ungated: metadata out, secrets never.
 	registerHttpProfileTools(server, ctx);
+	registerDiscordTools(server, ctx); // native Discord bot connect + per-instance channel grants (#1132)
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);

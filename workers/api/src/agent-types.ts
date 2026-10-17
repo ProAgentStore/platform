@@ -284,6 +284,35 @@ export interface DiscordGrantResponse {
 	grant: DiscordConnectorGrant;
 }
 
+/** The bot a Discord token authenticates as (#1132). Never the token. */
+export interface DiscordBot {
+	id: string;
+	username: string;
+}
+
+/** `GET /v1/discord/bot` — connected, live-validated, and how many channel grants depend on it. */
+export interface DiscordBotStatusResponse {
+	connected: boolean;
+	valid: boolean;
+	bot: DiscordBot | null;
+	error?: string;
+	reach: { grants: number; instances: number };
+}
+
+/** `PUT /v1/discord/bot` — `revoked` is non-zero only when the token belongs to a different bot. */
+export interface DiscordBotConnectResponse {
+	connected: true;
+	rotated: boolean;
+	bot: DiscordBot;
+	revoked: { grants: number; instances: number };
+}
+
+/** `DELETE /v1/discord/bot` — the token and every Discord channel grant it carried. */
+export interface DiscordBotDisconnectResponse {
+	disconnected: boolean;
+	revoked: { grants: number; instances: number };
+}
+
 /**
  * Owner-safe projection of a blocked-operation permission request (#1009).
  *

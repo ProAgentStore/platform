@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**342 tool registrations.** 315 are always registered; 27 are gated to the console
+**350 tool registrations.** 323 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -564,6 +564,14 @@ immediately instead of a whole transcript.
 | `list_instance_http_bindings` | The HTTP credential profiles one instance may use, by binding name — never a secret (#1123) | read | | |
 | `bind_http_profile` | Let an instance use one of your profiles under a binding name (#1123) | write | yes | |
 | `unbind_http_profile` | Remove a binding; the profile is kept (#1123) | write | yes | |
+| `discord_bot_status` | Is a Discord bot connected, does its token still work (checked live), which bot, how many grants depend on it — never the token (#1132) | read | | |
+| `connect_discord_bot` | Connect or rotate the Discord bot token, verified with Discord first; a different bot revokes old grants; never returned (#1132) | write | yes | |
+| `disconnect_discord_bot` | Remove the bot token and every Discord channel grant on every instance (#1132) | destructive | yes | `disconnect_discord_bot` |
+| `list_discord_guilds` | The Discord servers the connected bot is in (#1132) | read | | |
+| `list_discord_channels` | The text/announcement channels the bot can see in one server (#1132) | read | | |
+| `list_instance_discord_grants` | One instance's granted Discord channels, with the stable grant ids its Discord tools take (#1132) | read | | |
+| `grant_instance_discord_channel` | Grant one instance one channel, checked with the bot first; a re-grant returns the same id (#1132) | write | yes | |
+| `revoke_instance_discord_grant` | Revoke one instance's channel grant by id (#1132) | destructive | yes | `revoke_instance_discord_grant` |
 | `get_instance_connector_account` | Which of your accounts the instance uses per connector (e.g. Gmail): `pinned`, what a call `resolves` to, and `blocked` when it would use none | read | | |
 | `set_instance_connector_account` | Pin the instance to one connected account; answers with the row read back. A blank `account_id` is refused — it never clears a pin | write | yes | |
 

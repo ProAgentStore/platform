@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { upsertUserProviderKey } from "../lib/user-api-key-store.js";
+import { revokeUserConnectorGrants } from "../lib/connector-grants.js";
 import { backfillKeyHint } from "../lib/key-hint-backfill.js";
 import { cloudflareCredentialsError, wrongProviderError } from "../lib/key-shape.js";
 import { decryptKey } from "../lib/crypto.js";
@@ -477,12 +478,15 @@ keysRoutes.get("/:provider/reveal", async (c) => {
 keysRoutes.delete("/:provider", async (c) => {
 	const session = await requireUser(c);
 	const providerId = c.req.param("provider");
+	// The Discord bot token carries per-instance channel grants; removing it here revokes them, as
+	// `DELETE /v1/discord/bot` does — a reconnect must not silently re-arm them (#357, #1132).
+	const revoked = providerId === "discord" ? await revokeUserConnectorGrants(c.env, session.uid, "discord") : undefined;
 	await c.env.DB.prepare(
 		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)
 		.bind(session.uid, providerId)
 		.run();
-	return c.json({ success: true });
+	return c.json({ success: true, ...(revoked ? { revoked } : {}) });
 });
 
 /**

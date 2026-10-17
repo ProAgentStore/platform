@@ -13,6 +13,7 @@ import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerHttpProfileTools } from "./http-profiles.js";
+import { registerDiscordTools } from "./discord.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerBrowserVerificationTools } from "./browser-verification.js";
@@ -620,6 +621,15 @@ const TABLE: Record<string, Row> = {
 	list_instance_http_bindings: ["httpProfiles", "read", null, null, "instance_id,token"],
 	bind_http_profile: ["httpProfiles", "write", null, "envelope", "binding_name,connector,dry_run,instance_id,profile_id,token"],
 	unbind_http_profile: ["httpProfiles", "write", null, "envelope", "binding_name,connector,dry_run,instance_id,token"],
+	// #1132 — the native Discord bot's owner lifecycle + per-instance channel grants.
+	discord_bot_status: ["discord", "read", null, null, "token"],
+	connect_discord_bot: ["discord", "write", null, "envelope", "bot_token,dry_run,token"],
+	disconnect_discord_bot: ["discord", "destructive", "disconnect_discord_bot", "envelope", "confirm,dry_run,token"],
+	list_discord_guilds: ["discord", "read", null, null, "token"],
+	list_discord_channels: ["discord", "read", null, null, "guild_id,token"],
+	list_instance_discord_grants: ["discord", "read", null, null, "instance_id,token"],
+	grant_instance_discord_channel: ["discord", "write", null, "envelope", "channel_id,dry_run,instance_id,token"],
+	revoke_instance_discord_grant: ["discord", "destructive", "revoke_instance_discord_grant", "envelope", "confirm,dry_run,grant_id,instance_id,token"],
 };
 
 /** Which registrar owns each tool — the seam #305 introduced, checked rather than
@@ -638,6 +648,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	connectorAccounts: registerConnectorAccountTools as any,
 	guide: registerGuideTools as any,
 	httpProfiles: registerHttpProfileTools as any,
+	discord: registerDiscordTools as any,
 	consoleLink: registerConsoleLinkTools as any,
 	localBrowser: registerLocalBrowserTools as any,
 	browserVerification: registerBrowserVerificationTools as any,

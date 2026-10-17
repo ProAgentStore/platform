@@ -622,6 +622,12 @@ const READBACK: Record<string, string | null> = {
 	"unbind_http_profile.binding_name": "list_instance_http_bindings",
 	"unbind_http_profile.connector": "list_instance_http_bindings",
 
+	// ── #1132: the native Discord bot + channel grants ──
+	// The bot token itself is never returned — `discord_bot_status` reports which BOT it is, not the token.
+	"connect_discord_bot.bot_token": null,
+	"grant_instance_discord_channel.channel_id": "list_instance_discord_grants",
+	"revoke_instance_discord_grant.grant_id": "list_instance_discord_grants",
+
 	// ── subscribe ──
 	// The idempotency key is stored on the instance row as a dedup guard (#716). It is not
 	// a piece of content the subscriber manages; no reader surfaces it, and that is correct —

@@ -127,6 +127,7 @@ src/
 │                     the connection test, and the paused-elicitation inbox (#613)
 ├── guide.ts          1 tool — the per-instance connection guide (#772)
 ├── http-profiles.ts  10 tools — named HTTP credential profiles (create/update/rotate/delete/test; metadata only, never a secret) + per-instance bindings (#1123)
+├── discord.ts        8 tools — the native Discord bot: status, connect/rotate (verified with Discord, never returned), disconnect, guilds, channels, and per-instance channel grants list/grant/revoke (#1132)
 ├── coder-brain.ts    3 tools — the coder brain switch and knobs (#1025, #1027), its questions (#1025) and triage reports (#1027)
     ├── applications.ts  27 tools — the job-application queue across Scout → Tailor → Runner (#958):
     │                     list/get/trace, and the typed decisions (triage, tailor, fill, review, retry,
@@ -145,13 +146,13 @@ src/
                           surfaces:["coding"]) + 7 loop tools (3 run + 4 objective queue: list, cancel, reorder (#1097), lifecycle)
 ```
 
-**342 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**350 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all sixteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 289 across `instance-tools/`. 315 are always registered; 27 are
+`storage-tools.ts`, and 297 across `instance-tools/`. 323 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 289 = 342. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 297 = 350. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

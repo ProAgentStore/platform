@@ -1195,4 +1195,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.147": "sha256:e60c23680a3d06b4d0320a80d584deeeb787f21b82b458b14318cea2341bf98b",
 	// #1125: the http-profile allowed_origins field describes the enforced allowlist (https, `https://*.domain`, default deny).
 	"0.1.148": "sha256:3fff9ff022ca8f3a404b9c88ab275816bec3792e3013e9fc099860b8411cc50f",
+	// #1132: eight native Discord bot tools — status, connect/rotate, disconnect, guilds, channels, and per-instance channel grants (list/grant/revoke).
+	"0.1.149": "sha256:f1286ab71b5d78f0d77c90387902394247c95957f5878d745d0e56a541e644a7",
 };

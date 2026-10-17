@@ -12,6 +12,22 @@ const MAX_MESSAGE_LENGTH = 2_000;
 
 type DiscordReply = { ok: true; data: unknown } | { ok: false; status: number; message: string };
 
+export const DISCORD_NOT_CONNECTED = "No Discord bot is connected. Connect one with the MCP tool connect_discord_bot, or in Profile → API Keys → Discord bot token.";
+
+/**
+ * One wording for a Discord refusal (#1132), shared by the agent's tools and the owner's setup
+ * routes, with the status the platform answers with. Discord's 401 is NEVER passed on as a 401: it
+ * means the STORED BOT TOKEN was reset or revoked, and a 401 from this API reads as "your PAGS session
+ * expired" — the console signs the owner out on it.
+ */
+export function discordFailure(status: number, detail: string): { status: 403 | 404 | 409 | 429 | 502; message: string } {
+	if (status === 401) return { status: 409, message: `Discord rejected the connected bot token — it was reset or revoked. Reconnect the bot with connect_discord_bot. (Discord: ${detail})` };
+	if (status === 403) return { status: 403, message: `The bot lacks access or permission there. In Discord, give the bot's role View Channel, Read Message History and Send Messages on that channel. (Discord: ${detail})` };
+	if (status === 404) return { status: 404, message: `Discord has no such server, channel or message visible to this bot. (Discord: ${detail})` };
+	if (status === 429) return { status: 429, message: `Discord rate-limited the bot — retry shortly. (Discord: ${detail})` };
+	return { status: 502, message: `Discord returned ${status}: ${detail}` };
+}
+
 function snowflake(value: unknown): string | null {
 	const id = String(value ?? "").trim();
 	return SNOWFLAKE.test(id) ? id : null;
@@ -28,6 +44,10 @@ async function grantedChannel(ctx: RegistryToolCtx, grantId: unknown): Promise<{
 		}
 		return { channelId: grant.resourceId };
 	} catch (error) {
+		const status = (error as { status?: unknown } | null)?.status;
+		// requireGrant answers 403 for an unknown id — the grant was revoked, or never existed for THIS
+		// instance. Say which to do next rather than a generic "not allowed".
+		if (status === 403) return { error: `This agent holds no Discord grant "${id}" — it was revoked or belongs to another agent. Call discord_list_granted_channels for the current grants.` };
 		return { error: error instanceof Error ? error.message : "This agent has not been granted that Discord channel." };
 	}
 }
@@ -50,7 +70,7 @@ async function discordRequest(token: string, path: string, init: RequestInit = {
 		const data = await res.json().catch(() => null) as { message?: unknown } | null;
 		if (!res.ok) {
 			const detail = typeof data?.message === "string" ? data.message : "request failed";
-			return { ok: false, status: res.status, message: `Discord returned ${res.status}: ${detail}` };
+			return { ok: false, status: res.status, message: discordFailure(res.status, detail).message };
 		}
 		return { ok: true, data };
 	} catch {
@@ -71,7 +91,7 @@ const readMessages: ToolDef["handler"] = async (ctx, input) => {
 	const granted = await grantedChannel(ctx, input.grantId);
 	if ("error" in granted) return { content: granted.error, success: false };
 	const token = await botToken(ctx);
-	if (!token) return { content: "No Discord bot token is connected. Add one in Profile → API Keys → Discord bot token.", success: false };
+	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
 	const limit = Math.min(Math.max(Math.trunc(Number(input.limit) || 20), 1), 50);
 	const result = await discordRequest(token, `/channels/${granted.channelId}/messages?limit=${limit}`);
 	if (!result.ok) return { content: result.message, success: false };
@@ -87,7 +107,7 @@ const sendMessage: ToolDef["handler"] = async (ctx, input) => {
 	if (!content) return { content: "content is required.", success: false };
 	if (content.length > MAX_MESSAGE_LENGTH) return { content: `Discord messages are limited to ${MAX_MESSAGE_LENGTH} characters.`, success: false };
 	const token = await botToken(ctx);
-	if (!token) return { content: "No Discord bot token is connected. Add one in Profile → API Keys → Discord bot token.", success: false };
+	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
 	const result = await discordRequest(token, `/channels/${granted.channelId}/messages`, {
 		method: "POST",
 		// Agents must name mentions deliberately in a later, reviewed capability. A plain send
@@ -106,7 +126,7 @@ const addReaction: ToolDef["handler"] = async (ctx, input) => {
 	const emoji = String(input.emoji ?? "").trim();
 	if (!messageId || !emoji || emoji.length > 128) return { content: "A Discord messageId and emoji are required.", success: false };
 	const token = await botToken(ctx);
-	if (!token) return { content: "No Discord bot token is connected. Add one in Profile → API Keys → Discord bot token.", success: false };
+	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
 	const result = await discordRequest(token, `/channels/${granted.channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`, { method: "PUT" });
 	return result.ok
 		? { content: JSON.stringify({ reacted: true, channelId: granted.channelId, messageId, emoji }), success: true }

@@ -292,6 +292,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    BadGateway:
+      description: An upstream provider could not be reached or answered with an error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     Forbidden:
       description: Authenticated but not permitted
       content:
@@ -16255,6 +16261,59 @@ paths:
                 properties:
                   success: { type: boolean }
                   revoked: { $ref: "#/components/schemas/ConnectorReach" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/discord/bot:
+    get:
+      summary: My Discord bot — connected, live-validated, and its grant reach
+      description: Whether a Discord bot token is stored, whether Discord still accepts it (checked live), which bot it is, and how many channel grants depend on it. Never returns the token. (#1132)
+      operationId: getDiscordBot
+      tags: [Connectors]
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean }
+                  valid: { type: boolean }
+                  bot: { type: object, nullable: true, properties: { id: { type: string }, username: { type: string } } }
+                  error: { type: string, description: Why Discord refused the stored token, when valid is false. }
+                  reach: { type: object, properties: { grants: { type: integer }, instances: { type: integer } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      summary: Connect or rotate my Discord bot token
+      description: The token is checked against Discord's /users/@me before it is stored; a user-account token or one Discord rejects is refused (400). Stored encrypted and never returned. A token for a different bot than the one stored revokes every Discord channel grant (#357 rule). (#1132)
+      operationId: putDiscordBot
+      tags: [Connectors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string, description: The bot token; a leading "Bot " is accepted. } } }
+      responses:
+        "200": { description: Rotated (rotated true; revoked counts grants dropped for a different bot) }
+        "201": { description: Connected }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    delete:
+      summary: Disconnect my Discord bot
+      description: Removes the token and every Discord channel grant on every instance; returns what was revoked. (#1132)
+      operationId: deleteDiscordBot
+      tags: [Connectors]
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disconnected: { type: boolean }
+                  revoked: { type: object, properties: { grants: { type: integer }, instances: { type: integer } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/discord/guilds:
