@@ -302,7 +302,12 @@ export async function executeTriggerAction(
 		resultPayload = await startWakeLoop(env, target, payload, config, mapped);
 	} else if (target.action === "run_po_triage") {
 		// #1027: the product-owner wake. It decides its own skips (brain off, a second window this minute).
-		resultPayload = await runPoTriage(env, target, config);
+		// "This minute" is the window's SCHEDULED minute (#1138), not the wall clock when the sweep reached
+		// it: two windows due together were each claiming a different minute whenever the clock turned
+		// over between their dispatches, and both fired. A manual run has no slot and uses now.
+		const slotAt = stringValue(payloadRecord(payload).slotAt);
+		const scheduled = slotAt ? new Date(slotAt) : null;
+		resultPayload = await runPoTriage(env, target, config, scheduled && !Number.isNaN(scheduled.getTime()) ? scheduled : undefined);
 	} else if (target.action === "run_browse") {
 		// #172: schedule a generic browser task — fire the BROWSER_TASK workflow at the
 		// configured start URL. Runner-offline (503) or a run already active (409) aren't
@@ -467,7 +472,10 @@ export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Pr
 		).bind(trigger.id, next, trigger.next_run_at, nextSlot).run();
 		if (!claim.meta.changes) continue;
 		try {
-			await dispatchTrigger(env, trigger, "cron", { schedule: trigger.schedule, dueAt: dueIso });
+			// `slotAt` is the minute this trigger was SCHEDULED for — its cron slot, or its fire time on a row
+			// from before slots. The sweep runs due triggers one after another, so the wall clock can turn
+			// over between two of them; a handler that keys work on "this minute" must use this (#1138).
+			await dispatchTrigger(env, trigger, "cron", { schedule: trigger.schedule, dueAt: dueIso, slotAt: trigger.next_slot_at ?? trigger.next_run_at });
 			dispatched++;
 		} catch {
 			failed++;

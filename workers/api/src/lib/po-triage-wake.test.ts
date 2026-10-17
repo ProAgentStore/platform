@@ -1,7 +1,7 @@
 /**
  * The product-owner wake (#1027) on the real schema. GitHub and notifications are the only fakes.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { PO_TRIAGE_ACTION, poTriageDefaultMinute, readCoderBrain, setCoderBrain } from "./coder-brain.js";
 import { normalizeSchedule } from "./cron-schedule.js";
@@ -168,6 +168,56 @@ describe("windows and slots (#1027)", () => {
 		expect(reports()).toHaveLength(1);
 		const events = d1.sqlite.prepare("SELECT status, message FROM agent_trigger_events WHERE trigger_id IN ('t-a','t-b') AND status != 'running'").all() as Array<{ status: string; message: string }>;
 		expect(events.some((e) => /triage skipped — Another product-owner window/.test(e.message))).toBe(true);
+	});
+
+	it("the window is the SCHEDULED minute: the clock turning over between two dispatches does not let both fire (#1138)", async () => {
+		// The CI failure on fdd86ab6: the sweep runs due triggers one after another, and each triage took
+		// its slot from the wall clock — so when the minute turned over between the two, each claimed a
+		// different minute and both reported. Here the clock turns over exactly as the first one claims.
+		for (const id of ["t-a", "t-b"]) {
+			d1.exec(
+				`INSERT INTO agent_triggers (id, user_id, agent_id, instance_id, name, type, action, enabled, schedule, config, next_run_at, next_slot_at)
+				 VALUES ('${id}', 'u1', 'agent-1', 'coder', '${id}', 'cron', '${PO_TRIAGE_ACTION}', 1, '17 * * * *', '{"dryRun":true}', '2026-10-12T01:17:${id === "t-a" ? "05" : "40"}.000Z', '2026-10-12T01:17:00.000Z')`,
+			);
+		}
+		vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-12T01:17:59.900Z") });
+		const realDb = env.DB;
+		const clockTurnsOver = new Proxy(realDb, {
+			get(target, prop) {
+				if (prop === "prepare") {
+					return (sql: string) => {
+						if (sql.startsWith("INSERT INTO po_triage_reports")) vi.setSystemTime(new Date(Date.now() + 61_000));
+						return target.prepare(sql);
+					};
+				}
+				const v = Reflect.get(target, prop);
+				return typeof v === "function" ? v.bind(target) : v;
+			},
+		});
+		try {
+			await runDueTriggers({ ...env, DB: clockTurnsOver } as Env, at("2026-10-12T01:17:50Z"));
+		} finally {
+			vi.useRealTimers();
+		}
+		expect(reports()).toHaveLength(1);
+		const slots = d1.sqlite.prepare("SELECT slot FROM po_triage_reports WHERE instance_id = 'coder'").all() as Array<{ slot: string }>;
+		expect(slots).toEqual([{ slot: "2026-10-12T01:17:00.000Z" }]);
+	});
+
+	it("a manual run of the window (no scheduled slot) still uses the time it runs", async () => {
+		vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-12T03:42:10Z") });
+		try {
+			d1.exec(
+				`INSERT INTO agent_triggers (id, user_id, agent_id, instance_id, name, type, action, enabled, schedule, config, next_run_at)
+				 VALUES ('t-m', 'u1', 'agent-1', 'coder', 't-m', 'cron', '${PO_TRIAGE_ACTION}', 1, '17 * * * *', '{"dryRun":true}', NULL)`,
+			);
+			const { dispatchTrigger } = await import("./triggers.js");
+			const row = d1.sqlite.prepare("SELECT * FROM agent_triggers WHERE id = 't-m'").get();
+			await dispatchTrigger(env, row as never, "manual", {});
+		} finally {
+			vi.useRealTimers();
+		}
+		expect(d1.sqlite.prepare("SELECT slot FROM po_triage_reports WHERE instance_id = 'coder'").all()).toEqual([{ slot: "2026-10-12T03:42:00.000Z" }]);
 	});
 });
 
