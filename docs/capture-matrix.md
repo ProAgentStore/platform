@@ -263,6 +263,12 @@ These landed in the same period and are read by the same owner, but they are not
 
 These keep #1091 and #1083 open. Closing any of them needs a real production occurrence, or an owner-approved injection method.
 
+**Read-only recheck, 2026-10-17 (main 22aaea5f).** `error_summary scope:all days:3` — 140 signatures over 2,768 rows, not truncated, 14–17 Oct — holds **no** occurrence for gates 1, 2, 3, 4, 6 or 8, nor gate 5's offline replay, React, admin or public reports. Every gate stays open. What it did show:
+- Gate 5, online half only: live `client:network` rows from the console (`Load failed`, Safari), each with owner, deployed build (`3b9e16ccc9d4`, `19d2c37fe15f`) and `context.caller.origin: https://proagentstore.online` — #1120's attribution working in production. These are online network errors, not the offline **replay** the gate needs.
+- Gate 9: the only `runner-crash` rows are CLI 0.4.138, already counted for #1087. No crash from a later release.
+- Gate 8: a `cf-access` row ("blocked an admin request carrying no Access token", 403) is the Cloudflare Access layer, not the app's admin-role refusal the gate asks for.
+- `telemetry_health`: complete — 0 pending, 0 dead, 0 lost on all four sinks; last drain under a minute old.
+
 1. Cron sweep crash (`scheduled:*`).
 2. `AgentDO` alarm or WebSocket failure.
 3. A pipeline-run failure.
@@ -275,14 +281,12 @@ These keep #1091 and #1083 open. Closing any of them needs a real production occ
 
 ## Known gaps
 
-Recorded, not fixed here:
-- direct-5xx routes outside `logDirectResponse`;
-- route `waitUntil` tasks;
-- `RelayDO`;
-- `RunnerUpdateWorkflow`;
-- templates;
-- no request id on `error_log`;
-- host reports have no id or retry;
-- #1118 (nested `{success:false}` recorded as `completed`);
-- #1120 (`client:undefined` from a build-less caller).
+Recorded, not fixed here. Each was re-verified against `main` at 22aaea5f and is tracked:
+- direct-5xx routes outside `logDirectResponse`, route `waitUntil` tasks, `RelayDO`, `RunnerUpdateWorkflow` — #1134;
+- no request id on `error_log`, and host reports have no id or retry — #1135;
+- templates — by design (independent Workers), not tracked.
+
+Resolved since this list was written:
+- #1118 (nested `{success:false}` recorded as `completed`) — fixed in e417f636.
+- #1120 (`client:undefined` from a build-less caller) — fixed in a3708994 and 22aaea5f. Eighteen of the twenty unattributed rows were the mobile-handoff e2e fixture (stopped by 5d1dd1d6, #1086); vitest (a3708994) and the chromium e2e browser (22aaea5f) can no longer reach production's API.
 - #1119 is closed by the change that ships with this file: the terminal-snapshot sweep now throws, and the cron records it (`capture-acceptance.test.ts`, transient → warn, genuine → error).
