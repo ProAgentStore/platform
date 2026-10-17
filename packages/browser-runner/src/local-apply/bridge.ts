@@ -39,6 +39,7 @@ import { ELEMENT_PROBE_FN, type ElementFacts } from "../commit-guard.js";
 import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
 import { looksLikeSignIn, type SiteSessionLedger, siteKeyOf } from "./site-session.js";
+import { followOpenedTab, tabCount } from "./follow-tab.js";
 import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
@@ -454,9 +455,7 @@ export class ApplyBridge {
 		if (klass.klass === "entry") return this.entry(forward, t, klass.reason);
 		if (NAV_ROLES.has(t.role) || (t.role === "button" && PAGINATION_NAME.test(t.name.trim()))) {
 			if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
-			const res = await this.browser.callTool("browser_click", forward);
-			if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
-			return this.afterMove("browser_click", textOf(res));
+			return this.clickAndFollow(forward);
 		}
 		// A native file input opens the file chooser for upload_artifact — a DOM fact, whatever its label.
 		const fileInput = facts.tag === "input" && facts.type === "file";
@@ -652,9 +651,17 @@ export class ApplyBridge {
 		if (checkpoint) return checkpoint;
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
 		this.host.emit({ type: "policy.decision", detail: { tool: "browser_click", class: "entry", decision: "allowed", reason, role: t.role } });
+		return this.clickAndFollow(forward);
+	}
+
+	/** A page-changing click — followed into a tab it opened (#1133, `follow-tab.ts`). */
+	private async clickAndFollow(forward: Record<string, unknown>): Promise<ToolResult> {
+		const before = await tabCount(this.browser);
 		const res = await this.browser.callTool("browser_click", forward);
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
-		return this.afterMove("browser_click", textOf(res));
+		if (!(await followOpenedTab(this.browser, before))) return this.afterMove("browser_click", textOf(res));
+		this.host.emit({ type: "policy.decision", detail: { tool: "browser_click", class: "read", decision: "followed", reason: "opened_new_tab" } });
+		return this.afterMove("browser_click", `That click opened a new tab; the run now works in it. Take a browser_snapshot to read it.\n${textOf(res)}`);
 	}
 
 	/** The final Submit. Never under fill_and_review; once, gated and traced, under auto_submit. */
