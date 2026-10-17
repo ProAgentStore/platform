@@ -2889,8 +2889,12 @@ paths:
           schema: { type: string }
         - name: status
           in: query
-          description: Comma-separated statuses to return; the counts still cover every matching instance.
+          description: Comma-separated statuses to return; the counts still cover every matching instance. A list naming `paused` returns paused instances.
           schema: { type: string }
+        - name: include_paused
+          in: query
+          description: "`true` includes paused instances in `instances`. By default (and with no `status` filter) they are left out; `counts.paused` still counts them (#1137)."
+          schema: { type: boolean }
       responses:
         "200":
           description: The snapshot
@@ -2904,6 +2908,7 @@ paths:
                   total: { type: integer, description: Instances matching the tags, before the status filter. }
                   counts: { type: object, additionalProperties: { type: integer } }
                   note: { type: string, description: Present when some repositories were not read (per-snapshot limit). }
+                  pausedHidden: { type: integer, description: "Present when paused instances were left out of `instances` (the default, #1137): how many. Pass include_paused=true to see them." }
                   instances:
                     type: array
                     items:

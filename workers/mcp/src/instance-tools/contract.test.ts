@@ -263,7 +263,7 @@ type Row = [string, string, string | null, string | null, string];
 const TABLE: Record<string, Row> = {
 	add_instance_knowledge: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,source,source_url,title,token"],
 	account_activity: ["recent", "read", null, null, "token"],
-	fleet_snapshot: ["recent", "read", null, null, "status,tags,token"],
+	fleet_snapshot: ["recent", "read", null, null, "include_paused,status,tags,token"],
 	agent_trace: ["observability", "none", null, null, "cursor,instance_id,level,limit,offset,scope,since,source,token,trace_id,until"],
 	apply_account_coding_default: ["account", "runtime", null, "envelope", "dry_run,token"],
 	apply_to_job: ["apply", "destructive", null, null, "instance_id,token,url"],

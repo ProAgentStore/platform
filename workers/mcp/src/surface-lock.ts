@@ -1197,4 +1197,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.148": "sha256:3fff9ff022ca8f3a404b9c88ab275816bec3792e3013e9fc099860b8411cc50f",
 	// #1132: eight native Discord bot tools — status, connect/rotate, disconnect, guilds, channels, and per-instance channel grants (list/grant/revoke).
 	"0.1.149": "sha256:f1286ab71b5d78f0d77c90387902394247c95957f5878d745d0e56a541e644a7",
+	// #1137: fleet_snapshot gains include_paused (paused instances are left out of `instances` by default).
+	"0.1.150": "sha256:096b938b80b7953e58e5f0651b834394dd9faf3611240b3b2a602faaaf8c8ba0",
 };

@@ -132,7 +132,7 @@ describe("GET /my/snapshot (#961)", () => {
 		           ('pp', 'i-properties', 'u1', 'pb', 'acme/broken', 'github', 'ready', 'claude')`);
 		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, last_alive_at, last_progress_at, waiting_reason, waiting_until, parked_since)
 		         VALUES ('r-leads', 'u1', 'i-leads', 'Fix leads', 'running', 10, ${now}, ${now}, ${now}, 'human', ${now + 600_000}, ${now})`);
-		const { body } = await call("/v1/instances/my/snapshot?tag=held");
+		const { body } = await call("/v1/instances/my/snapshot?tag=held&include_paused=true");
 		const rows = body.instances as Snap[];
 		expect(Object.fromEntries(rows.map((r) => [r.instanceId, r.status]))).toEqual({ "i-doordrop": "paused", "i-properties": "paused", "i-leads": "paused" });
 		for (const r of rows) {
@@ -150,11 +150,51 @@ describe("GET /my/snapshot (#961)", () => {
 	it("active coders are unchanged by a paused neighbour sharing their repo (#1028)", async () => {
 		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-p-share', 'ag', 'u1', 'paused', '${JSON.stringify({ displayName: "share", tags: ["store"] })}')`);
 		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, provider, clone_status, default_client) VALUES ('ps', 'i-p-share', 'u1', 'todo', 'acme/todo', 'github', 'ready', 'claude')`);
-		const rows = (await call("/v1/instances/my/snapshot?tag=store")).body.instances as Snap[];
+		const rows = (await call("/v1/instances/my/snapshot?tag=store&include_paused=true")).body.instances as Snap[];
 		const by = Object.fromEntries(rows.map((r) => [r.instanceId, r.status]));
 		expect(by).toMatchObject({ "i-todo": "idle_needs_work", "i-todo2": "idle_needs_work", "i-unk": "unknown", "i-nh": "hard_blocked", "i-p-share": "paused" });
 		expect(rows.find((r) => r.instanceId === "i-todo")?.issues?.next.map((n) => n.number)).toEqual([1]);
 		expect(rows.map((r) => r.status)).toEqual(["decision_blocked", "idle_needs_work", "idle_needs_work", "hard_blocked", "hard_blocked", "working", "unknown", "paused", "idle"]);
+	});
+
+	describe("paused instances are left out unless asked for (#1137)", () => {
+		const pause = (id: string) => d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('${id}', 'ag', 'u1', 'paused', '${JSON.stringify({ displayName: id, tags: ["store"] })}')`);
+		beforeEach(() => {
+			pause("i-p1");
+			pause("i-p2");
+		});
+
+		it("by default: no paused instance in `instances`, but `counts.paused` and `total` are the true numbers, and `pausedHidden` says so", async () => {
+			const { body } = await call("/v1/instances/my/snapshot?tag=store");
+			const rows = body.instances as Snap[];
+			expect(rows.some((r) => r.status === "paused")).toBe(false);
+			expect(rows).toHaveLength(8);
+			expect(body.counts).toMatchObject({ paused: 2 });
+			expect(body.total).toBe(10);
+			expect(body.pausedHidden).toBe(2);
+		});
+
+		it("include_paused=true restores them, in their place in the order, and hides nothing", async () => {
+			const { body } = await call("/v1/instances/my/snapshot?tag=store&include_paused=true");
+			const rows = body.instances as Snap[];
+			expect(rows.filter((r) => r.status === "paused").map((r) => r.instanceId).sort()).toEqual(["i-p1", "i-p2"]);
+			expect(rows.map((r) => r.status)).toEqual(["decision_blocked", "idle_needs_work", "idle_needs_work", "hard_blocked", "hard_blocked", "working", "unknown", "paused", "paused", "idle"]);
+			expect(body.counts).toMatchObject({ paused: 2 });
+			expect(body).not.toHaveProperty("pausedHidden");
+		});
+
+		it("a status filter is an explicit ask: `paused` in it returns them; without it they stay out", async () => {
+			const only = (await call("/v1/instances/my/snapshot?tag=store&status=paused")).body;
+			expect((only.instances as Snap[]).map((r) => r.instanceId).sort()).toEqual(["i-p1", "i-p2"]);
+			expect(only).not.toHaveProperty("pausedHidden");
+			const active = (await call("/v1/instances/my/snapshot?tag=store&status=idle_needs_work")).body.instances as Snap[];
+			expect(active.every((r) => r.status === "idle_needs_work")).toBe(true);
+		});
+
+		it("with nothing paused there is nothing to report hidden", async () => {
+			d1.exec("UPDATE agent_instances SET status = 'active' WHERE id IN ('i-p1', 'i-p2')");
+			expect((await call("/v1/instances/my/snapshot?tag=store")).body).not.toHaveProperty("pausedHidden");
+		});
 	});
 
 	it("filters by status, and refuses a status that does not exist", async () => {

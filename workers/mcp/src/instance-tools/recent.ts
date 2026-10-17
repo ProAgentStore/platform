@@ -103,20 +103,22 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 		"fleet_snapshot",
 		"Status of a group of my instances in ONE call — the fleet view: for every instance carrying a tag (or every instance, with no tag), its derived `status`, the `reason` for it, the run it is working on (`work`: objective, waitingReason, waitNote), the question waiting on me (`decision`), pending secret entries (`ownerSecrets`) and a summary of its open GitHub issues (`issues`: open, actionable, needsHuman and the `next` few to hand over). `status` is " +
 			FLEET_STATUSES.map((s) => `\`${s}\``).join("/") +
-			": `decision_blocked` (a question waits for my answer — answer with answer_instance_mcp_input_request), `idle_needs_work` (idle with open issues it could take), `hard_blocked` (needs a person's hands: a session takeover, a CLI sign-in, a stalled run, a secret to enter, or only needs-human issues left — a coding run's ask-for-a-value pause is reported here because it cannot be answered from chat, #960), `working`, `unknown` (idle, but its issues could not be read), `paused` (I paused it — it takes no work and its backlog is not read or offered until resume_instance, #1028) and `idle` (nothing to do). Ordered most-needs-attention first, with `counts` per status. Tag instances with set_instance_tags; my_instances shows each instance's `tags`.",
+			": `decision_blocked` (a question waits for my answer — answer with answer_instance_mcp_input_request), `idle_needs_work` (idle with open issues it could take), `hard_blocked` (needs a person's hands: a session takeover, a CLI sign-in, a stalled run, a secret to enter, or only needs-human issues left — a coding run's ask-for-a-value pause is reported here because it cannot be answered from chat, #960), `working`, `unknown` (idle, but its issues could not be read), `paused` (I paused it — it takes no work and its backlog is not read or offered until resume_instance, #1028) and `idle` (nothing to do). Ordered most-needs-attention first, with `counts` per status. Paused instances are LEFT OUT of `instances` by default (#1137) — `counts.paused` is still the true count and `pausedHidden` says how many were left out; pass include_paused: true, or a `status` list naming `paused`, to see them. Tag instances with set_instance_tags; my_instances shows each instance's `tags`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			tags: z.array(z.string()).optional().describe("Instances carrying ANY of these tags (case-insensitive). Omit for every instance."),
 			status: z.array(z.enum(FLEET_STATUSES)).optional().describe("Only these statuses — e.g. [\"decision_blocked\", \"idle_needs_work\"] to skip what needs nothing."),
+			include_paused: z.boolean().optional().describe("Include paused instances in `instances`. Default false: they are left out (counts.paused still counts them)."),
 		},
-		async ({ token, tags, status }) => {
+		async ({ token, tags, status, include_paused }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "read", "fleet_snapshot", { tags, status });
+			const denied = await requirePermission(safetyFor(token), "read", "fleet_snapshot", { tags, status, include_paused });
 			if (denied) return denied;
 			const q = new URLSearchParams();
 			for (const t of tags ?? []) q.append("tag", t);
 			if (status?.length) q.set("status", status.join(","));
+			if (include_paused) q.set("include_paused", "true");
 			return jsonText(await authedCall(`/v1/instances/my/snapshot${q.size ? `?${q}` : ""}`, sessionToken, {}, env));
 		},
 	);

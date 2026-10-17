@@ -53,7 +53,12 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 
 	/**
 	 * `GET /my/snapshot?tag=store-coders&tag=pas-apps` (or `?tags=a,b`; none = every instance),
-	 * optionally `&status=idle_needs_work,decision_blocked`.
+	 * optionally `&status=idle_needs_work,decision_blocked`, and `&include_paused=true`.
+	 *
+	 * #1137: a paused instance is left OUT of `instances` by default — the snapshot is the daily look at
+	 * agents that work, and a paused one takes none. `include_paused=true` puts them back, and a `status`
+	 * filter that names `paused` is an explicit ask for them. `counts` and `total` always cover every
+	 * matching instance, so `counts.paused` stays the true count; `pausedHidden` says how many were left out.
 	 */
 	router.get("/my/snapshot", async (c) => {
 		const session = await requireUser(c);
@@ -63,6 +68,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 		const statusFilter = (c.req.query("status") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 		const badStatus = statusFilter.find((s) => !(FLEET_STATUSES as readonly string[]).includes(s));
 		if (badStatus) return c.json({ error: `Unknown status "${badStatus}". One of: ${FLEET_STATUSES.join(", ")}.` }, 400);
+		const hidePaused = c.req.query("include_paused") !== "true" && !statusFilter.length;
 
 		const roster = (
 			await c.env.DB.prepare(
@@ -146,13 +152,16 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				issues,
 			};
 		});
-		const shown = instances.filter((i) => !statusFilter.length || statusFilter.includes(i.status)).sort((a, b) => fleetOrder(a.status, b.status));
+		const shown = instances
+			.filter((i) => (statusFilter.length ? statusFilter.includes(i.status) : !(hidePaused && i.status === "paused")))
+			.sort((a, b) => fleetOrder(a.status, b.status));
 		const counts = Object.fromEntries(FLEET_STATUSES.map((s) => [s, instances.filter((i) => i.status === s).length])) as Record<FleetStatus, number>;
 		return c.json({
 			asOf: now,
 			tags: wanted,
 			total: instances.length,
 			counts,
+			...(hidePaused && counts.paused ? { pausedHidden: counts.paused } : {}),
 			...(allRepos.length > toRead.length ? { note: `${allRepos.length - toRead.length} of ${allRepos.length} repositories were not read (limit ${SNAPSHOT_MAX_REPOS} per snapshot) — narrow by tag.` } : {}),
 			instances: shown,
 		});
