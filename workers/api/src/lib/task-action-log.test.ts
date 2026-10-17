@@ -126,6 +126,46 @@ describe("an APPLICATION logs its Tailor and Runner on its card (#1108)", () => 
 	});
 });
 
+describe("an application's log says what each run did, when it did it (#1108, live 2026-10-17)", () => {
+	const H = 3_600_000;
+	const T0 = Date.parse("2026-10-16T04:40:00Z");
+	const fill = (id: string, startedAt: number, endedAt: number | null, status: string, filled: number | null) =>
+		syncApplicationCard(env, "u1", { id, instanceId: "runner-1", applicationId: "a2", status, startedAt, endedAt, ...(filled === null ? {} : { result: { filled } }) }, "fill");
+
+	it("an OLD run re-synced a day later is logged at its own end, not stamped with today's time", async () => {
+		// Live: application cf035017's card showed three "filled the form" lines in one minute on 17 Oct —
+		// runs abb37433 and 7a923d6f had ended on 16 Oct and were re-synced alongside the new run f63b2963.
+		await fill("fr-new", T0 + 21 * H, null, "running", null);
+		await fill("fr-old-1", T0, T0 + 4 * 60_000, "awaiting_review", 0); // synced now, ended a day ago
+		await fill("fr-old-2", T0 + 8 * 60_000, T0 + 11 * 60_000, "awaiting_review", 0);
+		await fill("fr-new", T0 + 21 * H, T0 + 21 * H + 90_000, "awaiting_review", 0);
+
+		const { entries } = await log("app-a2", "runner-1");
+		expect(entries.map((e) => e.ts)).toEqual([
+			new Date(T0 + 4 * 60_000).toISOString(),
+			new Date(T0 + 11 * 60_000).toISOString(),
+			new Date(T0 + 21 * H).toISOString(),
+			new Date(T0 + 21 * H + 90_000).toISOString(),
+		]);
+	});
+
+	it("a review with nothing filled does not say the form was filled; a real fill states its count", async () => {
+		await fill("fr-0", T0, T0 + 60_000, "awaiting_review", 0);
+		await fill("fr-3", T0 + H, T0 + H + 60_000, "awaiting_review", 3);
+		await fill("fr-1", T0 + 2 * H, T0 + 2 * H + 60_000, "awaiting_review", 1);
+		await fill("fr-unknown", T0 + 3 * H, T0 + 3 * H + 60_000, "awaiting_review", null);
+
+		const { entries } = await log("app-a2", "runner-1");
+		expect(entries.map((e) => [e.summary, e.status])).toEqual([
+			["Runner stopped without filling any field — nothing was submitted", "error"],
+			["Runner filled 3 fields — waiting for review before submit", "ok"],
+			["Runner filled 1 field — waiting for review before submit", "ok"],
+			["Runner stopped for review before submit — nothing was submitted", "ok"],
+		]);
+		for (const e of entries) expect(e.summary).not.toMatch(/filled the form/);
+	});
+});
+
 describe("a BROWSER task's own events are its log — projected, not copied (#1108)", () => {
 	it("created → navigated → completed, in order; URLs reduced; the raw payload never surfaces", async () => {
 		card("task_b1", "browser-1", "job.apply_agent");

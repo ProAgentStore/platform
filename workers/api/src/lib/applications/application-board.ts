@@ -209,7 +209,7 @@ export async function upsertApplicationRunCard(
 export async function syncApplicationCard(
 	env: Env,
 	userId: string,
-	run: { id: string; instanceId: string; applicationId: string; status: string; pause?: { reason?: string } | null; runnerVersion?: string | null },
+	run: { id: string; instanceId: string; applicationId: string; status: string; pause?: { reason?: string } | null; runnerVersion?: string | null; startedAt?: number | null; endedAt?: number | null; result?: unknown },
 	kind: ApplicationRunKind,
 	opts: { checkpoint?: ApplicationCardFacts["checkpoint"]; log?: boolean } = {},
 ): Promise<void> {
@@ -256,9 +256,14 @@ export async function syncApplicationCard(
 		// The card's paper trail (#1108): one line per run TRANSITION, keyed so the repeated syncs of
 		// an unchanged run record it once. Not on the reconciliation backfill, which would stamp an
 		// old transition with today's time.
-		const action = applicationRunAction(kind, run.status, run.pause?.reason ?? null);
+		const action = applicationRunAction(kind, run.status, run.pause?.reason ?? null, filledOf(run.result));
 		if (action && opts.log !== false) {
 			await writeActionEntry(env, {
+				// WHEN the transition happened, not when this sync ran (live, 2026-10-17): a terminal run is
+				// re-synced long after it ended (`syncApplyRunFromRunner` replays its projection), and an
+				// older run of the same application wrote "filled the form" stamped with today's time —
+				// three runs from two days read as three fills in one minute. Undefined → now (a pause).
+				...transitionAt(run),
 				instanceId: pipeline.runners[0] ?? run.instanceId,
 				userId,
 				taskId: applicationCardId(run.applicationId),
@@ -273,8 +278,28 @@ export async function syncApplicationCard(
 	}
 }
 
-/** How one run status reads on the application card's log (#1108). Null: not a step worth a line. */
-export function applicationRunAction(kind: ApplicationRunKind, status: string, pauseReason: string | null): { actionType: string; status: ActionStatus; summary: string } | null {
+const TERMINAL_RUN = new Set(["awaiting_review", "submitted", "completed", "blocked", "failed", "cancelled"]);
+
+/** The time a run's CURRENT status began: its start while running, its end once terminal. */
+export function transitionAt(run: { status: string; startedAt?: number | null; endedAt?: number | null }): { at?: number } {
+	const at = run.status === "running" ? run.startedAt : TERMINAL_RUN.has(run.status) ? run.endedAt : null;
+	return typeof at === "number" && Number.isFinite(at) ? { at } : {};
+}
+
+/** How many fields a fill run's result says it filled, when it says. */
+function filledOf(result: unknown): number | null {
+	const n = (result as { filled?: unknown } | null | undefined)?.filled;
+	return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * How one run status reads on the application card's log (#1108). Null: not a step worth a line.
+ *
+ * `awaiting_review` states the run's real `filled` count. It said "Runner filled the form" for every
+ * review, so a run that filled nothing (f63b2963, a sign-in in a tab the Runner never saw — #1133)
+ * logged a filled form — the claim #986 already removed from the card's stage label.
+ */
+export function applicationRunAction(kind: ApplicationRunKind, status: string, pauseReason: string | null, filled: number | null = null): { actionType: string; status: ActionStatus; summary: string } | null {
 	const who = kind === "fill" ? "Runner" : "Tailor";
 	switch (status) {
 		case "running":
@@ -283,7 +308,9 @@ export function applicationRunAction(kind: ApplicationRunKind, status: string, p
 		case "needs_human":
 			return { actionType: "blocker", status: "running", summary: `${who} paused${pauseReason ? ` — ${pauseReason}` : ""}` };
 		case "awaiting_review":
-			return { actionType: "checkpoint", status: "ok", summary: "Runner filled the form — waiting for review before submit" };
+			if (filled === 0) return { actionType: "checkpoint", status: "error", summary: "Runner stopped without filling any field — nothing was submitted" };
+			if (filled !== null) return { actionType: "checkpoint", status: "ok", summary: `Runner filled ${filled} field${filled === 1 ? "" : "s"} — waiting for review before submit` };
+			return { actionType: "checkpoint", status: "ok", summary: "Runner stopped for review before submit — nothing was submitted" };
 		case "submitted":
 			return { actionType: "submit", status: "ok", summary: "Runner submitted the application" };
 		case "completed":
