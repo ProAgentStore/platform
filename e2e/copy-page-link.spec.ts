@@ -46,7 +46,7 @@ test.describe("copy page link (#1130)", () => {
 		expect(page.url()).toContain("/console/instances/inst-1/tasks/t1?from=board");
 	});
 
-	test("is in the header at phone width without pushing the bar sideways", async ({ page }) => {
+	test("mobile — is in the header at phone width without pushing the bar sideways", async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 844 });
 		await signedIn(page);
 		await page.goto("/console/agents");

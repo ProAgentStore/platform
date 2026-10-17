@@ -90,7 +90,7 @@ test.describe("agent text is markdown, and options are buttons (#1129)", () => {
 		await expect(page.getByText("**", { exact: false })).toHaveCount(0);
 	});
 
-	test("at phone width (390px) the long option wraps inside the screen and nothing scrolls sideways", async ({ page }) => {
+	test("mobile — at phone width (390px) the long option wraps inside the screen and nothing scrolls sideways", async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 844 });
 		await mockTicket(page);
 		await page.goto("/console/instances/inst-1/tasks/t1");
