@@ -34,9 +34,11 @@ export const LOOP_STARTS_PAGE = 20;
  * `unknown` for a receipt from before attribution was recorded. Ties on `created_at` order by request
  * id, so a page boundary never moves.
  */
-export async function listLoopStarts(env: Env, userId: string, instanceId: string, offset = 0, after: Keyset | null = null, limit = LOOP_STARTS_PAGE) {
+export async function listLoopStarts(env: Env, userId: string, instanceId: string, offset = 0, after: Keyset | null = null, limit = LOOP_STARTS_PAGE, requestId: string | null = null) {
 	// `after` is a keyset cursor (#1017): receipts strictly older than the last one the reader saw.
-	const keyset = after ? ` AND ${olderThan("r.created_at", "r.request_id", 5)}` : "";
+	// `requestId` (#1071) narrows the same read to ONE receipt — the poll by request id — so the poll and
+	// the listing can never describe one start two ways.
+	const keyset = requestId ? " AND r.request_id = ?5" : after ? ` AND ${olderThan("r.created_at", "r.request_id", 5)}` : "";
 	const rows = await env.DB.prepare(
 		`SELECT r.*, q.id AS q_id, q.status AS q_status, q.stop_reason AS q_reason, q.run_id AS q_run,
 		        lr.run_id AS lr_run, lr.status AS lr_status, lr.stop_reason AS lr_reason
@@ -50,7 +52,7 @@ export async function listLoopStarts(env: Env, userId: string, instanceId: strin
 		  WHERE r.user_id = ?1 AND r.instance_id = ?2${keyset}
 		  ORDER BY r.created_at DESC, r.request_id DESC LIMIT ?3 OFFSET ?4`,
 	)
-		.bind(userId, instanceId, limit, after ? 0 : Math.max(0, Math.trunc(offset) || 0), ...(after ? [after.at, after.id] : []))
+		.bind(userId, instanceId, limit, after ? 0 : Math.max(0, Math.trunc(offset) || 0), ...(requestId ? [requestId] : after ? [after.at, after.id] : []))
 		.all<ReceiptRow & JoinedRow>();
 	return rows.results.map((row) => {
 		const result = row.response_json ? JSON.parse(row.response_json) as Record<string, unknown> : null;
@@ -64,6 +66,22 @@ export async function listLoopStarts(env: Env, userId: string, instanceId: strin
 		const attribution = row.actor_uid ? { kind: "owner" as const, uid: row.actor_uid, verified: true as const, clientClaimed: row.client_claimed ?? null } : { kind: "unknown" as const, legacy: true as const };
 		return { ...receiptView(row), attribution, current, ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, duplicate_of: typeof result.duplicate_of === "string" ? result.duplicate_of : null, reason: result.reason ?? null, error: typeof result.error === "string" ? clipMarked(result.error, 500) : null } } : {}) };
 	});
+}
+
+/**
+ * One start, by the request id its caller sent (#1071) — the poll for a `coding_loop_start` whose answer
+ * was lost. `not_received` is an answer, not an error: no start with that id reached this instance, so
+ * the call never arrived (or named another instance), and retrying with the SAME request_id is safe.
+ */
+export async function getLoopStart(env: Env, userId: string, instanceId: string, requestId: string) {
+	const [start] = await listLoopStarts(env, userId, instanceId, 0, null, 1, requestId);
+	if (start) return { found: true as const, start };
+	return {
+		found: false as const,
+		requestId,
+		startState: "not_received" as const,
+		detail: "No start with this request_id reached this instance: the call never arrived (or named another instance). Retrying coding_loop_start with the SAME request_id is safe — it starts once.",
+	};
 }
 
 interface JoinedRow {
@@ -108,7 +126,7 @@ export async function loopStartsPage(env: Env, userId: string, instanceId: strin
 export function dispatchLoopStartReceipt(env: Env, userId: string, instanceId: string, requestId: string, input: unknown, start: () => Promise<Response>, keepAlive: (operation: Promise<unknown>) => void, clientClaimed: string | null = null): Promise<Response> {
 	return withinConfirmationWindow(
 		withLoopStartReceipt(env, userId, instanceId, requestId, input, start, clientClaimed),
-		() => Response.json({ requestId, startState: "provisioning", approval: "dispatched", polling: { tool: "coding_loop_status", instance_id: instanceId }, guidance: "This request is being processed. Poll its receipt or reuse this requestId with the same arguments; do not submit a new request." }, { status: 202 }),
+		() => Response.json({ requestId, startState: "provisioning", approval: "dispatched", polling: { tool: "coding_loop_status", instance_id: instanceId, request_id: requestId }, guidance: "This request is being processed. Poll its receipt or reuse this requestId with the same arguments; do not submit a new request." }, { status: 202 }),
 		keepAlive,
 	);
 }
@@ -130,7 +148,7 @@ export async function withLoopStartReceipt(env: Env, userId: string, instanceId:
 		if (!row) throw new Error("start receipt disappeared");
 		if (row.input_json !== inputJson) return Response.json({ error: "requestId already belongs to a different start; use the original arguments to reconcile it", ...receiptView(row), reason: "request_key_conflict", submissionState: "not_started", originalStart: receiptView(row) }, { status: 409 });
 		if (row.response_json) return Response.json(JSON.parse(row.response_json), { status: row.response_status ?? 200 });
-		return Response.json({ ...receiptView(row), polling: { tool: "coding_loop_status", instance_id: instanceId }, guidance: "This request reached the platform and is provisioning or awaiting reconciliation. Poll status; do not submit a new request to infer whether it started." }, { status: 202 });
+		return Response.json({ ...receiptView(row), polling: { tool: "coding_loop_status", instance_id: instanceId, request_id: requestId }, guidance: "This request reached the platform and is provisioning or awaiting reconciliation. Poll status; do not submit a new request to infer whether it started." }, { status: 202 });
 	}
 	try {
 		const response = await start();
@@ -141,7 +159,7 @@ export async function withLoopStartReceipt(env: Env, userId: string, instanceId:
 		return Response.json(result, { status: response.status });
 	} catch {
 		// An exception may follow a successfully dispatched Workflow: never claim no effect.
-		const result = { error: "Start outcome could not be confirmed", requestId, startState: "unknown", approval: "dispatched", polling: { tool: "coding_loop_status", instance_id: instanceId }, guidance: "Poll status and reconcile this request before attempting another start." };
+		const result = { error: "Start outcome could not be confirmed", requestId, startState: "unknown", approval: "dispatched", polling: { tool: "coding_loop_status", instance_id: instanceId, request_id: requestId }, guidance: "Poll status and reconcile this request before attempting another start." };
 		await settle("unknown", result, 503);
 		await recordLifecycle(env, { userId, instanceId, requestId, event: "outcome_unknown", actor });
 		return Response.json(result, { status: 503 });

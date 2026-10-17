@@ -11878,6 +11878,38 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /v1/instances/{instanceId}/loop/starts/{requestId}:
+    get:
+      summary: Poll one loop start by its request id
+      description: |
+        What a caller that lost a start's answer reads instead of re-sending the start (#1071).
+        `found: true` returns the receipt: `startState` (provisioning, started, queued, not_started or
+        unknown), `current` (what it became now — its run or queue entry) and `result`. `found: false`
+        with `startState: not_received` means no start with that id reached this instance; retrying the
+        start with the SAME request id is safe. A `requestId` spelled `continue-preview` is read as the
+        run route of that name.
+      operationId: getLoopStart
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" } }
+      responses:
+        "200":
+          description: The start, or `found:false` when it never arrived.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found: { type: boolean }
+                  start: { type: object, additionalProperties: true }
+                  requestId: { type: string }
+                  startState: { type: string, enum: [not_received] }
+                  detail: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/loop/{runId}:
     get:
       summary: Read one loop run

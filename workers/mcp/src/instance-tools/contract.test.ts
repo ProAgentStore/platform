@@ -316,7 +316,7 @@ const TABLE: Record<string, Row> = {
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).
-	coding_loop_status: ["coding", "read", null, null, "cursor,instance_id,offset,run_id,starts_cursor,starts_offset,token"],
+	coding_loop_status: ["coding", "read", null, null, "cursor,instance_id,offset,request_id,run_id,starts_cursor,starts_offset,token"],
 	coding_loop_stop: ["coding", "write", null, null, "instance_id,run_id,token"],
 	coding_loop_lifecycle: ["coding", "read", null, null, "cursor,instance_id,limit,queue_entry_id,request_id,run_id,token"],
 	coding_loop_queue: ["coding", "read", null, null, "cursor,instance_id,offset,repo_id,status,token"],

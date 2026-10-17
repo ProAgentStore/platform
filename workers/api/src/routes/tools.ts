@@ -43,7 +43,7 @@ import { countLoopRuns, getLoopRun, pageLoopRuns, requestCancel } from "../lib/a
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
-import { dispatchLoopStartReceipt, loopStartsPage } from "../lib/loop-start-receipts.js";
+import { dispatchLoopStartReceipt, getLoopStart, loopStartsPage } from "../lib/loop-start-receipts.js";
 import { cursorParam } from "../lib/keyset-cursor.js";
 import { recoverPolicyRefusal } from "../lib/instance-permission-recovery.js";
 import { clientClaimFrom, trackStartOutcome } from "../lib/objective-lifecycle.js";
@@ -1373,6 +1373,21 @@ toolRoutes.get("/:id/loop", async (c) => {
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
 	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset")), startsAfter) : {};
 	return c.json({ runs: runs.map((run) => withHealth(run, now)), total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
+});
+
+/**
+ * Poll ONE start by its request id (#1071) — what a caller that lost a `coding_loop_start` answer reads
+ * instead of re-sending the whole start. Registered before `/:id/loop/:runId/…` so its literal segment
+ * always wins. A request id this instance never received answers 200 `found:false`, not 404: "it never
+ * arrived" is the answer the poll exists to give.
+ */
+toolRoutes.get("/:id/loop/starts/:requestId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const requestId = c.req.param("requestId");
+	if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) throw new HttpError(400, "request_id must be 1-128 letters, digits, _ or - (the shape coding_loop_start accepts).");
+	return c.json(await getLoopStart(c.env, session.uid, instanceId, requestId));
 });
 
 toolRoutes.get("/:id/loop/:runId", async (c) => {
