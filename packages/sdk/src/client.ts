@@ -109,9 +109,30 @@ if (typeof window !== "undefined") {
 	});
 }
 
+/**
+ * The source a report names when its caller named none (#1120) — a WORD, like `unset` for the build,
+ * and never the string "undefined" that `String(undefined)` used to send.
+ */
+export const UNLABELLED_SOURCE = "unlabelled";
+
+/** The source as sent: the caller's label, or {@link UNLABELLED_SOURCE} for a missing or blank one. */
+function reportSource(source: unknown): string {
+	return (typeof source === "string" && source.trim() ? source.trim() : UNLABELLED_SOURCE).slice(0, 40);
+}
+
+/**
+ * The message as sent. A caller that passed no message is itself the bug worth seeing (#1120): the row
+ * says so, with what it was given, rather than reading as an error whose text is "undefined".
+ */
+function reportMessage(message: unknown): string {
+	if (typeof message === "string" && message.trim()) return message.slice(0, 2000);
+	if (message instanceof Error && message.message) return `${message.name}: ${message.message}`.slice(0, 2000);
+	return `(no message: reportClientError was called with ${message === null ? "null" : typeof message === "string" ? "an empty string" : typeof message})`;
+}
+
 export function reportClientError(source: string, message: string, context?: Record<string, unknown>, status?: number): void {
 	try {
-		outbox().report({ source: String(source).slice(0, 40), message: String(message).slice(0, 2000), status, context, build: _build });
+		outbox().report({ source: reportSource(source), message: reportMessage(message), status, context, build: _build });
 	} catch { /* reporting must never throw */ }
 }
 

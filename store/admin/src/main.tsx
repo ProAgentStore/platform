@@ -1,9 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { classifyClientFailure } from "@proagentstore/sdk/client";
+import { classifyClientFailure, setClientBuild } from "@proagentstore/sdk/client";
 import { reportClientError } from "./lib/api";
 import "./index.css";
+
+// Every error row this app files names its build (#539) — before #1120 it reported `unset`.
+setClientBuild(__BUILD__);
 
 // Mirror uncaught browser errors into the durable log so admin-app crashes are visible (they'd otherwise
 // be a silent blank page). Classified (#1088), not filtered by words: an abort or offline failure is

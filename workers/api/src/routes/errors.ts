@@ -45,6 +45,34 @@ export const errorRoutes = new Hono<{ Bindings: Env }>();
  * claimed first, and a repeat answers `duplicate: true` without writing. `count` is how many occurrences the
  * event stands for — repeats the browser folded together — and is added to the row's `repeat_count`.
  */
+/**
+ * What a `String(undefined)` leaves in a field (#1120): not a value, so never stored as one. An SDK
+ * before #1120 sent `reportClientError(undefined, undefined)` as `client:undefined` / "undefined", and a
+ * bundle cached in a browser keeps doing it — so the route names the gap instead of refusing the report.
+ */
+const NOT_A_VALUE = new Set(["undefined", "null", "[object Object]"]);
+/** The source a report gets when it named none — the SDK's `UNLABELLED_SOURCE`. */
+const UNLABELLED_SOURCE = "unlabelled";
+
+/**
+ * The page a browser report came from (#1120) — its ORIGIN only, never a path or query — so a bundle
+ * that declares no build (`build: "unset"`) can still be told apart. `none` for a caller that sent
+ * neither header, which no browser page does: a script, a test runner or a server.
+ */
+export function callerOrigin(origin: string | undefined, referer: string | undefined): string {
+	for (const h of [origin, referer]) {
+		if (!h || h === "null") continue;
+		try {
+			const u = new URL(h);
+			// Never cut: a truncated origin would read as a real one.
+			if (u.protocol === "https:" || u.protocol === "http:") return u.origin.length <= 200 ? u.origin : "(origin too long)";
+		} catch {
+			// Not a URL: try the next header.
+		}
+	}
+	return "none";
+}
+
 /** A browser error event id (#1088): what `crypto.randomUUID()` mints, or the SDK's fallback. */
 const CLIENT_EVENT_ID = /^[A-Za-z0-9._:-]{8,128}$/;
 
@@ -52,9 +80,10 @@ errorRoutes.post("/client", async (c) => {
 	// Optional session: a valid token attributes the row, an absent or expired one still logs.
 	const session = await requireUser(c).catch(() => null);
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-	const message = typeof body.message === "string" ? body.message : "";
-	if (!message.trim()) return c.json({ ok: false, error: "message required" }, 400);
-	const rawSource = typeof body.source === "string" ? body.source : "app";
+	const sent = typeof body.message === "string" ? body.message : "";
+	if (!sent.trim()) return c.json({ ok: false, error: "message required" }, 400);
+	const message = NOT_A_VALUE.has(sent.trim()) ? `(no message: the reporter sent the literal "${sent.trim()}")` : sent;
+	const rawSource = typeof body.source === "string" ? (NOT_A_VALUE.has(body.source.trim()) || !body.source.trim() ? UNLABELLED_SOURCE : body.source) : "app";
 	const source = `client:${rawSource}`.slice(0, 64);
 	const status = typeof body.status === "number" ? body.status : undefined;
 	// The event id and its occurrence count (#1088). A browser retries until acknowledged, so the id makes
@@ -88,7 +117,8 @@ errorRoutes.post("/client", async (c) => {
 		// before it reaches the collapse key. Absent = a bundle that predates this field.
 		build: sanitizeBuildId(body.build),
 		message,
-		context: body.context && typeof body.context === "object" ? (body.context as Record<string, unknown>) : undefined,
+		// The caller's own origin (#1120) is the server's to add, after the body's keys, so a body cannot name another.
+		context: { ...(body.context && typeof body.context === "object" ? (body.context as Record<string, unknown>) : {}), caller: { origin: callerOrigin(c.req.header("Origin"), c.req.header("Referer")) } },
 		// The body is the caller's word (#1085): its instance counts only if this session owns it.
 		untrusted: true,
 		occurrences: count,

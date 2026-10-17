@@ -13,7 +13,7 @@ beforeEach(() => {
 	(globalThis as unknown as { fetch: unknown }).fetch = vi.fn().mockResolvedValue({ ok: true });
 });
 
-import { api, classifyClientFailure, clientBuild, isConnectivityError, reportClientError, setClientBuild, setToken } from "./client.js";
+import { api, classifyClientFailure, clientBuild, isConnectivityError, reportClientError, setClientBuild, setToken, UNLABELLED_SOURCE } from "./client.js";
 
 const mockFetch = () => (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
 
@@ -182,5 +182,30 @@ describe("classifyClientFailure — precise, not a word filter (#1088)", () => {
 		expect(classifyClientFailure(new Error("Upload timed out after the server cancelled it"), true)).toBe("error");
 		expect(classifyClientFailure(new TypeError("Cannot read properties of undefined (reading 'x')"), false)).toBe("error");
 		expect(classifyClientFailure(new TypeError("Failed to fetch dynamically imported module"), true)).toBe("error");
+	});
+});
+
+describe("a report never sends the string \"undefined\" (#1120)", () => {
+	const sent = () => JSON.parse(String((mockFetch().mock.calls.at(-1) as [string, RequestInit])[1].body)) as { source: string; message: string };
+
+	// The outbox sends one report at a time, so each is let through before the next is read.
+	const tick = () => new Promise((r) => setTimeout(r, 0));
+
+	it("a missing or blank source is `unlabelled`; a missing message says what it was given", async () => {
+		reportClientError(undefined as unknown as string, undefined as unknown as string);
+		await tick();
+		expect(sent()).toMatchObject({ source: UNLABELLED_SOURCE, message: "(no message: reportClientError was called with undefined)" });
+		reportClientError("   ", null as unknown as string);
+		await tick();
+		expect(sent()).toMatchObject({ source: UNLABELLED_SOURCE, message: "(no message: reportClientError was called with null)" });
+		reportClientError("api-1120", "");
+		await tick();
+		expect(sent()).toMatchObject({ source: "api-1120", message: "(no message: reportClientError was called with an empty string)" });
+	});
+
+	it("an Error passed as the message is reported by its name and message", async () => {
+		reportClientError("react-1120", new TypeError("x is not a function") as unknown as string);
+		await tick();
+		expect(sent()).toMatchObject({ source: "react-1120", message: "TypeError: x is not a function" });
 	});
 });

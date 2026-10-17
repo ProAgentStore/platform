@@ -80,7 +80,8 @@ describe("the host Worker (#1086)", () => {
 		const [row] = rows();
 		expect(row).toMatchObject({ source: "client:host", level: "error", status: 500, user_id: null, instance_id: null, run_id: null });
 		expect(String(row.message)).toMatch(/upstream connect error/);
-		expect(JSON.parse(String(row.context))).toEqual({ method: "POST", path: "/admin/api/v1/admin/stats" });
+		// `caller` is the API's own reading of where a client row came from (#1120): the host Worker is a server, not a page.
+		expect(JSON.parse(String(row.context))).toEqual({ method: "POST", path: "/admin/api/v1/admin/stats", caller: { origin: "none" } });
 		expect(String(row.context) + String(row.message)).not.toContain("secret-form-body");
 	});
 
