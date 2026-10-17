@@ -54,6 +54,10 @@ const DECLARED = (CONFIG.capabilities as Record<string, unknown>).tools as strin
 
 /** The tool list the converging UPDATE writes, so the two halves of the migration cannot diverge. */
 const CONVERGED: string[] = JSON.parse(/json\('(\[[\s\S]*?\])'\)/.exec(SQL)?.[1] ?? "[]");
+/** The tool list the INSERT writes — 0164's own, before later grants (0251, #1110) extend the live row. */
+const INSERTED: string[] = (JSON.parse(/json\('(\{[\s\S]*?\})'\)/.exec(SQL)?.[1]?.replace(/''/g, "'") ?? "{}").capabilities?.tools ?? []) as string[];
+/** Later grants that rewrite the Repo Coders' tool list, replayed after 0164 in order. */
+const SQL_0251 = readFileSync(fileURLToPath(new URL("../../migrations/0251_coder_remote_repo_read_tools.sql", import.meta.url).href), "utf8");
 
 const groups = registryConnectorGroups();
 const GITHUB_TOOLS = groups.find((g) => g.connector === "github")?.tools ?? [];
@@ -74,14 +78,16 @@ describe("migration 0164 — the Local Coder is subscribable (#868)", () => {
 	});
 
 	it("writes the SAME tool list in the INSERT and in the converging UPDATE", () => {
-		expect(CONVERGED).toEqual(DECLARED);
+		expect(INSERTED.length).toBeGreaterThan(0);
+		expect(CONVERGED).toEqual(INSERTED);
 	});
 
-	it("replaying the migration changes nothing", () => {
+	it("replaying the migration and the later Repo Coder grants in order changes nothing", () => {
 		const d1 = realSchemaD1();
 		try {
 			const before = rowFor(d1, "local-coder").config;
 			d1.exec(SQL);
+			d1.exec(SQL_0251);
 			expect(JSON.parse(rowFor(d1, "local-coder").config)).toEqual(JSON.parse(before));
 			const n = d1.sqlite.prepare("SELECT COUNT(*) AS n FROM agents WHERE slug = 'local-coder'").get() as { n: number };
 			expect(n.n).toBe(1);

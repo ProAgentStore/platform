@@ -193,17 +193,20 @@ describe("declared, reachable and read-only (#1110)", () => {
 		expect(t).toMatchObject({ connector: "github", scope: "read", mutates: false, untrustedOutput: true });
 	});
 
-	it("enablement is PENDING: no seeded agent declares them, and the Repo Coder lists them as not declared", () => {
+	it("ENABLED (migration 0251, owner-approved): exactly the Repo Coders declare them, and a Repo Coder can call them through call_instance_tool", () => {
 		const d1 = realSchemaD1();
 		try {
 			const rows = d1.sqlite.prepare("SELECT slug, config FROM agents WHERE json_valid(config)").all() as Array<{ slug: string; config: string }>;
-			for (const r of rows) {
-				const tools: string[] = JSON.parse(r.config).capabilities?.tools ?? [];
-				expect(tools.filter((t) => t === "github_read_file" || t === "github_tree"), r.slug).toEqual([]);
+			const declaring = rows.filter((r) => ((JSON.parse(r.config).capabilities?.tools ?? []) as string[]).some((t) => t === "github_read_file" || t === "github_tree")).map((r) => r.slug);
+			// The owner approved "All Repo Coder agents"; local-coder is pinned equal to coder-repo (0164).
+			expect(declaring.sort()).toEqual(["coder-repo", "local-coder"]);
+			for (const slug of ["coder-repo", "local-coder"]) {
+				const row = rows.find((r) => r.slug === slug) as { slug: string; config: string };
+				const policy = resolveToolPolicy(agentCapabilities({ slug, category: "code", config: row.config }));
+				for (const name of ["github_read_file", "github_tree"]) {
+					expect(policy.find((p) => p.name === name), `${slug} ${name}`).toMatchObject({ allowed: true, mutates: false, invocableBy: expect.arrayContaining(["call_instance_tool"]) });
+				}
 			}
-			const coder = rows.find((r) => r.slug === "coder-repo") as { slug: string; config: string };
-			const policy = resolveToolPolicy(agentCapabilities({ slug: "coder-repo", category: "code", config: coder.config }));
-			for (const name of ["github_read_file", "github_tree"]) expect(policy.find((p) => p.name === name), name).toMatchObject({ allowed: false, reason: "not_declared" });
 		} finally {
 			d1.close();
 		}

@@ -94,13 +94,6 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 		"The google_sheets connector is inert until the Sheets OAuth scope lands on the Google client; " +
 		"until then every call fails at consent, not at the tool.",
 	sheets_append: "Same as sheets_read — inert until the Sheets OAuth scope lands.",
-	// #1110. Implemented and callable (any agent that declares them — including through
-	// call_instance_tool — reads remote repos over its existing installation grant), but NOT yet
-	// declared on any seeded agent: adding remote-file reads to the Coders' declared tools is a live
-	// capability change awaiting the owner's approval, deliberately left out of the #1110 change.
-	github_read_file:
-		"Pending enablement (#1110): declaring remote-file reads on the seeded Coders is a live capability change awaiting owner approval.",
-	github_tree: "Same as github_read_file — pending owner approval to declare it on a seeded agent (#1110).",
 	// #711. Unlike the meta/sheets entries above, these are NOT inert: they run today against any
 	// already-connected mailbox, because gmail.readonly was always the granted scope and it covers
 	// attachment download. A subscriber can declare them on their own agent right now — they are in
