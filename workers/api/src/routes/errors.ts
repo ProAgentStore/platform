@@ -244,12 +244,14 @@ errorRoutes.get("/", async (c) => {
 	// Exact per-instance / per-run reads (#1085), on the verified columns — never widened past `scope`.
 	const instanceId = c.req.query("instance_id") || undefined;
 	const runId = c.req.query("run_id") || undefined;
+	// One request's rows (#1135): the `X-Request-Id` a response carried.
+	const requestId = c.req.query("request_id") || undefined;
 	// #1090: build and time bounds, and the keyset walk over the whole retained log.
 	const build = c.req.query("build") || undefined;
 	const since = parseTimeBound(c.req.query("since"));
 	const until = parseTimeBound(c.req.query("until"));
 	if (since === null || until === null) return c.json({ error: "since/until must be an ISO time or epoch milliseconds" }, 400);
-	const filter: ErrorFilter = { userId: session.uid, all, source, level, instanceId, runId, build, since, until };
+	const filter: ErrorFilter = { userId: session.uid, all, source, level, instanceId, runId, requestId, build, since, until };
 	const rawCursor = c.req.query("cursor");
 	if (rawCursor !== undefined) {
 		const cursor = parseHistoryCursor(rawCursor, "string");

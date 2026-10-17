@@ -150,11 +150,12 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			cursor: z.string().min(1).max(2048).optional().describe('"newest" to start a stable walk of the whole retained log, then the previous reply\'s `nextCursor`. Opaque — copy it exactly.'),
 			instance_id: z.string().optional().describe("Only this instance's rows — exact, on the verified `instance_id` column. Rows written before #1085 carry no instance; find those with error_summary's instance_id, which also reads their samples."),
 			run_id: z.string().optional().describe("Only this run's rows (the run / trace id that agent_trace's trace_id takes). Exact; client-reported rows never carry one."),
+			request_id: z.string().max(128).optional().describe("Only the rows one request wrote: the `X-Request-Id` an API response carried, or a tool call's `apiRequestId` in mcp_audit_log. Matches the request that opened a row or the latest one folded into it."),
 			build: z.string().max(64).optional().describe("Only rows stamped with this deployed build (the `build` field, a commit prefix). Rows from before build stamping carry none."),
 			since: z.string().max(40).optional().describe("Only rows FIRST written at or after this time (ISO 8601 or epoch ms)."),
 			until: z.string().max(40).optional().describe("Only rows first written at or before this time (ISO 8601 or epoch ms)."),
 		},
-		async ({ token, scope, source, level, limit, offset, cursor, instance_id, run_id, build, since, until }) => {
+		async ({ token, scope, source, level, limit, offset, cursor, instance_id, run_id, request_id, build, since, until }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
@@ -163,6 +164,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			if (level) qs.set("level", level);
 			if (instance_id) qs.set("instance_id", instance_id);
 			if (run_id) qs.set("run_id", run_id);
+			if (request_id) qs.set("request_id", request_id);
 			if (build) qs.set("build", build);
 			if (since) qs.set("since", since);
 			if (until) qs.set("until", until);

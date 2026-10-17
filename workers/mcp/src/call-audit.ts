@@ -58,6 +58,12 @@ export interface CallAuditRecord {
 	final?: unknown;
 	/** The last non-2xx HTTP status the platform API answered during this call. */
 	upstreamStatus?: number;
+	/**
+	 * The `X-Request-Id` every platform API request made during this call carried (#1135), minted on
+	 * the first one. The API stamps it on the error and trace rows those requests wrote, so
+	 * `list_errors request_id=<apiRequestId>` finds what this call broke.
+	 */
+	apiRequestId?: string;
 }
 
 const store = new AsyncLocalStorage<CallAuditRecord>();
@@ -88,6 +94,14 @@ export function noteUpstreamStatus(status: number): void {
 
 const SAFE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const ID = /^[A-Za-z0-9._:-]{1,120}$/;
+
+/** The request id the open call's API requests carry (#1135), or undefined outside a call. */
+export function apiRequestIdForCall(): string | undefined {
+	const rec = store.getStore();
+	if (!rec) return undefined;
+	rec.apiRequestId ??= `mcp-${crypto.randomUUID()}`;
+	return rec.apiRequestId;
+}
 
 /** What may be recorded about the arguments: their names, and the instance id the call targeted. */
 export function noteArguments(rec: CallAuditRecord, args: unknown): void {
@@ -254,6 +268,7 @@ export function callEvent(rec: CallAuditRecord): Record<string, unknown> | null 
 		// A fail-open gate is the thing to explain on a call that otherwise went fine.
 		explanation: gateUnverified && v.action === "completed" ? `Suspension check failed (${rec.gate?.reason ?? "unverified"}); the call was allowed fail-open.` : explain(v),
 		...(rec.gate ? { gate: rec.gate.check, ...(rec.gate.reason ? { gateReason: rec.gate.reason } : {}) } : {}),
+		...(rec.apiRequestId ? { apiRequestId: rec.apiRequestId } : {}),
 		durationMs: Date.now() - rec.startedAt,
 		receiptOf: "tool_call",
 	};

@@ -1,4 +1,4 @@
-import { noteUpstreamStatus } from "./call-audit.js";
+import { apiRequestIdForCall, noteUpstreamStatus } from "./call-audit.js";
 import { recordLatency } from "./latency.js";
 
 const API = "https://api.proagentstore.online";
@@ -117,11 +117,14 @@ export async function apiCall(
 	// Every API hop is an `api` latency sample (#198), named by path without its query so an
 	// id or a cursor never lands in a log line. A thrown fetch is a failed sample and rethrows.
 	const started = Date.now();
+	// Inside a tool call, every API request carries the call's request id (#1135), so the API's error
+	// and trace rows join this call's outcome event.
+	const requestId = apiRequestIdForCall();
 	let res: Response;
 	try {
 		res = await fetch(`${apiBase(env)}${path}`, {
 			...opts,
-			headers: { "Content-Type": "application/json", ...opts?.headers },
+			headers: { "Content-Type": "application/json", ...(requestId ? { "X-Request-Id": requestId } : {}), ...opts?.headers },
 		});
 	} catch (err) {
 		recordLatency({ stage: "api", name: path.split("?")[0] ?? path, ms: Date.now() - started, ok: false });

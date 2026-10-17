@@ -621,7 +621,7 @@ immediately instead of a whole transcript.
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `agent_trace` | The primary debug tool — time-ordered timeline of chat turns, apply steps, tool calls, failures | — | | |
-| `list_errors` | Persisted platform failures (`scope: "all"` is admin-only); `instance_id` / `run_id` read one verified instance or run exactly (#1085) | — | | |
+| `list_errors` | Persisted platform failures (`scope: "all"` is admin-only); `instance_id` / `run_id` read one verified instance or run exactly (#1085); `request_id` the rows one API request wrote — its `X-Request-Id`, or a call's `apiRequestId` (#1135) | — | | |
 | `error_summary` | The same failures GROUPED by signature — what is recurring, and for how long. The write-side collapse bucket is one hour, so a warning firing for days is ~24 rows a day in the flat feed | — | | |
 | `telemetry_health` | Whether platform telemetry is reaching its stores: per sink (`error_log`, `agent_events`, `admin_audit_log`, `mcp_audit`) what the primary store refused and is spooled for replay (`pending`), what replay gave up on (`dead`), what was lost outright in the last 30 days, and the per-minute drain's last receipt. `complete` only when all are zero. Admin only (#1084). |
 | `admin_mcp_audit` | Every account's MCP tool-call audit events (or one account's with `user`), newest first, with the same cursor, `tool` and `receipt` filters and `coverage` as `mcp_audit_log`. Admin only (#1090) | — | | |

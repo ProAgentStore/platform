@@ -14,6 +14,7 @@ import type { Env } from "../types.js";
 import { sqlTime } from "./sql-time.js";
 import { spoolTelemetry, type TelemetryWrite } from "./telemetry-spool.js";
 import { toolLogLine } from "./tool-result-cap.js";
+import { currentRequestId } from "./request-context.js";
 
 export type EventLevel = "debug" | "info" | "warn" | "error";
 
@@ -59,6 +60,10 @@ export async function logEvent(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_K
 	const id = e.id ? String(e.id).slice(0, 300) : crypto.randomUUID();
 	let row: Record<string, unknown> | null = null;
 	try {
+		// The request this event happened inside (#1135) rides in its context, so a trace row joins the
+		// error rows and the MCP call event of the same request. Never overrides a caller's own value.
+		const requestId = currentRequestId();
+		const context = requestId && !(e.context && "requestId" in e.context) ? { ...e.context, requestId } : e.context;
 		row = {
 		ts: typeof e.ts === "number" ? e.ts : Date.now(),
 		created_at: sqlTime(),
@@ -70,7 +75,7 @@ export async function logEvent(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_K
 		event: String(e.event).slice(0, 64),
 		// Marked, and valid JSON (#898): a sliced context failed json_valid and its row vanished.
 		message: e.message != null ? clipMarked(e.message, 2000) : null,
-		context: e.context ? boundedJson(e.context, 4000) : null,
+		context: context ? boundedJson(context, 4000) : null,
 		};
 		// `ON CONFLICT(id) DO NOTHING` is a no-op for every caller that lets the id default to a
 		// fresh uuid — a random 128-bit key never collides — and is what makes a supplied `id`

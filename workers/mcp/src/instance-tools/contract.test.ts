@@ -398,7 +398,7 @@ const TABLE: Record<string, Row> = {
 	telemetry_health: ["observability", "none", null, null, "token"],
 	admin_mcp_audit: ["observability", "none", null, null, "action,cursor,limit,receipt,request_id,session_id,since,token,tool,until,user"],
 	admin_action_audit: ["observability", "none", null, null, "action,actor,cursor,limit,since,target,target_type,token,until"],
-	list_errors: ["observability", "none", null, null, "build,cursor,instance_id,level,limit,offset,run_id,scope,since,source,token,until"],
+	list_errors: ["observability", "none", null, null, "build,cursor,instance_id,level,limit,offset,request_id,run_id,scope,since,source,token,until"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
 	list_instance_drive_files: ["connectors", "none", null, null, "folder,grant_id,instance_id,limit,q,token"],
 	list_instance_files: ["knowledge", "none", null, null, "instance_id,token"],

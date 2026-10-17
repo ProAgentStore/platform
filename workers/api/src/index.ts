@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
 import { setServerBuild } from "./lib/error-log.js";
+import { REQUEST_ID_HEADER, requestIdFor, withRequestId } from "./lib/request-context.js";
 import { isTransientInfraError, logUnhandled } from "./lib/on-error.js";
 import { verifySession } from "./lib/session.js";
 import { rateLimitAdmin, rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
@@ -113,6 +114,16 @@ const app = new Hono<{ Bindings: Env }>();
 
 // ── Middleware ──────────────────────────────────────────────────────────────
 
+// Every request runs inside an id (#1135), FIRST, so everything after it — CORS, the rate limiter,
+// the route and `app.onError` — writes its error and trace rows under the request that caused them.
+app.use("*", async (c, next) => {
+	const requestId = requestIdFor(c.req.raw.headers);
+	await withRequestId(requestId, async () => {
+		await next();
+		c.header(REQUEST_ID_HEADER, requestId);
+	});
+});
+
 app.use(
 	"*",
 	cors({
@@ -124,6 +135,7 @@ app.use(
 		],
 		allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 		allowHeaders: ["Content-Type", "Authorization"],
+		exposeHeaders: [REQUEST_ID_HEADER],
 		maxAge: 86400,
 		// Required for the OAuth state-binding cookie (lib/oauth-nonce.ts): the `/start` calls
 		// are cross-origin XHR from the console, and a browser DISCARDS Set-Cookie on those

@@ -47,10 +47,11 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
   - user;
   - path and method;
   - level: transient → warn 503; 402/403/409/429 → warn; 5xx or unknown → error with the stack (1800 chars);
-  - build.
-- **Exclusions:** 401, 404 and other non-diagnostic 4xx. There is no request id on `error_log`.
-- **Reader:** `list_errors`, `error_summary`.
-- **Local:** `entrypoint-capture.test.ts`. `capture-acceptance.test.ts` drives it through an outage, a replay and the reader.
+  - build;
+  - request id (#1135): the `X-Request-Id` the response carried — the caller's id when it sent an id-shaped one (the MCP Worker and the host do), else `cf-ray`, else a fresh uuid. `request_id` is the request that opened the row, `last_request_id` the latest folded into it. The request's trace rows carry it as `context.requestId`. Every `logError` written inside a request gets it, not only `app.onError`'s.
+- **Exclusions:** 401, 404 and other non-diagnostic 4xx. Rows written outside a request (Durable Object, Workflow, cron) have no request id.
+- **Reader:** `list_errors` (`request_id` filter), `error_summary`.
+- **Local:** `entrypoint-capture.test.ts`. `capture-acceptance.test.ts` drives it through an outage, a replay and the reader. `request-id-correlation.test.ts` reads the request id back through `GET /v1/errors`, through a repeat and through the spool's replay.
 - **Live:** `transient` D1 "Network connection lost" rows (503 warn); `unhandled` 409 warns.
 
 ### API route that RETURNS a failure
@@ -116,8 +117,9 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
 ### Host worker
 
 - **Capture:** `reportHostFailure` → `POST /v1/errors/client` over the service binding.
-- **Records:** `client:host` or `client:host-sitemap`. The report is treated as untrusted, so there is no user, instance or run.
-- **Exclusions:** no event id, so there is no receipt dedupe and no retry. A failed report goes to the console only.
+- **Records:** `client:host` or `client:host-sitemap`. The report is treated as untrusted, so there is no user, instance or run. The request id is the visitor request's `cf-ray` (#1135).
+- **Delivery (#1135):** each report carries an event id minted once, so it gets the browser reports' receipt (#1088): a re-send of a report already stored is answered `duplicate` and writes no second row. A throw, 5xx or 429 is retried after 250 ms and 1 s; a 4xx is not. After the last attempt the failure goes to the console. A crash's retries run under `waitUntil`, so the visitor's 500 does not wait for them.
+- **Exclusions:** retries live in the isolate only; a report that fails all three attempts is not spooled.
 - **Reader:** `list_errors`.
 - **Local:** `host-template-capture.test.ts`.
 - **Live:** **no row**, so a live gate is open.
@@ -139,6 +141,7 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
   - gate;
   - durationMs;
   - requestId and mcpSessionId;
+  - apiRequestId (#1135): the `X-Request-Id` every platform API request of the call carried, so `list_errors request_id=<apiRequestId>` finds the API rows the call caused;
   - argument names plus `instance_id`.
 - **Exclusions:**
   - Successful read-only calls are not recorded.
@@ -283,10 +286,10 @@ These keep #1091 and #1083 open. Closing any of them needs a real production occ
 
 Recorded, not fixed here. Each was re-verified against `main` at 22aaea5f and is tracked:
 - direct-5xx routes outside `logDirectResponse`, route `waitUntil` tasks, `RelayDO`, `RunnerUpdateWorkflow` — #1134;
-- no request id on `error_log`, and host reports have no id or retry — #1135;
 - templates — by design (independent Workers), not tracked.
 
 Resolved since this list was written:
+- #1135 (no request id on `error_log`; host reports with no id or retry) — request id stamped on every row written inside a request and shared with the trace and the MCP call event; host reports carry an event id and are retried.
 - #1118 (nested `{success:false}` recorded as `completed`) — fixed in e417f636.
 - #1120 (`client:undefined` from a build-less caller) — fixed in a3708994 and 22aaea5f. Eighteen of the twenty unattributed rows were the mobile-handoff e2e fixture (stopped by 5d1dd1d6, #1086); vitest (a3708994) and the chromium e2e browser (22aaea5f) can no longer reach production's API.
 - #1119 is closed by the change that ships with this file: the terminal-snapshot sweep now throws, and the cron records it (`capture-acceptance.test.ts`, transient → warn, genuine → error).

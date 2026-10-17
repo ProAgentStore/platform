@@ -166,6 +166,11 @@ interface Env {
 	API: Fetcher;
 }
 
+/** Waits before the 2nd and 3rd delivery attempt of a host report (#1135) — then it is given up. */
+export const HOST_REPORT_BACKOFF_MS = [250, 1000] as const;
+
+const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /**
  * Report a host failure to the platform's durable error log (#1086). The host binds no database —
  * only the API — so it reports the way a browser does: `POST /v1/errors/client` over the service
@@ -173,31 +178,54 @@ interface Env {
  * only (ADR 0004): method, path and the error's class and message, never a request or response
  * body. Never throws, and never reports a failure of the errors endpoint itself — a failing
  * report would otherwise report itself.
+ *
+ * ## One event id, retried with backoff (#1135)
+ *
+ * The report carries an event id minted ONCE, so it has the receipt semantics browser reports got in
+ * #1088: a re-send of a report already stored — its answer was lost on the way back — is answered
+ * `duplicate` and writes no second row. That is what makes a retry safe, so a report that threw, or
+ * was answered 5xx or 429, is re-sent after {@link HOST_REPORT_BACKOFF_MS}; a 4xx is the report's own
+ * fault and is not. Only when every attempt fails does it fall back to the console.
+ *
+ * `requestId` is the visitor's request (its `cf-ray`), sent as `X-Request-Id` so the API stamps it on
+ * the row: the row joins the edge's own log of the request that crashed.
  */
-export async function reportHostFailure(env: Env, r: { source: string; method: string; path: string; status: number; err: unknown }): Promise<void> {
+export async function reportHostFailure(
+	env: Env,
+	r: { source: string; method: string; path: string; status: number; err: unknown; requestId?: string | null },
+	sleep: (ms: number) => Promise<void> = sleepMs,
+): Promise<void> {
 	if (r.path.startsWith("/v1/errors") || r.path.startsWith(`${ADMIN_API_PREFIX}/v1/errors`)) return;
 	const message = r.err instanceof Error ? `${r.err.name}: ${r.err.message}` : String(r.err);
-	try {
-		await env.API.fetch(
-			new Request("https://api.proagentstore.online/v1/errors/client", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ source: r.source, status: r.status, message: message.slice(0, 500), context: { method: r.method, path: r.path.slice(0, 200) } }),
-			}),
-		);
-	} catch (e) {
-		console.error("[host] could not report a failure:", e instanceof Error ? e.message : String(e), "— original:", message);
+	const body = JSON.stringify({ id: crypto.randomUUID(), source: r.source, status: r.status, message: message.slice(0, 500), context: { method: r.method, path: r.path.slice(0, 200) } });
+	const headers: Record<string, string> = { "Content-Type": "application/json" };
+	if (r.requestId) headers["X-Request-Id"] = r.requestId;
+	let last = "";
+	for (let attempt = 0; attempt <= HOST_REPORT_BACKOFF_MS.length; attempt++) {
+		if (attempt > 0) await sleep(HOST_REPORT_BACKOFF_MS[attempt - 1]);
+		try {
+			const res = await env.API.fetch(new Request("https://api.proagentstore.online/v1/errors/client", { method: "POST", headers, body }));
+			if (res.ok) return;
+			last = `HTTP ${res.status}`;
+			if (res.status < 500 && res.status !== 429) break;
+		} catch (e) {
+			last = e instanceof Error ? e.message : String(e);
+		}
 	}
+	console.error("[host] could not report a failure:", last, "— original:", message);
 }
 
 export default {
 	/** Every request; a throw is reported and answered with a plain 500 instead of the runtime's (#1086). */
-	async fetch(request: Request, env: Env): Promise<Response> {
+	async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
 		try {
 			return await route(request, env);
 		} catch (err) {
 			const url = new URL(request.url);
-			await reportHostFailure(env, { source: "host", method: request.method, path: url.pathname, status: 500, err });
+			// Retries back off (#1135), so the visitor's 500 does not wait for them when the runtime can hold them.
+			const report = reportHostFailure(env, { source: "host", method: request.method, path: url.pathname, status: 500, err, requestId: request.headers.get("cf-ray") });
+			if (ctx) ctx.waitUntil(report);
+			else await report;
 			return new Response("Internal Server Error", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
 		}
 	},
@@ -334,7 +362,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 		} catch (error) {
 			// Still served — the static URLs — but the agent list is missing, and that is recorded (#1086).
 			console.warn("Sitemap agent expansion failed", error);
-			await reportHostFailure(env, { source: "host-sitemap", method: request.method, path, status: 502, err: error });
+			await reportHostFailure(env, { source: "host-sitemap", method: request.method, path, status: 502, err: error, requestId: request.headers.get("cf-ray") });
 		}
 		xml += "</urlset>";
 		return new Response(xml, {

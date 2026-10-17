@@ -2,6 +2,7 @@
  * Durable error log (D1 `error_log`). Failures at the key hotspots write here so
  * a reason is never thrown away — readable via GET /v1/errors. See migration 0034.
  */
+import { currentRequestId } from "./request-context.js";
 import { boundedJson, clipMarked } from "./clip-marked.js";
 import { type CursorQuery, keysetBefore, keysetPage, sqlTimeOf } from "./history-page.js";
 import type { Env } from "../types.js";
@@ -215,10 +216,12 @@ export function sanitizeBuildId(raw: unknown): string | undefined {
  *
  * Returns true when an existing row absorbed the occurrence.
  */
-async function collapseRepeat(env: Pick<Env, "DB">, k: CollapseKey, context: string | null, occurrences = 1): Promise<boolean> {
+async function collapseRepeat(env: Pick<Env, "DB">, k: CollapseKey, context: string | null, occurrences = 1, requestId: string | null = null): Promise<boolean> {
+	// The absorbed occurrence's request (#1135) is kept like its context: the latest one, beside the
+	// request that opened the row. Not part of the identity — every request has its own id.
 	const res = await env.DB.prepare(
 		`UPDATE error_log
-		    SET repeat_count = repeat_count + ?11, last_seen_at = datetime('now'), last_context = ?7
+		    SET repeat_count = repeat_count + ?11, last_seen_at = datetime('now'), last_context = ?7, last_request_id = ?12
 		  WHERE id = (SELECT id FROM error_log
 		               WHERE source = ?1 AND message = ?2 AND level = ?3
 		                 AND status IS ?4 AND user_id IS ?5
@@ -226,7 +229,7 @@ async function collapseRepeat(env: Pick<Env, "DB">, k: CollapseKey, context: str
 		                 AND instance_id IS ?9 AND run_id IS ?10
 		               ORDER BY created_at DESC LIMIT 1)`,
 	)
-		.bind(k.source, k.message, k.level, k.status, k.userId, sqlTime(Date.now() - COLLAPSE_WINDOW_MS), context, k.build, k.instanceId, k.runId, occurrences)
+		.bind(k.source, k.message, k.level, k.status, k.userId, sqlTime(Date.now() - COLLAPSE_WINDOW_MS), context, k.build, k.instanceId, k.runId, occurrences, requestId)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
 }
@@ -329,15 +332,17 @@ export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_K
 		// whose entire job is to not be silent, and a duplicate row is a trivially better outcome
 		// than no row.
 		const occurrences = Number.isInteger(e.occurrences) && (e.occurrences as number) > 1 ? Math.min(e.occurrences as number, 10_000) : 1;
-		if (await collapseRepeat(env, key, context, occurrences).catch(() => false)) return "persisted";
+		// The request this is written inside (#1135), or null from a Durable Object, Workflow or cron.
+		const requestId = currentRequestId();
+		if (await collapseRepeat(env, key, context, occurrences, requestId).catch(() => false)) return "persisted";
 		// The id and the time are minted ONCE (#1084): if this insert fails, the same row — same id,
 		// same moment — is what the spool replays, so a replay can never become a second fact.
 		id = crypto.randomUUID();
-		row = { created_at: sqlTime(), user_id: key.userId, source, status: key.status, message, context, level, build, instance_id: key.instanceId, run_id: key.runId, repeat_count: occurrences };
+		row = { created_at: sqlTime(), user_id: key.userId, source, status: key.status, message, context, level, build, instance_id: key.instanceId, run_id: key.runId, repeat_count: occurrences, request_id: requestId };
 		await env.DB.prepare(
-			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at, created_at, instance_id, run_id, repeat_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12)",
+			"INSERT INTO error_log (id, user_id, source, status, message, context, level, build, last_seen_at, created_at, instance_id, run_id, repeat_count, request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13)",
 		)
-			.bind(id, row.user_id, source, row.status, message, context, level, build, row.created_at, key.instanceId, key.runId, occurrences)
+			.bind(id, row.user_id, source, row.status, message, context, level, build, row.created_at, key.instanceId, key.runId, occurrences, requestId)
 			.run();
 		row = null;
 		// Mirror into the unified trace so failures appear inline in agent_trace next to
@@ -417,6 +422,14 @@ export interface ErrorRow {
 	instance_id?: string | null;
 	/** The run/trace correlation id (#1085). NULL on rows before migration 0239 and on client reports. */
 	run_id?: string | null;
+	/**
+	 * The request that OPENED this row (#1135) — the `X-Request-Id` its response carried, which the
+	 * MCP call event and the request's trace rows carry too. NULL outside a request (Durable Object,
+	 * Workflow, cron) and on rows before migration 0252.
+	 */
+	request_id?: string | null;
+	/** The request of the most recent occurrence absorbed into this row (#1135), once one has been. */
+	last_request_id?: string | null;
 }
 
 /**
@@ -428,7 +441,7 @@ export interface ErrorRow {
  * without it a NULL sorts LAST under `DESC` in SQLite, which is invisibility rather than staleness.
  */
 export const ERROR_COLUMNS =
-	"id, created_at, user_id, source, status, message, context, last_context, level, repeat_count, last_seen_at, build, instance_id, run_id";
+	"id, created_at, user_id, source, status, message, context, last_context, level, repeat_count, last_seen_at, build, instance_id, run_id, request_id, last_request_id";
 export const ERROR_RECENCY = "COALESCE(last_seen_at, created_at)";
 
 /** Read recent errors — for one user, or all (admin). Newest first. */
@@ -456,6 +469,8 @@ export interface ErrorFilter {
 	level?: ErrorLevel;
 	instanceId?: string;
 	runId?: string;
+	/** One request's rows (#1135): the request that opened a row OR the latest one absorbed into it. */
+	requestId?: string;
 	/** Exact deployed build stamp (the `build` column, a 12-char commit prefix). */
 	build?: string;
 	/** Epoch ms bounds on `created_at` (first seen), inclusive. */
@@ -487,6 +502,10 @@ function errorFilters(opts: ErrorFilter): { where: string[]; binds: unknown[] } 
 	if (opts.runId) {
 		binds.push(opts.runId);
 		where.push(`run_id = ?${binds.length}`);
+	}
+	if (opts.requestId) {
+		binds.push(opts.requestId);
+		where.push(`(request_id = ?${binds.length} OR last_request_id = ?${binds.length})`);
 	}
 	if (opts.build) {
 		binds.push(opts.build);

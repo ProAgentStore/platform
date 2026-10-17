@@ -29,10 +29,11 @@ vi.mock("cloudflare:workers", () => {
 });
 
 import { realSchemaD1, type RealSchemaD1 } from "./lib/d1-sqlite.js";
+import { signSession } from "./lib/session.js";
 import type { Env } from "./types.js";
 
 const { default: api } = await import("./index.js");
-const { default: host } = await import("../../host/src/index.js");
+const { default: host, reportHostFailure, HOST_REPORT_BACKOFF_MS } = await import("../../host/src/index.js");
 // By computed path: the templates have no install, so `tsc` must not follow them into this
 // package's typecheck. Vitest resolves them at runtime (see `vitest.config.ts`).
 const TEMPLATES = "../../../templates";
@@ -44,10 +45,13 @@ const TemplateAgentDO = ((await import(/* @vite-ignore */ `${TEMPLATES}/template
 let d1: RealSchemaD1;
 let apiEnv: Env;
 let apiDown: (req: Request) => boolean;
+/** Answers the host's report and then loses the answer on the way back — the write landed (#1135). */
+let loseAnswer: (req: Request) => boolean;
 beforeEach(() => {
 	d1 = realSchemaD1();
 	apiEnv = { DB: d1.DB, SESSION_SIGNING_KEY: "k", API_BUILD: "b1" } as unknown as Env;
 	apiDown = () => false;
+	loseAnswer = () => false;
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
 	vi.spyOn(console, "warn").mockImplementation(() => undefined);
 	vi.spyOn(Math, "random").mockReturnValue(0.5);
@@ -66,7 +70,9 @@ const hostEnv = () => ({
 			if (apiDown(req)) throw new Error("upstream connect error");
 			const headers = new Headers(req.headers);
 			headers.set("CF-Connecting-IP", "192.0.2.10");
-			return api.fetch(new Request(req, { headers }), apiEnv, ctx);
+			const res = await api.fetch(new Request(req, { headers }), apiEnv, ctx);
+			if (loseAnswer(req)) throw new Error("connection reset after the request was sent");
+			return res;
 		},
 	},
 });
@@ -98,6 +104,86 @@ describe("the host Worker (#1086)", () => {
 		const res = await host.fetch(new Request("https://proagentstore.online/admin/api/v1/errors/client", { method: "POST", body: "{}" }), hostEnv() as never);
 		expect(res.status).toBe(500);
 		expect(rows()).toEqual([]);
+	});
+});
+
+describe("host reports carry an event id and a request id, and are retried (#1135)", () => {
+	const crashOn = "/v1/admin/stats";
+	const report = (sleeps: number[] = []) =>
+		reportHostFailure(hostEnv() as never, { source: "host", method: "GET", path: "/admin/api/v1/admin/stats", status: 500, err: new Error("upstream connect error") }, async (ms) => void sleeps.push(ms));
+	const reportsSent = () => {
+		const sent: Request[] = [];
+		const wrapped = hostEnv();
+		const inner = wrapped.API.fetch;
+		wrapped.API.fetch = async (req: Request) => {
+			if (new URL(req.url).pathname === "/v1/errors/client") sent.push(req.clone());
+			return inner(req);
+		};
+		return { sent, env: wrapped };
+	};
+
+	it("a crash's row carries the visitor request's cf-ray, read back through GET /v1/errors?request_id=", async () => {
+		apiDown = (req) => new URL(req.url).pathname === crashOn;
+		const res = await host.fetch(new Request(`https://proagentstore.online/admin/api${crashOn}`, { headers: { "cf-ray": "8d1f00aa11bb22cc-SYD" } }), hostEnv() as never);
+		expect(res.status).toBe(500);
+		const admin = await signSession("admin-1", "k", { roles: ["user", "admin"] });
+		const read = await api.fetch(new Request("https://api.proagentstore.online/v1/errors?scope=all&request_id=8d1f00aa11bb22cc-SYD", { headers: { Authorization: `Bearer ${admin}`, "CF-Connecting-IP": "192.0.2.11" } }), apiEnv, ctx);
+		const { errors } = (await read.json()) as { errors: Array<Record<string, unknown>> };
+		expect(errors).toEqual([expect.objectContaining({ source: "client:host", request_id: "8d1f00aa11bb22cc-SYD" })]);
+	});
+
+	it("every report names an event id, minted once — the same id on each attempt", async () => {
+		let attempt = 0;
+		apiDown = (req) => new URL(req.url).pathname === "/v1/errors/client" && attempt++ === 0;
+		const { sent, env } = reportsSent();
+		await reportHostFailure(env as never, { source: "host", method: "GET", path: "/x", status: 500, err: new Error("boom") }, async () => undefined);
+		const ids = await Promise.all(sent.map(async (r) => ((await r.json()) as { id: string }).id));
+		expect(ids).toHaveLength(2);
+		expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/);
+		expect(ids[1]).toBe(ids[0]);
+	});
+
+	it("a report that could not be delivered is retried with backoff, and lands once", async () => {
+		let attempts = 0;
+		apiDown = (req) => new URL(req.url).pathname === "/v1/errors/client" && ++attempts <= 2;
+		const sleeps: number[] = [];
+		await report(sleeps);
+		expect(sleeps).toEqual([...HOST_REPORT_BACKOFF_MS]);
+		expect(rows()).toEqual([expect.objectContaining({ source: "client:host", status: 500 })]);
+		expect(console.error).not.toHaveBeenCalled();
+	});
+
+	it("a re-send of a report that WAS stored (its answer was lost) writes one row, not two", async () => {
+		let lost = 0;
+		loseAnswer = (req) => new URL(req.url).pathname === "/v1/errors/client" && lost++ === 0;
+		const sleeps: number[] = [];
+		await report(sleeps);
+		expect(sleeps).toEqual([HOST_REPORT_BACKOFF_MS[0]]);
+		expect(rows()).toEqual([expect.objectContaining({ source: "client:host" })]);
+		expect(Number((d1.sqlite.prepare("SELECT repeat_count FROM error_log").get() as { repeat_count: number }).repeat_count)).toBe(1);
+	});
+
+	it("gives up after the last backoff and says so on the console — and never retries a report the API rejected as malformed", async () => {
+		apiDown = (req) => new URL(req.url).pathname === "/v1/errors/client";
+		const sleeps: number[] = [];
+		await report(sleeps);
+		expect(sleeps).toEqual([...HOST_REPORT_BACKOFF_MS]);
+		expect(console.error).toHaveBeenCalledWith("[host] could not report a failure:", "upstream connect error", "— original:", "Error: upstream connect error");
+
+		const rejected: number[] = [];
+		const env400 = { API: { fetch: async () => new Response(JSON.stringify({ ok: false }), { status: 400 }) } };
+		await reportHostFailure(env400 as never, { source: "host", method: "GET", path: "/x", status: 500, err: new Error("boom") }, async (ms) => void rejected.push(ms));
+		expect(rejected).toEqual([]);
+	});
+
+	it("does not hold the visitor's 500 for its retries when the runtime can keep them alive", async () => {
+		apiDown = (req) => new URL(req.url).pathname === crashOn;
+		const held: Promise<unknown>[] = [];
+		const res = await host.fetch(new Request(`https://proagentstore.online/admin/api${crashOn}`), hostEnv() as never, { waitUntil: (p: Promise<unknown>) => void held.push(p), passThroughOnException: () => undefined } as unknown as ExecutionContext);
+		expect(res.status).toBe(500);
+		expect(held).toHaveLength(1);
+		await Promise.all(held);
+		expect(rows()).toEqual([expect.objectContaining({ source: "client:host" })]);
 	});
 });
 

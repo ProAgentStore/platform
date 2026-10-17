@@ -14209,6 +14209,7 @@ paths:
         - { name: source, in: query, description: "Filter by source, e.g. `auth`, `keys-proxy`, `client:voice`.", schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, default: 100 } }
         - { name: level, in: query, schema: { type: string, enum: [error, warn] } }
+        - { name: request_id, in: query, description: "The rows one request wrote — the `X-Request-Id` its response carried; matches the request that opened a row or the latest one folded into it (#1135).", schema: { type: string } }
         - { name: build, in: query, description: Exact deployed build stamp., schema: { type: string } }
         - { name: since, in: query, description: "First seen at or after (ISO 8601 or epoch ms).", schema: { type: string } }
         - { name: until, in: query, description: "First seen at or before (ISO 8601 or epoch ms).", schema: { type: string } }

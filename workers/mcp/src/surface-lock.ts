@@ -1199,4 +1199,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.149": "sha256:f1286ab71b5d78f0d77c90387902394247c95957f5878d745d0e56a541e644a7",
 	// #1137: fleet_snapshot gains include_paused (paused instances are left out of `instances` by default).
 	"0.1.150": "sha256:096b938b80b7953e58e5f0651b834394dd9faf3611240b3b2a602faaaf8c8ba0",
+	// #1135: list_errors gains request_id (the rows one API request wrote — its X-Request-Id, or a tool call's apiRequestId).
+	"0.1.151": "sha256:188e096d1f1634d01968e517ccac0167b881ee0851dd6f42fceb54a452712ca3",
 };

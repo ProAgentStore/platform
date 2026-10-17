@@ -118,10 +118,10 @@ async function deliver(env: Pick<Env, "DB"> & { OAUTH_KV: KVNamespace }, r: Spoo
 	switch (r.sink) {
 		case "error_log":
 			await env.DB.prepare(
-				"INSERT INTO error_log (id, created_at, user_id, source, status, message, context, level, build, last_seen_at, instance_id, run_id, repeat_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?2, ?10, ?11, ?12) ON CONFLICT(id) DO NOTHING",
+				"INSERT INTO error_log (id, created_at, user_id, source, status, message, context, level, build, last_seen_at, instance_id, run_id, repeat_count, request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?2, ?10, ?11, ?12, ?13) ON CONFLICT(id) DO NOTHING",
 			)
 				// `repeat_count` (#1088): a spooled browser report keeps the occurrences it stood for.
-				.bind(r.id, p.created_at, p.user_id ?? null, p.source, p.status ?? null, p.message, p.context ?? null, p.level, p.build ?? null, p.instance_id ?? null, p.run_id ?? null, typeof p.repeat_count === "number" && p.repeat_count > 0 ? p.repeat_count : 1)
+				.bind(r.id, p.created_at, p.user_id ?? null, p.source, p.status ?? null, p.message, p.context ?? null, p.level, p.build ?? null, p.instance_id ?? null, p.run_id ?? null, typeof p.repeat_count === "number" && p.repeat_count > 0 ? p.repeat_count : 1, p.request_id ?? null)
 				.run();
 			return;
 		case "agent_events":
