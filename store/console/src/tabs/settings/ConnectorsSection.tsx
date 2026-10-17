@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import ToolPermissions from "../../components/ToolPermissions";
 import AgentAccountChoice from "../../components/AgentAccountChoice";
-import { DiscordConnectorPanel, type DiscordConnectorGrant } from "../../components/DiscordConnectorPanel";
+import { DiscordConnectorPanel } from "../../components/DiscordConnectorPanel";
 import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
 import type { InstancePermissionRequest, InstancePermissionRequestDecisionResponse, InstancePermissionRequestResponse } from "../../lib/types";
+import type { DiscordConnectorGrant } from "../../lib/discordTypes";
 import Card from "../../components/Card";
 import { permissionCardActions, permissionCardExpiry, permissionCardInstanceLabel } from "../../lib/permissionCard";
 

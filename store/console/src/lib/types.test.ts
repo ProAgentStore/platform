@@ -3,10 +3,11 @@ import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from "../../../../workers/api/src/lib/coding-default-engine-types";
 import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, AccountPreferencesWriteResponse as WorkerAccountPreferencesWriteResponse } from "../../../../workers/api/src/lib/preferences";
-import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse, PreparedApplicationTransferReceipt as WorkerPreparedApplicationTransferReceipt } from "../../../../workers/api/src/agent-types";
+import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, DiscordChannelListResponse as WorkerDiscordChannelListResponse, DiscordGrantListResponse as WorkerDiscordGrantListResponse, DiscordGrantResponse as WorkerDiscordGrantResponse, DiscordGuildListResponse as WorkerDiscordGuildListResponse, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse, PreparedApplicationTransferReceipt as WorkerPreparedApplicationTransferReceipt } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
+import type { DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuildListResponse } from "./discordTypes";
 import type { GmailScoutScanResponse, LeadVerification, LeadVerificationListResponse } from "./gmailScout";
 import type { RemoteAuthRequestResponse, RemoteAuthRequestView } from "./remoteAuth";
 import type { RemoteAuthRequestResponse as WorkerRemoteAuthRequestResponse, RemoteAuthRequestView as WorkerRemoteAuthRequestView } from "../../../../workers/api/src/lib/remote-auth";
@@ -119,6 +120,19 @@ const _connectionGuideHasNoInventedFields: Extra<ConnectionGuideResponse, Worker
 const _connectorConsentHasNoInventedFields: Extra<ConnectorConsent, WorkerConsentRow> extends never
 	? true
 	: never = true;
+
+// ── Discord channel grants ──────────────────────────────────────────────────────────────────
+//
+// These owner-only picker envelopes are named on both sides, so an added field cannot quietly
+// become another anonymous response assertion in the console.
+const _discordGuildsHaveNoInventedFields: Extra<DiscordGuildListResponse, WorkerDiscordGuildListResponse> extends never ? true : never = true;
+const _discordChannelsHaveNoInventedFields: Extra<DiscordChannelListResponse, WorkerDiscordChannelListResponse> extends never ? true : never = true;
+const _discordGrantsHaveNoInventedFields: Extra<DiscordGrantListResponse, WorkerDiscordGrantListResponse> extends never ? true : never = true;
+const _discordGrantHasNoInventedFields: Extra<DiscordGrantResponse, WorkerDiscordGrantResponse> extends never ? true : never = true;
+const _discordGuildsAcceptTheProducer: DiscordGuildListResponse = {} as WorkerDiscordGuildListResponse;
+const _discordChannelsAcceptTheProducer: DiscordChannelListResponse = {} as WorkerDiscordChannelListResponse;
+const _discordGrantsAcceptTheProducer: DiscordGrantListResponse = {} as WorkerDiscordGrantListResponse;
+const _discordGrantAcceptsTheProducer: DiscordGrantResponse = {} as WorkerDiscordGrantResponse;
 
 // ── Permission-recovery request responses ──────────────────────────────────────────────────
 //

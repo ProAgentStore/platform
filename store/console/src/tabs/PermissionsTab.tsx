@@ -4,7 +4,7 @@ import LoadFailed from "../components/LoadFailed";
 import type { InstanceConnectorPolicy } from "../lib/connectorState";
 import { permissionRequestFocus } from "../lib/permissionRequestFocus";
 import ConnectorsSection, { type DriveStatus, type WorkdriveStatus } from "./settings/ConnectorsSection";
-import type { DiscordConnectorGrant } from "../components/DiscordConnectorPanel";
+import type { DiscordConnectorGrant, DiscordGrantListResponse, DiscordGrantResponse } from "../lib/discordTypes";
 import type { ConnectorGrant } from "./TriggersSection";
 
 interface Props {
@@ -69,8 +69,8 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 				failed.push("your WorkDrive folders");
 			}
 			try {
-				const d = await api<{ grants?: DiscordConnectorGrant[] }>(`/v1/discord/instances/${instanceId}/grants`);
-				setDiscordGrants(d.grants || []);
+				const d = await api<DiscordGrantListResponse>(`/v1/discord/instances/${instanceId}/grants`);
+				setDiscordGrants(d.grants);
 			} catch {
 				failed.push("your Discord channels");
 			}
@@ -167,7 +167,7 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 	};
 
 	const addDiscordGrant = async (channelId: string) => {
-		const d = await api<{ grant: DiscordConnectorGrant }>(`/v1/discord/instances/${instanceId}/grants`, {
+		const d = await api<DiscordGrantResponse>(`/v1/discord/instances/${instanceId}/grants`, {
 			method: "POST",
 			body: JSON.stringify({ channelId }),
 		});

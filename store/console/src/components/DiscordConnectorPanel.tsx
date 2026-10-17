@@ -1,21 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import type { DiscordChannel, DiscordChannelListResponse, DiscordConnectorGrant, DiscordGuild, DiscordGuildListResponse } from "../lib/discordTypes";
 
-interface DiscordGuild {
-	id: string;
-	name: string;
-}
-
-interface DiscordChannel {
-	id: string;
-	name: string;
-}
-
-export interface DiscordConnectorGrant {
-	id: string;
-	resourceId: string;
-	resourceName: string;
-}
+export type { DiscordConnectorGrant } from "../lib/discordTypes";
 
 interface Props {
 	grants: DiscordConnectorGrant[];
@@ -38,8 +25,8 @@ export function DiscordConnectorPanel({ grants, message, onAddGrant, onRemoveGra
 	const [saving, setSaving] = useState(false);
 
 	useEffect(() => {
-		api<{ guilds?: DiscordGuild[] }>("/v1/discord/guilds")
-			.then((data) => setGuilds(data.guilds || []))
+		api<DiscordGuildListResponse>("/v1/discord/guilds")
+			.then((data) => setGuilds(data.guilds))
 			.catch(() => setError("Add a Discord bot token in Profile → API Keys before choosing a channel."));
 	}, []);
 
@@ -50,8 +37,8 @@ export function DiscordConnectorPanel({ grants, message, onAddGrant, onRemoveGra
 			return;
 		}
 		setChannels(null);
-		api<{ channels?: DiscordChannel[] }>(`/v1/discord/guilds/${encodeURIComponent(guildId)}/channels`)
-			.then((data) => setChannels(data.channels || []))
+		api<DiscordChannelListResponse>(`/v1/discord/guilds/${encodeURIComponent(guildId)}/channels`)
+			.then((data) => setChannels(data.channels))
 			.catch(() => setError("Discord channels could not be loaded. Check that the bot can view this server."));
 	}, [guildId]);
 

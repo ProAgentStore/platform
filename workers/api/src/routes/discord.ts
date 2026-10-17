@@ -11,6 +11,7 @@ import { connectorRefusalFor } from "../lib/instance-connector-access.js";
 import { safeFetch } from "../lib/ssrf.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import type { DiscordChannel, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse } from "../agent-types.js";
 
 export const discordRoutes = new Hono<{ Bindings: Env }>();
 
@@ -47,14 +48,14 @@ async function discordJson(token: string, path: string): Promise<unknown> {
 discordRoutes.get("/guilds", async (c) => {
 	const session = await requireUser(c);
 	const data = await discordJson(await botToken(c.env, session.uid), "/users/@me/guilds");
-	const guilds = Array.isArray(data)
+	const guilds: DiscordGuild[] = Array.isArray(data)
 		? data.flatMap((g) => {
 			if (!g || typeof g !== "object") return [];
 			const row = g as { id?: unknown; name?: unknown };
 			return typeof row.id === "string" && typeof row.name === "string" ? [{ id: row.id, name: row.name }] : [];
 		})
 		: [];
-	return c.json({ guilds });
+	return c.json({ guilds } satisfies DiscordGuildListResponse);
 });
 
 /** List only text channels the bot can see in one selected guild. */
@@ -62,7 +63,7 @@ discordRoutes.get("/guilds/:guildId/channels", async (c) => {
 	const session = await requireUser(c);
 	const guildId = requireSnowflake(c.req.param("guildId"), "guildId");
 	const data = await discordJson(await botToken(c.env, session.uid), `/guilds/${guildId}/channels`);
-	const channels = Array.isArray(data)
+	const channels: DiscordChannel[] = Array.isArray(data)
 		? data.flatMap((channel) => {
 			if (!channel || typeof channel !== "object") return [];
 			const row = channel as { id?: unknown; name?: unknown; type?: unknown; guild_id?: unknown };
@@ -71,14 +72,14 @@ discordRoutes.get("/guilds/:guildId/channels", async (c) => {
 				: [];
 		})
 		: [];
-	return c.json({ channels });
+	return c.json({ channels } satisfies DiscordChannelListResponse);
 });
 
 discordRoutes.get("/instances/:instanceId/grants", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	return c.json({ grants: await listConnectorGrants(c.env, instanceId, session.uid, "discord") });
+	return c.json({ grants: await listConnectorGrants(c.env, instanceId, session.uid, "discord") } satisfies DiscordGrantListResponse);
 });
 
 /**
@@ -108,7 +109,7 @@ discordRoutes.post("/instances/:instanceId/grants", async (c) => {
 		resourceType: "discord_channel",
 		resourceUrl: guildId ? `https://discord.com/channels/${guildId}/${channelId}` : null,
 	});
-	return c.json({ grant }, 201);
+	return c.json({ grant } satisfies DiscordGrantResponse, 201);
 });
 
 discordRoutes.delete("/instances/:instanceId/grants/:grantId", async (c) => {
