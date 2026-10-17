@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import Button from "./Button";
 import type { DiscordChannel, DiscordChannelListResponse, DiscordConnectorGrant, DiscordGuild, DiscordGuildListResponse } from "../lib/discordTypes";
 
 export type { DiscordConnectorGrant } from "../lib/discordTypes";
@@ -81,9 +82,9 @@ export function DiscordConnectorPanel({ grants, message, onAddGrant, onRemoveGra
 						<option value="">{channels === null ? "Choose a server first" : "Choose a text channel"}</option>
 						{channels?.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
 					</select>
-					<button type="button" onClick={() => void grantChannel()} disabled={!channelId || saving} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-bold hover:border-accent hover:text-accent disabled:opacity-50">
+					<Button onClick={() => void grantChannel()} disabled={!channelId || saving}>
 						Grant channel
-					</button>
+					</Button>
 				</div>
 				{error && <p className="text-xs text-danger mb-2">{error}</p>}
 				{message && <p className="text-xs text-muted mb-2">{message}</p>}
