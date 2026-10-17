@@ -132,6 +132,16 @@ export function browserTakeoverLink(instanceId: string, takeover: { id: string; 
 	return `${page}?takeover=${encodeURIComponent(takeover.id)}`;
 }
 
+/**
+ * One application, opened in the Applications tab (#1136): its row selected and its detail — with the
+ * typed decisions (resume, retry, approve) — scrolled into view. The tab shows on the Runner AND the
+ * Tailor and lists the pipeline's whole queue, so it works from whichever instance the notification
+ * names; the Board does not (an application's card lives only on its Runner's board).
+ */
+export function applicationLink(instanceId: string, applicationId: string): string {
+	return `${instanceLink(instanceId)}/applications?application=${encodeURIComponent(applicationId)}`;
+}
+
 export function applicationHandoffLink(instanceId: string, handoffId: string): string {
 	return `${instanceLink(instanceId)}/applications?handoff=${encodeURIComponent(handoffId)}`;
 }
@@ -265,12 +275,9 @@ export type NotificationSubject =
 	/**
 	 * One job application needing the owner (#991) — the Board, where its card is.
 	 *
-	 * The Board and not a per-application page, because the Board is where the control that ANSWERS
-	 * the wait actually renders: the application card carries "Approve & continue" through
-	 * `ApplicationRunControls`. There is no `/applications/:id` route in the console, and pointing a
-	 * notification at a URL that does not resolve is #344's class of broken link; pointing it one
-	 * step short of the control is #897's. The id is carried so the link can narrow if that route
-	 * ever exists.
+	 * The application itself (#1136): the Applications tab with `?application=<id>`, which selects that
+	 * row and shows its decisions. It used to be the whole Board — one step short of the subject, and on a
+	 * Tailor notification a board the application's card is not even on.
 	 */
 	| { kind: "application"; instanceId: string; applicationId: string }
 	/** One short-lived, exact-run browser handoff for a login or CAPTCHA pause (#1013). */
@@ -319,7 +326,7 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 			case "local-browser-run":
 				return localBrowserRunLink(subject.instanceId, subject.runId);
 			case "application":
-				return instanceBoardLink(subject.instanceId);
+				return applicationLink(subject.instanceId, subject.applicationId);
 			case "application-handoff":
 				return applicationHandoffLink(subject.instanceId, subject.handoffId);
 			case "browser-takeover":

@@ -3,7 +3,7 @@ import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
 import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
 import { type AutoSubmitAllowance, type AutoSubmitRules, disablePayload, enablePayload, rulesPayload } from "../lib/autoSubmitPolicy";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -44,6 +44,11 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 	const requestedReconciliationHandoffId = searchParams.get("reconciliation_handoff")?.trim() || undefined;
 	const requestedAnyHandoffId = requestedReconciliationHandoffId ?? requestedHandoffId;
 	const reconciliationHandoff = !!requestedReconciliationHandoffId;
+	// #1136: a notification about one application opens IT — its row selected, its decisions in view.
+	const requestedApplicationId = searchParams.get("application")?.trim() || undefined;
+	const focusApplied = useRef<string | null>(null);
+	const [focusMissing, setFocusMissing] = useState(false);
+	const detailRef = useRef<HTMLDivElement>(null);
 	const [view, setView] = useState<ApplicationQueueView | null>(null);
 	const [error, setError] = useState("");
 	const [filter, setFilter] = useState<ApplicationQueueStatus | "">("");
@@ -80,6 +85,17 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 		return () => { cancelled = true; };
 	}, [requestedAnyHandoffId, reconciliationHandoff, instanceId]);
 	usePolling(load, 5000, !!view?.items.some((i) => i.status === "tailoring" || i.status === "filling" || i.fillRun));
+	// Once per requested id, on the first loaded queue: later polls never take the owner's selection away.
+	useEffect(() => {
+		if (!view || !requestedApplicationId || focusApplied.current === requestedApplicationId) return;
+		focusApplied.current = requestedApplicationId;
+		const hit = view.items.find((i) => i.applicationId === requestedApplicationId);
+		setFocusMissing(!hit);
+		if (!hit) return;
+		setFilter("");
+		setOpen(hit.key);
+		requestAnimationFrame(() => detailRef.current?.scrollIntoView({ block: "start" }));
+	}, [view, requestedApplicationId]);
 
 	if (error && !view) return <LoadFailed what="applications" detail={error} onRetry={load} />;
 	if (!view) return <p className="text-sm text-muted">Loading applications…</p>;
@@ -159,7 +175,12 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 				</ul>
 			</Card>
 
-			{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} />}
+			{focusMissing && (
+				<p className="mb-3 text-sm text-muted" data-testid="application-focus-missing">
+					The application this link is about is no longer in this queue — it may have been archived or removed.
+				</p>
+			)}
+			<div ref={detailRef}>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} />}</div>
 
 			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} allowance={view.limits.find((l) => l.runnerInstanceId === view.pipeline.runners[0])} onChanged={load} />}
 			{handoffOpen && handoff && (

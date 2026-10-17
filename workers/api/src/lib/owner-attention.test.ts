@@ -111,8 +111,8 @@ describe("raising it, and saying truthfully what happened", () => {
 		const notify = vi.fn<AttentionDeps<Env>["notify"]>(async () => undefined);
 		const out = await requestOwnerAttention(env, REQ(), deps({ notify }));
 		expect(out).toMatchObject({ event: "approval_required", recorded: true, push: "sent" });
-		// The Board, where the Approve control renders — not a URL that does not resolve.
-		expect(out.url).toMatch(/\/instances\/ap\/board$/);
+		// The application itself, in the Applications tab where its decisions render (#1136) — not the whole Board.
+		expect(out.url).toBe("/console/instances/ap/applications?application=435d31c8");
 		const [, userId, type, title, , url, opts] = notify.mock.calls[0];
 		expect({ userId, type, url }).toEqual({ userId: "u1", type: "apply", url: out.url });
 		expect(title).toMatch(/Approve to send/);

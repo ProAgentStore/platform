@@ -375,7 +375,7 @@ describe("an unconfirmed submit tells the owner, and offers only the read-only c
 		await pressedThenSignIn("lead-uc1");
 		expect((await appRow("lead-uc1"))).toMatchObject({ status: "blocked", block_reason: "submit_unconfirmed" });
 		const raised = await notes();
-		expect(raised).toEqual([expect.objectContaining({ type: "apply", kind: "alert", instance_id: "ap", url: "/console/instances/ap/board" })]);
+		expect(raised).toEqual([expect.objectContaining({ type: "apply", kind: "alert", instance_id: "ap", url: "/console/instances/ap/applications?application=lead-uc1" })]);
 		expect(String(raised[0].title)).toBe("Check whether it was sent: Staff Engineer at Globex");
 		expect(String(raised[0].body)).toMatch(/will not be retried/);
 		expect(String(raised[0].body)).toMatch(/read-only/);
@@ -450,7 +450,7 @@ describe("submission is gated", () => {
 		expect(read.body.run.trace.map((e: { type: string }) => e.type)).toEqual(expect.arrayContaining(["policy.submit_gate", "submit.attempted", "submit.confirmed"]));
 		expect(read.body.audit.at(-1)).toMatchObject({ from: "filling", to: "submitted" });
 		const terminalNotes = async () => (await d1.DB.prepare("SELECT type, title, body, url, kind, instance_id, dedupe_key FROM notifications WHERE user_id = 'u1' ORDER BY created_at").all<Record<string, unknown>>()).results ?? [];
-		expect(await terminalNotes()).toEqual([expect.objectContaining({ type: "apply", kind: "update", instance_id: "ap", url: "/console/instances/ap/board", title: expect.stringMatching(/^Application submitted: Staff Engineer at Globex$/), body: "The employer site confirmed this application was submitted.", dedupe_key: expect.any(String) })]);
+		expect(await terminalNotes()).toEqual([expect.objectContaining({ type: "apply", kind: "update", instance_id: "ap", url: "/console/instances/ap/applications?application=lead-6", title: expect.stringMatching(/^Application submitted: Staff Engineer at Globex$/), body: "The employer site confirmed this application was submitted.", dedupe_key: expect.any(String) })]);
 		// The persisted terminal result is polled again after a restart/scheduled sweep; it must not
 		// produce another terminal notification.
 		await call("GET", `/ap/application-runs/${runId}`);
@@ -470,7 +470,7 @@ describe("submission is gated", () => {
 		const read = await call("GET", `/ap/application-runs/${runId}`);
 		expect(read.body.application).toMatchObject({ status: "failed" });
 		const notes = async () => (await d1.DB.prepare("SELECT type, title, body, url, kind, instance_id FROM notifications WHERE user_id = 'u1' ORDER BY created_at").all<Record<string, unknown>>()).results ?? [];
-		expect(await notes()).toEqual([expect.objectContaining({ type: "apply", kind: "update", instance_id: "ap", url: "/console/instances/ap/board", title: "Application failed: Staff Engineer at Globex", body: "The signed-in runner engine exited before it could fill the form." })]);
+		expect(await notes()).toEqual([expect.objectContaining({ type: "apply", kind: "update", instance_id: "ap", url: "/console/instances/ap/applications?application=lead-terminal-failed", title: "Application failed: Staff Engineer at Globex", body: "The signed-in runner engine exited before it could fill the form." })]);
 		await call("GET", `/ap/application-runs/${runId}`);
 		await syncActiveApplyRuns(env());
 		expect(await notes()).toHaveLength(1);
@@ -820,7 +820,7 @@ describe("a one-click block is approvable, and the approval is spent once (#991)
 		expect((await card("lead-oc8")).actions).toContain("approve_and_proceed");
 		const raised = await notes();
 		expect(raised).toHaveLength(1);
-		expect(raised[0]).toMatchObject({ type: "apply", kind: "alert", instance_id: "ap", url: "/console/instances/ap/board" });
+		expect(raised[0]).toMatchObject({ type: "apply", kind: "alert", instance_id: "ap", url: "/console/instances/ap/applications?application=lead-oc8" });
 		expect(String(raised[0].title)).toMatch(/Approve to send/);
 		// The owner's own sentence from the run, not a paraphrase invented here.
 		expect(String(raised[0].body)).toMatch(/Approve this application to let it be sent/);
