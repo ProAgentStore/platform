@@ -1,3 +1,4 @@
+import { maskedPageScreenshot } from "./local-browser/replay.js";
 import type { Page } from "playwright";
 
 /**
@@ -73,12 +74,13 @@ export async function challengeSolved(page: Page): Promise<boolean> {
 		.catch(() => false);
 }
 
-/** Capture a downscaled JPEG screenshot as a data URL for the human-takeover UI. */
+/**
+ * Capture a downscaled JPEG screenshot as a data URL for the human-takeover UI — the STILL stored with a
+ * handoff. Form controls are blurred first and no still is kept when that cannot be confirmed (#1067): a
+ * handoff can be raised mid-form, and the person acts through the live takeover view (which is not
+ * blurred — it is the control surface), never through this preview.
+ */
 export async function captureScreenshotDataUrl(page: Page): Promise<string | undefined> {
-	try {
-		const buf = await page.screenshot({ type: "jpeg", quality: 55 });
-		return `data:image/jpeg;base64,${buf.toString("base64")}`;
-	} catch {
-		return undefined;
-	}
+	const shot = await maskedPageScreenshot(page, { quality: 55, timeout: 8_000 });
+	return shot ? `data:image/jpeg;base64,${shot}` : undefined;
 }

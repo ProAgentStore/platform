@@ -17,6 +17,7 @@ import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
 import { LocalBrowserRuntime } from "./local-browser/runtime.js";
 import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
+import { maskedPageScreenshot } from "./local-browser/replay.js";
 import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
@@ -924,16 +925,13 @@ export class LocalRunner {
 	}
 
 	/** A small JPEG screenshot (base64, no data: prefix) of the page — one per action,
-	 *  so the cloud can store it per step and the whole run can be replayed visually. */
+	 *  so the cloud can store it per step and the whole run can be replayed visually.
+	 *  Form controls are BLURRED first, and no frame is kept when that cannot be confirmed (#1067) —
+	 *  the Scout/Runner replay policy (#1063), which this legacy path used to skip.
+	 *  scale:"css" avoids 2× retina bloat; a short timeout means a stuck page never delays the
+	 *  action (the screenshot is best-effort, not the point). */
 	private async shot(page: Page): Promise<string | undefined> {
-		try {
-			// scale:"css" avoids 2× retina bloat; a short timeout means a stuck page
-			// never delays the action (the screenshot is best-effort, not the point).
-			const buf = await page.screenshot({ type: "jpeg", quality: 45, scale: "css", timeout: 8_000 });
-			return buf.toString("base64");
-		} catch {
-			return undefined;
-		}
+		return maskedPageScreenshot(page, { quality: 45, timeout: 8_000 });
 	}
 
 	/**

@@ -46,6 +46,30 @@ export const MASK_FORM_CONTROLS = `() => {
 }`;
 export const UNMASK_FORM_CONTROLS = `() => { const s = document.getElementById(${JSON.stringify(MASK_ID)}); if (s) s.remove(); return "unmasked"; }`;
 
+/**
+ * The same form-control policy for a Playwright `Page` (#1067) — the legacy workflow browser tasks
+ * (`runtime_task`: JOB_APPLY / BROWSER_TASK), whose per-action frames were taken with nothing blurred,
+ * so a step that had just typed a phone number stored it in plain pixels. Blur, capture, unblur — and
+ * NO frame (undefined) when the blur cannot be confirmed, exactly as {@link ShotRecorder.capture}. The
+ * unblur runs even when the capture throws, so a failed frame never leaves the page blurred.
+ */
+export async function maskedPageScreenshot(
+	page: { evaluate(expression: string): Promise<unknown>; screenshot(opts: { type: "jpeg"; quality: number; scale: "css"; timeout: number }): Promise<Buffer> },
+	opts: { quality: number; timeout: number },
+): Promise<string | undefined> {
+	try {
+		if ((await page.evaluate(`(${MASK_FORM_CONTROLS})()`)) !== "masked") return undefined;
+		try {
+			const buf = await page.screenshot({ type: "jpeg", quality: opts.quality, scale: "css", timeout: opts.timeout });
+			return buf.toString("base64");
+		} finally {
+			await page.evaluate(`(${UNMASK_FORM_CONTROLS})()`).catch(() => undefined);
+		}
+	} catch {
+		return undefined;
+	}
+}
+
 const textOf = (r: { content?: Array<{ text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
 
 export class ShotRecorder {
