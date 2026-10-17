@@ -19,7 +19,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 export const REQUEST_ID_HEADER = "X-Request-Id";
 
-const store = new AsyncLocalStorage<{ requestId: string }>();
+const store = new AsyncLocalStorage<{ requestId: string; recorded: boolean }>();
 
 /** An id as it may label a request: id-shaped and bounded, or nothing. */
 export function requestIdOrNull(raw: unknown): string | null {
@@ -34,10 +34,25 @@ export function requestIdFor(headers: Headers): string {
 }
 
 export function withRequestId<T>(requestId: string, fn: () => T): T {
-	return store.run({ requestId }, fn);
+	return store.run({ requestId, recorded: false }, fn);
 }
 
 /** The id of the request this code is running inside, or null outside one. */
 export function currentRequestId(): string | null {
 	return store.getStore()?.requestId ?? null;
+}
+
+/**
+ * Note that this request has written an error row (#1134). `logError` calls it, so the backstop for a
+ * returned 5xx (`logReturnedFailure`) does not add a second row for a failure a route — or
+ * `app.onError` — already recorded. A no-op outside a request.
+ */
+export function noteRequestRecorded(): void {
+	const s = store.getStore();
+	if (s) s.recorded = true;
+}
+
+/** Whether this request has written an error row yet (#1134). */
+export function requestRecorded(): boolean {
+	return store.getStore()?.recorded ?? false;
 }

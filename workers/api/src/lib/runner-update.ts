@@ -31,6 +31,8 @@ import {
 import { callRunner, relayConnected } from "./runner-client.js";
 import { attachAgentOnNode, liveCarriers, nodeRegistrations, type RepinDeps } from "./runner-repin.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
+import { clipMarked } from "./clip-marked.js";
+import { logError } from "./error-log.js";
 import { cliAtLeast } from "./runner-upgrade.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
@@ -439,6 +441,12 @@ export async function executeRunnerUpdateOperation(
 				supervisor: result.supervisor ?? null,
 				deferredUntil: result.deferredUntil ?? null,
 			} as const;
+		// A machine that answered but could not update (#1134) — a `warn`: it is the owner's machine
+		// failing, not this Worker. The expected outcomes (up to date, refused while busy, deferred,
+		// unsupported CLI, unreachable) stay on the operation row only.
+		if (result.action === "failed") {
+			await logError(env, { source: "runner-update", level: "warn", message: result.detail ?? `The ${params.kind ?? "update"} on ${node} failed.`, userId, context: { opId, node, kind: params.kind ?? "update" } });
+		}
 		const completed = await advanceUpdateOp(env, userId, opId, patch, opts.now?.());
 		if (!completed) {
 			await reconcileLateUpdateOp(env, userId, opId, `Late machine result after the original operation closed: ${result.action}; ${result.detail ?? "no machine detail was returned"}.`, opts.now?.());
@@ -448,6 +456,15 @@ export async function executeRunnerUpdateOperation(
 		// The one path that used to lose everything: a throw inside a request nobody is waiting
 		// for. It is now the operation's recorded outcome, with the reason on it.
 		const detail = `The update on ${node} failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}`;
+		// And in the durable log (#1134): the operation row is the owner's record, but a throw here is a
+		// failure of this Worker — the machine's own failures were already answered as a `failed`
+		// result inside `updateRunnerNode` — and `list_errors` never saw it.
+		await logError(env, {
+			source: "runner-update",
+			message: detail,
+			userId,
+			context: { opId, node, kind: params.kind ?? "update", phase: lastPhase, stack: e instanceof Error ? clipMarked(String(e.stack || ""), 1800) : undefined },
+		});
 		const completed = await advanceUpdateOp(env, userId, opId, {
 				state: "failed",
 				phase: lastPhase,

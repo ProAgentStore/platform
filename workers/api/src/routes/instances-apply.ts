@@ -335,7 +335,9 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		// Persist the content-type so a later re-parse (apply-resume/parse) knows the real
 		// format instead of guessing.
 		await c.env.STORAGE.put(resumeKey(session.uid, instanceId), body, { customMetadata: { name }, httpMetadata: { contentType: mime } });
-		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, new Uint8Array(body), mime).catch(() => undefined));
+		// No `.catch` (#1134): the parse records its own failures, and anything that still escapes is
+		// recorded by the Worker's `waitUntil` wrapper (`index.ts`) instead of being dropped here.
+		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, new Uint8Array(body), mime));
 		return c.json({ ok: true, name, size: body.byteLength });
 	});
 
@@ -352,7 +354,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		// mislabeled as application/pdf (that made parseResumeIntoProfile's PDF read fail
 		// silently instead of telling the user to re-upload a PDF).
 		const mime = obj.httpMetadata?.contentType || (/\.pdf$/i.test(name) ? "application/pdf" : "application/octet-stream");
-		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, bytes, mime).catch(() => undefined));
+		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, bytes, mime)); // no `.catch` — see the upload route (#1134)
 		return c.json({ ok: true, parsing: true, name });
 	});
 

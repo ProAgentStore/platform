@@ -7,6 +7,8 @@
  * which sends a message on the WebSocket and awaits the runner's response.
  */
 import { DurableObject } from "cloudflare:workers";
+import { clipMarked } from "./lib/clip-marked.js";
+import { logError } from "./lib/error-log.js";
 import { relayDispatchObservation } from "./lib/relay-dispatch-observability.js";
 import { evictStaleSockets, PONG_DEADLINE_MS, RunnerLiveness, rttEcho, sendOnFirstOpen } from "./lib/relay-liveness.js";
 import type { Env } from "./types.js";
@@ -33,6 +35,10 @@ interface CommandResponse {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const RELAY_UNRESPONSIVE_ERROR = "Runner relay is connected but not responding";
+const REPLACED = "Runner replaced by new connection";
+const EVICTED = "Stale runner socket evicted";
+/** Rejections the owner caused on purpose (`pags up --force`, an eviction) — not failures to record (#1134). */
+const DELIBERATE_REJECTIONS = new Set([REPLACED, EVICTED]);
 
 /** Accept the upgrade only to close it immediately with a code the client can read. A rejected
  *  upgrade surfaces as 1006 with no reason; an accepted-then-closed socket carries both. */
@@ -62,13 +68,37 @@ export class RelayDO extends DurableObject<Env> {
 	 */
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
-
-		if (url.pathname === "/connect") return this.handleConnect(request);
-		if (url.pathname === "/status") return this.handleStatus();
-		if (url.pathname === "/command" && request.method === "POST") return this.handleCommand(request);
-		if (url.pathname === "/evict-stale" && request.method === "POST") return this.handleEvictStale();
+		try {
+			if (url.pathname === "/connect") return await this.handleConnect(request);
+			if (url.pathname === "/status") return this.handleStatus();
+			if (url.pathname === "/command" && request.method === "POST") return await this.handleCommand(request);
+			if (url.pathname === "/evict-stale" && request.method === "POST") return await this.handleEvictStale();
+		} catch (err) {
+			// A throw inside the relay itself (#1134) is a bug here, not the runner's state: recorded with
+			// its stack, then rethrown so the caller sees exactly the failure it saw before.
+			await this.record("error", err instanceof Error ? `${err.name}: ${err.message}` : String(err), {
+				endpoint: url.pathname,
+				stack: err instanceof Error ? clipMarked(String(err.stack || ""), 1800) : undefined,
+			});
+			throw err;
+		}
 
 		return new Response("Not found", { status: 404 });
+	}
+
+	/**
+	 * Record a relay failure in the durable log (#1134). The relay had no writer at all, so a command
+	 * that timed out or a socket that errored reached only the caller, as its own error.
+	 *
+	 * Owner and instance come from this object's name — `${instanceId}:node:${node}` — and `logError`
+	 * keeps the instance only after reading its owner from `agent_instances`. A runner-side state
+	 * (timeout, socket error, disconnect mid-command) is `warn`: a fact about the owner's machine, as
+	 * the callers already classify it. Never throws.
+	 */
+	private async record(level: "warn" | "error", message: string, context: Record<string, unknown>): Promise<void> {
+		const name = this.ctx.id.name ?? "";
+		const [instanceId, node] = name.includes(":node:") ? name.split(":node:") : [name || undefined, undefined];
+		await logError(this.env, { source: "relay", level, message, context: { ...context, instanceId, node } }).catch(() => undefined);
 	}
 
 	// ── WebSocket lifecycle (hibernation API) ────────────────────────────
@@ -100,7 +130,7 @@ export class RelayDO extends DurableObject<Env> {
 
 		// Close any existing runner connection (forced takeover or dead socket)
 		if (existing.length > 0) {
-			this.rejectAll("Runner replaced by new connection");
+			this.rejectAll(REPLACED);
 			for (const ws of existing) {
 				try { ws.close(1000, "replaced"); } catch { /* already closed */ }
 			}
@@ -147,8 +177,9 @@ export class RelayDO extends DurableObject<Env> {
 		this.rejectAll("Runner disconnected");
 	}
 
-	async webSocketError(_ws: WebSocket): Promise<void> {
+	async webSocketError(_ws: WebSocket, error?: unknown): Promise<void> {
 		this.rejectAll("Runner WebSocket error");
+		await this.record("warn", `Runner WebSocket error${error instanceof Error ? `: ${error.message}` : ""}`, { endpoint: "websocket" });
 	}
 
 	// ── Cloud-side command dispatch ──────────────────────────────────────
@@ -156,7 +187,7 @@ export class RelayDO extends DurableObject<Env> {
 	/** The remote half of `pags up --force` for one agent (#856) — see `evictStaleSockets`. */
 	private async handleEvictStale(): Promise<Response> {
 		const verdict = await evictStaleSockets(this.ctx.getWebSockets("runner"), this.liveness);
-		if (verdict.evicted > 0) this.rejectAll("Stale runner socket evicted");
+		if (verdict.evicted > 0) this.rejectAll(EVICTED);
 		return Response.json(verdict);
 	}
 
@@ -223,11 +254,17 @@ export class RelayDO extends DurableObject<Env> {
 			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : "Relay command failed";
-			this.emitDispatchObservation({
-				path: body.path,
-				timeoutMs,
-				outcome: message === "Relay command timed out" ? "timeout" : "failed",
-				dispatchStartedAt,
+			const outcome = message === "Relay command timed out" ? "timeout" : "failed";
+			this.emitDispatchObservation({ path: body.path, timeoutMs, outcome, dispatchStartedAt });
+			// The 504 its caller gets, recorded (#1134) — unless the owner's own action ended it: a forced
+			// takeover or a stale-socket eviction rejects pending commands on purpose. The runner path is
+			// kept without its query (an id or a cursor is not a label). The "connected but not
+			// responding" 503 above is not recorded here: its callers already record it (`runner` warns),
+			// and this would be a second row for one fact.
+			if (!DELIBERATE_REJECTIONS.has(message)) await this.record("warn", `Relay command ${outcome === "timeout" ? `timed out after ${timeoutMs} ms` : `failed: ${message}`}`, {
+				endpoint: "/command",
+				runnerPath: clipMarked(String(body.path ?? "").split("?")[0], 200),
+				outcome,
 			});
 			return Response.json(
 				{ error: message },

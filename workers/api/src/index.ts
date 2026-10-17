@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
 import { setServerBuild } from "./lib/error-log.js";
-import { REQUEST_ID_HEADER, requestIdFor, withRequestId } from "./lib/request-context.js";
-import { isTransientInfraError, logUnhandled } from "./lib/on-error.js";
+import { REQUEST_ID_HEADER, requestIdFor, requestRecorded, withRequestId } from "./lib/request-context.js";
+import { isTransientInfraError, logReturnedFailure, logUnhandled } from "./lib/on-error.js";
 import { verifySession } from "./lib/session.js";
 import { rateLimitAdmin, rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
 import { agentRoutes } from "./routes/agents.js";
@@ -121,6 +121,11 @@ app.use("*", async (c, next) => {
 	await withRequestId(requestId, async () => {
 		await next();
 		c.header(REQUEST_ID_HEADER, requestId);
+		// A 5xx the route RETURNED without recording it (#1134). Never for the error endpoints
+		// themselves: a failing log must not report itself.
+		if (c.res.status >= 500 && !requestRecorded() && !c.req.path.startsWith("/v1/errors")) {
+			await logReturnedFailure(c.env, { response: c.res, path: c.req.path, method: c.req.method, userId: await uidFromRequest(c) });
+		}
 	});
 });
 
@@ -289,13 +294,31 @@ app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 let _buildStamped = false;
 
+/**
+ * The request's execution context, with every `waitUntil` task's rejection recorded (#1134).
+ *
+ * Work a route hands to `waitUntil` outlives its response, so a rejection reached no handler: the
+ * runtime logged it to the ephemeral console at best. Wrapping the context once covers every route's
+ * background task, present and future, through `logUnhandled`'s own policy (transient → warn, a
+ * genuine throw → error with its stack). The task still runs exactly as before; only its rejection
+ * is observed. It runs inside the request, so the row carries the request id (#1135).
+ */
+export function recordingWaitUntil(ctx: ExecutionContext, env: Env, request: Request): ExecutionContext {
+	const path = new URL(request.url).pathname;
+	return {
+		waitUntil: (task: Promise<unknown>) => ctx.waitUntil(Promise.resolve(task).catch((err) => logUnhandled(env, err, { path, method: `${request.method} waitUntil` }))),
+		passThroughOnException: () => ctx.passThroughOnException(),
+		props: ctx.props,
+	} as ExecutionContext;
+}
+
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		// Stamp the server build once per isolate (#735). `env.API_BUILD` is the deployed git SHA
 		// injected by CI; "dev" in local runs. Called on the first fetch rather than at module
 		// evaluation because `env` is not available until a request arrives.
 		if (!_buildStamped) { setServerBuild(env.API_BUILD ?? "dev"); _buildStamped = true; }
-		return app.fetch(request, env, ctx);
+		return app.fetch(request, env, recordingWaitUntil(ctx, env, request));
 	},
 	async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
 		// A cron isolate may never serve a fetch, and its failures carried no build (#1085).

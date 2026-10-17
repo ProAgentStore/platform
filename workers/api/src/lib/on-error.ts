@@ -130,3 +130,58 @@ export async function logDirectResponse(
 		context: r.context,
 	}).catch(() => undefined);
 }
+
+/**
+ * A 5xx a route RETURNED without recording it (#1134) — the backstop behind `logDirectResponse`.
+ *
+ * `logDirectResponse` is called at three sites; 22 more `c.json(…, 5xx)` returns, and every route
+ * that passes an upstream status through, produced no row. Rather than a call at each of them (and at
+ * each one added later), the request middleware hands every 5xx response here AFTER the route has
+ * answered, and it is recorded only when nothing in the request wrote a row already
+ * (`requestRecorded`): a route that logged its own failure, and a throw `app.onError` logged, stay
+ * one row.
+ *
+ * Level by status, the policy `logDirectResponse` documents:
+ *   - 500 and any other 5xx → `error`, a failure of this Worker;
+ *   - 501 → `warn`: the feature is not configured on this deployment (an OAuth client, a webhook secret);
+ *   - 502 / 503 / 504 → `warn`: a dependency did not answer — the owner's runner, GitHub, a provider.
+ *     "The runner is not connected" is a 502 to the client and a fact about the owner's laptop, not a
+ *     bug. A route whose 503 IS a fault of its own records it at `error` itself.
+ *
+ * The message is the response's own `error` text (or its plain-text body), which the caller already
+ * received — redacted and clipped as `logDirectResponse` does (ADR 0004). Never throws.
+ */
+export async function logReturnedFailure(
+	env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_KV" | "API_BUILD">>,
+	r: { response: Response; path: string; method: string; userId?: string | null },
+): Promise<void> {
+	const status = r.response.status;
+	if (status < 500) return;
+	let message = `HTTP ${status}`;
+	try {
+		const type = r.response.headers.get("Content-Type") ?? "";
+		if (type.includes("application/json")) {
+			const body = (await r.response.clone().json()) as { error?: unknown };
+			if (typeof body?.error === "string" && body.error.trim()) message = body.error;
+		} else if (type.startsWith("text/plain")) {
+			const text = (await r.response.clone().text()).trim();
+			if (text) message = text;
+		}
+	} catch {
+		// An unreadable body leaves the status as the message.
+	}
+	await logDirectResponse(env, {
+		status,
+		source: "route-5xx",
+		level: status === 500 || status > 504 ? "error" : "warn",
+		message,
+		userId: r.userId ?? null,
+		// The instance a `/v1/instances/:id/…` path names — kept by `logError` only when the caller owns it.
+		context: { path: r.path, method: r.method, ...(instanceInPath(r.path) ? { instanceId: instanceInPath(r.path) } : {}) },
+	});
+}
+
+function instanceInPath(path: string): string | undefined {
+	const id = /^\/v1\/instances\/([^/]+)\//.exec(path)?.[1];
+	return id && id !== "my" ? id : undefined;
+}

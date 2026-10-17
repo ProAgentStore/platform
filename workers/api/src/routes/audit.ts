@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireAdmin } from "../lib/auth.js";
 import { historyCoverage, keysetBefore, keysetPage, parseHistoryCursor, parseTimeBound, sqlTimeOf } from "../lib/history-page.js";
 import { AUDIT_GLOBAL_PREFIX, AUDIT_INDEX_PREFIX } from "../lib/mcp-audit-ledger.js";
+import { logDirectResponse } from "../lib/on-error.js";
 import { redactSecrets } from "../lib/redact.js";
 import type { AdminAuditRow } from "../lib/admin.js";
 import type { Env } from "../types.js";
@@ -87,7 +88,10 @@ auditRoutes.get("/admin-actions", async (c) => {
 			coverage: await historyCoverage(c.env, "admin_audit_log", true),
 		});
 	} catch (e) {
-		return c.json({ error: `admin audit read failed: ${e instanceof Error ? e.message : String(e)}`, audit: null }, 503);
+		const error = `admin audit read failed: ${e instanceof Error ? e.message : String(e)}`;
+		// This Worker's own read failed — an `error`, not the dependency `warn` a returned 503 gets by default (#1134).
+		await logDirectResponse(c.env, { status: 503, level: "error", source: "admin-audit", message: error, context: { path: c.req.path, method: c.req.method } });
+		return c.json({ error, audit: null }, 503);
 	}
 });
 

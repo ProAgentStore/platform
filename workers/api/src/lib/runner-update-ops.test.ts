@@ -24,10 +24,13 @@ const live = new Set<string>();
 let dropped = false;
 let comesBack = true;
 let pollsAfterRestart = 0;
+/** The relay's status read itself throwing — a control-plane failure, not the machine's (#1134). */
+let relayThrows = false;
 let reply: (body?: Record<string, unknown>) => unknown = () => ({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
 
 vi.mock("./runner-client.js", () => ({
 	relayConnected: async (_e: unknown, id: string, node: string) => {
+		if (relayThrows) throw new Error("relay status read failed");
 		if (!dropped) return live.has(`${id}@${node}`);
 		pollsAfterRestart++;
 		return comesBack && pollsAfterRestart > 2;
@@ -76,6 +79,7 @@ beforeEach(() => {
 	dropped = false;
 	comesBack = true;
 	pollsAfterRestart = 0;
+	relayThrows = false;
 	reply = () => ({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
 	NOW = Date.parse("2026-10-09T01:00:00Z");
 });
@@ -266,6 +270,40 @@ describe("the idle-node update path, end to end (#990)", () => {
 		// It reaches `failed` with the reason on it, instead of dying with the request.
 		expect(final).toMatchObject({ id: op.id, state: "failed" });
 		expect(final?.detail).toMatch(/relay exploded/);
+	});
+
+	it("a control-plane throw is ALSO an error row in the durable log, under its owner, with its stack (#1134)", async () => {
+		relayThrows = true;
+		const { op } = await start(fast);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "failed" });
+		const rows = d1.sqlite.prepare("SELECT source, level, user_id, message, context FROM error_log").all() as Array<Record<string, string>>;
+		expect(rows).toEqual([expect.objectContaining({ source: "runner-update", level: "error", user_id: "u1" })]);
+		expect(rows[0].message).toMatch(/The update on Macmini\.modem failed: relay status read failed/);
+		expect(JSON.parse(rows[0].context)).toMatchObject({ opId: op.id, node: NODE, kind: "update", stack: expect.stringMatching(/relay status read failed/) });
+	});
+
+	it("a machine that answered but could not update is a WARN row — the owner's machine failing, not this Worker (#1134)", async () => {
+		reply = () => {
+			throw new Error("relay exploded");
+		};
+		const { op } = await start(fast);
+		const rows = d1.sqlite.prepare("SELECT source, level, user_id, message, context FROM error_log").all() as Array<Record<string, string>>;
+		expect(rows).toEqual([expect.objectContaining({ source: "runner-update", level: "warn", user_id: "u1" })]);
+		expect(rows[0].message).toMatch(/could not update: relay exploded/);
+		expect(JSON.parse(rows[0].context)).toMatchObject({ opId: op.id, node: NODE });
+	});
+
+	it("an expected outcome — an unsupported CLI, an unreachable machine — writes no error row (#1134)", async () => {
+		reply = () => new Error("Runner /pags/runner/update → 404: not found");
+		await start(fast);
+		d1.exec(`DELETE FROM instance_runtime_nodes`);
+		await start(fast);
+		expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM error_log").get()).toEqual({ n: 0 });
+	});
+
+	it("a successful update writes no error row (#1134)", async () => {
+		await start(fast);
+		expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM error_log").get()).toEqual({ n: 0 });
 	});
 
 	it("queues a durable workflow and returns before any machine work", async () => {

@@ -56,11 +56,11 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
 
 ### API route that RETURNS a failure
 
-- **Capture:** `logDirectResponse` at 4 call sites: rate limit, coding diagnostics, and instance tasks (two).
-- **Records:** status; source; warn for 402/403/409/429 and expected 5xx, otherwise error.
-- **Exclusions:** **any other route that returns a 5xx itself records nothing.** This is a known gap, not covered.
+- **Capture:** `logDirectResponse` where a route builds the failure (rate limit, coding diagnostics, instance tasks, and — at `error`, because the fault is this Worker's — the admin-audit and trace read failures). Behind it, the request middleware's backstop `logReturnedFailure` (#1134) records every other 5xx a route returns, after it has answered, when nothing in the request wrote a row already.
+- **Records:** status; source (`route-5xx` for the backstop); the response's own `error` text, redacted and clipped; user; path, method and the path's instance (kept only for its owner); request id. Level: 500 → error; 501 (not configured on this deployment) and 502/503/504 (a dependency — the runner, GitHub, a provider) → warn; 402/403/409/429 → warn where a route records them.
+- **Exclusions:** other 4xx; a route that recorded its own failure (one row, not two); the `/v1/errors*` endpoints themselves, so a failing log never reports itself.
 - **Reader:** `list_errors`.
-- **Local:** `entrypoint-capture.test.ts` (the "returned" block).
+- **Local:** `entrypoint-capture.test.ts` (the "returned" block); `capture-gaps.test.ts` §1 drives a route's own 503 through the Worker and reads it back through `GET /v1/errors`.
 - **Live:** `rate-limit` 429 warn (2026-10-16 06:39).
 
 ### Cron sweeps (`scheduled()`)
@@ -76,9 +76,11 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
 
 ### Route `waitUntil` tasks
 
-- **Capture:** none at the call site (`public.ts`, `tools.ts`, `instances-runner-attach.ts`).
-- **Exclusions:** **known gap.**
-- **Local:** none.
+- **Capture:** the Worker hands every route an execution context whose `waitUntil` records a rejected task through `logUnhandled` (#1134, `recordingWaitUntil` in `index.ts`) — every route's background task, present and future, with no per-site catch. The task itself runs unchanged.
+- **Records:** source `unhandled` (or `transient`, at warn); path; method `<METHOD> waitUntil`; stack; request id.
+- **Exclusions:** a task that catches its own failure. Checked at #1134: `recordFunnelEvent` (`public.ts`) and `parseResumeIntoProfile` (`instances-apply.ts`) already record their genuine failures themselves, and the route's silent `.catch(() => undefined)` on the résumé parse was removed so anything that still escapes reaches the wrapper.
+- **Reader:** `list_errors`.
+- **Local:** `capture-gaps.test.ts` §2.
 - **Live:** none.
 
 ### `AgentDO` (fetch, chat, WebSocket, alarm)
@@ -98,10 +100,12 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
 
 ### `RelayDO`
 
-- **Capture:** none. Close and error only reject pending calls.
-- **Exclusions:** **known gap.** A relay failure is seen as the caller's own error (for example `runner` "not responding").
-- **Local:** `relay-do.test.ts` covers behaviour, not capture.
-- **Live:** `runner` "relay connected but not responding" warns, written by the callers.
+- **Capture (#1134):** a command that times out or is cut off (the caller's 504), a socket error, and a throw inside the relay (recorded, then rethrown so the caller's answer is unchanged).
+- **Records:** source `relay`; owner and instance from the object's name (`<instance>:node:<node>`), verified against `agent_instances`; node; the runner path without its query; outcome. Timeout, disconnect and socket error → warn (the owner's machine); a throw → error with its stack.
+- **Exclusions:** commands ended by the owner on purpose (`pags up --force` takeover, stale-socket eviction); the "connected but not responding" 503, which its callers already record (`runner` warns) — recording it here too would be a second row for one fact.
+- **Reader:** `list_errors`.
+- **Local:** `capture-gaps.test.ts` §3 drives the real `RelayDO`; `relay-do.test.ts` covers behaviour.
+- **Live:** `runner` "relay connected but not responding" warns, written by the callers. No `relay` row yet.
 
 ### Workflows (job apply, browser task, pipeline, coding session, agent loop)
 
@@ -109,7 +113,7 @@ Every reader states what it cannot see through its `coverage` field. `telemetry_
 - **Records:** user; instance; run id (= trace id); failure class; stack; level by class.
 - **Exclusions:**
   - Transient errors are traced as `*.interrupted` and rethrown.
-  - `RunnerUpdateWorkflow` writes only its operation row; it has no `error_log` row.
+  - `RunnerUpdateWorkflow` (#1134): a control-plane throw inside the operation, and a failure that escapes it (recorded, then rethrown so the engine still retries), are `runner-update` errors with owner, `opId`, node and stack; a machine that answered but could not update is a `runner-update` warn. Expected outcomes (up to date, refused while busy, deferred, unsupported CLI, unreachable) stay on the operation row only. Local: `capture-gaps.test.ts` §4, `runner-update-ops.test.ts`.
 - **Reader:** `list_errors(run_id)`, `agent_trace(trace_id)`, `list_pipeline_runs`.
 - **Local:** `workflow-trace.test.ts`, `driver-failure.test.ts`, `pipeline-run-accounting.test.ts`, `turn-recovery.test.ts`.
 - **Live:** `coding:session` failures, for example run d859e667 (2026-10-16 12:30). There is **no `pipeline-run` row**, so a live gate is open.
@@ -285,10 +289,10 @@ These keep #1091 and #1083 open. Closing any of them needs a real production occ
 ## Known gaps
 
 Recorded, not fixed here. Each was re-verified against `main` at 22aaea5f and is tracked:
-- direct-5xx routes outside `logDirectResponse`, route `waitUntil` tasks, `RelayDO`, `RunnerUpdateWorkflow` — #1134;
 - templates — by design (independent Workers), not tracked.
 
 Resolved since this list was written:
+- #1134 (returned 5xx outside `logDirectResponse`, route `waitUntil` tasks, `RelayDO`, `RunnerUpdateWorkflow`) — each now records through `logError` / `logUnhandled`; see their sections.
 - #1135 (no request id on `error_log`; host reports with no id or retry) — request id stamped on every row written inside a request and shared with the trace and the MCP call event; host reports carry an event id and are retried.
 - #1118 (nested `{success:false}` recorded as `completed`) — fixed in e417f636.
 - #1120 (`client:undefined` from a build-less caller) — fixed in a3708994 and 22aaea5f. Eighteen of the twenty unattributed rows were the mobile-handoff e2e fixture (stopped by 5d1dd1d6, #1086); vitest (a3708994) and the chromium e2e browser (22aaea5f) can no longer reach production's API.

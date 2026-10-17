@@ -2,6 +2,7 @@ import type { Context, Hono } from "hono";
 import { HttpError, isAdmin, requireUser } from "../lib/auth.js";
 import { type EventLevel, listEvents, listEventsPage } from "../lib/events.js";
 import { historyCoverage, parseHistoryCursor, parseTimeBound } from "../lib/history-page.js";
+import { logDirectResponse } from "../lib/on-error.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
@@ -61,8 +62,11 @@ export function registerTraceRoutes(router: Hono<{ Bindings: Env }>): void {
 				coverage: await historyCoverage(c.env, "agent_events", admin),
 			});
 		} catch (e) {
-			// A failed read is an error, never an empty page that reads as "nothing happened".
-			return c.json({ error: `trace read failed: ${e instanceof Error ? e.message : String(e)}`, events: null }, 503);
+			// A failed read is an error, never an empty page that reads as "nothing happened" — and it is
+			// this Worker's own fault, so recorded at `error` rather than as a dependency's 503 (#1134).
+			const error = `trace read failed: ${e instanceof Error ? e.message : String(e)}`;
+			await logDirectResponse(c.env, { status: 503, level: "error", source: "trace-read", message: error, userId: session.uid, context: { instanceId } });
+			return c.json({ error, events: null }, 503);
 		}
 	});
 }

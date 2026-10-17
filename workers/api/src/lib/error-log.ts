@@ -2,7 +2,7 @@
  * Durable error log (D1 `error_log`). Failures at the key hotspots write here so
  * a reason is never thrown away — readable via GET /v1/errors. See migration 0034.
  */
-import { currentRequestId } from "./request-context.js";
+import { currentRequestId, noteRequestRecorded } from "./request-context.js";
 import { boundedJson, clipMarked } from "./clip-marked.js";
 import { type CursorQuery, keysetBefore, keysetPage, sqlTimeOf } from "./history-page.js";
 import type { Env } from "../types.js";
@@ -334,6 +334,8 @@ export async function logError(env: Pick<Env, "DB"> & Partial<Pick<Env, "OAUTH_K
 		const occurrences = Number.isInteger(e.occurrences) && (e.occurrences as number) > 1 ? Math.min(e.occurrences as number, 10_000) : 1;
 		// The request this is written inside (#1135), or null from a Durable Object, Workflow or cron.
 		const requestId = currentRequestId();
+		// This request has a row now (#1134): its returned 5xx, if any, is not recorded a second time.
+		noteRequestRecorded();
 		if (await collapseRepeat(env, key, context, occurrences, requestId).catch(() => false)) return "persisted";
 		// The id and the time are minted ONCE (#1084): if this insert fails, the same row — same id,
 		// same moment — is what the spool replays, so a replay can never become a second fact.
