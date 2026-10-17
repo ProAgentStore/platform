@@ -467,6 +467,16 @@ describe("a run that never started says why — the #1112 fixtures through the r
 		expect(r.success).toBe(false);
 		expect(r.content).toContain("Annotations not accessible (HTTP 403): Resource not accessible by integration. Unable to determine start failure reason.");
 		expect(r.content).not.toMatch(/minutes_exhausted/);
+		// …and a 403 names the fix the owner can make (live on proappstore-online/interns, 2026-10-17).
+		expect(r.content).toContain("Grant the GitHub App the 'checks: read' permission so GitHub's reason (for example a billing or spending-limit block) can be read.");
+	});
+
+	it("github_workflow_run_logs: a 404 on annotations is not a missing permission — no checks: read hint", async () => {
+		const fx = loadActionsFixture("inaccessible-annotations");
+		const { result } = logs({ ...fx, annotationsResponse: { status: 404, body: { message: "Not Found" } } }, 900200);
+		const r = await result;
+		expect(r.content).toContain("Annotations not accessible (HTTP 404): Not Found. Unable to determine start failure reason.");
+		expect(r.content).not.toMatch(/checks: read/);
 	});
 
 	it("github_workflow_run_logs: never started and no annotation says exactly that", async () => {

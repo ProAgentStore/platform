@@ -126,7 +126,10 @@ async function startFailureReply(token: string, job: WorkflowJob, label: string)
 	if (job.status !== "completed" || job.steps.length > 0) return null;
 	const read = await fetchJobAnnotations(token, job);
 	if (!read.ok) {
-		return { content: `${label} never started (no steps recorded). Annotations not accessible (HTTP ${read.status}): ${read.message}. Unable to determine start failure reason.`, success: false };
+		// A 403 here is the GitHub App lacking `checks: read` (live on proappstore-online/interns, 2026-10-17) —
+		// name the fix, as the build path does (github-actions.ts). A 404 or an unreachable GitHub is not.
+		const hint = read.status === 403 ? " Grant the GitHub App the 'checks: read' permission so GitHub's reason (for example a billing or spending-limit block) can be read." : "";
+		return { content: `${label} never started (no steps recorded). Annotations not accessible (HTTP ${read.status}): ${read.message}. Unable to determine start failure reason.${hint}`, success: false };
 	}
 	const failure = classifyStartFailure(job, read.annotations);
 	if (!failure) return null;
