@@ -4,6 +4,7 @@ import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
 import ErrorBoundary from "./ErrorBoundary";
 import ConversationPill from "./ConversationPill";
+import CopyPageLink from "./CopyPageLink";
 import Button from "./Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
@@ -154,6 +155,7 @@ export default function Layout() {
 				{user && (
 					<span className={`flex items-center shrink-0 ${navHidden ? "gap-1.5" : "gap-2.5"}`}>
 						<ConversationPill />
+						<CopyPageLink size={navHidden ? 16 : 18} />
 						<NavLink to="/notifications" className="relative no-underline text-muted" title="Notifications">
 							<Bell size={navHidden ? 16 : 18} />
 							{unreadCount > 0 && (
