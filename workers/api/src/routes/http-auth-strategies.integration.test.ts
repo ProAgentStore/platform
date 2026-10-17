@@ -77,7 +77,8 @@ async function call(method: string, path: string, body?: unknown, headers: Recor
 
 /** Create a profile with a strategy and bind it to the instance under `binding`. */
 async function profile(name: string, secret: string, strategy: string, strategyConfig: unknown, binding = name) {
-	const created = await call("POST", "/v1/http-profiles", { name, secret, strategy, strategyConfig });
+	// The hosts these tests call (#1125 sends a credential only to a listed origin).
+	const created = await call("POST", "/v1/http-profiles", { name, secret, strategy, strategyConfig, allowedOrigins: ["https://discord.com", "https://api.example.com"] });
 	expect(created.status, created.raw).toBe(201);
 	const bound = await call("PUT", `/v1/instances/${INSTANCE}/http-bindings/${binding}`, { profileId: created.json.profile.id });
 	expect(bound.status, bound.raw).toBe(200);
@@ -194,7 +195,7 @@ describe("every strategy renders from the profile, never from the agent (#1124)"
 	});
 
 	it("a profile with no strategy renders nothing and says how to fix it", async () => {
-		const created = await call("POST", "/v1/http-profiles", { name: "bare", secret });
+		const created = await call("POST", "/v1/http-profiles", { name: "bare", secret, allowedOrigins: ["https://api.example.com"] });
 		await call("PUT", `/v1/instances/${INSTANCE}/http-bindings/bare`, { profileId: created.json.profile.id });
 		const r = await request({ url: "https://api.example.com/x", profile: "bare" });
 		expect(r.json.content).toMatch(/has no auth strategy yet/);

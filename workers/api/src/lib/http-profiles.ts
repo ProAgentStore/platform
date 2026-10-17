@@ -24,7 +24,8 @@
  *     and rendered by `lib/http-auth-strategies.ts`, OAuth2 grants by `lib/http-profile-oauth.ts`. A
  *     profile created without one stays `unspecified` and renders nothing until a strategy is set.
  *   - `allowedOrigins` — stored and returned so an agent can see where a binding is MEANT for; the
- *     host allowlist, scheme and redirect policy that enforce them are #1125.
+ *     host allowlist that enforces them is {@link originAllowed} (#1125): https only, exact origins or
+ *     an explicit `https://*.domain`, default deny; cross-origin redirects strip the credential (ssrf.ts).
  *   - The connection "test" here is a STORAGE test (present, decryptable, origins well-formed). A live
  *     request needs a rendering strategy and the execution policy, which do not exist yet — said so in
  *     the result rather than implied.
@@ -161,12 +162,46 @@ export function validOrigins(raw: unknown): string[] {
 			throw new HttpError(400, `\`allowedOrigins\` entry ${i + 1} is not an origin.`);
 		}
 		const bare = (u.pathname === "/" || u.pathname === "") && !u.search && !u.hash && !u.username && !u.password;
-		if ((u.protocol !== "https:" && u.protocol !== "http:") || !bare) {
-			throw new HttpError(400, `\`allowedOrigins\` entry ${i + 1} must be just a scheme and host, e.g. "https://discord.com" — no path, query or credentials.`);
+		if (!bare) throw new HttpError(400, `\`allowedOrigins\` entry ${i + 1} must be just a scheme and host, e.g. "https://discord.com" — no path, query or credentials.`);
+		// HTTPS only (#1125): a credential is never sent in the clear, so an http:// entry could only ever
+		// fail — refused here, where the owner can fix it, rather than at the request.
+		if (u.protocol !== "https:") throw new HttpError(400, `\`allowedOrigins\` entry ${i + 1} must be https:// — credentials are only ever sent over HTTPS.`);
+		// `*.` is the ONE wildcard (#1125), and only as the whole leftmost label: `https://*.example.com`
+		// covers its subdomains at any depth, never the apex (list `https://example.com` too) and never a
+		// suffix match on a bare string (`evilexample.com`). A wildcard over a single label (`*.com`) is
+		// refused; there is no public-suffix list, so `*.co.uk` is the owner's own explicit choice.
+		const host = u.hostname;
+		if (host.includes("*")) {
+			const rest = host.slice(2);
+			if (!host.startsWith("*.") || rest.includes("*") || rest.split(".").length < 2) {
+				throw new HttpError(400, `\`allowedOrigins\` entry ${i + 1}: a wildcard is only \`https://*.<domain>\` with at least two labels after it, e.g. "https://*.example.com".`);
+			}
 		}
-		if (!out.includes(u.origin)) out.push(u.origin);
+		const origin = `${u.protocol}//${host}${u.port ? `:${u.port}` : ""}`;
+		if (!out.includes(origin)) out.push(origin);
 	}
 	return out;
+}
+
+/**
+ * May a credential be sent to `url`? (#1125) Exact origin entries match scheme, host and port exactly;
+ * `https://*.example.com` matches any subdomain of example.com (at any depth) on the default port — not
+ * example.com itself. Anything that is not https never matches.
+ */
+export function originAllowed(allowed: readonly string[], url: string): boolean {
+	let u: URL;
+	try {
+		u = new URL(url);
+	} catch {
+		return false;
+	}
+	if (u.protocol !== "https:") return false;
+	const origin = `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ""}`;
+	return allowed.some((entry) => {
+		if (!entry.startsWith("https://*.")) return entry === origin;
+		const [hostPart, port] = entry.slice("https://*.".length).split(":");
+		return (port ?? "") === u.port && u.hostname.endsWith(`.${hostPart}`) && u.hostname.length > hostPart.length + 1;
+	});
 }
 
 function validDescription(raw: unknown): string {
@@ -342,7 +377,7 @@ export interface HttpProfileTestResult {
 /**
  * A storage test: the secret is present and decrypts, the origins are well-formed, and which
  * instances can use it. It reports facts about the secret, never the secret, and sends nothing over
- * the network — a live request needs a rendering strategy (#1124) and the execution policy (#1125).
+ * the network and mints no token.
  */
 export async function testHttpProfile(env: Pick<Env, "DB" | "KEY_ENCRYPTION_KEY">, userId: string, id: string): Promise<HttpProfileTestResult> {
 	const profile = await getHttpProfile(env, userId, id);
@@ -378,7 +413,7 @@ export async function testHttpProfile(env: Pick<Env, "DB" | "KEY_ENCRYPTION_KEY"
 		profileId: id,
 		ok: checks.every((c) => c.ok),
 		checks,
-		scope: "Storage and configuration check only: nothing was sent to any server, and no token was minted. Which hosts may receive the credential is #1125, not checked here.",
+		scope: "Storage and configuration check only: nothing was sent to any server, and no token was minted. A request goes only to an allowed origin (allowedOrigins) — an empty list sends it nowhere.",
 	};
 }
 
@@ -456,9 +491,28 @@ export async function resolveBoundSecret(
  */
 export async function renderBoundProfile(
 	env: Pick<Env, "DB" | "KEY_ENCRYPTION_KEY">,
-	q: { userId: string; instanceId: string; connector: string; bindingName: string },
+	q: { userId: string; instanceId: string; connector: string; bindingName: string; targetUrl: string },
 	opts: OAuthDeps & { forceRefresh?: boolean } = {},
 ): Promise<{ binding: HttpBindingView; strategy: StrategyConfig["strategy"]; rendered: RenderedAuth } | null> {
+	// The host is checked BEFORE anything is decrypted or minted (#1125): a credential refused for this
+	// destination is never in memory for it. An empty allowlist sends nowhere — default deny.
+	const binding = (await listInstanceHttpBindings(env, q.userId, q.instanceId)).find((b) => b.connector === q.connector && b.bindingName === q.bindingName);
+	if (!binding) return null;
+	if (!originAllowed(binding.allowedOrigins, q.targetUrl)) {
+		const where = (() => {
+			try {
+				return new URL(q.targetUrl).origin;
+			} catch {
+				return "that URL";
+			}
+		})();
+		throw new HttpError(
+			403,
+			binding.allowedOrigins.length
+				? `The profile bound as "${q.bindingName}" may not be sent to ${where}: it allows only ${binding.allowedOrigins.join(", ")}. Its owner adds the host with update_http_profile (allowedOrigins) if it should.`
+				: `The profile bound as "${q.bindingName}" lists no allowed origins, so it is sent nowhere. Its owner sets allowedOrigins (e.g. "https://discord.com") with update_http_profile.`,
+		);
+	}
 	const bound = await resolveBoundSecret(env, q);
 	if (!bound) return null;
 	const row = await env.DB.prepare("SELECT strategy, strategy_config FROM http_credential_profiles WHERE id = ?1 AND user_id = ?2").bind(bound.binding.profileId, q.userId).first<Pick<ProfileRow, "strategy" | "strategy_config">>();

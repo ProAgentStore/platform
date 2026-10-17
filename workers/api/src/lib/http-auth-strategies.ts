@@ -7,7 +7,7 @@
  * are the platform's, from configuration the OWNER wrote.
  *
  * Pure: validation and rendering only. Decrypting the secret and minting OAuth2 access tokens is
- * `lib/http-profile-oauth.ts`; which hosts may receive the result is #1125, not this.
+ * `lib/http-profile-oauth.ts`; which hosts may receive the result is `originAllowed` (#1125).
  *
  * ── Templating is literals around ONE secret reference, nothing else
  *

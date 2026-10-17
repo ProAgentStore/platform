@@ -16,7 +16,8 @@
 // Every outbound call goes through `safeFetch` (SSRF guard, https-only, redirect-revalidated),
 // so a templated/attacker-influenced url can't reach cloud-metadata / loopback / RFC1918.
 import type { RegistryToolCtx, RegistryToolResult, ToolDef } from "./types.js";
-import { safeFetch, SsrfError } from "../ssrf.js";
+import { type RedirectTrace, safeFetch, SsrfError } from "../ssrf.js";
+import { logEvent } from "../events.js";
 import { hasConsent } from "../connector-consent.js";
 import { consentInstanceOf } from "../execution-authority.js";
 import { OAUTH2_STRATEGIES, scrubSecrets, type RenderedAuth } from "../http-auth-strategies.js";
@@ -241,7 +242,11 @@ function parseAuth(raw: unknown): HttpAuth {
 		if (!name) throw new Error("auth.key.name is required for api-key mode.");
 		return { mode: "api-key", key: { in: where, name } };
 	}
-	return { mode: "none" };
+	// An unknown mode used to fall through to "none": the request went out with NO credential and the
+	// caller learned only from the remote 401 (#1125). Said instead, with the path that does exist.
+	if (a.mode === undefined || a.mode === null || a.mode === "none") return { mode: "none" };
+	const mode = /^[\w-]{1,40}$/.test(String(a.mode)) ? String(a.mode) : "(unrecognised)";
+	throw new Error(`Unsupported auth mode "${mode}". \`auth\` takes "none", "api-key" or "bearer" (a vault key); for Bot/Bearer/Basic/custom-header/OAuth2 credentials use \`profile\` with a credential profile bound to this instance (list_instance_http_bindings).`);
 }
 
 export const HTTP_TOOLS: ToolDef[] = [
@@ -327,7 +332,35 @@ export async function executeHttpRequest(
 	}
 	if (profileName && auth.mode !== "none") return { content: "Pass either `profile` (a bound credential profile) or `auth` (a vault key), not both.", success: false };
 
+	// ── The audit of a credentialed call (#1125) ──
+	// ONE event per call that asked for a credential — a bound profile or the legacy vault key — whatever
+	// became of it. Metadata only: which credential (profile/binding ids, strategy, or "legacy_vault"),
+	// the target ORIGIN (never a path or query, which can carry a key), the method, the consent decision,
+	// what the redirect chain did, and a result class. Never a secret, a header value, or a response body.
+	const credentialed = profileName !== "" || auth.mode !== "none";
+	const trail: Record<string, unknown> = profileName ? { credential: "profile", bindingName: profileName } : { credential: auth.mode === "none" ? "none" : "legacy_vault", provider: connectorId, mode: auth.mode };
+	const finish = async (result: RegistryToolResult, resultClass: string): Promise<RegistryToolResult> => {
+		if (!credentialed) return result;
+		let origin = "unparseable";
+		try {
+			origin = new URL(url).origin;
+		} catch {
+			/* keep the placeholder */
+		}
+		await logEvent(ctx.env, {
+			source: "http",
+			event: "http.credential_use",
+			level: resultClass === "ok" ? "info" : "warn",
+			message: `${method} ${origin} with ${profileName ? `profile "${profileName}"` : `the legacy ${connectorId} vault key`} → ${resultClass}`,
+			userId: ctx.userId ?? null,
+			instanceId: ctx.instanceId ?? null,
+			context: { ...trail, connector: connectorId, method, origin, resultClass },
+		}).catch(() => undefined);
+		return result;
+	};
+
 	const method = (typeof input.method === "string" ? input.method : "GET").toUpperCase();
+	trail.consent = "not_required";
 
 	// #307: a mutating call needs the instance's write consent for THIS connector. Checked before
 	// the vault key is read and before anything goes on the wire, so a refusal cannot have already
@@ -335,13 +368,15 @@ export async function executeHttpRequest(
 	// instance context and on any DB error.
 	if (!isReadShapedRequest(method, url)) {
 		const authority = consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf });
-		if (!(await hasConsent(ctx.env, authority || undefined, connectorId, "write"))) {
-			return {
+		const granted = await hasConsent(ctx.env, authority || undefined, connectorId, "write");
+		trail.consent = granted ? "granted" : "denied";
+		if (!granted) {
+			return finish({
 				// Same wording as runRegistryTool's gate, plus the method — the refusal has to be
 				// actionable from a pipeline run log, where nobody can see which verb was chosen.
-				content: `A ${method} via the ${connectorId} connector isn't permitted for this agent. Enable write access for ${connectorId} in the instance's Connections settings, then try again.`,
+				content: `A ${method} via the ${connectorId} connector isn't permitted for this agent (write consent denied). Enable write access for ${connectorId} in the instance's Connections settings, then try again.`,
 				success: false,
-			};
+			}, "blocked_consent");
 		}
 	}
 
@@ -367,7 +402,7 @@ export async function executeHttpRequest(
 	// used only on the wire, never returned or logged.
 	if (auth.mode === "api-key") {
 		const key = await ctx.connectorClient?.(connectorId).token().catch(() => null);
-		if (!key) return { content: `No API key connected for the ${connectorId} connector — add one in the instance's Connections settings.`, success: false };
+		if (!key) return finish({ content: `No API key connected for the ${connectorId} connector — add one in the instance's Connections settings.`, success: false }, "no_credential");
 		if (auth.key.in === "header") {
 			headers.set(auth.key.name, key);
 		} else {
@@ -377,7 +412,7 @@ export async function executeHttpRequest(
 		}
 	} else if (auth.mode === "bearer") {
 		const token = await ctx.connectorClient?.(connectorId).token().catch(() => null);
-		if (!token) return { content: `No credential connected for the ${connectorId} connector — connect it in the instance's Connections settings.`, success: false };
+		if (!token) return finish({ content: `No credential connected for the ${connectorId} connector — connect it in the instance's Connections settings.`, success: false }, "no_credential");
 		headers.set("Authorization", `Bearer ${token}`);
 	}
 
@@ -387,15 +422,18 @@ export async function executeHttpRequest(
 	let rendered: RenderedAuth | null = null;
 	let renderedStrategy = "";
 	const renderProfile = async (forceRefresh = false): Promise<RegistryToolResult | null> => {
-		if (!ctx.userId || !ctx.instanceId) return { content: "A credential profile can only be used by an instance.", success: false };
+		if (!ctx.userId || !ctx.instanceId) return finish({ content: "A credential profile can only be used by an instance.", success: false }, "no_profile");
 		try {
-			const r = await renderBoundProfile(ctx.env, { userId: ctx.userId, instanceId: ctx.instanceId, connector: connectorId, bindingName: profileName }, { forceRefresh });
-			if (!r) return { content: `No credential profile is bound to this instance as "${profileName}" for the ${connectorId} connector — list_instance_http_bindings shows the names it holds.`, success: false };
+			const r = await renderBoundProfile(ctx.env, { userId: ctx.userId, instanceId: ctx.instanceId, connector: connectorId, bindingName: profileName, targetUrl: url }, { forceRefresh });
+			if (!r) return finish({ content: `No credential profile is bound to this instance as "${profileName}" for the ${connectorId} connector — list_instance_http_bindings shows the names it holds.`, success: false }, "no_profile");
 			rendered = r.rendered;
 			renderedStrategy = r.strategy;
+			Object.assign(trail, { profileId: r.binding.profileId, strategy: r.strategy });
 			return null;
 		} catch (e) {
-			return { content: e instanceof HttpError ? e.message : "The credential profile could not be rendered.", success: false };
+			// 403 = host not allowed; 409 = no strategy, or an OAuth2 grant that cannot be obtained (#1125's errors).
+			const cls = e instanceof HttpError ? (e.status === 403 ? "blocked_host" : "auth_unavailable") : "auth_unavailable";
+			return finish({ content: e instanceof HttpError ? e.message : "The credential profile could not be rendered.", success: false }, cls);
 		}
 	};
 	if (profileName) {
@@ -420,9 +458,14 @@ export async function executeHttpRequest(
 		if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 	}
 
+	// The headers that carry THIS request's credential (#1125), named to safeFetch so a cross-origin
+	// redirect strips them whatever they are called — not only the ones its name heuristic recognises.
+	const credentialHeaders = (): string[] =>
+		rendered ? (rendered as RenderedAuth).headers.filter(([, v]) => (rendered as RenderedAuth).sensitive.includes(v)).map(([k]) => k) : auth.mode === "api-key" && auth.key.in === "header" ? [auth.key.name] : auth.mode === "bearer" ? ["Authorization"] : [];
+	const redirect: RedirectTrace = { hops: 0, crossOrigin: false, stripped: false, finalOrigin: "" };
 	let res: Response;
 	try {
-		res = await safeFetch(url, { method, headers, body: bodyStr });
+		res = await safeFetch(url, { method, headers, body: bodyStr }, 5, { credentialHeaders: credentialHeaders(), trace: redirect });
 		// An OAuth2 access token the API refuses is refreshed ONCE and the request retried (#1124) — a
 		// token revoked or expired early reads as 401 even inside its stated lifetime.
 		if (res.status === 401 && OAUTH2_STRATEGIES.has(renderedStrategy)) {
@@ -433,12 +476,12 @@ export async function executeHttpRequest(
 				const fresh = rendered as RenderedAuth;
 				rendered = { ...fresh, sensitive: [...new Set([...fresh.sensitive, ...before])].sort((a, b) => b.length - a.length) };
 				url = applyRendered(requestUrl);
-				res = await safeFetch(url, { method, headers, body: bodyStr });
+				res = await safeFetch(url, { method, headers, body: bodyStr }, 5, { credentialHeaders: credentialHeaders(), trace: redirect });
 			}
 		}
 	} catch (e) {
-		if (e instanceof SsrfError) return { content: scrub(`Blocked: ${e.message}`), success: false };
-		return { content: scrub(`Request failed: ${e instanceof Error ? e.message : String(e)}`), success: false };
+		if (e instanceof SsrfError) return finish({ content: scrub(`Blocked: ${e.message}`), success: false }, "blocked_ssrf");
+		return finish({ content: scrub(`Request failed: ${e instanceof Error ? e.message : String(e)}`), success: false }, "network_error");
 	}
 
 	// Scrubbed BEFORE parsing (#1124): an API that echoes the request back (`/headers`, an error
@@ -482,5 +525,13 @@ export async function executeHttpRequest(
 	// unbindable. The failure the split protects against — losing the ability to tell a 500 from a
 	// page containing "500" — does not arise for a typed field in a JSON object, and `success` is
 	// outside the string entirely.
-	return { content: JSON.stringify(result, null, 2), success: res.ok, origin: `the API at ${requestOrigin}` };
+	// Which credential this call used, said in the result (#1125): a legacy vault key is no longer an
+	// invisible default — the caller and the audit both see that it, and not a profile, was sent.
+	if (credentialed) result.credential = profileName ? { kind: "profile", binding: profileName, ...(trail.strategy ? { strategy: trail.strategy } : {}) } : { kind: "legacy_vault", provider: connectorId, mode: auth.mode };
+	if (redirect.hops) {
+		trail.redirect = { hops: redirect.hops, crossOrigin: redirect.crossOrigin, credentialStripped: redirect.stripped, finalOrigin: redirect.finalOrigin };
+		if (credentialed && redirect.crossOrigin) result.redirect = { crossOrigin: true, credentialStripped: redirect.stripped, finalOrigin: redirect.finalOrigin };
+	}
+	trail.status = res.status;
+	return finish({ content: JSON.stringify(result, null, 2), success: res.ok, origin: `the API at ${requestOrigin}` }, res.ok ? "ok" : res.status >= 500 ? "server_error" : "client_error");
 }

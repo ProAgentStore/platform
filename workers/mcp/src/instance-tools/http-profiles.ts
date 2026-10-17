@@ -17,7 +17,7 @@ export function registerHttpProfileTools(server: McpServer, ctx: InstanceToolsCt
 	const tokenArg = z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.");
 	const profileId = z.string().describe("Profile id (hcp_…) from list_http_profiles.");
 	const secretArg = z.string().min(1).max(8192).describe("The credential — an API key or token. Stored encrypted; never shown again by any tool.");
-	const origins = z.array(z.string()).max(20).optional().describe('Where this credential is meant to be sent, as bare origins: ["https://discord.com"]. Recorded now; enforced once host allowlisting ships (#1125).');
+	const origins = z.array(z.string()).max(20).optional().describe('The ONLY hosts this credential may be sent to (#1125), as https origins: ["https://discord.com"], or an explicit subdomain wildcard "https://*.example.com" (subdomains at any depth, not the apex). https only. An empty list sends it nowhere. A request to any other host is refused before the secret is decrypted; a redirect to another origin drops the credential.');
 	const err = (data: unknown) => (data as { error?: string }).error;
 	// #1124: how the secret becomes a request. Non-secret by construction — the owner's configuration.
 	const strategyArg = z

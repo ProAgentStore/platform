@@ -149,7 +149,32 @@ export const SAFE_FETCH_TIMEOUT_MS = 30_000;
  * distrust. `stripCredentialHeaders` rebuilds the init on a cross-origin hop and must carry the
  * signal through; `ssrf.test.ts` pins that.
  */
-export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
+/**
+ * What a redirect chain did to the request's credentials (#1125) — filled in when passed, so the caller
+ * can audit it. `stripped` stays true for the rest of the chain: a credential dropped at one origin
+ * boundary is NEVER restored, even if a later hop leads back to the original origin.
+ */
+export interface RedirectTrace {
+	hops: number;
+	crossOrigin: boolean;
+	stripped: boolean;
+	finalOrigin: string;
+}
+
+export async function safeFetch(
+	raw: string,
+	init: RequestInit = {},
+	maxRedirects = 5,
+	/**
+	 * `credentialHeaders` (#1125): the exact headers that carry a credential for THIS request — a profile's
+	 * rendered headers, a legacy vault key's header. Stripped on a cross-origin hop along with every header
+	 * the name heuristic below recognises, because a profile may name its credential header anything
+	 * (`X-Key`) and a heuristic that guesses it is a leak waiting for a name it does not know.
+	 */
+	opts: { credentialHeaders?: readonly string[]; trace?: RedirectTrace } = {},
+): Promise<Response> {
+	const named = new Set((opts.credentialHeaders ?? []).map((h) => h.toLowerCase()));
+	if (opts.trace) Object.assign(opts.trace, { hops: 0, crossOrigin: false, stripped: false, finalOrigin: originOf(raw) });
 	let current = raw;
 	let origin = originOf(raw);
 	let hopInit: RequestInit = init.signal ? init : { ...init, signal: AbortSignal.timeout(SAFE_FETCH_TIMEOUT_MS) };
@@ -175,9 +200,19 @@ export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirect
 		// perfectly public HTTPS host. Browsers and curl strip Authorization on a cross-host
 		// redirect for exactly this reason; now so do we.
 		const nextOrigin = originOf(current);
+		if (opts.trace) {
+			opts.trace.hops++;
+			opts.trace.finalOrigin = nextOrigin;
+		}
 		if (nextOrigin !== origin) {
-			hopInit = stripCredentialHeaders(hopInit);
+			const before = new Headers(hopInit.headers as HeadersInit | undefined);
+			hopInit = stripCredentialHeaders(hopInit, named);
 			origin = nextOrigin;
+			if (opts.trace) {
+				opts.trace.crossOrigin = true;
+				const after = new Headers(hopInit.headers as HeadersInit | undefined);
+				if ([...before.keys()].some((k) => !after.has(k))) opts.trace.stripped = true;
+			}
 		}
 	}
 	throw new SsrfError("Too many redirects");
@@ -207,10 +242,10 @@ function isCredentialHeader(name: string): boolean {
 	return CREDENTIAL_HEADERS.has(n) || CREDENTIAL_HEADER_RE.test(n);
 }
 
-function stripCredentialHeaders(init: RequestInit): RequestInit {
+function stripCredentialHeaders(init: RequestInit, named: ReadonlySet<string> = new Set()): RequestInit {
 	const next = new Headers(init.headers as HeadersInit | undefined);
 	for (const name of [...next.keys()]) {
-		if (isCredentialHeader(name)) next.delete(name);
+		if (named.has(name.toLowerCase()) || isCredentialHeader(name)) next.delete(name);
 	}
 	return { ...init, headers: next };
 }

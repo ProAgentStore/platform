@@ -1193,4 +1193,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.146": "sha256:a348f455e0edc1c92a9541743d4e5caa7943db13bfb20858c90d97881d78b77c",
 	// #1124: create_http_profile + update_http_profile gain strategy and strategy_config.
 	"0.1.147": "sha256:e60c23680a3d06b4d0320a80d584deeeb787f21b82b458b14318cea2341bf98b",
+	// #1125: the http-profile allowed_origins field describes the enforced allowlist (https, `https://*.domain`, default deny).
+	"0.1.148": "sha256:3fff9ff022ca8f3a404b9c88ab275816bec3792e3013e9fc099860b8411cc50f",
 };

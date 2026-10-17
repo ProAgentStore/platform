@@ -8511,7 +8511,9 @@ paths:
       summary: Create an HTTP credential profile
       description: |
         `strategy` is `unspecified` for every profile until auth-strategy rendering (#1124) lands;
-        `allowedOrigins` is recorded but not yet enforced (#1125). Error messages never quote the secret.
+        `allowedOrigins` is the host allowlist (#1125): https origins, or an explicit `https://*.domain`
+        subdomain wildcard; a credential is sent nowhere else, and an empty list sends it nowhere. A
+        cross-origin redirect strips the credential. Error messages never quote the secret.
       operationId: createHttpProfile
       tags: [Credentials]
       requestBody:
