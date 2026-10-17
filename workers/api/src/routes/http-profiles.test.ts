@@ -95,7 +95,7 @@ describe("redaction — the secret goes in and never comes out (#1123)", () => {
 		bodies.push(create.raw);
 		const id = create.json.profile.id as string;
 		expect(create.json.profile).toMatchObject({ name: "discord-bot", strategy: "unspecified", allowedOrigins: ["https://discord.com"], secret: { set: true, version: 1, rotatedAt: null } });
-		expect(Object.keys(create.json.profile).sort()).toEqual(["allowedOrigins", "bindings", "createdAt", "description", "id", "name", "secret", "strategy", "updatedAt"]);
+		expect(Object.keys(create.json.profile).sort()).toEqual(["allowedOrigins", "bindings", "createdAt", "description", "id", "name", "renders", "secret", "strategy", "strategyConfig", "updatedAt"]);
 
 		for (const [m, p, b] of [
 			["GET", "/v1/http-profiles", undefined],
@@ -167,8 +167,9 @@ describe("redaction — the secret goes in and never comes out (#1123)", () => {
 	it("the storage test reports facts about the secret and says it sent nothing", async () => {
 		const { id } = await createProfile();
 		const r = await call("GET", `/v1/http-profiles/${id}/test`);
-		expect(r.json).toMatchObject({ profileId: id, ok: true });
-		expect(r.json.checks.map((c: { check: string }) => c.check)).toEqual(["secret_decrypts", "allowed_origins", "bindings"]);
+		// No strategy yet (#1124): the secret is fine, but the profile renders nothing — said, not passed.
+		expect(r.json).toMatchObject({ profileId: id, ok: false });
+		expect(r.json.checks.map((c: { check: string; ok: boolean }) => [c.check, c.ok])).toEqual([["secret_decrypts", true], ["strategy_renders", false], ["allowed_origins", true], ["bindings", true]]);
 		expect(r.json.scope).toMatch(/nothing was sent/);
 		// The wrong platform key: the test fails honestly, still without the value.
 		env = { DB: d1.DB, KEY_ENCRYPTION_KEY: "b".repeat(64) } as unknown as Env;

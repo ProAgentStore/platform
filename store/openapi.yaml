@@ -348,7 +348,17 @@ components:
         id: { type: string }
         name: { type: string }
         description: { type: string }
-        strategy: { type: string, description: "`unspecified` until #1124." }
+        strategy:
+          type: string
+          enum: [unspecified, none, api_key, bearer, header_template, basic, multi_header, oauth2_client_credentials, oauth2_authorization_code]
+          description: How the secret becomes a request (#1124). `unspecified` renders nothing until one is set.
+        strategyConfig: { type: object, nullable: true, additionalProperties: true, description: "The strategy's non-secret configuration — header names, static literals, URLs, the OAuth2 client id. Never a secret." }
+        renders:
+          type: object
+          description: The header and query parameter NAMES a request carries — never a value.
+          properties:
+            headers: { type: array, items: { type: string } }
+            query: { type: array, items: { type: string } }
         allowedOrigins: { type: array, items: { type: string } }
         secret:
           type: object
@@ -8513,9 +8523,15 @@ paths:
               required: [name, secret]
               properties:
                 name: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" }
-                secret: { type: string, format: password, maxLength: 8192 }
+                secret: { type: string, format: password, maxLength: 8192, description: "The secret. For OAuth2 strategies, the client secret." }
                 description: { type: string, maxLength: 500 }
                 allowedOrigins: { type: array, maxItems: 20, items: { type: string, example: "https://discord.com" } }
+                strategy: { type: string, description: "none, api_key, bearer, header_template, basic, multi_header, oauth2_client_credentials or oauth2_authorization_code. Omitted, the profile is `unspecified`." }
+                strategyConfig:
+                  type: object
+                  additionalProperties: true
+                  description: |
+                    Per strategy: api_key `{in: header|query, name}`; header_template `{header: {name, template}}` where template is static text around ONE `{{secret}}` (e.g. `{"name":"Authorization","template":"Bot {{secret}}"}`); basic `{username}`; multi_header `{headers: [{name, template}]}`; OAuth2 `{tokenUrl, clientId, scope?, clientAuth?: body|basic}` plus `authorizeUrl` for authorization_code. Any strategy but multi_header may add `staticHeaders` (non-secret literals).
       responses:
         "201":
           description: Created
@@ -8557,6 +8573,8 @@ paths:
                 name: { type: string }
                 description: { type: string }
                 allowedOrigins: { type: array, items: { type: string } }
+                strategy: { type: string }
+                strategyConfig: { type: object, additionalProperties: true, description: "Validated together with `strategy`. Changing either clears an OAuth2 grant." }
       responses:
         "200":
           description: Updated
@@ -8611,6 +8629,42 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/http-profiles/{id}/oauth/start:
+    post:
+      summary: Start the owner's OAuth2 authorization for a profile
+      description: |
+        An `oauth2_authorization_code` profile is authorized once, in the owner's browser. Called from
+        that browser (credentials included): sets a browser-binding cookie and returns the provider's
+        authorize URL, whose `state` is signed and pinned to this profile. The provider redirects to
+        `/v1/http-profiles/oauth/callback`.
+      operationId: startHttpProfileAuthorization
+      tags: [Credentials]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The authorize URL
+          content:
+            application/json:
+              schema: { type: object, properties: { url: { type: string } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Not an authorization-code profile }
+
+  /v1/http-profiles/oauth/callback:
+    get:
+      summary: The provider's redirect after the owner granted access
+      description: Verifies the signed, browser-bound state, exchanges the code and stores the grant encrypted. A provider that issues no refresh token is refused. Unauthenticated by construction — the state is the evidence.
+      operationId: completeHttpProfileAuthorization
+      tags: [Credentials]
+      security: []
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: An HTML page saying the profile is authorized }
+        "400": { description: A bad, expired or foreign-browser state, or a refused exchange }
 
   /v1/http-profiles/{id}/test:
     get:

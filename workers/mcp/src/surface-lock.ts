@@ -1191,4 +1191,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.145": "sha256:7d2bb71e86f66f3369b65cacb81433192af6fb17bec1ef7e79c44157ce11d1b8",
 	// #1071: coding_loop_status gains request_id (poll one start); coding_loop_start's instance_id becomes optional in the schema.
 	"0.1.146": "sha256:a348f455e0edc1c92a9541743d4e5caa7943db13bfb20858c90d97881d78b77c",
+	// #1124: create_http_profile + update_http_profile gain strategy and strategy_config.
+	"0.1.147": "sha256:e60c23680a3d06b4d0320a80d584deeeb787f21b82b458b14318cea2341bf98b",
 };

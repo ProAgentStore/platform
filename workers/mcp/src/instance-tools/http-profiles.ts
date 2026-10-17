@@ -19,6 +19,23 @@ export function registerHttpProfileTools(server: McpServer, ctx: InstanceToolsCt
 	const secretArg = z.string().min(1).max(8192).describe("The credential — an API key or token. Stored encrypted; never shown again by any tool.");
 	const origins = z.array(z.string()).max(20).optional().describe('Where this credential is meant to be sent, as bare origins: ["https://discord.com"]. Recorded now; enforced once host allowlisting ships (#1125).');
 	const err = (data: unknown) => (data as { error?: string }).error;
+	// #1124: how the secret becomes a request. Non-secret by construction — the owner's configuration.
+	const strategyArg = z
+		.enum(["none", "api_key", "bearer", "header_template", "basic", "multi_header", "oauth2_client_credentials", "oauth2_authorization_code"])
+		.optional()
+		.describe("How the secret is sent. bearer → `Authorization: Bearer <secret>`; header_template → a named header with static text around the secret (Discord: `Authorization: Bot <secret>`); api_key → a header or query parameter; basic → HTTP Basic (username in strategy_config, password = the secret); multi_header → several headers, literals and/or the secret; oauth2_client_credentials / oauth2_authorization_code → the secret is the CLIENT secret and requests carry a minted, auto-refreshed access token (authorization_code needs the owner's one-time consent in a browser). Omitted on create, the profile renders nothing.");
+	const strategyConfigArg = z
+		.union([z.record(z.unknown()), z.string()])
+		.optional()
+		.describe('Per strategy, never a secret: api_key {"in":"header"|"query","name":"X-Api-Key"}; header_template {"header":{"name":"Authorization","template":"Bot {{secret}}"}} — static text around ONE {{secret}}, no other placeholder; basic {"username":"..."}; multi_header {"headers":[{"name":"X-Key","template":"{{secret}}"},{"name":"X-Version","template":"2"}]}; OAuth2 {"tokenUrl":"https://...","clientId":"...","scope":"...","clientAuth":"body"|"basic"} plus "authorizeUrl" for authorization_code. Any strategy but multi_header may add "staticHeaders" (non-secret literals).');
+	const configOf = (raw: unknown) => {
+		if (typeof raw !== "string") return raw;
+		try {
+			return JSON.parse(raw) as unknown;
+		} catch {
+			return raw;
+		}
+	};
 
 	server.tool(
 		"list_http_profiles",
@@ -63,23 +80,25 @@ export function registerHttpProfileTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"create_http_profile",
-		"Create a named HTTP credential profile holding one secret (API key / token), encrypted at rest. No agent can use it until you bind it to an instance with bind_http_profile. The secret is never returned by any tool afterwards. `name`: lower-case letters, digits, - or _. Call with dry_run first.",
+		"Create a named HTTP credential profile holding one secret (API key / token / password / OAuth2 client secret), encrypted at rest, and the auth strategy that turns it into a request (#1124). No agent can use it until you bind it to an instance with bind_http_profile; the agent then calls http_request with `profile` set to the binding name, and never sees the secret. The secret is never returned by any tool afterwards. `name`: lower-case letters, digits, - or _. Call with dry_run first.",
 		{
 			token: tokenArg,
 			name: z.string().describe('Profile name, e.g. "discord-bot".'),
 			secret: secretArg,
 			description: z.string().max(500).optional(),
 			allowed_origins: origins,
+			strategy: strategyArg,
+			strategy_config: strategyConfigArg,
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, name, secret, description, allowed_origins, dry_run }) => {
+		async ({ token, name, secret, description, allowed_origins, strategy, strategy_config, dry_run }) => {
 			const session = tokenFor(token);
 			if (!session) return authRequired();
-			const input = { name, description, allowed_origins, secret_supplied: true };
+			const input = { name, description, allowed_origins, strategy, strategy_config: configOf(strategy_config), secret_supplied: true };
 			const denied = await requirePermission(safetyFor(token), "write", "create_http_profile", input);
 			if (denied) return denied;
 			if (dry_run) return dryRun(safetyFor(token), "create_http_profile", `create HTTP credential profile "${name}"`, input, { endpoint: "/v1/http-profiles", method: "POST" });
-			const data = await authedCall("/v1/http-profiles", session, { method: "POST", body: JSON.stringify({ name, secret, description, allowedOrigins: allowed_origins }) }, env);
+			const data = await authedCall("/v1/http-profiles", session, { method: "POST", body: JSON.stringify({ name, secret, description, allowedOrigins: allowed_origins, strategy, strategyConfig: configOf(strategy_config) }) }, env);
 			if (err(data)) return text(`Error: ${err(data)}`);
 			await audit(safetyFor(token), { tool: "create_http_profile", action: "completed", input, result: data });
 			return jsonText(data);
@@ -88,24 +107,26 @@ export function registerHttpProfileTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"update_http_profile",
-		"Change an HTTP credential profile's name, description or allowed origins. Never the secret — use rotate_http_profile_secret. Renaming does not change any binding name. Call with dry_run first.",
+		"Change an HTTP credential profile's name, description, allowed origins, or auth strategy (strategy + strategy_config, validated together; changing them clears an OAuth2 grant). Never the secret — use rotate_http_profile_secret. Renaming does not change any binding name. Call with dry_run first.",
 		{
 			token: tokenArg,
 			profile_id: profileId,
 			name: z.string().optional(),
 			description: z.string().max(500).optional(),
 			allowed_origins: origins,
+			strategy: strategyArg,
+			strategy_config: strategyConfigArg,
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, profile_id, name, description, allowed_origins, dry_run }) => {
+		async ({ token, profile_id, name, description, allowed_origins, strategy, strategy_config, dry_run }) => {
 			const session = tokenFor(token);
 			if (!session) return authRequired();
-			const input = { profile_id, name, description, allowed_origins };
+			const input = { profile_id, name, description, allowed_origins, strategy, strategy_config: configOf(strategy_config) };
 			const denied = await requirePermission(safetyFor(token), "write", "update_http_profile", input);
 			if (denied) return denied;
 			const endpoint = `/v1/http-profiles/${encodeURIComponent(profile_id)}`;
 			if (dry_run) return dryRun(safetyFor(token), "update_http_profile", "update an HTTP credential profile's metadata", input, { endpoint, method: "PATCH" });
-			const data = await authedCall(endpoint, session, { method: "PATCH", body: JSON.stringify({ name, description, allowedOrigins: allowed_origins }) }, env);
+			const data = await authedCall(endpoint, session, { method: "PATCH", body: JSON.stringify({ name, description, allowedOrigins: allowed_origins, strategy, strategyConfig: configOf(strategy_config) }) }, env);
 			if (err(data)) return text(`Error: ${err(data)}`);
 			await audit(safetyFor(token), { tool: "update_http_profile", action: "completed", input, result: data });
 			return jsonText(data);

@@ -8,6 +8,10 @@
 //   • api-key      — a vault-stored key (user_api_keys, provider "http") minted via the
 //                    connectorClient (#86) and injected into a CONFIGURABLE header or query
 //                    param (e.g. Google Places `X-Goog-Api-Key`). NEVER inlined or logged.
+//   • `profile`    — (#1124) the NAME of a credential profile bound to this instance (#1123). The
+//                    profile's strategy renders the request — `Authorization: Bot <secret>`, Bearer,
+//                    Basic, header/query API keys, templated and multi-header credentials, OAuth2 —
+//                    and every value derived from the secret is scrubbed from what comes back.
 //
 // Every outbound call goes through `safeFetch` (SSRF guard, https-only, redirect-revalidated),
 // so a templated/attacker-influenced url can't reach cloud-metadata / loopback / RFC1918.
@@ -15,6 +19,9 @@ import type { RegistryToolCtx, RegistryToolResult, ToolDef } from "./types.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
 import { hasConsent } from "../connector-consent.js";
 import { consentInstanceOf } from "../execution-authority.js";
+import { OAUTH2_STRATEGIES, scrubSecrets, type RenderedAuth } from "../http-auth-strategies.js";
+import { renderBoundProfile } from "../http-profiles.js";
+import { HttpError } from "../auth.js";
 
 // ── {{param}} interpolation ────────────────────────────────────────────────
 // Replace every {{name}} with String(inputs[name]). A missing input becomes "" (so a
@@ -269,6 +276,11 @@ export const HTTP_TOOLS: ToolDef[] = [
 					description:
 						'Credential injection. { "mode": "none" } or { "mode": "api-key", "key": { "in": "header"|"query", "name": "X-Goog-Api-Key" } } — the key value is read from the vault, never passed here.',
 				},
+				profile: {
+					type: "string",
+					description:
+						"The NAME of an HTTP credential profile bound to this instance (list_instance_http_bindings), e.g. \"discord\". The platform renders its credential onto the request — Bearer, Bot/custom prefix, Basic, API key header/query, OAuth2 — you never see or send the secret, and any echo of it in the response is redacted. Use instead of `auth`.",
+				},
 				responseMap: {
 					type: "string",
 					description: 'Dotted extraction, e.g. "places[].{id,name:displayName.text,site:websiteUri}" or "candidates.0.content".',
@@ -306,12 +318,14 @@ export async function executeHttpRequest(
 
 	let auth: HttpAuth;
 	let url: string;
+	const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
 	try {
 		auth = parseAuth(input.auth);
 		url = buildUrl(input, inputs);
 	} catch (e) {
 		return { content: e instanceof Error ? e.message : String(e), success: false };
 	}
+	if (profileName && auth.mode !== "none") return { content: "Pass either `profile` (a bound credential profile) or `auth` (a vault key), not both.", success: false };
 
 	const method = (typeof input.method === "string" ? input.method : "GET").toUpperCase();
 
@@ -367,6 +381,39 @@ export async function executeHttpRequest(
 		headers.set("Authorization", `Bearer ${token}`);
 	}
 
+	// A bound credential profile (#1124): rendered here, after the consent gate, so a refused call never
+	// decrypts a secret or mints a token. Its headers REPLACE any the caller set with the same name — a
+	// caller cannot shadow, or append to, the credential.
+	let rendered: RenderedAuth | null = null;
+	let renderedStrategy = "";
+	const renderProfile = async (forceRefresh = false): Promise<RegistryToolResult | null> => {
+		if (!ctx.userId || !ctx.instanceId) return { content: "A credential profile can only be used by an instance.", success: false };
+		try {
+			const r = await renderBoundProfile(ctx.env, { userId: ctx.userId, instanceId: ctx.instanceId, connector: connectorId, bindingName: profileName }, { forceRefresh });
+			if (!r) return { content: `No credential profile is bound to this instance as "${profileName}" for the ${connectorId} connector — list_instance_http_bindings shows the names it holds.`, success: false };
+			rendered = r.rendered;
+			renderedStrategy = r.strategy;
+			return null;
+		} catch (e) {
+			return { content: e instanceof HttpError ? e.message : "The credential profile could not be rendered.", success: false };
+		}
+	};
+	if (profileName) {
+		const refused = await renderProfile();
+		if (refused) return refused;
+	}
+	const applyRendered = (target: string): string => {
+		if (!rendered) return target;
+		for (const [k, v] of rendered.headers) headers.set(k, v);
+		if (!rendered.query.length) return target;
+		const u = new URL(target);
+		for (const [k, v] of rendered.query) u.searchParams.set(k, v);
+		return u.toString();
+	};
+	const requestUrl = url;
+	url = applyRendered(url);
+	const scrub = (text: string) => (rendered ? scrubSecrets(text, (rendered as RenderedAuth).sensitive) : text);
+
 	let bodyStr: string | undefined;
 	if (method !== "GET" && method !== "HEAD" && input.body !== undefined && input.body !== null) {
 		bodyStr = JSON.stringify(interpolateDeep(input.body, inputs));
@@ -376,12 +423,27 @@ export async function executeHttpRequest(
 	let res: Response;
 	try {
 		res = await safeFetch(url, { method, headers, body: bodyStr });
+		// An OAuth2 access token the API refuses is refreshed ONCE and the request retried (#1124) — a
+		// token revoked or expired early reads as 401 even inside its stated lifetime.
+		if (res.status === 401 && OAUTH2_STRATEGIES.has(renderedStrategy)) {
+			const before = (rendered as RenderedAuth | null)?.sensitive ?? [];
+			const refused = await renderProfile(true);
+			if (!refused && rendered && (rendered as RenderedAuth).sensitive.join() !== before.join()) {
+				// Keep the OLD token on the scrub list too: an echo of it is still a secret.
+				const fresh = rendered as RenderedAuth;
+				rendered = { ...fresh, sensitive: [...new Set([...fresh.sensitive, ...before])].sort((a, b) => b.length - a.length) };
+				url = applyRendered(requestUrl);
+				res = await safeFetch(url, { method, headers, body: bodyStr });
+			}
+		}
 	} catch (e) {
-		if (e instanceof SsrfError) return { content: `Blocked: ${e.message}`, success: false };
-		return { content: `Request failed: ${e instanceof Error ? e.message : String(e)}`, success: false };
+		if (e instanceof SsrfError) return { content: scrub(`Blocked: ${e.message}`), success: false };
+		return { content: scrub(`Request failed: ${e instanceof Error ? e.message : String(e)}`), success: false };
 	}
 
-	const text = await res.text();
+	// Scrubbed BEFORE parsing (#1124): an API that echoes the request back (`/headers`, an error
+	// quoting the Authorization header) must not hand the credential to the model.
+	const text = scrub(await res.text());
 	let raw: unknown = text;
 	try {
 		raw = JSON.parse(text);

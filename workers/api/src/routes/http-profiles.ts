@@ -7,8 +7,12 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { logEvent } from "../lib/events.js";
+import { connectorStateProvider, signConnectorState, verifyConnectorState } from "../lib/connector-oauth.js";
+import { clearOauthBindCookie, newOauthNonce, OAUTH_BIND_ERROR, oauthBindCookie, readOauthBindCookie } from "../lib/oauth-nonce.js";
 import {
 	bindHttpProfile,
+	completeHttpProfileAuthorization,
+	httpProfileAuthorizeUrl,
 	createHttpProfile,
 	deleteHttpProfile,
 	getHttpProfile,
@@ -75,6 +79,45 @@ httpProfileRoutes.delete("/:id", async (c) => {
 	const result = await deleteHttpProfile(c.env, uid, c.req.param("id"));
 	await audit(c, uid, "http_profile.delete", "Deleted an HTTP credential profile", { profileId: result.id, unbound: result.unbound });
 	return c.json(result);
+});
+
+// ── OAuth2 authorization-code consent (#1124) ─────────────────────────────────────────────────
+//
+// The owner's browser starts it (the console calls `start` with credentials, so the bind cookie lands
+// on THIS origin) and finishes it at the provider's redirect to `callback`. The state is signed with
+// the profile pinned (`http_profile:<id>`) and bound to that browser (lib/oauth-nonce.ts): a link an
+// attacker started, completed by someone else, files nothing — the classic consent CSRF that would
+// land the victim's grant in the attacker's profile.
+const COOKIE_SCOPE = "http_profile";
+const STATE_TTL_SECONDS = 10 * 60;
+const callbackUri = (c: C) => `${new URL(c.req.url).origin}/v1/http-profiles/oauth/callback`;
+
+httpProfileRoutes.get("/oauth/callback", async (c) => {
+	const code = c.req.query("code");
+	const state = c.req.query("state");
+	if (!code || !state) return c.text("missing code or state", 400);
+	const provider = connectorStateProvider(state) ?? "";
+	const id = provider.startsWith("http_profile:") ? provider.slice("http_profile:".length) : "";
+	const uid = id ? await verifyConnectorState(state, c.env.SESSION_SIGNING_KEY, { cookieNonce: readOauthBindCookie(c.req.header("cookie"), COOKIE_SCOPE), provider }) : null;
+	c.header("Set-Cookie", clearOauthBindCookie(COOKIE_SCOPE)); // single-use, whatever the outcome
+	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
+	try {
+		await completeHttpProfileAuthorization(c.env, uid, id, code, callbackUri(c));
+	} catch (e) {
+		return c.text(e instanceof HttpError ? e.message : "The authorization could not be completed.", e instanceof HttpError ? (e.status as 400) : 500);
+	}
+	await audit(c, uid, "http_profile.authorize", "Authorized an HTTP credential profile (OAuth2)", { profileId: id });
+	return c.html("<!doctype html><title>Authorized</title><body style='font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0'><div style='text-align:center'><h1>Authorized</h1><p>The profile can now be used. You can close this tab.</p></div></body>");
+});
+
+httpProfileRoutes.post("/:id/oauth/start", async (c) => {
+	const { uid } = await requireUser(c);
+	const id = c.req.param("id");
+	const nonce = newOauthNonce();
+	const state = await signConnectorState(uid, Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS, c.env.SESSION_SIGNING_KEY, { nonce, provider: `http_profile:${id}` });
+	const url = await httpProfileAuthorizeUrl(c.env, uid, id, callbackUri(c), state);
+	c.header("Set-Cookie", oauthBindCookie(nonce, COOKIE_SCOPE));
+	return c.json({ url });
 });
 
 export const httpBindingRoutes = new Hono<{ Bindings: Env }>();

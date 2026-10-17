@@ -20,8 +20,9 @@
  *
  * ── Deliberately not here (later parts of #1122)
  *
- *   - `strategy` / `strategy_config` — HOW the secret is rendered (Bearer, Basic, custom prefix,
- *     OAuth2): #1124. Every profile reads `strategy: "unspecified"` until then; no input sets it.
+ *   - (#1124 added them) `strategy` / `strategy_config` — HOW the secret becomes a request: validated
+ *     and rendered by `lib/http-auth-strategies.ts`, OAuth2 grants by `lib/http-profile-oauth.ts`. A
+ *     profile created without one stays `unspecified` and renders nothing until a strategy is set.
  *   - `allowedOrigins` — stored and returned so an agent can see where a binding is MEANT for; the
  *     host allowlist, scheme and redirect policy that enforce them are #1125.
  *   - The connection "test" here is a STORAGE test (present, decryptable, origins well-formed). A live
@@ -30,6 +31,8 @@
  */
 import { HttpError } from "./auth.js";
 import { decryptKey, encryptKey } from "./crypto.js";
+import { describeRendering, OAUTH2_STRATEGIES, type RenderedAuth, renderAuth, type StrategyConfig, StrategyError, validateStrategy } from "./http-auth-strategies.js";
+import { clearProfileTokens, completeProfileAuthorization, ProfileAuthError, profileAccessToken, profileAuthorizeUrl, profileTokenStatus, type OAuthDeps } from "./http-profile-oauth.js";
 import type { Env } from "../types.js";
 
 /** A profile or binding name: what an agent types, so lower-case and plain. */
@@ -47,6 +50,10 @@ export interface HttpProfileView {
 	name: string;
 	description: string;
 	strategy: string;
+	/** The strategy's non-secret configuration (#1124): names, literals, URLs, the OAuth2 client id. Null while `unspecified`. */
+	strategyConfig: StrategyConfig | null;
+	/** Which header and query parameter NAMES a request carries — never a value. */
+	renders: { headers: string[]; query: string[] };
 	allowedOrigins: string[];
 	secret: { set: true; version: number; rotatedAt: string | null };
 	bindings: Array<{ instanceId: string; connector: string; bindingName: string }>;
@@ -73,6 +80,7 @@ type ProfileRow = {
 	name: string;
 	description: string;
 	strategy: string;
+	strategy_config: string;
 	allowed_origins: string;
 	secret_version: number;
 	secret_rotated_at: string | null;
@@ -80,7 +88,30 @@ type ProfileRow = {
 	updated_at: string;
 };
 /** The metadata columns — the only ones a view is ever read from. */
-const META = "id, user_id, name, description, strategy, allowed_origins, secret_version, secret_rotated_at, created_at, updated_at";
+const META = "id, user_id, name, description, strategy, strategy_config, allowed_origins, secret_version, secret_rotated_at, created_at, updated_at";
+
+/** The stored strategy, re-validated on every read — a row written by hand is not trusted to render. */
+function storedStrategy(row: Pick<ProfileRow, "strategy" | "strategy_config">): StrategyConfig | null {
+	if (row.strategy === UNSPECIFIED_STRATEGY) return null;
+	try {
+		return validateStrategy(row.strategy, JSON.parse(row.strategy_config || "{}"));
+	} catch {
+		return null;
+	}
+}
+
+/** Validate a strategy from an owner's input, as a 400 the owner can act on. */
+function strategyFrom(strategy: unknown, config: unknown): StrategyConfig {
+	try {
+		return validateStrategy(strategy, config);
+	} catch (e) {
+		throw new HttpError(400, e instanceof StrategyError ? e.message : "Invalid strategy.");
+	}
+}
+const configColumn = (cfg: StrategyConfig) => {
+	const { strategy: _s, ...rest } = cfg;
+	return JSON.stringify(rest);
+};
 
 const origins = (raw: string): string[] => {
 	try {
@@ -175,6 +206,11 @@ function view(row: ProfileRow, bindings: HttpProfileView["bindings"]): HttpProfi
 		name: row.name,
 		description: row.description,
 		strategy: row.strategy,
+		strategyConfig: storedStrategy(row),
+		renders: (() => {
+			const cfg = storedStrategy(row);
+			return cfg ? describeRendering(cfg) : { headers: [], query: [] };
+		})(),
 		allowedOrigins: origins(row.allowed_origins),
 		secret: { set: true, version: Number(row.secret_version), rotatedAt: row.secret_rotated_at },
 		bindings,
@@ -209,22 +245,23 @@ export async function createHttpProfile(env: Pick<Env, "DB" | "KEY_ENCRYPTION_KE
 	const secret = validSecret(input.secret);
 	const description = validDescription(input.description);
 	const allowed = validOrigins(input.allowedOrigins);
+	const cfg = input.strategy === undefined || input.strategy === UNSPECIFIED_STRATEGY ? null : strategyFrom(input.strategy, input.strategyConfig);
 	const existing = await env.DB.prepare("SELECT 1 AS x FROM http_credential_profiles WHERE user_id = ?1 AND name = ?2").bind(userId, name).first();
 	if (existing) throw new HttpError(409, `A profile named "${name}" already exists. Rotate its secret, or choose another name.`);
 	const sealed = await encryptKey(secret, kek(env));
 	const id = `hcp_${crypto.randomUUID()}`;
 	await env.DB.prepare(
-		`INSERT INTO http_credential_profiles (id, user_id, name, description, strategy, allowed_origins, secret_ciphertext, secret_dek, secret_iv)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+		`INSERT INTO http_credential_profiles (id, user_id, name, description, strategy, strategy_config, allowed_origins, secret_ciphertext, secret_dek, secret_iv)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
 	)
-		.bind(id, userId, name, description, UNSPECIFIED_STRATEGY, JSON.stringify(allowed), sealed.ciphertext, sealed.dekWrapped, sealed.iv)
+		.bind(id, userId, name, description, cfg?.strategy ?? UNSPECIFIED_STRATEGY, cfg ? configColumn(cfg) : "{}", JSON.stringify(allowed), sealed.ciphertext, sealed.dekWrapped, sealed.iv)
 		.run();
 	return getHttpProfile(env, userId, id);
 }
 
 /** Metadata only. A secret sent here is refused, not silently ignored: rotation is its own act. */
 export async function updateHttpProfile(env: Pick<Env, "DB">, userId: string, id: string, input: Record<string, unknown>): Promise<HttpProfileView> {
-	await ownedRow(env, userId, id);
+	const current = await ownedRow(env, userId, id);
 	if ("secret" in input) throw new HttpError(400, "A profile's secret is changed with rotate, never with update.");
 	const sets: string[] = [];
 	const binds: unknown[] = [id, userId];
@@ -243,10 +280,24 @@ export async function updateHttpProfile(env: Pick<Env, "DB">, userId: string, id
 		binds.push(JSON.stringify(validOrigins(input.allowedOrigins)));
 		sets.push(`allowed_origins = ?${binds.length}`);
 	}
-	if (!sets.length) throw new HttpError(400, "Nothing to update: send name, description or allowedOrigins.");
+	// The strategy and its config are validated TOGETHER (#1124): a config is only meaningful for its strategy.
+	let strategyChanged = false;
+	if (input.strategy !== undefined || input.strategyConfig !== undefined) {
+		const strategy = input.strategy ?? current.strategy;
+		if (strategy === UNSPECIFIED_STRATEGY) throw new HttpError(400, "Set a `strategy` to configure how this profile's secret is sent.");
+		const cfg = strategyFrom(strategy, input.strategyConfig ?? (input.strategy === undefined ? JSON.parse(current.strategy_config || "{}") : undefined));
+		binds.push(cfg.strategy);
+		sets.push(`strategy = ?${binds.length}`);
+		binds.push(configColumn(cfg));
+		sets.push(`strategy_config = ?${binds.length}`);
+		strategyChanged = true;
+	}
+	if (!sets.length) throw new HttpError(400, "Nothing to update: send name, description, allowedOrigins, strategy or strategyConfig.");
 	await env.DB.prepare(`UPDATE http_credential_profiles SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?1 AND user_id = ?2`)
 		.bind(...binds)
 		.run();
+	// A grant was issued for the OLD client or endpoint: never spend it against a new one.
+	if (strategyChanged) await clearProfileTokens(env, id, userId);
 	return getHttpProfile(env, userId, id);
 }
 
@@ -267,6 +318,7 @@ export async function rotateHttpProfileSecret(env: Pick<Env, "DB" | "KEY_ENCRYPT
 export async function deleteHttpProfile(env: Pick<Env, "DB">, userId: string, id: string): Promise<{ deleted: true; id: string; unbound: number }> {
 	await ownedRow(env, userId, id);
 	const unbound = await env.DB.prepare("DELETE FROM http_credential_bindings WHERE profile_id = ?1 AND user_id = ?2").bind(id, userId).run();
+	await clearProfileTokens(env, id, userId);
 	await env.DB.prepare("DELETE FROM http_credential_profiles WHERE id = ?1 AND user_id = ?2").bind(id, userId).run();
 	return { deleted: true, id, unbound: unbound.meta?.changes ?? 0 };
 }
@@ -302,13 +354,31 @@ export async function testHttpProfile(env: Pick<Env, "DB" | "KEY_ENCRYPTION_KEY"
 		// The message is about the KEY or the ciphertext, never the value.
 		checks.push({ check: "secret_decrypts", ok: false, detail: e instanceof HttpError ? e.message : "The stored secret could not be decrypted with the platform key; rotate it." });
 	}
+	const cfg = await env.DB.prepare("SELECT strategy, strategy_config FROM http_credential_profiles WHERE id = ?1 AND user_id = ?2").bind(id, userId).first<Pick<ProfileRow, "strategy" | "strategy_config">>();
+	const strategy = cfg ? storedStrategy(cfg) : null;
+	checks.push(
+		strategy
+			? { check: "strategy_renders", ok: true, detail: `Strategy ${strategy.strategy}: a request carries ${[...profile.renders.headers.map((h) => `header ${h}`), ...profile.renders.query.map((q) => `query parameter ${q}`)].join(", ") || "no credential"}.` }
+			: { check: "strategy_renders", ok: false, detail: "No strategy is set, so this profile renders nothing: set `strategy` (and `strategyConfig`) with update." },
+	);
+	if (strategy && OAUTH2_STRATEGIES.has(strategy.strategy)) {
+		const grant = await profileTokenStatus(env, id, userId);
+		const authorized = strategy.strategy === "oauth2_client_credentials" || grant.refreshToken;
+		checks.push({
+			check: "oauth2_grant",
+			ok: !!authorized,
+			detail: authorized
+				? `OAuth2 grant ${grant.accessToken ? `holds an access token${grant.expiresAt ? ` expiring ${grant.expiresAt}` : ""}` : "will mint an access token on first use"}${grant.refreshToken ? "; a refresh token is stored" : ""}.`
+				: "Not authorized yet: the owner must grant access once in a browser before a request can be made.",
+		});
+	}
 	checks.push({ check: "allowed_origins", ok: true, detail: profile.allowedOrigins.length ? `${profile.allowedOrigins.length} origin(s) recorded.` : "No origins recorded yet." });
 	checks.push({ check: "bindings", ok: true, detail: profile.bindings.length ? `Bound to ${profile.bindings.length} instance binding(s).` : "Not bound to any instance — no agent can use it until it is bound." });
 	return {
 		profileId: id,
 		ok: checks.every((c) => c.ok),
 		checks,
-		scope: "Storage check only: nothing was sent to any server. How the secret is rendered into a request (#1124) and which hosts may receive it (#1125) are not configured on this platform yet, so a live connection test is not available.",
+		scope: "Storage and configuration check only: nothing was sent to any server, and no token was minted. Which hosts may receive the credential is #1125, not checked here.",
 	};
 }
 
@@ -376,4 +446,56 @@ export async function resolveBoundSecret(
 	const binding = (await listInstanceHttpBindings(env, q.userId, q.instanceId)).find((b) => b.connector === q.connector && b.bindingName === q.bindingName);
 	if (!binding) return null;
 	return { binding, secret: await sealedSecret(env, binding.profileId) };
+}
+
+/**
+ * Render the credential a bound instance may send (#1124) — the one path from a binding to a request.
+ * Null when this instance holds no such binding (see {@link resolveBoundSecret}). Throws an
+ * {@link HttpError} the agent can read — never quoting the secret — for an unconfigured strategy or an
+ * OAuth2 grant that cannot be obtained. `forceRefresh` skips a stored OAuth2 access token the API refused.
+ */
+export async function renderBoundProfile(
+	env: Pick<Env, "DB" | "KEY_ENCRYPTION_KEY">,
+	q: { userId: string; instanceId: string; connector: string; bindingName: string },
+	opts: OAuthDeps & { forceRefresh?: boolean } = {},
+): Promise<{ binding: HttpBindingView; strategy: StrategyConfig["strategy"]; rendered: RenderedAuth } | null> {
+	const bound = await resolveBoundSecret(env, q);
+	if (!bound) return null;
+	const row = await env.DB.prepare("SELECT strategy, strategy_config FROM http_credential_profiles WHERE id = ?1 AND user_id = ?2").bind(bound.binding.profileId, q.userId).first<Pick<ProfileRow, "strategy" | "strategy_config">>();
+	const cfg = row ? storedStrategy(row) : null;
+	if (!cfg) throw new HttpError(409, `The profile bound as "${q.bindingName}" has no auth strategy yet — its owner sets one with update_http_profile.`);
+	try {
+		const accessToken =
+			cfg.strategy === "oauth2_client_credentials" || cfg.strategy === "oauth2_authorization_code"
+				? await profileAccessToken(env, { id: bound.binding.profileId, userId: q.userId, strategy: cfg.strategy, cfg }, bound.secret, { ...opts, force: opts.forceRefresh })
+				: undefined;
+		return { binding: bound.binding, strategy: cfg.strategy, rendered: renderAuth(cfg, { secret: bound.secret, accessToken }) };
+	} catch (e) {
+		if (e instanceof ProfileAuthError || e instanceof StrategyError) throw new HttpError(409, e.message);
+		throw e;
+	}
+}
+
+/** The owner's authorization-code profile and its config, or a 4xx that says why it cannot be authorized. */
+async function authorizationCodeProfile(env: Pick<Env, "DB">, userId: string, id: string) {
+	const row = await ownedRow(env, userId, id);
+	const cfg = storedStrategy(row);
+	if (cfg?.strategy !== "oauth2_authorization_code") throw new HttpError(409, "Only an oauth2_authorization_code profile is authorized in a browser; a client-credentials profile mints its own tokens.");
+	return cfg;
+}
+
+/** Where the owner grants access (#1124). `state` is signed and browser-bound by the route. */
+export async function httpProfileAuthorizeUrl(env: Pick<Env, "DB">, userId: string, id: string, redirectUri: string, state: string): Promise<string> {
+	return profileAuthorizeUrl(await authorizationCodeProfile(env, userId, id), redirectUri, state);
+}
+
+/** Finish the consent: exchange the code for the profile's grant, stored encrypted. */
+export async function completeHttpProfileAuthorization(env: Pick<Env, "DB" | "KEY_ENCRYPTION_KEY">, userId: string, id: string, code: string, redirectUri: string, deps: OAuthDeps = {}): Promise<void> {
+	const cfg = await authorizationCodeProfile(env, userId, id);
+	try {
+		await completeProfileAuthorization(env, { id, userId, cfg }, await sealedSecret(env, id), code, redirectUri, deps);
+	} catch (e) {
+		if (e instanceof ProfileAuthError) throw new HttpError(400, e.message);
+		throw e;
+	}
 }

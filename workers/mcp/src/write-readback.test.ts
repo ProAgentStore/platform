@@ -601,6 +601,11 @@ const READBACK: Record<string, string | null> = {
 	"create_http_profile.name": "list_http_profiles",
 	"create_http_profile.description": "list_http_profiles",
 	"create_http_profile.allowed_origins": "list_http_profiles",
+	// #1124: the strategy and its non-secret config read back on the profile (`strategy`, `strategyConfig`, `renders`).
+	"create_http_profile.strategy": "list_http_profiles",
+	"create_http_profile.strategy_config": "list_http_profiles",
+	"update_http_profile.strategy": "get_http_profile",
+	"update_http_profile.strategy_config": "get_http_profile",
 	// The credential itself. Never returned by any reader, by design: the profile reports only
 	// `secret.version` and `rotatedAt` — the same rule keeps the credentials vault off MCP.
 	"create_http_profile.secret": null,
