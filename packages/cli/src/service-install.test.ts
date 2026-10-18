@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installService, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisorPath, uninstallService } from "./service-install.js";
+import { installService, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
 
 const mac: ServiceContext = { platform: "darwin", home: "/Users/serge", nodePath: "/opt/homebrew/bin/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/serge/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin:/bin", uid: 501, user: "serge" };
 const linux: ServiceContext = { platform: "linux", home: "/home/serge", nodePath: "/usr/bin/node", script: "/usr/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/home/serge/.config/proagentstore", pathEnv: "/usr/local/bin:/usr/bin", user: "serge" };
@@ -25,6 +25,7 @@ describe("the service each OS gets (#1141)", () => {
 		expect(plist?.content).toContain("<key>KeepAlive</key><true/>");
 		expect(plist?.content).toContain("<string>/opt/homebrew/bin/node</string>");
 		expect(plist?.content).toContain("<string>/Users/serge/.config/proagentstore/pags-up-supervisor.mjs</string>");
+		expect(plist?.content).toContain("<key>WorkingDirectory</key><string>/Users/serge</string>"); // #1154: not launchd's `/`
 		expect(plan.commands.map((c) => [c.file, ...c.args].join(" "))).toEqual([
 			`launchctl bootout gui/501/${SERVICE_LABEL}`,
 			`launchctl bootstrap gui/501 /Users/serge/Library/LaunchAgents/${SERVICE_LABEL}.plist`,
@@ -50,6 +51,10 @@ describe("the service each OS gets (#1141)", () => {
 		expect(task?.content).toContain("New-ScheduledTaskTrigger -AtStartup");
 		expect(task?.content).toContain("-UserId 'DELL-LAPTOP\\serge' -LogonType S4U");
 		expect(task?.content).toContain("-RestartCount 999");
+		// #1154: restart-on-failure only covers a task that failed to START — a killed supervisor is brought back by a
+		// trigger repeating every 5 minutes, and IgnoreNew keeps that to one supervisor.
+		expect(task?.content).toContain("-RepetitionInterval (New-TimeSpan -Minutes 5)");
+		expect(task?.content).toContain("-MultipleInstances IgnoreNew");
 		expect(task?.content).toContain(`-Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument '"C:\\Users\\serge\\.config\\proagentstore\\pags-up-supervisor.mjs"'`);
 		expect(plan.commands).toEqual([expect.objectContaining({ file: "powershell.exe", args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", task?.path] })]);
 	});
@@ -127,4 +132,25 @@ describe("the supervisor, run for real (#1141)", () => {
 		expect(gaps.at(-1) ?? 0).toBeGreaterThan(gaps[0] ?? 0);
 		expect(readFileSync(join(dir, "pags-up.log"), "utf8")).toMatch(/supervisor: pags up exited \(1\); starting it again/);
 	}, 15_000);
+});
+
+describe("a service pinned to a version manager's Node (#1154)", () => {
+	it("recognises nvm, nvm-windows, fnm, volta, asdf, nodenv and n — and not a system Node", () => {
+		expect(versionManagedNode("/Users/serge/.nvm/versions/node/v22.23.2/bin/node")).toBe("nvm");
+		expect(versionManagedNode("C:\\Users\\serge\\AppData\\Roaming\\nvm\\v22.11.0\\node.exe")).toBe("nvm");
+		expect(versionManagedNode("/home/serge/.local/share/fnm/node-versions/v22/installation/bin/node")).toBe("fnm");
+		expect(versionManagedNode("/Users/serge/.volta/tools/image/node/22.0.0/bin/node")).toBe("volta");
+		expect(versionManagedNode("/home/serge/.asdf/installs/nodejs/22.0.0/bin/node")).toBe("asdf");
+		expect(versionManagedNode("/home/serge/.nodenv/versions/22.0.0/bin/node")).toBe("nodenv");
+		expect(versionManagedNode("/usr/local/n/versions/node/22.0.0/bin/node")).toBe("n");
+		for (const plain of ["/opt/homebrew/bin/node", "/usr/bin/node", "C:\\Program Files\\nodejs\\node.exe"]) expect(versionManagedNode(plain)).toBeNull();
+	});
+
+	it("says so at install, on every OS — and says nothing for a system Node", () => {
+		for (const ctx of [mac, linux, win]) {
+			const pinned = { ...ctx, nodePath: ctx.platform === "win32" ? "C:\\Users\\serge\\AppData\\Roaming\\nvm\\v22\\node.exe" : "/home/serge/.nvm/versions/node/v22/bin/node" };
+			expect(servicePlan(pinned).notes.join("\n")).toMatch(/installed by nvm.*run `pags up --install-service` again/);
+			expect(servicePlan(ctx).notes.join("\n")).not.toMatch(/installed by/);
+		}
+	});
 });

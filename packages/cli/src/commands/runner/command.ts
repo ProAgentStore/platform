@@ -93,6 +93,9 @@ export function createRunnerCommand(): Command {
 					process.exit(1);
 				}
 				lockHeld = { path: taken.path, rsid: taken.lock.rsid, nonce: taken.lock.nonce, launch: taken.lock.launch };
+				// This process reports them in its own heartbeat (#1154) — they used to reach only the runtime's env.
+				process.env.PAGS_RUNNER_RSID = taken.lock.rsid;
+				process.env.PAGS_RUNNER_LAUNCH = taken.lock.launch;
 				// The supervisor reads this to know which process is ITS child (#896 F2), and the
 				// runner carries the same id to the cloud so duplicates can be named there.
 				writeLine(`STATUS runner-session=${taken.lock.rsid}`);

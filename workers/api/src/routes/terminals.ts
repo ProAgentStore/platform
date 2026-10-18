@@ -142,6 +142,8 @@ export interface TerminalNode {
 	 * heartbeat stopped, not that the machine went idle.
 	 */
 	resources: RunnerResourcesView | null;
+	/** What restarts its runner if it dies (#1154): `service`, a `launcher`, or `none`; null for a CLI that cannot say. */
+	supervisor: "service" | "launcher" | "none" | null;
 	/** Live: any (instance,node) relay socket is up. */
 	connected: boolean;
 	/** Agents/instances this machine serves. */
@@ -267,6 +269,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 				runnerBehind: null,
 				lastSeenAt: r.last_seen_at,
 				resources: null,
+				supervisor: null,
 				connected: false,
 				instances: [],
 				sessions: [],
@@ -337,6 +340,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	// by a CLI the machine has since upgraded past must not keep prescribing an upgrade.
 	for (const [key, n] of byKey) {
 		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length);
+		n.supervisor = n.resources?.runner?.supervisor ?? null;
 		n.identityHint = identityHint(n.machineId, n.runnerVersion);
 		n.runnerBehind = runnerFeatureGaps(n.runnerVersion)?.map((g) => `${g.feature} (needs ${g.minCli})`) ?? null;
 	}

@@ -14,18 +14,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { relaunchDelayMs, type RestartDeps, restartPagsUp, UP_LAUNCHER_ENV, upRestartMode } from "./up-restart.js";
+import { relaunchDelayMs, type RestartDeps, restartOwner, restartPagsUp, RUNNER_DIED_EXIT_CODE, runnerExitAction, UP_LAUNCHER_ENV, UP_LAUNCHER_PID_ENV, upRestartMode } from "./up-restart.js";
 import { RESTART_COMMAND_ENV, RUNNER_RESTART_EXIT_CODE, SERVICE_ENV } from "./runner/self-update.js";
 
 describe("upRestartMode (#1036)", () => {
 	it("hands a supervised pags up back to its supervisor", () => {
 		expect(upRestartMode({ [SERVICE_ENV]: "1" })).toBe("service");
 		expect(upRestartMode({ [RESTART_COMMAND_ENV]: "tmux respawn-pane -k" })).toBe("command");
-		expect(upRestartMode({ [UP_LAUNCHER_ENV]: "1" })).toBe("launcher-child");
+		expect(upRestartMode({ [UP_LAUNCHER_ENV]: "1", [UP_LAUNCHER_PID_ENV]: "40" }, { pid: 40, alive: () => true })).toBe("launcher-child");
 	});
 
 	it("otherwise stays as the one launcher — never replaces itself in place, which leaves nothing to retry a failed start (#1151)", () => {
-		expect(upRestartMode({})).toBe("launcher");
+		expect(upRestartMode({}, { pid: 1, alive: () => true })).toBe("launcher");
+	});
+
+	it("#1154: a launcher-child whose launcher is gone becomes the launcher — it does not exit to nobody", () => {
+		const env = { [UP_LAUNCHER_ENV]: "1", [UP_LAUNCHER_PID_ENV]: "40" };
+		expect(upRestartMode(env, { pid: 1, alive: () => true })).toBe("launcher"); // re-parented to init (POSIX)
+		expect(upRestartMode(env, { pid: 40, alive: () => false })).toBe("launcher"); // a dead parent's pid kept (Windows)
 	});
 
 	it("waits 10s after a failed unattended start, doubling, never more than 5 minutes", () => {
@@ -45,6 +51,9 @@ describe("restartPagsUp (#1036)", () => {
 		log: vi.fn(),
 		sleep: vi.fn(),
 		step: vi.fn(),
+		parent: { pid: 1, alive: () => true },
+		pid: 4242,
+		now: () => 0,
 		...over,
 	});
 
@@ -54,7 +63,7 @@ describe("restartPagsUp (#1036)", () => {
 		restartPagsUp(["up", "--headless"], { PAGS_NO_PROMPT: "1" }, d);
 		const [file, argv, options] = spawnSyncFn.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }];
 		expect([file, argv]).toEqual(["/node", ["/pags", "up", "--headless"]]);
-		expect(options.env).toMatchObject({ A: "1", PAGS_NO_PROMPT: "1", [UP_LAUNCHER_ENV]: "1" });
+		expect(options.env).toMatchObject({ A: "1", PAGS_NO_PROMPT: "1", [UP_LAUNCHER_ENV]: "1", [UP_LAUNCHER_PID_ENV]: "4242" });
 		expect(d.exit).toHaveBeenCalledWith(0);
 	});
 
@@ -112,7 +121,7 @@ describe("restartPagsUp (#1036)", () => {
 		expect(d.exit).toHaveBeenCalledWith(0);
 		// Every step is in the update log: why each start ended, and each retry.
 		const steps = (d.step as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
-		expect(steps).toEqual(expect.arrayContaining(["launcher: pags up exited 1", "launcher: pags up was killed by SIGKILL", "launcher: retrying in 10s (failure 1)", "launcher: retrying in 20s (failure 2)"]));
+		expect(steps).toEqual(expect.arrayContaining(["launcher: pags up exited 1 after 0s", "launcher: pags up was killed by SIGKILL after 0s", "launcher: retrying in 10s (failure 1)", "launcher: retrying in 20s (failure 2)"]));
 	});
 
 	it("#1151: a failure after a successful update cycle starts the backoff from 10s again", () => {
@@ -120,6 +129,69 @@ describe("restartPagsUp (#1036)", () => {
 		const d = deps({ spawnSync: vi.fn(() => statuses.shift()) as never });
 		restartPagsUp(["up"], { PAGS_NO_PROMPT: "1" }, d);
 		expect((d.sleep as ReturnType<typeof vi.fn>).mock.calls).toEqual([[10_000], [10_000]]);
+	});
+
+	it("#1154: a runner that died is handed to the owner with 76 — the service and a launcher-child exit with it", () => {
+		const svc = deps({ env: { [SERVICE_ENV]: "1" } });
+		restartPagsUp(["up"], {}, svc, { exitCode: RUNNER_DIED_EXIT_CODE });
+		expect(svc.exit).toHaveBeenCalledWith(RUNNER_DIED_EXIT_CODE);
+		const child = deps({ env: { [UP_LAUNCHER_ENV]: "1", [UP_LAUNCHER_PID_ENV]: "40" }, parent: { pid: 40, alive: () => true } });
+		restartPagsUp(["up"], {}, child, { exitCode: RUNNER_DIED_EXIT_CODE });
+		expect(child.exit).toHaveBeenCalledWith(RUNNER_DIED_EXIT_CODE);
+	});
+
+	it("#1154: the launcher starts a pags up whose runner died again, with backoff — even one a person started", () => {
+		const statuses = [{ status: RUNNER_DIED_EXIT_CODE }, { status: RUNNER_DIED_EXIT_CODE }, { status: 0 }];
+		const d = deps({ spawnSync: vi.fn(() => statuses.shift()) as never });
+		restartPagsUp(["up"], {}, d, { initial: true });
+		expect((d.sleep as ReturnType<typeof vi.fn>).mock.calls).toEqual([[10_000], [20_000]]);
+		expect(d.exit).toHaveBeenCalledWith(0);
+	});
+
+	it("#1154: a first start that fails at once passes its code on silently; one that had been up is started again", () => {
+		const quick = deps({ spawnSync: vi.fn(() => ({ status: 1 })) as never });
+		restartPagsUp(["up"], {}, quick, { initial: true });
+		expect(quick.exit).toHaveBeenCalledWith(1);
+		expect(quick.log).not.toHaveBeenCalled(); // the child already said why (not signed in, lock held)
+
+		let clock = 0;
+		const ran = [{ status: 1, took: 120_000 }, { status: 0, took: 1 }];
+		const up = deps({ now: () => clock, spawnSync: vi.fn(() => { const r = ran.shift()!; clock += r.took; return { status: r.status }; }) as never });
+		restartPagsUp(["up"], {}, up, { initial: true });
+		expect(up.sleep).toHaveBeenCalledWith(10_000);
+		expect(up.exit).toHaveBeenCalledWith(0);
+	});
+
+	it("#1154: Ctrl-C reaches the whole foreground group — a child ended by SIGINT ends the launcher too", () => {
+		const d = deps({ spawnSync: vi.fn(() => ({ status: null, signal: "SIGINT" })) as never });
+		restartPagsUp(["up"], { PAGS_NO_PROMPT: "1" }, d);
+		expect(d.sleep).not.toHaveBeenCalled();
+		expect(d.exit).toHaveBeenCalledWith(0);
+	});
+
+	it("#1154: a run of 10 minutes resets the backoff, like the service supervisor's", () => {
+		let clock = 0;
+		const runs = [{ status: 1, took: 1 }, { status: 1, took: 1 }, { status: 1, took: 11 * 60_000 }, { status: 0, took: 1 }];
+		const d = deps({ now: () => clock, spawnSync: vi.fn(() => { const r = runs.shift()!; clock += r.took; return { status: r.status }; }) as never });
+		restartPagsUp(["up"], { PAGS_NO_PROMPT: "1" }, d);
+		expect((d.sleep as ReturnType<typeof vi.fn>).mock.calls).toEqual([[10_000], [20_000], [10_000]]);
+	});
+});
+
+describe("what a runner's exit means, and who restarts it (#1154)", () => {
+	it("75 restarts on the new release; 0 is a deliberate stop; anything else died; our own stop is ignored", () => {
+		expect(runnerExitAction(RUNNER_RESTART_EXIT_CODE, false)).toBe("restart");
+		expect(runnerExitAction(0, false)).toBe("stop");
+		expect(runnerExitAction(1, false)).toBe("died");
+		expect(runnerExitAction(null, false)).toBe("died"); // a signal
+		expect(runnerExitAction(null, true)).toBe("ignore");
+	});
+
+	it("reports the service, a live launcher, or nothing", () => {
+		expect(restartOwner({ [SERVICE_ENV]: "1" })).toBe("service");
+		expect(restartOwner({ [UP_LAUNCHER_ENV]: "1", [UP_LAUNCHER_PID_ENV]: "40" }, () => true)).toBe("launcher");
+		expect(restartOwner({ [UP_LAUNCHER_ENV]: "1", [UP_LAUNCHER_PID_ENV]: "40" }, () => false)).toBe("none");
+		expect(restartOwner({})).toBe("none");
 	});
 });
 

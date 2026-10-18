@@ -8,8 +8,8 @@ import { homedir, hostname, userInfo } from "node:os";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
-import { processRestartDeps, restartPagsUp } from "./up-restart.js";
-import { restartUpArgs, RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
+import { processRestartDeps, restartPagsUp, RUNNER_DIED_EXIT_CODE, runnerExitAction, upRestartMode } from "./up-restart.js";
+import { restartUpArgs, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
 import { configDir, holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
 import { crashPaths, deliverCrashReports, recordChildExit } from "../crash-delivery.js";
 import { replaceHolder } from "../runner-replace.js";
@@ -64,6 +64,13 @@ export const upCommand = new Command("up")
 	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean; background?: boolean; installService?: boolean; uninstallService?: boolean }) => {
 		if (opts.uninstallService) {
 			for (const line of uninstallService(serviceContext()).lines) writeLine(line);
+			return;
+		}
+		// One restart owner from the FIRST start (#1154): a terminal `pags up` with no service or launcher above it
+		// becomes the launcher and runs the real one as its child, so a crash of the runner — or of that child —
+		// is started again rather than final. Not `--background`, which detaches and exits, nor the service verbs.
+		if (!opts.background && !opts.installService && upRestartMode(process.env) === "launcher") {
+			restartPagsUp(process.argv.slice(2), {}, { ...processRestartDeps(), log: (line) => writeLine(`  ${line}`) }, { initial: true });
 			return;
 		}
 		const session = requireSession();
@@ -362,38 +369,30 @@ export const upCommand = new Command("up")
 			void deliverCrashReports({ apiBase: API_BASE, token: session.token, account: session.user.login, paths: crashes }).catch(() => undefined);
 		};
 		child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
-			// `runner_update` installed a newer CLI and asked to be started again (#859) — not a crash.
-			// The WHOLE `pags up` restarts, not only this child (#860): respawning just the child left
-			// this supervisor on the old code until someone restarted it at the machine. No prompt on the
-			// way back — nobody may be at the keyboard, and every agent must re-attach unattended.
-			if (code === RUNNER_RESTART_EXIT_CODE) {
+			const action = runnerExitAction(code, stopping);
+			if (action === "restart") {
+				// `runner_update` installed a newer CLI and asked to be started again (#859) — not a crash. The WHOLE
+				// `pags up` restarts, not only this child (#860). No prompt on the way back: nobody may be there.
 				logUpdateStep("restart: runner connect asked for a restart (exit 75)");
 				restartUp("Runner updated remotely — restarting pags up on the new version…", { PAGS_NO_PROMPT: "1" });
 				return;
 			}
 			childDead = true;
 			logUpdateStep(`runner connect ${signal ? `was killed by ${signal}` : `exited ${code}`}${stopping ? " (stopping)" : ""}`);
-			// `runner connect` itself died (a crash of the CLI process, or a signal): record it with its
-			// last lines and deliver it now if the platform answers, else on the next start (#1087).
-			if (code !== 0 && !stopping) recordConnectExit(code, signal ?? null, logs.slice(-20));
-			// A child killed by a SIGNAL exits with `code === null`, and the old test
-			// (`if (code && code !== 0)`) read that as a clean exit (#896 F1). That is how a
-			// five-day-old terminal kept showing "connected" after a newer `pags up` had killed its
-			// runner: nothing was marked, nothing was said, and pressing `r` there killed the live
-			// runner in turn. A signal is now reported as what it is.
-			if (code === null) {
-				state.runner = "error";
-				state.lastEvent = "Runner stopped by another process (signal) — it is not connected any more";
-				printStatus(state);
-				return;
+			if (action === "ignore") return;
+			// A deliberate stop — `pags down`, or `--replace` from another terminal — ends `runner connect` with 0: this
+			// `pags up` has nothing left to do, and leaves cleanly so its owner does not start it again.
+			if (action === "stop") {
+				clearScreen();
+				writeLine("  Runner stopped (pags down, or replaced by another pags up).");
+				process.exit(0);
 			}
-			if (code !== 0) {
-				state.runner = "error";
-				state.lastEvent = `Runner exited (code ${code})`;
-				const recent = logs.slice(-5);
-				if (recent.length) state.lastEvent += ": " + recent[recent.length - 1].slice(0, 60);
-				printStatus(state);
-			}
+			// It DIED — crashed, OOM-killed, killed by a signal (#896 F1: `code === null`). Record it with its last lines
+			// (#1087), then hand it to this `pags up`'s restart owner (#1154). It used to redraw "Runner exited" and
+			// stay up holding nothing, so neither the service supervisor nor a launcher ever noticed a dead runner.
+			recordConnectExit(code, signal ?? null, logs.slice(-20));
+			const recent = logs.slice(-5).at(-1);
+			restartUp(`Runner ${signal ? `was killed by ${signal}` : `exited (code ${code})`}${recent ? `: ${recent.slice(0, 60)}` : ""} — starting it again…`, { PAGS_NO_PROMPT: "1" }, RUNNER_DIED_EXIT_CODE);
 		});
 
 		/**
@@ -402,11 +401,11 @@ export const upCommand = new Command("up")
 		 * terminal and starts it again if it fails (#1151) — see `up-restart.ts`. Stdin is released first so
 		 * the new process reads every keystroke.
 		 */
-		function restartUp(why: string, env: NodeJS.ProcessEnv = {}): never {
+		function restartUp(why: string, env: NodeJS.ProcessEnv = {}, exitCode?: number): never {
 			writeLine(`  ${why}`);
 			if (process.stdin.isTTY) process.stdin.setRawMode(false);
 			process.stdin.pause();
-			restartPagsUp(restartUpArgs(opts), env, { ...processRestartDeps(), log: (line) => writeLine(`  ${line}`) });
+			restartPagsUp(restartUpArgs(opts), env, { ...processRestartDeps(), log: (line) => writeLine(`  ${line}`) }, { exitCode });
 			process.exit(1); // unreachable: every path above exits this process
 		}
 

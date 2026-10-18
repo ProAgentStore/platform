@@ -34,7 +34,7 @@ export interface RunnerResourceSample {
 	/** The checkout volume (CLI ≥ {@link RESOURCE_DETAIL_MIN_CLI}). */
 	disk?: { path: string; totalBytes: number; freeBytes: number; inodesTotal: number; inodesFree: number };
 	/** The `pags runner connect` process: start time, uptime, starts in 24h, relay reconnects. */
-	runner?: { startedAt: number; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string };
+	runner?: { startedAt: number; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string; supervisor?: "service" | "launcher" | "none" };
 	/** One relay round trip this beat, ms; null when the probe got no echo in time. */
 	relayRttMs?: number | null;
 	/** Per-session CPU/memory, engine plus descendants. */
@@ -116,7 +116,9 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 			const rsid = typeof p.rsid === "string" && p.rsid.trim() ? p.rsid.trim().slice(0, 64) : undefined;
 			const pid = finite(p.pid, 2 ** 31);
 			const launch = typeof p.launch === "string" && /^(tty|tmux|service|headless|background)$/.test(p.launch) ? p.launch : undefined;
-			sample.runner = { startedAt, uptimeSec, starts24h, relayReconnects, ...(rsid ? { rsid } : {}), ...(pid ? { pid } : {}), ...(launch ? { launch } : {}) };
+			// #1154: what restarts it if it dies. Absent from a CLI older than 0.4.151 — unknown, not "none".
+			const supervisor = p.supervisor === "service" || p.supervisor === "launcher" || p.supervisor === "none" ? p.supervisor : undefined;
+			sample.runner = { startedAt, uptimeSec, starts24h, relayReconnects, ...(rsid ? { rsid } : {}), ...(pid ? { pid } : {}), ...(launch ? { launch } : {}), ...(supervisor ? { supervisor } : {}) };
 		}
 	}
 	if (r.relayRttMs === null) sample.relayRttMs = null;
@@ -161,7 +163,7 @@ export interface RunnerResourcesView {
 	/** The checkout volume; null when the runner does not report it (CLI before {@link RESOURCE_DETAIL_MIN_CLI}). */
 	disk: { path: string; totalBytes: number; freeBytes: number; usedPct: number; inodesUsedPct: number } | null;
 	/** The runner process; null when not reported. */
-	runner: { startedAt: string; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string } | null;
+	runner: { startedAt: string; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string; supervisor?: "service" | "launcher" | "none" } | null;
 	/** One relay round trip at the sample, ms. null: no echo in time, or not reported. */
 	relayRttMs: number | null;
 	/** Per-session usage, heaviest CPU first; null when not reported. */
@@ -252,6 +254,7 @@ export function resourcesView(raw: unknown, activeSessions: number | null): Runn
 				...(s.runner.rsid ? { rsid: s.runner.rsid } : {}),
 				...(s.runner.pid ? { pid: s.runner.pid } : {}),
 				...(s.runner.launch ? { launch: s.runner.launch } : {}),
+				...(s.runner.supervisor ? { supervisor: s.runner.supervisor } : {}),
 			}
 			: null,
 		relayRttMs: typeof s.relayRttMs === "number" ? Math.round(s.relayRttMs) : null,

@@ -13241,6 +13241,7 @@ paths:
                         connected: { type: boolean }
                         last_error: { type: string, nullable: true, description: "The runner's own reason for its last refusal or failed update (#1054) — the same value get_machine_policy carries." }
                         update_log: { type: string, nullable: true, description: "The runner's step-by-step update log (#1151) — the newest 4000 characters of ~/.config/proagentstore/update.log, as the first registration after its last start uploaded it." }
+                        supervisor: { type: string, nullable: true, enum: [service, launcher, none], description: "What restarts this machine's runner if it dies (#1154): the OS service, a terminal pags up launcher, or nothing. Null for a CLI older than 0.4.151." }
                         auto_update_stuck: { $ref: "#/components/schemas/AutoUpdateStuck" }
                         instances:
                           type: array

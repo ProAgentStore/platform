@@ -36,10 +36,13 @@ describe("the pkill is gone (#896)", () => {
 });
 
 describe("the hollow supervisor (#896 F1/F2)", () => {
-	it("a child killed by a SIGNAL is reported as killed, not as a clean exit", () => {
+	it("a child killed by a SIGNAL is a dead runner, handed to the restart owner — not a clean exit", () => {
 		// `if (code && code !== 0)` treated `code === null` — a SIGTERM — as success, which is how a
-		// five-day-old terminal kept showing "connected" after its runner had been killed.
-		expect(code(up)).toMatch(/if \(code === null\)[\s\S]{0,400}Runner stopped by another process \(signal\)/);
+		// five-day-old terminal kept showing "connected" after its runner had been killed. Since #1154 the
+		// decision is `runnerExitAction` (up-restart.ts, unit-tested there: null → "died"), and a death
+		// restarts through the owner instead of being redrawn as a status line.
+		expect(code(up)).toMatch(/runnerExitAction\(code, stopping\)/);
+		expect(code(up)).toMatch(/restartUp\([\s\S]{0,300}RUNNER_DIED_EXIT_CODE\)/);
 		expect(code(up)).not.toMatch(/if \(code && code !== 0\)/);
 	});
 

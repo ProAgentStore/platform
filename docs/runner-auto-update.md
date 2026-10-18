@@ -254,6 +254,44 @@ registration of every start uploads the newest 4000 characters, and the machine 
 `update_log` (`list_runner_nodes`, `machine_policies.update_log`, migration 0253) — so the next update
 that does not come back can be read from the record of the start that follows it.
 
+## One restart owner, and nothing that dies stays dead (#1154)
+
+Every `pags up` now has exactly one thing that restarts it, and every way it can end is handed to that owner:
+
+| Started as | Restart owner | What `list_runner_nodes` reports (`supervisor`) |
+|---|---|---|
+| `pags up --install-service` (launchd / systemd / Scheduled Task) | the service supervisor | `service` |
+| `pags up` in a terminal or tmux pane | a launcher — the terminal `pags up` itself, from its **first** start | `launcher` |
+| `pags up --background`, a bare `runner connect`, or a launcher that was killed | nothing | `none` |
+
+`supervisor` is on each machine in `list_runner_nodes` (and on `resources.runner`, beside `launch`, which is
+how it was started). Null means a CLI older than 0.4.151. Before this, `launch` and the runner's `rsid` were
+never actually reported: `runner connect` put them only into its runtime child's environment.
+
+How each ending is handed over (`runnerExitAction`, `up-restart.ts`):
+
+- **75** — an update or `runner_restart`: the owner starts it again at once, on the new release.
+- **0** — a deliberate stop (`pags down`, `--replace` from another terminal): `pags up` leaves cleanly, and the
+  owner does not start it again.
+- **anything else** — the runner crashed, was OOM-killed, or was killed by a signal: `pags up` exits **76**,
+  and the owner starts it again with backoff (10s, doubling to 5 minutes, reset after a 10-minute run). Until
+  0.4.150 a dead runner was only redrawn as "Runner exited (code N)" while `pags up` stayed up, so neither the
+  service nor a launcher ever noticed it.
+
+A launcher's child records the launcher's pid (`PAGS_UP_LAUNCHER_PID`). If the launcher is killed, the orphan
+no longer exits to it: the next time its runner ends it becomes the launcher itself.
+
+**Proven in real processes** (`packages/cli/src/commands/up-recovery.test.ts`): killing the runner brings up a
+new `pags up` under the same launcher; killing the launcher and then the runner makes the orphan the new
+launcher; a release that dies at every start is retried until the stub gives it up after six starts and runs
+the previous version; one that crashes on import is rolled back in the same start; and a release given up on
+is never started again. A reboot is the OS unit's job (`RunAtLoad`, `WantedBy=default.target`, `-AtStartup`).
+
+**Still open.** macOS starts at login, not at boot (#1149). The trial/rollback lives in the *global* stub,
+which an auto-update never replaces, so a machine whose global install predates 0.4.150 has no rollback until
+`npm i -g @proagentstore/cli` is run there once, and a non-stub install has none (#1147). A release on trial
+passes on the platform's first answer; "every agent re-attached" is checked, but does not roll back.
+
 ## Windows
 
 How `pags up` is installed and kept running on Windows is in

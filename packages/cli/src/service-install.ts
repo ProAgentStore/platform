@@ -13,7 +13,9 @@
  *
  *   - macOS: a launchd LaunchAgent (`KeepAlive`), loaded into the user's GUI session;
  *   - Linux: a systemd user unit (`Restart=always`) — `loginctl enable-linger` lets it run with nobody logged in;
- *   - Windows: a Scheduled Task at startup, as this user (S4U), restarted on failure (platform-docs/windows.md).
+ *   - Windows: a Scheduled Task at startup, as this user (S4U), re-triggered every 5 minutes with `IgnoreNew` (#1154):
+ *     Task Scheduler's own restart-on-failure only covers a task that fails to START, not a supervisor that was
+ *     killed or crashed later, so the repetition is what brings it back — and `IgnoreNew` keeps it to one.
  *
  * It runs `process.argv[1]` — the bootstrap stub on an npm install — so every start picks the newest
  * payload, and a payload on trial that never registers is rolled back by the stub (bootstrap/trial.ts).
@@ -136,6 +138,23 @@ const unitWord = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"'
 /** A PowerShell single-quoted literal. */
 const ps = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
+/**
+ * A Node binary from a version manager (nvm, fnm, volta, asdf, n, nodenv): the service is pinned to that exact
+ * version, and removing it breaks the service with nothing said (#1154). Said at install so it is known.
+ */
+export function versionManagedNode(nodePath: string): string | null {
+	if (/[\\/]n[\\/]versions[\\/]/.test(nodePath)) return "n";
+	const m = /[\\/]\.?(nvm|fnm|volta|asdf|nodenv)[\\/]/i.exec(nodePath);
+	return m ? m[1].toLowerCase() : null;
+}
+
+const pinnedNodeNote = (ctx: ServiceContext): string[] => {
+	const manager = versionManagedNode(ctx.nodePath);
+	return manager
+		? [`It runs Node ${ctx.nodePath}, installed by ${manager}. Removing or switching away from that Node version stops the service; after changing Node, run \`pags up --install-service\` again.`]
+		: [];
+};
+
 /** The files and commands that install the service here. Pure — {@link installService} carries it out. */
 export function servicePlan(ctx: ServiceContext): ServicePlan {
 	const supervisor = supervisorPath(ctx);
@@ -160,6 +179,7 @@ export function servicePlan(ctx: ServiceContext): ServicePlan {
 	<key>KeepAlive</key><true/>
 	<key>ThrottleInterval</key><integer>30</integer>
 	<key>ProcessType</key><string>Background</string>
+	<key>WorkingDirectory</key><string>${xml(ctx.home)}</string>
 	<key>StandardOutPath</key><string>${xml(log)}</string>
 	<key>StandardErrorPath</key><string>${xml(log)}</string>
 </dict>
@@ -175,6 +195,7 @@ export function servicePlan(ctx: ServiceContext): ServicePlan {
 				{ file: "launchctl", args: ["kickstart", "-k", `${domain}/${SERVICE_LABEL}`], why: "start it now" },
 			],
 			notes: [
+				...pinnedNodeNote(ctx),
 				`LaunchAgent ${plist} — runs while this user is logged in. On a machine that must survive a reboot unattended, turn on automatic login for this user.`,
 				`Remove it with: pags up --uninstall-service`,
 			],
@@ -189,8 +210,11 @@ export function servicePlan(ctx: ServiceContext): ServicePlan {
 $ErrorActionPreference = 'Stop'
 $action    = New-ScheduledTaskAction -Execute ${ps(ctx.nodePath)} -Argument ${ps(`"${supervisor}"`)}
 $trigger   = New-ScheduledTaskTrigger -AtStartup
+# Task Scheduler restarts a task that failed to START; a supervisor killed later just ends. Re-trigger it every five
+# minutes, forever — MultipleInstances IgnoreNew makes a trigger that finds it running do nothing (#1154).
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 $principal = New-ScheduledTaskPrincipal -UserId ${ps(principal)} -LogonType S4U -RunLevel Limited
-$settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+$settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
 Unregister-ScheduledTask -TaskName ${ps(WINDOWS_TASK)} -Confirm:$false -ErrorAction SilentlyContinue
 Register-ScheduledTask -TaskName ${ps(WINDOWS_TASK)} -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
 Start-ScheduledTask -TaskName ${ps(WINDOWS_TASK)}
@@ -201,6 +225,7 @@ Start-ScheduledTask -TaskName ${ps(WINDOWS_TASK)}
 			files,
 			commands: [{ file: "powershell.exe", args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", task], why: "register and start the Scheduled Task" }],
 			notes: [
+				...pinnedNodeNote(ctx),
 				`Scheduled Task "${WINDOWS_TASK}" — starts at boot as ${principal || "this user"}, with nobody logged in. Registering it needs an elevated PowerShell: if it was refused, run ${task} from one.`,
 				`Remove it with: pags up --uninstall-service`,
 			],
@@ -235,7 +260,7 @@ WantedBy=default.target
 			{ file: "systemctl", args: ["--user", "enable", "--now", SYSTEMD_UNIT], why: "enable and start it" },
 			{ file: "loginctl", args: ["enable-linger", ...(ctx.user ? [ctx.user] : [])], optional: true, why: "keep it running with nobody logged in" },
 		],
-		notes: [`systemd user unit ${unit}. Logs: ${log} (and journalctl --user -u ${SYSTEMD_UNIT}).`, `Remove it with: pags up --uninstall-service`],
+		notes: [...pinnedNodeNote(ctx), `systemd user unit ${unit}. Logs: ${log} (and journalctl --user -u ${SYSTEMD_UNIT}).`, `Remove it with: pags up --uninstall-service`],
 	};
 }
 

@@ -34,6 +34,17 @@ describe("parseResourceSample — the runner is a system boundary", () => {
 		expect(parseResourceSample(sample({ runner: runner("tty") }))?.runner?.launch).toBe("tty");
 		expect(parseResourceSample(sample({ runner: runner("daemon") }))?.runner?.launch).toBeUndefined();
 	});
+
+	it("#1154: keeps what restarts the runner if it dies — service, launcher or none — into the view; drops anything else", () => {
+		const runner = (supervisor: unknown) => ({ startedAt: 1, uptimeSec: 1, starts24h: 1, relayReconnects: 0, supervisor });
+		for (const s of ["service", "launcher", "none"]) {
+			const parsed = parseResourceSample(sample({ runner: runner(s) }));
+			expect(parsed?.runner?.supervisor).toBe(s);
+			expect(resourcesView(parsed, 0)?.runner?.supervisor).toBe(s);
+		}
+		expect(parseResourceSample(sample({ runner: runner("systemd") }))?.runner?.supervisor).toBeUndefined();
+		expect(parseResourceSample(sample({ runner: runner(undefined) }))?.runner?.supervisor).toBeUndefined(); // an older CLI: unknown
+	});
 });
 
 describe("resourcesView — what list_runner_nodes and coding_diagnostics report", () => {

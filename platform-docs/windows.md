@@ -53,6 +53,10 @@ Task Scheduler task that:
 - runs as your user with logon type **S4U** ("Run whether user is logged on or not", with no
   password stored), so it uses your `%USERPROFILE%` and therefore your `pags login` session;
 - has **no execution time limit**, and **restarts on failure**;
+- is **triggered again every 5 minutes** with **MultipleInstances = IgnoreNew** (#1154). Task Scheduler's
+  restart-on-failure only covers a task that fails to *start*; a supervisor that is killed or crashes later
+  just ends, and the repeating trigger is what brings it back. `IgnoreNew` makes a trigger that finds it
+  still running do nothing, so there is never more than one;
 - runs a small wrapper that starts `pags up --headless` again whenever it exits, and appends its
   output to `%USERPROFILE%\.config\proagentstore\pags-up.log`.
 
@@ -78,10 +82,11 @@ goto loop
 
 $action    = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$dir\pags-up-loop.cmd`""
 $trigger   = New-ScheduledTaskTrigger -AtStartup
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
 $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-               -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+               -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName "pags up" -Action $action -Trigger $trigger -Principal $principal -Settings $settings
 
 Start-ScheduledTask -TaskName "pags up"

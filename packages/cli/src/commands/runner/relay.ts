@@ -15,6 +15,7 @@ import { readWorkLook } from "./runner-work-observation.js";
 import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
 import { releaseTrial } from "./release-trial.js";
 import { updateLogUpload } from "../../bootstrap/update-log.js";
+import { restartOwner } from "../up-restart.js";
 
 /**
  * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
@@ -429,6 +430,7 @@ export async function connectViaRelay(
 					...(process.env.PAGS_RUNNER_RSID ? { rsid: process.env.PAGS_RUNNER_RSID } : {}),
 					pid: process.pid,
 					...(process.env.PAGS_RUNNER_LAUNCH ? { launch: process.env.PAGS_RUNNER_LAUNCH } : {}),
+					supervisor: restartOwner(), // #1154: what starts it again if it dies
 				},
 				relayRttMs,
 				sessions: sessions ?? undefined,

@@ -48,6 +48,8 @@ export interface RunnerProcessSample {
 	pid?: number;
 	/** `tty` | `tmux` | `service` | `headless` — so the fix can say where the other one is. */
 	launch?: string;
+	/** What starts the runner again if it dies (#1154): the OS `service`, a `pags up` `launcher`, or `none`. */
+	supervisor?: "service" | "launcher" | "none";
 	uptimeSec: number;
 	/** Process starts on this machine in the last 24h, this one included — a crash loop shows here. */
 	starts24h: number;
