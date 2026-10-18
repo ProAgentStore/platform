@@ -66,6 +66,8 @@ export interface PolicyChannelDeps {
 	held: () => Iterable<string>;
 	onError: (id: string, message: string) => void;
 	onAction: (action: "start" | "cancel") => void;
+	/** The service answered a registration or heartbeat — what proves a release on trial (#1141, release-trial.ts). */
+	onAnswer?: () => void;
 }
 
 /** Registration and the authority-conferring refresh, over one policy cell. */
@@ -76,7 +78,10 @@ export function createPolicyChannel(deps: PolicyChannelDeps) {
 		if (action === "cancel") deps.onAction("cancel");
 		else if (action === "start" && !deps.cell.refreshing) deps.onAction("start");
 	};
-	const accept = (response: unknown, sentAs: number) => act(deps.cell.accept(response, sentAs));
+	const accept = (response: unknown, sentAs: number) => {
+		act(deps.cell.accept(response, sentAs));
+		deps.onAnswer?.();
+	};
 	const register = async (id: string, force = deps.force, signal?: AbortSignal): Promise<boolean> => {
 		const sent = deps.cell.next();
 		try {
@@ -158,7 +163,9 @@ export function createInstallBridge(deps: InstallBridgeDeps) {
 		if (automatic) {
 			const fresh = await within((signal) => deps.refresh(signal));
 			if (fresh === null) expired(false, "The owner policy refresh before installing");
-			if (!fresh || !deps.cell.policy.autoUpdate) {
+			// Another machine started first (#1141): the answer to THIS refresh — which already reported us installing —
+			// is the race-safe look. The service counts only machines ahead of us, so exactly one proceeds.
+			if (!fresh || !deps.cell.policy.autoUpdate || deps.cell.policy.fleetUpdating) {
 				release(false);
 				return false;
 			}

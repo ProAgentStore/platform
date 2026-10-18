@@ -13,6 +13,7 @@ import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAu
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, RelayMutationAdmission } from "./auto-update-controller.js";
 import { readWorkLook } from "./runner-work-observation.js";
 import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
+import { releaseTrial } from "./release-trial.js";
 
 /**
  * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
@@ -55,6 +56,7 @@ export async function connectViaRelay(
 	// The policy record (#1020, update-bridge.ts). A cache is an outage aid, never a second authority: only a fresh
 	// service answer confirms the owner's switch; the cache carries the status and the unverified recovery cycle.
 	const cell = new PolicyCell(autoUpdateKey ? (loadAutoUpdatePolicy(autoUpdateKey) ?? { autoUpdate: false }) : { autoUpdate: false }, (p) => saveAutoUpdatePolicy(autoUpdateKey, p), !!autoUpdateKey);
+	const trial = releaseTrial(CLI_VERSION, cell, writeLine); // #1141: report a rollback; the first answer proves a release on trial
 	let scheduleAutomaticUpdate: (initial?: boolean, cancel?: boolean) => void = () => undefined;
 	// The controller's own record (#1020), bound once it exists. Times, a normalized blocker class and
 	// observation outcomes only — never session text, process arguments, paths, prompts or tokens.
@@ -94,6 +96,7 @@ export async function connectViaRelay(
 			writeError(`register ${id.slice(0, 8)}… failed: ${msg}`);
 		},
 		onAction: (action) => scheduleAutomaticUpdate(action === "start", action === "cancel"),
+		onAnswer: trial.proven,
 	});
 	const registered = channel.registered;
 	const registerRuntime = (id: string, forceClaim = force) => channel.register(id, forceClaim);
@@ -151,6 +154,7 @@ export async function connectViaRelay(
 			...("error" in release ? { latestError: release.error } : {}),
 			fromSource: runsFromSource(),
 			restarter: restarterFrom(process.env),
+			rolledBack: trial.rolledBack(),
 			// A restart ends browser/application work too. Give these durable names to the same
 			// planner so neither manual nor automatic update can mistake them for an idle machine.
 			busy,
@@ -167,7 +171,7 @@ export async function connectViaRelay(
 		cell,
 		refresh: channel.refresh,
 		facts: updateFacts,
-		install: installVersion,
+		install: (version) => installVersion(version, CLI_VERSION),
 		admission: relayMutationAdmission,
 		leaseActive: deferredUpdateLeaseActive,
 		detachAll: () => {

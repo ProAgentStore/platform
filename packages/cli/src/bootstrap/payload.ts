@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSy
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
 import { promisify } from "node:util";
+import { badVersions } from "./trial.js";
 
 const run = promisify(execFile);
 
@@ -21,7 +22,7 @@ export const CLI_PACKAGE = "@proagentstore/cli";
 export const BOOTSTRAP_ENV = "PAGS_BOOTSTRAP";
 /** `1` turns the stub's check off — the machine stays on whatever it has. */
 export const NO_SELF_UPDATE_ENV = "PAGS_NO_SELF_UPDATE";
-/** Payload versions kept after an install: the new one and the one before it. */
+/** Payload versions kept after an install: the new one and the newest GOOD one before it — what a rollback lands on (#1141). */
 const KEEP = 2;
 
 /** Where fetched payloads live. `PAGS_CLI_CACHE` overrides it (tests, unusual homes). */
@@ -193,7 +194,8 @@ export async function npmInstallInto(dir: string, version: string): Promise<void
 /**
  * Fetch `version` into the cache and answer it. Installed into a scratch folder and RENAMED into place,
  * so a crash or a second `pags up` doing the same never leaves a half-written payload for the stub to
- * run. Older versions beyond the last {@link KEEP} are removed.
+ * run. Older versions beyond the last {@link KEEP} are removed — a version given up on (trial.ts) never counts as
+ * one of them, so it can never push the last good version out of the cache.
  */
 export async function installPayload(version: string, root: string = payloadRoot(), install = npmInstallInto): Promise<Payload> {
 	const done = payloadAt(packageDir(root, version));
@@ -214,8 +216,11 @@ export async function installPayload(version: string, root: string = payloadRoot
 	}
 	const payload = payloadAt(packageDir(root, version));
 	if (!payload) throw new Error(`${CLI_PACKAGE}@${version} is not usable after install`);
-	for (const old of cachedPayloads(root).sort((a, b) => (olderThan(a.version, b.version) ? 1 : -1)).slice(KEEP)) {
-		rmSync(join(root, old.version), { recursive: true, force: true });
-	}
+	const bad = badVersions(root);
+	const others = cachedPayloads(root)
+		.filter((p) => p.version !== version)
+		.sort((a, b) => (olderThan(a.version, b.version) ? 1 : -1));
+	const kept = new Set(others.filter((p) => !bad[p.version]).slice(0, KEEP - 1).map((p) => p.version));
+	for (const old of others) if (!kept.has(old.version)) rmSync(join(root, old.version), { recursive: true, force: true });
 	return payload;
 }

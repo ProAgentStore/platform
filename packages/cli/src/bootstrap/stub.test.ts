@@ -41,6 +41,8 @@ function stub(version: string, args: string[], over: Partial<StubDeps> = {}): St
 		self: "/usr/local/lib/node_modules/@proagentstore/cli/dist/bootstrap.js",
 		fromSource: false,
 		cached: () => cachedPayloads(root),
+		// The trial records (#1141) live beside the payloads: never the real home cache.
+		root,
 		latest: async () => null,
 		install: (v) => installPayload(v, root, async (prefix, ver) => void writeInstalled(prefix, ver)),
 		log: () => undefined,

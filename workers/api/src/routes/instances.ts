@@ -102,7 +102,7 @@ import { healthOfError, healthOfResponse, runnerStatusView } from "../lib/runner
 import { saveResourceSample } from "../lib/runner-resources.js";
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
-import { getMachinePolicy, reportMachinePolicyStatus } from "../lib/machine-policy.js";
+import { fleetUpdatingFor, getMachinePolicy, reportMachinePolicyStatus } from "../lib/machine-policy.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -575,7 +575,8 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	// Read back to confirm (or just return success if readback fails)
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
 	const nodes = runnerNode ? await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []) : [];
-		const autoUpdatePolicy = await getMachinePolicy(c.env, session.uid, machineId);
+		// #1141: with the policy, how many of this owner's other machines are mid-update — the runner waits while any are.
+		const autoUpdatePolicy = { ...(await getMachinePolicy(c.env, session.uid, machineId)), fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) };
 		return c.json({
 			runtime: runtime ? runtimeResponse(runtime) : { instanceId, endpointUrl, placement, status: "registered" },
 			nodes: nodes.map(runtimeNodeResponse),
@@ -723,7 +724,7 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 		await reportMachinePolicyStatus(c.env, session.uid, machineId, typeof body.autoUpdateStatus === "object" && body.autoUpdateStatus !== null
 			? body.autoUpdateStatus
 			: { status: body.autoUpdateStatus, latestVersion: body.latestVersion, lastAttemptAt: body.lastAttemptAt });
-		return c.json({ success: true, status: "online", autoUpdatePolicy: await getMachinePolicy(c.env, session.uid, machineId) });
+		return c.json({ success: true, status: "online", autoUpdatePolicy: { ...(await getMachinePolicy(c.env, session.uid, machineId)), fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) } });
 });
 
 /** R2 key for a voice turn's saved audio (owner-scoped path). */

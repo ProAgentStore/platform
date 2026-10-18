@@ -4,7 +4,7 @@ import { requireSession } from "./login.js";
 import { maybeClaimMachineNames } from "../machine-claim.js";
 import { loadMachineIdentity } from "../machine.js";
 import { partitionByPin, type DiscoverableInstance } from "./runner/membership.js";
-import { hostname } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
@@ -15,6 +15,7 @@ import { crashPaths, deliverCrashReports, recordChildExit } from "../crash-deliv
 import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
 import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
+import { installService, uninstallService, type ServiceContext } from "../service-install.js";
 
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -55,8 +56,26 @@ export const upCommand = new Command("up")
 	// #499: opt-in, never the default. Same discovery, pins and lock as the foreground runner; the
 	// runner then runs detached and logs to a file. Stop it with `pags down`, see it with `pags status`.
 	.option("--background", "Run the runner in the background, with no terminal open (stop it with `pags down`)")
-	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean; background?: boolean }) => {
+	// #1141: an OS supervisor (launchd / systemd / Scheduled Task) that starts `pags up` again whenever it exits — a
+	// crash, an update that never came back, a reboot — with backoff. See service-install.ts.
+	.option("--install-service", "Install an OS service that keeps `pags up` running (launchd, systemd or a Scheduled Task), then exit")
+	.option("--uninstall-service", "Remove the service --install-service installed, then exit")
+	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean; background?: boolean; installService?: boolean; uninstallService?: boolean }) => {
+		if (opts.uninstallService) {
+			for (const line of uninstallService(serviceContext()).lines) writeLine(line);
+			return;
+		}
 		const session = requireSession();
+		if (opts.installService) {
+			// Signed in first: the service runs as this user, on this sign-in.
+			const result = installService(serviceContext());
+			for (const line of result.lines) writeLine(line);
+			writeLine(result.ok
+				? "The service starts `pags up` now and whenever it exits. A `pags up` already running here keeps the lock; the service takes over once it stops."
+				: "The service was not fully installed — see the FAILED line above.");
+			if (!result.ok) process.exitCode = 1;
+			return;
+		}
 
 		const state: TuiState = {
 			user: session.user.login,
@@ -447,3 +466,25 @@ export const downCommand = new Command("down")
 		}
 		writeLine("");
 	});
+
+/** This machine and this CLI, as the service installer needs them (#1141). */
+function serviceContext(): ServiceContext {
+	const user = (() => {
+		try {
+			return userInfo().username;
+		} catch {
+			return process.env.USER || process.env.USERNAME || undefined; // no passwd entry (containers): fall back to the env
+		}
+	})();
+	return {
+		platform: process.platform,
+		home: homedir(),
+		nodePath: process.execPath,
+		script: process.argv[1],
+		configDir: configDir(),
+		pathEnv: process.env.PATH ?? "",
+		uid: process.getuid?.(),
+		user,
+		domain: process.env.USERDOMAIN,
+	};
+}

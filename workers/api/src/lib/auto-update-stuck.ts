@@ -8,7 +8,7 @@
  * and only a manual `runner_update` gets them out. The platform can see it from outside, by
  * comparing what the machine runs — and what its own check last saw — with the registry.
  */
-import type { MachinePolicy } from "./machine-policy.js";
+import { silentAfterInstall, type MachinePolicy } from "./machine-policy.js";
 import { cliAtLeast } from "./runner-upgrade.js";
 
 /** How long a connected, ON machine may stay behind a published release before it reads as stuck. */
@@ -27,14 +27,19 @@ export interface AutoUpdateStuck {
 	 * long ago, so it will not catch up by itself.
 	 * `cannot_fetch_update` (#1054): a Windows runner on CLI ≤ {@link LAST_SHELLLESS_NPM_CLI} whose npm call cannot
 	 * start, so neither its updater nor `runner_update` can ever reach the release that fixed it.
+	 * `no_heartbeat_after_install` (#1141): it reported an install and then went silent for 5 minutes — connected or
+	 * not, whatever the registry says. Nothing on the machine is answering, so only something AT the machine helps.
 	 */
-	reason: "behind_published" | "stale_latest" | "cannot_fetch_update";
+	reason: "behind_published" | "stale_latest" | "cannot_fetch_update" | "no_heartbeat_after_install";
 	/** Publish time of the first release the machine (or its check) has not caught up with. */
 	behind_since: string;
 	published_version: string;
 	releases_behind: number;
-	/** `manual_npm_install`: only a one-time install AT the machine helps — runner_update uses the same broken npm call. */
-	remedy: "runner_update" | "manual_npm_install";
+	/**
+	 * `manual_npm_install`: only a one-time install AT the machine helps — runner_update uses the same broken npm call.
+	 * `restart_at_machine` (#1141): start `pags up` there; `pags up --install-service` makes the next one restart itself.
+	 */
+	remedy: "runner_update" | "manual_npm_install" | "restart_at_machine";
 	detail: string;
 }
 
@@ -68,8 +73,23 @@ export function assessAutoUpdateStuck(input: {
 	/** The runner's own stored reason (`last_error`) and the machine's OS, from its last heartbeat (#1054). */
 	lastError?: string | null;
 	platform?: string | null;
+	/** It reported an install and has been silent since (#1141, `silentAfterInstall`), and when it was last heard from. */
+	silentSinceInstall?: boolean;
+	lastHeartbeatAt?: string | null;
 }): AutoUpdateStuck | null {
 	const { published, runnerVersion, now } = input;
+	// First, and needing neither a live connection nor the registry: this is the machine that cannot report anything.
+	if (input.autoUpdate && input.silentSinceInstall) {
+		const since = input.lastHeartbeatAt ?? new Date(now).toISOString();
+		return {
+			reason: "no_heartbeat_after_install",
+			behind_since: since,
+			published_version: published?.latest ?? input.reportedLatest ?? "",
+			releases_behind: 0,
+			remedy: "restart_at_machine",
+			detail: `This machine reported installing ${input.reportedLatest ?? "an update"} and has not been heard from since ${since}. runner_update and runner_restart cannot reach a runner that is not running: start \`pags up\` at the machine. \`pags up --install-service\` installs a supervisor (launchd, systemd or a Scheduled Task) so the next update that does not come back is restarted — and rolled back — by itself.`,
+		};
+	}
 	if (!input.autoUpdate || !input.connected || !published) return null;
 	if (!isRelease(runnerVersion) || cliAtLeast(runnerVersion, published.latest)) return null;
 	// `unsupported` is honest about a PERMANENT refusal (a source checkout, nothing to restart the runner), so it hides
@@ -153,10 +173,13 @@ type StuckMachine = { connected: boolean; runnerVersion: string | null | undefin
 
 /** One machine's verdict from its live connection fact and stored policy. */
 export function machineAutoUpdateStuck(machine: StuckMachine, policy: MachinePolicy, published: PublishedCli | null): AutoUpdateStuck | null {
-	return assessAutoUpdateStuck({ autoUpdate: policy.autoUpdate, status: policy.status, connected: machine.connected, runnerVersion: machine.runnerVersion, reportedLatest: policy.latestVersion, published, now: Date.now(), lastError: policy.lastError, platform: machine.resources?.platform ?? null });
+	const now = Date.now();
+	return assessAutoUpdateStuck({ autoUpdate: policy.autoUpdate, status: policy.status, connected: machine.connected, runnerVersion: machine.runnerVersion, reportedLatest: policy.latestVersion, published, now, lastError: policy.lastError, platform: machine.resources?.platform ?? null, silentSinceInstall: silentAfterInstall(policy, now), lastHeartbeatAt: policy.lastHeartbeatAt });
 }
 
-/** The registry is asked only when the answer could be "stuck": policy ON and connected. */
+/** The registry is asked only when the answer could be "stuck" by it: policy ON and connected. A silent install needs no registry (#1141). */
 export async function stuckNow(machine: StuckMachine, policy: MachinePolicy, published: () => Promise<PublishedCli | null>): Promise<AutoUpdateStuck | null> {
-	return policy.autoUpdate && machine.connected ? machineAutoUpdateStuck(machine, policy, await published()) : null;
+	if (!policy.autoUpdate) return null;
+	if (silentAfterInstall(policy)) return machineAutoUpdateStuck(machine, policy, null);
+	return machine.connected ? machineAutoUpdateStuck(machine, policy, await published()) : null;
 }

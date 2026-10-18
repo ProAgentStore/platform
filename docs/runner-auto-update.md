@@ -164,6 +164,64 @@ operation continues as a restart: held agents are waited for and re-attached, an
 `failed` and says which version the machine still reports. Dry runs install nothing and are not
 re-read.
 
+## Never left without a running `pags up` (#1141)
+
+On 2026-10-17 two machines went offline in the middle of an automatic update to 0.4.149. Their status
+stayed at `installing` and they sent no heartbeat after that. `runner_restart` cannot reach a runner that
+is not running, and the owner was away from both machines. Four changes make that state recover by
+itself, or at least say what happened.
+
+**The new version is on trial, and the old one stays installed.** Under the bootstrap stub (#862) a
+release is installed next to the running one in the payload cache (`~/.config/proagentstore/cli/<version>`).
+The cache always keeps the newest version that has not been given up on, so a rollback always has
+somewhere to land. The new version goes on trial (`packages/cli/src/bootstrap/trial.ts`). It passes
+the trial the first time its relay registers or heartbeats. The stub gives it up, and runs the previous
+version, when any of these happens:
+
+- it throws while it is being loaded. The previous version then starts at once, in the same process.
+- it has not registered **5 minutes** after its first start. If something restarts this process (a
+  `pags up` supervising its runner, the Windows launcher, or a service), the stub exits with the restart
+  code (75) and the next start runs the previous version. If nothing restarts it, the stub records the
+  verdict and the next `pags up` runs the previous version.
+- it has been started 6 times without registering (a crash loop). The `pags up` process and its
+  runner each count as a start.
+
+A version that was given up on is not picked again. The stub's own check on `pags up` does not fetch it,
+and the updater refuses it as `failed` with the reason ("… was installed here and rolled back: …") until
+a newer release is published. The version that runs next reports the rollback in its first registration
+("Rolled back from 0.4.149 to 0.4.148: it crashed on start: …"). That message goes to `last_error` and
+to the error log.
+
+**An OS supervisor: `pags up --install-service`.** This installs a LaunchAgent on macOS, a systemd
+user unit on Linux, or a Scheduled Task at startup on Windows, and starts it. All three run the same small
+Node supervisor (`~/.config/proagentstore/pags-up-supervisor.mjs`). It starts `pags up --headless` with
+`PAGS_SERVICE=1` and appends its output to `pags-up.log`. When `pags up` exits with the restart code
+(an update or `runner_restart`), the supervisor starts it again after 1 second. After any other exit it
+waits, doubling the wait from 10 seconds up to 5 minutes, and resets the wait once a run has lasted 10
+minutes. `pags up --uninstall-service` removes it. The macOS LaunchAgent runs only while the user is
+logged in, so a Mac that has to come back after a reboot unattended needs automatic login. The Linux
+installer runs `loginctl enable-linger` so the unit runs with nobody logged in. On Windows the task is
+registered from an elevated PowerShell. If registering is refused, the installer leaves the script it
+wrote and says to run it from an elevated shell.
+
+**A silent install is reported, not left at `installing`.** A cron sweep turns any machine whose
+policy reads `installing` or `restarting`, and that has not reported for **5 minutes**, into
+`failed`. Its `last_error` begins "No heartbeat within 5 minutes of installing an update", and the
+sweep writes one `runner-auto-update` error-log row. `list_runner_nodes` and the machine detail
+flag it as `auto_update_stuck` with `reason: no_heartbeat_after_install` and
+`remedy: restart_at_machine`. This flag does not need a live connection or the registry, because the
+machine in this state is usually disconnected. The machine's own next report replaces the verdict. Any
+`failed` status that a runner reports is also an error-log row, written once for each distinct reason
+rather than once per heartbeat.
+
+**One machine at a time.** Every registration and heartbeat answer carries `autoUpdatePolicy.fleetUpdating`.
+This is the number of the owner's other machines that are `installing` or `restarting` and have reported
+in the last 10 minutes. A machine that is itself mid-update counts only the machines that began before it
+(by attempt time, then machine id), so when two machines start together exactly one goes ahead. While the
+count is above zero an automatic update waits with `blocker_class: fleet_stagger` and checks again every
+15 seconds. The install bridge reads the count once more from the refresh it makes just before npm runs.
+A machine that has been silent for longer than that 10-minute window stops holding up the rest of the fleet.
+
 ## Windows
 
 How `pags up` is installed and kept running on Windows is in

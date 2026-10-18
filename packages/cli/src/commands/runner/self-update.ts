@@ -18,7 +18,8 @@
  * global install: the respawn runs `process.argv[1]` — the stub — which picks the newest payload.
  */
 import { spawn } from "node:child_process";
-import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, runNpm } from "../../bootstrap/payload.js";
+import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, payloadRoot, runNpm } from "../../bootstrap/payload.js";
+import { beginTrial } from "../../bootstrap/trial.js";
 import type { SessionStateCounts } from "./runner-work-observation.js";
 
 export { CLI_PACKAGE, latestPublishedRelease, latestPublishedVersion, olderThan } from "../../bootstrap/payload.js";
@@ -80,6 +81,8 @@ export interface UpdateFacts {
 	 * Never their content — no session text, paths, arguments or tokens. Absent where nothing was asked.
 	 */
 	observations?: UpdateObservation[];
+	/** Versions this machine rolled back from (#1141, bootstrap/trial.ts), with why. Never installed again. */
+	rolledBack?: Record<string, string>;
 }
 
 /** One local work observation the updater made. */
@@ -158,6 +161,9 @@ export function planRunnerUpdate(f: UpdateFacts): UpdatePlan {
 	if (f.fromSource) return { action: "refused", current: f.current, reason: "This runner runs from a source checkout — update it with `git pull` there, not npm." };
 	if (!f.latest) return { action: "refused", current: f.current, reason: `npm could not be asked for the latest ${CLI_PACKAGE} from this machine${f.latestError ? `: ${f.latestError}` : "."}`, retryable: true };
 	if (!olderThan(f.current, f.latest)) return { action: "up-to-date", current: f.current };
+	// Retryable: nothing forbids updating — the NEXT release installs as usual; this one is never installed again (#1141).
+	const rolledBack = f.rolledBack?.[f.latest];
+	if (rolledBack) return { action: "refused", current: f.current, reason: `${f.latest} was installed here and rolled back: ${rolledBack}. This machine stays on ${f.current} until a newer release is published.`, retryable: true };
 	if (!f.restarter) {
 		return {
 			action: "refused",
@@ -206,10 +212,15 @@ export function planRunnerRestart(f: { current: string; restarter: Restarter | n
 	return { action: "restart", current: f.current, restarter: f.restarter };
 }
 
-/** Install `version` — into the stub's cache when bootstrapped (#862), else globally. Rejects with npm's own reason. */
-export async function installVersion(version: string): Promise<void> {
+/**
+ * Install `version` — into the stub's cache when bootstrapped (#862), else globally. Rejects with npm's own reason.
+ * Bootstrapped, it goes in BESIDE the running `current` and on trial (#1141): the stub falls back to `current` if the
+ * new one crashes on start or never registers.
+ */
+export async function installVersion(version: string, current: string | null = null): Promise<void> {
 	if (process.env[BOOTSTRAP_ENV]) {
 		await installPayload(version);
+		beginTrial(payloadRoot(), version, current);
 		return;
 	}
 	try {

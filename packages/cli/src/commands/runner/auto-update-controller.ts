@@ -26,7 +26,7 @@ export interface AutomaticUpdateControllerDeps {
 }
 
 /** Why an enabled controller is not installing yet — a normalized class, never raw session data (#1020). */
-export type BlockerClass = "idle_wait" | "active_sessions" | "observation_failure" | "unknown";
+export type BlockerClass = "idle_wait" | "active_sessions" | "observation_failure" | "fleet_stagger" | "unknown";
 
 /**
  * What the controller last DID, for the status report (#1020). The service stamps its own receipt
@@ -298,6 +298,14 @@ export class AutomaticUpdateController {
 			this.defer();
 			return;
 		}
+		// One machine at a time (#1141): another machine on this account is installing or has not come back yet, so
+		// this one waits rather than risk the whole fleet going dark together. Re-checked on the idle cadence.
+		if (policy.fleetUpdating) {
+			this.blockerClass = "fleet_stagger";
+			this.deps.status("waiting-for-idle", { latestVersion: plan.latest, reason: `${policy.fleetUpdating} other machine(s) on this account are mid-update; this one updates after them.` });
+			this.defer(plan.latest);
+			return;
+		}
 		// A NEW cycle begins with the install, recorded before npm runs: target + the agents held now (#1020). An OPEN one is
 		// retried on its own target with its own agents and start — a shrunken membership or a different registry answer
 		// never redefines it, and the bridge then reuses what npm already installed instead of installing again.
@@ -315,7 +323,7 @@ export class AutomaticUpdateController {
 		// must also be RETRIED, deferred or not (#1020). A deferred callback reaches here with its own
 		// timer already spent, so returning without a new one left an enabled runner silent forever:
 		// `waiting_for_idle` while idle, with nothing left to re-decide.
-		this.blockerClass = "idle_wait";
+		this.blockerClass = this.deps.policy().value.fleetUpdating ? "fleet_stagger" : "idle_wait";
 		this.defer(target);
 	}
 

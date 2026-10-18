@@ -13,7 +13,7 @@ import { startRunnerUpdate, updateRunnerNode } from "../lib/runner-update.js";
 import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/runner-update-ops.js";
 import { detectDuplicateRunners, type DuplicateVerdict, type RunnerProcessIdentity } from "../lib/runner-duplicates.js";
 import { runnerIdentityOf } from "../lib/runner-resources.js";
-import { getMachinePolicy, machinePolicyWire, setMachinePolicy, type MachinePolicy } from "../lib/machine-policy.js";
+import { getMachinePolicy, machinePolicyWire, setMachinePolicy, silentAfterInstall, type MachinePolicy } from "../lib/machine-policy.js";
 import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
 import type { Env } from "../types.js";
 
@@ -524,7 +524,8 @@ terminalRoutes.get("/nodes", async (c) => {
 	}));
 	// #1034: the registry is asked only when some connected machine has auto-update ON.
 	const published = [...policies].some(([n, p]) => p.autoUpdate && n.connected) ? await publishedCli() : undefined;
-	if (published !== undefined) for (const [n, p] of policies) n.auto_update_stuck = machineAutoUpdateStuck(n, p, published);
+	// #1141: a machine silent since an install is stuck with or without the registry — it is usually the disconnected one.
+	for (const [n, p] of policies) if (published !== undefined || silentAfterInstall(p)) n.auto_update_stuck = machineAutoUpdateStuck(n, p, published ?? null);
 
 	return c.json({ nodes });
 });

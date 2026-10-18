@@ -39,6 +39,13 @@ boot by Task Scheduler (below) has no desktop to show a window on, so it must us
 
 ## Run at boot, without logging in
 
+`pags up --install-service`, run once from an **elevated** PowerShell after `pags login`, sets this up for
+you (#1141). It registers the Scheduled Task described below, running a small supervisor that starts
+`pags up --headless` again whenever it exits. The wait between restarts doubles from 10 seconds up to 5
+minutes, and the supervisor logs to the same `pags-up.log`. `pags up --uninstall-service` removes it. The
+same flag installs a launchd LaunchAgent on macOS and a systemd user unit on Linux. The manual steps below
+are still valid.
+
 On macOS or Linux a launchd or systemd unit keeps `pags up` running. On Windows the equivalent is a
 Task Scheduler task that:
 

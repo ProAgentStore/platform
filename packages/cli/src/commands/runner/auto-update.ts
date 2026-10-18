@@ -54,6 +54,11 @@ export interface AutoUpdatePolicy {
 	lastAttemptAt?: string;
 	reason?: string;
 	recovery?: RecoveryCycle;
+	/**
+	 * How many OTHER machines on this account the service sees mid-update (#1141). The service's fact, taken
+	 * from every answer; while it is above zero an automatic install waits, so a fleet updates one machine at a time.
+	 */
+	fleetUpdating?: number;
 }
 
 /** A persisted recovery record, or undefined when it is absent or does not read as one — never a partial guess. */
@@ -106,6 +111,7 @@ export function parseAutoUpdatePolicy(value: unknown): AutoUpdatePolicy | null {
 	const lastAttemptAt = raw.lastAttemptAt ?? raw.last_attempt_at;
 	const reason = raw.reason;
 	const recovery = parseRecovery(raw.recovery);
+	const fleet = raw.fleetUpdating ?? raw.fleet_updating;
 	return {
 		autoUpdate,
 		...(status ? { status } : {}),
@@ -113,6 +119,7 @@ export function parseAutoUpdatePolicy(value: unknown): AutoUpdatePolicy | null {
 		...(typeof lastAttemptAt === "string" ? { lastAttemptAt } : {}),
 		...(typeof reason === "string" ? { reason } : {}),
 		...(recovery ? { recovery } : {}),
+		...(typeof fleet === "number" && Number.isInteger(fleet) && fleet >= 0 ? { fleetUpdating: fleet } : {}),
 	};
 }
 
@@ -205,7 +212,11 @@ export function acceptPolicyResponse(local: AutoUpdatePolicy, wasAuthoritative: 
 	const { recovery: _fromService, ...remote } = parsed;
 	const action = policyScheduleAction(local, remote, wasAuthoritative);
 	const ownerTransition = action === "cancel" || !local.autoUpdate;
-	return { policy: ownerTransition ? { ...local, ...remote } : { ...local, autoUpdate: remote.autoUpdate }, action };
+	// The fleet count is the service's live fact, never an echo of ours: always taken — an answer without one (an older
+	// service) clears it rather than leaving a stale count to hold this machine back (#1141).
+	const { fleetUpdating: _stale, ...base } = local;
+	const fleet = remote.fleetUpdating === undefined ? {} : { fleetUpdating: remote.fleetUpdating };
+	return { policy: ownerTransition ? { ...base, ...remote, ...fleet } : { ...base, autoUpdate: remote.autoUpdate, ...fleet }, action };
 }
 
 /**

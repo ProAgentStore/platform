@@ -41,12 +41,13 @@ export interface MachineDetail {
  * `waiting_for_idle`; this overrides it. Absent on an older API, null when not stuck.
  */
 export interface AutoUpdateStuck {
-	reason: "behind_published" | "stale_latest" | "cannot_fetch_update" | string;
+	/** `no_heartbeat_after_install` (#1141): it reported an install and went silent — set whether or not it is connected. */
+	reason: "behind_published" | "stale_latest" | "cannot_fetch_update" | "no_heartbeat_after_install" | string;
 	behind_since: string;
 	published_version: string;
 	releases_behind: number;
-	/** `manual_npm_install` (#1054): only an install at the machine helps — Update CLI is not offered. */
-	remedy: "runner_update" | "manual_npm_install" | string;
+	/** `manual_npm_install` (#1054) and `restart_at_machine` (#1141): only something AT the machine helps — Update CLI is not offered. */
+	remedy: "runner_update" | "manual_npm_install" | "restart_at_machine" | string;
 	detail: string;
 }
 
@@ -145,6 +146,7 @@ const BLOCKERS: Record<string, string> = {
 	active_sessions: "A coding session on this machine is not proven idle, so it waits rather than interrupt it.",
 	observation_failure: "It could not read whether this machine is busy, so it waits (it never assumes idle).",
 	idle_wait: "It found the machine idle, but the final safety check before installing refused; it will check again.",
+	fleet_stagger: "Another of your machines is updating; this one updates after it, so they never all go offline together.",
 	unknown: "It is waiting, but did not report why.",
 };
 
