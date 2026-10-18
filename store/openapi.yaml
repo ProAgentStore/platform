@@ -3601,14 +3601,19 @@ paths:
 
   /v1/instances/{instanceId}/secure-inputs/{requestId}/inject:
     post:
-      summary: Type a ready tmux secure input into a named session — verified
+      summary: Type a ready tmux secure input into a named session or terminal target — verified
       description: |
-        Types the value into the tmux session `target` (else the one the request named) over the
-        owner's runner and, with `submit` (default true), presses Enter (#966). VERIFIED: the value
-        must appear on the pane once more than before the typing. A value that did not land is
-        cleared from the line, not submitted, and NOT consumed — it stays `ready`. The answer is the
-        verdict and never the value: `{delivered, reason?, submitted, consumedValue, target, status,
-        length?}`. `tmux`-scoped requests only; a file destination uses `tmux_secure_get`. Replaces
+        Types the value into the tmux session or terminal target `target` (else the one the request
+        named) over the owner's runner and, with `submit` (default true), presses Enter (#966).
+        VERIFIED: the value must appear on the pane once more than before the typing. A value that
+        did not land is cleared from the line, not submitted, and NOT consumed — it stays `ready`.
+        A pane ending at a password/passphrase prompt (or `hiddenPrompt: true`, which refuses when
+        there is none) is verified by OUTCOME instead (#1140): after Enter the prompt must move on
+        without a re-prompt or a rejection; a rejected value was submitted, so it is consumed and the
+        prompt gets C-c. The answer is the verdict and never the value: `{delivered, reason?,
+        submitted, consumedValue, target, status, length?, verifiedBy?}`. A prefixed target
+        (`tmux:main`, `kitty:3`) goes through the terminal connector; iTerm2 is refused.
+        `tmux`-scoped requests only; a file destination uses `tmux_secure_get`. Replaces
         `…/consume`, which returned the plaintext to its caller.
       operationId: injectSecureInput
       tags: [Instances]
@@ -3625,8 +3630,9 @@ paths:
             schema:
               type: object
               properties:
-                target: { type: string, maxLength: 128, description: "tmux session name" }
+                target: { type: string, maxLength: 128, description: "tmux session name, or a terminal target such as tmux:main or kitty:3" }
                 submit: { type: boolean, default: true }
+                hiddenPrompt: { type: boolean, description: "true = the pane must end at a password prompt, verified by outcome; false = verify by echo; omitted = detect" }
       responses:
         "200": { $ref: "#/components/responses/OkObject" }
         "400": { $ref: "#/components/responses/BadRequest" }

@@ -136,7 +136,7 @@ secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/submit", async (c)
 	return c.json(status);
 });
 
-const TARGET_RULE = "target must be a tmux session name: 1-128 characters, no newlines";
+const TARGET_RULE = "target must be a tmux session name or terminal target: 1-128 characters, no newlines";
 
 /** A tmux session name, `undefined` when none was given, `false` when one was given and is unusable. */
 function targetOf(raw: unknown): string | undefined | false {
@@ -147,11 +147,13 @@ function targetOf(raw: unknown): string | undefined | false {
 }
 
 /**
- * POST /:instanceId/secure-inputs/:requestId/inject  `{ target?, submit? }`
- * Type a ready `tmux` value into the named session (`target`, else the one the request named) and,
- * with `submit` (default true), press Enter — VERIFIED, and restored when not delivered (#966).
+ * POST /:instanceId/secure-inputs/:requestId/inject  `{ target?, submit?, hiddenPrompt? }`
+ * Type a ready `tmux` value into the named session or terminal target (`target`, else the one the
+ * request named) and, with `submit` (default true), press Enter — VERIFIED, and restored when not
+ * delivered (#966). A pane ending at a password prompt (or `hiddenPrompt: true`, which insists on
+ * one) is verified by the prompt's outcome after Enter instead of by echo (#1140); `false` forces echo.
  *
- * Answers `{ delivered, reason?, submitted, consumedValue, target, status, length? }`. The value is
+ * Answers `{ delivered, reason?, submitted, consumedValue, target, status, length?, verifiedBy? }`. The value is
  * never in the answer. This REPLACES `…/consume`, which returned the plaintext to its caller: the MCP
  * worker dropped it and reported success while nothing was typed, and any holder of the owner's
  * session could read a secret back out of it — the one route that broke this file's first rule.
@@ -162,7 +164,10 @@ secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/inject", async (c)
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const target = targetOf(body.target);
 	if (target === false) throw new HttpError(400, TARGET_RULE);
-	const result = await injectSecureInputToTmux(c.env, { instanceId, userId: uid, requestId, target, submit: body.submit !== false });
+	const hp = body.hiddenPrompt;
+	if (hp !== undefined && hp !== null && typeof hp !== "boolean") throw new HttpError(400, "hiddenPrompt must be a boolean");
+	const hidden = typeof hp === "boolean" ? hp : undefined;
+	const result = await injectSecureInputToTmux(c.env, { instanceId, userId: uid, requestId, target, submit: body.submit !== false, hidden });
 	if (!result) throw new HttpError(404, "Request not found");
 	return c.json(result);
 });

@@ -426,6 +426,8 @@ const READBACK: Record<string, string | null> = {
 	// #966: inject's `target` and `submit` steer ONE delivery and are not stored; the verdict echoes the target.
 	"secure_input_inject.target": null,
 	"secure_input_inject.submit": null,
+	// #1140: `hidden_prompt` chooses how that one delivery is verified; the verdict reports it as `verifiedBy`.
+	"secure_input_inject.hidden_prompt": null,
 	"send_instance_takeover_input.x": null,
 	"send_instance_takeover_input.y": null,
 	"send_instance_takeover_input.delta_x": null,

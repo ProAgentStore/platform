@@ -39,6 +39,11 @@ beforeEach(() => {
 	sent = [];
 	getBoundRunnerConn.mockReset().mockResolvedValue({ runnerNode: "pink-laptop", instanceId: "i1" });
 	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string, body: { session: string; text?: string; keys?: string[] }) => {
+		if (path === "/tmux/capture") {
+			const pane = panes.get(body.session);
+			if (pane === undefined) throw new Error(`Runner /tmux/capture → 404: {"error":"No tmux session \\"${body.session}\\"."}`);
+			return { session: body.session, pane };
+		}
 		sent.push({ path, session: body.session, text: body.text, keys: body.keys });
 		if (path !== "/tmux/send") throw new Error(`unexpected ${path}`);
 		const before = panes.get(body.session);
@@ -85,7 +90,7 @@ describe("inject lands the value on the named session's prompt line, verified (#
 	it("types it into `target`, confirms it on the pane, submits it — and the answer never carries the value", async () => {
 		const id = await ready();
 		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
-		expect(r.body).toEqual({ delivered: true, submitted: true, consumedValue: true, target: "gcloud-setup", status: "consumed", length: CODE.length });
+		expect(r.body).toEqual({ delivered: true, submitted: true, consumedValue: true, target: "gcloud-setup", status: "consumed", length: CODE.length, verifiedBy: "echo" });
 		expect(r.text).not.toContain("VERIFICATION-CODE");
 		// Capture: the code is on the prompt line, then Enter submitted it.
 		const pane = panes.get("gcloud-setup") ?? "";

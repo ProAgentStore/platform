@@ -444,7 +444,7 @@ const TABLE: Record<string, Row> = {
 	remove_repo: ["repo", "write", null, "envelope", "confirm,dry_run,instance_id,repo_url,token"],
 	rename_instance: ["settings", "write", null, "envelope", "dry_run,instance_id,name,token"],
 	run_instance_task: ["runtime", "runtime", null, "envelope", "approval_prompt,dry_run,input,instance_id,requires_approval,token,type"],
-	secure_input_inject: ["secureInput", "runtime", null, "envelope", "dry_run,instance_id,request_id,submit,target,token"],
+	secure_input_inject: ["secureInput", "runtime", null, "envelope", "dry_run,hidden_prompt,instance_id,request_id,submit,target,token"],
 	secure_input_request: ["secureInput", "write", null, "envelope", "destination_scope,dry_run,instance_id,label,one_shot,purpose,target,token"],
 	secure_input_status: ["secureInput", "read", null, null, "instance_id,request_id,token"],
 	get_console_link: ["consoleLink", "read", null, null, "instance_id,permission_request_id,run_id,section,secure_input_id,target,task_id,token"],

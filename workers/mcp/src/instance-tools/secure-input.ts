@@ -94,28 +94,29 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"secure_input_inject",
-		"Type a ready `tmux` secure input into a tmux session's prompt line and, by default, press Enter — VERIFIED. The platform types it over the same path tmux_send_message uses and checks the value actually appeared on the pane; the value never enters this conversation, the result, or any log. Returns `delivered` (true only when verified on the pane), `submitted`, `consumedValue`, `target`, `status`, `length`, and a `reason` when not delivered. A value that did not land is cleared from the line, NOT submitted, and NOT consumed — it stays ready to retry. Name the session with `target` (tmux_list_sessions) unless the request already named one. A prompt that hides typing (a password prompt) cannot be verified this way. For a FILE destination use tmux_secure_get with the request id as the handle.",
+		"Type a ready `tmux` secure input into a tmux session's (or terminal target's) prompt line and, by default, press Enter — VERIFIED. The value never enters this conversation, the result, or any log. Two ways of verifying, chosen from the pane before anything is consumed: ECHO — the value must appear on the pane; one that did not land is cleared from the line, NOT submitted, and NOT consumed (it stays ready to retry). OUTCOME — when the pane ends at a password/passphrase prompt (ssh, sudo, su, gpg), which hides what is typed: the value is typed and submitted, and the prompt must move on with no re-prompt and no 'Permission denied' / 'Sorry, try again' within a few seconds. A rejected password WAS submitted, so it is consumed, the prompt gets C-c, and `reason` says so. Returns `delivered`, `verifiedBy` (which of the two checks above judged it), `submitted`, `consumedValue`, `target`, `status`, `length`, and a `reason` when not delivered. Name the target with `target` — a tmux session from tmux_list_sessions, or a terminal target like `tmux:main` / `kitty:3` from terminal_list_targets (iTerm2 is refused) — unless the request already named one. For a FILE destination use tmux_secure_get with the request id as the handle.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly."),
 			request_id: z.string().describe("The secure input request ID. Copy it exactly."),
-			target: z.string().max(128).optional().describe("The tmux session to type into (from tmux_list_sessions). Required unless secure_input_request named one."),
-			submit: z.boolean().optional().describe("Press Enter once the value is verified on the prompt line. Default true — omit for a prompt waiting for the value."),
+			target: z.string().max(128).optional().describe("The tmux session (tmux_list_sessions) or terminal target such as `tmux:main` or `kitty:3` (terminal_list_targets) to type into. Required unless secure_input_request named one."),
+			submit: z.boolean().optional().describe("Press Enter once the value is verified on the prompt line. Default true — omit for a prompt waiting for the value. A password prompt requires it."),
+			hidden_prompt: z.boolean().optional().describe("true: the pane must END at a password/passphrase prompt (refused, nothing consumed, if not) and delivery is verified by the prompt's outcome. false: verify by echo only. Omit to detect from the pane."),
 			dry_run: z.boolean().optional().describe("Preview the injection without typing or consuming anything."),
 		},
-		async ({ token, instance_id, request_id, target, submit, dry_run }) => {
+		async ({ token, instance_id, request_id, target, submit, hidden_prompt, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 
-			const input = { instance_id, request_id, ...(target ? { target } : {}), submit: submit !== false };
+			const input = { instance_id, request_id, ...(target ? { target } : {}), submit: submit !== false, ...(hidden_prompt === undefined ? {} : { hidden_prompt }) };
 			const denied = await requirePermission(safetyFor(token), "runtime", "secure_input_inject", input);
 			if (denied) return denied;
 
 			const endpoint = `/v1/instances/${instance_id}/secure-inputs/${request_id}/inject`;
-			if (dry_run) return dryRun(safetyFor(token), "secure_input_inject", `type the secure input into ${target ? `tmux session "${target}"` : "the request's tmux session"}${submit === false ? "" : " and press Enter"}`, input, { endpoint, method: "POST" });
+			if (dry_run) return dryRun(safetyFor(token), "secure_input_inject", `type the secure input into ${target ? `"${target}"` : "the request's tmux session"}${submit === false ? "" : " and press Enter"}${hidden_prompt ? ", verified as a password prompt" : ""}`, input, { endpoint, method: "POST" });
 
-			// The platform delivers and verifies (#966). The answer is the verdict — the value is never in it.
-			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ ...(target ? { target } : {}), submit: submit !== false }) }, env)) as { error?: string; delivered?: boolean };
+			// The platform delivers and verifies (#966, #1140). The answer is the verdict — the value is never in it.
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ ...(target ? { target } : {}), submit: submit !== false, ...(hidden_prompt === undefined ? {} : { hiddenPrompt: hidden_prompt }) }) }, env)) as { error?: string; delivered?: boolean };
 			if (!data.error) await audit(safetyFor(token), { tool: "secure_input_inject", action: data.delivered ? "completed" : "failed", input, result: data });
 			return jsonText(data);
 		},
