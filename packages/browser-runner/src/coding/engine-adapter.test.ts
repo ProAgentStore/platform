@@ -73,10 +73,12 @@ describe("engineAdapterFor", () => {
 		expect(args).not.toContain("--last");
 	});
 
-	it("warns when Claude or Codex uses its raw fallback", () => {
+	it("warns when Claude, Codex or Grok uses its raw fallback", () => {
 		expect(engineInvocationWarning("claude", "raw")).toMatch(/running raw/i);
 		expect(engineInvocationWarning("codex", "raw")).toMatch(/running raw/i);
-		expect(engineInvocationWarning("grok", "raw")).toBeNull();
+		// #1187: Grok has a structured stream now, so running raw is a fallback worth naming.
+		expect(engineInvocationWarning("grok", "raw")).toMatch(/running raw/i);
+		expect(engineInvocationWarning("gemini", "raw")).toBeNull();
 	});
 });
 

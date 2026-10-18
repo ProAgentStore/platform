@@ -641,7 +641,8 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		}, 30_000);
 
 		it("a raw engine reads the objective after the replay and before the instruction (#1019)", async () => {
-			const s = new HeadlessSession({ id: "objective-raw", workDir: dir, clientType: "grok", command: "grok", bin: codexBin });
+			// Gemini, not Grok: Grok reads structured since #1187.
+			const s = new HeadlessSession({ id: "objective-raw", workDir: dir, clientType: "gemini", command: "gemini", bin: codexBin });
 			s.input("do it", { replay: "REPLAY: earlier turns", objective: { runId: "run-raw", text: "RAW OBJECTIVE LINE" } });
 			await until(() => s.runState() === "idle" && s.snapshot().includes("done: "), 12_000, "raw objective turn");
 			const pane = s.snapshot();

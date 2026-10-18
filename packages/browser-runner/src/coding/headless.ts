@@ -702,11 +702,12 @@ export class HeadlessSession {
 		// #1156: Grok carries its conversation by an id this runner chose — `-s` to make it, `-r` to resume it.
 		if (this.config.clientType === "grok" && this.grokContinuity && !this.grokConversation) this.grokConversation = newGrokConversation();
 		const grokConversation = this.config.clientType === "grok" && this.grokContinuity ? this.grokConversation : null;
+		const presetArgs = this.adapter.prepareArgs?.(this.cmdArgs) ?? this.cmdArgs; // #1187: Grok's structured flags; gone with the adapter if refused
 		const turnArgs = resumedCodexThreadId
 			? buildCodexResumeArgs(this.cmdArgs, resumedCodexThreadId, text)
 			: grokConversation
-				? grokTurnArgs(this.cmdArgs, text, grokConversation)
-				: this.adapter.buildTurnArgs(this.cmdArgs, text);
+				? grokTurnArgs(presetArgs, text, grokConversation)
+				: this.adapter.buildTurnArgs(presetArgs, text);
 		const env = this.spawnEnv;
 		const target = spawnTarget(this.cmdPrefix, this.cmdBin, turnArgs);
 		const launch = resolveEngineSpawn(target.command, target.args, { env });

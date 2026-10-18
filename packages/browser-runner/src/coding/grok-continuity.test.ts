@@ -12,6 +12,8 @@ import { defaultStatePath, readState } from "./headless-state.js";
 
 const ID = "1e88dd3f-332f-4f10-9806-ae7baf58c0ff";
 const PRESET = ["--permission-mode", "bypassPermissions", "-p"];
+/** What a session spawns from that preset: the structured-output flags in front (#1187, grok-adapter.ts). */
+const SPAWNED = ["--output-format", "streaming-json", "--no-auto-update", ...PRESET];
 
 describe("the turn's argv (#1156)", () => {
 	it("starts a conversation with -s, resumes it with -r, and leaves the turn as -p's value at the end", () => {
@@ -96,7 +98,7 @@ describe("a Grok session, in real processes (#1156)", () => {
 		const [flag, id] = runs(log)[0];
 		expect(flag).toBe("-s");
 		expect(isGrokConversationId(id)).toBe(true);
-		expect(runs(log)[0].slice(2)).toEqual(["--permission-mode", "bypassPermissions", "-p", "first"]);
+		expect(runs(log)[0].slice(2)).toEqual([...SPAWNED, "first"]);
 		await turn(s, "second", 2, log);
 		expect(runs(log)[1].slice(0, 2)).toEqual(["-r", id]);
 		expect(readState(defaultStatePath(join(dir, "state-g1")), "g1", "grok")).toBe(id);
@@ -127,10 +129,10 @@ describe("a Grok session, in real processes (#1156)", () => {
 		const s = session("g3", log, { GROK_FAKE_REJECT: "1" });
 		await turn(s, "do the thing", 2, log);
 		expect(runs(log)[0][0]).toBe("-s");
-		expect(runs(log)[1]).toEqual(["--permission-mode", "bypassPermissions", "-p", "do the thing"]);
+		expect(runs(log)[1]).toEqual([...SPAWNED, "do the thing"]);
 		expect(s.snapshot()).toContain("rejected its session flags");
 		await turn(s, "next", 3, log);
-		expect(runs(log)[2]).toEqual(["--permission-mode", "bypassPermissions", "-p", "next"]); // no flags again
+		expect(runs(log)[2]).toEqual([...SPAWNED, "next"]); // no continuity flags again
 		expect(runs(log)).toHaveLength(3);
 		s.stop();
 	}, 30_000);

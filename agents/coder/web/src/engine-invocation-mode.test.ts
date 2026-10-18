@@ -8,9 +8,14 @@ describe("engineInvocationNote — the read-only mode chip in the engines panel 
 	});
 
 	it("labels legitimate raw commands without making them faults", () => {
-		const note = engineInvocationNote("grok --permission-mode bypassPermissions -p");
+		const note = engineInvocationNote("gemini --approval-mode yolo --prompt");
 		expect(note).toMatchObject({ mode: "raw", label: "raw" });
 		expect(note?.detail).toMatch(/stdout/i);
+	});
+
+	it("Grok reads structured (#1187) — unless its preset chose another output format", () => {
+		expect(engineInvocationNote("grok --permission-mode bypassPermissions -p")).toMatchObject({ mode: "structured" });
+		expect(engineInvocationNote("grok --output-format json -p")).toMatchObject({ mode: "raw" });
 	});
 
 	it("names Codex fallback commands as raw", () => {

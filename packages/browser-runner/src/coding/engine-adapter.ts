@@ -1,5 +1,6 @@
 import type { ClientType } from "./handlers.js";
 import { stripAnsi } from "./transcript-lines.js";
+import { createGrokEngineAdapter, grokOutputFormat } from "./grok-adapter.js";
 
 export type EngineMode = "stream-json" | "raw";
 export type EngineInvocationMode = "structured" | "raw";
@@ -11,12 +12,16 @@ export type NormalizedEngineEvent =
 	| { kind: "tool_result"; block: Record<string, unknown>; toolUseId: string; content: unknown }
 	| { kind: "turn_end"; raw: Record<string, unknown>; isError: boolean; result: string }
 	/** The engine reporting a problem mid-turn — Codex's `{"type":"error"}` (#889), e.g. each retry of a 401. */
-	| { kind: "engine_error"; text: string };
+	| { kind: "engine_error"; text: string }
+	/** A structured line understood and deliberately not shown — Grok's usage, thoughts, text deltas (#1187). */
+	| { kind: "meta" };
 
 export interface EngineAdapter {
 	readonly mode: EngineMode;
 	readonly persistent: boolean;
 	buildLaunchArgs(userArgs: string[], resumeId: string | null): string[];
+	/** The flags this engine's structured output needs, added to the preset when a turn is built (#1187, Grok). */
+	prepareArgs?(userArgs: string[]): string[];
 	buildTurnArgs(userArgs: string[], turnText: string): string[];
 	parseLine(line: string): NormalizedEngineEvent[];
 	/** Identifies an unsupported structured-output flag before a one-shot retry. */
@@ -28,7 +33,7 @@ export function engineInvocationModeFromAdapter(mode: EngineMode): EngineInvocat
 }
 
 export function structuredCapableEngine(clientType: ClientType): boolean {
-	return clientType === "claude" || clientType === "codex";
+	return clientType === "claude" || clientType === "codex" || clientType === "grok";
 }
 
 export function engineInvocationWarning(clientType: ClientType, mode: EngineInvocationMode): string | null {
@@ -258,5 +263,7 @@ export const genericRawEngineAdapter: EngineAdapter = {
 export function engineAdapterFor(clientType: ClientType, userArgs: string[] = []): EngineAdapter {
 	if (clientType === "claude") return claudeEngineAdapter;
 	if (clientType === "codex" && userArgs[0] === "exec" && !["resume", "fork", "review", "help"].includes(userArgs[1] ?? "")) return codexEngineAdapter;
+	// Grok's NDJSON stream (#1187) — unless the preset chose another output format on purpose, which stays raw.
+	if (clientType === "grok" && [null, "streaming-json"].includes(grokOutputFormat(userArgs))) return createGrokEngineAdapter();
 	return genericRawEngineAdapter;
 }

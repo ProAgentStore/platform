@@ -56,7 +56,16 @@ export function engineInvocationMode(command: string): EngineInvocationMode | nu
 	const { bin, args } = engineParts(command);
 	if (!bin || bin.startsWith("claude")) return "structured";
 	if (bin.startsWith("codex") && args[0] === "exec" && !CODEX_RAW_SUBCOMMANDS.has(args[1] ?? "")) return "structured";
+	// Grok's NDJSON stream (#1187) — the runner adds `--output-format streaming-json` unless a preset chose another format.
+	if (bin.startsWith("grok")) return grokChoseOtherFormat(args) ? "raw" : "structured";
 	return "raw";
+}
+
+/** A Grok preset that set `--output-format` to something other than `streaming-json` runs raw on purpose. */
+function grokChoseOtherFormat(args: readonly string[]): boolean {
+	const i = args.indexOf("--output-format");
+	const value = i >= 0 ? args[i + 1] : args.find((a) => a.startsWith("--output-format="))?.slice("--output-format=".length);
+	return value !== undefined && value !== "streaming-json";
 }
 
 const WRITE_FLAGS: Record<string, { accepts: string[]; suggest: string }> = {

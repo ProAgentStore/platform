@@ -44,7 +44,10 @@ export interface EngineMeteringNote {
  */
 export function engineMeteringNote(command: string): EngineMeteringNote | null {
 	if (!command.trim()) return null;
-	return engineInvocationMode(command) === "structured"
+	// Grok reads structured since #1187, but its turn-end usage is not parsed into the ledger yet — structured is
+	// not the same claim as measured, so it is said as unmeasured until it is.
+	const grok = /(?:^|[\\/])grok$/.test(command.trim().split(/\s+/)[0] ?? "");
+	return engineInvocationMode(command) === "structured" && !grok
 		? {
 				metered: true,
 				label: "Spend is measured",

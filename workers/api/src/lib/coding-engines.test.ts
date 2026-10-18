@@ -298,7 +298,11 @@ describe("engineInvocationReport — structured/raw transparency (#731)", () => 
 		expect(expectedEngineInvocationMode("codex", "codex exec --json --sandbox danger-full-access")).toBe("structured");
 		expect(expectedEngineInvocationMode("codex", "codex")).toBe("raw");
 		expect(expectedEngineInvocationMode("codex", "codex exec resume thread-1")).toBe("raw");
-		expect(expectedEngineInvocationMode("grok", "grok --permission-mode bypassPermissions -p")).toBe("raw");
+		// #1187: Grok reads structured — the runner adds `--output-format streaming-json` to an old preset too —
+		// unless the preset chose another output format on purpose.
+		expect(expectedEngineInvocationMode("grok", "grok --permission-mode bypassPermissions -p")).toBe("structured");
+		expect(expectedEngineInvocationMode("grok", "grok --permission-mode bypassPermissions --no-auto-update --output-format streaming-json -p")).toBe("structured");
+		expect(expectedEngineInvocationMode("grok", "grok --output-format json -p")).toBe("raw");
 	});
 
 	it("warns only when a structured-capable engine actually runs raw", () => {

@@ -98,6 +98,13 @@ const CODEX_RAW_SUBCOMMANDS = new Set(["resume", "fork", "review", "help"]);
 /** The invocation path this command should take on a current runner (#731). */
 export function expectedEngineInvocationMode(clientType: CodingClientType, launchCommand: string | null | undefined): EngineInvocationMode {
 	if (clientType === "claude") return "structured";
+	// Grok's NDJSON stream (#1187): the runner adds `--output-format streaming-json`, unless a preset chose another format.
+	if (clientType === "grok") {
+		const args = launchCommand?.trim() ? commandEngineParts(launchCommand).args : [];
+		const i = args.indexOf("--output-format");
+		const value = i >= 0 ? args[i + 1] : args.find((a) => a.startsWith("--output-format="))?.slice("--output-format=".length);
+		return value === undefined || value === "streaming-json" ? "structured" : "raw";
+	}
 	if (clientType !== "codex") return "raw";
 	if (!launchCommand?.trim()) return "structured";
 	const { args } = commandEngineParts(launchCommand);
@@ -356,7 +363,9 @@ export const DEFAULT_ENGINES: CodingEngine[] = [
 	{ id: "gemini", label: "Gemini CLI", command: "gemini --approval-mode yolo --skip-trust --prompt" },
 	// `-p/--single`, NOT `--prompt`: grok has `--prompt-file` and `--prompt-json` but no
 	// `--prompt`, so the old preset died on an unknown/ambiguous flag before reaching the model.
-	{ id: "grok", label: "Grok", command: "grok --permission-mode bypassPermissions -p" },
+	// `--output-format streaming-json` makes its tool calls observable to the evidence check (#1187); `--no-auto-update`
+	// is xAI's advice for automated runs. The runner adds both to an older saved preset too (grok-adapter.ts).
+	{ id: "grok", label: "Grok", command: "grok --permission-mode bypassPermissions --no-auto-update --output-format streaming-json -p" },
 	// Bring your own — a local model costs nothing per token and needs no cloud key. The prompt
 	// is appended, so anything prompt-in/text-out works by editing this command.
 	{ id: "local", label: "Local model (Ollama)", command: "ollama run llama3", auth: "machine" },
