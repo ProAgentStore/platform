@@ -304,7 +304,9 @@ export type NotificationSubject =
 	/** Account-level: the Usage page — spend, drivers and limits (#1040). */
 	| { kind: "usage" }
 	/** One PAS remote sign-in request a machine relayed (#1005): the page that shows it and links to PAS. */
-	| { kind: "remote-auth-request"; requestId: string };
+	| { kind: "remote-auth-request"; requestId: string }
+	/** A runner machine (#1162): its page when it has a stable id, else the Terminals list it is shown on. */
+	| { kind: "machine"; machineId: string | null };
 
 export type NotificationSubjectKind = NotificationSubject["kind"];
 
@@ -352,6 +354,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return usageLink();
 			case "remote-auth-request":
 				return remoteAuthRequestLink(subject.requestId);
+			case "machine":
+				return subject.machineId ? `${BASE}/terminals/machines/${encodeURIComponent(subject.machineId)}` : `${BASE}/terminals`;
 		}
 	})();
 	return link as DeepLink;

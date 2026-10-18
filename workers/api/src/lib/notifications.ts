@@ -142,6 +142,13 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: false,
 	},
 	{
+		// #1162: a runner machine that stopped reporting — once per silence, with its last report and the fix.
+		id: "machine",
+		label: "Machines",
+		description: "A machine running `pags up` going silent — including mid-update. Once each time it goes quiet.",
+		alerts: false,
+	},
+	{
 		id: "subscribe",
 		label: "New subscribers",
 		description: "Someone subscribing to an agent you publish.",

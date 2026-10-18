@@ -78,6 +78,7 @@ import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { failSilentUpdates } from "./lib/machine-policy.js";
+import { notifySilentMachines } from "./lib/machine-silence.js";
 import { expireStaleTakeovers } from "./lib/browser-takeovers.js";
 import { runLeadBrowserVerification } from "./lib/job-lead-browser-verification.js";
 import { dispatchQueuedRunnerUpdates } from "./lib/runner-update.js";
@@ -389,6 +390,8 @@ export default {
 		// #1141: a machine that reported an install and went silent becomes `failed` with a reason and an error-log row —
 		// never `installing` forever, which is how two machines sat dark on 2026-10-17 with nothing saying so.
 		ctx.waitUntil(failSilentUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-auto-updates", method: "CRON" })));
+		// #1162: and the OWNER is told — once per silence, mid-update or not — instead of finding a grey dot by looking.
+		ctx.waitUntil(notifySilentMachines(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-machines", method: "CRON" })));
 		// #1031: a takeover nobody answered before its expiry becomes `expired`, not open forever.
 		ctx.waitUntil(expireStaleTakeovers(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-takeovers", method: "CRON" })));
 		// #1030: settle finished browser verifications of Gmail leads, then dispatch the ones due.

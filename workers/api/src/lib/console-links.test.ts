@@ -67,6 +67,13 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		profile: { kind: "profile" },
 		usage: { kind: "usage" },
 		"remote-auth-request": { kind: "remote-auth-request", requestId: other },
+		machine: { kind: "machine", machineId: id },
+	});
+
+	it("a machine with no stable id lands on the Terminals list it is shown on (#1162)", () => {
+		const url = links.deepLinkFor({ kind: "machine", machineId: null });
+		const check = checkConsoleLink(url);
+		expect(check.ok, `${url}: ${check.ok === false ? check.reason : ""}`).toBe(true);
 	});
 
 	for (const [kind, subject] of Object.entries(sample("inst_1", "id_2"))) {
