@@ -181,3 +181,62 @@ export function checkEngine(
 		...(engine === "grok" && binaryPath ? { vendor: grokVendor(versionText, (deps.realpath ?? safeRealpath)(binaryPath)) } : {}),
 	};
 }
+
+/**
+ * The models an engine's CLI says it offers, asked live (#1199) — what `coding_engine_set` checks a pinned model id
+ * against, so `grok --model grok-4` is refused with the list instead of failing at the next turn ("unknown model id").
+ *
+ * Only Grok publishes one: `grok models` (xAI Grok CLI 1.0.62, 2026-10-19) prints
+ *
+ *     Default model: grok-4.7
+ *
+ *     Available models:
+ *       * grok-4.7 (default)
+ *       - grok-4.7-build-fast
+ *
+ * Claude Code, Codex and Gemini take `--model` but list nothing, so for them `models` is null and the answer says so —
+ * the platform then saves the id unchecked rather than guessing a list.
+ */
+export interface EngineModels {
+	clientType: ClientType;
+	/** The ids the CLI offered; null when this engine has no list to ask, or asking failed (`reason`). */
+	models: string[] | null;
+	defaultModel: string | null;
+	reason?: string;
+}
+
+/** `grok models` → its ids and default; null when the output has no model list in it. */
+export function parseGrokModels(text: string): { models: string[]; defaultModel: string | null } | null {
+	const lines = text.split(/\r?\n/);
+	const start = lines.findIndex((l) => /^\s*Available models:\s*$/i.test(l));
+	if (start < 0) return null;
+	const models: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		const m = /^\s*[*-]\s+(\S+)/.exec(line);
+		if (m) models.push(m[1]);
+		else if (line.trim()) break;
+	}
+	if (!models.length) return null;
+	const named = /^\s*Default model:\s*(\S+)/im.exec(text)?.[1] ?? null;
+	const starred = lines.slice(start + 1).find((l) => /^\s*\*\s+/.test(l))?.trim().split(/\s+/)[1] ?? null;
+	return { models, defaultModel: named ?? starred };
+}
+
+export function listEngineModels(input: { clientType?: string; command?: string }, deps: EngineCheckDeps & { listText?: (spawn: EngineSpawn, env: NodeJS.ProcessEnv) => string | null } = {}): EngineModels {
+	const engine = (["claude", "gemini", "codex", "grok", "generic"].includes(input.clientType ?? "") ? input.clientType : "claude") as ClientType;
+	if (engine !== "grok") return { clientType: engine, models: null, defaultModel: null, reason: `the ${engine} CLI publishes no model list` };
+	const command = parseCommand(input.command);
+	const bin = unwrapLauncher(command.bin, command.args).bin || "grok";
+	const launch = resolveEngineSpawn(bin, ["models"], deps);
+	if (!launch.binaryPath) return { clientType: engine, models: null, defaultModel: null, reason: "grok is not installed on this machine" };
+	const text = (deps.listText ?? defaultListText)(launch, deps.env ?? process.env);
+	const parsed = text ? parseGrokModels(text) : null;
+	if (!parsed) return { clientType: engine, models: null, defaultModel: null, reason: "`grok models` gave no model list (is the CLI signed in?)" };
+	return { clientType: engine, ...parsed };
+}
+
+function defaultListText(launch: EngineSpawn, env: NodeJS.ProcessEnv): string | null {
+	const command = launch.via === "direct" && launch.binaryPath ? launch.binaryPath : launch.command;
+	const r = spawnSync(command, launch.args, { encoding: "utf8", env, timeout: 20_000, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments });
+	return r.error || r.status !== 0 ? null : `${r.stdout ?? ""}${r.stderr ?? ""}`;
+}

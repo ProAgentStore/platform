@@ -13,7 +13,7 @@ import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
-import { checkEngine } from "./coding/engine-check.js";
+import { checkEngine, listEngineModels } from "./coding/engine-check.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
 import { runNativePreflight } from "./native/preflight.js";
@@ -563,10 +563,10 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// Can this machine run an engine — its binary on PATH, its subscription login stored (#879)? Asked
 	// BEFORE a session is launched, so a missing engine is a named refusal rather than a dead pane.
 	// An older runner 404s this, and the cloud reads that as "unverified", never as "missing".
-	if (req.method === "POST" && path === "/coding/engine-check") {
+	if (req.method === "POST" && (path === "/coding/engine-check" || path === "/coding/engine-models")) {
 		const b = await readJson<{ clientType?: string; command?: string; credentialInjected?: boolean }>(req);
 		try {
-			return json(res, 200, checkEngine(b));
+			return json(res, 200, path === "/coding/engine-models" ? listEngineModels(b) : checkEngine(b)); // #1199: the CLI's live model list
 		} catch (e: unknown) {
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}

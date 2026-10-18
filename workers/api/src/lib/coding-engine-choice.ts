@@ -14,6 +14,7 @@ import { deriveClientType } from "./coding-command.js";
 import { readEngines, type CodingEngine } from "./coding-engines.js";
 import { MODEL_SUGGESTIONS, isValidModelId, modelFlagEngine, readEngineModel, writeEngineModel, type ModelSuggestion } from "./coding-engine-model.js";
 import { patchInstanceConfig } from "./instance-config.js";
+import { checkEngineModel, type ModelCheck } from "./engine-model-check.js";
 import { MCP_API_CODING_REFUSAL, apiCodingConfirmed, apiCodingOptInFor, apiCodingWarning } from "./coding-api-policy.js";
 import type { CodingClientType } from "./coding-types.js";
 import type { Env } from "../types.js";
@@ -46,6 +47,8 @@ export interface EngineChoiceView {
 	lastObserved: { model: string; at: string } | null;
 	/** When the choice takes effect — said by the server so every surface says the same thing. */
 	appliesTo: string;
+	/** A pinned model, checked against the machine's own model list (#1199) — only on the answer to a write that pinned one. */
+	modelCheck?: ModelCheck;
 }
 
 /**
@@ -123,6 +126,7 @@ export async function writeEngineChoice(
 		}
 	}
 
+	let modelCheck: ModelCheck | undefined;
 	if (input.model !== undefined) {
 		const model = input.model === null || input.model === "" ? null : input.model;
 		if (model !== null && !isValidModelId(model)) throw new HttpError(400, "That is not a model id — use the id the CLI itself accepts, with no spaces or quotes.");
@@ -130,6 +134,8 @@ export async function writeEngineChoice(
 		if (model !== null && !modelFlagEngine(engine.command)) {
 			throw new HttpError(400, `${engine.label} has no model flag this platform knows — edit its command in the CLI engines panel instead.`);
 		}
+		// #1199: an id the machine's CLI does not offer is refused here, with its list, before anything is saved.
+		if (model !== null) modelCheck = await checkEngineModel(env, instanceId, userId, { clientType: deriveClientType(engine.command), command: engine.command, label: engine.label }, model as string);
 		const command = writeEngineModel(engine.command, model);
 		if (command !== engine.command) {
 			// The whole list, because that is the key's shape — and because an instance that has saved
@@ -138,5 +144,6 @@ export async function writeEngineChoice(
 		}
 	}
 	await patchInstanceConfig(env, instanceId, userId, "defaultEngineId", engine.id);
-	return readEngineChoice(env, instanceId, userId);
+	const view = await readEngineChoice(env, instanceId, userId);
+	return modelCheck ? { ...view, modelCheck } : view;
 }
