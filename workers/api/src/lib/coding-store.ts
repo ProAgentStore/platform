@@ -651,8 +651,8 @@ export async function reconcileOrphanedSessions(
 		`SELECT id FROM coding_sessions
 		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'
 		   AND updated_at < datetime('now', '-3 minutes')
-		   -- #1076: a parked run stopped this engine on purpose; its session is not an orphan.
-		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr WHERE lr.session_id = coding_sessions.id AND lr.status = 'running' AND lr.waiting_reason = 'decision' AND lr.workflow_instance_id IS NOT NULL)`,
+		   -- #1076: a parked run stopped this engine on purpose; its session is not an orphan. #1160: nor is one whose machine went away and is back.
+		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr WHERE lr.session_id = coding_sessions.id AND lr.status = 'running' AND lr.waiting_reason IN ('decision', 'runner_away') AND lr.workflow_instance_id IS NOT NULL)`,
 	)
 		.bind(instanceId, userId)
 		.all<{ id: string }>();

@@ -109,6 +109,9 @@ export const PARK_LIMIT_MS: Record<RunWaitReason, number> = {
 	// The same 15-minute give-up as a handoff (`coding-pause.ts`'s `waitForSignIn`), doubled for the
 	// same reason `human` is (#881).
 	engine_auth: 30 * 60 * 1000,
+	// The machine went away (#1160). Its `waitingUntil` (a day, `RUNNER_PARK_MS`) outranks this; an hour past
+	// it only catches a park whose run died without closing it.
+	runner_away: 25 * 60 * 60 * 1000,
 };
 
 /**
@@ -347,6 +350,8 @@ const PARKS: Record<RunWaitReason, Park> = {
 	// #1076: a captured question parks at zero compute until it is answered (up to 30 days, its `waitingUntil`).
 	decision: { why: "it is PARKED, waiting for YOUR ANSWER to a question", deadline: "give_up" },
 	engine_auth: { why: "the coding engine is not signed in — sign it in with coding_engine_reauth, from any device", deadline: "give_up" },
+	// #1160: woken when the machine re-registers; its `waitingUntil` is when it stops waiting.
+	runner_away: { why: "its machine went away — it continues by itself when the machine reconnects", deadline: "give_up" },
 	// "Being resumed" only while a retry is actually SCHEDULED — see `waitClause` for the park without one (#855).
 	platform_interrupt: { why: "it was interrupted by something other than the work and a retry is scheduled", deadline: "resume" },
 };

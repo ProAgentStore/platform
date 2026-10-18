@@ -11,6 +11,7 @@ import { applySettingsPatch, settingsPatchRefusal, resolveSettingsValues } from 
 import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
 import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
+import { wakeRunnerParkedRuns } from "../lib/runner-park.js";
 import { notifyUser } from "./push.js";
 import { deepLinkFor } from "../lib/console-links.js";
 import { validatePipeline } from "../lib/pipeline.js";
@@ -523,6 +524,8 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		}
 		const resumed = await resumeSessionsForNode(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
 		if (resumed) console.log(`Resumed ${resumed} suspended session(s) on ${runnerNode}`);
+		// A run parked on its machine continues now, not at its next own look (#1160).
+		await wakeRunnerParkedRuns(c.env, instanceId, session.uid);
 	}
 
 	if (runnerNode) {

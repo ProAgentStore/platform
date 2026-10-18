@@ -15,6 +15,7 @@ import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayCon
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import { isRunnerSessionAbsent, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
+import { runnerParkDeps } from "../../lib/runner-park.js";
 import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
 import { ObjectiveDelivery, type ObjectiveDeliveryState } from "../../lib/coding-objective-delivery.js";
 import { sendAct } from "../../lib/coding-act-send.js";
@@ -377,6 +378,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		sessionLost: async (e) =>
 			isRunnerSessionAbsent(e) &&
 			(await env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(sessionId, instanceId, userId).first<{ status: string }>())?.status === "active",
+		// A machine away past the poll parks the run until it re-registers (#1160); only a run with a loop-run row can be woken.
+		park: event.payload.loopRunId ? runnerParkDeps(env, step, runRetry, { runId: event.payload.loopRunId, workflowInstanceId: event.instanceId ?? event.payload.loopRunId }) : undefined,
 		reconnect: async (label) => {
 			// The machine that comes back may not be the machine that went away — a user closing
 			// one laptop and opening another is the ordinary case. Re-resolve live (pin-aware),

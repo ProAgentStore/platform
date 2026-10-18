@@ -67,9 +67,10 @@ export const RUNNER_PROBE_INTERVAL = "15 seconds";
  * How long ONE disconnect may pause a run.
  *
  * Sized against the thing being waited for, not picked round: the runner reconnects with
- * exponential backoff capped at 30s, so this is ~20 reconnect attempts. It covers a closed
- * laptop lid, a wifi handover, a `pags up` restart and a CLI upgrade — the events that produced
- * this ticket — and it is deliberately UNDER `STALE_DRIVER_MS` (15 min), so a single pause
+ * exponential backoff capped at 30s, so this is ~20 reconnect attempts. It covers a wifi
+ * handover, a `pags up` restart and a quick CLI upgrade. A closed laptop lid, a night away or a
+ * slow update outlasts it, and the run then PARKS ({@link RUNNER_PARK_MS}, #1160) instead of
+ * ending. It is deliberately UNDER `STALE_DRIVER_MS` (15 min), so a single pause
  * cannot outlive the single-flight claim the run holds on its session even if the heartbeat
  * were to stop.
  */
@@ -83,6 +84,47 @@ export const RUNNER_WAIT_MS = 10 * 60_000;
  * is reported the same day.
  */
 export const RUNNER_WAIT_TOTAL_MS = 30 * 60_000;
+
+/**
+ * How long a run may stay PARKED for a machine that went away, across the whole run (#1160).
+ *
+ * The ten-minute wait above is a POLL, sized for a blip. A laptop shut for lunch or overnight, or an
+ * update that took the machine down, outlasts it, and the run used to end `runner_gone` with nothing to
+ * continue it when the machine came back. Past the poll the run now PARKS: at zero compute on
+ * `step.waitForEvent`, its `waiting_until` published, woken when the machine re-registers. A day
+ * covers a night away and the morning after; a machine gone longer than that is reported as gone,
+ * with this bound named in the message.
+ */
+export const RUNNER_PARK_MS = 24 * 60 * 60_000;
+
+/**
+ * How often a parked run looks again on its own, without the re-registration event. Also its
+ * heartbeat, so it stays UNDER `STALE_DRIVER_MS` (15 min): a parked run keeps its claim on its session.
+ */
+export const RUNNER_PARK_CHECK_MS = 10 * 60_000;
+
+/** After a wake, how long to poll for the socket: a runner registers before its relay connects. */
+export const RUNNER_WAKE_POLL_MS = 2 * 60_000;
+
+/** The event a run parked on its machine waits for. Cloudflare allows `[A-Za-z0-9_-]`, at most 100 characters: a run id is a uuid, so it fits whole. */
+export function runnerBackEventType(runId: string): string {
+	return `runner-back-${runId}`.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+/**
+ * What the guard needs to PARK a run on its machine (#1160). The workflow supplies durable versions;
+ * a run without a loop-run row cannot be woken, so it supplies none and keeps the old ending.
+ */
+export interface RunnerParkDeps {
+	/** The wall clock, journalled (a `step.do`), so a replay agrees with itself about how long it waited. */
+	now: (label: string) => Promise<number>;
+	/** Record the park — `runner_away`, until `until` — so the owner can see it and the registration route can wake it. */
+	begin: (label: string, until: number) => Promise<void>;
+	/** Wait at zero compute for the machine's re-registration, or `timeoutMs`. True when the event arrived. */
+	waitForBack: (label: string, timeoutMs: number) => Promise<boolean>;
+	/** Clear the park. */
+	end: (label: string) => Promise<void>;
+}
 
 /** Re-attempts of one step around a disconnect before the loss is treated as terminal. */
 export const RECONNECT_ROUNDS = 3;
@@ -132,6 +174,7 @@ export function describeFacts(facts: RuntimeFacts): AttachmentDiagnosis {
 
 export function formatDuration(ms: number): string {
 	if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+	if (ms >= 2 * 60 * 60_000) return `${Math.round(ms / (60 * 60_000))} hours`;
 	const m = Math.round(ms / 60_000);
 	return `${m} minute${m === 1 ? "" : "s"}`;
 }
@@ -168,6 +211,24 @@ export function resumeMessage(node: string | null, waitedMs: number): string {
 export function runnerGoneMessage(d: AttachmentDiagnosis, waitedMs: number): string {
 	const waited = waitedMs > 0 ? ` after waiting ${formatDuration(waitedMs)}` : "";
 	return `The runner did not come back${waited}. ${d.message}${d.remedy ? ` Try: \`${d.remedy}\`` : ""}`;
+}
+
+/** An instant as an owner reads it in the thread: UTC, to the minute. */
+function utcMinute(ms: number): string {
+	return `${new Date(ms).toISOString().replace("T", " ").replace(/:\d\d\.\d+Z$/, "")} UTC`;
+}
+
+export function parkMessage(d: AttachmentDiagnosis, until: number, leftMs: number): string {
+	return [
+		"⏸ **Runner away — the run is parked, not stopped.**",
+		d.message,
+		`It waits until ${utcMinute(until)} (${formatDuration(leftMs)}) and continues by itself, at the same step, as soon as the machine reconnects${d.remedy ? ` (\`${d.remedy}\`)` : ""}.`,
+		"Past that it stops as runner_gone.",
+	].join(" ");
+}
+
+export function parkExpiredMessage(d: AttachmentDiagnosis, parkedMs: number): string {
+	return `The runner did not come back: this run waited ${formatDuration(parkedMs)} for its machine, the longest a run waits (${formatDuration(RUNNER_PARK_MS)}). ${d.message}${d.remedy ? ` Try: \`${d.remedy}\`` : ""}`;
 }
 
 /**
@@ -241,12 +302,17 @@ export function makeRunnerGuard(cfg: {
 	 * would otherwise read as a genuine failure. Absent: no such check, the pre-#1053 behaviour.
 	 */
 	sessionLost?: (e: unknown) => Promise<boolean>;
+	/** Park past the poll instead of ending (#1160). Absent: a poll that runs out ends the run, as before. */
+	park?: RunnerParkDeps;
 	waitMsPerLoss?: number;
 	totalWaitMs?: number;
+	parkTotalMs?: number;
 }): RunnerGuard {
 	const perLoss = cfg.waitMsPerLoss ?? RUNNER_WAIT_MS;
 	const total = cfg.totalWaitMs ?? RUNNER_WAIT_TOTAL_MS;
+	const parkTotal = cfg.parkTotalMs ?? RUNNER_PARK_MS;
 	let spent = 0;
+	let parked = 0;
 
 	return async function guard<T>(run: RunStep, name: string, fn: () => Promise<T>): Promise<T> {
 		for (let round = 0; ; round++) {
@@ -283,7 +349,11 @@ export function makeRunnerGuard(cfg: {
 			const budget = Math.min(perLoss, Math.max(0, total - spent));
 			const w = await waitForRunner(cfg.wait, { label: `${name}-w${tag}`, waitMs: budget, unresponsive });
 			spent += w.waitedMs;
-			if (!w.returned) {
+			// A machine that went AWAY parks the run (#1160). One still connected but silent does not: it is
+			// registered, so no re-registration would ever wake the park, and the honest answer is the one below.
+			if (!w.returned && cfg.park && w.state !== "attached") {
+				await parkUntilBack(cfg.park, `${name}-w${tag}`);
+			} else if (!w.returned) {
 				throw new RunnerGoneError(
 					budget <= 0
 						? `${w.message} This run has already spent its ${formatDuration(total)} of waiting for the runner.`
@@ -299,8 +369,45 @@ export function makeRunnerGuard(cfg: {
 			}
 		}
 	}
-}
 
+	/**
+	 * Park the run until its machine is back, or until the run's park budget is spent (#1160).
+	 *
+	 * Woken by the machine's re-registration (`wakeRunnerParkedRuns`), and on its own every
+	 * {@link RUNNER_PARK_CHECK_MS} — so a lost event costs minutes, not the run. A wake only LOOKS: the
+	 * relay is asked, and a runner that registered but whose socket is not up yet gets a short poll.
+	 * Returns when the runner is connected; throws {@link RunnerGoneError} with the bound named otherwise.
+	 */
+	async function parkUntilBack(p: RunnerParkDeps, label: string): Promise<void> {
+		const start = await p.now(`${label}-pk`);
+		const left = parkTotal - parked;
+		let facts = await cfg.wait.probe();
+		if (left <= 0) throw new RunnerGoneError(parkExpiredMessage(describeFacts(facts), parked));
+		const until = start + left;
+		await p.begin(`${label}-pk-begin`, until);
+		await cfg.wait.announce(parkMessage(describeFacts(facts), until, left));
+		const quiet: RunnerWaitDeps = { ...cfg.wait, announce: async () => undefined };
+		for (let i = 0; ; i++) {
+			const at = await p.now(`${label}-pk${i}-at`);
+			if (at >= until) {
+				parked = parkTotal;
+				await p.end(`${label}-pk-end`);
+				throw new RunnerGoneError(parkExpiredMessage(describeFacts(facts), parked));
+			}
+			const woken = await p.waitForBack(`${label}-pk${i}`, Math.min(RUNNER_PARK_CHECK_MS, until - at));
+			const now = await p.now(`${label}-pk${i}-t`);
+			await cfg.wait.tick?.(now - start);
+			const back = woken ? await waitForRunner(quiet, { label: `${label}-pk${i}-w`, waitMs: RUNNER_WAKE_POLL_MS }) : null;
+			facts = await cfg.wait.probe();
+			if (back?.returned || facts.relayConnected) {
+				parked += now - start;
+				await p.end(`${label}-pk-end`);
+				await cfg.wait.announce(resumeMessage(facts.node, now - start));
+				return;
+			}
+		}
+	}
+}
 /**
  * The runner answered that it holds no coding session with the id asked about — it restarted and lost
  * it (#1053). A runner from #1116 on answers 404 (a lookup, not a crash); an older one answered 500

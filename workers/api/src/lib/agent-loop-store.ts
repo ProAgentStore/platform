@@ -79,6 +79,10 @@ export interface LoopRunRow {
  *   engine_auth        — the coding CLI is not signed in (#881). Resolved by the owner signing it in
  *                        through the re-auth relay, from any device — not by a takeover, which is why
  *                        it is not `human`. Its deadline is a GIVE-UP, like `human`'s.
+ *   runner_away        — the machine running the engine went away for longer than the guard's poll
+ *                        (#1160): a closed lid, a night, an update. The run waits at zero compute and
+ *                        is woken when the machine re-registers. Its deadline is a GIVE-UP
+ *                        (`RUNNER_PARK_MS`): past it the run stops as `runner_gone`.
  *
  * ── Why this is an array and not only a union (#596)
  *
@@ -91,7 +95,7 @@ export interface LoopRunRow {
  * Every table keyed by a park reason — `work-report.ts`'s `PARKS`, `coding-run-state.ts`'s
  * `PARK_GLOSS` — is a place a new member can go unhandled. This array is what lets a test walk them.
  */
-export const RUN_WAIT_REASONS = ["engine_limit", "human", "platform_interrupt", "engine_auth", "decision"] as const;
+export const RUN_WAIT_REASONS = ["engine_limit", "human", "platform_interrupt", "engine_auth", "decision", "runner_away"] as const;
 
 export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
 

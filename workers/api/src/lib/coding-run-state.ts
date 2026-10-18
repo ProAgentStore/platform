@@ -136,6 +136,12 @@ const PARK_GLOSS: Record<string, { what: string; fix: string; severity: "warn" |
 		fix: "Nothing to do — it resumes itself",
 		severity: "info",
 	},
+	// #1160: parked on its machine, woken when it re-registers.
+	runner_away: {
+		what: "the run's machine went away, and the run is parked waiting for it to come back",
+		fix: "Bring the machine back (`pags up`) — the run continues by itself at the same step",
+		severity: "warn",
+	},
 };
 
 /** The same park with NO retry scheduled (#855) — it will not resume itself, so it must not say so. */
