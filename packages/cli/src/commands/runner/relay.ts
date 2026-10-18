@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 import { type ResourceSample, recordRunnerStart, sampleDisk, sampleResources } from "./resources.js";
 import { sessionToken } from "./session-token.js";
+import { AgentRoutePolicy } from "./route-policy.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, pagsApiBase, requestPags, requestRunner } from "./http.js";
@@ -327,6 +328,10 @@ export async function connectViaRelay(
 		return { status: 200, result: { attached: [...attached.keys()], ...(plan.target ? { target: plan.target, holding: attached.has(plan.target) } : {}) } };
 	};
 
+	// Each agent's declared capabilities confine what its socket may reach (#1164, route-policy.ts).
+	const routes = new AgentRoutePolicy(() => requestPags<{ instances?: DiscoverableInstance[] }>("GET", "/v1/instances/my/instances", { ...opts, pagsToken: pagsToken() }).then((r) => r.instances));
+	await routes.refresh();
+
 	const attach = (id: string, label = `${id.slice(0, 8)}…`) => {
 		if (attached.has(id)) return;
 		// Each connect mints a fresh instance-scoped relay token using the account
@@ -372,6 +377,7 @@ export async function connectViaRelay(
 				// The final automatic-update drain is an admission gate, not merely another poll:
 				// command work starts only when the old runner is still permitted to serve it.
 				() => relayMutationAdmission.begin(),
+				routes.refusalFor(id),
 			),
 		);
 		if (label) writeLine(`Attached agent: ${label}`);
@@ -511,6 +517,7 @@ export async function connectViaRelay(
 				"/v1/instances/my/instances",
 				{ ...opts, pagsToken: pagsToken() },
 			);
+			routes.learn(res.instances);
 			const { attach: toAttach, detach: toDetach } = diffMembership(
 				attached.keys(),
 				res.instances ?? [],
@@ -617,6 +624,12 @@ export function openRelaySocket(
 	/** Returns a release handle for an admitted mutation, or null while the safe-update drain is
 	 * closed. Read-only probes do not participate. */
 	beginMutation: () => (() => void) | null = () => () => undefined,
+	/**
+	 * Why this agent may not reach `method path` on the local runtime, or null (#1164). Asked of every
+	 * relayed command before it is forwarded: the socket names the agent, and the agent's declared
+	 * capabilities name the routes it needs (`route-policy.ts`). Absent: nothing is refused.
+	 */
+	routeRefusal: (method: string, path: string, body?: unknown) => string | null = () => null,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -686,6 +699,13 @@ export function openRelaySocket(
 
 			// Dispatch to local runner HTTP server
 			const method = (cmd.method || "POST").toUpperCase();
+			// Only the routes THIS agent's declared capabilities need (#1164) — refused here, before the
+			// runtime, so a socket cannot reach another kind of agent's routes on this machine.
+			const refused = routeRefusal(method, cmd.path, cmd.body);
+			if (refused) {
+				try { ws.send(JSON.stringify({ id: cmd.id, status: 403, result: { error: refused } })); } catch { /* WS closed */ }
+				return;
+			}
 			const releaseMutation = method !== "GET" && method !== "HEAD" ? beginMutation() : null;
 			if (method !== "GET" && method !== "HEAD" && !releaseMutation) {
 				// Do not let a new local/coding request begin between the final idle observation and

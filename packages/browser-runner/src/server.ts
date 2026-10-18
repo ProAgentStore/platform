@@ -1,3 +1,4 @@
+import { codingSessionRefusal, instanceOf, readJson } from "./request-instance.js";
 import {
 	createServer,
 	type IncomingMessage,
@@ -86,6 +87,10 @@ export async function startRunnerServer(config: RunnerConfig): Promise<{
 async function route(runner: LocalRunner, req: IncomingMessage, res: ServerResponse) {
 	const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
 	const path = url.pathname.replace(/\/$/, "") || "/";
+	// The agent this request came from, and whether it may touch the coding session it names (#1164, request-instance.ts).
+	const caller = instanceOf(req);
+	const refused = await codingSessionRefusal(runner.coding, req, path, caller);
+	if (refused) return json(res, 403, { error: refused });
 
 	if ((req.method === "GET" || req.method === "POST") && path === "/health") {
 		// #896: a health check that cannot say WHO answered is not enough to decide anything with.
@@ -311,7 +316,9 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	if (req.method === "POST" && path === "/coding/start") {
 		const b = await readJson<StartCodingInput>(req);
-		return json(res, 200, runner.coding.start(b));
+		const started = runner.coding.start(b);
+		runner.coding.bindInstance(b.sessionId, caller);
+		return json(res, 200, started);
 	}
 	if (req.method === "POST" && path === "/coding/capture") {
 		// `drainUsage` opts this caller in to consuming the session's measured engine spend (#267).
@@ -329,7 +336,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.coding.end(b.sessionId));
 	}
 	if (req.method === "GET" && path === "/coding/sessions") {
-		return json(res, 200, { sessions: runner.coding.list() });
+		// Each agent sees its own sessions (#1164); a local caller (the update controller) sees them all.
+		return json(res, 200, { sessions: runner.coding.list().filter((s) => runner.coding.visibleTo(s.sessionId, caller)) });
 	}
 	// Per-session CPU and memory, for the heartbeat (#924): which agent is loading this machine.
 	if (req.method === "GET" && path === "/coding/resources") {
@@ -820,18 +828,6 @@ function authorize(req: IncomingMessage, config: RunnerConfig): boolean {
 	const auth = req.headers.authorization || "";
 	const headerToken = req.headers["x-pags-runner-token"];
 	return auth === `Bearer ${token}` || headerToken === token;
-}
-
-async function readJson<T>(req: IncomingMessage): Promise<T> {
-	const chunks: Buffer[] = [];
-	for await (const chunk of req) chunks.push(Buffer.from(chunk));
-	const raw = Buffer.concat(chunks).toString("utf-8");
-	if (!raw) return {} as T;
-	try {
-		return JSON.parse(raw) as T;
-	} catch {
-		throw new RunnerInputError("Request body must be valid JSON");
-	}
 }
 
 function clampLimit(value: string | null, fallback: number, max: number): number {

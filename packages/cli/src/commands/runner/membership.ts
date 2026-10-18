@@ -13,7 +13,8 @@ export interface DiscoverableInstance {
 	id: string;
 	name?: string;
 	status?: string;
-	capabilities?: { runtime?: string | null } | null;
+	/** Also what the relay confines each agent's socket to (#1164, `route-policy.ts`). */
+	capabilities?: { runtime?: string | null; surfaces?: string[] | null; tools?: string[] | null } | null;
 	config?: { runnerNode?: string | null } | null;
 }
 

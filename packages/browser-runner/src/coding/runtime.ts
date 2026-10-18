@@ -216,6 +216,13 @@ const MAX_PANE = 64 * 1024;
 
 export class CodingRuntime {
 	private sessions = new Map<string, HeadlessSession>();
+	/**
+	 * Which agent instance each session belongs to (#1164). One `pags up` serves every agent on the
+	 * machine, and every relayed request names the instance whose socket it arrived on — so a session
+	 * started by one agent must not be driven, read or ended through another's. Bound at `/coding/start`;
+	 * a session with no binding (one started before this, or by a local caller) answers to anyone, as before.
+	 */
+	private owners = new Map<string, string>();
 
 	/**
 	 * Coding turns that are running here (#896, #1007).
@@ -569,6 +576,23 @@ export class CodingRuntime {
 		}
 		this.takeovers.delete(sessionId);
 		return { ok: true, usage, acts, authResolved };
+	}
+
+	/** Record the instance a session belongs to — the first one to start it (#1164). */
+	bindInstance(sessionId: string, instanceId: string | undefined): void {
+		if (sessionId && instanceId && !this.owners.has(sessionId)) this.owners.set(sessionId, instanceId);
+	}
+
+	/** Why `instanceId` may not touch this session, or null (#1164). An unbound session, or no caller instance, is not refused. */
+	instanceRefusal(sessionId: string, instanceId: string | undefined): string | null {
+		const owner = this.owners.get(sessionId);
+		if (!owner || !instanceId || owner === instanceId) return null;
+		return `Coding session ${sessionId} belongs to another agent on this machine; a request from this agent cannot reach it.`;
+	}
+
+	/** Is this session visible to `instanceId` — its own, unbound, or no caller instance (#1164)? */
+	visibleTo(sessionId: string, instanceId: string | undefined): boolean {
+		return this.instanceRefusal(sessionId, instanceId) === null;
 	}
 
 	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string; runState: "idle" | "thinking" | "responding" }> {
