@@ -13,6 +13,7 @@ vi.mock("../lib/runner-client.js", async (orig) => ({ ...(await orig<typeof impo
 vi.mock("../lib/auth.js", async (orig) => ({ ...(await orig<typeof import("../lib/auth.js")>()), requireUser: async () => ({ uid: "u1", roles: [] }) }));
 
 import { HttpError } from "../lib/auth.js";
+import { revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { occurrences } from "../lib/secure-input-inject.js";
 import type { Env } from "../types.js";
@@ -30,10 +31,13 @@ let panes: Map<string, string>;
 let deaf: Set<string>;
 let sent: Array<{ path: string; session: unknown; text?: unknown; keys?: unknown }>;
 
-beforeEach(() => {
+beforeEach(async () => {
 	d1 = realSchemaD1();
 	seedTenant(d1, { userId: "u1", instanceIds: ["i1"] });
 	env = { DB: d1.DB, KEY_ENCRYPTION_KEY: "0".repeat(64) } as unknown as Env;
+	// The owner granted terminal write consent, as `*_send_keys` needs (#1145).
+	await setConsent(env, "i1", "u1", "tmux", "write");
+	await setConsent(env, "i1", "u1", "terminal", "write");
 	panes = new Map([["gcloud-setup", `$ gcloud auth login --no-launch-browser\nGo to the following link in your browser:\n  https://accounts.google.com/o/oauth2/auth?…\n\n${PROMPT}`]]);
 	deaf = new Set();
 	sent = [];
@@ -178,5 +182,36 @@ describe("occurrences", () => {
 		expect(occurrences(`prompt: 4/0AVG7f\niQ-rest`, "4/0AVG7fiQ-rest")).toBe(1);
 		expect(occurrences("ab ab", "ab")).toBe(2);
 		expect(occurrences("x", "")).toBe(0);
+	});
+});
+
+describe("inject is held to the terminal write-consent *_send_keys needs (#1145)", () => {
+	it("without the tmux consent: refused with the consent route named, the runner never reached, the value still ready", async () => {
+		await revokeConsent(env, "i1", "tmux", "write");
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(r.body).toMatchObject({ delivered: false, consumedValue: false, submitted: false, status: "ready" });
+		expect(r.body.reason).toContain("PUT /v1/instances/i1/connectors/tmux/consent");
+		expect(r.body.reason).toContain("Nothing was consumed.");
+		expect(callRunner).not.toHaveBeenCalled();
+		expect((await call("GET", `/i1/secure-inputs/${id}`)).body.status).toBe("ready");
+	});
+
+	it("a per-call (ask) consent is refused too — inject cannot be queued for approval", async () => {
+		await setConsent(env, "i1", "u1", "tmux", "write", "ask");
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(r.body).toMatchObject({ delivered: false, consumedValue: false, status: "ready" });
+		expect(r.body.reason).toContain("ask on every call");
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("a prefixed target needs the terminal connector's consent — tmux consent alone does not reach /terminal/send", async () => {
+		await revokeConsent(env, "i1", "terminal", "write");
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "tmux:gcloud-setup" });
+		expect(r.body).toMatchObject({ delivered: false, consumedValue: false, status: "ready" });
+		expect(r.body.reason).toContain("PUT /v1/instances/i1/connectors/terminal/consent");
+		expect(callRunner).not.toHaveBeenCalled();
 	});
 });

@@ -14,6 +14,7 @@ vi.mock("../lib/runner-client.js", async (orig) => ({ ...(await orig<typeof impo
 vi.mock("../lib/auth.js", async (orig) => ({ ...(await orig<typeof import("../lib/auth.js")>()), requireUser: async () => ({ uid: "u1", roles: [] }) }));
 
 import { HttpError } from "../lib/auth.js";
+import { setConsent } from "../lib/connector-consent.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { hiddenOutcomeTiming, judgeHiddenOutcome, outputAfterPrompt, trailingSecretPrompt } from "../lib/secure-input-hidden.js";
 import type { Env } from "../types.js";
@@ -54,10 +55,13 @@ function capture(s: Session): string {
 	return s.pane;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
 	d1 = realSchemaD1();
 	seedTenant(d1, { userId: "u1", instanceIds: ["i1"] });
 	env = { DB: d1.DB, KEY_ENCRYPTION_KEY: "0".repeat(64) } as unknown as Env;
+	// The owner granted terminal write consent, as `*_send_keys` needs (#1145).
+	await setConsent(env, "i1", "u1", "tmux", "write");
+	await setConsent(env, "i1", "u1", "terminal", "write");
 	machine = new Map([
 		["ssh-pink", session({ pane: `$ ssh serge@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT })],
 		["sudo", session({ pane: `$ sudo systemctl restart pags-runner\n${SUDO_PROMPT}`, prompt: SUDO_PROMPT, rejection: "Sorry, try again." })],

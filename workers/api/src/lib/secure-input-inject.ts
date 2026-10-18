@@ -21,11 +21,21 @@
  * a bare name is a tmux session, under the tmux binding. tmux itself turns `:` in a session name
  * into `_`, so the two cannot be confused.
  *
+ * It is held to the same write-consent as `*_send_keys` (#1145): the connector whose runner path types
+ * it (`terminal` for a prefixed target, `tmux` for a bare one) must have the owner's write consent on
+ * this instance. NOT exempt because the owner typed the value: entering a secret consents to handing
+ * it over, not to letting the agent type into a pane — the agent picks the `target`, as it does for
+ * `*_send_keys`. And the file sibling `tmux_secure_get` is already behind this gate via
+ * `runRegistryTool`; exempting the terminal path would make one secure-input delivery gated and the
+ * other not. A per-call (`ask`) consent is refused too: inject cannot be queued as a board ticket, and
+ * typing without that per-call approval would be exactly what `ask` forbids.
+ *
  * The value never leaves this module: the pane that comes back from the runner shows it, so the pane
  * is read here for verification and returned NOWHERE — not in the result, a log, or a trace.
  */
 import type { Env } from "../types.js";
 import { lookupConnectorConstraints } from "./agent-capabilities.js";
+import { consentModeFor } from "./connector-consent.js";
 import { TERMINAL_TOOLS } from "./connectors/terminal.js";
 import { TMUX_TOOLS } from "./connectors/tmux.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
@@ -107,6 +117,19 @@ async function constraintRefusal(env: Env, instanceId: string, userId: string, t
 	}
 }
 
+/**
+ * The write-consent `*_send_keys` is held to in `runRegistryTool`, for the connector whose runner
+ * path types into this target — refusal or null (#1145). Fail-closed: no consent, or `ask`, refuses.
+ */
+async function consentRefusal(env: Env, instanceId: string, target: string): Promise<string | null> {
+	const connector = TERMINAL_PREFIX.test(target) ? "terminal" : "tmux";
+	const route = `PUT /v1/instances/${instanceId}/connectors/${connector}/consent`;
+	const mode = await consentModeFor(env, instanceId, connector, "write");
+	if (!mode) return `Typing into a terminal via the ${connector} connector isn't permitted for this agent. Enable write access for ${connector} in the instance's Connections settings (${route}), then inject again.`;
+	if (mode === "ask") return `The ${connector} connector's write access is set to ask on every call, and an inject cannot be queued for approval. Set it to always allow in the instance's Connections settings (${route}), then inject again.`;
+	return null;
+}
+
 /** A runner error names the session or the endpoint — and is scrubbed of the value regardless. */
 function errorText(e: unknown, value: string): string {
 	const msg = e instanceof Error ? e.message.replace(/^Runner \/(?:tmux|terminal)\/\w+ → \d+: /, "") : String(e);
@@ -131,6 +154,8 @@ export async function injectSecureInputToTmux(
 	// held unsubmitted for checking nor cleared off a wrong prompt.
 	if (/^iterm2:/i.test(target)) return refuse("iTerm2 targets cannot be typed into without submitting, or sent C-u/C-c — use a tmux or kitty target. Nothing was consumed.");
 
+	const denied = await consentRefusal(env, input.instanceId, target);
+	if (denied) return refuse(`${denied} Nothing was consumed.`);
 	const refusal = await constraintRefusal(env, input.instanceId, input.userId, target);
 	if (refusal) return refuse(`${refusal} Nothing was consumed.`);
 
