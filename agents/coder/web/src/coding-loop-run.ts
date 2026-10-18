@@ -111,6 +111,7 @@ const LOOP_END_LABEL: Record<string, string> = {
 	engine_limit: "Loop stopped — the coding CLI hit its usage limit",
 	provider_credit: "Loop stopped — the Anthropic API key has no balance",
 	engine_auth: "Loop stopped — the coding CLI needs you to sign in",
+	engine_error: "Loop stopped — the coding CLI crashed",
 	interrupted: "Loop was cut off by the platform",
 	escalated: "Loop needs you",
 	needs_human: "Loop needs you",

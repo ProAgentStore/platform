@@ -126,6 +126,7 @@ const PREDECESSOR_ENDING: Record<ResumableStopReason, string> = {
 	constraint_refused: "a previous run on this repository was stopped before its next instruction because the owner's constraints in force did not fit the objective's envelope whole. It was not your objective failing, and it did not finish; what it already did stands",
 	turn_lost: "a previous run on this repository stopped because a runner restart cut off an engine turn that could not be safely resumed. It was not your objective failing; that turn may have partly run, so check the worktree (git status, git log) before redoing anything",
 	decision: "a previous run on this repository parked on a question to the owner and stopped after waiting 30 days without an answer. It was not your objective failing, and it did not finish; if the owner has answered since, the answer is in the run's question history and on its issue",
+	engine_error: "a previous run on this repository stopped because the coding CLI itself exited with an error (its message is in the run's record — for example an invalid model). It was not your objective failing, and it did not finish; what it already did stands",
 };
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);

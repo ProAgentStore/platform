@@ -383,7 +383,7 @@ export const CONTINUE_RESUME_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
  * its own handoff rather than a successor. `cancelled` is a human stopping it, and a restart after
  * that may well be the "start clean" #806 lists as an option in its own right. `done` needs nothing.
  */
-export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision"] as const satisfies readonly LoopStopReason[];
+export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision", "engine_error"] as const satisfies readonly LoopStopReason[];
 
 export type ResumableStopReason = (typeof RESUMABLE_STOP_REASONS)[number];
 

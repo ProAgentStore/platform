@@ -24,7 +24,7 @@ import { instructionAttributionNote } from "./run-attribution.js";
 import {
 	EMPTY_STREAK,
 	type EngineTurnReport,
-	engineFailureDetail,
+	engineErrorEnding,
 	engineFailureNote,
 	MAX_ENGINE_FAILURES,
 	observeTurn,
@@ -180,7 +180,7 @@ export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"
  * the re-auth relay lets them do from any device — so it is its own outcome, and the workflow parks
  * on it waiting for that relay to report success.
  */
-export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled" | "waiting" | "needs_reauth";
+export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled" | "waiting" | "needs_reauth" | "engine_error";
 
 export interface CodingDecision {
 	thought?: string;
@@ -332,11 +332,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// invocation, and the production run's ending — a `request_human` nobody answered,
 			// timing out to "failed — stuck not resolved in time" fifteen minutes later — is the
 			// worst available one. The bound is CONSECUTIVE, so a run that recovers is untouched.
-			if (turns.consecutive >= MAX_ENGINE_FAILURES) {
-				const detail = engineFailureDetail(turns, goal.repo);
-				transcript.push(`finish: failed — ${detail}`);
-				return { outcome: "failed", detail, steps: step, transcript };
-			}
+			if (turns.consecutive >= MAX_ENGINE_FAILURES) return { ...engineErrorEnding(turns, goal.repo, transcript), steps: step, transcript };
 		}
 
 		const decision = await deps.decide({ goal, actionLog, snapshot: snap });
@@ -383,6 +379,8 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// decides, not the brain's wording — the same narrow detector as everywhere else.
 			const block = engineSignInBlock(snap);
 			if (block) return reauthResult(block, goal, step, transcript);
+			// The turn it is looking at CRASHED (#1200): "ask a person" is the brain reading that off the pane — say what the CLI said.
+			if (turns.consecutive > 0) return { ...engineErrorEnding(turns, goal.repo, transcript), steps: step, transcript };
 			return { outcome: "stuck", detail: decision.stuck.why, steps: step, transcript };
 		}
 		if (decision.needsInput) {
@@ -392,7 +390,8 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			return { outcome: "needs_input", detail: decision.needsInput.why, fieldNeeded: decision.needsInput.field, ...(options.length ? { options } : {}), ...(fullQuestion ? { fullQuestion } : {}), ...(parts?.length ? { parts } : {}), steps: step, transcript };
 		}
 		if (!decision.action) {
-			// No action and no terminal verdict → treat prose as a stuck signal.
+			// No action and no terminal verdict → treat prose as a stuck signal — unless the last turn crashed (#1200).
+			if (turns.consecutive > 0) return { ...engineErrorEnding(turns, goal.repo, transcript), steps: step, transcript };
 			return { outcome: "stuck", detail: decision.thought ?? "no action chosen", steps: step, transcript };
 		}
 

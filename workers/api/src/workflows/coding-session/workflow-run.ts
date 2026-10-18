@@ -1241,7 +1241,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				).catch(() => undefined);
 				// The runner session is now gone — sync the D1 row so it doesn't sit
 				// "active" forever (the row was created active by the /sessions route).
-				const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";
+				const status = result.outcome === "failed" || result.outcome === "max_steps" || result.outcome === "engine_error" ? "error" : "ended";
 				// Through `endSession`, not raw SQL: it is the ONE place a session leaves `active`,
 				// so it is the one place the board card can reliably follow (#206). It also covers
 				// `suspended`, which the raw `status = 'active'` predicate here silently skipped —

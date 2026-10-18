@@ -27,7 +27,8 @@ export type LoopStopReason =
 	| "interrupted" // the PLATFORM cut the invocation off — the objective never reported (#546)
 	| "constraint_refused" // the owner's constraints in force do not fit the engine's envelope whole: nothing more was sent (#1019)
 	| "turn_lost" // a runner restart or engine relaunch cut a turn off and it could not be resumed exactly once: nothing was re-sent (#1053)
-	| "decision"; // parked on a question to the owner and nobody answered within the park's 30 days: continuable (#1076)
+	| "decision" // parked on a question to the owner and nobody answered within the park's 30 days: continuable (#1076)
+	| "engine_error"; // the coding CLI itself exited non-zero (a bad model, a crash): its own message carried, never a wait on a person (#1200)
 
 export interface LoopState {
 	iteration: number;

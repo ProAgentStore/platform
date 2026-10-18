@@ -525,6 +525,8 @@ export function stopReasonFor(outcome: CodingOutcome): LoopStopReason {
 			return "engine_limit";
 		case "needs_reauth":
 			return "engine_auth";
+		case "engine_error":
+			return "engine_error";
 		default:
 			return "done";
 	}

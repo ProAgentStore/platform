@@ -219,3 +219,15 @@ export function engineFailureDetail(streak: TurnStreak, repo?: string): string {
 const NOTE_TAIL_BUDGET = 2500;
 /** The stored run detail's ceiling (`finishLoopRun` keeps 2,000 characters), less headroom. */
 const DETAIL_BUDGET = 1950;
+
+/**
+ * The engine CLI crashed (#1200): an `engine_error` ending carrying the CLI's own words (`engineFailureDetail` — the
+ * exit code and its last output), never a park on a person. Before, a turn that exited 1 on an invalid model left the
+ * Pilot reading the error off the pane and escalating, and the run sat `waiting`/`human` with a countdown,
+ * indistinguishable from a real question, with nothing in its ask, ticket or action log.
+ */
+export function engineErrorEnding(turns: TurnStreak, repo: string, transcript: string[]): { outcome: "engine_error"; detail: string } {
+	const detail = engineFailureDetail(turns, repo);
+	transcript.push(`finish: engine_error — ${detail}`);
+	return { outcome: "engine_error", detail };
+}

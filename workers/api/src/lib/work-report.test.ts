@@ -198,6 +198,7 @@ describe("describeLoopRun", () => {
 		};
 		/** Every stop reason, so the closed set below is derived from `statusFor`, not asserted. */
 		const REASONS: Record<LoopStopReason, true> = {
+			engine_error: true,
 			done: true,
 			escalated: true,
 			failed: true,

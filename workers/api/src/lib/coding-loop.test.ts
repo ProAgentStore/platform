@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { statusFor } from "./agent-loop.js";
+import { isResumableStopReason } from "./agent-loop-store.js";
+import { stopReasonFor } from "./coding-pause.js";
 import {
 	CODING_TOOLS,
 	LEARNED_MAX,
@@ -772,7 +775,7 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 		expect(events.some(([t]) => t === "engine_failed")).toBe(true);
 	});
 
-	it("ends the run FAILED after three consecutive failed turns — not stuck, and not on the first", async () => {
+	it("ends the run as an ENGINE ERROR after three consecutive failed turns — not stuck, and not on the first", async () => {
 		// `failed`, not `stuck`: the production run raised a handoff nobody answered and closed
 		// "failed — stuck not resolved in time" fifteen minutes later. No human takeover fixes a CLI
 		// that refuses on every invocation.
@@ -786,7 +789,8 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 			{ action: { kind: "message", text: "Try the pull from the parent directory instead" } },
 		]);
 		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
-		expect(r.outcome).toBe("failed");
+		// `engine_error` since #1200: the CLI's crash is its own ending, with its own words.
+		expect(r.outcome).toBe("engine_error");
 		expect(r.detail).toContain("3 consecutive turns");
 		expect(r.detail).toContain(REFUSAL);
 		// Three turns ran, and the fourth instruction was never sent. The production run reached
@@ -795,7 +799,7 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 		expect(r.steps).toBeLessThan(5);
 	});
 
-	it("the FAILED run's detail carries the engine's own output, verbatim (#889)", async () => {
+	it("the ended run's detail carries the engine's own output, verbatim (#889)", async () => {
 		const tail = ["Error loading config.toml: unknown variant `danger-full-access`, expected one of `read-only`, `workspace-write`", "[codex exited with code 1]"];
 		const { deps } = refusingEngine([
 			{ action: { kind: "message", text: "one" } },
@@ -803,7 +807,7 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 			{ action: { kind: "message", text: "three" } },
 		], { tail, detail: tail[1] });
 		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
-		expect(r.outcome).toBe("failed");
+		expect(r.outcome).toBe("engine_error");
 		expect(r.detail).toContain("Error loading config.toml: unknown variant `danger-full-access`");
 		expect(r.detail).toContain("The engine's own output on its last turn");
 	});
@@ -815,8 +819,44 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 			{ action: { kind: "message", text: "three" } },
 		], { tail: [], detail: "" });
 		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
-		expect(r.outcome).toBe("failed");
+		expect(r.outcome).toBe("engine_error");
 		expect(r.detail).toMatch(/printed nothing at all on stdout or stderr/);
+	});
+
+	it("#1200 acceptance: an invalid-model Grok turn the Pilot then calls STUCK ends as an engine error with the CLI's message — never a wait on a person", async () => {
+		// The production shape: `[grok exited with code 1]` after a model error, and the run sat `waiting` /
+		// `waitingReason: human` with a countdown and an empty ask — indistinguishable from a design question.
+		const tail = ["Error: model \"grok-9-imaginary\" not found (400 invalid_request_error)", "[grok exited with code 1]"];
+		const { deps, sent } = refusingEngine([
+			{ action: { kind: "message", text: "Fix the lint error in src/app.ts." } },
+			{ stuck: { why: "The CLI printed an error I cannot resolve — asking the owner." } },
+		], { tail, detail: tail[1] });
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		expect(r.outcome).toBe("engine_error");
+		expect(r.outcome).not.toBe("stuck");
+		expect(r.detail).toContain('model "grok-9-imaginary" not found');
+		expect(r.detail).toContain("exited with code 1");
+		expect(sent).toHaveLength(1);
+		// And the run's ending is an ERROR state, not a needs-you one.
+		expect(stopReasonFor(r.outcome)).toBe("engine_error");
+		expect(statusFor(stopReasonFor(r.outcome))).toBe("failed");
+	});
+
+	it("#1200: a Pilot that chooses NO action after a crashed turn is an engine error too, not a stuck signal", async () => {
+		const { deps } = refusingEngine([{ action: { kind: "message", text: "run it" } }, { thought: "the engine errored, not sure what to do" }]);
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		expect(r.outcome).toBe("engine_error");
+		expect(r.detail).toContain(REFUSAL);
+	});
+
+	it("#1200: a genuine stuck after a HEALTHY turn still asks a person — only a crash is re-classified", async () => {
+		const { deps } = refusingEngine([{ action: { kind: "message", text: "run it" } }, { stuck: { why: "which API key should I use?" } }], { failEvery: false });
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		expect(r.outcome).toBe("stuck");
+	});
+
+	it("an engine error is a continuable stop — fix the model or the CLI, then continue the run", () => {
+		expect(isResumableStopReason("engine_error")).toBe(true);
 	});
 
 	it("does NOT end a run on ONE failed turn — a CLI can exit and be relaunched", async () => {
