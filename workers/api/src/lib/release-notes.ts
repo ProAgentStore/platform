@@ -6,9 +6,9 @@
  * covers what changed, the issues closed (by title) and the commit range. One note per run, not per
  * commit: every push the run made is batched into it.
  *
- * Channels today: Discord, through the instance's `discord_channel` grants. Slack and other messaging
- * connectors (#1217) are added to {@link releaseNoteChannels} and {@link Deliver}. Nothing else
- * changes.
+ * Channels: the instance's granted Discord and Slack channels, filtered by its release-notes setting
+ * (#1217, lib/release-notes-settings.ts) — off, or a chosen subset of the granted channels. A new
+ * messaging connector is one entry in `RELEASE_NOTE_PROVIDERS` and one branch in {@link liveDeliver}.
  *
  * What the note claims:
  *   • The push is read from the run's own recorded acts (`act.consequential`, lib/engine-acts.ts),
@@ -26,17 +26,22 @@
 import { clipMarked } from "./clip-marked.js";
 import { deepLinkFor } from "./console-links.js";
 import { getRepo } from "./coding-store.js";
-import { listConnectorGrants } from "./connector-grants.js";
+import { HttpError } from "./auth.js";
 import { connectorClient } from "./connectors/client.js";
-import { postDiscordMessage } from "./connectors/discord.js";
+import { DISCORD_NOT_CONNECTED, postDiscordMessage } from "./connectors/discord.js";
 import { deriveAct } from "./engine-acts.js";
 import { logError } from "./error-log.js";
 import { logEvent } from "./events.js";
 import { resolveGithubRead } from "./github-cache.js";
+import { grantedReleaseChannels, loadReleaseNotes, type ReleaseChannel } from "./release-notes-settings.js";
 import type { RunStep } from "./runner-availability.js";
+import { postSlackMessage, SLACK_NOT_CONNECTED } from "./slack.js";
 import { safeFetch } from "./ssrf.js";
 import { notifyUser } from "../routes/push.js";
+import { getUserProviderKey } from "./user-ai.js";
 import type { Env } from "../types.js";
+
+export type { ReleaseChannel } from "./release-notes-settings.js";
 
 /** Discord allows 2,000 characters. The note stays under this, cutting its lists visibly. */
 export const RELEASE_NOTE_MAX_CHARS = 1_800;
@@ -78,13 +83,6 @@ export interface ReleaseNoteInput {
 	sessionId: string;
 }
 
-export interface ReleaseChannel {
-	provider: "discord";
-	grantId: string;
-	channelId: string;
-	name: string;
-}
-
 export type Deliver = (channel: ReleaseChannel, text: string) => Promise<{ ok: true } | { ok: false; error: string }>;
 
 export interface ReleaseNoteDeps {
@@ -96,7 +94,7 @@ export interface ReleaseNoteDeps {
 
 
 export interface ReleaseNoteOutcome {
-	status: "not_shipped" | "no_channels" | "posted";
+	status: "not_shipped" | "disabled" | "no_channels" | "posted";
 	sent: string[];
 	failed: { grantId: string; error: string }[];
 }
@@ -128,12 +126,6 @@ export async function runShippedToTrunk(env: Env, input: { instanceId: string; u
 		if (c.act === "pr.merge") return true;
 		return c.act === "push.trunk" && deriveAct(c.act, String(c.command ?? "")).phrase === "pushed directly to the trunk";
 	});
-}
-
-/** The messaging channels this instance was granted. Discord today; #1217 adds Slack here. */
-export async function releaseNoteChannels(env: Env, instanceId: string, userId: string): Promise<ReleaseChannel[]> {
-	const discord = await listConnectorGrants(env, instanceId, userId, "discord");
-	return discord.filter((g) => g.resourceType === "discord_channel").map((g) => ({ provider: "discord", grantId: g.id, channelId: g.resourceId, name: g.resourceName }));
 }
 
 function ciFrom(raw: unknown): CiStatus {
@@ -245,14 +237,20 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 	const trace = { source: "coding", userId, instanceId, traceId: runId };
 	const plan = (await runStep("release-notes-plan", async () => {
 		if (!(await runShippedToTrunk(env, { instanceId, userId, runId }))) return null;
-		const channels = await releaseNoteChannels(env, instanceId, userId);
+		const settings = await loadReleaseNotes(env, instanceId, userId);
+		if (!settings?.effective.enabled) return { disabled: true, channels: [], repo: input.repoLabel, text: "" };
+		const channels: ReleaseChannel[] = settings.effective.channels.filter((c) => c.selected).map(({ selected: _s, ...c }) => c);
 		if (!channels.length) return { channels, repo: input.repoLabel, text: "" };
 		const ctx = await collectReleaseNoteContext(input, deps);
 		return { channels, repo: ctx.repo, text: buildReleaseNoteText(ctx) };
-	})) as { channels: ReleaseChannel[]; repo: string; text: string } | null;
+	})) as { disabled?: true; channels: ReleaseChannel[]; repo: string; text: string } | null;
 	if (!plan) return { status: "not_shipped", sent: [], failed: [] };
+	if (plan.disabled) {
+		await logEvent(env, { ...trace, event: "release_note_skipped_disabled", message: "Release note not posted: release notes are turned off for this instance." }).catch(() => undefined);
+		return { status: "disabled", sent: [], failed: [] };
+	}
 	if (!plan.channels.length) {
-		await logEvent(env, { ...trace, event: "release_note_skipped_no_grants", message: "Release note not posted: no messaging channel is granted to this instance." }).catch(() => undefined);
+		await logEvent(env, { ...trace, event: "release_note_skipped_no_grants", message: "Release note not posted: no messaging channel is granted to this instance, or none is chosen to receive release notes." }).catch(() => undefined);
 		return { status: "no_channels", sent: [], failed: [] };
 	}
 	const outcome: ReleaseNoteOutcome = { status: "posted", sent: [], failed: [] };
@@ -266,11 +264,11 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 		})) as Awaited<ReturnType<Deliver>>;
 		if (result.ok) {
 			outcome.sent.push(channel.grantId);
-			await logEvent(env, { ...trace, event: "release_note_sent", message: `Release note posted to ${channel.provider} #${channel.name}`, context: { provider: channel.provider, grantId: channel.grantId, channelId: channel.channelId } }).catch(() => undefined);
+			await logEvent(env, { ...trace, event: "release_note_sent", message: `Release note posted to ${channel.provider} ${channel.name}`, context: { provider: channel.provider, grantId: channel.grantId, channelId: channel.channelId } }).catch(() => undefined);
 			continue;
 		}
 		outcome.failed.push({ grantId: channel.grantId, error: result.error });
-		const message = `Release note could not be posted to ${channel.provider} #${channel.name}: ${result.error}`;
+		const message = `Release note could not be posted to ${channel.provider} ${channel.name}: ${result.error}`;
 		const context = { provider: channel.provider, grantId: channel.grantId, channelId: channel.channelId, instanceId, runId };
 		await logError(env, { source: "release-notes", message, userId, context }).catch(() => undefined);
 		await logEvent(env, { ...trace, event: "release_note_failed", level: "error", message, context }).catch(() => undefined);
@@ -307,11 +305,44 @@ function liveDeps(input: ReleaseNoteInput): ReleaseNoteDeps {
 			}).catch(() => null);
 			return res?.ok ? res.json().catch(() => null) : null;
 		},
-		deliver: async (channel, text) => {
-			const bot = await connectorClient(env, "discord", { userId }).token().catch(() => null);
-			if (!bot) return { ok: false, error: "No Discord bot is connected." };
-			const sent = await postDiscordMessage(bot, channel.channelId, text);
-			return sent.ok ? { ok: true } : { ok: false, error: sent.message };
-		},
+		deliver: liveDeliver(env, userId),
 	};
+}
+
+/** Post to a granted channel with the owner's own bot for that provider. */
+export function liveDeliver(env: Env, userId: string): Deliver {
+	return async (channel, text) => {
+		if (channel.provider === "slack") {
+			const bot = await getUserProviderKey(env, userId, "slack");
+			if (!bot) return { ok: false, error: SLACK_NOT_CONNECTED };
+			const sent = await postSlackMessage(bot, channel.channelId, text);
+			return sent.ok ? { ok: true } : { ok: false, error: sent.message };
+		}
+		const bot = await connectorClient(env, "discord", { userId }).token().catch(() => null);
+		if (!bot) return { ok: false, error: DISCORD_NOT_CONNECTED };
+		const sent = await postDiscordMessage(bot, channel.channelId, text);
+		return sent.ok ? { ok: true } : { ok: false, error: sent.message };
+	};
+}
+
+/**
+ * Send a TEST release note to one channel granted to this instance (#1217) — the way to check a
+ * channel works before a run depends on it. Sent whether or not release notes are on, and whether
+ * or not the channel is chosen: it tests the channel, not the setting. Refused (404) for a grant
+ * this instance does not hold; a failed post is a 502 with the provider's reason.
+ */
+export async function sendTestReleaseNote(env: Env, userId: string, instanceId: string, grantId: string, deliver: Deliver = liveDeliver(env, userId)): Promise<{ sent: true; channel: ReleaseChannel }> {
+	const channel = (await grantedReleaseChannels(env, instanceId, userId)).find((c) => c.grantId === grantId);
+	if (!channel) throw new HttpError(404, `This instance holds no Discord or Slack grant "${grantId}" — it was revoked or belongs to another instance. GET /v1/instances/${instanceId}/release-notes lists its channels.`);
+	const text = `🧪 Test release note from ProAgentStore\n\nThis channel (${channel.name}) is set up to receive release notes. When a coder run on this agent ships to its repository's default branch, one note per run arrives here: what changed, the issues it closed, and CI/deploy status.`;
+	let result: Awaited<ReturnType<Deliver>>;
+	try {
+		result = await deliver(channel, text);
+	} catch (e) {
+		result = { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+	const context = { provider: channel.provider, grantId, channelId: channel.channelId };
+	await logEvent(env, { source: "coding", event: result.ok ? "release_note_test_sent" : "release_note_test_failed", level: result.ok ? "info" : "warn", userId, instanceId, message: `Test release note to ${channel.provider} ${channel.name}: ${result.ok ? "sent" : result.error}`, context }).catch(() => undefined);
+	if (!result.ok) throw new HttpError(502, `The test release note was not delivered to ${channel.provider} ${channel.name}: ${result.error}`);
+	return { sent: true, channel };
 }

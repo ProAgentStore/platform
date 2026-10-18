@@ -26,6 +26,7 @@
 // them: otherwise every agent would read as "customised" on day one, which is the sprawl this
 // removes.
 
+import type { AccountReleaseNotes } from "../agent-types.js";
 import { isValidTimeZone } from "./cron-time.js";
 import { type NotificationPreferences, type NotificationTypeSpec, sanitizeNotificationPreferences } from "./notifications.js";
 import { type EffectiveRow, type NotificationChannelSpec, sanitizeNotificationPolicy } from "./notification-policy.js";
@@ -182,6 +183,8 @@ export interface AccountPreferences {
 	 * the log and is never optional, which is the same split `pushAllowedByPreference` makes.
 	 */
 	attention?: OwnerAttentionPreferences;
+	/** Whether instances post release notes by default (#1217); an instance can override it. */
+	releaseNotes?: AccountReleaseNotes;
 }
 
 export interface CodingPreferences {
@@ -401,6 +404,12 @@ function withSanitizedRules(prefs: NotificationPreferences | undefined): Notific
 	return { ...prefs, rules: policy.rules };
 }
 
+/** The release-notes account default (#1217) from a stored blob — lenient: anything malformed is unset. */
+export function sanitizeAccountReleaseNotes(raw: unknown): AccountReleaseNotes | undefined {
+	const enabled = (raw as { enabled?: unknown } | null)?.enabled;
+	return typeof enabled === "boolean" ? { enabled } : undefined;
+}
+
 export function parseAccountPreferences(raw: string | null | undefined): AccountPreferences {
 	if (!raw) return {};
 	try {
@@ -420,6 +429,7 @@ export function parseAccountPreferences(raw: string | null | undefined): Account
 			// is exactly what it understands, on every read, whatever older code wrote.
 			notifications: withSanitizedRules(sanitizeNotificationPreferences(o.notifications)),
 			attention: sanitizeOwnerAttentionPreferences(o.attention),
+			releaseNotes: sanitizeAccountReleaseNotes(o.releaseNotes),
 		};
 	} catch {
 		return {};

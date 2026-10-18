@@ -65,6 +65,9 @@ export default function Preferences() {
 	const [coding, setCoding] = useState<{ defaultEngineId?: string }>({});
 	const [codingEngineOptions, setCodingEngineOptions] = useState<ReadonlyArray<CodingEngineOption>>([]);
 	const [codingMsg, setCodingMsg] = useState("");
+	// The release-notes default every agent inherits (#1217): undefined = the platform default (on).
+	const [releaseNotes, setReleaseNotes] = useState<boolean | undefined>(undefined);
+	const [releaseNotesMsg, setReleaseNotesMsg] = useState("");
 	const [applyingCoding, setApplyingCoding] = useState(false);
 	const [languages, setLanguages] = useState<ReadonlyArray<{ name: string; tag: string }>>([]);
 	const [notificationTypes, setNotificationTypes] = useState<ReadonlyArray<NotificationTypeSpec>>([]);
@@ -99,6 +102,7 @@ export default function Preferences() {
 				setVoice(recordOrEmpty(d.preferences?.voice));
 				setTranslation(recordOrEmpty(d.preferences?.translation));
 				setCoding(d.preferences?.coding || {});
+				setReleaseNotes(d.preferences?.releaseNotes?.enabled);
 				setCodingEngineOptions(d.codingEngineOptions || []);
 				setLanguages(d.languages || []);
 				// The vocabulary comes from the server, not from a second copy of the list here —
@@ -147,6 +151,22 @@ export default function Preferences() {
 			setCoding(d.preferences?.coding || {});
 		} catch (e) {
 			setCodingMsg(e instanceof Error ? e.message : String(e));
+		}
+	}, []);
+
+	const saveReleaseNotesDefault = useCallback(async (value: "" | "on" | "off") => {
+		const enabled = value === "" ? undefined : value === "on";
+		setReleaseNotes(enabled);
+		setReleaseNotesMsg("");
+		try {
+			const d = await api<AccountPreferencesWriteResponse>("/v1/preferences", {
+				method: "PUT",
+				body: JSON.stringify({ releaseNotes: enabled === undefined ? null : { enabled } }),
+			});
+			setReleaseNotes(d.preferences?.releaseNotes?.enabled);
+			setReleaseNotesMsg("Saved — agents without their own release-notes setting follow this.");
+		} catch (e) {
+			setReleaseNotesMsg(e instanceof Error ? e.message : String(e));
 		}
 	}, []);
 
@@ -218,6 +238,25 @@ export default function Preferences() {
 			{/* #992: the per-event, per-channel rules under the switches above. Same component as an
 			    agent's own editor, so the two levels cannot describe the same choice differently. */}
 			<NotificationPolicySection />
+
+			<Card className="mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Release notes</h3>
+				<p className="text-xs text-muted mb-3">
+					When a coder run ships to a repository's default branch, it posts one release note to the Discord and Slack channels granted to that agent. This is the default for every agent; an agent can override it, and choose its channels, on its Permissions tab.
+				</p>
+				<label htmlFor="account-release-notes" className="text-xs text-muted block mb-1">Default</label>
+				<select
+					id="account-release-notes"
+					value={releaseNotes === undefined ? "" : releaseNotes ? "on" : "off"}
+					onChange={(e) => void saveReleaseNotesDefault(e.target.value as "" | "on" | "off")}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full sm:w-56"
+				>
+					<option value="">Platform default (on)</option>
+					<option value="on">On</option>
+					<option value="off">Off</option>
+				</select>
+				{releaseNotesMsg && <p className="text-xs text-muted mt-2">{releaseNotesMsg}</p>}
+			</Card>
 
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Default coding engine</h3>

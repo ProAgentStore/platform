@@ -29,6 +29,7 @@ import {
 	unknownVoiceField,
 	type AccountPreferences,
 } from "../lib/preferences.js";
+import { validateAccountReleaseNotes } from "../lib/release-notes-settings.js";
 import { TRANSLATION_LANGUAGES } from "./instances-translation.js";
 import type { Env } from "../types.js";
 
@@ -90,6 +91,7 @@ preferenceRoutes.put("/", async (c) => {
 		timezone?: unknown;
 		notifications?: unknown;
 		attention?: unknown;
+		releaseNotes?: unknown;
 	};
 	// Strict on write, like `notifications` below: an event we do not know, or one whose push is not
 	// optional, must be refused rather than dropped — a silently ignored save leaves the owner
@@ -176,6 +178,9 @@ preferenceRoutes.put("/", async (c) => {
 		// section-level patch rule — omitting it leaves the stored channel controls alone.
 		attention:
 			body.attention === undefined ? current.attention : sanitizeOwnerAttentionPreferences(body.attention),
+		// The default every instance's release notes follow (#1217). Strict on write; `null` clears it
+		// back to the platform default (on).
+		releaseNotes: body.releaseNotes === undefined ? current.releaseNotes : body.releaseNotes === null ? undefined : validateAccountReleaseNotes(body.releaseNotes),
 	};
 
 	await c.env.DB.prepare("UPDATE users SET preferences = ?1 WHERE id = ?2")

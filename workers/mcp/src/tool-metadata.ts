@@ -326,6 +326,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_discord_guilds: "read",
 	list_discord_channels: "read",
 	list_instance_discord_grants: "read",
+	// #1217: an instance's release-notes setting, and the Slack bot's status, channels and an instance's grants. Never the token.
+	get_instance_release_notes: "read",
+	slack_bot_status: "read",
+	list_slack_channels: "read",
+	list_instance_slack_grants: "read",
 
 	// ── write: adds to or updates PAGS state, and this server grants it on a default
 	//    connection. Announced `readOnlyHint: false, destructiveHint: false`. ──
@@ -425,6 +430,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #1132: connecting/rotating the bot (verified with Discord first) and granting one channel — reversible owner state.
 	connect_discord_bot: "write",
 	grant_instance_discord_channel: "write",
+	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.
+	set_instance_release_notes: "write",
+	send_test_release_note: "write",
+	connect_slack_bot: "write",
+	grant_instance_slack_channel: "write",
 
 	// ── runtime: drives something whose effects this server does not model — a machine, a
 	//    deploy, an agent turn. Announced `destructiveHint: true`, which reads "MAY perform
@@ -539,6 +549,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #1132: disconnecting drops the bot token and every Discord grant; a revoke cuts an agent off a channel.
 	disconnect_discord_bot: "destructive",
 	revoke_instance_discord_grant: "destructive",
+	// #1217: disconnecting drops the Slack bot token and every Slack grant; a revoke stops an instance's notes reaching a channel.
+	disconnect_slack_bot: "destructive",
+	revoke_instance_slack_grant: "destructive",
 };
 
 export { MCP_RISK_COUNTS } from "./tool-risk-counts.js";

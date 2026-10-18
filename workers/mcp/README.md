@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**350 tool registrations.** 323 are always registered; 27 are gated to the console
+**360 tool registrations.** 333 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -572,6 +572,16 @@ immediately instead of a whole transcript.
 | `list_instance_discord_grants` | One instance's granted Discord channels, with the stable grant ids its Discord tools take (#1132) | read | | |
 | `grant_instance_discord_channel` | Grant one instance one channel, checked with the bot first; a re-grant returns the same id (#1132) | write | yes | |
 | `revoke_instance_discord_grant` | Revoke one instance's channel grant by id (#1132) | destructive | yes | `revoke_instance_discord_grant` |
+| `get_instance_release_notes` | Who receives an instance's release notes: its own setting, the account default, and each granted Discord/Slack channel marked `selected` (#1217) | read | | |
+| `set_instance_release_notes` | Turn an instance's release notes on/off (null = follow the account) and choose which granted channels receive them; an ungranted grant id is refused (#1217) | write | yes | |
+| `send_test_release_note` | Post a test release note to one channel granted to the instance (#1217) | write | yes | |
+| `slack_bot_status` | Is a Slack bot connected, does its token still work (checked live), which workspace, how many grants depend on it — never the token (#1217) | read | | |
+| `connect_slack_bot` | Connect or rotate the Slack bot token (xoxb-), verified with Slack first; another workspace's bot revokes old grants; never returned (#1217) | write | yes | |
+| `disconnect_slack_bot` | Remove the Slack bot token and every Slack channel grant on every instance (#1217) | destructive | yes | `disconnect_slack_bot` |
+| `list_slack_channels` | The public/private channels the Slack bot can see, with `isMember` (#1217) | read | | |
+| `list_instance_slack_grants` | One instance's granted Slack channels, with their stable grant ids (#1217) | read | | |
+| `grant_instance_slack_channel` | Grant one instance one Slack channel, checked with the bot first; a re-grant returns the same id (#1217) | write | yes | |
+| `revoke_instance_slack_grant` | Revoke one instance's Slack channel grant by id (#1217) | destructive | yes | `revoke_instance_slack_grant` |
 | `get_instance_connector_account` | Which of your accounts the instance uses per connector (e.g. Gmail): `pinned`, what a call `resolves` to, and `blocked` when it would use none | read | | |
 | `set_instance_connector_account` | Pin the instance to one connected account; answers with the row read back. A blank `account_id` is refused — it never clears a pin | write | yes | |
 

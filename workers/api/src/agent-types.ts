@@ -313,6 +313,118 @@ export interface DiscordBotDisconnectResponse {
 	revoked: { grants: number; instances: number };
 }
 
+// ── Slack + release notes (#1217) ──────────────────────────────────────────────────────────
+
+/** The workspace a Slack bot token belongs to. Never the token. */
+export interface SlackBot {
+	teamId: string;
+	team: string;
+	botUserId: string | null;
+}
+
+/** A public or private channel the owner's Slack bot can see. */
+export interface SlackChannel {
+	id: string;
+	name: string;
+	isPrivate: boolean;
+	/** The bot is in the channel — Slack refuses posts from a bot that is not. */
+	isMember: boolean;
+}
+
+/** `GET /v1/slack/bot`. */
+export interface SlackBotStatusResponse {
+	oauthConfigured: boolean;
+	connected: boolean;
+	valid: boolean;
+	bot: SlackBot | null;
+	error?: string;
+	reach: { grants: number; instances: number };
+}
+
+/** `PUT /v1/slack/bot` — and what the OAuth callback stores. */
+export interface SlackBotConnectResponse {
+	connected: true;
+	rotated: boolean;
+	bot: SlackBot;
+	revoked: { grants: number; instances: number };
+}
+
+export interface SlackBotDisconnectResponse {
+	disconnected: boolean;
+	revoked: { grants: number; instances: number };
+}
+
+export interface SlackOauthStartResponse {
+	url: string;
+}
+
+export interface SlackChannelListResponse {
+	channels: SlackChannel[];
+	hasMore: boolean;
+}
+
+/** A Slack channel grant has the same row shape as a Discord one. */
+export type SlackConnectorGrant = DiscordConnectorGrant;
+
+export interface SlackGrantListResponse {
+	grants: SlackConnectorGrant[];
+}
+
+export interface SlackGrantResponse {
+	grant: SlackConnectorGrant;
+	botInChannel: boolean;
+	note: string | null;
+}
+
+export type ReleaseNoteProvider = "discord" | "slack";
+
+/** One channel granted to an instance that can receive its release notes. */
+export interface ReleaseChannel {
+	provider: ReleaseNoteProvider;
+	grantId: string;
+	/** The provider's channel id. */
+	channelId: string;
+	name: string;
+}
+
+/** Which level decided `enabled`: the instance's own setting, the account default, or the platform's (on). */
+export type ReleaseNotesEnabledFrom = "instance" | "account" | "platform";
+
+export interface AccountReleaseNotes {
+	enabled: boolean;
+}
+
+export interface InstanceReleaseNotes {
+	/** Absent: follow the account default. */
+	enabled?: boolean;
+	/** Grant ids. Absent: every channel granted to the instance. */
+	channels?: string[];
+}
+
+export interface ResolvedReleaseNotes {
+	enabled: boolean;
+	enabledFrom: ReleaseNotesEnabledFrom;
+	/** Every channel granted to the instance, each marked whether it receives the notes. */
+	channels: Array<ReleaseChannel & { selected: boolean }>;
+	/** `instance` when the instance chose its channels, `all` when every granted channel receives them. */
+	channelsFrom: "instance" | "all";
+	/** Grant ids the instance chose that are no longer granted — they receive nothing. */
+	missing: string[];
+}
+
+/** `GET`/`PUT /v1/instances/:id/release-notes`. */
+export interface InstanceReleaseNotesResponse {
+	settings: InstanceReleaseNotes;
+	account: AccountReleaseNotes | null;
+	effective: ResolvedReleaseNotes;
+}
+
+/** `POST /v1/instances/:id/release-notes/test`. */
+export interface ReleaseNoteTestResponse {
+	sent: true;
+	channel: ReleaseChannel;
+}
+
 /**
  * Owner-safe projection of a blocked-operation permission request (#1009).
  *

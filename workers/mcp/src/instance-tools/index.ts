@@ -20,6 +20,7 @@ import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerDiscordTools } from "./discord.js";
+import { registerReleaseNotesTools } from "./release-notes.js";
 import { registerGuideTools } from "./guide.js";
 import { registerHttpProfileTools } from "./http-profiles.js";
 import { registerConsoleLinkTools } from "./console-link.js";
@@ -95,6 +96,7 @@ export function registerInstanceTools(
 	// Named HTTP credential profiles + per-instance bindings (#1123) — ungated: metadata out, secrets never.
 	registerHttpProfileTools(server, ctx);
 	registerDiscordTools(server, ctx); // native Discord bot connect + per-instance channel grants (#1132)
+	registerReleaseNotesTools(server, ctx); // release-notes setting + test send, and the Slack bot + per-instance channel grants (#1217)
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);

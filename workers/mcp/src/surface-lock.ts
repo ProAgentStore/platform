@@ -1205,4 +1205,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.152": "sha256:a93e53a7074bfb4cca41500ba5bf6a5712b49dfe6c952e6ff5b5408a5cbb9597",
 	// #1156: coding_engine_reauth's client_type gains grok (xAI's Grok CLI device-code sign-in, `grok login --device-auth`).
 	"0.1.153": "sha256:1dcf299105a77144018d0998f5508d7a679fb96cb44a4d97c40c8020e04149cf",
+	// #1217: ten release-notes + Slack tools (get/set_instance_release_notes, send_test_release_note, slack_bot_status, connect/disconnect_slack_bot, list_slack_channels, list/grant/revoke instance Slack grants); set_account_preferences gains releaseNotes.
+	"0.1.154": "sha256:98cb272545371237c3ac7accb2994078782d5127256088764410be94507ef285",
 };

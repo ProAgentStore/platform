@@ -1,7 +1,9 @@
 import type { InstanceRetirement } from "./retirement";
 import type { ScanSchedule, ScanTelemetry } from "./scanSchedule";
-import type { ApplicationExecutionProjection } from "../../../../workers/api/src/agent-types";
+import type { AccountReleaseNotes, ApplicationExecutionProjection } from "../../../../workers/api/src/agent-types";
 export type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, GithubInstallationCheckReason, GithubInstallationSyncResponse } from "../../../../workers/api/src/agent-types";
+// Release notes + the Slack bot (#1217): the Worker's own types, imported rather than copied.
+export type { AccountReleaseNotes, InstanceReleaseNotesResponse, ReleaseNoteTestResponse, SlackBotConnectResponse, SlackBotStatusResponse, SlackChannelListResponse, SlackGrantResponse, SlackOauthStartResponse } from "../../../../workers/api/src/agent-types";
 
 export interface Agent {
 	id: string;
@@ -249,6 +251,8 @@ export interface ConsoleAccountPreferences {
 	/** Event ids whose push the owner turned off (#991). The in-app row is still written. */
 	attention?: { pushOff?: string[] };
 	timezone?: string;
+	/** The release-notes default every instance inherits (#1217). */
+	releaseNotes?: AccountReleaseNotes;
 }
 
 export interface PreferenceLanguageOption {

@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.153`
+- `serverInfo.version`: `0.1.154`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -251,6 +251,8 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `delete_http_profile`: `confirm: "delete_http_profile"`
 - `disconnect_discord_bot`: `confirm: "disconnect_discord_bot"`
 - `revoke_instance_discord_grant`: `confirm: "revoke_instance_discord_grant"`
+- `disconnect_slack_bot`: `confirm: "disconnect_slack_bot"`
+- `revoke_instance_slack_grant`: `confirm: "revoke_instance_slack_grant"`
 - `delete_supervision`: `confirm: "delete_supervision"`
 - `delete_feedback`: `confirm: "delete_feedback"`
 - `delete_agent`: `confirm: "delete_agent"`
@@ -282,7 +284,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 350 tools under two different scope sets and reads the required scope out
+which drives all 360 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -525,7 +527,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **350 tools**. 323 are always present. The remaining 27 are gated to
+The server registers **360 tools**. 333 are always present. The remaining 27 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -590,7 +592,7 @@ looking and tells the user which console screen to use instead.
 | The credentials vault — site logins, passwords, PINs, recovery codes | Secrets. Console → Knowledge → Credentials. | `check-mcp-parity.mjs` |
 | API-key **values** | `keys_status` returns provider names only. There is no reveal tool and no route that returns a stored key, and no tool writes a provider key slot — a key sent through a tool call is a secret in a transcript. The two deliberate exceptions take a credential IN and never return it: `create_http_profile` / `rotate_http_profile_secret` (#1123) and `connect_discord_bot`, which Discord verifies before storing (#1132). Gmail refresh tokens are never revealable at all. | `check-mcp-parity.mjs` |
 | Credentials for an outbound MCP server | Same rule as the vault, on the newer surface: the console stores the bearer or OAuth secret an instance uses to reach someone else's MCP server, and it is never read back or written over MCP. `list_instance_tools` reports whether a connection HAS one. | `check-mcp-parity.mjs` |
-| Browser sign-in and account-link redirects | An OAuth start returns a URL for a human to open in a browser with cookies. A headless caller cannot complete one, so returning the URL would be an invitation to a dead end. | `check-mcp-parity.mjs` |
+| Browser sign-in and account-link redirects | An OAuth start returns a URL for a human to open in a browser with cookies. A headless caller cannot complete one, so returning the URL would be an invitation to a dead end. Slack's "Add to Slack" start (#1217) is the same; over MCP the Slack bot connects with `connect_slack_bot` instead. | `check-mcp-parity.mjs` |
 | PAS remote sign-in requests (#1005) | The request page exists to hand the OWNER to ProAppStore's own approval page in their own browser, where they sign in and consent. Giving its approval link to a model tool would invite an agent to drive another store's sign-in, which the design forbids; the request is relayed by the owner's machine with the `pags` CLI, not by an agent. | `check-mcp-parity.mjs` |
 | Web Push subscription plumbing | A push subscription is a browser object (a VAPID key and an endpoint minted by the user's own browser). There is nothing for a server-side caller to subscribe WITH. | `check-mcp-parity.mjs` |
 | Permission writes on instance state | `get_instance_state` is read-only for the permission block; toggles stay in the console. The one carve-out is `set_instance_model`, which writes the `model` field and nothing else. | — |

@@ -116,8 +116,8 @@ const EXCLUSIONS = [
 	{
 		label: "Browser sign-in and account-link redirects",
 		why:
-			"An OAuth start returns a URL for a human to open in a browser with cookies. A headless caller cannot complete one, so returning the URL would be an invitation to a dead end.",
-		match: /^[A-Z]+ \/v1\/auth\/[a-z]+\/link\/start$/,
+			"An OAuth start returns a URL for a human to open in a browser with cookies. A headless caller cannot complete one, so returning the URL would be an invitation to a dead end. Slack's \"Add to Slack\" start (#1217) is the same; over MCP the Slack bot connects with `connect_slack_bot` instead.",
+		match: /^[A-Z]+ \/v1\/(?:auth\/[a-z]+\/link|slack\/oauth)\/start$/,
 	},
 	{
 		label: "PAS remote sign-in requests (#1005)",

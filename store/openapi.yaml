@@ -16561,6 +16561,219 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/slack/bot:
+    get:
+      summary: My Slack bot — connected, live-validated, and its grant reach
+      description: Whether a Slack bot token is stored, whether Slack still accepts it (auth.test, checked live), which workspace it is in, whether "Add to Slack" OAuth is configured here, and how many channel grants depend on it. Never returns the token. (#1217)
+      operationId: getSlackBot
+      tags: [Connectors]
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean }
+                  valid: { type: boolean }
+                  oauthConfigured: { type: boolean }
+                  bot: { type: object, nullable: true, properties: { teamId: { type: string }, team: { type: string }, botUserId: { type: string, nullable: true } } }
+                  error: { type: string, description: Why Slack refused the stored token, when valid is false. }
+                  reach: { type: object, properties: { grants: { type: integer }, instances: { type: integer } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      summary: Connect or rotate my Slack bot token
+      description: The bot token (xoxb-) is checked with Slack's auth.test before it is stored; a user token or one Slack rejects is refused (400). Stored encrypted and never returned. A bot in a different workspace than the stored one revokes every Slack channel grant. (#1217)
+      operationId: putSlackBot
+      tags: [Connectors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string, description: The Slack Bot User OAuth Token (xoxb-…). } } }
+      responses:
+        "200": { description: Rotated (rotated true; revoked counts grants dropped for a different workspace) }
+        "201": { description: Connected }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    delete:
+      summary: Disconnect my Slack bot
+      description: Removes the token and every Slack channel grant on every instance; returns what was revoked. (#1217)
+      operationId: deleteSlackBot
+      tags: [Connectors]
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/slack/oauth/start:
+    get:
+      summary: Begin "Add to Slack"
+      description: Returns the Slack authorize URL with a signed, expiring state bound to this browser by a single-use cookie. 501 when the platform's Slack app is not configured — connect by pasting a bot token instead. (#1217)
+      operationId: startSlackOauth
+      tags: [Connectors]
+      responses:
+        "200": { description: The authorize URL, content: { application/json: { schema: { type: object, properties: { url: { type: string } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "501": { description: Slack OAuth is not configured on this platform }
+
+  /v1/slack/oauth/callback:
+    get:
+      summary: Finish "Add to Slack"
+      description: Slack's redirect target. Verifies the state and the browser cookie, exchanges the code (oauth.v2.access) for the bot token, verifies it, and stores it. Answers a small HTML page. (#1217)
+      operationId: completeSlackOauth
+      tags: [Connectors]
+      security: []
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Connected (HTML) }
+        "400": { description: Missing code or state, a state not bound to this browser, or a failed exchange }
+
+  /v1/slack/channels:
+    get:
+      summary: Channels my Slack bot can see
+      description: Public and private, non-archived channels, with isMember (Slack refuses posts from a bot that is not in the channel). One page of up to 200; hasMore when there are more. (#1217)
+      operationId: listSlackChannels
+      tags: [Connectors]
+      responses:
+        "200":
+          description: Channels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channels: { type: array, items: { type: object, properties: { id: { type: string }, name: { type: string }, isPrivate: { type: boolean }, isMember: { type: boolean } } } }
+                  hasMore: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/slack/instances/{instanceId}/grants:
+    get:
+      summary: Slack channels granted to this instance
+      description: The channels this instance's release notes may be posted to. (#1217)
+      operationId: listSlackGrants
+      tags: [Connectors]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Channel grants
+          content:
+            application/json:
+              schema: { type: object, properties: { grants: { type: array, items: { type: object, additionalProperties: true } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Grant a Slack channel to this instance
+      description: Verifies the channel with the owner's bot (conversations.info) before saving the grant; archived or unknown channels are refused. A channel the bot is not in is granted with botInChannel false and a note. Re-granting returns the same grant id. (#1217)
+      operationId: createSlackGrant
+      tags: [Connectors]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [channelId], properties: { channelId: { type: string, description: Slack channel id (C… or G…). } } }
+      responses:
+        "200": { description: Already granted — the same grant }
+        "201":
+          description: Verified channel grant
+          content:
+            application/json:
+              schema: { type: object, properties: { grant: { type: object, additionalProperties: true }, botInChannel: { type: boolean }, note: { type: string, nullable: true } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/slack/instances/{instanceId}/grants/{grantId}:
+    delete:
+      summary: Revoke a Slack channel grant
+      operationId: deleteSlackGrant
+      tags: [Connectors]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: grantId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Success" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/release-notes:
+    get:
+      summary: Who receives this instance's release notes
+      description: The instance's own setting (enabled, channels — each absent when inherited), the account default, and the resolved effect — enabled with enabledFrom (instance, account or platform), and every granted Discord and Slack channel marked selected. missing lists chosen grant ids since revoked. (#1217)
+      operationId: getInstanceReleaseNotes
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Setting and effect
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { type: object, properties: { enabled: { type: boolean }, channels: { type: array, items: { type: string } } } }
+                  account: { type: object, nullable: true, properties: { enabled: { type: boolean } } }
+                  effective:
+                    type: object
+                    properties:
+                      enabled: { type: boolean }
+                      enabledFrom: { type: string, enum: [instance, account, platform] }
+                      channelsFrom: { type: string, enum: [instance, all] }
+                      channels: { type: array, items: { type: object, properties: { provider: { type: string, enum: [discord, slack] }, grantId: { type: string }, channelId: { type: string }, name: { type: string }, selected: { type: boolean } } } }
+                      missing: { type: array, items: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Set who receives this instance's release notes
+      description: Patch per field; null returns a field to inherited (enabled → the account default, channels → every granted channel). channels are grant ids this instance holds — any other is refused and nothing is saved. Unknown fields are refused. Answers the same shape as GET. (#1217)
+      operationId: putInstanceReleaseNotes
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean, nullable: true }
+                channels: { type: array, nullable: true, items: { type: string } }
+      responses:
+        "200": { description: The saved setting and its effect }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/release-notes/test:
+    post:
+      summary: Send a test release note to one granted channel
+      description: Posts a test note to one Discord or Slack channel granted to this instance, whether or not release notes are on or the channel is chosen. 404 for a grant this instance does not hold; 502 with the provider's reason when the post fails. (#1217)
+      operationId: testInstanceReleaseNote
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [grantId], additionalProperties: false, properties: { grantId: { type: string } } }
+      responses:
+        "200": { description: Sent, content: { application/json: { schema: { type: object, properties: { sent: { type: boolean }, channel: { type: object, additionalProperties: true } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
   /v1/drive/files:
     get:
       summary: Search my Drive

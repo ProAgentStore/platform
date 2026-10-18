@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import LoadFailed from "../components/LoadFailed";
+import ReleaseNotesPanel from "../components/ReleaseNotesPanel";
 import type { InstanceConnectorPolicy } from "../lib/connectorState";
 import { permissionRequestFocus } from "../lib/permissionRequestFocus";
 import ConnectorsSection, { type DriveStatus, type WorkdriveStatus } from "./settings/ConnectorsSection";
@@ -32,6 +33,7 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
 	const [discordGrants, setDiscordGrants] = useState<DiscordConnectorGrant[]>([]);
 	const [discordMsg, setDiscordMsg] = useState("");
+	const discordChanges = discordGrants.map((g) => g.id).join(",");
 	const [connectorPolicy, setConnectorPolicy] = useState<InstanceConnectorPolicy[] | null>(null);
 	const [loadFailures, setLoadFailures] = useState<string[]>([]);
 
@@ -232,6 +234,8 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 				onAddDiscordGrant={addDiscordGrant}
 				onRemoveDiscordGrant={removeDiscordGrant}
 			/>
+			{/* #1217: who receives this agent's release notes, across its Discord and Slack grants. */}
+			<ReleaseNotesPanel instanceId={instanceId} refreshKey={discordChanges} />
 		</div>
 	);
 }

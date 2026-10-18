@@ -91,6 +91,9 @@ export interface Env {
 	/** Google OAuth client used for the Gmail email-access connection. */
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;
+	/** Slack app used to connect a Slack bot by OAuth (#1217). Unset: Slack connects by pasting a bot token only. */
+	SLACK_CLIENT_ID?: string;
+	SLACK_CLIENT_SECRET?: string;
 	/** Zoho OAuth client used for the WorkDrive read-only connector. */
 	ZOHO_CLIENT_ID?: string;
 	ZOHO_CLIENT_SECRET?: string;

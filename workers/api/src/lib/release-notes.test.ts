@@ -72,7 +72,7 @@ const events = (name: string) => d1.DB.prepare("SELECT message, context, level F
 describe("one note per run, per granted channel (#1216 acceptance)", () => {
 	it("a run that pushed to main three times posts ONE note to the channel, covering every commit, the closed issue by title, and pending CI", async () => {
 		await pushes(act("a1", "push.trunk", "git push origin main"), act("a2", "push.trunk", "git push origin main"), act("a3", "push.trunk", "git push origin HEAD:main"));
-		await grant("111111111111111111", "releases");
+		await grant("111111111111111111", "#releases");
 		const d = deps();
 		const outcome = await postReleaseNotes(input(), d);
 		expect(outcome).toMatchObject({ status: "posted", failed: [] });
@@ -90,8 +90,8 @@ describe("one note per run, per granted channel (#1216 acceptance)", () => {
 
 	it("two granted channels get one note each — the same note", async () => {
 		await pushes(act("a1", "push.trunk", "git push origin main"));
-		await grant("111111111111111111", "releases");
-		await grant("222222222222222222", "team");
+		await grant("111111111111111111", "#releases");
+		await grant("222222222222222222", "#team");
 		const d = deps();
 		expect((await postReleaseNotes(input(), d)).sent).toHaveLength(2);
 		expect(d.posts.map((p) => p.channel.channelId).sort()).toEqual(["111111111111111111", "222222222222222222"]);
@@ -100,7 +100,7 @@ describe("one note per run, per granted channel (#1216 acceptance)", () => {
 
 	it("a merged pull request counts as shipping to the trunk", async () => {
 		await pushes(act("m1", "pr.merge", "gh pr merge 7 --squash"));
-		await grant("111111111111111111", "releases");
+		await grant("111111111111111111", "#releases");
 		const d = deps();
 		expect((await postReleaseNotes(input(), d)).status).toBe("posted");
 		expect(d.posts).toHaveLength(1);
@@ -108,11 +108,57 @@ describe("one note per run, per granted channel (#1216 acceptance)", () => {
 
 	it("a run that pushed only a branch, or dry-ran the push, posts nothing — and reads nothing from GitHub", async () => {
 		await pushes(act("b1", "push", "git push origin feature/x"), act("b2", "push.trunk", "git push --dry-run origin main"));
-		await grant("111111111111111111", "releases");
+		await grant("111111111111111111", "#releases");
 		const d = deps();
 		expect((await postReleaseNotes(input(), d)).status).toBe("not_shipped");
 		expect(d.posts).toHaveLength(0);
 		expect(d.githubCalls).toHaveLength(0);
+	});
+});
+
+describe("the instance's release-notes setting decides who receives the note (#1217)", () => {
+	const setInstance = (releaseNotes: unknown) => d1.exec(`UPDATE agent_instances SET config = '${JSON.stringify({ releaseNotes })}' WHERE id = 'inst-1'`);
+	const setAccount = (releaseNotes: unknown) => d1.exec(`UPDATE users SET preferences = '${JSON.stringify({ releaseNotes })}' WHERE id = 'u1'`);
+
+	it("turned off on the instance: nothing is posted, GitHub is not read, and the skip is recorded", async () => {
+		await pushes(act("a1", "push.trunk", "git push origin main"));
+		await grant("111111111111111111", "#releases");
+		setInstance({ enabled: false });
+		const d = deps();
+		expect((await postReleaseNotes(input(), d)).status).toBe("disabled");
+		expect(d.posts).toHaveLength(0);
+		expect(d.githubCalls).toHaveLength(0);
+		expect(await events("release_note_skipped_disabled")).toHaveLength(1);
+	});
+
+	it("turned off for the account: an instance with no setting of its own inherits it; one set on still posts", async () => {
+		await pushes(act("a1", "push.trunk", "git push origin main"));
+		await grant("111111111111111111", "#releases");
+		setAccount({ enabled: false });
+		expect((await postReleaseNotes(input(), deps())).status).toBe("disabled");
+		setInstance({ enabled: true });
+		const d = deps();
+		expect((await postReleaseNotes(input(), d)).status).toBe("posted");
+		expect(d.posts).toHaveLength(1);
+	});
+
+	it("chosen channels: only those receive it, out of everything granted", async () => {
+		await pushes(act("a1", "push.trunk", "git push origin main"));
+		const chosen = await grant("111111111111111111", "#releases");
+		await grant("222222222222222222", "#team");
+		setInstance({ channels: [chosen.id] });
+		const d = deps();
+		await postReleaseNotes(input(), d);
+		expect(d.posts.map((p) => p.channel.grantId)).toEqual([chosen.id]);
+	});
+
+	it("a granted Slack channel receives it beside Discord, through the same delivery", async () => {
+		await pushes(act("a1", "push.trunk", "git push origin main"));
+		await grant("111111111111111111", "#releases");
+		await upsertConnectorGrant(env, "inst-1", "u1", { provider: "slack", resourceId: "C0123456789", resourceName: "#eng", resourceType: "slack_channel" });
+		const d = deps();
+		await postReleaseNotes(input(), d);
+		expect(d.posts.map((p) => p.channel.provider).sort()).toEqual(["discord", "slack"]);
 	});
 });
 
@@ -132,9 +178,9 @@ describe("no channel granted: no post, nothing breaks (#1216 acceptance)", () =>
 describe("a failed delivery is logged and surfaced, never dropped (#1216 acceptance)", () => {
 	it("one channel failing (or throwing) does not stop the next; each failure is in error_log and the trace, and the owner gets one alert", async () => {
 		await pushes(act("a1", "push.trunk", "git push origin main"));
-		await grant("111111111111111111", "releases");
-		await grant("222222222222222222", "team");
-		await grant("333333333333333333", "ops");
+		await grant("111111111111111111", "#releases");
+		await grant("222222222222222222", "#team");
+		await grant("333333333333333333", "#ops");
 		const d = deps(async (channel) => {
 			if (channel.channelId === "111111111111111111") return { ok: false, error: "The bot lacks access or permission there." };
 			if (channel.channelId === "222222222222222222") throw new Error("Discord could not be reached.");
@@ -156,7 +202,7 @@ describe("a failed delivery is logged and surfaced, never dropped (#1216 accepta
 
 	it("each delivery is its own step, so a journalled replay does not post twice", async () => {
 		await pushes(act("a1", "push.trunk", "git push origin main"));
-		await grant("111111111111111111", "releases");
+		await grant("111111111111111111", "#releases");
 		const journal = new Map<string, unknown>();
 		const runStep = async (name: string, fn: () => Promise<unknown>) => {
 			if (!journal.has(name)) journal.set(name, await fn());

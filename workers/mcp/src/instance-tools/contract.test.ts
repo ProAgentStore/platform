@@ -14,6 +14,7 @@ import { registerConnectorAccountTools, registerConnectorGrantTools } from "./co
 import { registerGuideTools } from "./guide.js";
 import { registerHttpProfileTools } from "./http-profiles.js";
 import { registerDiscordTools } from "./discord.js";
+import { registerReleaseNotesTools } from "./release-notes.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerBrowserVerificationTools } from "./browser-verification.js";
@@ -511,7 +512,7 @@ const TABLE: Record<string, Row> = {
 	// the cadence, rewrite the config. `write`, no confirmation: disabling keeps the trigger.
 	set_instance_trigger: ["triggers", "write", null, "envelope", "config,dry_run,enabled,name,schedule,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
-	set_account_preferences: ["account", "write", null, "envelope", "attention,coding,dry_run,notifications,timezone,token,translation,voice"],
+	set_account_preferences: ["account", "write", null, "envelope", "attention,coding,dry_run,notifications,releaseNotes,timezone,token,translation,voice"],
 	set_agent_capabilities: ["agentAuthoring", "destructive", "set_agent_capabilities", "envelope", "agent_id,confirm,custom_surfaces,dry_run,local_browser,runtime,surfaces,token,tools,workflow"],
 	set_agent_settings_schema: ["settings", "write", null, "envelope", "agent_id,dry_run,settings_schema,token"],
 	set_agent_state: ["agentAuthoring", "destructive", "set_agent_state", "envelope", "agent_id,confirm,dry_run,state,token"],
@@ -630,6 +631,17 @@ const TABLE: Record<string, Row> = {
 	list_instance_discord_grants: ["discord", "read", null, null, "instance_id,token"],
 	grant_instance_discord_channel: ["discord", "write", null, "envelope", "channel_id,dry_run,instance_id,token"],
 	revoke_instance_discord_grant: ["discord", "destructive", "revoke_instance_discord_grant", "envelope", "confirm,dry_run,grant_id,instance_id,token"],
+	// #1217 — who receives release notes, a test send, and the Slack bot's owner lifecycle + per-instance channel grants.
+	get_instance_release_notes: ["releaseNotes", "read", null, null, "instance_id,token"],
+	set_instance_release_notes: ["releaseNotes", "write", null, "envelope", "channels,dry_run,enabled,instance_id,token"],
+	send_test_release_note: ["releaseNotes", "write", null, "envelope", "dry_run,grant_id,instance_id,token"],
+	slack_bot_status: ["releaseNotes", "read", null, null, "token"],
+	connect_slack_bot: ["releaseNotes", "write", null, "envelope", "bot_token,dry_run,token"],
+	disconnect_slack_bot: ["releaseNotes", "destructive", "disconnect_slack_bot", "envelope", "confirm,dry_run,token"],
+	list_slack_channels: ["releaseNotes", "read", null, null, "token"],
+	list_instance_slack_grants: ["releaseNotes", "read", null, null, "instance_id,token"],
+	grant_instance_slack_channel: ["releaseNotes", "write", null, "envelope", "channel_id,dry_run,instance_id,token"],
+	revoke_instance_slack_grant: ["releaseNotes", "destructive", "revoke_instance_slack_grant", "envelope", "confirm,dry_run,grant_id,instance_id,token"],
 };
 
 /** Which registrar owns each tool — the seam #305 introduced, checked rather than
@@ -649,6 +661,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	guide: registerGuideTools as any,
 	httpProfiles: registerHttpProfileTools as any,
 	discord: registerDiscordTools as any,
+	releaseNotes: registerReleaseNotesTools as any,
 	consoleLink: registerConsoleLinkTools as any,
 	localBrowser: registerLocalBrowserTools as any,
 	browserVerification: registerBrowserVerificationTools as any,

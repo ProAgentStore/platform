@@ -630,6 +630,17 @@ const READBACK: Record<string, string | null> = {
 	"grant_instance_discord_channel.channel_id": "list_instance_discord_grants",
 	"revoke_instance_discord_grant.grant_id": "list_instance_discord_grants",
 
+	// ── #1217: release notes + the Slack bot and channel grants ──
+	"set_account_preferences.releaseNotes": "get_account_preferences",
+	"set_instance_release_notes.enabled": "get_instance_release_notes",
+	"set_instance_release_notes.channels": "get_instance_release_notes",
+	// A test note is a message posted to a channel, not stored state — the channel's own history is where it is read.
+	"send_test_release_note.grant_id": "get_instance_release_notes",
+	// The bot token itself is never returned — `slack_bot_status` reports which workspace's bot it is, not the token.
+	"connect_slack_bot.bot_token": null,
+	"grant_instance_slack_channel.channel_id": "list_instance_slack_grants",
+	"revoke_instance_slack_grant.grant_id": "list_instance_slack_grants",
+
 	// ── subscribe ──
 	// The idempotency key is stored on the instance row as a dedup guard (#716). It is not
 	// a piece of content the subscriber manages; no reader surfaces it, and that is correct —

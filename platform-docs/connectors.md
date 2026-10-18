@@ -58,6 +58,24 @@ same id), `list_instance_discord_grants`, `revoke_instance_discord_grant`, and `
 (`set_instance_connector_consent`). Connect, rotate, disconnect, grant and revoke each write a
 `discord.*` audit event with ids only — never the token or message content.
 
+### Release notes and Slack (#1216, #1217)
+
+When a coder run ships to a repository's default branch, the platform posts **one release note per
+run** — the commit range, each change, the issues closed by title, and CI/deploy as GitHub reports it
+(never "live") — to the Discord and Slack channels granted to that agent. Who receives it is set on the
+agent's **Permissions** tab → *Release notes* (or `get_instance_release_notes` /
+`set_instance_release_notes`): on, off, or follow the account default (**Preferences → Release notes**,
+the `releaseNotes` section of `set_account_preferences`), and which granted channels. *Send test*
+(`send_test_release_note`) posts a test note to one channel.
+
+**Slack** is a notification connector only: the platform posts, the agent gets no Slack tools. Connect
+a Slack bot on the same panel — paste your Slack app's bot token (xoxb-, scopes `chat:write`,
+`channels:read`, `groups:read`), or *Add to Slack* where the platform's Slack app is configured — then
+grant channels one per agent, as with Discord. Over MCP: `connect_slack_bot`, `slack_bot_status`,
+`list_slack_channels` → `grant_instance_slack_channel`, `list_instance_slack_grants`,
+`revoke_instance_slack_grant`, `disconnect_slack_bot`. A bot from a different workspace revokes the old
+grants; the bot must be invited into a channel (`/invite @bot`) before Slack accepts its posts.
+
 **Remote repository reads (#1110).** `github_read_file` (`repo`, `path`, `ref?`, `startLine?`, `endLine?`) and `github_tree` (`repo`, `path?`, `ref?`) read any repository the owner's GitHub App installation covers, at any branch, tag or SHA, with no local checkout. They use the same installation token as the other `github_*` reads, so they add no new scope or grant, and a repository the installation does not cover answers 404. Both are read-only (`mutates: false`), and their output is fenced as untrusted. A file is returned as a window of numbered lines with the exact next call; files over 1 MB can be read up to their first 1 MB, and a binary file returns only its size and sha. **Status:** declared on every Repo Coder (`coder-repo`) and on the Local Coder (`local-coder`, which mirrors the Repo Coder's capabilities) by migration 0251, with the owner's approval. They can be called both from chat and through `call_instance_tool`, and the instance's generated operator manual documents them.
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:

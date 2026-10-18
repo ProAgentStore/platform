@@ -375,7 +375,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"set_account_preferences",
-		"Change your account-wide preferences. Patches by SECTION: pass only the sections you mean to change and the rest are left exactly as stored. `timezone` is an IANA zone (e.g. Australia/Sydney) — an invalid name is REJECTED, never coerced; null clears it back to unset. `notifications` REPLACES that whole section: to mute one more type, read get_account_preferences, add it to the existing `muted`, and send both `muted` and any `instances` scope back — an unknown type id is rejected. `coding.defaultEngineId` sets the inherited coding CLI engine for coders without their own explicit engine. `voice` and `translation` are merged into what is stored, and an unknown voice field is rejected. `attention.pushOff` turns OFF the push for a kind of attention an agent asks for (`approval_required`, `input_required`, …) across every agent — the in-app notification is still written, and an event id that is not one of `attentionEvents` is rejected. Returns the saved preferences.",
+		"Change your account-wide preferences. Patches by SECTION: pass only the sections you mean to change and the rest are left exactly as stored. `timezone` is an IANA zone (e.g. Australia/Sydney) — an invalid name is REJECTED, never coerced; null clears it back to unset. `notifications` REPLACES that whole section: to mute one more type, read get_account_preferences, add it to the existing `muted`, and send both `muted` and any `instances` scope back — an unknown type id is rejected. `coding.defaultEngineId` sets the inherited coding CLI engine for coders without their own explicit engine. `voice` and `translation` are merged into what is stored, and an unknown voice field is rejected. `attention.pushOff` turns OFF the push for a kind of attention an agent asks for (`approval_required`, `input_required`, …) across every agent — the in-app notification is still written, and an event id that is not one of `attentionEvents` is rejected. `releaseNotes.enabled` is the default every instance's release notes follow until that instance sets its own. Returns the saved preferences.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			timezone: z.string().nullable().optional().describe("IANA timezone name. null clears it to unset; omit to leave unchanged."),
@@ -400,6 +400,12 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 				})
 				.optional()
 				.describe("Replaces the whole owner-attention section. Omit to leave it unchanged."),
+			releaseNotes: z
+				.object({ enabled: z.boolean().describe("Whether instances post release notes to their granted channels by default.") })
+				.strict()
+				.nullable()
+				.optional()
+				.describe("The release-notes default every instance inherits unless it sets its own (set_instance_release_notes). null clears it to the platform default (on). Omit to leave unchanged."),
 			dry_run: z.boolean().optional(),
 		},
 		async (args) => {
@@ -465,7 +471,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
  * caller cannot set. `account-notifications.test.ts` reads the route's own body type and fails when a
  * section is added there and not here.
  */
-export const ACCOUNT_PREFERENCE_SECTIONS = ["timezone", "notifications", "voice", "translation", "coding", "attention"] as const;
+export const ACCOUNT_PREFERENCE_SECTIONS = ["timezone", "notifications", "voice", "translation", "coding", "attention", "releaseNotes"] as const;
 
 /**
  * Every column of `account_budget_limits`, as [tool argument, API field].

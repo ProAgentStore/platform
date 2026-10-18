@@ -511,6 +511,13 @@ export const UNBACKED_CLAIMS: Record<string, UnbackedClaim> = {
 		source: "workers/api/src/routes/budget.ts",
 		symbol: "CeilingTier",
 	},
+	"account|instance|platform": {
+		reason:
+			"release-notes `enabledFrom` (#1217) — which level decided whether an instance posts release notes. " +
+			"A field of the API's resolved view, declared as a type in the API worker, which this worker cannot import.",
+		source: "workers/api/src/agent-types.ts",
+		symbol: "ReleaseNotesEnabledFrom",
+	},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
