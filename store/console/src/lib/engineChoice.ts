@@ -18,6 +18,8 @@ export interface EngineChoiceOption {
 	model: string | null;
 	modelSelectable: boolean;
 	suggestions: { value: string; label: string }[];
+	/** #1202: where the suggestions came from — the machine's CLI live, the CLI's documented aliases, or nowhere. Absent on an older API. */
+	suggestionsFrom?: "machine" | "documented" | null;
 	/** #1042 — absent on an older API, which is read as subscription (it never billed a key by default). */
 	billing?: "subscription" | "api-key";
 }
@@ -78,4 +80,16 @@ export function observedLine(choice: EngineChoice): string | null {
 export function engineOptionsForCard(choice: EngineChoice): Array<{ id: string; label: string }> {
 	const label = (e: EngineChoiceOption) => (e.billing === "api-key" ? `${e.label} — API key, billed per token` : e.label);
 	return [...choice.engines.filter((e) => e.billing !== "api-key"), ...choice.engines.filter((e) => e.billing === "api-key")].map((e) => ({ id: e.id, label: label(e) }));
+}
+
+/**
+ * One line under the model dropdown saying what its options are (#1202) — so a Grok list read off the machine is not
+ * mistaken for a fixed menu, and an engine with no list says why it offers only the CLI default and free text.
+ */
+export function suggestionsNote(engine: EngineChoiceOption): string | null {
+	if (!engine.modelSelectable) return null;
+	if (engine.suggestionsFrom === "machine") return "These are the models this machine's CLI lists right now.";
+	if (engine.suggestionsFrom === "documented") return "These are the aliases this CLI documents; any id it accepts works under “Another model…”.";
+	if (engine.suggestionsFrom === null) return "This CLI publishes no model list — use “Another model…” with an id it accepts.";
+	return null;
 }

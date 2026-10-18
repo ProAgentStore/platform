@@ -28,6 +28,7 @@ export interface ModelCheck {
 
 interface Listed {
 	models: string[] | null;
+	defaultModel?: string | null;
 	reason?: string;
 	at: number;
 }
@@ -41,7 +42,7 @@ export function clearEngineModelCache(): void {
 
 export interface ModelListDeps {
 	/** The machine's answer, or null when no runner is connected. Throws as the relay does. */
-	ask: (body: { clientType: string; command: string }) => Promise<{ node: string; models: string[] | null; reason?: string } | null>;
+	ask: (body: { clientType: string; command: string }) => Promise<{ node: string; models: string[] | null; defaultModel?: string | null; reason?: string } | null>;
 	now: () => number;
 }
 
@@ -50,12 +51,42 @@ function liveDeps(env: Env, instanceId: string, userId: string): ModelListDeps {
 		ask: async (body) => {
 			const conn = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
 			if (!conn) return null;
-			const r = await callRunner<{ models?: unknown; reason?: unknown }>(conn, "/coding/engine-models", body, { timeoutMs: READ_TIMEOUT_MS });
+			const r = await callRunner<{ models?: unknown; defaultModel?: unknown; reason?: unknown }>(conn, "/coding/engine-models", body, { timeoutMs: READ_TIMEOUT_MS });
 			const models = Array.isArray(r?.models) ? r.models.filter((m): m is string => typeof m === "string") : null;
-			return { node: conn.runnerNode ?? instanceId, models, ...(typeof r?.reason === "string" ? { reason: r.reason } : {}) };
+			return { node: conn.runnerNode ?? instanceId, models, defaultModel: typeof r?.defaultModel === "string" ? r.defaultModel : null, ...(typeof r?.reason === "string" ? { reason: r.reason } : {}) };
 		},
 		now: Date.now,
 	};
+}
+
+/**
+ * The models the machine's `clientType` CLI offers right now — shared by the model check below and the model
+ * dropdown's suggestions (#1202), through one cache. `models: null` with the reason when there is no list to have.
+ */
+export async function liveModelList(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	engine: { clientType: string; command: string },
+	deps: ModelListDeps = liveDeps(env, instanceId, userId),
+): Promise<{ models: string[] | null; defaultModel?: string | null; reason: string | null }> {
+	if (engine.clientType !== "grok") return { models: null, reason: `the ${engine.clientType} CLI publishes no model list` };
+	// Keyed by the BINARY, not the whole command: pinning a model rewrites the command (`--model …`), and the list the
+	// machine's CLI offers does not change with which of its models is pinned.
+	const key = `${instanceId}:${engine.clientType}:${engine.command.trim().split(/\s+/)[0] ?? ""}`;
+	const cached = cache.get(key);
+	if (cached && deps.now() - cached.at <= ENGINE_MODELS_TTL_MS) return { models: cached.models, defaultModel: cached.defaultModel ?? null, reason: null };
+	let answer: Awaited<ReturnType<ModelListDeps["ask"]>>;
+	try {
+		answer = await deps.ask({ clientType: engine.clientType, command: engine.command });
+	} catch (e) {
+		const old = e instanceof Error && /→ 404/.test(e.message);
+		return { models: null, reason: old ? `this machine's runner cannot list models (CLI ${ENGINE_MODELS_MIN_CLI} or newer)` : "the machine could not be asked for its model list" };
+	}
+	if (!answer) return { models: null, reason: "no runner is connected to ask for the model list" };
+	// Only a real list is cached: "could not list" is worth asking again next time.
+	if (answer.models) cache.set(key, { models: answer.models, defaultModel: answer.defaultModel ?? null, at: deps.now() });
+	return { models: answer.models, defaultModel: answer.defaultModel ?? null, reason: answer.models ? null : (answer.reason ?? "the CLI listed no models") };
 }
 
 /**
@@ -70,22 +101,7 @@ export async function checkEngineModel(
 	model: string,
 	deps: ModelListDeps = liveDeps(env, instanceId, userId),
 ): Promise<ModelCheck> {
-	if (engine.clientType !== "grok") return { validated: false, reason: `the ${engine.clientType} CLI publishes no model list, so the id was saved unchecked` };
-	const key = `${instanceId}:${engine.clientType}:${engine.command}`;
-	let listed = cache.get(key);
-	if (!listed || deps.now() - listed.at > ENGINE_MODELS_TTL_MS) {
-		let answer: Awaited<ReturnType<ModelListDeps["ask"]>>;
-		try {
-			answer = await deps.ask({ clientType: engine.clientType, command: engine.command });
-		} catch (e) {
-			const old = e instanceof Error && /→ 404/.test(e.message);
-			return { validated: false, reason: old ? `this machine's runner cannot list models (CLI ${ENGINE_MODELS_MIN_CLI} or newer), so the id was saved unchecked` : "the machine could not be asked for its model list, so the id was saved unchecked" };
-		}
-		if (!answer) return { validated: false, reason: "no runner is connected to ask for the model list, so the id was saved unchecked" };
-		listed = { models: answer.models, ...(answer.reason ? { reason: answer.reason } : {}), at: deps.now() };
-		// Only a real list is cached: "could not list" is worth asking again next time.
-		if (answer.models) cache.set(key, listed);
-	}
+	const listed = await liveModelList(env, instanceId, userId, engine, deps);
 	if (!listed.models) return { validated: false, reason: `${listed.reason ?? "the CLI listed no models"}, so the id was saved unchecked` };
 	if (listed.models.includes(model)) return { validated: true };
 	throw new HttpError(400, `"${model}" is not a model ${engine.label} offers on this machine — choose one of: ${listed.models.join(", ")}.`);

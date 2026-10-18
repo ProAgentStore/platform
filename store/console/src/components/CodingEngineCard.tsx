@@ -3,7 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import Card from "./Card";
 import { ENGINE_CARD_SCOPE } from "../lib/brainChoice";
-import { engineOptionsForCard, CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, modelOptions, observedLine, type EngineChoice } from "../lib/engineChoice";
+import { engineOptionsForCard, CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, modelOptions, observedLine, suggestionsNote, type EngineChoice } from "../lib/engineChoice";
 
 /**
  * Which coding CLI this agent opens sessions with, and which model it runs (#792).
@@ -77,6 +77,7 @@ export default function CodingEngineCard({ instanceId }: { instanceId: string })
 						) : (
 							<p className="text-sm text-muted" id="inst-engine-model">This engine's model is part of its command — edit it under CLI engines on the Coding tab.</p>
 						)}
+						{suggestionsNote(engine) && <p className="text-xs text-muted mt-1" id="inst-engine-model-source">{suggestionsNote(engine)}</p>}
 						{other !== null && (
 							<div className="flex gap-2 mt-2">
 								<input

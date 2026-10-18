@@ -12,7 +12,7 @@ vi.mock("./runner-client.js", async (orig) => ({ ...(await orig<typeof import(".
 
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { readEngines } from "./coding-engines.js";
-import { writeEngineChoice } from "./coding-engine-choice.js";
+import { readEngineChoice, writeEngineChoice } from "./coding-engine-choice.js";
 import { checkEngineModel, clearEngineModelCache, ENGINE_MODELS_TTL_MS, type ModelListDeps } from "./engine-model-check.js";
 import type { Env } from "../types.js";
 
@@ -54,9 +54,11 @@ describe("coding_engine_set checks a Grok model against the machine's live list 
 		expect(await grokCommand()).toContain("grok-4.7");
 	});
 
-	it("clearing the pin (null) asks nothing — handing the choice back to the CLI cannot name a wrong model", async () => {
-		await writeEngineChoice(env, "inst-1", "u1", { engineId: "grok", model: null });
-		expect(callRunner).not.toHaveBeenCalled();
+	it("clearing the pin (null) is not checked — handing the choice back to the CLI cannot name a wrong model", async () => {
+		callRunner.mockRejectedValue(new Error("the machine is unreachable"));
+		const view = await writeEngineChoice(env, "inst-1", "u1", { engineId: "grok", model: null });
+		expect(view.modelCheck).toBeUndefined();
+		expect(view.engines.find((e) => e.id === "grok")?.model).toBeNull();
 	});
 });
 
@@ -100,5 +102,34 @@ describe("checkEngineModel — when the list cannot be had, it says so instead o
 		const d = deps({ ask: async () => (++calls === 1 ? { node: "mac", models: null, reason: "not signed in" } : { node: "mac", models: GROK_MODELS }) });
 		expect((await checkEngineModel(env, "inst-1", "u1", GROK, "grok-4.7", d)).validated).toBe(false);
 		expect((await checkEngineModel(env, "inst-1", "u1", GROK, "grok-4.7", d)).validated).toBe(true);
+	});
+});
+
+describe("coding_engine_get's suggestions come from the machine's live list (#1202 acceptance)", () => {
+	it("Grok's suggestions are the models its CLI lists right now — grok-4.7 included, marked as the CLI's default", async () => {
+		const view = await readEngineChoice(env, "inst-1", "u1");
+		const grok = view.engines.find((e) => e.id === "grok");
+		expect(grok?.suggestionsFrom).toBe("machine");
+		expect(grok?.suggestions.map((s) => s.value)).toEqual(GROK_MODELS);
+		expect(grok?.suggestions[0]).toEqual({ value: "grok-4.7", label: "grok-4.7 (the CLI's default)" });
+	});
+
+	it("the other engines say where theirs come from: Claude its documented aliases, Codex none — it lists no models", async () => {
+		const byId = Object.fromEntries((await readEngineChoice(env, "inst-1", "u1")).engines.map((e) => [e.id, e]));
+		expect(byId.claude).toMatchObject({ suggestionsFrom: "documented" });
+		expect(byId.claude.suggestions.map((s) => s.value)).toEqual(["fable", "opus", "sonnet"]);
+		expect(byId.codex).toMatchObject({ suggestionsFrom: null, suggestions: [] });
+	});
+
+	it("the dropdown offers only what a save accepts: one list, one cache — the machine is asked once for both", async () => {
+		await readEngineChoice(env, "inst-1", "u1");
+		await writeEngineChoice(env, "inst-1", "u1", { engineId: "grok", model: "grok-4.6" });
+		expect(callRunner.mock.calls.filter((c) => c[1] === "/coding/engine-models")).toHaveLength(1);
+	});
+
+	it("no runner connected: the view still loads, with no live suggestions rather than an error", async () => {
+		getBoundRunnerConn.mockResolvedValue(null);
+		const grok = (await readEngineChoice(env, "inst-1", "u1")).engines.find((e) => e.id === "grok");
+		expect(grok).toMatchObject({ suggestions: [], suggestionsFrom: null });
 	});
 });

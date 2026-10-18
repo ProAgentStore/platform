@@ -5,7 +5,7 @@
  * while a model is pinned, and rewriting an engine's command when the owner only switched engines.
  */
 import { describe, expect, it } from "vitest";
-import { CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, engineOptionsForCard, modelOptions, observedLine, type EngineChoice, type EngineChoiceOption } from "./engineChoice";
+import { CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, engineOptionsForCard, modelOptions, observedLine, suggestionsNote, type EngineChoice, type EngineChoiceOption } from "./engineChoice";
 
 const engine = (over: Partial<EngineChoiceOption> = {}): EngineChoiceOption => ({
 	id: "claude",
@@ -95,5 +95,32 @@ describe("engineOptionsForCard (#1042)", () => {
 			{ id: "old", label: "old" },
 			{ id: "api", label: "api — API key, billed per token" },
 		]);
+	});
+});
+
+describe("the dropdown lists the machine's live models (#1202)", () => {
+	const grok = engine({
+		id: "grok",
+		label: "Grok",
+		command: "grok --permission-mode bypassPermissions -p",
+		modelSelectable: true,
+		suggestions: [
+			{ value: "grok-4.7", label: "grok-4.7 (the CLI's default)" },
+			{ value: "grok-4.6", label: "grok-4.6" },
+		],
+		suggestionsFrom: "machine",
+	});
+
+	it("as options between the CLI default and the free-text escape — grok-4.7 included", () => {
+		expect(modelOptions(grok).map((o) => o.value)).toEqual([CLI_DEFAULT, "grok-4.7", "grok-4.6", OTHER_MODEL]);
+	});
+
+	it("and says where the options came from, for each kind of engine", () => {
+		expect(suggestionsNote(grok)).toMatch(/this machine's CLI lists right now/);
+		expect(suggestionsNote(engine({ modelSelectable: true, suggestionsFrom: "documented" }))).toMatch(/aliases this CLI documents/);
+		expect(suggestionsNote(engine({ modelSelectable: true, suggestions: [], suggestionsFrom: null }))).toMatch(/publishes no model list/);
+		// An older API that does not send the field, and an engine whose model is not selectable, say nothing.
+		expect(suggestionsNote(engine({ modelSelectable: true }))).toBeNull();
+		expect(suggestionsNote(engine({ modelSelectable: false, suggestionsFrom: null }))).toBeNull();
 	});
 });

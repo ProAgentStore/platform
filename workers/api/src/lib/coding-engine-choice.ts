@@ -14,7 +14,7 @@ import { deriveClientType } from "./coding-command.js";
 import { readEngines, type CodingEngine } from "./coding-engines.js";
 import { MODEL_SUGGESTIONS, isValidModelId, modelFlagEngine, readEngineModel, writeEngineModel, type ModelSuggestion } from "./coding-engine-model.js";
 import { patchInstanceConfig } from "./instance-config.js";
-import { checkEngineModel, type ModelCheck } from "./engine-model-check.js";
+import { checkEngineModel, liveModelList, type ModelCheck } from "./engine-model-check.js";
 import { MCP_API_CODING_REFUSAL, apiCodingConfirmed, apiCodingOptInFor, apiCodingWarning } from "./coding-api-policy.js";
 import type { CodingClientType } from "./coding-types.js";
 import type { Env } from "../types.js";
@@ -30,6 +30,12 @@ export interface EngineChoiceOption {
 	/** False for a binary whose model flag we do not know (a local model, a custom wrapper). */
 	modelSelectable: boolean;
 	suggestions: ModelSuggestion[];
+	/**
+	 * Where `suggestions` came from (#1202): `machine` — the bound machine's CLI listed them live (Grok's `grok models`);
+	 * `documented` — the aliases the CLI's own help documents (Claude); null — there is nothing to suggest, because the
+	 * CLI publishes no model list (Codex, Gemini) or the machine could not be asked.
+	 */
+	suggestionsFrom: "machine" | "documented" | null;
 	/** How it bills (#1042): the machine's subscription/local CLI login, or a provider API key per token. */
 	billing: "subscription" | "api-key";
 }
@@ -69,6 +75,7 @@ const toOption = (e: CodingEngine): EngineChoiceOption => {
 		model: readEngineModel(e.command),
 		modelSelectable: flagEngine !== null,
 		suggestions: flagEngine ? MODEL_SUGGESTIONS[flagEngine] : [],
+		suggestionsFrom: flagEngine && MODEL_SUGGESTIONS[flagEngine].length ? "documented" : null,
 		billing: e.auth === "api-key" ? "api-key" : "subscription",
 	};
 };
@@ -88,7 +95,20 @@ export async function readEngineChoice(env: Env, instanceId: string, userId: str
 	const { engines, defaultEngineId } = await readEngines(env, instanceId, userId);
 	// The observation is an improvement to the view, never a reason to fail it.
 	const lastObserved = await lastObservedModel(env, instanceId, userId).catch(() => null);
-	return { defaultEngineId, engines: engines.map(toOption), lastObserved, appliesTo: ENGINE_CHOICE_APPLIES_TO };
+	return { defaultEngineId, engines: await Promise.all(engines.map(toOption).map((o) => withLiveSuggestions(env, instanceId, userId, o))), lastObserved, appliesTo: ENGINE_CHOICE_APPLIES_TO };
+}
+
+/**
+ * An engine whose CLI lists its models gets that list as its suggestions (#1202) — the same live list, through the
+ * same cache, that `coding_engine_set` checks a pin against (#1199), so the dropdown can only offer what saving accepts.
+ * Not listable, or the machine not reachable: the static suggestions stand. Never a reason to fail the view.
+ */
+async function withLiveSuggestions(env: Env, instanceId: string, userId: string, option: EngineChoiceOption): Promise<EngineChoiceOption> {
+	if (!option.modelSelectable || option.clientType !== "grok") return option;
+	const live = await liveModelList(env, instanceId, userId, { clientType: option.clientType, command: option.command }).catch(() => null);
+	if (!live?.models?.length) return option;
+	const suggestions = live.models.map((m) => ({ value: m, label: m === live.defaultModel ? `${m} (the CLI's default)` : m }));
+	return { ...option, suggestions, suggestionsFrom: "machine" };
 }
 
 /**
