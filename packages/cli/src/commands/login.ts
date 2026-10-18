@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
@@ -38,12 +39,38 @@ export function requireSession(): StoredSession {
 	return session;
 }
 
+/**
+ * How to open `url` in the default browser: a program and its arguments, never a shell line (#1158).
+ *
+ * It was `exec(\`start "<url>"\`)` on Windows, and cmd's `start` takes its first quoted argument as the WINDOW
+ * TITLE — so `pags login` opened an empty console titled with the URL instead of the browser (dell-laptop,
+ * 0.4.150). Every OS also handed the URL to a shell, where `&`, `%` and `^` mean something. Windows now asks the
+ * URL handler directly (`rundll32 url.dll,FileProtocolHandler`, what Go's and Rust's browser openers use): no cmd,
+ * so no title argument and nothing in the URL to escape. (`start "" "<url>"` would not need `^&` either — inside
+ * quotes cmd keeps a caret literally, so escaping it there would corrupt the query string.)
+ */
+export function browserCommand(url: string, platform: NodeJS.Platform = process.platform): { file: string; args: string[] } {
+	if (platform === "win32") return { file: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
+	return { file: platform === "darwin" ? "open" : "xdg-open", args: [url] };
+}
+
+/** Best-effort: a browser that does not open (no xdg-open, a headless box) is covered by the URL printed beside it. */
+function openBrowser(url: string): void {
+	const { file, args } = browserCommand(url);
+	try {
+		const child = spawn(file, args, { stdio: "ignore", detached: true, windowsHide: true });
+		child.on("error", () => undefined);
+		child.unref();
+	} catch {
+		// the printed URL is the fallback
+	}
+}
+
 export const loginCommand = new Command("login")
 	.description("Sign in with Google or GitHub (opens browser)")
 	.option("--github", "Use GitHub instead of Google")
 	.action(async (opts: { github?: boolean }) => {
 		const provider = opts.github ? "github" : "google";
-		writeLine(`Opening browser for ${provider} sign-in...`);
 
 		// Start local callback server
 		const port = await findFreePort();
@@ -102,10 +129,10 @@ export const loginCommand = new Command("login")
 			: `${API_BASE}/v1/auth/github/start`;
 		const oauthUrl = `${oauthBase}?return_to=${encodeURIComponent(callbackUrl)}`;
 
-		// Open browser
-		const open = (await import("node:child_process")).exec;
-		const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-		open(`${cmd} "${oauthUrl}"`);
+		// Always printed, on every OS (#1158): when no browser opens, the owner can still paste it into one on this machine.
+		writeLine(`Opening your browser for ${provider} sign-in. If it does not open, paste this URL into a browser on this machine:`);
+		writeLine(`  ${oauthUrl}`);
+		openBrowser(oauthUrl);
 
 		try {
 			await tokenPromise;
