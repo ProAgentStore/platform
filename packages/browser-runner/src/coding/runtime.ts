@@ -1,3 +1,4 @@
+import { confineWorkDir } from "./workdir-guard.js";
 import { actDigest, type EngineInputs } from "./input-ledger.js";
 import { parkRestore, parkSnapshot } from "./park-snapshot.js";
 import { runObjective } from "./run-objective.js";
@@ -282,19 +283,24 @@ export class CodingRuntime {
 	 * workDir (authoritative even for managed clone dirs); fall back to an explicit path
 	 * (the cloud passes the D1 `repo.workdir` when the session map is empty after a runner
 	 * restart). Expands a leading `~` the same way start() does.
+	 *
+	 * An explicit path is CONFINED (#1165): never the home folder or above it, never inside a
+	 * credential directory — so `{ workDir: "~", path: ".ssh/id_ed25519" }` is refused rather
+	 * than a confined read of a private key. See `workdir-guard.ts`.
 	 */
 	private resolveWorkDir(input: { sessionId?: string; workDir?: string }): string {
 		if (input.sessionId) {
 			const s = this.sessions.get(input.sessionId);
-			if (s) return s.config.workDir;
+			// The session's own folder answers to the same rule: a session started in `~` must not reopen it.
+			if (s) return confineWorkDir(s.config.workDir, { allow: [this.reposBaseDir] });
 		}
-		if (input.workDir) return resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()));
+		if (input.workDir) return confineWorkDir(input.workDir, { allow: [this.reposBaseDir] });
 		throw new InspectError("no session or workDir to inspect");
 	}
 
 	/** Where a parked run's checkout is (#1077): its declared folder, else the managed clone dir `start()` uses. */
 	private parkWorkDir(input: { workDir?: string; repoId?: string }): string {
-		if (input.workDir) return resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()));
+		if (input.workDir) return confineWorkDir(input.workDir, { allow: [this.reposBaseDir] });
 		if (input.repoId) return join(this.reposBaseDir, sanitizeSessionName(input.repoId));
 		throw new InspectError("no workDir or repoId for the parked checkout");
 	}

@@ -284,7 +284,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		jsonSchema: {
 			type: "object",
 			properties: {
-				path: { type: "string", description: "File to deposit. Absolute, `~/…`, or relative to the home directory." },
+				path: { type: "string", description: "File to deposit, inside the machine's secure-files folder `~/.config/proagentstore/secure-files` — a relative path is relative to it. Anywhere else is refused (#1165): put the file there first." },
 				label: { type: "string", description: "Short name the owner sees in the console, e.g. \"heartfull .env.prod\". Never put the value here." },
 				ttl_minutes: { type: "number", description: "How long the handle stays retrievable (default 60, max 1440)." },
 			},
@@ -343,7 +343,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 			type: "object",
 			properties: {
 				handle: { type: "string", description: "The handle returned by tmux_secure_put (copy it exactly)." },
-				path: { type: "string", description: "Destination file. Absolute, `~/…`, or relative to the home directory. Parent directories are created." },
+				path: { type: "string", description: "Destination file, inside the machine's secure-files folder `~/.config/proagentstore/secure-files` — a relative path is relative to it; parent directories are created. Anywhere else is refused (#1165); move it to where it is used afterwards." },
 				mode: { type: "string", description: "Octal file mode, default \"600\". Never group/world-writable or executable." },
 				overwrite: { type: "boolean", description: "Replace the file if it already exists (default false)." },
 			},

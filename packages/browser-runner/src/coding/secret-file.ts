@@ -2,6 +2,7 @@ import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFi
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { RunnerInputError } from "../errors.js";
+import { isWithin, realPathOf } from "./workdir-guard.js";
 
 /**
  * The runner's half of the machine-to-machine secret handoff (#918): read a secret file so the
@@ -21,22 +22,43 @@ import { RunnerInputError } from "../errors.js";
 /** Big enough for any `.env`, key file or credentials JSON; small enough that this is not a file-transfer tool. */
 export const SECRET_MAX_BYTES = 64 * 1024;
 
-/** `~` expanded; a relative path resolves against the home directory, which is where `pags up` users name things from. */
-function resolvePath(raw: unknown): string {
-	const p = String(raw ?? "").trim();
-	if (!p) throw new RunnerInputError("A `path` is required.");
-	const expanded = p.replace(/^~(?=$|\/)/, homedir());
-	return isAbsolute(expanded) ? resolve(expanded) : resolve(homedir(), expanded);
+/**
+ * The ONE folder the secret handoff reads from and writes to (#1165).
+ *
+ * It used to take any path the owner's account could reach: `/secure/read` would hand over
+ * `~/.ssh/id_ed25519`, and `/secure/write` with `overwrite: true` could replace `~/.ssh/authorized_keys`.
+ * Now a relative path is relative to this folder, and an absolute or `~/…` path must already be inside
+ * it, resolved through symlinks, so a link planted in it cannot point back out. Moving a delivered
+ * file to where it is used is the operator's step, in the open.
+ */
+export function secureFilesDir(home = homedir()): string {
+	return join(home, ".config", "proagentstore", "secure-files");
 }
 
-export function readSecretFile(input: { path?: unknown }): { path: string; value: string; bytes: number } {
-	const path = resolvePath(input.path);
+/** `~` expanded; relative to {@link secureFilesDir}; refused unless it stays inside that folder. */
+function resolvePath(raw: unknown, home = homedir()): string {
+	const p = String(raw ?? "").trim();
+	if (!p) throw new RunnerInputError("A `path` is required.");
+	const root = secureFilesDir(home);
+	const expanded = p.replace(/^~(?=$|\/)/, home);
+	const path = isAbsolute(expanded) ? resolve(expanded) : resolve(root, expanded);
+	mkdirSync(root, { recursive: true, mode: 0o700 });
+	if (path === root || !isWithin(realPathOf(path, home), realPathOf(root, home))) {
+		throw new RunnerInputError(`${p} is outside ${root}. The secret handoff reads and writes only inside that folder — name a file there, e.g. \`app.env\`.`);
+	}
+	return path;
+}
+
+export function readSecretFile(input: { path?: unknown }, home = homedir()): { path: string; value: string; bytes: number } {
+	const path = resolvePath(input.path, home);
 	let st: ReturnType<typeof statSync>;
 	try {
-		st = statSync(path);
+		st = lstatSync(path);
 	} catch {
 		throw new RunnerInputError(`No file at ${path}.`);
 	}
+	// Not followed (#1165): a symlink in the folder would read whatever it points at.
+	if (st.isSymbolicLink()) throw new RunnerInputError(`${path} is a symbolic link; the secret handoff reads regular files only.`);
 	if (!st.isFile()) throw new RunnerInputError(`${path} is not a regular file.`);
 	if (st.size === 0) throw new RunnerInputError(`${path} is empty — there is nothing to hand off.`);
 	if (st.size > SECRET_MAX_BYTES) throw new RunnerInputError(`${path} is ${st.size} bytes; the secret handoff carries at most ${SECRET_MAX_BYTES}.`);
@@ -59,8 +81,8 @@ function parseMode(raw: unknown): number {
 	return mode;
 }
 
-export function writeSecretFile(input: { path?: unknown; value?: unknown; mode?: unknown; overwrite?: unknown }): { path: string; bytes: number; replaced: boolean } {
-	const path = resolvePath(input.path);
+export function writeSecretFile(input: { path?: unknown; value?: unknown; mode?: unknown; overwrite?: unknown }, home = homedir()): { path: string; bytes: number; replaced: boolean } {
+	const path = resolvePath(input.path, home);
 	if (typeof input.value !== "string" || !input.value) throw new RunnerInputError("Nothing to write.");
 	const mode = parseMode(input.mode);
 	let replaced = false;

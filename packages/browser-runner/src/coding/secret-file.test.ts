@@ -1,16 +1,20 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { readSecretFile, SECRET_MAX_BYTES, writeSecretFile } from "./secret-file.js";
+import { readSecretFile as readAt, SECRET_MAX_BYTES, secureFilesDir, writeSecretFile as writeAt } from "./secret-file.js";
 
 const SECRET = "FIREBASE_API_KEY=AIza-very-secret-value\nSERVER_KEY=s3cr3t\n";
 
-const roots: string[] = [];
+/** A home of its own, so the dedicated folder (#1165) is a scratch one and the real `~` is never touched. */
+const HOME = mkdtempSync(join(tmpdir(), "pags-secret-home-"));
+const readSecretFile = (input: Parameters<typeof readAt>[0]) => readAt(input, HOME);
+const writeSecretFile = (input: Parameters<typeof writeAt>[0]) => writeAt(input, HOME);
+
+const roots: string[] = [HOME];
 function scratch(): string {
-	const d = mkdtempSync(join(tmpdir(), "pags-secret-"));
-	roots.push(d);
-	return d;
+	mkdirSync(secureFilesDir(HOME), { recursive: true });
+	return mkdtempSync(join(secureFilesDir(HOME), "pags-secret-"));
 }
 afterAll(() => {
 	for (const r of roots) rmSync(r, { recursive: true, force: true });
@@ -90,5 +94,47 @@ describe("writeSecretFile (#918)", () => {
 			errorOf(() => writeSecretFile({ path: join(d, "x"), value: "" })),
 		];
 		for (const m of messages) expect(m).not.toContain("very-secret");
+	});
+});
+
+describe("the secret handoff stays inside its own folder (#1165)", () => {
+	function withKeys() {
+		mkdirSync(join(HOME, ".ssh"), { recursive: true });
+		writeFileSync(join(HOME, ".ssh", "id_ed25519"), "-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n");
+		writeFileSync(join(HOME, ".ssh", "authorized_keys"), "ssh-ed25519 AAAA owner@laptop\n");
+	}
+
+	it("will not read a private key — by absolute path, by ~/…, or by climbing out", () => {
+		withKeys();
+		for (const path of [join(HOME, ".ssh", "id_ed25519"), "~/.ssh/id_ed25519", "../../.ssh/id_ed25519"]) {
+			const msg = errorOf(() => readSecretFile({ path }));
+			expect(msg, path).toMatch(/outside/);
+			expect(msg, path).not.toContain("PRIVATE KEY");
+		}
+	});
+
+	it("will not replace ~/.ssh/authorized_keys, even with overwrite: true", () => {
+		withKeys();
+		for (const path of [join(HOME, ".ssh", "authorized_keys"), "~/.ssh/authorized_keys", "../../.ssh/authorized_keys"]) {
+			expect(errorOf(() => writeSecretFile({ path, value: "ssh-ed25519 ATTACKER\n", overwrite: true })), path).toMatch(/outside/);
+		}
+		expect(readFileSync(join(HOME, ".ssh", "authorized_keys"), "utf8")).toBe("ssh-ed25519 AAAA owner@laptop\n");
+	});
+
+	it("a symlink planted in the folder cannot point back out — neither a link to a file nor to a folder", () => {
+		withKeys();
+		const root = secureFilesDir(HOME);
+		mkdirSync(root, { recursive: true });
+		symlinkSync(join(HOME, ".ssh", "id_ed25519"), join(root, "innocent.env"));
+		expect(errorOf(() => readSecretFile({ path: "innocent.env" }))).toMatch(/outside|symbolic link/);
+		symlinkSync(join(HOME, ".ssh"), join(root, "keys"));
+		expect(errorOf(() => writeSecretFile({ path: "keys/authorized_keys", value: "ssh-ed25519 ATTACKER\n", overwrite: true }))).toMatch(/outside/);
+		expect(readFileSync(join(HOME, ".ssh", "authorized_keys"), "utf8")).toBe("ssh-ed25519 AAAA owner@laptop\n");
+	});
+
+	it("a relative path lands in the folder, and reads back from there", () => {
+		const r = writeSecretFile({ path: "heartfull/.env.prod", value: SECRET });
+		expect(r.path).toBe(join(secureFilesDir(HOME), "heartfull", ".env.prod"));
+		expect(readSecretFile({ path: "heartfull/.env.prod" }).value).toBe(SECRET);
 	});
 });
