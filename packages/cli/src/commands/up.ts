@@ -351,7 +351,7 @@ export const upCommand = new Command("up")
 				}
 
 				// Show errors
-				if (/error|Error|EADDRINUSE|ECONNREFUSED|failed/i.test(trimmed)) {
+				if (/error|Error|EADDRINUSE|ECONNREFUSED|failed|expired/i.test(trimmed)) {
 					state.lastEvent = trimmed.slice(0, 80);
 					printStatus(state);
 				}

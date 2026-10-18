@@ -34,7 +34,7 @@ export interface RunnerResourceSample {
 	/** The checkout volume (CLI ≥ {@link RESOURCE_DETAIL_MIN_CLI}). */
 	disk?: { path: string; totalBytes: number; freeBytes: number; inodesTotal: number; inodesFree: number };
 	/** The `pags runner connect` process: start time, uptime, starts in 24h, relay reconnects. */
-	runner?: { startedAt: number; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string; supervisor?: "service" | "launcher" | "none" };
+	runner?: { startedAt: number; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string; supervisor?: "service" | "launcher" | "none"; sessionExpiresAt?: number };
 	/** One relay round trip this beat, ms; null when the probe got no echo in time. */
 	relayRttMs?: number | null;
 	/** Per-session CPU/memory, engine plus descendants. */
@@ -58,6 +58,8 @@ export const MEMORY_HIGH_WATER_PCT = 90;
 export const DISK_HIGH_WATER_PCT = 90;
 /** Runner starts in 24h at or above which the process is called crash-looping. */
 export const RESTARTS_HIGH_WATER = 3;
+/** A runner refreshes its sign-in in its last 7 days; one with 3 or fewer left could not (#1157). */
+export const SESSION_WARN_MS = 3 * 86_400_000;
 /** A relay round trip at or above the deadline the platform gives a ping (`PONG_DEADLINE_MS`) is "slow enough to fail". */
 export const RELAY_RTT_HIGH_WATER_MS = 1500;
 /**
@@ -118,7 +120,9 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 			const launch = typeof p.launch === "string" && /^(tty|tmux|service|headless|background)$/.test(p.launch) ? p.launch : undefined;
 			// #1154: what restarts it if it dies. Absent from a CLI older than 0.4.151 — unknown, not "none".
 			const supervisor = p.supervisor === "service" || p.supervisor === "launcher" || p.supervisor === "none" ? p.supervisor : undefined;
-			sample.runner = { startedAt, uptimeSec, starts24h, relayReconnects, ...(rsid ? { rsid } : {}), ...(pid ? { pid } : {}), ...(launch ? { launch } : {}), ...(supervisor ? { supervisor } : {}) };
+			// #1157: when the runner's sign-in expires. Absent from an older CLI; a running one refreshes it in its last 7 days.
+			const sessionExpiresAt = finite(p.sessionExpiresAt, 2 ** 53) ?? undefined;
+			sample.runner = { startedAt, uptimeSec, starts24h, relayReconnects, ...(rsid ? { rsid } : {}), ...(pid ? { pid } : {}), ...(launch ? { launch } : {}), ...(supervisor ? { supervisor } : {}), ...(sessionExpiresAt ? { sessionExpiresAt } : {}) };
 		}
 	}
 	if (r.relayRttMs === null) sample.relayRttMs = null;
@@ -163,7 +167,7 @@ export interface RunnerResourcesView {
 	/** The checkout volume; null when the runner does not report it (CLI before {@link RESOURCE_DETAIL_MIN_CLI}). */
 	disk: { path: string; totalBytes: number; freeBytes: number; usedPct: number; inodesUsedPct: number } | null;
 	/** The runner process; null when not reported. */
-	runner: { startedAt: string; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string; supervisor?: "service" | "launcher" | "none" } | null;
+	runner: { startedAt: string; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string; supervisor?: "service" | "launcher" | "none"; sessionExpiresAt?: string } | null;
 	/** One relay round trip at the sample, ms. null: no echo in time, or not reported. */
 	relayRttMs: number | null;
 	/** Per-session usage, heaviest CPU first; null when not reported. */
@@ -227,6 +231,13 @@ export function resourcesView(raw: unknown, activeSessions: number | null): Runn
 		: null;
 	if (disk && disk.usedPct >= DISK_HIGH_WATER_PCT) warnings.push(`Disk nearly full: ${disk.usedPct}% of the checkout volume in use. Clones, builds and git writes fail when it fills.`);
 	if (disk && disk.inodesUsedPct >= DISK_HIGH_WATER_PCT) warnings.push(`Inodes nearly exhausted: ${disk.inodesUsedPct}% in use on the checkout volume — many small files (node_modules, build caches) can fill it with space to spare.`);
+	// #1157: a runner refreshes its sign-in in its last 7 days, so one this close to expiry could not — and signs out at the date.
+	if (s.runner?.sessionExpiresAt && s.runner.sessionExpiresAt - s.sampledAt <= SESSION_WARN_MS) {
+		const left = s.runner.sessionExpiresAt - s.sampledAt;
+		warnings.push(left <= 0
+			? "The runner's sign-in has expired: it is signed out. Run `pags login --device` on the machine (over SSH works), then restart `pags up`."
+			: `The runner's sign-in expires in ${left >= 48 * 3600_000 ? `${Math.round(left / 86_400_000)} days` : `${Math.max(1, Math.round(left / 3_600_000))} hours`} and has not refreshed itself. Run \`pags login --device\` on the machine before then (over SSH works).`);
+	}
 	if (s.runner && s.runner.starts24h >= RESTARTS_HIGH_WATER) warnings.push(`The runner has started ${s.runner.starts24h} times on this machine in 24 hours — it may be crash-looping, which reads as a machine flickering between online and offline.`);
 	if (typeof s.relayRttMs === "number" && s.relayRttMs >= RELAY_RTT_HIGH_WATER_MS) warnings.push(`Relay round trip ${Math.round(s.relayRttMs)} ms — at or over the ${RELAY_RTT_HIGH_WATER_MS} ms a ping is given, so commands to this machine can fail as "not responding" (#913).`);
 	const capacity = recommendedMaxSessions(s.cpus, s.memTotalBytes);
@@ -255,6 +266,7 @@ export function resourcesView(raw: unknown, activeSessions: number | null): Runn
 				...(s.runner.pid ? { pid: s.runner.pid } : {}),
 				...(s.runner.launch ? { launch: s.runner.launch } : {}),
 				...(s.runner.supervisor ? { supervisor: s.runner.supervisor } : {}),
+				...(s.runner.sessionExpiresAt ? { sessionExpiresAt: new Date(s.runner.sessionExpiresAt).toISOString() } : {}),
 			}
 			: null,
 		relayRttMs: typeof s.relayRttMs === "number" ? Math.round(s.relayRttMs) : null,

@@ -5054,6 +5054,119 @@ paths:
                   session: { type: string }
         "400": { $ref: "#/components/responses/BadRequest" }
 
+  /v1/auth/device/start:
+    post:
+      summary: Start a device sign-in (`pags login --device`)
+      description: |
+        RFC 8628 device authorization (#1157). The machine gets a device code (its secret for this exchange — only its
+        hash is stored) and a short user code the owner approves at `verification_uri` from any signed-in device.
+        Codes last 10 minutes.
+      operationId: deviceAuthStart
+      security: []
+      tags: [Auth]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                node: { type: string, description: "This machine's name, shown on the approval page." }
+      responses:
+        "200":
+          description: The codes and where to approve them
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device_code: { type: string }
+                  user_code: { type: string, example: BCDF-GHJK }
+                  verification_uri: { type: string }
+                  verification_uri_complete: { type: string }
+                  expires_in: { type: integer }
+                  interval: { type: integer }
+
+  /v1/auth/device/token:
+    post:
+      summary: Poll a device sign-in
+      description: |
+        The machine's poll (RFC 8628 §3.4). 400 with `error` = `authorization_pending`, `slow_down` (poll less often),
+        `access_denied` or `expired_token`; 200 with a session exactly once, after the owner approved — the approval is
+        consumed by that poll. The session carries the account's live roles; a suspended account gets `access_denied`.
+      operationId: deviceAuthToken
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_code]
+              properties:
+                device_code: { type: string }
+      responses:
+        "200":
+          description: The session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "400": { description: "authorization_pending | slow_down | access_denied | expired_token" }
+
+  /v1/auth/device/requests/{userCode}:
+    parameters:
+      - { name: userCode, in: path, required: true, schema: { type: string } }
+    get:
+      summary: The device sign-in behind a code — for the approval page
+      description: Which machine asked, from which address and when, so a code someone else started is recognisable. 404 once expired.
+      operationId: deviceAuthRequest
+      tags: [Auth]
+      responses:
+        "200": { description: The request }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { description: No such request, or it expired }
+    post:
+      summary: Approve or deny a device sign-in
+      operationId: deviceAuthDecide
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approve]
+              properties:
+                approve: { type: boolean }
+      responses:
+        "200": { description: The request, decided }
+        "409": { description: Already decided, or expired }
+
+  /v1/auth/session/refresh:
+    post:
+      summary: Swap a valid session for a fresh 30-day one
+      description: |
+        What a running `pags up` does in its session's last 7 days (#1157), so a long-running machine never ends up
+        signed out. Live roles; refused to a suspended account. An expired session cannot refresh — sign in again.
+      operationId: sessionRefresh
+      tags: [Auth]
+      responses:
+        "200":
+          description: The new session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: The account cannot be signed in }
+
   # ── Agents: capabilities, settings schema, ops ────────────────────────────
 
   /v1/agents/{id}/capabilities:

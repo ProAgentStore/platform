@@ -58,6 +58,11 @@ export function usageLink(): string {
 	return `${BASE}/usage`;
 }
 
+/** Approve a machine's `pags login --device` (#1157) — with its code when the CLI has one to put in the link. */
+export function deviceApprovalLink(userCode?: string): string {
+	return `${BASE}/device${userCode ? `?code=${encodeURIComponent(userCode)}` : ""}`;
+}
+
 /** One PAS remote sign-in request (#1005) — account-level, like the machine that asked for it. */
 export function remoteAuthRequestLink(requestId: string): string {
 	return `${BASE}/remote-auth/${encodeURIComponent(requestId)}`;

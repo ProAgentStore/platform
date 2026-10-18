@@ -43,6 +43,7 @@ import { terminalRoutes } from "./routes/terminals.js";
 import { terminalNativeRoutes } from "./routes/terminals-native.js";
 import { usageRoutes } from "./routes/usage.js";
 import { remoteAuthRoutes } from "./routes/remote-auth.js";
+import { deviceAuthRoutes, sessionRoutes } from "./routes/device-auth.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { statsRoutes } from "./routes/stats.js";
 import { controllerAiSettingsRoutes } from "./routes/controller-ai-settings.js";
@@ -201,6 +202,8 @@ app.use("/v1/admin/*", rateLimitAdmin());
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
+app.route("/v1/auth/device", deviceAuthRoutes); // #1157: `pags login --device` — sign a machine in from any device
+app.route("/v1/auth/session", sessionRoutes); // #1157: a running `pags up` keeps its session fresh
 app.route("/v1/auth", authRoutes);
 app.route("/v1/agent-builder", agentBuilderRoutes);
 app.route("/v1/agents", agentRoutes);

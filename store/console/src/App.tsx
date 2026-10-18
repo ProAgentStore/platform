@@ -21,6 +21,7 @@ import Preferences from "./pages/Preferences";
 import RunDetail from "./pages/RunDetail";
 import SecureInputDetail from "./pages/SecureInputDetail";
 import RemoteAuthRequest from "./pages/RemoteAuthRequest";
+import DeviceApprove from "./pages/DeviceApprove";
 import { landingRoute, landingRouteFromMemory, type TopLevelRoute } from "./lib/lastRoute";
 import { readLandingCounts } from "./lib/landing";
 
@@ -99,6 +100,7 @@ function AuthGate() {
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />
 				<Route path="remote-auth/:requestId" element={<RemoteAuthRequest />} />
+				<Route path="device" element={<DeviceApprove />} />
 				<Route path="*" element={<DefaultRedirect />} />
 			</Route>
 		</Routes>

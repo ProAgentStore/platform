@@ -16,6 +16,7 @@ import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } fr
 import { releaseTrial } from "./release-trial.js";
 import { updateLogUpload } from "../../bootstrap/update-log.js";
 import { restartOwner } from "../up-restart.js";
+import { sessionExpiresAt } from "../login-device.js";
 
 /**
  * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
@@ -45,8 +46,9 @@ export async function connectViaRelay(
 	watchInstances = false,
 ): Promise<void> {
 	const apiBase = pagsApiBase(opts.apiBase).replace(/^http/, "ws"); // https → wss
-	const pagsToken = clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
-	if (!pagsToken) throw new Error("PAGS token required for WebSocket relay");
+	// Read per call, not once (#1157): the session refresher swaps PAGS_TOKEN while this runs.
+	const pagsToken = () => clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
+	if (!pagsToken()) throw new Error("PAGS token required for WebSocket relay");
 	const runnerNode = hostname();
 	// The hostname stays the routing key — it names the relay DO — but it is NOT this machine's
 	// identity: it moves with the network. The persisted id is what lets the server recognise a
@@ -303,7 +305,7 @@ export async function connectViaRelay(
 		// A scoped run told the pin moved (#853 finding 13): let go of what is pinned elsewhere now —
 		// its socket and, with it, its heartbeat — and attach nothing.
 		if (plan.release) {
-			const res = await requestPags<{ instances?: DiscoverableInstance[] }>("GET", "/v1/instances/my/instances", { ...opts, pagsToken });
+			const res = await requestPags<{ instances?: DiscoverableInstance[] }>("GET", "/v1/instances/my/instances", { ...opts, pagsToken: pagsToken() });
 			const released = pinnedAway(attached.keys(), res.instances ?? [], runnerNode, machine.names);
 			for (const id of released) detach(id, `${id.slice(0, 8)}… (pinned to another machine now)`);
 			if (released.length && attached.size === 0) writeLine("This `pags up --instance` holds no agent now — close it, or restart it without --instance.");
@@ -331,7 +333,7 @@ export async function connectViaRelay(
 		// session token (resolved above; opts.pagsToken may be unset if it came from
 		// the saved session).
 		const mintToken = () =>
-			requestPags<{ token: string }>("POST", `/v1/relay/${apiPathSegment(id)}/token`, { ...opts, pagsToken }, {}).then((r) => r.token);
+			requestPags<{ token: string }>("POST", `/v1/relay/${apiPathSegment(id)}/token`, { ...opts, pagsToken: pagsToken() }, {}).then((r) => r.token);
 		attached.set(
 			id,
 			openRelaySocket(
@@ -431,6 +433,7 @@ export async function connectViaRelay(
 					pid: process.pid,
 					...(process.env.PAGS_RUNNER_LAUNCH ? { launch: process.env.PAGS_RUNNER_LAUNCH } : {}),
 					supervisor: restartOwner(), // #1154: what starts it again if it dies
+					sessionExpiresAt: sessionExpiresAt(pagsToken() ?? "") ?? undefined, // #1157: when this runner signs out
 				},
 				relayRttMs,
 				sessions: sessions ?? undefined,
@@ -487,7 +490,7 @@ export async function connectViaRelay(
 			const free = await requestPags<{ connected?: boolean }>(
 				"GET",
 				`/v1/relay/${apiPathSegment(id)}/status`,
-				{ ...opts, pagsToken },
+				{ ...opts, pagsToken: pagsToken() },
 			).then((r) => r.connected === false).catch(() => false);
 			if (!free) continue;
 			blocked.delete(id);
@@ -506,7 +509,7 @@ export async function connectViaRelay(
 			const res = await requestPags<{ instances?: DiscoverableInstance[] }>(
 				"GET",
 				"/v1/instances/my/instances",
-				{ ...opts, pagsToken },
+				{ ...opts, pagsToken: pagsToken() },
 			);
 			const { attach: toAttach, detach: toDetach } = diffMembership(
 				attached.keys(),

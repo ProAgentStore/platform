@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import { writeLine, writeError } from "../output.js";
+import { chooseLoginFlow, deviceLogin, sessionExpiresAt } from "./login-device.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "proagentstore");
 const TOKEN_FILE = join(CONFIG_DIR, "session.json");
@@ -28,6 +29,17 @@ export function loadSession(): StoredSession | null {
 export function saveSession(session: StoredSession): void {
 	mkdirSync(CONFIG_DIR, { recursive: true });
 	writeFileSync(TOKEN_FILE, JSON.stringify(session, null, 2));
+}
+
+/** Resolve who `token` signs in as and store it — the end of every sign-in, browser or device. */
+async function storeSession(token: string): Promise<StoredSession> {
+	const meRes = await fetch(`${API_BASE}/v1/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+	if (!meRes.ok) throw new Error("Session validation failed");
+	const me = (await meRes.json()) as { id: string; login: string; avatar: string };
+	// The token's own expiry (#1157), not a guess at it: a refreshed or device-issued session says when it ends.
+	const session = { token, user: { id: me.id, login: me.login, avatar: me.avatar }, expiresAt: sessionExpiresAt(token) ?? Date.now() + 29 * 24 * 3600_000 };
+	saveSession(session);
+	return session;
 }
 
 export function requireSession(): StoredSession {
@@ -67,9 +79,23 @@ function openBrowser(url: string): void {
 }
 
 export const loginCommand = new Command("login")
-	.description("Sign in with Google or GitHub (opens browser)")
+	.description("Sign in with Google or GitHub — in a browser here, or approved from another device over SSH/headless")
 	.option("--github", "Use GitHub instead of Google")
-	.action(async (opts: { github?: boolean }) => {
+	.option("--device", "Sign in from another device: show a link and a code to approve on your phone (SSH, no display)")
+	.option("--browser", "Open a browser on this machine, even over SSH")
+	.action(async (opts: { github?: boolean; device?: boolean; browser?: boolean }) => {
+		const choice = chooseLoginFlow(opts);
+		if (choice.flow === "device") {
+			if (choice.why !== "--device") writeLine(`Signing in from another device, because ${choice.why} (use --browser to open one here instead).`);
+			try {
+				const session = await storeSession(await deviceLogin({ apiBase: API_BASE, node: hostname(), log: writeLine }));
+				writeLine(`Signed in as ${session.user.login}. Token stored at ${TOKEN_FILE}`);
+			} catch (err) {
+				writeError(err instanceof Error ? err.message : String(err));
+				process.exit(1);
+			}
+			return;
+		}
 		const provider = opts.github ? "github" : "google";
 
 		// Start local callback server
@@ -95,17 +121,7 @@ export const loginCommand = new Command("login")
 
 				// Resolve the signed-in user with the PAGS session token.
 				try {
-					const meRes = await fetch(`${API_BASE}/v1/auth/me`, {
-						headers: { Authorization: `Bearer ${session}` },
-					});
-					if (!meRes.ok) throw new Error("Session validation failed");
-					const me = await meRes.json() as { id: string; login: string; avatar: string };
-
-					saveSession({
-						token: session,
-						user: { id: me.id, login: me.login, avatar: me.avatar },
-						expiresAt: Date.now() + 29 * 24 * 60 * 60 * 1000, // ~29 days
-					});
+					const me = (await storeSession(session)).user;
 
 					res.writeHead(200, { "Content-Type": "text/html" });
 					res.end(`<h1>Signed in as ${me.login}</h1><p>You can close this tab and return to the terminal.</p><script>window.close()</script>`);

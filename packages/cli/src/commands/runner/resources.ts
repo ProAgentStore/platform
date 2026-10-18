@@ -50,6 +50,8 @@ export interface RunnerProcessSample {
 	launch?: string;
 	/** What starts the runner again if it dies (#1154): the OS `service`, a `pags up` `launcher`, or `none`. */
 	supervisor?: "service" | "launcher" | "none";
+	/** When this runner's sign-in expires, ms (#1157) — refreshed while it runs; a date close by means it could not be. */
+	sessionExpiresAt?: number;
 	uptimeSec: number;
 	/** Process starts on this machine in the last 24h, this one included — a crash loop shows here. */
 	starts24h: number;

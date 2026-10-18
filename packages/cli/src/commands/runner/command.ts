@@ -22,7 +22,9 @@ import { loadMachineIdentity } from "../../machine.js";
 import { CLI_VERSION } from "./process.js";
 import { crashAccountKey } from "../../crash-reports.js";
 import { crashPaths, deliverCrashReports, OutputTail, recordChildExit } from "../../crash-delivery.js";
-import { loadSession } from "../login.js";
+import { loadSession, saveSession } from "../login.js";
+import { sessionExpiresAt } from "../login-device.js";
+import { startSessionRefresh } from "../../session-refresh.js";
 import { hostname } from "node:os";
 import type {
 	PagsRequestOptions,
@@ -182,6 +184,21 @@ export function createRunnerCommand(): Command {
 				// restart, then keep sending what the runtime survives — every five minutes, not per crash.
 				void deliver().catch(() => undefined);
 				setInterval(() => void deliver().catch(() => undefined), 5 * 60_000).unref();
+				// #1157: keep this runner signed in. Not for an explicit --pags-token: that is the caller's to manage.
+				if (!clean(opts.pagsToken)) {
+					startSessionRefresh({
+						apiBase: pagsApiBase(opts.apiBase),
+						token: () => clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token) || null,
+						onRefreshed: (token, previous) => {
+							process.env.PAGS_TOKEN = token;
+							// The next start reads session.json — unless the owner has since signed in again, as anyone.
+							const stored = loadSession();
+							if (stored?.token === previous) saveSession({ ...stored, token, expiresAt: sessionExpiresAt(token) ?? stored.expiresAt });
+						},
+						log: writeLine,
+						warn: writeError,
+					});
+				}
 				await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
 			} catch (error) {
 				shutdown();

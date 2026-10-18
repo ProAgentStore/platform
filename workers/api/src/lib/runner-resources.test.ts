@@ -45,6 +45,17 @@ describe("parseResourceSample — the runner is a system boundary", () => {
 		expect(parseResourceSample(sample({ runner: runner("systemd") }))?.runner?.supervisor).toBeUndefined();
 		expect(parseResourceSample(sample({ runner: runner(undefined) }))?.runner?.supervisor).toBeUndefined(); // an older CLI: unknown
 	});
+
+	it("#1157: carries when the runner's sign-in expires, and warns once it is close enough that a refresh must have failed", () => {
+		const at = Date.UTC(2026, 9, 5, 6, 0);
+		const runner = (sessionExpiresAt?: number) => ({ startedAt: 1, uptimeSec: 1, starts24h: 1, relayReconnects: 0, sessionExpiresAt });
+		const view = (expires?: number) => resourcesView(sample({ runner: runner(expires) }), 0);
+		expect(view(at + 20 * 86_400_000)?.runner?.sessionExpiresAt).toBe(new Date(at + 20 * 86_400_000).toISOString());
+		expect(view(at + 20 * 86_400_000)?.warnings.join(" ")).not.toMatch(/sign-in/);
+		expect(view(at + 30 * 3_600_000)?.warnings.join(" ")).toMatch(/sign-in expires in 30 hours and has not refreshed itself.*pags login --device/);
+		expect(view(at - 1)?.warnings.join(" ")).toMatch(/sign-in has expired: it is signed out/);
+		expect(view(undefined)?.runner?.sessionExpiresAt).toBeUndefined(); // an older CLI says nothing — and is not warned about
+	});
 });
 
 describe("resourcesView — what list_runner_nodes and coding_diagnostics report", () => {
