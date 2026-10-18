@@ -48,7 +48,9 @@ describe("terminal connector — registration", () => {
 			expect(names.has(n)).toBe(true);
 		}
 		expect(getRegistryTool("terminal_list_targets")?.scope).toBe("read");
-		expect(getRegistryTool("terminal_capture")?.scope).toBe("read");
+		// #1166: reading a pane needs the terminal consent; it still changes nothing.
+		expect(getRegistryTool("terminal_capture")?.scope).toBe("write");
+		expect(getRegistryTool("terminal_capture")?.mutates).toBe(false);
 		expect(getRegistryTool("terminal_run_command")?.scope).toBe("write");
 		expect(getRegistryTool("terminal_send_keys")?.scope).toBe("write");
 		expect(getRegistryTool("terminal_send_message")?.scope).toBe("write");

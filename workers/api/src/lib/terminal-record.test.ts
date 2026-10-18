@@ -161,7 +161,11 @@ describe("what a terminal tool call leaves behind (#878)", () => {
 });
 
 describe("the dispatcher records every surface's terminal calls (#878)", () => {
+	/** Reading a pane needs the owner's tmux consent since #1166; the WRITE below is the one left without it. */
+	const grantRead = () => d1.exec(`INSERT INTO instance_connector_consent (instance_id, user_id, connector, scope) VALUES ('${INSTANCE}', '${UID}', 'tmux', 'write')`);
+
 	it("a capture through runRegistryTool is recorded", async () => {
+		grantRead();
 		getBoundRunnerConn.mockResolvedValue({ id: "conn" });
 		callRunner.mockResolvedValue({ pane: BUILD });
 		const r = await runRegistryTool("tmux_capture_pane", { env, userId: UID, instanceId: INSTANCE }, { session: "shell" });
@@ -179,6 +183,7 @@ describe("the dispatcher records every surface's terminal calls (#878)", () => {
 	});
 
 	it("a capture of a session that has ended fails and does not overwrite the stored pane", async () => {
+		grantRead();
 		await use("tmux_capture_pane", { session: "shell" }, BUILD);
 		getBoundRunnerConn.mockResolvedValue({ id: "conn" });
 		callRunner.mockRejectedValue(new Error(`No tmux session "shell".`));

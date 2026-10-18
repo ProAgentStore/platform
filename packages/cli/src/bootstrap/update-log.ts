@@ -8,8 +8,10 @@
  * is what the next one leaves behind. The first registration after a restart uploads its tail ({@link updateLogTail})
  * onto the machine's update record.
  *
- * Node builtins ONLY: the bootstrap stub writes to it too. Writing never throws — a log must not stop an update.
+ * Node builtins ONLY — and `crash-reports.ts` for the shared redactor, which is held to builtins itself: the
+ * bootstrap stub writes to it too. Writing never throws — a log must not stop an update.
  */
+import { maskSecrets } from "../crash-reports.js";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -41,7 +43,8 @@ export function logUpdateStep(step: string, env: NodeJS.ProcessEnv = process.env
 /** The newest whole lines of the log, at most {@link UPDATE_LOG_UPLOAD_CHARS} characters — null when there is none. */
 export function updateLogTail(env: NodeJS.ProcessEnv = process.env, maxChars = UPDATE_LOG_UPLOAD_CHARS): string | null {
 	try {
-		const text = readFileSync(updateLogPath(env), "utf8").trimEnd();
+		// Through the one redactor everything cloudward passes (#1166): a step can quote a command line or an error.
+		const text = maskSecrets(readFileSync(updateLogPath(env), "utf8").trimEnd());
 		if (!text) return null;
 		if (text.length <= maxChars) return text;
 		const cut = text.slice(-maxChars);

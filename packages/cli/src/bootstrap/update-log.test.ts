@@ -57,4 +57,15 @@ describe("the step-by-step update log (#1151)", () => {
 		expect(readFileSync(updateLogPath(env), "utf8").match(/registered: 0\.4\.150 answered by the platform/g)).toHaveLength(1);
 		expect(updateLogUpload("0.4.150", { PAGS_CONFIG_DIR: join(dir, "empty") }).body()).toEqual({});
 	});
+
+	it("what it uploads goes through the shared redactor — a session token a step quoted never reaches the platform (#1166)", () => {
+		const session = `${Buffer.from(JSON.stringify({ uid: "github:serge-ivo", exp: 2 })).toString("base64url")}.${"s".repeat(43)}`;
+		logUpdateStep(`restart: pags up --pags-token ${session} --headless`, env);
+		logUpdateStep("install: npm i -g @proagentstore/cli@0.4.158 token=npm_abcdefgh12345678", env);
+		const tail = updateLogTail(env) ?? "";
+		expect(tail).not.toContain(session);
+		expect(tail).not.toContain("npm_abcdefgh12345678");
+		expect(tail).toContain("[redacted-jwt]");
+		expect(updateLogUpload("0.4.158", env).body().updateLog).toBe(tail);
+	});
 });

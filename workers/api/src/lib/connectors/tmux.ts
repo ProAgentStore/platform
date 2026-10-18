@@ -4,9 +4,12 @@
 // the same path the coding tools use. So there's no OAuth flow and no grant table —
 // machine ownership is already enforced by the relay-token handshake.
 //
-// Reads (list/capture) are always allowed once the runner is online. Writes (send keys,
-// run a command, create/kill a session) are `scope:"write"`, so runRegistryTool refuses
-// them unless the instance has "tmux" write-consent (instance_connector_consent, 0051).
+// Listing sessions is allowed once the runner is online. READING A PANE is not (#1166): a pane holds
+// whatever the owner typed or a tool printed, passwords and tokens included, so `tmux_capture_pane`
+// answers to the same per-instance "tmux" consent as the writes (send keys, run a command,
+// create/kill a session) — `scope:"write"` with `mutates:false`, since scope is the consent gate's
+// instruction, not "does it change anything". runRegistryTool refuses it without the consent
+// (instance_connector_consent, 0051), and a declared session binding confines it per target.
 // This is the terminal surface any permitted agent can use to drive shells, git, and
 // even other CLIs (Claude/Codex) running in the user's own tmux sessions.
 //
@@ -99,7 +102,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 		name: "tmux_capture_pane",
 		tier: "connector",
 		connector: "tmux",
-		scope: "read",
+		scope: "write",
 		mutates: false,
 		untrustedOutput: true,
 		description:

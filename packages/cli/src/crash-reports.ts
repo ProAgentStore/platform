@@ -103,12 +103,19 @@ export interface CrashFile {
 	dropped: number;
 }
 
-/** Mask credential-shaped text: bearer tokens, API keys, JWTs, `token=…` pairs. */
+/**
+ * Mask credential-shaped text: bearer tokens, API keys, JWTs, `token=…` pairs.
+ *
+ * THE redactor for everything this machine sends to the platform (#1166): crash reports, the update log
+ * (`bootstrap/update-log.ts`) and terminal panes (`coding/pane-redact.ts`). A PAGS session is TWO
+ * segments — `base64url(json).hmac` (`workers/api/src/lib/session.ts`) — so the token rule takes an
+ * optional third: a three-segment-only rule masked a bare session only when `Bearer`/`token=` preceded it.
+ */
 export function maskSecrets(text: string): string {
 	return text
 		.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [redacted]")
 		.replace(/\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|gho_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|xox[abp]-[A-Za-z0-9-]{8,}|pags_runner_[A-Za-z0-9-]{8,})/g, "[redacted]")
-		.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[redacted-jwt]")
+		.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]{8,})?/g, "[redacted-jwt]")
 		.replace(/\b((?:api[_-]?key|token|secret|password|authorization)\s*[=:]\s*)("?)[^\s"&]{4,}\2/gi, "$1[redacted]");
 }
 

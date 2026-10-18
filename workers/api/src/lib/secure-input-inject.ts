@@ -60,6 +60,11 @@ export interface SecureInjectResult {
 	length?: number;
 	/** How delivery was judged: the value seen on the pane, or the password prompt's outcome. */
 	verifiedBy?: "echo" | "outcome";
+	/**
+	 * An echoed value, after delivery (#1166): `cleared` — the tmux pane's scrollback was cleared; `masked` — the
+	 * runner masks it in every later capture. False on a runner older than the scrub, or a backend it cannot clear.
+	 */
+	scrubbed?: { cleared: boolean; masked: boolean };
 }
 
 /** How many times `needle` occurs in `hay`, line wraps ignored — a long code wraps across pane rows. */
@@ -84,13 +89,13 @@ const TERMINAL_PREFIX = /^(tmux|kitty|iterm2):/i;
 function paneFor(conn: RunnerConn, target: string): Pane {
 	if (TERMINAL_PREFIX.test(target)) {
 		return {
-			send: (b) => callRunner<SendResult>(conn, "/terminal/send", { target, ...b }),
-			capture: async () => (await callRunner<{ pane?: string }>(conn, "/terminal/capture", { target, lines: 200 }, { timeoutMs: READ_TIMEOUT_MS })).pane ?? "",
+			send: (b) => callRunner<SendResult>(conn, "/terminal/send", { target, ...b, unmasked: true }),
+			capture: async () => (await callRunner<{ pane?: string }>(conn, "/terminal/capture", { target, lines: 200, unmasked: true }, { timeoutMs: READ_TIMEOUT_MS })).pane ?? "",
 		};
 	}
 	return {
-		send: (b) => callRunner<SendResult>(conn, "/tmux/send", { session: target, ...b }),
-		capture: async () => (await callRunner<{ pane?: string }>(conn, "/tmux/capture", { session: target, lines: 200 }, { timeoutMs: READ_TIMEOUT_MS })).pane ?? "",
+		send: (b) => callRunner<SendResult>(conn, "/tmux/send", { session: target, ...b, unmasked: true }),
+		capture: async () => (await callRunner<{ pane?: string }>(conn, "/tmux/capture", { session: target, lines: 200, unmasked: true }, { timeoutMs: READ_TIMEOUT_MS })).pane ?? "",
 	};
 }
 
@@ -128,6 +133,20 @@ async function consentRefusal(env: Env, instanceId: string, target: string): Pro
 	if (!mode) return `Typing into a terminal via the ${connector} connector isn't permitted for this agent. Enable write access for ${connector} in the instance's Connections settings (${route}), then inject again.`;
 	if (mode === "ask") return `The ${connector} connector's write access is set to ask on every call, and an inject cannot be queued for approval. Set it to always allow in the instance's Connections settings (${route}), then inject again.`;
 	return null;
+}
+
+/**
+ * After an echoed delivery (#1166): the runner clears the tmux pane's scrollback and masks the value in every
+ * later capture, so the next reader of that pane — an agent, a capture tool, a crash tail — does not get it.
+ * Best-effort: the value already landed, and an older runner (404) simply leaves it as before.
+ */
+async function scrubDelivered(conn: RunnerConn, target: string, value: string): Promise<{ cleared: boolean; masked: boolean }> {
+	try {
+		const r = await callRunner<{ remembered?: boolean; cleared?: boolean }>(conn, "/secure/scrub", { target, value }, { timeoutMs: READ_TIMEOUT_MS });
+		return { cleared: r?.cleared === true, masked: r?.remembered === true };
+	} catch {
+		return { cleared: false, masked: false };
+	}
 }
 
 /** A runner error names the session or the endpoint — and is scrubbed of the value regardless. */
@@ -226,7 +245,7 @@ export async function injectSecureInputToTmux(
 			return { ...base, verifiedBy, delivered: true, submitted: false, consumedValue: true, status: "consumed", reason: `The value is on "${target}"'s prompt line, but pressing Enter failed — press it with tmux_send_keys.` };
 		}
 	}
-	return { ...base, verifiedBy, delivered: true, submitted, consumedValue: true, status: "consumed" };
+	return { ...base, verifiedBy, delivered: true, submitted, consumedValue: true, status: "consumed", scrubbed: await scrubDelivered(conn, target, value) };
 }
 
 /** Enter, then judge the password prompt by what it does next (#1140). The value is already typed. */

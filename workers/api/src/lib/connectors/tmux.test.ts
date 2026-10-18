@@ -50,13 +50,15 @@ beforeEach(() => {
 });
 
 describe("tmux connector — registration", () => {
-	it("registers all 7 tools with correct scopes (list/capture read; run/send/send-message/new/kill write)", () => {
+	it("registers all 7 tools with correct scopes (list read; capture consent-gated, #1166; run/send/send-message/new/kill write)", () => {
 		const names = registryToolNameSet();
 		for (const n of ["tmux_list_sessions", "tmux_capture_pane", "tmux_run_command", "tmux_send_keys", "tmux_send_message", "tmux_new_session", "tmux_kill_session"]) {
 			expect(names.has(n)).toBe(true);
 		}
 		expect(getRegistryTool("tmux_list_sessions")?.scope).toBe("read");
-		expect(getRegistryTool("tmux_capture_pane")?.scope).toBe("read");
+		// #1166: reading a pane needs the tmux consent; it still changes nothing.
+		expect(getRegistryTool("tmux_capture_pane")?.scope).toBe("write");
+		expect(getRegistryTool("tmux_capture_pane")?.mutates).toBe(false);
 		expect(getRegistryTool("tmux_run_command")?.scope).toBe("write");
 		expect(getRegistryTool("tmux_send_keys")?.scope).toBe("write");
 		expect(getRegistryTool("tmux_send_message")?.scope).toBe("write");

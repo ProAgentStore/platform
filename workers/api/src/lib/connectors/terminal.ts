@@ -72,7 +72,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		name: "terminal_capture",
 		tier: "connector",
 		connector: "terminal",
-		scope: "read",
+		scope: "write", // #1166: reading a pane needs the terminal consent too — it holds what the owner typed
 		mutates: false,
 		untrustedOutput: true,
 		description:

@@ -30,6 +30,9 @@ let panes: Map<string, string>;
 /** A session whose foreground program ignores input (not at a prompt). */
 let deaf: Set<string>;
 let sent: Array<{ path: string; session: unknown; text?: unknown; keys?: unknown }>;
+/** What `/secure/scrub` was asked to clear after a delivery (#1166), and whether every pane read asked for the raw pane. */
+let scrubs: Array<{ target?: unknown; value?: unknown }>;
+let maskedReads: number;
 
 beforeEach(async () => {
 	d1 = realSchemaD1();
@@ -41,8 +44,15 @@ beforeEach(async () => {
 	panes = new Map([["gcloud-setup", `$ gcloud auth login --no-launch-browser\nGo to the following link in your browser:\n  https://accounts.google.com/o/oauth2/auth?…\n\n${PROMPT}`]]);
 	deaf = new Set();
 	sent = [];
+	scrubs = [];
+	maskedReads = 0;
 	getBoundRunnerConn.mockReset().mockResolvedValue({ runnerNode: "pink-laptop", instanceId: "i1" });
-	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string, body: { session: string; text?: string; keys?: string[] }) => {
+	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string, body: { session: string; text?: string; keys?: string[]; unmasked?: boolean; target?: string; value?: string }) => {
+		if (path === "/secure/scrub") {
+			scrubs.push({ target: body.target, value: body.value });
+			return { remembered: true, cleared: true };
+		}
+		if (body.unmasked !== true) maskedReads++;
 		if (path === "/tmux/capture") {
 			const pane = panes.get(body.session);
 			if (pane === undefined) throw new Error(`Runner /tmux/capture → 404: {"error":"No tmux session \\"${body.session}\\"."}`);
@@ -94,7 +104,7 @@ describe("inject lands the value on the named session's prompt line, verified (#
 	it("types it into `target`, confirms it on the pane, submits it — and the answer never carries the value", async () => {
 		const id = await ready();
 		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
-		expect(r.body).toEqual({ delivered: true, submitted: true, consumedValue: true, target: "gcloud-setup", status: "consumed", length: CODE.length, verifiedBy: "echo" });
+		expect(r.body).toEqual({ delivered: true, submitted: true, consumedValue: true, target: "gcloud-setup", status: "consumed", length: CODE.length, verifiedBy: "echo", scrubbed: { cleared: true, masked: true } });
 		expect(r.text).not.toContain("VERIFICATION-CODE");
 		// Capture: the code is on the prompt line, then Enter submitted it.
 		const pane = panes.get("gcloud-setup") ?? "";
@@ -213,5 +223,40 @@ describe("inject is held to the terminal write-consent *_send_keys needs (#1145)
 		expect(r.body).toMatchObject({ delivered: false, consumedValue: false, status: "ready" });
 		expect(r.body.reason).toContain("PUT /v1/instances/i1/connectors/terminal/consent");
 		expect(callRunner).not.toHaveBeenCalled();
+	});
+});
+
+describe("an echoed value does not stay in the pane for the next reader (#1166)", () => {
+	it("after delivery the runner is asked to clear the scrollback and mask the value — and the answer still never carries it", async () => {
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(r.body).toMatchObject({ delivered: true, scrubbed: { cleared: true, masked: true } });
+		expect(scrubs).toEqual([{ target: "gcloud-setup", value: CODE }]);
+		expect(r.text).not.toContain("VERIFICATION-CODE");
+	});
+
+	it("inject reads its OWN panes unmasked — it must see the value land — and nothing else it sends asks for that", async () => {
+		const id = await ready();
+		await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(maskedReads).toBe(0);
+	});
+
+	it("a delivery that did not land is not scrubbed — nothing was left behind, and the value is restored", async () => {
+		deaf.add("gcloud-setup");
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(r.body).toMatchObject({ delivered: false, status: "ready" });
+		expect(scrubs).toEqual([]);
+	});
+
+	it("a runner older than the scrub still delivers; the answer says the pane was not scrubbed", async () => {
+		const real = callRunner.getMockImplementation();
+		callRunner.mockImplementation(async (conn: unknown, path: string, body: never) => {
+			if (path === "/secure/scrub") throw new Error('Runner /secure/scrub → 404: {"error":"Not found"}');
+			return real?.(conn, path, body);
+		});
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(r.body).toMatchObject({ delivered: true, scrubbed: { cleared: false, masked: false } });
 	});
 });

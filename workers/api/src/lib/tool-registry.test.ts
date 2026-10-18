@@ -211,7 +211,9 @@ describe("tmux connector", () => {
 		expect(names.has("tmux_run_command")).toBe(true);
 		expect(names.has("tmux_send_keys")).toBe(true);
 		expect(getRegistryTool("tmux_list_sessions")?.scope).toBe("read");
-		expect(getRegistryTool("tmux_capture_pane")?.scope).toBe("read");
+		// #1166: a pane holds what the owner typed — reading one needs the tmux consent (scope is the gate, mutates says it changes nothing).
+		expect(getRegistryTool("tmux_capture_pane")?.scope).toBe("write");
+		expect(getRegistryTool("tmux_capture_pane")?.mutates).toBe(false);
 		expect(getRegistryTool("tmux_run_command")?.scope).toBe("write");
 		expect(getRegistryTool("tmux_send_keys")?.scope).toBe("write");
 		expect(getRegistryTool("tmux_new_session")?.scope).toBe("write");
@@ -439,7 +441,8 @@ describe("capability-constraint gate (#404)", () => {
 			// `instanceId`, so the join matches no row. "No ceiling declared" and "no such row" were
 			// the same `undefined`, and the ceiling silently stopped applying on that surface while
 			// write-consent, on the identical input, refused.
-			const r = await runRegistryTool("terminal_capture", { env: envNoRow(), userId: "u1", instanceId: "agent_kitty_operator" }, { target: "kitty:1" });
+			// A READ tool, so no consent gate stands in front of this one (#1166 made capture consent-gated).
+			const r = await runRegistryTool("terminal_list_targets", { env: envNoRow(), userId: "u1", instanceId: "agent_kitty_operator" }, { backend: "kitty" });
 			expect(r.success).toBe(false);
 			expect(r.content).toMatch(/could not be resolved/i);
 		});
@@ -461,7 +464,7 @@ describe("capability-constraint gate (#404)", () => {
 					},
 				},
 			} as unknown as Env;
-			const r = await runRegistryTool("terminal_capture", { env, userId: "u1", instanceId: "agent_kitty_operator" }, { target: "kitty:1" });
+			const r = await runRegistryTool("terminal_list_targets", { env, userId: "u1", instanceId: "agent_kitty_operator" }, { backend: "kitty" });
 			expect(r.success).toBe(false);
 			expect(sqls).toHaveLength(1);
 			expect(sqls[0]).toContain("agent_instances");
