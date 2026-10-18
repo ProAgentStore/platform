@@ -41,6 +41,7 @@ import { TMUX_TOOLS } from "./connectors/tmux.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
 import { trailingSecretPrompt, watchHiddenOutcome, hiddenOutcomeTiming } from "./secure-input-hidden.js";
 import { consumeSecureInput, getSecureInputStatus, restoreConsumedSecureInput } from "./secure-input.js";
+import { runnerUpgradeClause } from "./runner-upgrade.js";
 import { enforceConstraints } from "./surface-options.js";
 
 export interface SecureInjectResult {
@@ -81,6 +82,8 @@ type SendResult = { pane?: string; paneBefore?: string; changed?: boolean };
 /** One pane, whichever connector reaches it. */
 interface Pane {
 	send(body: { text?: string; keys?: string[] }): Promise<SendResult>;
+	/** Type the SECRET — over the runner's stdin path, never argv (#1143): `/secure/type`. */
+	type(value: string): Promise<SendResult>;
 	capture(): Promise<string>;
 }
 
@@ -90,11 +93,13 @@ function paneFor(conn: RunnerConn, target: string): Pane {
 	if (TERMINAL_PREFIX.test(target)) {
 		return {
 			send: (b) => callRunner<SendResult>(conn, "/terminal/send", { target, ...b, unmasked: true }),
+			type: (value) => callRunner<SendResult>(conn, "/secure/type", { target, value }),
 			capture: async () => (await callRunner<{ pane?: string }>(conn, "/terminal/capture", { target, lines: 200, unmasked: true }, { timeoutMs: READ_TIMEOUT_MS })).pane ?? "",
 		};
 	}
 	return {
 		send: (b) => callRunner<SendResult>(conn, "/tmux/send", { session: target, ...b, unmasked: true }),
+		type: (value) => callRunner<SendResult>(conn, "/secure/type", { target, value }),
 		capture: async () => (await callRunner<{ pane?: string }>(conn, "/tmux/capture", { session: target, lines: 200, unmasked: true }, { timeoutMs: READ_TIMEOUT_MS })).pane ?? "",
 	};
 }
@@ -149,9 +154,18 @@ async function scrubDelivered(conn: RunnerConn, target: string, value: string): 
 	}
 }
 
+/** The CLI release whose runner types a secret over stdin, never argv (#1143). */
+export const SECURE_TYPE_MIN_CLI = "0.4.159";
+
+/** `/secure/type` answers 404 itself only for a missing session; any other 404 is a runner without the route. */
+function runnerLacksSecureType(e: unknown): boolean {
+	const msg = e instanceof Error ? e.message : String(e);
+	return /^Runner \/secure\/type → 404/.test(msg) && !/No tmux session/.test(msg);
+}
+
 /** A runner error names the session or the endpoint — and is scrubbed of the value regardless. */
 function errorText(e: unknown, value: string): string {
-	const msg = e instanceof Error ? e.message.replace(/^Runner \/(?:tmux|terminal)\/\w+ → \d+: /, "") : String(e);
+	const msg = e instanceof Error ? e.message.replace(/^Runner \/(?:tmux|terminal|secure)\/\w+ → \d+: /, "") : String(e);
 	return value ? msg.split(value).join("[redacted]") : msg;
 }
 
@@ -220,8 +234,11 @@ export async function injectSecureInputToTmux(
 
 	let typed: SendResult;
 	try {
-		typed = await pane.send({ text: value });
+		typed = await pane.type(value);
 	} catch (e) {
+		// A runner that does not know `/secure/type` is refused, not fallen back from: the old path put the
+		// value in `tmux send-keys`'s argv, readable in the machine's process table (#1143).
+		if (runnerLacksSecureType(e)) return restore(`The value was not typed: ${runnerUpgradeClause({ what: "type a secret without exposing it in its process table", minCli: SECURE_TYPE_MIN_CLI, node: conn.runnerNode })}.`);
 		return restore(`Typing into "${target}" failed: ${errorText(e, value)}.`);
 	}
 

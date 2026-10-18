@@ -70,12 +70,14 @@ beforeEach(async () => {
 	sent = [];
 	Object.assign(hiddenOutcomeTiming, { windowMs: 60, pollMs: 5 });
 	getBoundRunnerConn.mockReset().mockResolvedValue({ runnerNode: "dell-laptop", instanceId: "i1" });
-	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string, body: { session?: string; target?: string; text?: string; keys?: string[] }) => {
-		const name = path.startsWith("/terminal/") ? String(body.target).replace(/^tmux:/, "") : String(body.session);
+	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string, raw: { session?: string; target?: string; text?: string; keys?: string[]; value?: string }) => {
+		// The secret is typed over `/secure/type` (#1143): the same pane effect as a text send.
+		const body = path === "/secure/type" ? { target: raw.target, text: raw.value } : raw;
+		const name = path.startsWith("/terminal/") || path === "/secure/type" ? String(body.target).replace(/^tmux:/, "") : String(body.session);
 		const s = machine.get(name);
 		if (!s) throw new Error(`Runner ${path} → 404: {"error":"No tmux session \\"${name}\\"."}`);
 		if (path.endsWith("/capture")) return { pane: capture(s) };
-		if (!path.endsWith("/send")) throw new Error(`unexpected ${path}`);
+		if (!path.endsWith("/send") && path !== "/secure/type") throw new Error(`unexpected ${path}`);
 		sent.push({ path, target: body.target ?? body.session, text: body.text, keys: body.keys });
 		const before = s.pane;
 		const atPrompt = s.prompt !== null && s.pane.endsWith(s.prompt);
@@ -140,7 +142,8 @@ describe("a hidden prompt is verified by its outcome, not by echo (#1140)", () =
 		const id = await ready();
 		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "tmux:sudo", hiddenPrompt: true });
 		expect(r.body).toMatchObject({ delivered: true, verifiedBy: "outcome", submitted: true, target: "tmux:sudo" });
-		expect(sent.every((s) => s.path === "/terminal/send" && s.target === "tmux:sudo")).toBe(true);
+		// The secret over `/secure/type` (#1143), the keys over the terminal connector's own path — both at the same target.
+		expect(sent.map((s) => [s.path, s.target])).toEqual([["/secure/type", "tmux:sudo"], ["/terminal/send", "tmux:sudo"]]);
 	});
 
 	it("wrong password: delivered:false naming the rejection, C-c sent, and the value reported consumed because it was submitted", async () => {

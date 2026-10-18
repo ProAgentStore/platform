@@ -19,6 +19,7 @@
  */
 import type { ServerResponse } from "node:http";
 import { maskSecrets } from "../crash-reports.js";
+import { machineSecureTypeDeps, secureType } from "./secure-type.js";
 import { tmuxExec } from "./tmux.js";
 
 /** How long a delivered value is masked in captures. */
@@ -99,4 +100,9 @@ export function scrubDelivered(body: { target?: unknown; value?: unknown }): { r
 	} catch {
 		return { remembered: true, cleared: false };
 	}
+}
+
+/** The two secret routes a delivery uses: `/secure/type` (the value over stdin, #1143) and `/secure/scrub` (after it, #1166). */
+export async function secureTerminalRoute(path: "/secure/scrub" | "/secure/type" | string, body: { target?: unknown; value?: unknown }): Promise<unknown> {
+	return path === "/secure/scrub" ? scrubDelivered(body) : secureType(body, await machineSecureTypeDeps());
 }

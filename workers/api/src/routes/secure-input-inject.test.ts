@@ -33,6 +33,8 @@ let sent: Array<{ path: string; session: unknown; text?: unknown; keys?: unknown
 /** What `/secure/scrub` was asked to clear after a delivery (#1166), and whether every pane read asked for the raw pane. */
 let scrubs: Array<{ target?: unknown; value?: unknown }>;
 let maskedReads: number;
+/** Values typed through `/secure/type` — the only route a secret may travel (#1143). */
+let typedSecurely: unknown[];
 
 beforeEach(async () => {
 	d1 = realSchemaD1();
@@ -46,8 +48,14 @@ beforeEach(async () => {
 	sent = [];
 	scrubs = [];
 	maskedReads = 0;
+	typedSecurely = [];
 	getBoundRunnerConn.mockReset().mockResolvedValue({ runnerNode: "pink-laptop", instanceId: "i1" });
-	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string, body: { session: string; text?: string; keys?: string[]; unmasked?: boolean; target?: string; value?: string }) => {
+	callRunner.mockReset().mockImplementation(async (_conn: unknown, realPath: string, raw: { session: string; text?: string; keys?: string[]; unmasked?: boolean; target?: string; value?: string }) => {
+		// The secret is typed over `/secure/type` (#1143) — recorded under that path, with the pane effect of a send.
+		const typing = realPath === "/secure/type";
+		const path = typing ? "/tmux/send" : realPath;
+		const body = typing ? { session: String(raw.target).replace(/^tmux:/, ""), text: raw.value, unmasked: true } : raw;
+		if (typing) typedSecurely.push(raw.value);
 		if (path === "/secure/scrub") {
 			scrubs.push({ target: body.target, value: body.value });
 			return { remembered: true, cleared: true };
@@ -58,7 +66,7 @@ beforeEach(async () => {
 			if (pane === undefined) throw new Error(`Runner /tmux/capture → 404: {"error":"No tmux session \\"${body.session}\\"."}`);
 			return { session: body.session, pane };
 		}
-		sent.push({ path, session: body.session, text: body.text, keys: body.keys });
+		sent.push({ path: realPath, session: body.session, text: body.text, keys: body.keys });
 		if (path !== "/tmux/send") throw new Error(`unexpected ${path}`);
 		const before = panes.get(body.session);
 		if (before === undefined) throw new Error(`Runner /tmux/send → 404: {"error":"No tmux session \\"${body.session}\\"."}`);
@@ -110,7 +118,7 @@ describe("inject lands the value on the named session's prompt line, verified (#
 		const pane = panes.get("gcloud-setup") ?? "";
 		expect(pane).toContain(`${PROMPT}${CODE}\nYou are now logged in`);
 		expect(sent.map((s) => [s.path, s.session, s.keys ?? null])).toEqual([
-			["/tmux/send", "gcloud-setup", null],
+			["/secure/type", "gcloud-setup", null],
 			["/tmux/send", "gcloud-setup", ["Enter"]],
 		]);
 		expect((await call("GET", `/i1/secure-inputs/${id}`)).body.status).toBe("consumed");
@@ -258,5 +266,27 @@ describe("an echoed value does not stay in the pane for the next reader (#1166)"
 		const id = await ready();
 		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
 		expect(r.body).toMatchObject({ delivered: true, scrubbed: { cleared: false, masked: false } });
+	});
+});
+
+describe("the secret is typed over the runner's stdin path, never as send-keys text (#1143)", () => {
+	it("it goes to /secure/type — and no /tmux/send ever carries it", async () => {
+		const id = await ready();
+		await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(typedSecurely).toEqual([CODE]);
+		expect(sent.filter((s) => s.path === "/tmux/send").some((s) => String(s.text ?? "").includes(CODE))).toBe(false);
+	});
+
+	it("a runner without /secure/type is REFUSED, not fallen back from — the value restored, nothing typed", async () => {
+		const real = callRunner.getMockImplementation();
+		callRunner.mockImplementation(async (conn: unknown, path: string, body: never) => {
+			if (path === "/secure/type") throw new Error('Runner /secure/type → 404: {"error":"Not found"}');
+			return real?.(conn, path, body);
+		});
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "gcloud-setup" });
+		expect(r.body).toMatchObject({ delivered: false, consumedValue: false, status: "ready" });
+		expect(r.body.reason).toMatch(/CLI 0\.4\.159 or newer/);
+		expect(sent.some((s) => String(s.text ?? "").includes(CODE))).toBe(false);
 	});
 });

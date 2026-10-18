@@ -1,4 +1,4 @@
-import { outgoing, redactPanesOf, scrubDelivered } from "./coding/pane-redact.js";
+import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
 import { codingSessionRefusal, instanceOf, readJson } from "./request-instance.js";
 import {
 	createServer,
@@ -94,7 +94,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (refused) return json(res, 403, { error: refused });
 	// Panes leave this machine redacted (#1166, coding/pane-redact.ts); a delivered secret is scrubbed.
 	redactPanesOf(res, path, req.method === "POST" && /^\/(tmux|terminal)\//.test(path) ? await readJson<{ unmasked?: unknown }>(req) : undefined);
-	if (req.method === "POST" && path === "/secure/scrub") return json(res, 200, scrubDelivered(await readJson(req)));
+	if (req.method === "POST" && (path === "/secure/scrub" || path === "/secure/type")) return json(res, 200, await secureTerminalRoute(path, await readJson(req)));
 
 	if ((req.method === "GET" || req.method === "POST") && path === "/health") {
 		// #896: a health check that cannot say WHO answered is not enough to decide anything with.
