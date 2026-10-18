@@ -23,6 +23,7 @@
 import { pathToFileURL } from "node:url";
 import { BOOTSTRAP_ENV, cachedPayloads, installPayload, latestPublishedVersion, NO_SELF_UPDATE_ENV, newestPayload, olderThan, payloadRoot, type Payload } from "./payload.js";
 import { badVersions, beginTrial, markBad, noteTrialStart, readTrial, TRIAL_MS } from "./trial.js";
+import { logUpdateStep } from "./update-log.js";
 
 /** `runner connect`'s ask-for-a-respawn exit code (self-update.ts `RUNNER_RESTART_EXIT_CODE`), restated: the stub imports nothing else. */
 export const STUB_RESTART_EXIT_CODE = 75;
@@ -65,7 +66,11 @@ export function checksForUpdate(args: string[]): boolean {
 
 /** Choose the payload — fetching a newer release first when this is `pags up` — and run it. Answers the one run. */
 export async function runStub(deps: StubDeps): Promise<Payload> {
-	const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+	// Every line the stub says is a step of an update — into the update log too (#1151).
+	const log = deps.log ?? ((line: string) => {
+		process.stderr.write(`${line}\n`);
+		logUpdateStep(`stub: ${line}`);
+	});
 	const root = deps.root ?? payloadRoot();
 	const now = deps.now ?? Date.now;
 	const env = deps.env ?? process.env;
@@ -106,6 +111,7 @@ export async function runStub(deps: StubDeps): Promise<Payload> {
 			watchTrial(root, chosen.version, deps, log, now, env);
 		}
 	}
+	if (trialApplies(deps.args)) logUpdateStep(`stub: running ${chosen.version} for pags ${deps.args.find((a) => !a.startsWith("-"))}`);
 	env[BOOTSTRAP_ENV] = deps.self;
 	const load = deps.load ?? ((entry: string) => import(pathToFileURL(entry).href));
 	try {

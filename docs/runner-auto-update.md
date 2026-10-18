@@ -222,6 +222,38 @@ count is above zero an automatic update waits with `blocker_class: fleet_stagger
 15 seconds. The install bridge reads the count once more from the refresh it makes just before npm runs.
 A machine that has been silent for longer than that 10-minute window stops holding up the rest of the fleet.
 
+## An update always comes back, and says what it did (#1151)
+
+On 2026-10-17/18 the Mac mini, the pink laptop and dell-laptop each auto-updated 0.4.148 → 0.4.149, reported
+`installing`, and were never heard from again. 0.4.149 was not broken — the Mac mini and the pink laptop run it,
+started by hand — and byte-identical updater and restart code had moved the Mac mini 0.4.147 → 0.4.148 eleven
+hours earlier. On the Mac mini the install completed (the 0.4.149 payload was renamed into its cache a second
+before the last heartbeat) and no `runner connect` started after it, and no crash report was written — so what
+died was the `pags up` the restart started, before it reached its runner. Nothing survived that: on macOS and
+Linux the old process had replaced itself in place (`execve`), so the new one's exit was the end; on Windows
+the launcher gave up after one failed start. Which step killed it could not be recovered — the CLI kept no
+log, `console.clear()` had overwritten the terminal, and a `pags up`'s own exit is not a crash report.
+
+**Nothing is left to a single start.** A restart no longer replaces the process in place: the process that
+held the terminal stays as the launcher (above) and outlives every `pags up` it starts. When a start after a
+remote update fails — any non-zero exit or signal — the launcher starts it again, waiting 10 seconds and
+doubling up to 5 minutes, until one comes up (`relaunchDelayMs`, `up-restart.ts`). A `pags up` started
+unattended (`PAGS_NO_PROMPT=1`, which every update restart sets) also no longer exits on what a retry
+clears: it retries the instance list with backoff instead of exiting on a failed fetch, and waits up to a
+minute for the old runner's lock before judging it. That half runs in the NEW release's code, so it already
+protects the restart that an older `pags up` performs. Only a restart a person asked for (`r`) still reports
+a failure and exits, because someone is there to see it.
+
+**The update log.** Every step goes to `~/.config/proagentstore/update.log` (`PAGS_UPDATE_LOG` overrides),
+one timestamped, pid-stamped line each, cut back to its newest half past 256KB
+(`packages/cli/src/bootstrap/update-log.ts`): the install starting, finishing or failing with npm's
+reason; the runner leaving for its restarter and with what exit code; each start and exit the launcher
+sees and each retry; each `pags up` start, a failed instance fetch, a held lock; the stub's update,
+rollback and choice of version; and the new version's first answer from the platform. The first
+registration of every start uploads the newest 4000 characters, and the machine record keeps it as
+`update_log` (`list_runner_nodes`, `machine_policies.update_log`, migration 0253) — so the next update
+that does not come back can be read from the record of the start that follows it.
+
 ## Windows
 
 How `pags up` is installed and kept running on Windows is in
@@ -240,11 +272,11 @@ every update or `r` added one idle process (six deep on one machine after two da
 
 - under a service (`PAGS_SERVICE=1`) `pags up` exits with code 75 and the service starts the new
   release; with `PAGS_RESTART_COMMAND` it starts that command detached and exits;
-- in a terminal or tmux pane on macOS and Linux it replaces itself in place (`process.execve`, Node
-  22.15 or later): same pid, same terminal, nothing left behind;
-- where that is not available, Windows included, the first restart turns the process into one thin
+- everywhere else — a terminal or tmux pane on any OS — the first restart turns the process into one thin
   launcher that runs `pags up` again whenever it asks for a restart. That is two processes for good,
-  however many updates follow. Restarting the Task Scheduler task clears the launcher too.
+  however many updates follow. Restarting the Task Scheduler task clears the launcher too. (Up to 0.4.149,
+  macOS and Linux replaced the process in place with `process.execve` instead; that left nothing to retry
+  a respawn that failed — see the next section.)
 
 A machine still running an older `pags up` keeps its existing chain until that process is restarted
 once at the machine.

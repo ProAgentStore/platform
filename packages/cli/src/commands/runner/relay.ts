@@ -14,6 +14,7 @@ import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, Rel
 import { readWorkLook } from "./runner-work-observation.js";
 import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
 import { releaseTrial } from "./release-trial.js";
+import { updateLogUpload } from "../../bootstrap/update-log.js";
 
 /**
  * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
@@ -61,10 +62,12 @@ export async function connectViaRelay(
 	// The controller's own record (#1020), bound once it exists. Times, a normalized blocker class and
 	// observation outcomes only — never session text, process arguments, paths, prompts or tokens.
 	let autoUpdateDiagnostics: () => Partial<AutoUpdateDiagnostics> = () => ({});
+	const updateLog = updateLogUpload(CLI_VERSION); // #1151: the update log lands on the machine's record once per start
 	const autoUpdateStatusBody = () => ({
 		status: autoUpdateStatusWire(cell.policy.status),
 		latestVersion: cell.policy.latestVersion,
 		error: cell.policy.reason,
+		...updateLog.body(),
 		...autoUpdateDiagnostics(),
 	});
 
@@ -96,7 +99,10 @@ export async function connectViaRelay(
 			writeError(`register ${id.slice(0, 8)}… failed: ${msg}`);
 		},
 		onAction: (action) => scheduleAutomaticUpdate(action === "start", action === "cancel"),
-		onAnswer: trial.proven,
+		onAnswer: () => {
+			trial.proven();
+			updateLog.answered();
+		},
 	});
 	const registered = channel.registered;
 	const registerRuntime = (id: string, forceClaim = force) => channel.register(id, forceClaim);

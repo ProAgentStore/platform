@@ -16,6 +16,7 @@ import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
 import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
 import { installService, uninstallService, type ServiceContext } from "../service-install.js";
+import { logUpdateStep } from "../bootstrap/update-log.js";
 
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -94,20 +95,40 @@ export const upCommand = new Command("up")
 			startedAt: Date.now(),
 		};
 
+		// A start nobody is watching — the restart after a remote update (#1151). It must not end on a failure a
+		// retry would clear: on 2026-10-17 no process was left to start it again once it had.
+		const unattended = process.env.PAGS_NO_PROMPT === "1";
+		logUpdateStep(`start: pags up ${CLI_VERSION}${unattended ? " (unattended)" : ""}`);
+
 		clearScreen();
 		printLogo(CLI_VERSION);
 		printStep("Signed in as " + session.user.login, "ok");
 
 		// Fetch instances
 		printStep("Fetching instances...", "wait");
-		const res = await fetch(`${API_BASE}/v1/instances/my/instances`, {
-			headers: { Authorization: `Bearer ${session.token}` },
-		});
-		if (!res.ok) {
-			printStep("Failed to fetch instances: " + res.status, "fail");
-			process.exit(1);
+		type Listed = { instances?: Array<DiscoverableInstance & { agent_id: string; slug?: string }> };
+		let data: Listed;
+		for (let failures = 1; ; failures++) {
+			let failure: string;
+			try {
+				const res = await fetch(`${API_BASE}/v1/instances/my/instances`, { headers: { Authorization: `Bearer ${session.token}` } });
+				if (res.ok) {
+					data = (await res.json()) as Listed;
+					break;
+				}
+				failure = `HTTP ${res.status}`;
+			} catch (e) {
+				failure = e instanceof Error ? e.message : String(e);
+			}
+			logUpdateStep(`start: fetching instances failed (${failure})${unattended ? "" : " — exiting"}`);
+			if (!unattended) {
+				printStep("Failed to fetch instances: " + failure, "fail");
+				process.exit(1);
+			}
+			const wait = Math.min(5 * 60_000, 5_000 * 2 ** (failures - 1));
+			printStep(`Failed to fetch instances (${failure}) — retrying in ${Math.round(wait / 1000)}s`, "wait");
+			await new Promise((resolve) => setTimeout(resolve, wait));
 		}
-		const data = await res.json() as { instances?: Array<DiscoverableInstance & { agent_id: string; slug?: string }> };
 		const active = (data.instances || []).filter((i) => i.status === "active");
 		let instances = active;
 		/** Runtime agents pinned to ANOTHER machine — served there, listed here, never attached (#810). */
@@ -194,11 +215,12 @@ export const upCommand = new Command("up")
 		// child, which owns the sockets; this checks it FIRST so a second start can refuse with who
 		// holds it rather than killing them. `--replace` asks that holder to stop, gracefully.
 		const lockFile = lockPath(session.user.login);
-		// A background restart after a remote update is started by the old runner as it leaves
-		// (#499): give that one a bounded moment to release the lock before judging it.
-		if (opts.background && process.env[BACKGROUND_RESTART_ENV] === "1") await waitUntilTakeable(() => inspectHolder(lockFile));
+		// A restart after a remote update is started as the old runner leaves (#499, #1151): give it a bounded moment
+		// to release the lock before judging it.
+		if (unattended || (opts.background && process.env[BACKGROUND_RESTART_ENV] === "1")) await waitUntilTakeable(() => inspectHolder(lockFile), { timeoutMs: 60_000 });
 		const held = await inspectHolder(lockFile);
 		if (held.lock && !isTakeable(held.verdict)) {
+			logUpdateStep(`start: the lock is held by pid ${held.lock.pid} (${held.verdict})${opts.replace ? " — replacing it" : " — exiting"}`);
 			if (!opts.replace) {
 				clearScreen();
 				printLogo(CLI_VERSION);
@@ -345,10 +367,12 @@ export const upCommand = new Command("up")
 			// this supervisor on the old code until someone restarted it at the machine. No prompt on the
 			// way back — nobody may be at the keyboard, and every agent must re-attach unattended.
 			if (code === RUNNER_RESTART_EXIT_CODE) {
+				logUpdateStep("restart: runner connect asked for a restart (exit 75)");
 				restartUp("Runner updated remotely — restarting pags up on the new version…", { PAGS_NO_PROMPT: "1" });
 				return;
 			}
 			childDead = true;
+			logUpdateStep(`runner connect ${signal ? `was killed by ${signal}` : `exited ${code}`}${stopping ? " (stopping)" : ""}`);
 			// `runner connect` itself died (a crash of the CLI process, or a signal): record it with its
 			// last lines and deliver it now if the platform answers, else on the next start (#1087).
 			if (code !== 0 && !stopping) recordConnectExit(code, signal ?? null, logs.slice(-20));
@@ -374,15 +398,16 @@ export const upCommand = new Command("up")
 
 		/**
 		 * `pags up` again with the SAME flags, leaving no blocked ancestor behind (#1036): the service or
-		 * restart command takes over, or this process is replaced in place on the same terminal — see
-		 * `up-restart.ts`. Stdin is released first so the new process reads every keystroke.
+		 * restart command takes over, or this process stays as the one launcher that starts it on the same
+		 * terminal and starts it again if it fails (#1151) — see `up-restart.ts`. Stdin is released first so
+		 * the new process reads every keystroke.
 		 */
 		function restartUp(why: string, env: NodeJS.ProcessEnv = {}): never {
 			writeLine(`  ${why}`);
 			if (process.stdin.isTTY) process.stdin.setRawMode(false);
 			process.stdin.pause();
 			restartPagsUp(restartUpArgs(opts), env, { ...processRestartDeps(), log: (line) => writeLine(`  ${line}`) });
-			process.exit(1); // unreachable: every path above replaces or exits this process
+			process.exit(1); // unreachable: every path above exits this process
 		}
 
 		const shutdown = () => {

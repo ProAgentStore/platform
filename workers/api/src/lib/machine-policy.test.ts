@@ -147,3 +147,26 @@ describe("machine policy — receipt time is not decision time (#1020)", () => {
 		expect(wire.auto_update_diagnostics).toEqual({ last_heartbeat_at: iso(5_000_000), last_check_at: null, last_decision_at: iso(4_990_000), next_retry_due_at: null, blocker_class: "idle_wait", observations: [] });
 	});
 });
+
+describe("machine policy — the runner's update log (#1151)", () => {
+	const M = "machine-aaaa1111";
+
+	it("stores the log a restart uploads, keeps it through reports that carry none, and puts it on the wire", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		const log = "2026-10-18T03:17:55.000Z [133] start: pags up 0.4.150 (unattended)\n2026-10-18T03:17:58.000Z [140] registered: 0.4.150 answered by the platform";
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "verified_success", updateLog: log });
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "verified_success" });
+		await reportMachinePolicyStatus(env(), "u1", M, { latestVersion: "0.4.150" }); // a status-less report: receipt only
+		const policy = await getMachinePolicy(env(), "u1", M);
+		expect(policy.updateLog).toBe(log);
+		expect(machinePolicyWire(policy).update_log).toBe(log);
+	});
+
+	it("a status-less report still lands its log, and an oversized one keeps its newest end", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		await reportMachinePolicyStatus(env(), "u1", M, { updateLog: `${"x".repeat(9000)}END` });
+		const stored = (await getMachinePolicy(env(), "u1", M)).updateLog ?? "";
+		expect(stored.length).toBe(8000);
+		expect(stored.endsWith("END")).toBe(true);
+	});
+});

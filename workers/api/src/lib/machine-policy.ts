@@ -17,6 +17,8 @@ export const UPDATE_SILENCE_MS = 5 * 60_000;
 export const FLEET_SLOT_FRESH_MS = 10 * 60_000;
 /** The `last_error` the silence sweep writes; the stuck verdict reads it back, and the machine's own next report replaces it. */
 export const SILENT_UPDATE_ERROR = "No heartbeat within 5 minutes of installing an update";
+/** The most of a runner's update log one report stores (#1151) — the CLI sends ≤4000; this bounds a hand-made body. */
+const UPDATE_LOG_MAX_CHARS = 8000;
 
 /** One paired work observation the updater made: which request, whether it answered, and when. */
 export interface UpdateObservation {
@@ -69,6 +71,8 @@ export interface MachinePolicy {
 	nextRetryDueAt: string | null;
 	blockerClass: BlockerClass | null;
 	observations: UpdateObservation[];
+	/** The runner's own step-by-step update log, as its last restart uploaded it (#1151). */
+	updateLog: string | null;
 }
 
 interface Row {
@@ -83,6 +87,7 @@ interface Row {
 	next_retry_due_at?: number | null;
 	blocker_class?: string | null;
 	observations?: string | null;
+	update_log?: string | null;
 }
 const iso = (ms: number | null | undefined) => (ms ? new Date(ms).toISOString() : null);
 const present = (row: Row | null, enabled = false): MachinePolicy => ({
@@ -97,6 +102,7 @@ const present = (row: Row | null, enabled = false): MachinePolicy => ({
 	nextRetryDueAt: iso(row?.next_retry_due_at),
 	blockerClass: row?.blocker_class && BLOCKERS.has(row.blocker_class as BlockerClass) ? (row.blocker_class as BlockerClass) : null,
 	observations: parseObservations(row?.observations ? safeJson(row.observations) : null, (ms) => new Date(ms).toISOString()),
+	updateLog: row?.update_log ?? null,
 });
 
 function safeJson(text: string): unknown {
@@ -143,6 +149,7 @@ export function machinePolicyWire(policy: MachinePolicy) {
 		auto_update_status: policy.status,
 		last_attempt_at: policy.lastAttemptAt,
 		last_error: policy.lastError,
+		update_log: policy.updateLog,
 		auto_update_diagnostics: {
 			last_heartbeat_at: policy.lastHeartbeatAt,
 			last_check_at: policy.lastCheckAt,
@@ -165,7 +172,7 @@ export async function getMachinePolicy(env: Pick<Env, "DB">, userId: string, raw
 	const machineId = normalizeMachineId(rawMachineId);
 	if (!machineId) return present(null);
 	const row = await env.DB.prepare(`SELECT auto_update, status, latest_version, last_attempt_at, last_error, last_heartbeat_at, last_check_at, last_decision_at,
-		next_retry_due_at, blocker_class, observations FROM machine_policies WHERE user_id = ?1 AND machine_id = ?2`)
+		next_retry_due_at, blocker_class, observations, update_log FROM machine_policies WHERE user_id = ?1 AND machine_id = ?2`)
 		.bind(userId, machineId).first<Row>().catch(() => null);
 	return present(row);
 }
@@ -192,9 +199,11 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 	const aliases: Record<string, AutoUpdateStatus> = { "waiting-for-idle": "waiting_for_idle", running: "installing", "verified-success": "verified_success", failure: "failed" };
 	const status = rawStatus && STATUSES.has((aliases[rawStatus] ?? rawStatus) as AutoUpdateStatus) ? (aliases[rawStatus] ?? rawStatus) as AutoUpdateStatus : null;
 	const now = Date.now();
+	// #1151: sent once per start, with its first report; absent on every other report, which then leaves it as it was.
+	const updateLog = typeof value.updateLog === "string" && value.updateLog.trim() ? value.updateLog.slice(-UPDATE_LOG_MAX_CHARS) : null;
 	if (!status) {
 		// Interrupted/partial telemetry still proves the runner reported — receipt only, nothing else changes.
-		await env.DB.prepare("UPDATE machine_policies SET last_heartbeat_at = ?1 WHERE user_id = ?2 AND machine_id = ?3").bind(now, userId, machineId).run().catch(() => undefined);
+		await env.DB.prepare("UPDATE machine_policies SET last_heartbeat_at = ?1, update_log = COALESCE(?4, update_log) WHERE user_id = ?2 AND machine_id = ?3").bind(now, userId, machineId, updateLog).run().catch(() => undefined);
 		return;
 	}
 	// The runner's OWN check/decision times (#1020). Absent on an older runner, and absent is not "now".
@@ -227,8 +236,9 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 		next_retry_due_at = CASE WHEN ?12 = 1 THEN ?9 ELSE next_retry_due_at END,
 		blocker_class = CASE WHEN ?12 = 1 THEN ?10 ELSE blocker_class END,
 		observations = CASE WHEN ?11 IS NOT NULL THEN ?11 ELSE observations END,
+		update_log = COALESCE(?13, update_log),
 		last_heartbeat_at = ?4, updated_at = ?4 WHERE user_id = ?5 AND machine_id = ?6`)
-		.bind(status, latest, error, now, userId, machineId, decisionAt, checkAt, nextRetry, blocker, observations, diagnostics ? 1 : 0)
+		.bind(status, latest, error, now, userId, machineId, decisionAt, checkAt, nextRetry, blocker, observations, diagnostics ? 1 : 0, updateLog)
 		.run()
 		.catch(() => undefined);
 	if (before && (before.status !== "failed" || before.last_error !== error)) {

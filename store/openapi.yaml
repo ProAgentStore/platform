@@ -13118,6 +13118,7 @@ paths:
                       auto_update_status: { type: string, enum: [disabled, enabled, checking, waiting_for_idle, installing, restarting, verified_success, offline, unsupported, failed] }
                       last_attempt_at: { type: string, nullable: true, format: date-time, description: "The runner's last controller DECISION — a heartbeat alone never advances it." }
                       last_error: { type: string, nullable: true }
+                      update_log: { type: string, nullable: true, description: "The runner's step-by-step update log (#1151), as its last start uploaded it." }
                       auto_update_diagnostics: { $ref: "#/components/schemas/AutoUpdateDiagnostics" }
                       auto_update_stuck: { $ref: "#/components/schemas/AutoUpdateStuck" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -13239,6 +13240,7 @@ paths:
                         lastSeenAt: { type: string, nullable: true }
                         connected: { type: boolean }
                         last_error: { type: string, nullable: true, description: "The runner's own reason for its last refusal or failed update (#1054) — the same value get_machine_policy carries." }
+                        update_log: { type: string, nullable: true, description: "The runner's step-by-step update log (#1151) — the newest 4000 characters of ~/.config/proagentstore/update.log, as the first registration after its last start uploaded it." }
                         auto_update_stuck: { $ref: "#/components/schemas/AutoUpdateStuck" }
                         instances:
                           type: array

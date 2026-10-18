@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, payloadRoot, runNpm } from "../../bootstrap/payload.js";
 import { beginTrial } from "../../bootstrap/trial.js";
+import { logUpdateStep } from "../../bootstrap/update-log.js";
 import type { SessionStateCounts } from "./runner-work-observation.js";
 
 export { CLI_PACKAGE, latestPublishedRelease, latestPublishedVersion, olderThan } from "../../bootstrap/payload.js";
@@ -136,6 +137,7 @@ export function deferredUpdateLeaseActive(lease: DeferredUpdateLease, now = Date
  * `pags up` or a service manager; for a {@link RESTART_COMMAND_ENV} the command, started detached first.
  */
 export function leaveForRestart(restarter: Restarter, deps: { spawn: typeof spawn; exit: (code: number) => void } = { spawn, exit: (code) => process.exit(code) }): void {
+	logUpdateStep(`restart: leaving for the ${restarter} restarter (${restarter === "command" ? "restart command started, exit 0" : `exit ${RUNNER_RESTART_EXIT_CODE}`})`);
 	if (restarter === "command") {
 		deps.spawn(process.env[RESTART_COMMAND_ENV] as string, { shell: true, detached: true, stdio: "ignore", env: process.env }).unref();
 		deps.exit(0);
@@ -218,15 +220,21 @@ export function planRunnerRestart(f: { current: string; restarter: Restarter | n
  * new one crashes on start or never registers.
  */
 export async function installVersion(version: string, current: string | null = null): Promise<void> {
-	if (process.env[BOOTSTRAP_ENV]) {
-		await installPayload(version);
-		beginTrial(payloadRoot(), version, current);
-		return;
-	}
+	const bootstrapped = !!process.env[BOOTSTRAP_ENV];
+	logUpdateStep(`install: ${current ?? "?"} → ${version} starting (${bootstrapped ? "payload cache" : "npm i -g"})`);
 	try {
-		await runNpm(["i", "-g", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 });
+		if (bootstrapped) {
+			await installPayload(version);
+			beginTrial(payloadRoot(), version, current);
+		} else {
+			await runNpm(["i", "-g", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 }).catch((e: unknown) => {
+				const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim();
+				throw new Error((stderr || (e instanceof Error ? e.message : String(e))).slice(-400));
+			});
+		}
 	} catch (e) {
-		const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim();
-		throw new Error((stderr || (e instanceof Error ? e.message : String(e))).slice(-400));
+		logUpdateStep(`install: ${version} FAILED — ${e instanceof Error ? e.message : String(e)}`);
+		throw e;
 	}
+	logUpdateStep(`install: ${version} installed`);
 }
