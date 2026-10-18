@@ -51,6 +51,9 @@ export async function findDuplicateObjective(
 		`SELECT r.run_id, r.objective, s.repo_id FROM agent_loop_runs r
 		   LEFT JOIN coding_sessions s ON s.id = r.session_id
 		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND r.status = 'running'
+		    -- #1203: a run being CANCELLED is ending — it must not absorb a new start for its issue. The new start goes on to
+		    -- the queue behind it (the cancelling run still holds the repo) and runs when the cancel settles.
+		    AND COALESCE(r.cancel_requested, 0) = 0
 		  ORDER BY r.started_at DESC`,
 	)
 		.bind(input.userId, input.instanceId)

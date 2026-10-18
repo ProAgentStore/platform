@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findDuplicateObjective, referencedIssue } from "./objective-dedupe.js";
 import { cancelQueueEntry, enqueueObjective } from "./objective-queue.js";
+import { requestCancel } from "./agent-loop-store.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
@@ -78,6 +79,15 @@ describe("findDuplicateObjective — the same issue already waiting or running o
 		expect(await find("Retry: issue #925")).toEqual({ kind: "running", runId: "run-a", objective: "Work issue #925" });
 		expect(await find("Retry: issue #925", "r2")).toBeNull();
 		expect(await find("Work issue #7")).toBeNull();
+	});
+
+	it("a run that is CANCELLING does not absorb a new start for its issue (#1203)", async () => {
+		// Run 17336d80: coding_loop_stop answered `cancelling`, and the next coding_loop_start for the same issue came
+		// back `duplicate_of` that very run — so the new objective was dropped onto a run that was ending.
+		running("run-a", "Work issue #84", "r1");
+		expect(await find("Work issue #84")).toEqual(expect.objectContaining({ kind: "running", runId: "run-a" }));
+		expect(await requestCancel(env, "u1", "run-a")).toBe(true);
+		expect(await find("Work issue #84")).toBeNull();
 	});
 
 	it("prefers a waiting entry over the running run, since the entry is what a queued answer names", async () => {

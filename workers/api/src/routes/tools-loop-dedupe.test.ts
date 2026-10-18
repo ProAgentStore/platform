@@ -108,6 +108,27 @@ describe("POST /:id/loop — a retried queued start is not queued twice (#925)",
 		expect(pendingRows()).toHaveLength(0);
 	});
 
+	it("#1203: a run that is CANCELLING does not absorb the start — a new entry is queued, and it starts once the cancel settles", async () => {
+		// The incident: coding_loop_stop answered `cancelling` for run 17336d80, and coding_loop_start(issue 84,
+		// queue_if_busy) with a new request_id came back `duplicate_of` that run, so the new objective went nowhere.
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id) VALUES ('s1', 'i1', 'r1', 'u1')`);
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id, cancel_requested, cancel_requested_at) VALUES ('run-1', 'u1', 'i1', 'Work issue #84', 'running', 10, 1, 's1', 1, 2)`);
+		const res = await post({ requestId: "req-new", objective: "Work issue #84", repoId: "r1", queueIfBusy: true });
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as { queued: boolean; entry: { id: string }; duplicate_of?: string };
+		expect(body).toMatchObject({ queued: true });
+		expect(body).not.toHaveProperty("duplicate_of");
+		expect(pendingRows()).toEqual([expect.objectContaining({ id: body.entry.id, repo_id: "r1" })]);
+
+		// The cancel settles: the run's terminal path drains the repo's queue, and the new entry starts.
+		d1.exec(`UPDATE agent_loop_runs SET status = 'cancelled' WHERE run_id = 'run-1'`);
+		driverStart.mockResolvedValue({ ok: true, runId: "run-2", driver: "coding" });
+		const { tryDequeueAndStart } = await import("../lib/objective-queue-start.js");
+		const drained = await tryDequeueAndStart({ DB: d1.DB } as unknown as Env, "i1", "r1", "u1");
+		expect(drained).toMatchObject({ drained: true, entryId: body.entry.id, started: true, runId: "run-2" });
+		expect(pendingRows()).toHaveLength(0);
+	});
+
 	it("only the queue_if_busy path looks: without it a busy repo is still the plain refusal", async () => {
 		await post({ requestId: "a", objective: "Work issue #925", repoId: "r1", queueIfBusy: true });
 		const res = await post({ requestId: "b", objective: "Work issue #925", repoId: "r1" });
