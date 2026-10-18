@@ -78,6 +78,22 @@ async function discordRequest(token: string, path: string, init: RequestInit = {
 	}
 }
 
+/**
+ * Post one message to a channel with the bot token — the agent's `discord_send_message` and the
+ * platform's own release notes (#1216) send through this one path.
+ */
+export async function postDiscordMessage(token: string, channelId: string, content: string): Promise<{ ok: true; messageId: string | null } | { ok: false; status: number; message: string }> {
+	const result = await discordRequest(token, `/channels/${channelId}/messages`, {
+		method: "POST",
+		// Agents must name mentions deliberately in a later, reviewed capability. A plain send
+		// cannot turn untrusted text into a mass ping.
+		body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+	});
+	if (!result.ok) return result;
+	const id = (result.data as { id?: unknown } | null)?.id;
+	return { ok: true, messageId: typeof id === "string" ? id : null };
+}
+
 const listGrantedChannels: ToolDef["handler"] = async (ctx) => {
 	if (!ctx.instanceId || !ctx.userId) return { content: "Discord channel grants are available only from a subscribed agent instance.", success: false };
 	const grants = await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord");
@@ -108,15 +124,9 @@ const sendMessage: ToolDef["handler"] = async (ctx, input) => {
 	if (content.length > MAX_MESSAGE_LENGTH) return { content: `Discord messages are limited to ${MAX_MESSAGE_LENGTH} characters.`, success: false };
 	const token = await botToken(ctx);
 	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
-	const result = await discordRequest(token, `/channels/${granted.channelId}/messages`, {
-		method: "POST",
-		// Agents must name mentions deliberately in a later, reviewed capability. A plain send
-		// cannot turn untrusted text into a mass ping.
-		body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
-	});
+	const result = await postDiscordMessage(token, granted.channelId, content);
 	if (!result.ok) return { content: result.message, success: false };
-	const messageId = typeof (result.data as { id?: unknown } | null)?.id === "string" ? (result.data as { id: string }).id : null;
-	return { content: JSON.stringify({ sent: true, channelId: granted.channelId, messageId }, null, 2), success: true };
+	return { content: JSON.stringify({ sent: true, channelId: granted.channelId, messageId: result.messageId }, null, 2), success: true };
 };
 
 const addReaction: ToolDef["handler"] = async (ctx, input) => {

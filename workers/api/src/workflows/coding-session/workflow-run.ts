@@ -21,6 +21,7 @@ import { ObjectiveDelivery, type ObjectiveDeliveryState } from "../../lib/coding
 import { sendAct } from "../../lib/coding-act-send.js";
 import { decideTurnRecovery, describeTurnRecovery, recoveryInstruction, turnRecoveryRecord, type InflightTurn } from "../../lib/coding-turn-recovery.js";
 import { activeConstraints, constraintLines, constraintSources } from "../../lib/coding-scope-constraints.js";
+import { postReleaseNotes } from "../../lib/release-notes.js";
 import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { markDirectivesProcessed } from "../../lib/coding-ownership.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
@@ -1297,6 +1298,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			}).catch(() => undefined);
 			return null;
 		});
+		// One release note per run that shipped to the trunk, to each granted channel (#1216). Never throws.
+		await postReleaseNotes({ env, userId, instanceId, sessionId, repoId, repoLabel: goal.repo, runId: event.payload.loopRunId ?? sessionId, runStartedAt }, undefined, runRetry);
 		// #155: close out the observable delegation task on the board (if this was a
 		// delegated goal) so its status reflects the real outcome, not a stuck "running".
 		// Inline upsert into instance_runtime_tasks (the board's source) — same shape as
