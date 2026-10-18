@@ -13,6 +13,9 @@
  *             the account that approved it, for the route to mint a session for.
  */
 import type { Env } from "../types.js";
+import type { DeviceRequestView } from "./device-auth-view.js";
+
+export type { DeviceDecisionResponse, DeviceRequestResponse, DeviceRequestView } from "./device-auth-view.js";
 
 /** How long a request waits for the owner. */
 export const DEVICE_CODE_TTL_SECONDS = 10 * 60;
@@ -24,16 +27,6 @@ const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
 export type DevicePoll =
 	| { kind: "approved"; userId: string }
 	| { kind: "authorization_pending" | "slow_down" | "access_denied" | "expired_token" };
-
-export interface DeviceRequestView {
-	userCode: string;
-	status: "pending" | "approved" | "denied" | "consumed";
-	node: string | null;
-	ip: string | null;
-	country: string | null;
-	createdAt: string;
-	expiresAt: string;
-}
 
 async function sha256hex(s: string): Promise<string> {
 	const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));

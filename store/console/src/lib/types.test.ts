@@ -10,6 +10,8 @@ import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, Acc
 import type { DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuildListResponse } from "./discordTypes";
 import type { GmailScoutScanResponse, LeadVerification, LeadVerificationListResponse } from "./gmailScout";
 import type { RemoteAuthRequestResponse, RemoteAuthRequestView } from "./remoteAuth";
+import type { DeviceDecisionResponse, DeviceRequestResponse, DeviceRequestView } from "./deviceAuth";
+import type { DeviceDecisionResponse as WorkerDeviceDecisionResponse, DeviceRequestResponse as WorkerDeviceRequestResponse, DeviceRequestView as WorkerDeviceRequestView } from "../../../../workers/api/src/lib/device-auth-view";
 import type { RemoteAuthRequestResponse as WorkerRemoteAuthRequestResponse, RemoteAuthRequestView as WorkerRemoteAuthRequestView } from "../../../../workers/api/src/lib/remote-auth";
 import type { BrowserTakeover, BrowserTakeoverListResponse, BrowserTakeoverTransitionResponse } from "./browserTakeovers";
 import type { BrowserTakeover as WorkerBrowserTakeover, BrowserTakeoverListResponse as WorkerBrowserTakeoverListResponse, BrowserTakeoverTransitionResponse as WorkerBrowserTakeoverTransitionResponse } from "../../../../workers/api/src/lib/browser-takeover-types";
@@ -174,6 +176,11 @@ const _leadVerificationListAcceptsTheProducer: LeadVerificationListResponse = {}
 const _remoteAuthViewHasNoInventedFields: Extra<RemoteAuthRequestView, WorkerRemoteAuthRequestView> extends never ? true : never = true;
 const _remoteAuthViewAcceptsTheProducer: RemoteAuthRequestView = {} as WorkerRemoteAuthRequestView;
 const _remoteAuthResponseAcceptsTheProducer: RemoteAuthRequestResponse = {} as WorkerRemoteAuthRequestResponse;
+// #1157: the device sign-in approval page reads exactly what the worker sends.
+const _deviceViewHasNoInventedFields: Extra<DeviceRequestView, WorkerDeviceRequestView> extends never ? true : never = true;
+const _deviceViewAcceptsTheProducer: DeviceRequestView = {} as WorkerDeviceRequestView;
+const _deviceResponseAcceptsTheProducer: DeviceRequestResponse = {} as WorkerDeviceRequestResponse;
+const _deviceDecisionAcceptsTheProducer: DeviceDecisionResponse = {} as WorkerDeviceDecisionResponse;
 // #1063: the replay artifact list the shared player reads.
 const _browserArtifactHasNoInventedFields: Extra<BrowserArtifactView, WorkerBrowserArtifactView> extends never ? true : never = true;
 const _browserArtifactAcceptsTheProducer: BrowserArtifactView = {} as WorkerBrowserArtifactView;
@@ -256,7 +263,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_leadVerificationListHasNoInventedFields,
 			_remoteAuthViewHasNoInventedFields,
 			_browserArtifactHasNoInventedFields,
-		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
+			_deviceViewHasNoInventedFields,
+		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});
@@ -267,6 +275,9 @@ describe("console response types match the Worker declarations they copy (#617)"
 		expect(_leadVerificationListAcceptsTheProducer).toEqual({});
 		expect(_remoteAuthViewAcceptsTheProducer).toEqual({});
 		expect(_remoteAuthResponseAcceptsTheProducer).toEqual({});
+		expect(_deviceViewAcceptsTheProducer).toEqual({});
+		expect(_deviceResponseAcceptsTheProducer).toEqual({});
+		expect(_deviceDecisionAcceptsTheProducer).toEqual({});
 		expect(_browserArtifactAcceptsTheProducer).toEqual({});
 		expect(_browserArtifactListAcceptsTheProducer).toEqual({});
 	});

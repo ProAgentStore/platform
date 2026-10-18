@@ -4,16 +4,7 @@ import { api } from "@proagentstore/sdk/client";
 import { Check, X } from "lucide-react";
 import Button from "../components/Button";
 import Page from "../components/Page";
-
-interface DeviceRequest {
-	userCode: string;
-	status: "pending" | "approved" | "denied" | "consumed";
-	node: string | null;
-	ip: string | null;
-	country: string | null;
-	createdAt: string;
-	expiresAt: string;
-}
+import type { DeviceDecisionResponse, DeviceRequestResponse, DeviceRequestView } from "../lib/deviceAuth";
 
 /**
  * Approve a machine's `pags login --device` (#1157) — the page its link and code lead to, from any device.
@@ -25,14 +16,14 @@ export default function DeviceApprove() {
 	const [params, setParams] = useSearchParams();
 	const code = params.get("code") ?? "";
 	const [typed, setTyped] = useState(code);
-	const [request, setRequest] = useState<DeviceRequest | null>(null);
+	const [request, setRequest] = useState<DeviceRequestView | null>(null);
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 
 	const load = useCallback(async () => {
 		if (!code) return;
 		try {
-			const res = await api<{ request: DeviceRequest }>(`/v1/auth/device/requests/${encodeURIComponent(code)}`);
+			const res = await api<DeviceRequestResponse>(`/v1/auth/device/requests/${encodeURIComponent(code)}`);
 			setRequest(res.request);
 			setError("");
 		} catch (e) {
@@ -48,7 +39,7 @@ export default function DeviceApprove() {
 	const decide = async (approve: boolean) => {
 		setBusy(true);
 		try {
-			const res = await api<{ request: DeviceRequest | null }>(`/v1/auth/device/requests/${encodeURIComponent(code)}`, { method: "POST", body: JSON.stringify({ approve }) });
+			const res = await api<DeviceDecisionResponse>(`/v1/auth/device/requests/${encodeURIComponent(code)}`, { method: "POST", body: JSON.stringify({ approve }) });
 			if (res.request) setRequest(res.request);
 			else setRequest((r) => (r ? { ...r, status: approve ? "approved" : "denied" } : r));
 		} catch (e) {
@@ -76,7 +67,6 @@ export default function DeviceApprove() {
 							value={typed}
 							onChange={(e) => setTyped(e.target.value)}
 							aria-label="The code `pags login --device` shows"
-							autoFocus
 						/>
 						<Button type="submit" variant="primary">Continue</Button>
 					</form>

@@ -91,6 +91,12 @@ const EXCLUSIONS = [
 		match: /^GET \/v1\/instances\/\{\}\/takeover\/\{\}\/frame$/,
 	},
 	{
+		label: "Approving a machine's device sign-in (`pags login --device`)",
+		why:
+			"Approving mints a full account session for another machine (#1157). That decision belongs to the person signed in on the console, looking at which machine asked and from where — never to an agent holding an MCP token, which could otherwise sign in any machine that showed it a code.",
+		match: /^(GET|POST) \/v1\/auth\/device\/requests\/\{\}$/,
+	},
+	{
 		label: "The credentials vault — site logins, passwords, PINs, recovery codes",
 		why: "Secrets. Console → Knowledge → Credentials.",
 		match: /^[A-Z]+ \/v1\/instances\/\{\}\/credentials/,

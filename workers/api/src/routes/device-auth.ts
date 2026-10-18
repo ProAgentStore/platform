@@ -17,7 +17,7 @@ import { HttpError, isSuspended, requireUser, rolesOf } from "../lib/auth.js";
 import { signSession, verifySession } from "../lib/session.js";
 import { CONSOLE_ORIGIN } from "../lib/console-deep-link.js";
 import { deviceApprovalLink } from "../lib/console-links.js";
-import { decideDeviceRequest, getDeviceRequest, normalizeUserCode, pollDeviceAuthorization, startDeviceAuthorization } from "../lib/device-auth.js";
+import { decideDeviceRequest, type DeviceDecisionResponse, type DeviceRequestResponse, getDeviceRequest, normalizeUserCode, pollDeviceAuthorization, startDeviceAuthorization } from "../lib/device-auth.js";
 
 export const deviceAuthRoutes = new Hono<{ Bindings: Env }>();
 export const sessionRoutes = new Hono<{ Bindings: Env }>();
@@ -69,7 +69,7 @@ deviceAuthRoutes.get("/requests/:userCode", async (c) => {
 	const request = await getDeviceRequest(c.env, userCodeParam(c));
 	if (!request) throw new HttpError(404, "No sign-in is waiting for that code — it may have expired (codes last 10 minutes).");
 	c.header("Cache-Control", "no-store");
-	return c.json({ request });
+	return c.json({ request } satisfies DeviceRequestResponse);
 });
 
 deviceAuthRoutes.post("/requests/:userCode", async (c) => {
@@ -80,7 +80,7 @@ deviceAuthRoutes.post("/requests/:userCode", async (c) => {
 	if ((await decideDeviceRequest(c.env, s.uid, code, body.approve)) === "gone") {
 		throw new HttpError(409, "This sign-in was already decided, or it has expired. Run `pags login --device` again for a new code.");
 	}
-	return c.json({ request: await getDeviceRequest(c.env, code) });
+	return c.json({ request: await getDeviceRequest(c.env, code) } satisfies DeviceDecisionResponse);
 });
 
 sessionRoutes.post("/refresh", async (c) => {
