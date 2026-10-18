@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { describeType, matchesType, validateAgainstSchema } from "./json-schema-validate.js";
+import { describeType, matchesType, unknownKeysRefusal, validateAgainstSchema } from "./json-schema-validate.js";
+import { getRegistryTool } from "./tool-registry.js";
 import { behaviourToolSchema } from "./agent-behaviour.js";
 import { SELF_WRITABLE_FIELDS } from "./agent-behaviour.js";
 
@@ -63,5 +64,33 @@ describe("validateAgainstSchema against the REAL set_behaviour schema", () => {
 		const required = { type: "object" as const, properties: { repo: { type: "string" } }, required: ["repo"] };
 		expect(validateAgainstSchema(required, {})).toBe("Missing required field: repo");
 		expect(validateAgainstSchema(required, { repo: "owner/name" })).toBeNull();
+	});
+});
+
+describe("an input key the schema does not declare is refused, never ignored (#1205)", () => {
+	const listIssues = () => {
+		const tool = getRegistryTool("github_list_issues");
+		if (!tool) throw new Error("github_list_issues is not in the registry");
+		return tool.jsonSchema;
+	};
+
+	it("github_list_issues with `query` is refused, suggesting `search` and listing the valid keys", () => {
+		const err = validateAgainstSchema(listIssues(), { repo: "ProAgentStore/platform", state: "all", query: "local runner deploy" });
+		expect(err).toContain('"query" (did you mean "search"?)');
+		for (const key of ["repo", "state", "labels", "search", "page"]) expect(err).toContain(`"${key}"`);
+	});
+
+	it("the same call spelled with `search` passes", () => {
+		expect(validateAgainstSchema(listIssues(), { repo: "ProAgentStore/platform", state: "all", search: "self-hosted runner" })).toBeNull();
+	});
+
+	it("names every unknown key, suggests a differently-cased spelling, and says when a tool takes nothing", () => {
+		const schema = { type: "object" as const, properties: { instance_id: { type: "string" } } };
+		expect(unknownKeysRefusal(schema, { instanceId: "x", bogus: 1 })).toBe('Unknown input keys "instanceId" (did you mean "instance_id"?), "bogus" — refused rather than silently ignored. Valid keys: "instance_id".');
+		expect(unknownKeysRefusal({ type: "object", properties: {} }, { a: 1 })).toContain("This tool takes no input.");
+	});
+
+	it("a schema that sets additionalProperties still accepts extra keys", () => {
+		expect(unknownKeysRefusal({ type: "object", properties: {}, additionalProperties: true }, { anything: 1 })).toBeNull();
 	});
 });

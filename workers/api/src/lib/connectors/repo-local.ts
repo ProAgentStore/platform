@@ -758,7 +758,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 					// matches" is only honest because the search had no depth limit to hide behind —
 					// and because the tail says whether the tree searched is the CURRENT one (#785):
 					// "no file named X" on a checkout three commits behind is how #782 got filed.
-					return { head: `(no ${isFind ? "file whose path contains" : "match for"} "${pattern}"${input.path ? ` under ${String(input.path)}` : ""})`, content: "", success: true, tail: await syncTailFor(sync) };
+					return { head: `(no ${isFind ? "file whose path contains" : "match for the literal text"} "${pattern}"${input.path ? ` under ${String(input.path)}` : ""})`, content: "", success: true, tail: await syncTailFor(sync) };
 				}
 				const lines = matches.map((m) => (isFind ? m.path : `${m.path}:${m.line ?? "?"}: ${m.text ?? ""}`));
 				// Bounded by MATCH COUNT at BOTH ends now (#534's AC 5). The runner drops whole
