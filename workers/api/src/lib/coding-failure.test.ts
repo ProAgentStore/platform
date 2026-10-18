@@ -1,7 +1,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectionLostMessage, deadlineMessage } from "./ai-deadlines.js";
-import { classifyCodingFailure, CodingRunProbe, codingFailureLevel, recordCodingFailure, splitCfReference } from "./coding-failure.js";
+import { classifyCodingFailure, CodingRunProbe, codingFailureLevel, DRIVER_RESUME_POLICY, recordCodingFailure, splitCfReference } from "./coding-failure.js";
 import { RunnerGoneError, RunnerUnreachableError } from "./runner-unreachable.js";
 import type { Env } from "../types.js";
 
@@ -118,6 +118,14 @@ describe("classifyCodingFailure — the three classes that used to read identica
 		const reset = classifyCodingFailure(new Error("Durable Object reset because its code was updated"));
 		expect(reset.class).toBe("infra_transient");
 		expect(codingFailureLevel(reset.class)).toBe("warn");
+	});
+
+	it("resumes a run whose relay Durable Object was evicted mid-step (#1159)", () => {
+		// The literal error_log text of run 39081df2, which ended `unknown` at s13-waitidle-c40.
+		const evicted = classifyCodingFailure(new Error("Connection closed: this Durable Object instance is no longer active."));
+		expect(evicted.class).toBe("infra_transient");
+		expect(evicted.retryable).toBe(true);
+		expect(DRIVER_RESUME_POLICY[evicted.class].resume).toBe(true);
 	});
 
 	it("classifies a truncated stream, and leaves a genuine unknown as unknown", () => {

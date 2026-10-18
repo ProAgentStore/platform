@@ -7,6 +7,10 @@ describe("isTransientInfraError", () => {
 		expect(isTransientInfraError("The Durable Object has been reset")).toBe(true);
 	});
 
+	it("matches an evicted Durable Object (#1159)", () => {
+		expect(isTransientInfraError("Connection closed: this Durable Object instance is no longer active.")).toBe(true);
+	});
+
 	it("is case-insensitive and tolerant of null", () => {
 		expect(isTransientInfraError("durable object RESET because its CODE WAS UPDATED")).toBe(true);
 		expect(isTransientInfraError("")).toBe(false);
