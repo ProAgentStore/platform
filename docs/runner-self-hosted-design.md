@@ -104,10 +104,10 @@ current visibility, and a periodic re-check removes any repo that has since beco
 
 | Criterion | Status |
 |---|---|
-| Pin-scoped mutual exclusion holds | decision logic shipped (`isPinScoped`, pinned-node-only labels); enforcement needs groups (§4) + reconciliation (§5) |
+| Pin-scoped mutual exclusion holds | decision logic shipped (`isPinScoped`, pinned-node-only labels); the ordered reconciliation PLAN shipped (slice 2, `runner-reconcile.ts`: one group per repo, removals → variable → additions, stale queued runs cancelled, multi-machine and public-repo violations fixed and reported — the issue's acceptance tests pass against a simulated GitHub, checked after every step of a re-pin); executing it needs the App permissions (#1207) and groups (#1210, #1211) |
 | By default all jobs run on GitHub-hosted | logic shipped; needs templates using `PAGS_RUNNER` (§8) |
 | Auto-switch to self-hosted on low/exhausted minutes, and back | decision shipped; the variable writer and minutes reader are pending (§1, §6) |
-| Offline self-hosted → GitHub-hosted when minutes remain, else alert | pending (§6) |
+| Offline self-hosted → GitHub-hosted when minutes remain, else alert | decision shipped (slice 2, `desiredRoute`); live minutes + delivery pending (#1212, #1213) |
 | Pin registers the runner and adds repos; unpin/forget cleans up | pending (§2–§5) |
 | Public repos rejected | guard shipped (`assertPrivateRepo`); not yet called live (§4) |
 | Registration tokens never persisted | design (§2); pending |
