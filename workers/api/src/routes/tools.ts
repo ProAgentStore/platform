@@ -1240,8 +1240,8 @@ toolRoutes.post("/:id/loop", async (c) => {
 			issue,
 		});
 		if (!started.ok) {
-			// Queue only the refusals WAITING fixes: no runner or unusable checkout cannot be, while a
-			// busy repo and one holding a closed run's unfinished work both can (#984).
+			// Queue only the refusals WAITING fixes: an unusable checkout cannot be, while a busy repo, one
+			// holding a closed run's unfinished work (#984) and a machine that is away (#1161) can.
 			// The drain opens its own budget; this unspent pool is not reused.
 			if (body.queueIfBusy === true && startRefusalIsWaitable(started.reason)) {
 				// Same issue already waiting or running on this repo (#925): hand THAT back, not a second entry.

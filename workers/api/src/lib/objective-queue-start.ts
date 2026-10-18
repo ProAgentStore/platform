@@ -154,8 +154,10 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 			return { drained: true, entryId: entry.id, started: false, requeued: requeue.requeued, error: started.error };
 		}
 
-		// Everything else is structural — no repo on the agent, no runner, a checkout that failed
-		// admission. Waiting does not fix any of them, so the entry FAILS with the driver's own
+		// `runner_offline` (#1161) is waited for too: the machine is asleep or away, and its relay
+		// reconnecting drains the queue (`routes/relay.ts`). Failing it stranded every entry behind it.
+
+		// Everything else is structural — no repo on the agent, a checkout that failed admission. Waiting does not fix any of them, so the entry FAILS with the driver's own
 		// sentence rather than sitting pending forever with nobody ever told why nothing happened.
 		await finishQueueEntry(env, entry.id, "failed", started.error);
 		await recordLifecycle(env, { ...lifecycleOf(entry), event: "admission_failed", reason: started.error });

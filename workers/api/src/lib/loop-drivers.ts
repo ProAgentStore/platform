@@ -170,10 +170,15 @@ export type LoopStartResult =
 			 * the remedy — a person recovers it, or a run for that same issue continues it — so a
 			 * queued objective must keep its place rather than fail. See {@link startRefusalIsWaitable}.
 			 *
+			 * `runner_offline` (#1161) is the third: the agent's machine is not connected. A closed lid or
+			 * a night away is transient, so a queued objective waits for it — and is drained when the
+			 * machine's relay connects again (`routes/relay.ts`) — instead of failing and stranding the
+			 * rest of the queue behind it.
+			 *
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required" | "paused";
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline";
 			/**
 			 * Set with `reason: "engine_auth"` (#891): the refused run was RECORDED, finished with that
 			 * stop reason, so sign-in tooling can find it and `continue` can pick it back up.
@@ -191,7 +196,8 @@ export type LoopStartResult =
  */
 export function startRefusalIsWaitable(reason: string | undefined): boolean {
 	// `paused` (#1015): the owner switched the agent off; resuming it is what unblocks the entry.
-	return reason === "busy" || reason === "recovery_required" || reason === "paused";
+	// `runner_offline` (#1161): the machine is away; its relay reconnecting drains the queue.
+	return reason === "busy" || reason === "recovery_required" || reason === "paused" || reason === "runner_offline";
 }
 
 export interface LoopDriver {
@@ -323,7 +329,9 @@ const codingDriver: LoopDriver = {
 			...(facts ?? EMPTY_RUNTIME_FACTS),
 		});
 		if (!connectivity.canWork) {
-			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity }) };
+			// Only the MACHINE being away is waitable (#1161); a runner that is attached but blocked by the budget ceiling is not.
+			const reason = connectivity.state === "attached" ? undefined : ("runner_offline" as const);
+			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity }), ...(reason ? { reason } : {}) };
 		}
 
 		// Is the CHECKOUT usable? (#548)

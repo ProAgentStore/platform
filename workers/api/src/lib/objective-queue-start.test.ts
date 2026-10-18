@@ -10,6 +10,8 @@
  *   busy again (a race)   → back to `pending`, keeping its place — the winner's drain takes it
  *   recovery_required     → back to `pending` with the reason on the row (#984): the repo is
  *                           mid-handover, which a person resolves
+ *   runner_offline        → back to `pending` (#1161): the machine is away; its relay reconnecting
+ *                           drains the queue
  *   any other refusal     → `failed`, with the driver's own sentence, rather than pending forever
  *
  * And the property that makes it safe to call from a workflow's terminal path: it NEVER THROWS. The
@@ -32,11 +34,12 @@ vi.mock("./objective-queue.js", () => ({
 	finishQueueEntry: (...a: unknown[]) => finishQueueEntry(...a),
 	requeueEntry: (...a: unknown[]) => requeueEntry(...a),
 }));
-vi.mock("./loop-drivers.js", () => ({
+vi.mock("./loop-drivers.js", async (orig) => ({
 	loopDriverFor: () => ({ id: "coding", label: "the engine", start: (...a: unknown[]) => start(...a) }),
 	// The REAL predicate, not a stub: which refusals are waited for is the decision this file is
-	// about, and a mock that answered it would assert the mock (#984).
-	startRefusalIsWaitable: (reason: string | undefined) => reason === "busy" || reason === "recovery_required" || reason === "paused",
+	// about, and a mock that answered it would assert the mock (#984). It was a hand copy until
+	// #1161, which is how a new waitable reason could have gone unseen here.
+	startRefusalIsWaitable: (await orig<typeof import("./loop-drivers.js")>()).startRefusalIsWaitable,
 }));
 vi.mock("./agent-capabilities.js", () => ({ capabilitiesForInstance: async () => ({ workflow: "CODING_SESSION" }) }));
 vi.mock("./delegation-budget-store.js", () => ({
@@ -173,13 +176,24 @@ describe("when the start is refused", () => {
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
 	});
 
-	it("a structural refusal FAILS the entry with the driver's own sentence", async () => {
-		// No runner, no repo, an unusable checkout — waiting fixes none of them, and an entry left
-		// pending forever with nobody told why is the loss this issue is about wearing a new hat.
+	it("runner_offline is WAITED FOR: a machine asleep keeps the entry, and the rest of the queue, in place (#1161)", async () => {
+		// Before: the refusal carried no reason, so the queue failed the entry as structural and nothing
+		// was left to drain the entries behind it. The relay reconnecting drains it (routes/relay.ts).
 		dequeueNext.mockResolvedValue(entry());
-		start.mockResolvedValue({ ok: false, status: 409, error: "No runner is connected — run `pags up`." });
+		start.mockResolvedValue({ ok: false, status: 409, reason: "runner_offline", error: "No coding runner connected for owner/repo — run `pags up`." });
 		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
-		expect(finishQueueEntry).toHaveBeenCalledWith(env, "objq-1", "failed", "No runner is connected — run `pags up`.");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "No coding runner connected for owner/repo — run `pags up`.");
+		expect(finishQueueEntry).not.toHaveBeenCalled();
+		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
+	});
+
+	it("a structural refusal FAILS the entry with the driver's own sentence", async () => {
+		// No repo, an unusable checkout — waiting fixes neither, and an entry left pending forever
+		// with nobody told why is the loss this issue is about wearing a new hat.
+		dequeueNext.mockResolvedValue(entry());
+		start.mockResolvedValue({ ok: false, status: 409, error: "This checkout is not a git working tree." });
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(finishQueueEntry).toHaveBeenCalledWith(env, "objq-1", "failed", "This checkout is not a git working tree.");
 		expect(requeueEntry).not.toHaveBeenCalled();
 		expect(out).toMatchObject({ drained: true, started: false, requeued: false });
 	});

@@ -292,12 +292,12 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 
 		if (!started.ok) {
 			if (startRefusalIsWaitable(started.reason)) {
-				// The session is being driven, or it holds work a closed run owns (#984) — waiting is
-				// the remedy either way, so the ticket goes back.
+				// The session is being driven, it holds work a closed run owns (#984), or its machine is
+				// away (#1161) — waiting is the remedy either way, so the ticket goes back.
 				await release(started.error);
 				return { started: false, reason: "driver_busy", ticketId: next.id, detail: started.error };
 			}
-			// Structural (no repo, no runner, a checkout that failed admission): waiting fixes none of
+			// Structural (no repo, a checkout that failed admission): waiting fixes none of
 			// it, so the ticket stays taken with the driver's own sentence until a person re-queues it.
 			await refuse(started.error);
 			return { started: false, reason: "refused", ticketId: next.id, detail: started.error };

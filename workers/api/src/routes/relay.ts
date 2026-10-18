@@ -1,3 +1,4 @@
+import { drainPendingQueues } from "../lib/objective-queue-start.js";
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
@@ -69,9 +70,21 @@ relayRoutes.get("/:instanceId/connect", async (c) => {
 	const doUrl = new URL("/connect", c.req.url);
 	if (c.req.query("force") === "1") doUrl.searchParams.set("force", "1");
 	const stub = c.env.RELAY.get(c.env.RELAY.idFromName(relayNameForInstance(instanceId, runnerNode)));
-	return stub.fetch(new Request(doUrl, {
+	const res = await stub.fetch(new Request(doUrl, {
 		headers: c.req.raw.headers,
 	}));
+	// The machine can work again: start what was queued while it was away (#1161). After the upgrade,
+	// because the drain's admission asks the relay whether a socket is live — at startup the runner
+	// registers BEFORE it connects, so a drain on registration would meet "offline" and requeue.
+	if (res.status === 101) {
+		const drain = drainPendingQueues(c.env, instanceId, relay.uid).catch(() => []);
+		try {
+			c.executionCtx.waitUntil(drain);
+		} catch {
+			await drain;
+		}
+	}
+	return res;
 });
 
 /** GET /v1/relay/:instanceId/status -- is a runner WS connected for this instance? */

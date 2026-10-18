@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_LOOP_DRIVER, loopDriverFor, LOOP_DRIVER_IDS, pickLoopRepo } from "./loop-drivers.js";
+import { DEFAULT_LOOP_DRIVER, loopDriverFor, LOOP_DRIVER_IDS, pickLoopRepo, startRefusalIsWaitable } from "./loop-drivers.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -450,6 +450,13 @@ describe("the coding driver's preconditions are refusals, not crashes", () => {
 		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
 		expect(out).toMatchObject({ ok: false, status: 409 });
 		if (!out.ok) expect(out.error).toMatch(/pags up/);
+	});
+
+	it("marks a machine that is away `reason: \"runner_offline\"` — waitable, so a queued objective keeps its place (#1161)", async () => {
+		const { env } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: null, runnerOnline: false });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "runner_offline" });
+		expect(startRefusalIsWaitable(out.ok ? undefined : out.reason)).toBe(true);
 	});
 
 	it("opens a session itself when none is live and the runner is connected", async () => {
