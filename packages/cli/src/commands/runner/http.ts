@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { loadSession } from "../login.js";
+import { sessionToken } from "./session-token.js";
 import { loadMachineIdentity } from "../../machine.js";
 import type {
 	PagsRequestOptions,
@@ -22,8 +22,8 @@ export function pagsApiBase(url?: string): string {
 
 export function pagsHeaders(token?: string): Record<string, string> {
 	// Fall back to the saved login (pags login) so `runner connect` works without
-	// PAGS_TOKEN — same token `pags up` uses.
-	const resolved = clean(token) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
+	// PAGS_TOKEN — same token `pags up` uses — and to the session `runner connect` holds (#1163).
+	const resolved = sessionToken(token);
 	return resolved ? { Authorization: `Bearer ${resolved}` } : {};
 }
 

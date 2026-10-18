@@ -6,13 +6,31 @@
  * `headless.ts` sat one line under its size pin — so the concern gets a file rather than the pin
  * getting a raise. `engine-auth.ts` READS this env; this builds it.
  *
- *  1. {@link mergeEnv} — the platform's overlay over the machine's, where empty means REMOVE.
+ *  1. {@link mergeEnv} — the platform's overlay over the machine's, where empty means REMOVE, and
+ *     never the platform's own credentials ({@link PLATFORM_CREDENTIAL_ENV}, #1163).
  *  2. {@link engineSpawnEnv} — that, plus the `gh` guard ahead of the real binary on `PATH`, and the
  *     `git` stash guard (#1021) ahead of both.
  */
 
 import { ghGuardEnv } from "./gh-guard.js";
 import { gitGuardEnv } from "./git-guard.js";
+
+/**
+ * The platform's own credentials, which no engine may inherit (#1163).
+ *
+ * An engine runs with its permission prompts off, on repositories and issues that carry untrusted
+ * text, so a prompt injection ("run `curl -d $PAGS_TOKEN …`") gets whatever its environment holds.
+ * `PAGS_TOKEN` is the owner's 30-day ACCOUNT session — every agent, and through relay-token minting
+ * every machine. `PAGS_RUNNER_TOKEN` is this runtime's own bearer and `PAGS_RUNNER_CONTROL_NONCE` its
+ * shutdown credential. None of them is the engine's to use.
+ */
+export const PLATFORM_CREDENTIAL_ENV = ["PAGS_TOKEN", "PAGS_RUNNER_TOKEN", "PAGS_RUNNER_CONTROL_NONCE"] as const;
+
+/** `env` without {@link PLATFORM_CREDENTIAL_ENV}, in place — what the runtime does to its own env at start. */
+export function dropPlatformCredentials(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	for (const name of PLATFORM_CREDENTIAL_ENV) delete env[name];
+	return env;
+}
 
 /**
  * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
@@ -30,7 +48,9 @@ export function mergeEnv(base: NodeJS.ProcessEnv, overlay: Record<string, string
 		if (v === "") delete out[k];
 		else out[k] = v;
 	}
-	return out;
+	// Every engine's env is built here — coding, local-browser, local-artifact — so this is the one place
+	// the platform's credentials are kept out of all of them, whatever the machine or an overlay holds (#1163).
+	return dropPlatformCredentials(out);
 }
 
 /**

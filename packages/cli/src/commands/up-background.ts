@@ -53,13 +53,14 @@ export async function startInBackground(start: BackgroundStart, deps: Background
 	// process. A remote update restarts it through the restart command instead (#860's `command`).
 	const env: NodeJS.ProcessEnv = {
 		...deps.env,
-		PAGS_TOKEN: start.session.token,
 		PAGS_LOCK_ACCOUNT: account,
 		[BACKGROUND_ENV]: "1",
 		[BACKGROUND_LOG_ENV]: logPath,
 		[RESTART_COMMAND_ENV]: backgroundRestartCommand(deps.execPath, start.runnerArgs[0], upArgs, deps.platform),
 	};
 	delete env.PAGS_UP_SUPERVISED;
+	// The runner reads session.json itself (#1163): the account session is in no environment it, its runtime or its engines inherit.
+	delete env.PAGS_TOKEN;
 
 	deps.step("Starting the runner in the background…", "wait");
 	const pid = spawnDetached(deps.execPath, start.runnerArgs, env, logPath, deps.spawn);

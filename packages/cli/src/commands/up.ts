@@ -268,7 +268,9 @@ export const upCommand = new Command("up")
 			stdio: ["ignore", "pipe", "pipe"],
 			// The child is the lock HOLDER (#896): it owns the relay sockets, so it is what a
 			// contender must find and what `--replace` must be able to stop.
-			env: { ...process.env, PAGS_TOKEN: session.token, [SUPERVISED_ENV]: SUPERVISOR_RESTARTS, PAGS_LOCK_ACCOUNT: session.user.login },
+			// No PAGS_TOKEN (#1163): the child reads session.json itself, so the account session is in no
+			// environment its runtime and engines could inherit.
+			env: { ...process.env, PAGS_TOKEN: undefined, [SUPERVISED_ENV]: SUPERVISOR_RESTARTS, PAGS_LOCK_ACCOUNT: session.user.login },
 		});
 
 		// The child's recent output, IN MEMORY ONLY and bounded at 200 lines (#1087): it feeds the

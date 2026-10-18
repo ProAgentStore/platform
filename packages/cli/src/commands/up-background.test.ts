@@ -57,13 +57,22 @@ describe("pags up --background", () => {
 		expect(command).toBe("/usr/bin/node");
 		expect(args).toEqual(h.start.runnerArgs);
 		expect(opts.detached).toBe(true);
-		expect(opts.env.PAGS_TOKEN).toBe("session-token");
+		// The account session is in NO environment (#1163): the runner reads session.json itself.
+		expect(opts.env.PAGS_TOKEN).toBeUndefined();
 		expect(opts.env.PAGS_LOCK_ACCOUNT).toBe("serge-ivo");
 		expect(opts.env.PAGS_BACKGROUND).toBe("1");
 		expect(opts.env.PAGS_BACKGROUND_LOG).toBe(backgroundLogPath("serge-ivo", h.deps.env));
 		// Nothing waits on this process, so it must not believe a `pags up` will restart it (#860).
 		expect(opts.env.PAGS_UP_SUPERVISED).toBeUndefined();
 		expect(opts.env.PAGS_RESTART_COMMAND).toBe("PAGS_BACKGROUND_RESTART=1 /usr/bin/node /opt/pags/bin/pags up --background");
+	});
+
+	it("drops a PAGS_TOKEN the shell exported, so the runner's runtime and engines cannot inherit it (#1163)", async () => {
+		const h = harness();
+		h.deps.env = { ...h.deps.env, PAGS_TOKEN: "ambient-session" };
+		await startInBackground(h.start, h.deps);
+		expect(h.spawned[0].opts.env.PAGS_TOKEN).toBeUndefined();
+		expect(JSON.stringify(h.spawned[0].opts.env)).not.toContain("session-token");
 	});
 
 	it("records what it serves, for `pags status`", async () => {

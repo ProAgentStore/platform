@@ -1,9 +1,9 @@
 import { hostname } from "node:os";
 import { type ResourceSample, recordRunnerStart, sampleDisk, sampleResources } from "./resources.js";
-import { loadSession } from "../login.js";
+import { sessionToken } from "./session-token.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
-import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
+import { apiPathSegment, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
 import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
@@ -46,8 +46,8 @@ export async function connectViaRelay(
 	watchInstances = false,
 ): Promise<void> {
 	const apiBase = pagsApiBase(opts.apiBase).replace(/^http/, "ws"); // https → wss
-	// Read per call, not once (#1157): the session refresher swaps PAGS_TOKEN while this runs.
-	const pagsToken = () => clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
+	// Read per call, not once (#1157): the session refresher swaps the held session while this runs (#1163).
+	const pagsToken = () => sessionToken(opts.pagsToken);
 	if (!pagsToken()) throw new Error("PAGS token required for WebSocket relay");
 	const runnerNode = hostname();
 	// The hostname stays the routing key — it names the relay DO — but it is NOT this machine's

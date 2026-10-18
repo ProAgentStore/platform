@@ -6,6 +6,7 @@ import { startRunnerServer } from "./server.js";
 import { reapOnStartup } from "./reaper.js";
 import type { RunnerConfig } from "./types.js";
 import { randomUUID } from "node:crypto";
+import { dropPlatformCredentials } from "./coding/engine-env.js";
 
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -65,6 +66,9 @@ Endpoints:
 }
 
 const config = configFromArgs();
+// Read, so out of the environment (#1163): nothing this runtime spawns — engines, git, gh, a browser —
+// inherits the account session or this runtime's own bearer and shutdown credential.
+dropPlatformCredentials(process.env);
 
 // Resilience: a stray error in any runtime must NOT take the whole runner down —
 // that drops the tunnel and forces the user to restart `pags up` (and lose their

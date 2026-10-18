@@ -23,6 +23,7 @@ import { CLI_VERSION } from "./process.js";
 import { crashAccountKey } from "../../crash-reports.js";
 import { crashPaths, deliverCrashReports, OutputTail, recordChildExit } from "../../crash-delivery.js";
 import { loadSession, saveSession } from "../login.js";
+import { holdSessionToken, sessionToken, takeSessionTokenFromEnv } from "./session-token.js";
 import { sessionExpiresAt } from "../login-device.js";
 import { startSessionRefresh } from "../../session-refresh.js";
 import { hostname } from "node:os";
@@ -75,6 +76,9 @@ export function createRunnerCommand(): Command {
 		.option("--force", "Take over from another connected machine")
 		.option("--watch-instances", "Attach newly eligible agents while running, without a restart")
 		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { force?: boolean; watchInstances?: boolean }) => {
+			// Before anything is spawned (#1163): the account session leaves the environment, so the runtime
+			// and every engine it starts never inherit it. This process keeps it in memory.
+			takeSessionTokenFromEnv();
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
 			const port = clean(opts.port) || String(await findFreePort(49171));
@@ -136,7 +140,7 @@ export function createRunnerCommand(): Command {
 			});
 			const deliver = async () => {
 				if (!crashes) return;
-				const token = clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
+				const token = sessionToken(opts.pagsToken);
 				if (!token) return;
 				const result = await deliverCrashReports({ apiBase: pagsApiBase(opts.apiBase), token, account: crashAccount, paths: crashes });
 				if (result.delivered) writeLine(`Delivered ${result.delivered} crash report(s) to ProAgentStore.`);
@@ -188,9 +192,9 @@ export function createRunnerCommand(): Command {
 				if (!clean(opts.pagsToken)) {
 					startSessionRefresh({
 						apiBase: pagsApiBase(opts.apiBase),
-						token: () => clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token) || null,
+						token: () => sessionToken() || null,
 						onRefreshed: (token, previous) => {
-							process.env.PAGS_TOKEN = token;
+							holdSessionToken(token);
 							// The next start reads session.json — unless the owner has since signed in again, as anyone.
 							const stored = loadSession();
 							if (stored?.token === previous) saveSession({ ...stored, token, expiresAt: sessionExpiresAt(token) ?? stored.expiresAt });
