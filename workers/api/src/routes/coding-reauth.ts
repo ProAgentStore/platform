@@ -50,7 +50,7 @@ import type { Env } from "../types.js";
 const PANE_TAIL_LINES = 30;
 /** How far back a run stopped on sign-in is still worth offering to continue. */
 const RESUMABLE_WINDOW_MS = 24 * 60 * 60 * 1000;
-const RELAY_CLIENTS: readonly CodingClientType[] = ["claude", "codex"];
+const RELAY_CLIENTS: readonly CodingClientType[] = ["claude", "codex", "grok"];
 
 type Ctx = Context<{ Bindings: Env }>;
 

@@ -50,7 +50,7 @@ import type { EngineAuth } from "./coding-engines.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
 
 /** How the relay signs an engine in. Each one is a subscription login. */
-export type ReauthMethod = "claude-login" | "claude-setup-token" | "codex-device-auth";
+export type ReauthMethod = "claude-login" | "claude-setup-token" | "codex-device-auth" | "grok-device-auth";
 
 export type ReauthPlan =
 	| {
@@ -74,7 +74,16 @@ export function reauthSessionName(clientType: CodingClientType): string {
 const STRIP_FOR_LOGIN: Partial<Record<CodingClientType, string[]>> = {
 	claude: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
 	codex: ["OPENAI_API_KEY"],
+	// xAI's CLI: "The API key takes precedence over browser credentials" — removed so the device login is what it stores.
+	grok: ["XAI_API_KEY"],
 };
+
+/**
+ * xAI's Grok CLI, preferring its installer's ~/.grok/bin over PATH (#1156) — the same choice the runner makes when it
+ * spawns the engine (`officialEngineBinary`), so the login is made by the CLI that will use it. The relay's terminal is
+ * the user's shell (sh, bash or zsh), whose PATH often lacks ~/.grok/bin and may hold an npm `grok` that is not xAI's.
+ */
+const GROK_BIN = `"$( [ -x "$HOME/.grok/bin/grok" ] && echo "$HOME/.grok/bin/grok" || echo grok )"`;
 
 function withStripped(clientType: CodingClientType, command: string): string {
 	const vars = STRIP_FOR_LOGIN[clientType] ?? [];
@@ -107,8 +116,20 @@ export function planReauth(input: {
 			warning: null,
 		};
 	}
+	if (clientType === "grok") {
+		// Verified against xAI's Grok CLI 1.0.62 (#1156): `grok login --device-auth` (alias --device-code) prints
+		// "open this URL … https://accounts.x.ai/oauth2/device?user_code=XXXX-XXXX" and the code, then waits.
+		return {
+			ok: true,
+			method: "grok-device-auth",
+			command: withStripped("grok", `${GROK_BIN} login --device-auth`),
+			lands:
+				"Grok's own login store on the runner (~/.grok/auth.json), which the engine reads — the platform strips XAI_API_KEY from the engine in this mode, so the login is authoritative.",
+			warning: null,
+		};
+	}
 	if (clientType !== "claude") {
-		return { ok: false, reason: `The re-auth relay supports the Claude and Codex engines; ${clientType} has to be signed in on the machine.` };
+		return { ok: false, reason: `The re-auth relay supports the Claude, Codex and Grok engines; ${clientType} has to be signed in on the machine.` };
 	}
 	if (auth !== "machine" && input.hasStoredClaudeToken) {
 		return {
@@ -185,7 +206,8 @@ export function unwrapPane(pane: string): string {
 const URL_RE = /https:\/\/[^\s"'`)<>\]]+/g;
 const DEVICE_CODE_RE = /\b([A-Z0-9]{4,5}-[A-Z0-9]{4,5})\b/;
 const SETUP_TOKEN_RE = /sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,}/;
-const SUCCESS_RE = /login successful|logged in successfully|successfully logged in|you are now logged in/i;
+// "Signed in as <account>" is xAI's Grok CLI (1.0.62, read from the binary — the device flow was not completed live).
+const SUCCESS_RE = /login successful|logged in successfully|successfully logged in|you are now logged in|^\s*signed in as\b/im;
 // "device auth timed out after 15 minutes" is how Codex ends an unattended device-code flow (#890).
 const FAILED_RE = /\b(login failed|failed to (?:log|sign) in|authentication failed|oauth error|invalid (?:code|grant)|code (?:has )?expired|(?:device (?:auth|code)|login|sign-in) timed out)\b/i;
 const MENU_RE = /select login method|how would you like to authenticate|choose (?:a|your) (?:login|sign-in) method/i;
@@ -194,7 +216,7 @@ const MENU_RE = /select login method|how would you like to authenticate|choose (
 export function readReauthPane(pane: string, method: ReauthMethod): ReauthPaneReading {
 	const text = unwrapPane(pane);
 	const url = (text.match(URL_RE) ?? []).map((u) => u.replace(/[.,;:!?'")\]]+$/, "")).find(isAuthUrl) ?? null;
-	const deviceCode = method === "codex-device-auth" ? (DEVICE_CODE_RE.exec(text)?.[1] ?? null) : null;
+	const deviceCode = method === "codex-device-auth" || method === "grok-device-auth" ? (DEVICE_CODE_RE.exec(text)?.[1] ?? null) : null;
 	const succeeded = method === "claude-setup-token" ? SETUP_TOKEN_RE.test(text) : SUCCESS_RE.test(text);
 	let state: ReauthPaneState;
 	if (succeeded) state = "succeeded";
@@ -262,7 +284,7 @@ export function reauthInputError(input: { text?: unknown; keys?: unknown }): str
 export function reauthNextStep(reading: ReauthPaneReading, method: ReauthMethod): string {
 	switch (reading.state) {
 		case "device_code":
-			return `Open ${reading.url} on any device, sign in with your ChatGPT account and enter the code ${reading.deviceCode}. Then check status — nothing needs to be sent back.`;
+			return `Open ${reading.url} on any device, sign in with your ${method === "grok-device-auth" ? "Grok (grok.com) account" : "ChatGPT account"} and enter the code ${reading.deviceCode}. Then check status — nothing needs to be sent back.`;
 		case "awaiting_code":
 			return `Open the sign-in URL on any device and sign in with your Claude subscription account. The page then shows a code — send it back with action "input" (text: the code).`;
 		case "menu":

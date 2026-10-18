@@ -1203,4 +1203,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.151": "sha256:188e096d1f1634d01968e517ccac0167b881ee0851dd6f42fceb54a452712ca3",
 	// #1140: secure_input_inject gains hidden_prompt (a password prompt, verified by its outcome after Enter); target also takes a terminal target (tmux:main, kitty:3).
 	"0.1.152": "sha256:a93e53a7074bfb4cca41500ba5bf6a5712b49dfe6c952e6ff5b5408a5cbb9597",
+	// #1156: coding_engine_reauth's client_type gains grok (xAI's Grok CLI device-code sign-in, `grok login --device-auth`).
+	"0.1.153": "sha256:1dcf299105a77144018d0998f5508d7a679fb96cb44a4d97c40c8020e04149cf",
 };

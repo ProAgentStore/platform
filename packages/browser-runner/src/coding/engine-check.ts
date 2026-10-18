@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { unwrapLauncher } from "./launcher-wrapper.js";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { handlerFor, type ClientType } from "./handlers.js";
@@ -43,6 +43,13 @@ export interface EngineCheck {
 	login: "found" | "missing" | "unknown";
 	/** Where the login was looked for — a path or "keychain", never a value. */
 	loginWhere?: string;
+	/** What `<bin> --version` printed, reduced to its version (#1156). Asked for Grok always, others on request. */
+	version?: string | null;
+	/**
+	 * Grok only (#1156): whose `grok` this is. `xai` — xAI's Grok CLI (`grok 1.0.62 (…)`); `community` — an npm package
+	 * of the same name (`@vibe-kit/grok-cli`, API-key billed, other flags), which the shipped preset cannot drive.
+	 */
+	vendor?: "xai" | "community" | "unknown";
 }
 
 export interface EngineCheckDeps extends EngineSpawnDeps {
@@ -50,6 +57,38 @@ export interface EngineCheckDeps extends EngineSpawnDeps {
 	exists?: (p: string) => boolean;
 	/** Exit status of `security find-generic-password -s <service>`; null when it could not run. */
 	keychainItemStatus?: (service: string) => number | null;
+	/** What a `--version` run printed (stdout + stderr), or null when it did not run or failed. */
+	versionText?: (spawn: EngineSpawn, env: NodeJS.ProcessEnv) => string | null;
+	/** Where a PATH entry really points — nvm's `bin/grok` is a symlink into `node_modules`. */
+	realpath?: (p: string) => string;
+}
+
+function safeRealpath(p: string): string {
+	try {
+		return realpathSync(p);
+	} catch {
+		return p;
+	}
+}
+
+function defaultVersionText(launch: EngineSpawn, env: NodeJS.ProcessEnv): string | null {
+	// The file the check FOUND, not the bare name: off Windows `command` is the name as given, which spawnSync would
+	// resolve against this process's PATH rather than the one being checked — and report another binary's version.
+	const command = launch.via === "direct" && launch.binaryPath ? launch.binaryPath : launch.command;
+	const r = spawnSync(command, launch.args, { encoding: "utf8", env, timeout: 5_000, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments });
+	return r.error || r.status !== 0 ? null : `${r.stdout ?? ""}${r.stderr ?? ""}`;
+}
+
+/** `codex-cli 0.146.0`, `2.1.3 (Claude Code)`, `grok 1.0.62 (1474f9cbdd91)` → the version. Null when there is none. */
+export function parseEngineVersion(text: string | null): string | null {
+	return text?.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? null;
+}
+
+/** Whose `grok` answered: xAI's names itself; the community npm one prints a bare version from a node_modules script. */
+export function grokVendor(text: string | null, binaryPath: string | undefined): "xai" | "community" | "unknown" {
+	if (text && /^\s*grok \d+\.\d+/m.test(text)) return "xai";
+	if (/[\\/]node_modules[\\/]|@vibe-kit/.test(binaryPath ?? "")) return "community";
+	return "unknown";
 }
 
 function defaultExists(p: string): boolean {
@@ -95,6 +134,13 @@ export function detectEngineLogin(engine: ClientType, deps: EngineCheckDeps = {}
 		}
 		return { login: "missing", where: file };
 	}
+	if (engine === "grok") {
+		// xAI's Grok CLI keeps its subscription login (grok.com / accounts.x.ai) in auth.json under GROK_HOME, default
+		// ~/.grok. An external auth provider or OIDC setup signs in another way, so absence is not proof there.
+		if (env.GROK_AUTH_PROVIDER_COMMAND?.trim() || env.GROK_OIDC_ISSUER?.trim() || env.GROK_DEPLOYMENT_KEY?.trim()) return { login: "unknown" };
+		const file = join(env.GROK_HOME?.trim() || join(home, ".grok"), "auth.json");
+		return { login: exists(file) ? "found" : "missing", where: file };
+	}
 	if (engine === "gemini") {
 		// Google sign-in lands here; Gemini also accepts other auth (gcloud, Vertex), so absence is
 		// not proof of "signed out".
@@ -110,7 +156,7 @@ export function detectEngineLogin(engine: ClientType, deps: EngineCheckDeps = {}
  * the engine reads and is not checked.
  */
 export function checkEngine(
-	input: { clientType?: string; command?: string; credentialInjected?: boolean },
+	input: { clientType?: string; command?: string; credentialInjected?: boolean; withVersion?: boolean },
 	deps: EngineCheckDeps = {},
 ): EngineCheck {
 	const engine = (["claude", "gemini", "codex", "grok", "generic"].includes(input.clientType ?? "") ? input.clientType : "claude") as ClientType;
@@ -120,6 +166,9 @@ export function checkEngine(
 	const bin = parsed.bin || parseCommand(handlerFor(engine).cliCommand).bin || engine;
 	const { binaryPath, via } = resolveEngineSpawn(bin, [], deps);
 	const login = input.credentialInjected ? { login: "found" as const, where: "platform" } : detectEngineLogin(engine, deps);
+	// Grok's version is what tells xAI's CLI from a same-named npm package, so it is always read for Grok (a native
+	// binary, milliseconds); the others only when asked (coding_engine_get), because each is a Node startup.
+	const versionText = binaryPath && (engine === "grok" || input.withVersion) ? (deps.versionText ?? defaultVersionText)(resolveEngineSpawn(bin, ["--version"], deps), deps.env ?? process.env) : null;
 	return {
 		checked: true,
 		engine,
@@ -128,5 +177,7 @@ export function checkEngine(
 		...(binaryPath ? { binaryPath, binaryVia: via } : {}),
 		login: login.login,
 		...(login.where ? { loginWhere: login.where } : {}),
+		...(binaryPath && (engine === "grok" || input.withVersion) ? { version: parseEngineVersion(versionText) } : {}),
+		...(engine === "grok" && binaryPath ? { vendor: grokVendor(versionText, (deps.realpath ?? safeRealpath)(binaryPath)) } : {}),
 	};
 }

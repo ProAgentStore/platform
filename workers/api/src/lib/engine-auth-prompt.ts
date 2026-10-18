@@ -94,6 +94,9 @@ const AUTH_PHRASES = [
 	// fails the turn. OpenAI's own wording — narrow enough that only a request sent with NO
 	// credential produces it. Reaches the pane and the turn report since #889 stopped dropping it.
 	"missing bearer or basic authentication",
+	// xAI's Grok CLI with no login (#1156), verified on 1.0.62: "Not signed in. To authenticate without a browser, run:
+	// grok login --device-code". Its first sentence alone; "not signed in" by itself is too common in quoted source.
+	"not signed in. to authenticate without a browser",
 ];
 
 /** Phrases that look like auth but are NOT a block — the engine is running normally. */

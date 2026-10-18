@@ -15,6 +15,7 @@ import { type ClientType, handlerFor } from "./handlers.js";
 import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
 import { buildCodexResumeArgs, engineAdapterFor, engineInvocationModeFromAdapter, engineInvocationWarning, genericRawEngineAdapter, type EngineAdapter, type EngineInvocationMode, type EngineMode } from "./engine-adapter.js";
 import { isCodexThreadId, readCodexState, readState, writeState } from "./headless-state.js";
+import { afterGrokTurn, type GrokConversation, grokRejectedContinuity, grokTurnArgs, isGrokConversationId, newGrokConversation } from "./grok-continuity.js";
 
 export { buildClaudeArgs } from "./engine-adapter.js";
 export { defaultStatePath } from "./headless-state.js";
@@ -163,6 +164,10 @@ export class HeadlessSession {
 	private claudeSessionId: string | null = null;
 	/** Codex's thread id from `thread.started` — used only by the explicit-ID resume path (#848). */
 	private codexThreadId: string | null = null;
+	/** Grok's own conversation across one-shot turns (#1156, grok-continuity.ts); null = the next turn starts one. */
+	private grokConversation: GrokConversation | null = null;
+	/** Off once this machine's CLI refused the continuity flags: the session then runs as before, turn by turn. */
+	private grokContinuity = true;
 	/**
 	 * The cloud's context brief, until the first turn spends it (ADR 0005, #693). Null once
 	 * delivered, and null from the start when the engine resumed its own conversation.
@@ -373,6 +378,8 @@ export class HeadlessSession {
 			config.clientType === "codex" && this.mode === "stream-json" && !config.fresh
 				? readCodexState(config.statePath, config.id) ?? (config.resumeFrom ? readCodexState(config.statePath, config.resumeFrom) : null)
 				: null;
+		const storedGrok = config.clientType === "grok" && !config.fresh ? (readState(config.statePath, config.id, "grok") ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom, "grok") : null)) : null;
+		this.grokConversation = isGrokConversationId(storedGrok) ? { id: storedGrok, started: true } : null;
 		// AFTER both lines above, because `resumedConversation` reads them: the brief is the fallback,
 		// so an engine that found its own conversation drops it unread rather than being handed a
 		// summary of the conversation it is already in.
@@ -692,9 +699,14 @@ export class HeadlessSession {
 		this.structuredOutputRejected = false;
 		const resumedCodexThreadId = this.codexResumeThreadId;
 		const inputId = this.turnInputId;
+		// #1156: Grok carries its conversation by an id this runner chose — `-s` to make it, `-r` to resume it.
+		if (this.config.clientType === "grok" && this.grokContinuity && !this.grokConversation) this.grokConversation = newGrokConversation();
+		const grokConversation = this.config.clientType === "grok" && this.grokContinuity ? this.grokConversation : null;
 		const turnArgs = resumedCodexThreadId
 			? buildCodexResumeArgs(this.cmdArgs, resumedCodexThreadId, text)
-			: this.adapter.buildTurnArgs(this.cmdArgs, text);
+			: grokConversation
+				? grokTurnArgs(this.cmdArgs, text, grokConversation)
+				: this.adapter.buildTurnArgs(this.cmdArgs, text);
 		const env = this.spawnEnv;
 		const target = spawnTarget(this.cmdPrefix, this.cmdBin, turnArgs);
 		const launch = resolveEngineSpawn(target.command, target.args, { env });
@@ -780,6 +792,19 @@ export class HeadlessSession {
 				this.push(`[${this.config.clientType} CLI rejected --json; retrying this turn with raw output]`);
 				this.runOneShot(text);
 				return;
+			}
+			if (grokConversation) {
+				const after = afterGrokTurn(grokConversation, { code, rejected: grokRejectedContinuity(this.turnTail) });
+				this.grokConversation = after.next;
+				writeState(this.config.statePath, this.config.id, after.persist, "grok");
+				// The flags were refused before anything ran (an argument error): the same turn again, without them.
+				if (after.disable) {
+					this.grokContinuity = false;
+					this.proc = null;
+					this.push("[grok CLI rejected its session flags; retrying this turn without conversation continuity]");
+					this.runOneShot(text);
+					return;
+				}
 			}
 			// A rejected/expired explicit ID is not retried as the same turn: the CLI may have started
 			// work before failing. Drop only that known-bad local key so the NEXT turn is safely fresh.

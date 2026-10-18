@@ -33,7 +33,17 @@ describe("detectEngineLogin — subscription login presence only (#879)", () => 
 
 	it("engines with other sign-in routes are never reported missing", () => {
 		expect(detectEngineLogin("gemini", { env: {}, home: HOME, exists: onPath([]) }).login).toBe("unknown");
-		expect(detectEngineLogin("grok", { env: {}, home: HOME, exists: onPath([]) }).login).toBe("unknown");
+		// Grok's other routes — an external auth provider, OIDC, an enterprise deployment key — stay unknown (#1156).
+		for (const v of ["GROK_AUTH_PROVIDER_COMMAND", "GROK_OIDC_ISSUER", "GROK_DEPLOYMENT_KEY"]) {
+			expect(detectEngineLogin("grok", { env: { [v]: "x" }, home: HOME, exists: onPath([]) }).login).toBe("unknown");
+		}
+	});
+
+	it("grok: xAI's subscription login is auth.json under GROK_HOME (default ~/.grok) — without it the CLI refuses every turn (#1156)", () => {
+		// Verified on xAI's Grok CLI 1.0.62 with no ~/.grok/auth.json: "Not signed in. To authenticate without a browser…".
+		expect(detectEngineLogin("grok", { env: {}, home: HOME, exists: onPath([`${HOME}/.grok/auth.json`]) })).toEqual({ login: "found", where: `${HOME}/.grok/auth.json` });
+		expect(detectEngineLogin("grok", { env: {}, home: HOME, exists: onPath([]) }).login).toBe("missing");
+		expect(detectEngineLogin("grok", { env: { GROK_HOME: "/cfg/grok" }, home: HOME, exists: onPath(["/cfg/grok/auth.json"]) }).login).toBe("found");
 	});
 });
 
@@ -57,5 +67,30 @@ describe("checkEngine (#879)", () => {
 	it("falls back to the engine's default command when none is given", () => {
 		const r = checkEngine({ clientType: "codex" }, { env: { PATH: "/b" }, home: HOME, platform: "linux", isExecutable: onPath(["/b/codex"]), exists: onPath([`${HOME}/.codex/auth.json`]) });
 		expect(r).toMatchObject({ bin: "codex", binaryFound: true, login: "found" });
+	});
+});
+
+describe("which grok, and which version (#1156)", () => {
+	const official = `${HOME}/.grok/bin/grok`;
+	const nvm = `${HOME}/.nvm/versions/node/v22/bin/grok`;
+	const check = (files: string[], versionText: string | null, realpath: (p: string) => string = (p) => p) =>
+		checkEngine({ clientType: "grok", command: "grok --permission-mode bypassPermissions -p" }, { env: { PATH: `${HOME}/.nvm/versions/node/v22/bin` }, platform: "darwin", home: HOME, exists: () => false, isExecutable: (p) => files.includes(p), versionText: () => versionText, realpath });
+
+	it("xAI's CLI in ~/.grok/bin wins over an npm `grok` earlier on PATH, and names itself", () => {
+		const r = check([official, nvm], "grok 1.0.62 (1474f9cbdd91)\n");
+		expect(r).toMatchObject({ binaryFound: true, binaryPath: official, version: "1.0.62", vendor: "xai" });
+	});
+
+	it("only the community npm package: found, but reported as what it is — its bare version and its node_modules target", () => {
+		const r = check([nvm], "1.0.1\n", () => `${HOME}/.nvm/versions/node/v22/lib/node_modules/@vibe-kit/grok-cli/dist/index.js`);
+		expect(r).toMatchObject({ binaryPath: nvm, version: "1.0.1", vendor: "community" });
+	});
+
+	it("a version that does not answer is null, not a guess; other engines are asked only when the caller wants it", () => {
+		expect(check([official], null)).toMatchObject({ version: null, vendor: "unknown" });
+		const codex = checkEngine({ clientType: "codex", command: "codex exec" }, { env: { PATH: "/bin" }, platform: "darwin", home: HOME, exists: () => false, isExecutable: (p) => p === "/bin/codex", versionText: () => "codex-cli 0.162.1" });
+		expect(codex.version).toBeUndefined();
+		const asked = checkEngine({ clientType: "codex", command: "codex exec", withVersion: true }, { env: { PATH: "/bin" }, platform: "darwin", home: HOME, exists: () => false, isExecutable: (p) => p === "/bin/codex", versionText: () => "codex-cli 0.162.1" });
+		expect(asked.version).toBe("0.162.1");
 	});
 });

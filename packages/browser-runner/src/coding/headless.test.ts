@@ -37,8 +37,9 @@ rl.on("line", (line) => {
 /** A raw (non-Claude) CLI: echoes coloured (ANSI) lines for each stdin line, with a
  *  short delay before the second line, then goes quiet. */
 const FAKE_CODEX = `#!/usr/bin/env node
-// One-shot, like \`codex exec "<turn>"\`: the prompt is the final argument, not a stdin line.
-const line = process.argv[2] || "";
+// One-shot, like \`codex exec "<turn>"\`: the prompt is the final argument, not a stdin line. The LAST argument, as the
+// contract says — Grok's turns lead with their session flags (#1156), so the first one is not the turn.
+const line = process.argv.length > 2 ? process.argv[process.argv.length - 1] : "";
 process.stdout.write("\\x1b[32mthinking about: " + line + "\\x1b[0m\\n");
 setTimeout(() => process.stdout.write("done: " + line + "\\n"), 150);
 `;

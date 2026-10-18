@@ -156,6 +156,39 @@ does not combine with `-c`.
 You own the command field, and on a repo only ever driven by the agent this trade may be worth
 making. The platform declines to make it *for* you.
 
+### Grok: an explicit session id, held by the runner (#1156)
+
+xAI's Grok CLI 1.x takes an id it is *given*, which is what the rule above was missing: `-s <uuid>` starts a NEW
+conversation under that id (it must be a UUID and must not exist), and `-r <uuid>` resumes exactly that one (it errors
+when it does not exist — it never falls back to "the most recent"). So the runner, not the preset, carries Grok's
+conversation (`packages/browser-runner/src/coding/grok-continuity.ts`): the first turn of a session runs with
+`-s <a fresh UUID>`, every later turn with `-r <that UUID>`, and the id is kept per session in
+`headless-sessions.json` (`grok:<session>`) so a runner restart resumes it too. A turn that fails forgets the id —
+the next starts a clean conversation — and a CLI that rejects the flags themselves has the turn retried once without
+them, after which that session runs one-shot as before.
+
+**Status: built against `grok --help` of 1.0.62 (2026-10-18), not yet run end to end** — the CLI refuses every turn
+until it is signed in. Until a signed-in run proves it, the platform still sends its own replay with every Grok turn
+(`holdsConversationThisTurn` stays false), so nothing is lost if the CLI's memory is not what it says.
+
+### Installing xAI's Grok CLI
+
+It is a native binary from xAI's own installer, not an npm package. The npm packages named `grok-cli`
+(`@vibe-kit/grok-cli`) are community tools that bill an `XAI_API_KEY` and take other flags; the shipped preset cannot
+drive them.
+
+| OS | Install | Sign in (subscription) |
+|---|---|---|
+| macOS / Linux | `curl -fsSL https://x.ai/cli/install.sh \| bash` | `grok login` — or `grok login --device-auth` over SSH |
+| Windows (PowerShell) | `irm https://x.ai/cli/install.ps1 \| iex` | same |
+
+Both put it in `~/.grok/bin` (`%USERPROFILE%\.grok\bin`), and add that to PATH only in the shell's profile — which a
+`pags up` under launchd, systemd or a Scheduled Task never reads. The runner therefore prefers `~/.grok/bin/grok` for
+a preset that says `grok`, whatever PATH holds (`officialEngineBinary`), and `coding_engine_get`'s `machine` block
+reports which file, which version, and `vendor: xai | community` for each machine. Update with `grok update`. Sign it
+in from any device with `coding_engine_reauth` (`client_type: "grok"`), which runs `grok login --device-auth` on the
+runner and returns the `accounts.x.ai` link and code.
+
 ## The shipped defaults
 
 `DEFAULT_ENGINES` (`workers/api/src/lib/coding-engines.ts`) — what an instance that has saved

@@ -6,7 +6,7 @@ interface StateFile {
 	[sessionId: string]: string;
 }
 
-export type StateEngine = "claude" | "codex";
+export type StateEngine = "claude" | "codex" | "grok";
 
 /** Codex CLI emitted UUID-shaped `thread_id`s in the #730 proof; reject anything unsafe to argv. */
 export function isCodexThreadId(value: unknown): value is string {
@@ -14,7 +14,7 @@ export function isCodexThreadId(value: unknown): value is string {
 }
 
 function stateKey(id: string, engine: StateEngine): string {
-	return engine === "codex" ? `codex:${id}` : id;
+	return engine === "claude" ? id : `${engine}:${id}`;
 }
 
 function loadFile(path: string | undefined): StateFile {

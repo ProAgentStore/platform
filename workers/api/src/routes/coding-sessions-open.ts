@@ -15,6 +15,7 @@ import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { logEvent } from "../lib/events.js";
 import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
 import { READ_TIMEOUT_MS, callRunner, getBoundRunnerConn, liveAliasForPin, relayConnected } from "../lib/runner-client.js";
+import { machineEngineChecks } from "../lib/engine-preflight.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { sessionAttachment } from "../lib/session-attachment.js";
 import { shouldPersistSnapshot, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
@@ -93,7 +94,10 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 	 */
 	codingRoutes.get("/:instanceId/coding/engine-choice", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		return c.json(await readEngineChoice(c.env, instanceId, uid));
+		const choice = await readEngineChoice(c.env, instanceId, uid);
+		// #1156: beside the presets, what the bound machine actually has for each — installed, version, signed in.
+		const machine = await machineEngineChecks(c.env, instanceId, uid, choice.engines, () => getBoundRunnerConn(c.env, instanceId, uid));
+		return c.json({ ...choice, machine });
 	});
 
 	codingRoutes.put("/:instanceId/coding/engine-choice", async (c) => {

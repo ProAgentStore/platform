@@ -1,4 +1,5 @@
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 
 /**
@@ -41,6 +42,25 @@ export interface EngineSpawnDeps {
 	readText?: (p: string) => string | null;
 	/** The Node that runs a script shim's target. */
 	nodePath?: string;
+	/** The user's home, where xAI's installer puts the Grok CLI. */
+	home?: string;
+}
+
+/**
+ * xAI's Grok CLI for a bare `grok`, wherever PATH points (#1156). Its installer (x.ai/cli/install.sh, install.ps1) always
+ * puts it in `~/.grok/bin` (`GROK_BIN_DIR` overrides), and adds that to PATH only in the SHELL's profile — so a
+ * `pags up` started by launchd, systemd, a Scheduled Task or an older terminal does not see it. And an npm package of
+ * the same name, the community `@vibe-kit/grok-cli` (API-key billed, different flags), can sit earlier on PATH: on the
+ * Mac mini it did, in nvm's bin. The preset means xAI's CLI, so its own location wins when it is there. An explicit path
+ * in a preset is the owner's choice and is never rewritten.
+ */
+export function officialEngineBinary(bin: string, deps: EngineSpawnDeps = {}): string | null {
+	if (bin !== "grok") return null;
+	const windows = (deps.platform ?? process.platform) === "win32";
+	const env = deps.env ?? process.env;
+	const dir = envVar(env, "GROK_BIN_DIR", windows)?.trim() || (windows ? win32 : posix).join(deps.home ?? homedir(), ".grok", "bin");
+	const file = (windows ? win32 : posix).join(dir, windows ? "grok.exe" : "grok");
+	return (deps.isExecutable ?? defaultIsExecutable)(file) ? file : null;
 }
 
 function defaultIsExecutable(p: string): boolean {
@@ -111,7 +131,8 @@ export function quoteCmdArg(arg: string): string {
 	return a.replace(CMD_META, "^$1").replace(CMD_META, "^$1");
 }
 
-export function resolveEngineSpawn(bin: string, args: string[], deps: EngineSpawnDeps = {}): EngineSpawn {
+export function resolveEngineSpawn(requested: string, args: string[], deps: EngineSpawnDeps = {}): EngineSpawn {
+	const bin = officialEngineBinary(requested, deps) ?? requested;
 	const windows = (deps.platform ?? process.platform) === "win32";
 	if (!windows) return { command: bin, args, binaryPath: resolveBinary(bin, deps), via: "direct" };
 	const env = deps.env ?? process.env;

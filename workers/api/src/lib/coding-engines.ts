@@ -334,6 +334,9 @@ export const DEFAULT_ENGINES: CodingEngine[] = [
 	// preset starts each turn with no memory of the previous one — see `docs/coding-engines.md` §
 	// "What one-shot costs", and the per-preset line the engines panel now shows (#449).
 	//
+	// Continuity is the RUNNER's, by an explicit id, never a preset flag: Claude's persistent stream-json session, Codex's
+	// `exec resume <thread-id>` (#848), and Grok's `-s <uuid>` then `-r <uuid>` (#1156, browser-runner
+	// grok-continuity.ts — xAI's Grok CLI 1.x takes an id it was given). What follows is why a PRESET never resumes:
 	// NO PRESET RESUMES, deliberately, though three of these CLIs offer it. Checked against the
 	// installed binaries 2026-08-09: `codex exec resume --last` (codex-cli 0.146.0), grok's
 	// `-c/--continue` (0.2.118) and gemini's `-r/--resume latest` (0.53.1) all select the most

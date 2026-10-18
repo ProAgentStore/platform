@@ -132,3 +132,31 @@ describe("checkEngine reports what the spawn will run (#1044)", () => {
 		expect(checkEngine({ clientType: "claude" }, { ...base, ...machine({}) })).toMatchObject({ binaryFound: false });
 	});
 });
+
+describe("xAI's Grok CLI for a bare `grok` (#1156)", () => {
+	const HOME = "/home/me";
+	it("its installer's ~/.grok/bin/grok is spawned whatever PATH holds — PATH first finding an npm `grok`, or nothing", () => {
+		const isExecutable = (p: string) => p === `${HOME}/.grok/bin/grok` || p === "/usr/local/bin/grok";
+		const r = resolveEngineSpawn("grok", ["-p", "hi"], { env: { PATH: "/usr/local/bin" }, platform: "linux", home: HOME, isExecutable });
+		expect(r).toMatchObject({ command: `${HOME}/.grok/bin/grok`, args: ["-p", "hi"], binaryPath: `${HOME}/.grok/bin/grok`, via: "direct" });
+		expect(resolveEngineSpawn("grok", [], { env: { PATH: "" }, platform: "darwin", home: HOME, isExecutable }).binaryPath).toBe(`${HOME}/.grok/bin/grok`);
+	});
+
+	it("GROK_BIN_DIR moves it, as it moves the installer; with none there, PATH decides as before", () => {
+		const isExecutable = (p: string) => p === "/opt/grok/grok" || p === "/usr/local/bin/grok";
+		expect(resolveEngineSpawn("grok", [], { env: { PATH: "/usr/local/bin", GROK_BIN_DIR: "/opt/grok" }, platform: "linux", home: HOME, isExecutable }).binaryPath).toBe("/opt/grok/grok");
+		expect(resolveEngineSpawn("grok", [], { env: { PATH: "/usr/local/bin" }, platform: "linux", home: HOME, isExecutable }).binaryPath).toBe("/usr/local/bin/grok");
+	});
+
+	it("Windows: %USERPROFILE%\\.grok\\bin\\grok.exe, run directly — before PATH has been refreshed in a service's environment", () => {
+		const exe = "C:\\Users\\me\\.grok\\bin\\grok.exe";
+		const r = resolveEngineSpawn("grok", ["-p", "a & b"], { env: { Path: "C:\\Windows" }, platform: "win32", home: "C:\\Users\\me", isExecutable: (p) => p.toLowerCase() === exe.toLowerCase() });
+		expect(r).toMatchObject({ command: exe, binaryPath: exe, via: "direct", args: ["-p", "a & b"] });
+	});
+
+	it("never rewrites another engine, or a path the owner wrote", () => {
+		const isExecutable = (p: string) => p === `${HOME}/.grok/bin/grok` || p === "/opt/my/grok";
+		expect(resolveEngineSpawn("/opt/my/grok", [], { env: { PATH: "" }, platform: "linux", home: HOME, isExecutable }).binaryPath).toBe("/opt/my/grok");
+		expect(resolveEngineSpawn("codex", [], { env: { PATH: "" }, platform: "linux", home: HOME, isExecutable }).binaryPath).toBeNull();
+	});
+});

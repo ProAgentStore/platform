@@ -42,6 +42,8 @@ interface RawEngineCheck {
 	binaryFound?: unknown;
 	login?: unknown;
 	error?: unknown;
+	/** Grok only (#1156, CLI 0.4.154): `xai` | `community` | `unknown` — whose `grok` the machine has. */
+	vendor?: unknown;
 }
 
 const ENGINE_NAMES: Record<CodingClientType, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", grok: "Grok CLI" };
@@ -51,7 +53,12 @@ const ENGINE_SETUP: Record<CodingClientType, { install: string; login: string }>
 	claude: { install: "`npm i -g @anthropic-ai/claude-code`", login: "run `claude` and sign in with `/login`" },
 	codex: { install: "`npm i -g @openai/codex`", login: "run `codex login` and sign in with your ChatGPT account" },
 	gemini: { install: "`npm i -g @google/gemini-cli`", login: "run `gemini` and sign in with Google" },
-	grok: { install: "the Grok CLI", login: "run `grok` and sign in" },
+	// xAI's own installer, a native binary in ~/.grok/bin — not an npm package (#1156). The npm `grok-cli` packages are
+	// community tools that bill an API key and take other flags.
+	grok: {
+		install: "`curl -fsSL https://x.ai/cli/install.sh | bash` — on Windows, in PowerShell: `irm https://x.ai/cli/install.ps1 | iex`",
+		login: "run `grok login` and sign in with your Grok (grok.com) account — `grok login --device-auth` over SSH",
+	},
 };
 
 function machineName(conn: RunnerConn): string {
@@ -76,6 +83,11 @@ export function enginePreflightMessage(
 		return `${input.machine} runs a \`pags\` CLI older than ${ENGINE_CHECK_MIN_CLI}, which cannot confirm ${name} is installed and signed in there. Update it with runner_update, then try again.`;
 	}
 	return `${input.machine} did not answer whether ${name} is installed and signed in there.`;
+}
+
+/** The community `grok` on a machine instead of xAI's (#1156). */
+export function grokCommunityMessage(machine: string): string {
+	return `The \`grok\` on ${machine} is the community npm package (@vibe-kit/grok-cli), not xAI's Grok CLI — it bills an API key and does not take this engine's flags. Install xAI's CLI there (${ENGINE_SETUP.grok.install}); it goes into ~/.grok/bin, which the runner prefers. Optionally remove the other one with \`npm uninstall -g @vibe-kit/grok-cli\`. Then ${ENGINE_SETUP.grok.login}, or sign it in from any device with coding_engine_reauth.`;
 }
 
 /**
@@ -113,6 +125,88 @@ export async function preflightEngine(env: Env, conn: RunnerConn, instanceId: st
 	}
 	const bin = typeof raw.bin === "string" ? raw.bin : undefined;
 	if (raw.binaryFound === false) return { state: "no-binary", message: enginePreflightMessage("no-binary", { clientType, bin, machine }) };
+	// A `grok` that is not xAI's (#1156): the community npm package of the same name cannot run this preset (other flags,
+	// API-key billing). Said as what it is, with the fix — not as a session that dies on an unknown flag.
+	if (clientType === "grok" && raw.vendor === "community") return { state: "no-binary", message: grokCommunityMessage(machine) };
 	if (raw.login === "missing") return { state: "signed-out", message: enginePreflightMessage("signed-out", { clientType, bin, machine }) };
 	return { state: "ok" };
+}
+
+/** What the bound machine has for one engine (#1156), as coding_engine_get shows it. */
+export interface MachineEngineCheck {
+	installed: boolean;
+	/** The file the runner would run — on a machine with both, xAI's ~/.grok/bin/grok rather than an npm `grok`. */
+	path: string | null;
+	/** `--version`, reduced to the version; null when it did not answer. */
+	version: string | null;
+	/** Grok only: `xai` | `community` | `unknown`. */
+	vendor?: string;
+	login: "found" | "missing" | "unknown";
+	/** What stops a session on this engine starting there, with the fix — null when nothing does. */
+	problem: string | null;
+}
+
+export interface MachineEngines {
+	/** The machine asked — the instance's bound runner. Null when there is none. */
+	node: string | null;
+	/** By engine id. Empty when the machine could not be asked; `unavailable` then says why. */
+	engines: Record<string, MachineEngineCheck>;
+	unavailable: string | null;
+}
+
+/**
+ * Ask the instance's machine about every engine it could be pointed at (#1156): installed, which file, which version,
+ * signed in. One engine-check each, in parallel — every engine the owner configured, none dropped. Never throws: an
+ * offline or outdated runner is a sentence.
+ */
+export async function machineEngineChecks(
+	env: Env,
+	instanceId: string,
+	uid: string,
+	engines: Array<{ id: string; command: string; clientType: CodingClientType }>,
+	getConn: () => Promise<RunnerConn | null>,
+): Promise<MachineEngines> {
+	const conn = await getConn().catch(() => null);
+	if (!conn) return { node: null, engines: {}, unavailable: "No runner is connected for this agent, so what its machine has installed could not be checked. Start `pags up` there." };
+	const machine = machineName(conn);
+	const out: Record<string, MachineEngineCheck> = {};
+	let unavailable: string | null = null;
+	await Promise.all(
+		engines.map(async (e) => {
+			const session = { clientType: e.clientType, launchCommand: e.command } as CodingSessionRecord;
+			const injected = await credentialInjected(env, instanceId, uid, session);
+			let raw: RawEngineCheck & { binaryPath?: unknown; version?: unknown };
+			try {
+				raw = await callRunner(conn, "/coding/engine-check", { clientType: e.clientType, command: e.command, credentialInjected: injected, withVersion: true }, { timeoutMs: READ_TIMEOUT_MS });
+			} catch (err) {
+				const outdated = /\/coding\/engine-check → 404/.test(err instanceof Error ? err.message : String(err));
+				unavailable = enginePreflightMessage(outdated ? "outdated" : "unreachable", { clientType: e.clientType, machine });
+				return;
+			}
+			if (raw?.checked !== true) {
+				unavailable = enginePreflightMessage("outdated", { clientType: e.clientType, machine });
+				return;
+			}
+			const bin = typeof raw.bin === "string" ? raw.bin : undefined;
+			const installed = raw.binaryFound === true;
+			const login = raw.login === "found" || raw.login === "missing" ? raw.login : "unknown";
+			const vendor = typeof raw.vendor === "string" ? raw.vendor : undefined;
+			const problem = !installed
+				? enginePreflightMessage("no-binary", { clientType: e.clientType, bin, machine })
+				: e.clientType === "grok" && vendor === "community"
+					? grokCommunityMessage(machine)
+					: login === "missing"
+						? enginePreflightMessage("signed-out", { clientType: e.clientType, bin, machine })
+						: null;
+			out[e.id] = {
+				installed,
+				path: typeof raw.binaryPath === "string" ? raw.binaryPath : null,
+				version: typeof raw.version === "string" ? raw.version : null,
+				...(vendor ? { vendor } : {}),
+				login,
+				problem,
+			};
+		}),
+	);
+	return { node: conn.runnerNode ?? null, engines: out, unavailable };
 }
