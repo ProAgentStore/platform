@@ -392,6 +392,12 @@ export function waitClause(run: RunHealthInput & { waitingUntil?: number | null;
 		const q = run.waitingAsk ? ` to "${run.waitingAsk.question}"` : "";
 		return `ANSWER PENDING, not waiting on you — your answer${q} was recorded ${ago(Math.max(0, now - run.answerPendingSince))} and the run has not applied it yet. It resumes with it as soon as its repository is free; a run whose workflow has stopped is closed within a minute and the answer carries to the run that continues it. Do not answer again`;
 	}
+	// #1236: a run that reached its iteration cap asks for more — said as what it is, with what it did and how to answer.
+	const more = run.waitingReason === "decision" ? /^Approve (\d+) more iterations$/.exec(run.waitingAsk?.options[0] ?? "") : null;
+	if (more && run.waitingAsk) {
+		const done = run.waitingAsk.why ? ` ${run.waitingAsk.why.replace(/\s+$/, "")}.` : "";
+		return `WAITING on YOUR APPROVAL, not stalled and not working — it reached its iteration cap without finishing and asks for ${more[1]} more iterations.${done} Approve with answer_instance_input (task_id ${run.waitingAsk.taskId}, value "approve" or a number of iterations) to resume this same run, or answer "deny" to stop it here. Its session and working tree stay exactly as they are meanwhile`;
+	}
 	const park = PARKS[run.waitingReason as RunWaitReason] as Park | undefined;
 	// A park whose reason this build does not know is still a park (`coding-run-state.ts` takes the
 	// same line). What it does NOT get is a deadline clause: with no kind, the instant could only be

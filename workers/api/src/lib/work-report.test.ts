@@ -710,3 +710,16 @@ describe("waitClause — an answer recorded and not yet applied (#1231)", () => 
 		expect(waitClause({ ...parked, status: "completed", answerPendingSince: now }, now)).toBeNull();
 	});
 });
+
+describe("waitClause — a run asking for more iterations at its cap (#1236)", () => {
+	it("says it waits on the owner's APPROVAL, what it did last, and how to approve or deny", () => {
+		const now = 10_000_000;
+		const ask = { question: "This run reached its cap of 30 iterations without finishing. Approve 30 more…", options: ["Approve 30 more iterations", "Deny — stop the run here"], why: "Its last steps: ran the tests · fixed two imports", field: "x", taskId: "csess-s1" };
+		const note = waitClause({ status: "running", waitingReason: "decision", waitingAsk: ask, waitingUntil: now + 86_400_000, startedAt: 0 }, now) ?? "";
+		expect(note).toMatch(/^WAITING on YOUR APPROVAL/);
+		expect(note).toContain("asks for 30 more iterations. Its last steps: ran the tests · fixed two imports.");
+		expect(note).toContain("Its session and working tree stay exactly as they are meanwhile");
+		// Answered and not yet applied, the #1231 note wins: the owner is not asked twice.
+		expect(waitClause({ status: "running", waitingReason: "decision", waitingAsk: ask, startedAt: 0, answerPendingSince: now - 1000 }, now)).toMatch(/^ANSWER PENDING/);
+	});
+});

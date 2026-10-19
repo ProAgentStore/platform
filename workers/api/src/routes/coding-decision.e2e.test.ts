@@ -283,7 +283,11 @@ describe("a run at its iteration cap asks the owner instead of failing (#1236)",
 		expect(callRunner.mock.calls.some((c) => c[1] === "/coding/park-snapshot")).toBe(false); // nothing set aside, nothing reset
 		expect(parkedRun?.waitingAsk?.question).toMatch(/reached its cap of 2 iterations without finishing\. Approve 2 more/);
 		expect(parkedRun?.waitingAsk?.options).toEqual(["Approve 2 more iterations", "Deny — stop the run here"]);
-		expect(waitClause(parkedRun!, Date.now())).toMatch(/PARKED, waiting for YOUR ANSWER to a question: "This run reached its cap/);
+		// coding_loop_status and recent_instances both quote this note (#1236).
+		const note = waitClause(parkedRun!, Date.now()) ?? "";
+		expect(note).toMatch(/^WAITING on YOUR APPROVAL, not stalled and not working — it reached its iteration cap without finishing and asks for 2 more iterations\. Its last steps: /);
+		expect(note).toContain('answer_instance_input (task_id csess-s1, value "approve" or a number of iterations)');
+		expect(note).toContain('"deny" to stop it here');
 	});
 
 	it("approve with N: the SAME run resumes in the same session with N more iterations, and finishes", async () => {
