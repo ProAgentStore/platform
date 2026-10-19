@@ -38,7 +38,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 	if (groups.has("coding")) {
 		server.tool(
 			"system_status",
-			"Full diagnostics for a coding instance: runner connectivity, node name, tmux sessions, repos, issues — and `providerAccount`, the owner's own Anthropic account as last observed: `failing` means the newest recorded run death was an empty balance or a rejected key and the key has not succeeded since; `no_failure_recorded` is not an all-clear. Use this to understand why sessions are offline, to check the runner's machine, or when a run stopped with `provider_credit`. For a LIVE credit answer the report names a verify endpoint; it costs one small provider request, so call it when you suspect a problem rather than before every run.",
+			"Full diagnostics for a coding instance: runner connectivity, node name, terminal sessions, repos, issues — the same report coding_diagnostics reads (prefer it unless you need what follows), plus `providerAccount`, the owner's own Anthropic account as last observed: `failing` means the newest recorded run death was an empty balance or a rejected key and the key has not succeeded since; `no_failure_recorded` is not an all-clear. Use this to understand why sessions are offline, to check the runner's machine, or when a run stopped with `provider_credit`. For a LIVE credit answer the report names a verify endpoint; it costs one small provider request, so call it when you suspect a problem rather than before every run.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),

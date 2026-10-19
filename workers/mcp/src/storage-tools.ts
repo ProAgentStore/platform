@@ -24,7 +24,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"list_collections",
-		"List all data collections (tables) for an agent. Shows schema and record counts.",
+		"List the data collections (tables) on an agent TEMPLATE, with each one's schema and record count. Required: agent_id. For one of your subscribed instances — where an agent's working data usually lives — use list_instance_collections.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
@@ -39,7 +39,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"create_collection",
-		"Create a new data collection for an agent. Define fields with types and indexing.",
+		"Create a data collection on an agent TEMPLATE. Required: agent_id, name (lowercase a-z0-9_) and fields, a JSON array such as [{\"name\":\"email\",\"type\":\"string\",\"required\":true,\"indexed\":true,\"unique\":true}]. An instance's collections are read with list_instance_collections.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
@@ -65,7 +65,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"query_records",
-		"Query records from a collection. Filter by field values, sort, paginate.",
+		"Query records in a collection on an agent TEMPLATE. For a collection on one of your subscribed instances use query_instance_records. Required: agent_id, collection (names from list_collections). Optional: where, a JSON filter such as {\"status\":\"submitted\"}; order_by; limit (default 50, max 200); offset. The reply's `total` counts every match — page with offset += limit.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
@@ -92,7 +92,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"insert_record",
-		"Insert a new record into a collection.",
+		"Insert one record into a collection on an agent TEMPLATE. For an instance's collection use insert_instance_record. Required: agent_id, collection, and data — a JSON object of field values matching the collection's fields (list_collections), e.g. {\"email\":\"a@example.com\",\"status\":\"new\"}.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
@@ -118,7 +118,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"update_record",
-		"Update fields on an existing record.",
+		"Update fields on an existing record in a collection on an agent TEMPLATE. For an instance's collection use update_instance_record. Required: agent_id, collection, record_id (from query_records) and data — a JSON object of the fields to change, e.g. {\"status\":\"done\"}.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
@@ -416,7 +416,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"agent_activity",
-		"Get recent activity log for an agent (chat, tool calls, file uploads, etc.).",
+		"Read the recent activity log of an agent TEMPLATE (chat, tool calls, file uploads, record changes). Required: agent_id; optional limit. For one of your subscribed instances use instance_activity; for what every instance is doing right now, account_activity; for a run's full timeline, agent_trace.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),

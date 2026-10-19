@@ -312,7 +312,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"chat_with_agent",
-			"Send a message to a published agent (trial mode)",
+			"Send a message to a PUBLISHED agent in public trial mode: a capped preview with no private state and none of your credentials. Required: agent_id (id or slug from list_agents) and message; pass the returned session_id to continue the same trial. To talk to an agent you subscribe to use chat_with_instance; to test your own template as its creator, chat_with_my_agent. Example: {\"agent_id\":\"repo-chat\",\"message\":\"What can you do?\"}",
 			{
 				agent_id: z.string().describe("Published agent ID or slug from list_agents/agent_info. This is not a private instance_id."),
 				message: z.string().describe("User message for the public trial chat. For durable private work, use chat_with_instance instead."),
@@ -931,7 +931,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"add_knowledge",
-			"Add a document to an agent's knowledge base",
+			"Add a document to an agent TEMPLATE's knowledge base. New subscribers' instances are seeded from the template, so this is creator content — to add a document to just one of your subscribed instances use add_instance_knowledge. Required: agent_id, title, content; optional source. Takes dry_run. Returns the new document's id. Example: {\"agent_id\":\"my-agent\",\"title\":\"Refund policy\",\"content\":\"Refunds are accepted within 30 days.\"}",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string(),
@@ -977,7 +977,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"list_knowledge",
-			"List documents in an agent's knowledge base",
+			"List the documents in an agent TEMPLATE's knowledge base — the creator's copy that new subscribers are seeded from. Required: agent_id. For one of your subscribed instances use list_instance_knowledge; to search by meaning, search_agent_knowledge.",
 			{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."), agent_id: z.string() },
 			async ({ token, agent_id }) => {
 				const sessionToken = this.token(token);
@@ -1020,7 +1020,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"platform_guide",
-			"Get ProAgentStore platform guide",
+			"Read the ProAgentStore platform guide: what the platform is, the tool families and the tool to start each with (subscriber runtime, an instance's own tools, coding, observability), the live server version and tool counts, and the public URLs. Call it first in a new session when you do not yet know which tool to use. No arguments. To run an instance's own tools see list_instance_tools; for writing agent code, sdk_reference.",
 			{},
 			async () => {
 				return { content: [{ type: "text" as const, text: PLATFORM_GUIDE }] };
@@ -1029,7 +1029,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"sdk_reference",
-			"Get ProAgentStore SDK usage examples",
+			"Read short code examples for BUILDING on ProAgentStore: the @proagentstore/sdk client (e.g. initPro({ agentId, token }) then agent.chat('Hello!'), agent.memory.set, agent.tasks.create), the embeddable chat widget's script tag and the webhook ingest endpoint. It is for code you write — to drive an instance from here use my_instances, chat_with_instance and the instance tools. No arguments.",
 			{},
 			async () => {
 				return { content: [{ type: "text" as const, text: SDK_REFERENCE }] };

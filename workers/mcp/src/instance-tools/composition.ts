@@ -360,7 +360,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"start_instance_loop",
-		"Give an agent an objective and let it work autonomously on the server. Durable: it survives you closing the browser, and its spend is bounded by a budget. Returns a run id — poll it with check_instance_loop.",
+		"Give an agent an objective and let it work autonomously on the server. Prefer coding_loop_start: it starts the same run (same endpoint) and can also queue behind a busy instance (queue_if_busy); this tool is a retirement candidate (#1241). Durable: it survives you closing the browser, and its spend is bounded by a budget. Returns a run id — poll it with check_instance_loop.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -679,7 +679,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// `work-report.ts`'s `RUN_HEALTH_LEGEND`; those two are the only place to change the wording.
 	server.tool(
 		"check_instance_loop",
-		`Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance — most of them will be CLOSED, because this listing has no status filter. Read \`health\` first. ${runHealthSentence()} ${repoCiSentence()} Do not derive your own from the timestamps: \`lastAliveAt\` is the orchestrator's heartbeat and \`lastProgressAt\` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its \`run_state\`, plus the events since your last poll) or coding_session_capture.`,
+		`Check an autonomous run. coding_loop_status reads the same runs (same endpoint) and is the preferred tool; this one is a retirement candidate (#1241). status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance — most of them will be CLOSED, because this listing has no status filter. Read \`health\` first. ${runHealthSentence()} ${repoCiSentence()} Do not derive your own from the timestamps: \`lastAliveAt\` is the orchestrator's heartbeat and \`lastProgressAt\` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its \`run_state\`, plus the events since your last poll) or coding_session_capture.`,
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -709,7 +709,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// that ends early — not an edge pointed the wrong way or a budget quietly committed.
 	server.tool(
 		"stop_instance_loop",
-		"Ask an autonomous run to stop. Cooperative: the step in flight finishes and settles its spend rather than being killed mid-way. No dry run — call check_instance_loop first to see which run you are about to stop.",
+		"Ask an autonomous run to stop. coding_loop_stop cancels the same runs (same endpoint) and can also resolve the most recent run without a run_id; prefer it — this tool is a retirement candidate (#1241). Cooperative: the step in flight finishes and settles its spend rather than being killed mid-way. No dry run — call check_instance_loop first to see which run you are about to stop.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
