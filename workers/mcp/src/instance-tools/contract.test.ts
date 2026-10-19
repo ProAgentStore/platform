@@ -552,6 +552,8 @@ const TABLE: Record<string, Row> = {
 	runner_update: ["machineControl", "runtime", null, "envelope", "dry_run,runner_node,token"],
 	runner_restart: ["machineControl", "runtime", null, "envelope", "confirm,dry_run,force,runner_node,token"],
 	runner_update_status: ["machineControl", "read", null, null, "runner_node,token"],
+	actions_runner_setup: ["machineControl", "runtime", null, "envelope", "action,dry_run,instance_id,runner_group,scope,token"],
+	actions_runner_status: ["machineControl", "read", null, null, "instance_id,job_id,token"],
 	set_machine_policy: ["machineControl", "write", null, "envelope", "auto_update,dry_run,machine_id,token"],
 	set_instance_terminal_session: ["runtime", "write", null, "envelope", "active_terminal_target,dry_run,instance_id,token"],
 	set_instance_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,settings,token"],

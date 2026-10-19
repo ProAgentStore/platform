@@ -328,6 +328,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_instance_discord_grants: "read",
 	// #1217: an instance's release-notes setting, and the Slack bot's status, channels and an instance's grants. Never the token.
 	get_instance_release_notes: "read",
+	// #1208/#1209: the GitHub Actions runners on an agent's pinned machine.
+	actions_runner_status: "read",
 	slack_bot_status: "read",
 	list_slack_channels: "read",
 	list_instance_slack_grants: "read",
@@ -468,6 +470,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	native_preflight: "read",
 	// Installs software on a machine and restarts its runner (#859).
 	runner_update: "runtime",
+	// #1209: installs (or removes) the actions/runner service on the owner's machine.
+	actions_runner_setup: "runtime",
 	// Restarts a machine's runner on the CLI it has — the recovery for a wedged runtime (#1032).
 	runner_restart: "runtime",
 	// #990: reads one machine's latest update operation. A read, and deliberately so — it answers

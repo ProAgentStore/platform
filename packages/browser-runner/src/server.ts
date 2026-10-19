@@ -14,6 +14,7 @@ import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } fr
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
 import { checkEngine, listEngineModels } from "./coding/engine-check.js";
+import { routeActionsRunner } from "./coding/actions-runner.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
 import { runNativePreflight } from "./native/preflight.js";
@@ -570,6 +571,11 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		} catch (e: unknown) {
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
+	}
+	// The GitHub Actions runner service on this machine (#1209) — coding/actions-runner.ts.
+	if (req.method === "POST" && path.startsWith("/coding/actions-runner/")) {
+		const r = routeActionsRunner(path, await readJson<Record<string, unknown>>(req));
+		return json(res, r.status, r.body);
 	}
 	// Background cold-start clones (#858): start (or join) one, and read it back. An older runner 404s
 	// both, and the cloud falls back to the synchronous `/coding/clone` below.

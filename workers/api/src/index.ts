@@ -25,6 +25,7 @@ import { driveRoutes } from "./routes/drive.js";
 import { discordRoutes } from "./routes/discord.js";
 import { slackRoutes } from "./routes/slack.js";
 import { instanceReleaseNotesRoutes } from "./routes/instances-release-notes.js";
+import { instanceActionsRunnerRoutes } from "./routes/instances-actions-runner.js";
 import { workdriveRoutes } from "./routes/workdrive.js";
 import { errorRoutes } from "./routes/errors.js";
 import { auditRoutes } from "./routes/audit.js";
@@ -230,6 +231,7 @@ app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /
 app.route("/v1/agents", agentTypeToolRoutes); // /v1/agents/:slug/tools — an agent type's declared tools (#771)
 app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collections, /files, /search, /activity
 app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
+app.route("/v1/instances", instanceActionsRunnerRoutes); // /v1/instances/:id/actions-runner — the Actions runner on the pinned machine (#1208, #1209)
 app.route("/v1/instances", instanceReleaseNotesRoutes); // /v1/instances/:id/release-notes (+ /test) (#1217)
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
 app.route("/v1/instances", ticketRoutes); // /v1/instances/:id/board/items/:jobKey/ticket, /tickets/:ticketId (#757)

@@ -236,4 +236,51 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);
+
+	// ── The GitHub Actions runner on an agent's pinned machine (#1208, #1209) ─────
+	server.tool(
+		"actions_runner_setup",
+		"Install (or remove) the GitHub Actions self-hosted runner as a service on the machine one coding agent is pinned to (#1113). The platform mints the runner registration (or removal) token through the ProAgentStore GitHub App and hands it straight to that machine's `pags up` — it is never stored or returned. The runner is labelled `pags` and `pags-<node>` and named `pags-<node>`. `scope` is `{org}` (an org that owns one of this agent's repos) or `{repo}` (one of its repos — private only; a public repo is refused). Answers at once with the machine's job (`state` running/done/failed, `steps`, `prerequisites` such as a missing AWS CLI, `service`, and `serviceNote` when a step needs an administrator on the machine); read it with actions_runner_status. Refused with the permission to grant until the App's runner permissions are accepted on that org (#1207). `runtime`: it installs software and a service on the owner's machine. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID of the coding agent whose pinned machine gets the runner, from my_instances."),
+			action: z.enum(["install", "remove"]).describe("install: register and start the runner service. remove: stop, uninstall and deregister it."),
+			scope: z.object({ org: z.string().optional(), repo: z.string().optional() }).strict().describe('Exactly one of { "org": "<org>" } or { "repo": "<owner>/<name>" }.'),
+			runner_group: z.string().optional().describe("Org scope only: the runner group to join (needs GitHub Team for anything but Default)."),
+			dry_run: z.boolean().optional().describe("Report what would be asked of the machine, without minting a token or contacting it."),
+		},
+		async ({ token, instance_id, action, scope, runner_group, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, action, scope, runner_group };
+			// `runtime`: it installs software and a service on the owner's machine.
+			const denied = await requirePermission(safetyFor(token), "runtime", "actions_runner_setup", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/actions-runner`;
+			const body = { action, scope, ...(runner_group ? { runnerGroup: runner_group } : {}) };
+			if (dry_run) return dryRun(safetyFor(token), "actions_runner_setup", `${action} the GitHub Actions runner on this agent's pinned machine`, input, { endpoint, method: "POST", body });
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string; job?: { id?: string; state?: string } };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "actions_runner_setup", action: "completed", input, result: { jobId: data.job?.id, state: data.job?.state } });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"actions_runner_status",
+		"Read the GitHub Actions runners configured on one coding agent's pinned machine — the platform's own and any hand install (`managed: false`), each with its name and GitHub URL — and, with job_id, the progress of an actions_runner_setup job. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID of the coding agent, from my_instances."),
+			job_id: z.string().optional().describe("The `job.id` actions_runner_setup answered with."),
+		},
+		async ({ token, instance_id, job_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "actions_runner_status", { instance_id, job_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/actions-runner${job_id ? `?jobId=${encodeURIComponent(job_id)}` : ""}`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
 }

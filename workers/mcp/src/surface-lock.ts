@@ -1207,4 +1207,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.153": "sha256:1dcf299105a77144018d0998f5508d7a679fb96cb44a4d97c40c8020e04149cf",
 	// #1217: ten release-notes + Slack tools (get/set_instance_release_notes, send_test_release_note, slack_bot_status, connect/disconnect_slack_bot, list_slack_channels, list/grant/revoke instance Slack grants); set_account_preferences gains releaseNotes.
 	"0.1.154": "sha256:98cb272545371237c3ac7accb2994078782d5127256088764410be94507ef285",
+	// #1208/#1209: actions_runner_setup (install/remove the GitHub Actions runner service on an agent's pinned machine) and actions_runner_status.
+	"0.1.155": "sha256:1b9b3d9de5d29aeb9cea48ea26a52c255e919a57cc1fa7d27df3c5248b94f220",
 };

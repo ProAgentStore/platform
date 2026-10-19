@@ -337,6 +337,10 @@ const READBACK: Record<string, string | null> = {
 	"force_runner_attach.runner_node": "instance_runner_node",
 	"set_machine_policy.auto_update": "get_machine_policy",
 	"runner_update.runner_node": "list_runner_nodes",
+	// #1209: what is installed is read back by actions_runner_status; the scope and group are on each runner GitHub reports.
+	"actions_runner_setup.action": "actions_runner_status",
+	"actions_runner_setup.scope": "actions_runner_status",
+	"actions_runner_setup.runner_group": "actions_runner_status",
 	"runner_restart.runner_node": "list_runner_nodes",
 	// A per-call choice for that one restart, not state anything keeps.
 	"runner_restart.force": null,
