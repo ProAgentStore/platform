@@ -452,6 +452,19 @@ export interface Credential {
 	comments?: string;
 	recoveryHistory?: string;
 	createdAt?: string;
+	/** Which secrets are stored — the list never carries a value (`routes/credentials.ts`). */
+	hasPassword?: boolean;
+	hasPin?: boolean;
+	hasRecoveryCodes?: boolean;
+	updatedAt?: string;
+	lastUsedAt?: string;
+}
+
+/** What the owner-only, audited reveal returns (#1226). Held on the page only until Hide. */
+export interface CredentialSecrets {
+	password?: string;
+	pin?: string;
+	recoveryCodes?: string;
 }
 
 export interface Notification {

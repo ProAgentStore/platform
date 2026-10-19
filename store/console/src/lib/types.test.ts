@@ -329,6 +329,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 		const declared: Record<keyof Credential, true> = {
 			id: true, domain: true, loginUrl: true, username: true,
 			comments: true, recoveryHistory: true, createdAt: true,
+			// #1226: the console's credential panel now renders these.
+			hasPassword: true, hasPin: true, hasRecoveryCodes: true, updatedAt: true, lastUsedAt: true,
 		};
 		// `CredentialSummary` (`workers/api/src/lib/credentials.ts:24`), which also carries hasPassword
 		// / hasPin / hasRecoveryCodes / updatedAt / lastUsedAt. Declaring FEWER fields than the

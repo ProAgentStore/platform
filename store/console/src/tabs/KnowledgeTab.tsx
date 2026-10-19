@@ -6,6 +6,7 @@ import { useUploader } from "../lib/use-uploader";
 import { showsConnector } from "../lib/connectorState";
 import { showsKnowledgeSubTab, type SurfaceCaps } from "../lib/surfaces";
 import { buttonClass, cardClass } from "../lib/control-classes";
+import CredentialsSection from "../components/CredentialsSection";
 import FilesSection from "../components/FilesSection";
 import LoadFailed from "../components/LoadFailed";
 import Button from "../components/Button";
@@ -741,23 +742,14 @@ export default function KnowledgeTab({ instanceId, caps }: Props) {
 			{subTab === "credentials" && (
 				<div>
 					<h3 className="text-base font-bold mb-1">Credentials</h3>
-					<p className="text-xs text-muted mb-3">Logins & secrets the agent signs in with. Passwords are encrypted at rest.</p>
+					<p className="text-xs text-muted mb-3">Logins & secrets the agent signs in with. Passwords are encrypted at rest; revealing one is recorded in the agent's trace.</p>
 					{/* "No credentials saved yet" over a failed read is the empty state answering a
 					  * question nobody asked — and on this list it invites the user to re-enter a
 					  * login they already have. */}
 					{credErr ? (
 						<LoadFailed what="your credentials" detail={credErr} onRetry={loadCredentials} testId="credentials-load-failed" />
-					) : credentials.length === 0 ? (
-						<p className="text-center py-4 text-muted-soft text-sm">No credentials saved yet.</p>
 					) : (
-						<div className="flex flex-col gap-2">
-							{credentials.map((c) => (
-								<Card key={c.id}>
-									<div className="font-semibold text-sm">{c.domain}</div>
-									{c.username && <div className="text-xs text-muted mt-0.5">{c.username}</div>}
-								</Card>
-							))}
-						</div>
+						<CredentialsSection instanceId={instanceId} credentials={credentials} reload={loadCredentials} />
 					)}
 				</div>
 			)}
