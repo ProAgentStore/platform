@@ -218,7 +218,7 @@ async function repoHasRunningCoder(env: Env, iid: string, uid: string, repoId: s
 }
 
 /** Why nothing may be queued right now, or null. Checked once per wake, before anything is queued. */
-async function queueGate(env: Env, iid: string, uid: string): Promise<string | null> {
+export async function queueGate(env: Env, iid: string, uid: string): Promise<string | null> {
 	const inst = await env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(iid, uid).first<{ status: string }>();
 	if (inst?.status !== "active") return `The instance is ${inst?.status ?? "missing"}, so nothing is queued.`;
 	const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM mcp_input_requests WHERE instance_id = ?1 AND user_id = ?2 AND status = 'pending' AND expires_at > datetime('now')")
@@ -258,6 +258,25 @@ function defaultNotify(env: Env, uid: string, iid: string, slot: string) {
 	};
 }
 
+/**
+ * Has this coder nothing to do (#1232)? No objective pending in its queue, and no open run that holds a
+ * repo or is about to resume one — a run parked on an unanswered question with its checkout released
+ * holds nothing (#1228), while one whose answer is in is about to take its repo back.
+ */
+export async function coderIsIdle(env: Pick<Env, "DB">, instanceId: string): Promise<boolean> {
+	const busy = await env.DB.prepare(
+		`SELECT (SELECT COUNT(*) FROM instance_objective_queue WHERE instance_id = ?1 AND status = 'pending')
+		      + (SELECT COUNT(*) FROM agent_loop_runs r WHERE r.instance_id = ?1 AND r.status = 'running'
+		           AND (r.checkout_released_at IS NULL OR EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')))) AS n`,
+	)
+		.bind(instanceId)
+		.first<{ n: number }>();
+	return !busy?.n;
+}
+
+/** The reason a queue-empty wake gives when triage is off — the cue for auto-pickup (#1233) to act instead. */
+export const PO_TRIAGE_OFF = "product-owner triage is not on for this instance";
+
 /** At most one queue-empty wake per coder in this window, so a run that fails at once cannot loop (#1232). */
 export const QUEUE_EMPTY_DEBOUNCE_MS = 15 * 60_000;
 
@@ -281,15 +300,8 @@ export async function wakePoTriageIfIdle(env: Env, instanceId: string, userId: s
 		const trigger = await env.DB.prepare("SELECT id, config FROM agent_triggers WHERE instance_id = ?1 AND user_id = ?2 AND action = 'run_po_triage' AND enabled = 1 ORDER BY created_at ASC LIMIT 1")
 			.bind(instanceId, userId)
 			.first<{ id: string; config: string | null }>();
-		if (!trigger) return { woke: false, reason: "product-owner triage is not on for this instance" };
-		const busy = await env.DB.prepare(
-			`SELECT (SELECT COUNT(*) FROM instance_objective_queue WHERE instance_id = ?1 AND status = 'pending')
-			      + (SELECT COUNT(*) FROM agent_loop_runs r WHERE r.instance_id = ?1 AND r.status = 'running'
-			           AND (r.checkout_released_at IS NULL OR EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')))) AS n`,
-		)
-			.bind(instanceId)
-			.first<{ n: number }>();
-		if (busy?.n) return { woke: false, reason: "the coder still has queued or running work" };
+		if (!trigger) return { woke: false, reason: PO_TRIAGE_OFF };
+		if (!(await coderIsIdle(env, instanceId))) return { woke: false, reason: "the coder still has queued or running work" };
 		const recent = await env.DB.prepare("SELECT 1 AS x FROM po_triage_reports WHERE instance_id = ?1 AND trigger_source = 'queue_empty' AND created_at > datetime(?2 / 1000, 'unixepoch') LIMIT 1")
 			.bind(instanceId, now.getTime() - QUEUE_EMPTY_DEBOUNCE_MS)
 			.first<{ x: number }>();

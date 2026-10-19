@@ -7609,6 +7609,38 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: "Product-owner triage needs a coding instance." }
+  /v1/instances/{instanceId}/auto-pickup:
+    get:
+      summary: Brain-free auto-pickup settings and its last decisions
+      description: |
+        The instance's auto-pickup settings (#1233: `enabled`, `priorityLabels`, `excludeLabels`, `maxPerDay`,
+        `maxIterations`), the built-in exclude labels, which picker an empty queue wakes (`triage` when the coder brain's
+        product-owner triage is on, else `auto_pickup`), and its ten most recent decisions (started, none_eligible,
+        skipped_failed, capped).
+      operationId: getAutoPickup
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Turn brain-free auto-pickup on or off and set its rules
+      description: |
+        The one writer (MCP `set_auto_pickup`). Body `{ enabled?, priorityLabels?, excludeLabels?, maxPerDay?, maxIterations? }`,
+        validated (400 otherwise). Turning it on needs a coding instance (409 otherwise). When a coding run ends with nothing
+        queued, it starts the next eligible open issue with zero model calls; with the brain's triage on, triage picks instead.
+      operationId: putAutoPickup
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "Auto-pickup needs a coding instance." }
   /v1/instances/{instanceId}/coder-questions:
     get:
       summary: Coder questions and their audit trail

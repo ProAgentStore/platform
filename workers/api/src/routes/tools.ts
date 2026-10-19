@@ -40,6 +40,7 @@ import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js"
 import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection, setSupervisionEnabled } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
 import { answersPendingFor, countLoopRuns, getLoopRun, pageLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { autoPickupStatus } from "../lib/auto-pickup.js";
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
@@ -1373,8 +1374,8 @@ toolRoutes.get("/:id/loop", async (c) => {
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
 	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset")), startsAfter) : {};
-	const pending = await answersPendingFor(c.env, runs.map((r) => r.runId)); // #1231
-	return c.json({ runs: runs.map((run) => withHealth(run, now, pending)), total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
+	const [pending, autoPickup] = await Promise.all([answersPendingFor(c.env, runs.map((r) => r.runId)), autoPickupStatus(c.env, instanceId, session.uid)]); // #1231, #1233
+	return c.json({ runs: runs.map((run) => withHealth(run, now, pending)), autoPickup, total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
 });
 
 /**

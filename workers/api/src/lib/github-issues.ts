@@ -26,6 +26,8 @@ export interface IssueSummary {
 	title: string;
 	state: string;
 	labels: string[];
+	/** Who it is assigned to (logins). Read by auto-pickup (#1233), which leaves an issue a person holds. */
+	assignees?: string[];
 	comments: number;
 	updatedAt: string;
 	url: string;
@@ -137,6 +139,7 @@ function toSummary(raw: RawIssue): IssueSummary {
 		title: raw.title ?? "",
 		state: raw.state ?? "open",
 		labels: labelNames(raw.labels),
+		assignees: (raw.assignees ?? []).map((a) => a?.login).filter((l): l is string => typeof l === "string" && l.length > 0),
 		comments: typeof raw.comments === "number" ? raw.comments : 0,
 		updatedAt: raw.updated_at ?? "",
 		url: raw.html_url ?? "",

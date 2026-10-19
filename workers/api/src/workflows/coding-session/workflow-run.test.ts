@@ -1077,15 +1077,15 @@ describe("a run that ends with nothing queued wakes its coder's triage at once (
 		await setCoderBrain(env, "i1", "u1", { enabled: true, poEnabled: true });
 		seedLoopRun();
 		const { journal } = await run(params({ loopRunId: "run-1" }));
-		expect(journal.order.indexOf("po-triage-wake")).toBeGreaterThan(journal.order.indexOf("objective-queue-drain"));
-		expect(journal.done.get("po-triage-wake")).toBe(true);
+		expect(journal.order.indexOf("idle-coder-wake")).toBeGreaterThan(journal.order.indexOf("objective-queue-drain"));
+		expect(journal.done.get("idle-coder-wake")).toBe("triage");
 		expect(rows<{ trigger_source: string; status: string }>("SELECT trigger_source, status FROM po_triage_reports WHERE instance_id = 'i1'")).toEqual([{ trigger_source: "queue_empty", status: "completed" }]);
 	});
 
-	it("with triage off, the step runs and wakes nothing", async () => {
+	it("with triage and auto-pickup both off, the step runs and wakes nothing", async () => {
 		seedLoopRun();
 		const { journal } = await run(params({ loopRunId: "run-1" }));
-		expect(journal.done.get("po-triage-wake")).toBe(false);
+		expect(journal.done.get("idle-coder-wake")).toBe("auto-pickup: auto-pickup is off for this instance");
 		expect(rows("SELECT id FROM po_triage_reports")).toEqual([]);
 	});
 });

@@ -15,6 +15,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { deriveFleetStatus, FLEET_STATUSES, type FleetStatus, fleetOrder, type RepoIssues, tallyIssues } from "../lib/fleet-snapshot.js";
 import { listIssuesPage } from "../lib/github-issues.js";
 import { answersPendingFor } from "../lib/agent-loop-store.js";
+import { autoPickupFrom } from "../lib/auto-pickup.js";
 import { instanceHealthFor } from "../lib/instance-activity.js";
 import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { instanceListName, parseConfigBlob, patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
@@ -80,7 +81,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				.all<{ id: string; status: string | null; config: string | null; name: string | null; slug: string | null }>()
 		).results ?? [];
 		const members = roster
-			.map((r) => ({ id: r.id, instanceStatus: r.status, name: instanceListName(r.config, r.name), slug: r.slug, tags: tagsOf(parseConfigBlob(r.config)) }))
+			.map((r) => ({ id: r.id, instanceStatus: r.status, name: instanceListName(r.config, r.name), slug: r.slug, tags: tagsOf(parseConfigBlob(r.config)), autoPickup: autoPickupFrom(r.config).enabled }))
 			.filter((m) => matchesTags(m.tags, wanted));
 		const ids = new Set(members.map((m) => m.id));
 		// #1028: a paused instance's repos are not read — its backlog is not work anyone can take.
@@ -145,6 +146,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				name: m.name,
 				slug: m.slug,
 				tags: m.tags,
+				autoPickup: m.autoPickup, // #1233: brain-free auto-pickup is on
 				status: verdict.status,
 				reason: verdict.reason,
 				health,

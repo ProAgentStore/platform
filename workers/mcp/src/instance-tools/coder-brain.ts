@@ -42,6 +42,47 @@ export function registerCoderBrainTools(server: McpServer, ctx: InstanceToolsCtx
 		},
 	);
 	server.tool(
+		"set_auto_pickup",
+		"Turn a coder instance's brain-free auto-pickup on or off and set its rules (#1233). When a coding run ends and the coder has nothing queued, auto-pickup starts its next open GitHub issue — deterministically, with zero model calls: it leaves out issues labelled needs-human, blocked-on-serge, blocked, question or wontfix (plus `exclude_labels`), pull requests, issues assigned to a person, issues already queued or running, and an issue two auto-picked runs ended failed on (it comments on that issue once). It orders by `priority_labels` (default P0, P1, P2, P3; `P1: blocks users` counts as P1), then bug before enhancement, then the issue card's board order, then oldest. At most `max_per_day` auto-picked starts per 24 hours (default 10), each with `max_iterations` (default 30). When nothing qualifies the owner is told once. With the coder brain's product-owner triage on (set_coder_brain), triage picks instead and this stays idle. Needs a coding instance. Returns the settings, the built-in exclude labels and the last decisions; coding_loop_status shows `autoPickup` too. Call with dry_run first.",
+		{
+			token: z.string().optional(),
+			instance_id: z.string(),
+			enabled: z.boolean().optional(),
+			priority_labels: z.array(z.string()).max(20).optional().describe("Priority labels, highest first. Default [\"P0\",\"P1\",\"P2\",\"P3\"]."),
+			exclude_labels: z.array(z.string()).max(20).optional().describe("Labels that keep an issue out, on top of the built-in ones."),
+			max_per_day: z.coerce.number().int().min(1).max(50).optional(),
+			max_iterations: z.coerce.number().int().min(1).max(100).optional(),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, enabled, priority_labels, exclude_labels, max_per_day, max_iterations, dry_run: preview }) => {
+			const session = auth(token);
+			if (!session) return authRequired();
+			const patch = Object.fromEntries(Object.entries({ enabled, priorityLabels: priority_labels, excludeLabels: exclude_labels, maxPerDay: max_per_day, maxIterations: max_iterations }).filter(([, v]) => v !== undefined));
+			const input = { instance_id, ...patch };
+			const denied = await requirePermission(safetyFor(token), "write", "set_auto_pickup", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/auto-pickup`;
+			if (preview) return dryRun(safetyFor(token), "set_auto_pickup", "change the brain-free auto-pickup switch and rules", input, { endpoint, method: "PUT" });
+			const data = (await authedCall(endpoint, session, { method: "PUT", body: JSON.stringify(patch) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "set_auto_pickup", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+	server.tool(
+		"get_auto_pickup",
+		"Read a coder instance's brain-free auto-pickup (#1233): its settings (`enabled`, `priorityLabels`, `excludeLabels`, `maxPerDay`, `maxIterations`), the built-in exclude labels, which picker an empty queue wakes (`triage` when the coder brain's product-owner triage is on, else `auto_pickup`), and its ten most recent decisions — `started` (with the issue), `none_eligible`, `skipped_failed` (an issue two auto-picked runs ended failed on) or `capped` (the daily cap). Change it with set_auto_pickup. Read-only.",
+		{ token: z.string().optional(), instance_id: z.string() },
+		async ({ token, instance_id }) => {
+			const session = auth(token);
+			if (!session) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_auto_pickup", { instance_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/auto-pickup`, session, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+	server.tool(
 		"po_triage_reports",
 		"Read a coder instance's product-owner triage (#1027): the brain switch, its `run_po_triage` triggers, and the most recent wake reports. Each report lists every open issue it read with its category (`waiting_on_human`, `blocked`, `needs_detail`, `ready`), a one-line reason and the action taken (`queued`, `would_queue`, `already_queued`, `held`, `commented`, …), plus counts and the digest sent (null when nothing changed), and `source` — what woke it: `cron` (its hourly window), `manual` (run by hand) or `queue_empty` (#1232: a coding run ended with nothing queued, so the coder was triaged at once; at most once per 15 minutes). No issue bodies or comments are stored. Read-only.",
 		{ token: z.string().optional(), instance_id: z.string(), limit: z.coerce.number().int().min(1).max(50).optional() },

@@ -104,6 +104,8 @@ export const INSTANCE_CHILD_TABLES = [
 	"gmail_scout_scan_receipts",
 	// #1027 — one product-owner triage report per wake.
 	"po_triage_reports",
+	// #1233 — brain-free auto-pickup's decision log.
+	"auto_pickup_log",
 	// #1025 — one durable row per question a coding run parks on.
 	"coder_questions",
 	// #1057 — local_native runs: events before their run (FK).

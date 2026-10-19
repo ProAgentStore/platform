@@ -507,6 +507,8 @@ const TABLE: Record<string, Row> = {
 	po_triage_reports: ["coderBrain", "read", null, null, "instance_id,limit,token"],
 	set_coder_brain: ["coderBrain", "write", null, "envelope", "confidence_threshold,dry_run,enabled,escalation_timeout_minutes,human_timeout_minutes,instance_id,max_decisions_per_run,model,po_dry_run,po_enabled,token"],
 	coder_questions: ["coderBrain", "read", null, null, "instance_id,limit,state,token"],
+	get_auto_pickup: ["coderBrain", "read", null, null, "instance_id,token"],
+	set_auto_pickup: ["coderBrain", "write", null, "envelope", "dry_run,enabled,exclude_labels,instance_id,max_iterations,max_per_day,priority_labels,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	// #980: the in-place change the console's scan-schedule controls make — enable/disable, move
 	// the cadence, rewrite the config. `write`, no confirmation: disabling keeps the trigger.

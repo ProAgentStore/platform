@@ -316,6 +316,12 @@ const READBACK: Record<string, string | null> = {
 	"set_coder_brain.escalation_timeout_minutes": "coder_questions",
 	"set_coder_brain.max_decisions_per_run": "coder_questions",
 	"set_coder_brain.confidence_threshold": "coder_questions",
+	// #1233: get_auto_pickup returns every auto-pickup setting (coding_loop_status's `autoPickup` carries them too).
+	"set_auto_pickup.enabled": "get_auto_pickup",
+	"set_auto_pickup.priority_labels": "get_auto_pickup",
+	"set_auto_pickup.exclude_labels": "get_auto_pickup",
+	"set_auto_pickup.max_per_day": "get_auto_pickup",
+	"set_auto_pickup.max_iterations": "get_auto_pickup",
 	"set_instance_instructions.instructions": "get_instance_instructions",
 	// #992: the policy is read back WITH its resolution — `get_instance_notification_policy`
 	// returns the stored rules and the effective state per channel, which is the half a writer

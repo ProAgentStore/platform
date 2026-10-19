@@ -25,6 +25,7 @@ import BrowserVerificationSection from "./settings/BrowserVerificationSection";
 import BrowserScreenshotsSection from "./settings/BrowserScreenshotsSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
 import CoderBrainSection from "./settings/CoderBrainSection";
+import AutoPickupSection from "./settings/AutoPickupSection";
 
 interface Props {
 	instanceId: string;
@@ -269,6 +270,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				<h2 id="settings-brain-heading" className="text-lg font-semibold mb-2">Brain — advises and orchestrates</h2>
 				<BrainModelCard instanceId={instanceId} />
 				{isCoding && <CoderBrainSection instanceId={instanceId} />}
+				{isCoding && <AutoPickupSection instanceId={instanceId} />}
 			</section>
 			{isCoding && (
 				<section aria-labelledby="settings-coding-heading" data-testid="settings-coding-section" className="border-t border-line pt-4 mt-2">

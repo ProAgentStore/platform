@@ -4,6 +4,7 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { type CoderBrainSettings, PO_TRIAGE_ACTION, coderBrainPatchProblem, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
 import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-question-store.js";
 import { brainModelRefusal, writeInstanceBrain } from "../lib/instance-brain.js";
+import { BUILTIN_EXCLUDE_LABELS, autoPickupPatchProblem, readAutoPickup, setAutoPickup } from "../lib/auto-pickup.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -58,6 +59,39 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		if (patch.model !== undefined) await writeInstanceBrain(c.env, instanceId, patch.model);
 		const { triggers } = await setCoderBrain(c.env, instanceId, uid, patch, { poDryRun: b.poDryRun === true });
 		return c.json({ ...(await view(c.env, instanceId, uid)), changed: triggers });
+	});
+
+	/**
+	 * Brain-free auto-pickup (#1233): read the switch and what it last decided; change it (`set_auto_pickup`).
+	 * Independent of the brain — with the brain's triage on, triage picks and this stays idle.
+	 */
+	const pickupView = async (env: Env, instanceId: string, uid: string) => {
+		const { results } = await env.DB.prepare("SELECT repo, issue_number, outcome, detail, created_at FROM auto_pickup_log WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, rowid DESC LIMIT 10")
+			.bind(instanceId, uid)
+			.all<{ repo: string | null; issue_number: number | null; outcome: string; detail: string | null; created_at: number }>();
+		const brain = await readCoderBrain(env, instanceId, uid);
+		return {
+			settings: await readAutoPickup(env, instanceId, uid),
+			builtinExcludeLabels: BUILTIN_EXCLUDE_LABELS,
+			activeWhenQueueEmpties: brain?.poEnabled ? "triage" : "auto_pickup",
+			recent: (results ?? []).map((r) => ({ repo: r.repo, issue: r.issue_number, outcome: r.outcome, detail: r.detail, at: r.created_at })),
+		};
+	};
+	router.get("/:instanceId/auto-pickup", async (c) => {
+		const { instanceId, uid } = await owned(c);
+		return c.json(await pickupView(c.env, instanceId, uid));
+	});
+	router.put("/:instanceId/auto-pickup", async (c) => {
+		const { instanceId, uid } = await owned(c);
+		const patch = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const problem = autoPickupPatchProblem(patch);
+		if (problem) throw new HttpError(400, problem);
+		if (patch.enabled === true) {
+			const caps = await capabilitiesForInstance(c.env, instanceId, uid).catch(() => null);
+			if (caps?.workflow !== "CODING_SESSION") throw new HttpError(409, "Auto-pickup starts coding runs, so it needs a coding instance (a Repo Coder).");
+		}
+		await setAutoPickup(c.env, instanceId, uid, patch);
+		return c.json(await pickupView(c.env, instanceId, uid));
 	});
 
 	/** #1025: the questions this coder parked on, each with its full state history (the audit trail). */

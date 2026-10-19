@@ -1209,4 +1209,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.154": "sha256:98cb272545371237c3ac7accb2994078782d5127256088764410be94507ef285",
 	// #1208/#1209: actions_runner_setup (install/remove the GitHub Actions runner service on an agent's pinned machine) and actions_runner_status.
 	"0.1.155": "sha256:1b9b3d9de5d29aeb9cea48ea26a52c255e919a57cc1fa7d27df3c5248b94f220",
+	// #1233: set_auto_pickup (brain-free auto-pickup: on/off, priority + exclude labels, daily cap, iterations) and get_auto_pickup (read).
+	"0.1.156": "sha256:bdca0061b64725cf263adcdaa990708b1a21d6535be9ba5bb1e349ab20e87b5e",
 };
