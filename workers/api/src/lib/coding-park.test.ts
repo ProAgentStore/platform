@@ -18,7 +18,8 @@ import { sweepStaleRuns } from "./run-sweeper.js";
 import { repoFreeForRun, repoOwners } from "./coding-ownership.js";
 import { describeBusyHolder } from "./loop-busy.js";
 import { resumeSessionsForNode } from "./coding-store.js";
-import { releasedRunAwaitingCheckout } from "./coding-park.js";
+import { CHECKOUT_WAKE_GRACE_MS, putBackWork, releasedRunAwaitingCheckout, takeBackCheckout } from "./coding-park.js";
+import { listBlockedOnAnswer, toLoopRunView, type LoopRunRow } from "./agent-loop-store.js";
 import { tryDequeueAndStart } from "./objective-queue-start.js";
 import { enqueueObjective } from "./objective-queue.js";
 import type { Env } from "../types.js";
@@ -192,5 +193,87 @@ describe("a run that released its checkout is not an owner of its repo (#1077)",
 		expect(await runDueParkWakes(env)).toBe(0);
 		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-2'; UPDATE coding_sessions SET status = 'ended' WHERE id = 's2'");
 		expect(await runDueParkWakes(env)).toBe(1);
+	});
+
+	// ── #1228: a parked decision never holds the queue ──────────────────────────────────────────────
+	const queueStatus = () => (d1.sqlite.prepare("SELECT status FROM instance_objective_queue").get() as { status: string }).status;
+	const wakeAt = () => (d1.sqlite.prepare("SELECT checkout_wake_at FROM agent_loop_runs WHERE run_id = 'run-1'").get() as { checkout_wake_at: number | null }).checkout_wake_at;
+	/** Run 2 holding the repo: a working run on its own active session. */
+	const holder = () => {
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type) VALUES ('s2', 'i1', 'r1', 'u1', 'active', 'claude')");
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-2', 'u1', 'i1', 'y', 'running', 10, ${Date.now()}, 's2')`);
+	};
+	const runScope = { runId: "run-1", instanceId: "i1", userId: "u1", sessionId: "s1", repoId: "r1" };
+
+	it("the queue drains past a run parked on an unanswered question (#1228)", async () => {
+		released();
+		await enqueueObjective(env, { instanceId: "i1", userId: "u1", repoId: "r1", objective: "queued after it" });
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ drained: true });
+		expect(queueStatus()).not.toBe("pending");
+		expect(sent).toEqual([]); // the parked run was not woken: it has nothing to resume with yet
+	});
+
+	it("an answered run is not preempting: it waits while another run holds the repo, and takes it back once that run ends (#1228)", async () => {
+		released();
+		holder();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
+		expect(await takeBackCheckout(env, runScope)).toEqual({ busy: "another run is working on the repository" });
+		expect((d1.sqlite.prepare("SELECT status FROM coding_sessions WHERE id = 's1'").get() as { status: string }).status).toBe("suspended");
+		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-2'; UPDATE coding_sessions SET status = 'ended' WHERE id = 's2'");
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toEqual({ drained: false }); // the holder's end wakes it first
+		expect(sent).toEqual([{ instance: "wf-1", type: answerEventType("q1"), why: "checkout" }]);
+		expect(await takeBackCheckout(env, runScope)).toEqual({ ok: true, snapshot: "a".repeat(40) });
+	});
+
+	it("a run woken for its checkout that never takes it back cannot starve the queue (#1228)", async () => {
+		// FGS Platform Coder, 2026-10-19: two answered runs never resumed, every drain woke the older one and
+		// started nothing, and #358 sat pending 12h behind `activeRun: null`.
+		released();
+		await enqueueObjective(env, { instanceId: "i1", userId: "u1", repoId: "r1", objective: "queued after it" });
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toEqual({ drained: false });
+		const first = wakeAt();
+		expect(first).toBeGreaterThan(0);
+		// Inside the grace it is still coming: the next drain waits for it again, without restarting its clock.
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toEqual({ drained: false });
+		expect(wakeAt()).toBe(first);
+		expect(queueStatus()).toBe("pending");
+		// Past the grace, the drain passes over it and starts the next objective.
+		d1.exec(`UPDATE agent_loop_runs SET checkout_wake_at = ${Date.now() - CHECKOUT_WAKE_GRACE_MS - 1} WHERE run_id = 'run-1'`);
+		expect(await releasedRunAwaitingCheckout(env, "i1", "r1")).toBeNull();
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ drained: true });
+		expect(queueStatus()).not.toBe("pending");
+		// It keeps its answer and its set-aside work, for the next free cycle.
+		expect(await storedAnswer(env, "q1")).toMatchObject({ value: "yes", by: "human" });
+		expect(d1.sqlite.prepare("SELECT checkout_released_at IS NOT NULL AS released, checkout_snapshot FROM agent_loop_runs WHERE run_id = 'run-1'").get()).toEqual({ released: 1, checkout_snapshot: "a".repeat(40) });
+	});
+
+	it("one holder at a time: a passed-over run cannot take the checkout from the run that started in its place (#1228)", async () => {
+		released();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
+		d1.exec(`UPDATE agent_loop_runs SET checkout_wake_at = ${Date.now() - CHECKOUT_WAKE_GRACE_MS - 1} WHERE run_id = 'run-1'`);
+		holder();
+		expect((await repoOwners(env, scope)).map((o) => o.sessionId)).toEqual(["s2"]);
+		expect(await takeBackCheckout(env, runScope)).toMatchObject({ busy: expect.any(String) });
+		expect((await repoOwners(env, scope)).map((o) => o.sessionId)).toEqual(["s2"]);
+		// Once the holder ends it takes the checkout back, and the wake is cleared with the release.
+		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-2'; UPDATE coding_sessions SET status = 'ended' WHERE id = 's2'");
+		expect(await takeBackCheckout(env, runScope)).toMatchObject({ ok: true });
+		await putBackWork(env, {} as never, runScope, null);
+		expect(wakeAt()).toBeNull();
+		expect((await repoOwners(env, scope)).map((o) => o.sessionId)).toEqual(["s1"]);
+	});
+
+	it("status views list a released park apart from working runs (#1228)", async () => {
+		released();
+		holder();
+		const row = (id: string) => d1.sqlite.prepare("SELECT * FROM agent_loop_runs WHERE run_id = ?").get(id) as unknown as LoopRunRow;
+		expect(toLoopRunView(row("run-1")).blockedOnAnswer).toBe(true);
+		expect(toLoopRunView(row("run-2")).blockedOnAnswer).toBe(false);
+		d1.exec(`UPDATE agent_loop_runs SET waiting_ask = '${JSON.stringify({ question: "Keep it?", options: [], why: "", field: "Keep it?", taskId: "csess-s1" })}' WHERE run_id = 'run-1'`);
+		expect(await listBlockedOnAnswer(env, "i1", "u1")).toEqual([{ runId: "run-1", objective: "x", question: "Keep it?", taskId: "csess-s1", answered: false, parkedSince: expect.any(Number) }]);
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
+		expect(await listBlockedOnAnswer(env, "i1", "u1", "r1")).toEqual([expect.objectContaining({ runId: "run-1", answered: true })]);
+		expect(await listBlockedOnAnswer(env, "i1", "u1", "other")).toEqual([]);
 	});
 });

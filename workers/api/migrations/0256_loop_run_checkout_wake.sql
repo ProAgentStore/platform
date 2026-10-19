@@ -1,0 +1,12 @@
+-- #1228: a parked run woken to take its checkout back must not hold the queue forever.
+--
+-- A run parked on a question releases its checkout (0246, #1077). Once it has its answer, a drain
+-- wakes it instead of starting the next queued objective, because it was there first. When the woken
+-- run never takes the checkout back (its Workflow is gone, or its resume keeps failing), every drain
+-- woke it again and started nothing. FGS Platform Coder's queue sat 12h behind two such runs with
+-- `activeRun: null`.
+--   checkout_wake_at → when a drain FIRST woke this run for the checkout (ms). Past a short grace, the
+--                      drain passes over it and starts the next queued objective. The run keeps its
+--                      answer and its set-aside work, and takes the checkout on a later free cycle.
+--                      Cleared when the run takes its checkout back, or releases it again.
+ALTER TABLE agent_loop_runs ADD COLUMN checkout_wake_at INTEGER;

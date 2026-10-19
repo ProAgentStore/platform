@@ -146,7 +146,7 @@ export async function releaseCheckout(env: Env, conn: RunnerConn, scope: ParkSco
 		return { released: false, line: `The checkout stays held while it waits: its work could not be set aside on the machine (${e instanceof Error ? e.message : String(e)}; set-aside needs CLI 0.4.140 or later).` };
 	}
 	if (!saved?.clean) return { released: false, line: "The checkout stays held while it waits: it was not clean after setting the work aside." };
-	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_released_at = ?2, checkout_snapshot = ?3 WHERE run_id = ?1 AND status = 'running'").bind(scope.runId, now, saved.snapshot).run();
+	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_released_at = ?2, checkout_snapshot = ?3, checkout_wake_at = NULL WHERE run_id = ?1 AND status = 'running'").bind(scope.runId, now, saved.snapshot).run();
 	await env.DB.prepare("UPDATE coding_sessions SET status = 'suspended', driver_id = NULL, driver_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'")
 		.bind(scope.sessionId, scope.instanceId, scope.userId)
 		.run();
@@ -198,7 +198,7 @@ export async function putBackWork(env: Env, conn: RunnerConn, scope: ParkScope, 
 			return { blocked: `${restored.refused ?? "its saved work could not be put back"}.${files} Nothing was changed; the work is still set aside as ${snapshot} (\`refs/pags/parked/${scope.runId}\`, \`git stash apply ${snapshot}\`).` };
 		}
 	}
-	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_released_at = NULL, checkout_snapshot = NULL WHERE run_id = ?1").bind(scope.runId).run();
+	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_released_at = NULL, checkout_snapshot = NULL, checkout_wake_at = NULL WHERE run_id = ?1").bind(scope.runId).run();
 	return { ok: true };
 }
 
@@ -233,17 +233,33 @@ export async function resumeFromPark(
 }
 
 /**
+ * How long a run a drain woke for its checkout has to take it back before the drain stops waiting for
+ * it (#1228). A resume that works takes seconds; this is the margin for a slow machine.
+ */
+export const CHECKOUT_WAKE_GRACE_MS = 5 * 60_000;
+
+/**
  * A run on this repo that released its checkout and now has its answer, waiting to take it back. A
  * drain starts it FIRST (by waking it) instead of the next queued objective: it was there before them.
+ *
+ * Only while it is still coming (#1228). A run a drain woke more than {@link CHECKOUT_WAKE_GRACE_MS} ago
+ * that has not taken the checkout back is passed over, or one dead Workflow would hold the queue
+ * forever. It keeps its answer and its set-aside work. The backstop wakes it once the repo is free.
  */
-export async function releasedRunAwaitingCheckout(env: Pick<Env, "DB">, instanceId: string, repoId: string): Promise<string | null> {
+export async function releasedRunAwaitingCheckout(env: Pick<Env, "DB">, instanceId: string, repoId: string, now = Date.now()): Promise<string | null> {
 	const row = await env.DB.prepare(
 		`SELECT r.run_id FROM agent_loop_runs r JOIN coding_sessions s ON s.id = r.session_id JOIN coder_questions q ON q.run_id = r.run_id
 		  WHERE r.instance_id = ?1 AND s.repo_id = ?2 AND r.status = 'running' AND r.checkout_released_at IS NOT NULL
 		    AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')
+		    AND (r.checkout_wake_at IS NULL OR r.checkout_wake_at > ?3)
 		  ORDER BY r.parked_since ASC LIMIT 1`,
 	)
-		.bind(instanceId, repoId)
+		.bind(instanceId, repoId, now - CHECKOUT_WAKE_GRACE_MS)
 		.first<{ run_id: string }>();
 	return row?.run_id ?? null;
+}
+
+/** A drain woke this run for its checkout (#1228). The FIRST wake starts its grace; later ones do not extend it. */
+export async function markWokenForCheckout(env: Pick<Env, "DB">, runId: string, now = Date.now()): Promise<void> {
+	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_wake_at = COALESCE(checkout_wake_at, ?2) WHERE run_id = ?1").bind(runId, now).run();
 }

@@ -29,7 +29,7 @@ import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { dequeueNext, finishQueueEntry, requeueEntry } from "./objective-queue.js";
 import { pausedStartRefusal } from "./instance-pause.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
-import { releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
+import { markWokenForCheckout, releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
 import type { ObjectiveQueueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
 
@@ -64,7 +64,10 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// A run that parked on a question, released this checkout and now has its answer goes FIRST
 		// (#1077): it was there before anything queued. Woken, it takes the checkout back; its own end drains next.
 		const parked = repoId ? await releasedRunAwaitingCheckout(env, instanceId, repoId).catch(() => null) : null;
-		if (parked && (await wakeParkedRun(env, parked, "checkout"))) return { drained: false };
+		if (parked && (await wakeParkedRun(env, parked, "checkout"))) {
+			await markWokenForCheckout(env, parked).catch(() => undefined); // #1228: its grace starts now, so it cannot hold the queue forever
+			return { drained: false };
+		}
 		const entry = await dequeueNext(env, instanceId, repoId);
 		if (!entry) return { drained: false };
 		entryId = entry.id;

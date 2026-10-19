@@ -65,7 +65,7 @@ describe("GET /:id/loop/queue", () => {
 		// `handoff` is null without a repo_id: the state is per-REPO, and an instance-wide read has no
 		// one checkout to report on.
 		// Each entry carries its card key and whether it starts next (#1097: board order is run order).
-		expect(await res.json()).toEqual({ scope: "pending", entries: [{ id: "objq-1", jobKey: "objective:objq-1", next: true }], activeRun: null, inFlightStarts: [], handoff: null });
+		expect(await res.json()).toEqual({ scope: "pending", entries: [{ id: "objq-1", jobKey: "objective:objq-1", next: true }], activeRun: null, inFlightStarts: [], blockedOnAnswer: [], handoff: null });
 	});
 
 	it("reports the per-repo handover state, so a stuck queue says WHY (#984)", async () => {

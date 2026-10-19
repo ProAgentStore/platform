@@ -54,6 +54,8 @@ export interface LoopRunRow {
 	session_id: string | null;
 	queue_entry_id?: string | null;
 	request_id?: string | null;
+	/** When a run parked on a question let go of its checkout (0246, #1077); null while it holds it. */
+	checkout_released_at?: number | null;
 }
 
 /**
@@ -209,6 +211,12 @@ export interface LoopRunView {
 	/** The queue entry a drain started this run from, and the start request behind it (#1017). */
 	queueEntryId: string | null;
 	requestId: string | null;
+	/**
+	 * Parked on a question with its checkout released (#1228): it holds no repo slot and is not
+	 * working, so the queue runs past it. It resumes once answered, on the next free cycle. Status views
+	 * list it apart from working runs, so an instance with a question pending is never just "waiting".
+	 */
+	blockedOnAnswer: boolean;
 }
 
 export function toLoopRunView(row: LoopRunRow): LoopRunView {
@@ -237,6 +245,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		// Where it came from (#1017): the queue entry a drain started it from, and the start request.
 		queueEntryId: row.queue_entry_id ?? null,
 		requestId: row.request_id ?? null,
+		blockedOnAnswer: row.status === "running" && row.waiting_reason === "decision" && row.checkout_released_at != null,
 	};
 }
 
@@ -697,4 +706,31 @@ export async function finishLoopRun(
 		await recordLifecycle(env, { userId: run.user_id, instanceId: run.instance_id, runId, sessionId: run.session_id, queueEntryId: run.queue_entry_id, requestId: run.request_id, event: "run_finished", reason: stopReason, actor: { kind: "platform" }, now: finishedAt });
 	}
 	return "applied";
+}
+
+/**
+ * The runs on this instance parked on a question with their checkout released (#1228): not working, not
+ * holding the queue. `answered` says whether the owner has replied and the run is due to resume on the
+ * next free cycle; otherwise it waits on an answer. Status views list these apart from the working run.
+ */
+export async function listBlockedOnAnswer(
+	env: Pick<Env, "DB">,
+	instanceId: string,
+	userId: string,
+	repoId?: string,
+): Promise<Array<{ runId: string; objective: string; question: string | null; taskId: string | null; answered: boolean; parkedSince: number | null }>> {
+	const { results } = await env.DB.prepare(
+		`SELECT r.run_id, r.objective, r.waiting_ask, r.parked_since,
+		        EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')) AS answered
+		   FROM agent_loop_runs r LEFT JOIN coding_sessions s ON s.id = r.session_id
+		  WHERE r.instance_id = ?1 AND r.user_id = ?2 AND r.status = 'running' AND r.waiting_reason = 'decision' AND r.checkout_released_at IS NOT NULL
+		    AND (?3 IS NULL OR s.repo_id = ?3)
+		  ORDER BY r.parked_since ASC`,
+	)
+		.bind(instanceId, userId, repoId ?? null)
+		.all<{ run_id: string; objective: string; waiting_ask: string | null; parked_since: number | null; answered: number }>();
+	return (results ?? []).map((r) => {
+		const ask = parseWaitingAsk(r.waiting_ask);
+		return { runId: r.run_id, objective: r.objective, question: ask?.question ?? null, taskId: ask?.taskId ?? null, answered: r.answered === 1, parkedSince: r.parked_since };
+	});
 }

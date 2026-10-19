@@ -35,6 +35,7 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 		// #1017: a run started directly — no originating queue entry or start request.
 		queueEntryId: null,
 		requestId: null,
+		blockedOnAnswer: false,
 		...over,
 	};
 }
