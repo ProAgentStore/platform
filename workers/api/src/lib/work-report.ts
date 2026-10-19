@@ -382,11 +382,16 @@ const DEADLINE_CLAUSE: Record<ParkDeadline, (left: string) => string> = {
  * A deadline already in the past renders as no clause at all: "gives up in -3m" is not a sentence,
  * and the next tick either clears the park or closes the run.
  */
-export function waitClause(run: RunHealthInput & { waitingUntil?: number | null; waitingAsk?: WaitingAsk | null }, now: number): string | null {
+export function waitClause(run: RunHealthInput & { waitingUntil?: number | null; waitingAsk?: WaitingAsk | null; answerPendingSince?: number | null }, now: number): string | null {
 	// A FINISHED run makes no liveness claim in either direction (#459) — and `finishLoopRun` does
 	// not clear the park columns, so a run that ended while parked still carries them. Reading them
 	// on a closed row would announce a wait that is over.
 	if (run.status !== "running" || !run.waitingReason) return null;
+	// #1231: the answer is IN. "Waiting for your answer" would send the owner to answer a third time.
+	if (run.waitingReason === "decision" && run.answerPendingSince != null) {
+		const q = run.waitingAsk ? ` to "${run.waitingAsk.question}"` : "";
+		return `ANSWER PENDING, not waiting on you — your answer${q} was recorded ${ago(Math.max(0, now - run.answerPendingSince))} and the run has not applied it yet. It resumes with it as soon as its repository is free; a run whose workflow has stopped is closed within a minute and the answer carries to the run that continues it. Do not answer again`;
+	}
 	const park = PARKS[run.waitingReason as RunWaitReason] as Park | undefined;
 	// A park whose reason this build does not know is still a park (`coding-run-state.ts` takes the
 	// same line). What it does NOT get is a deadline clause: with no kind, the instant could only be

@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { requestCancel } from "./agent-loop-store.js";
-import { answerEventType, DECISION_PARK_MS, PARK_WAKE_BACKSTOP_MS, runDueParkWakes, wakeParkedRun } from "./coding-park.js";
+import { answerEventType, DECISION_PARK_MS, PARK_WAKE_BACKSTOP_MS, runDueParkWakes, wakeParkedRun, wakeParkedRunDetailed } from "./coding-park.js";
 import { recordAnswer } from "./coder-question-store.js";
 import { defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
 import { getCoderQuestion, storedAnswer } from "./coder-question-store.js";
@@ -64,6 +64,46 @@ describe("waking a parked run", () => {
 		d1.exec("UPDATE agent_loop_runs SET waiting_reason = 'decision'");
 		const broken = { DB: d1.DB, CODING_SESSION: { get: async () => { throw new Error("no such instance"); } } } as unknown as Env;
 		expect(await wakeParkedRun(broken, "run-1", "answer")).toBe(false);
+		expect(sent).toEqual([]);
+	});
+
+	it("reads the Workflow's status first: a live one is woken, a dead one is `gone` and is sent nothing (#1231)", async () => {
+		parked();
+		const withStatus = (status: string | Error) =>
+			({
+				DB: d1.DB,
+				CODING_SESSION: {
+					get: async (instance: string) => ({
+						status: async () => {
+							if (status instanceof Error) throw status;
+							return { status };
+						},
+						sendEvent: async (e: { type: string; payload: { why?: unknown } }) => void sent.push({ instance, type: e.type, why: e.payload?.why }),
+					}),
+				},
+			}) as unknown as Env;
+		for (const live of ["waiting", "running", "queued", "paused"]) expect(await wakeParkedRunDetailed(withStatus(live), "run-1", "answer")).toBe("woken");
+		expect(sent).toHaveLength(4);
+		sent = [];
+		for (const dead of ["errored", "terminated", "complete", "unknown"]) expect(await wakeParkedRunDetailed(withStatus(dead), "run-1", "answer")).toBe("gone");
+		expect(sent).toEqual([]);
+		// A status that cannot be READ is not taken as death: the event is still sent.
+		expect(await wakeParkedRunDetailed(withStatus(new Error("binding hiccup")), "run-1", "answer")).toBe("woken");
+		// An instance the binding no longer has is gone; any other failure is retryable.
+		const missing = (message: string) => ({ DB: d1.DB, CODING_SESSION: { get: async () => { throw new Error(message); } } }) as unknown as Env;
+		expect(await wakeParkedRunDetailed(missing("instance.not_found: wf-1"), "run-1", "answer")).toBe("gone");
+		expect(await wakeParkedRunDetailed(missing("network"), "run-1", "answer")).toBe("failed");
+		d1.exec("UPDATE agent_loop_runs SET waiting_reason = NULL");
+		expect(await wakeParkedRunDetailed(withStatus("waiting"), "run-1", "answer")).toBe("not_parked");
+	});
+
+	it("the backstop hands a run whose Workflow is gone to recovery, instead of re-sending into nothing every minute (#1231)", async () => {
+		parked();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "mcp", now: Date.now() - 2 * PARK_WAKE_BACKSTOP_MS });
+		const dead = { DB: d1.DB, CODING_SESSION: { get: async () => ({ status: async () => ({ status: "errored" }), sendEvent: async () => void sent.push({ instance: "x", type: "x", why: "x" }) }) } } as unknown as Env;
+		const gone: string[] = [];
+		expect(await runDueParkWakes(dead, Date.now(), async (runId) => void gone.push(runId))).toBe(0);
+		expect(gone).toEqual(["run-1"]);
 		expect(sent).toEqual([]);
 	});
 

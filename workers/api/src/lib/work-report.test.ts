@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_PARK_MS, PARK_LIMIT_MS, RUN_HEALTH_LEGEND, RUN_HEALTH_STATES, STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth } from "./work-report.js";
+import { MAX_PARK_MS, PARK_LIMIT_MS, RUN_HEALTH_LEGEND, RUN_HEALTH_STATES, STALLED_AFTER_MS, describeLoopRun, describeWorkCheck, engineClause, isStalled, recentWorkPrompt, runHealth, waitClause } from "./work-report.js";
 import { statusFor, type LoopRunStatus, type LoopStopReason } from "./agent-loop.js";
 import type { LoopRunView } from "./agent-loop-store.js";
 import type { TerminalView } from "./terminal-label.js";
@@ -688,5 +688,25 @@ describe("a park is bounded by what its REASON is worth (#790)", () => {
 		expect(runHealth(unknown, NOW)).toBe("stalled");
 		const young = parked({ waitingReason: "something_new" as never, parkedSince: NOW - 1000 });
 		expect(runHealth(young, NOW)).toBe("waiting");
+	});
+});
+
+describe("waitClause — an answer recorded and not yet applied (#1231)", () => {
+	const now = 10_000_000;
+	const ask = { question: "Close #350 now?", options: [], why: "", field: "Close #350 now?", taskId: "csess-s1" };
+	const parked = { status: "running", waitingReason: "decision", waitingAsk: ask, waitingUntil: now + 86_400_000, parkedSince: now - 3_600_000, startedAt: 0 };
+
+	it("says the answer is in, and not to answer again, instead of 'waiting for YOUR ANSWER'", () => {
+		expect(waitClause(parked, now)).toContain("waiting for YOUR ANSWER");
+		const note = waitClause({ ...parked, answerPendingSince: now - 600_000 }, now) ?? "";
+		expect(note).toMatch(/^ANSWER PENDING, not waiting on you/);
+		expect(note).toContain('"Close #350 now?"');
+		expect(note).toContain("Do not answer again");
+		expect(note).not.toContain("YOUR ANSWER");
+	});
+
+	it("only for a decision park on a running run", () => {
+		expect(waitClause({ ...parked, waitingReason: "engine_limit", answerPendingSince: now }, now)).not.toMatch(/ANSWER PENDING/);
+		expect(waitClause({ ...parked, status: "completed", answerPendingSince: now }, now)).toBeNull();
 	});
 });

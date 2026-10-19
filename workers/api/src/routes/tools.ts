@@ -39,7 +39,7 @@ import { listConnections, createConnection, deleteConnection, setConnectionEnabl
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection, setSupervisionEnabled } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
-import { countLoopRuns, getLoopRun, pageLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { answersPendingFor, countLoopRuns, getLoopRun, pageLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
@@ -1348,10 +1348,11 @@ toolRoutes.put("/:id/loop-presets", async (c) => {
  * The raw columns stay alongside it. The verdict is the answer; the fields are the evidence, and a
  * caller that wants to check the arithmetic must be able to.
  */
-function withHealth<T extends Parameters<typeof runHealth>[0]>(run: T, now: number) {
-	// `waitClause` returns null unless the run is running AND parked, so `waitNote` is present
-	// exactly when there is something to say — never a "nothing is wrong" filler line.
-	return { ...run, health: runHealth(run, now), waitNote: waitClause(run, now) };
+function withHealth<T extends Parameters<typeof runHealth>[0] & { runId: string }>(run: T, now: number, pending: Map<string, number>) {
+	// `waitClause` returns null unless the run is running AND parked, so `waitNote` is present exactly when there
+	// is something to say. #1231: an answer recorded and not yet applied is `answerPending`, said in the note too.
+	const answerPendingSince = run.status === "running" && run.waitingReason === "decision" ? (pending.get(run.runId) ?? null) : null;
+	return { ...run, health: runHealth(run, now), answerPending: answerPendingSince != null, waitNote: waitClause({ ...run, answerPendingSince }, now) };
 }
 
 toolRoutes.get("/:id/loop", async (c) => {
@@ -1372,7 +1373,8 @@ toolRoutes.get("/:id/loop", async (c) => {
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
 	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset")), startsAfter) : {};
-	return c.json({ runs: runs.map((run) => withHealth(run, now)), total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
+	const pending = await answersPendingFor(c.env, runs.map((r) => r.runId)); // #1231
+	return c.json({ runs: runs.map((run) => withHealth(run, now, pending)), total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
 });
 
 /**
@@ -1396,7 +1398,7 @@ toolRoutes.get("/:id/loop/:runId", async (c) => {
 	const run = await getLoopRun(c.env, session.uid, c.req.param("runId"));
 	if (!run) throw new HttpError(404, "loop run not found");
 	const repoCi = await instanceRepoCi(c.env, c.req.param("id"), session.uid);
-	return c.json({ ...withHealth(run, Date.now()), ...(repoCi ? { repoCi } : {}) });
+	return c.json({ ...withHealth(run, Date.now(), await answersPendingFor(c.env, [run.runId])), ...(repoCi ? { repoCi } : {}) });
 });
 
 toolRoutes.post("/:id/loop/:runId/cancel", async (c) => {

@@ -25,6 +25,12 @@ describe("tallyIssues", () => {
 describe("deriveFleetStatus (#961)", () => {
 	const repo = (actionable: number, needsHuman = 0, readable = true) => ({ repos: ["a/r"], readable, unreadRepos: readable ? [] : ["a/r"], open: actionable + needsHuman, openMore: false, actionable, needsHuman, next: [] });
 
+	it("a run whose answer is in is not reported as waiting on you (#1231)", () => {
+		const ask = { question: "Close #350 now?", taskId: "csess-s1" };
+		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "decision", runQuestion: ask }))).toMatchObject({ status: "decision_blocked" });
+		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "decision", runQuestion: ask, answerPending: true }))).toMatchObject({ status: "working", reason: expect.stringContaining("Your answer is in") });
+	});
+
 	it("an answerable ask beats everything — even a working run", () => {
 		expect(deriveFleetStatus(facts({ decisions: 2, health: "working" }))).toMatchObject({ status: "decision_blocked", reason: expect.stringContaining("answer_instance_mcp_input_request") });
 	});

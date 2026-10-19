@@ -52,36 +52,66 @@ export async function recordParkedWorkflow(env: Pick<Env, "DB">, runId: string, 
 }
 
 /**
- * Wake a run parked on a question so it re-reads its answer (or its cancel) from D1. False when the
- * run is not parked on a question, or the event could not be sent — never throws: every caller has
- * already written the durable fact, and the minute backstop covers a send that failed.
+ * Workflow instance statuses that can still take an event and act on it (#1231). Anything else —
+ * `errored`, `terminated`, `complete`, `unknown` — is a run whose park nothing will ever wake.
  */
-export async function wakeParkedRun(env: Pick<Env, "DB" | "CODING_SESSION">, runId: string, why: "answer" | "cancel" | "backstop" | "checkout"): Promise<boolean> {
+const LIVE_WORKFLOW_STATUSES = new Set(["queued", "running", "paused", "waiting", "waitingForPause"]);
+
+/**
+ * What waking a parked run did (#1231).
+ *   woken      → its live Workflow accepted the event; it re-reads its answer from D1
+ *   not_parked → it is not parked on a question with a Workflow to wake
+ *   gone       → its Workflow is no longer running, so no event will ever resume it
+ *   failed     → the event could not be sent just now (the minute backstop retries)
+ */
+export type WakeResult = "woken" | "not_parked" | "gone" | "failed";
+
+/**
+ * Wake a run parked on a question so it re-reads its answer (or its cancel) from D1. Never throws:
+ * every caller has already written the durable fact.
+ *
+ * The Workflow's own status is read first (#1231). A park outlives deploys and evictions, and a
+ * Workflow that errored while parked used to accept nothing and report nothing: the answer was
+ * "delivered" to a run that would never read it. A status that cannot be read is not taken as death.
+ */
+export async function wakeParkedRunDetailed(env: Pick<Env, "DB" | "CODING_SESSION">, runId: string, why: "answer" | "cancel" | "backstop" | "checkout"): Promise<WakeResult> {
+	let row: { wf: string; qid: string } | null;
 	try {
-		const row = await env.DB.prepare(
+		row = await env.DB.prepare(
 			`SELECT r.workflow_instance_id AS wf, q.id AS qid FROM agent_loop_runs r JOIN coder_questions q ON q.run_id = r.run_id
 			  WHERE r.run_id = ?1 AND r.status = 'running' AND r.waiting_reason = 'decision' AND r.workflow_instance_id IS NOT NULL
 			  ORDER BY q.asked_at DESC, q.rowid DESC LIMIT 1`,
 		)
 			.bind(runId)
 			.first<{ wf: string; qid: string }>();
-		if (!row) return false;
-		const instance = await env.CODING_SESSION.get(row.wf);
-		await instance.sendEvent({ type: answerEventType(row.qid), payload: { why } });
-		return true;
 	} catch {
-		return false;
+		return "failed";
 	}
+	if (!row) return "not_parked";
+	try {
+		const instance = await env.CODING_SESSION.get(row.wf);
+		const status = typeof instance.status === "function" ? await instance.status().catch(() => null) : null;
+		if (status && !LIVE_WORKFLOW_STATUSES.has(status.status)) return "gone";
+		await instance.sendEvent({ type: answerEventType(row.qid), payload: { why } });
+		return "woken";
+	} catch (e) {
+		return /not[ _.-]?found/i.test(e instanceof Error ? e.message : String(e)) ? "gone" : "failed";
+	}
+}
+
+/** {@link wakeParkedRunDetailed}, for the callers that only need to know whether it woke. */
+export async function wakeParkedRun(env: Pick<Env, "DB" | "CODING_SESSION">, runId: string, why: "answer" | "cancel" | "backstop" | "checkout"): Promise<boolean> {
+	return (await wakeParkedRunDetailed(env, runId, why)) === "woken";
 }
 
 /**
  * The backstop (one more pass on the every-minute tick): re-send the event for every parked run that
  * has something to act on and has not acted — an answer no run has applied yet, an unresolved
  * instruction, or a cancel — older than {@link PARK_WAKE_BACKSTOP_MS}. A run that already woke has
- * applied its answer, so it is not selected again; one that is gone stays selected until the run
- * sweeper closes it at its published deadline.
+ * applied its answer, so it is not selected again. One whose Workflow is gone is handed to `onGone`
+ * (#1231), which closes it, since its published deadline is a month away.
  */
-export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, now = Date.now()): Promise<number> {
+export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, now = Date.now(), onGone?: (runId: string) => Promise<unknown>): Promise<number> {
 	const due = now - PARK_WAKE_BACKSTOP_MS;
 	const { results } = await env.DB.prepare(
 		`SELECT DISTINCT r.run_id FROM agent_loop_runs r JOIN coder_questions q ON q.run_id = r.run_id
@@ -99,7 +129,12 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 		.bind(due)
 		.all<{ run_id: string }>();
 	let woken = 0;
-	for (const r of results ?? []) if (await wakeParkedRun(env, r.run_id, "backstop")) woken++;
+	for (const r of results ?? []) {
+		const result = await wakeParkedRunDetailed(env, r.run_id, "backstop");
+		if (result === "woken") woken++;
+		// #1231: a run whose Workflow is gone held its answer, its card and its repo's queue forever.
+		else if (result === "gone" && onGone) await onGone(r.run_id).catch(() => undefined);
+	}
 	return woken;
 }
 

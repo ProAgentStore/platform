@@ -734,3 +734,26 @@ export async function listBlockedOnAnswer(
 		return { runId: r.run_id, objective: r.objective, question: ask?.question ?? null, taskId: ask?.taskId ?? null, answered: r.answered === 1, parkedSince: r.parked_since };
 	});
 }
+
+/**
+ * For each of these runs that has an answer recorded on its question and not yet applied — a person's,
+ * the brain's, or its unresolved instruction — when that answer arrived (#1231). Status views say so
+ * instead of showing a normal wait: "waiting for your answer" is false once you have given it.
+ */
+export async function answersPendingFor(env: Pick<Env, "DB">, runIds: string[]): Promise<Map<string, number>> {
+	const ids = [...new Set(runIds)];
+	const out = new Map<string, number>();
+	// In chunks of 100 bound ids (D1's limit), never cut: a page can carry 200 runs.
+	for (let i = 0; i < ids.length; i += 100) {
+		const chunk = ids.slice(i, i + 100);
+		const { results } = await env.DB.prepare(
+			`SELECT run_id, MIN(COALESCE(answered_at, resolved_at)) AS at FROM coder_questions
+			  WHERE run_id IN (${chunk.map((_, j) => `?${j + 1}`).join(",")}) AND applied_at IS NULL AND (answered_at IS NOT NULL OR state = 'unresolved')
+			  GROUP BY run_id`,
+		)
+			.bind(...chunk)
+			.all<{ run_id: string; at: number | null }>();
+		for (const r of results ?? []) out.set(r.run_id, r.at ?? 0);
+	}
+	return out;
+}

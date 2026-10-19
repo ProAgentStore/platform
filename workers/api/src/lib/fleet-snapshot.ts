@@ -89,6 +89,8 @@ export interface FleetFacts {
 	decisions: number;
 	/** The open run's question when it is parked on `decision` (#960), or null. */
 	runQuestion?: { question: string; taskId: string } | null;
+	/** #1231: the run's question has an answer recorded that the run has not applied yet. */
+	answerPending?: boolean;
 	/** Pending owner secure inputs — a secret to type into the console, not a conversation. */
 	ownerSecrets: number;
 	/** Null when the instance has no GitHub repo bound — there is no backlog to report. */
@@ -106,6 +108,9 @@ export function deriveFleetStatus(f: FleetFacts): { status: FleetStatus; reason:
 	// #1028: a paused instance takes no work, whatever its runs or backlog say — so this is checked
 	// before every run, question and backlog verdict, and its backlog is never offered as work.
 	if (f.instanceStatus === "paused") return { status: "paused", reason: "Paused — it takes no work until it is resumed (resume_instance), so its backlog is not offered." };
+	if (f.health === "waiting" && f.waitingReason === "decision" && f.answerPending) {
+		return { status: "working", reason: "Your answer is in and the run has not applied it yet — it resumes with it as soon as its repository is free. Do not answer again." };
+	}
 	if (f.health === "waiting" && f.waitingReason === "decision") {
 		const q = f.runQuestion;
 		return {

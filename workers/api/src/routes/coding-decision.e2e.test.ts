@@ -55,6 +55,8 @@ let d1: RealSchemaD1;
 let env: Env;
 /** Events sent to Workflow instances (#1076) — how an answer wakes a parked run. */
 let woken: Array<{ instance: string; type: string }>;
+/** What the Workflows binding reports for an instance's status (#1231). */
+let workflowStatus: string;
 /** The runner's coding takeover map, keyed by session — the thing an answer must reach. */
 let pause: { open: boolean; resolved: boolean; value?: string };
 let decisions: CodingDecision[];
@@ -69,7 +71,8 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id)
 	  VALUES ('run-1', 'u1', 'i1', 'retire the v1 API', 'running', 10, ${Date.now()}, 's1')`);
 	woken = [];
-	const CODING_SESSION = { get: async (instance: string) => ({ sendEvent: async (e: { type: string }) => void woken.push({ instance, type: e.type }) }) };
+	workflowStatus = "waiting";
+	const CODING_SESSION = { get: async (instance: string) => ({ status: async () => ({ status: workflowStatus }), sendEvent: async (e: { type: string }) => void woken.push({ instance, type: e.type }) }) };
 	env = { DB: d1.DB, CODING_SESSION } as unknown as Env;
 	pause = { open: false, resolved: false };
 	acts = [];
@@ -177,11 +180,40 @@ describe("a coding run asks, PARKS at zero compute, and resumes with the owner's
 		expect(acts.join("\n")).toContain("Drop the v1 API as the owner chose.");
 		expect(result).toMatchObject({ outcome: "done" });
 		expect(await getLoopRun(env, "u1", "run-1")).toMatchObject({ status: "completed", waitingReason: null, waitingAsk: null });
-		expect(question()).toMatchObject({ state: "answered_human", answered_via: "console", decision: "drop it", applied_run_id: "run-1" });
+		expect(question()).toMatchObject({ state: "answered_human", answered_via: "console", decision: "drop it", applied_run_id: "run-1", applied_at: expect.any(Number) });
 		// A second answer is recorded and reported "already applied" — never silently dropped.
 		const again = await post("csess-s1", "keep it");
 		expect(again).toMatchObject({ status: 202, body: { outcome: "already_applied", recorded: true, delivered: false, appliedRunId: "run-1" } });
 		expect(question().decision).toBe("drop it");
+	});
+
+	it("a parked run whose Workflow died is never reported delivered: it is closed, the answer kept, and the queue moves (#1231)", async () => {
+		// FGS Platform Coder, 2026-10-19: three answers each came back `delivered: true`, the question stayed
+		// unapplied for 12 hours, and the queue behind the run never started.
+		decisions = [toDecision({ name: "ask_owner", arguments: { question: "Close #350 now or after the deploy?", why: "the issue says after" } })];
+		let answered: Awaited<ReturnType<typeof post>> | null = null;
+		let queued: string | null = null;
+		await runCodingSessionWorkflow(
+			env,
+			{ payload: params(), instanceId: "wf-run-1" } as unknown as WorkflowEvent<CodingSessionParams>,
+			step(
+				async () => undefined,
+				async () => {
+					const { enqueueObjective } = await import("../lib/objective-queue.js");
+					queued = (await enqueueObjective(env, { instanceId: "i1", userId: "u1", repoId: "r1", objective: "the next objective" })).id;
+					workflowStatus = "errored"; // evicted, or a deploy it could not replay through
+					answered = await post("csess-s1", "after the deploy");
+					return "timeout";
+				},
+			),
+		);
+		expect(answered).toMatchObject({ status: 409, body: { ok: false, outcome: "run_gone", delivered: false, recorded: true, runId: "run-1" } });
+		expect(answered!.body.error).toMatch(/no longer running.*Continue the run/s);
+		expect(woken).toEqual([]); // nothing was sent to a dead instance and called delivered
+		expect(await getLoopRun(env, "u1", "run-1")).toMatchObject({ stopReason: "decision" });
+		expect(question()).toMatchObject({ state: "answered_human", decision: "after the deploy", applied_at: null });
+		const entry = d1.sqlite.prepare("SELECT status FROM instance_objective_queue WHERE id = ?").get(queued) as { status: string };
+		expect(entry.status).not.toBe("pending"); // the closed run's repo drained
 	});
 
 	it("a long, multi-part question reaches the card whole: its uncut text and one option list per decision (#1129)", async () => {

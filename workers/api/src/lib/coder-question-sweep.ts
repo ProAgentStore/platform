@@ -20,6 +20,7 @@ import { readCoderBrain, type CoderBrainSettings } from "./coder-brain.js";
 import { type BrainModelCall, type DecisionContext, byokBrainCall, decideCoderQuestion } from "./coder-brain-decide.js";
 import { type CoderQuestion, captureCoderQuestion, openCoderQuestions, transitionCoderQuestion, unresolvedInstruction } from "./coder-question-store.js";
 import { runDueParkWakes, wakeParkedRun } from "./coding-park.js";
+import { recoverDeadParkedRun } from "./park-recovery.js";
 import { gatherGrounding } from "./coder-brain-grounding.js";
 import { resolveCodingPause } from "./coding-answer.js";
 import { appendTimeline, lastTerminal } from "./coding-timeline.js";
@@ -169,8 +170,9 @@ export async function runDueCoderQuestions(env: Env, now = Date.now(), effects?:
 		}
 	}
 	// The resumption backstop (#1076): a parked run whose answer, brain decision or cancel is on record
-	// but whose wake event was lost is woken here, on the same every-minute tick.
-	await runDueParkWakes(env, now).catch(() => 0);
+	// but whose wake event was lost is woken here, on the same every-minute tick. One whose Workflow is
+	// gone is closed (#1231), so its answer reaches the issue and its queue drains.
+	await runDueParkWakes(env, now, (runId) => recoverDeadParkedRun(env, runId, now)).catch(() => 0);
 	return out;
 }
 

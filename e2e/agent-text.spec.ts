@@ -14,9 +14,10 @@ const QUESTION = "Three decisions: 1. **Notification channel** — email or push
 const LONG = "Use the platform default notification channel, which is email to the owner, and nothing else";
 const OPTIONS = ["Email, then push", "Push only", LONG];
 
-async function mockTicket(page: Page, opts: { options?: string[]; data?: Record<string, unknown> } = {}) {
+async function mockTicket(page: Page, opts: { options?: string[]; data?: Record<string, unknown>; noEvents?: boolean } = {}) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
 	const answers: string[] = [];
+	const eventQueries: string[] = [];
 	await page.route(`${API}/**`, async (route) => {
 		const req = route.request();
 		const path = new URL(req.url()).pathname;
@@ -27,6 +28,8 @@ async function mockTicket(page: Page, opts: { options?: string[]; data?: Record<
 			return json({ id: "t1", type: "coding.session", status: "needs_human", createdAt: "2026-10-17T00:00:00Z", description: "Configure **alerts** for the deploy", reasoning: "1. Read the issue\n2. **Stopped** to ask — the owner decides the channel" });
 		}
 		if (path === "/v1/instances/inst-1/task-events") {
+			eventQueries.push(new URL(req.url()).search);
+			if (opts.noEvents) return json({ events: [] });
 			return json({
 				events: [
 					{ id: "e1", taskId: "t1", type: "agent.needs_input", createdAt: "2026-10-17T00:01:00Z", message: `Needs your input — ${QUESTION}`, data: { field: QUESTION, why: "the alert config needs it", options: opts.options ?? OPTIONS, ...opts.data } },
@@ -46,7 +49,7 @@ async function mockTicket(page: Page, opts: { options?: string[]; data?: Record<
 		if (path === "/v1/instances/inst-1/board") return json({ items: [] });
 		return json({});
 	});
-	return { answers };
+	return { answers, eventQueries };
 }
 
 test.describe("agent text is markdown, and options are buttons (#1129)", () => {
@@ -147,5 +150,25 @@ test.describe("agent text is markdown, and options are buttons (#1129)", () => {
 		const box = await long.boundingBox();
 		expect(box && box.x >= 0 && box.x + box.width <= 390 && box.height >= 44).toBe(true);
 		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+	});
+});
+
+test.describe("a coding card waiting on you can always be answered (#1231)", () => {
+	test("its events are read for THIS ticket, so an older question cannot fall out of the instance's newest 500", async ({ page }) => {
+		const mock = await mockTicket(page);
+		await page.goto("/console/instances/inst-1/tasks/t1");
+		await expect(page.getByText("The agent needs one answer to continue")).toBeVisible();
+		expect(mock.eventQueries.some((q) => new URLSearchParams(q).get("task_id") === "t1")).toBe(true);
+	});
+
+	test("with its question event out of reach, the card still offers a text box — never the browser take-over prompt", async ({ page }) => {
+		const mock = await mockTicket(page, { noEvents: true });
+		await page.goto("/console/instances/inst-1/tasks/t1");
+		await expect(page.getByText("The agent needs one answer to continue")).toBeVisible();
+		await expect(page.getByText("The agent is stuck on one step")).toHaveCount(0);
+		const box = page.getByRole("textbox", { name: "your answer" });
+		await box.fill("Deploy it, then close #350");
+		await page.getByRole("button", { name: "Send", exact: true }).click();
+		await expect.poll(() => mock.answers).toEqual(["Deploy it, then close #350"]);
 	});
 });

@@ -14,6 +14,7 @@ import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { deriveFleetStatus, FLEET_STATUSES, type FleetStatus, fleetOrder, type RepoIssues, tallyIssues } from "../lib/fleet-snapshot.js";
 import { listIssuesPage } from "../lib/github-issues.js";
+import { answersPendingFor } from "../lib/agent-loop-store.js";
 import { instanceHealthFor } from "../lib/instance-activity.js";
 import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { instanceListName, parseConfigBlob, patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
@@ -100,6 +101,8 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				.all<{ instance_id: string; github_repo: string }>(),
 		]);
 		const runOf = new Map(runs.map((r) => [r.instanceId, r] as const));
+		// #1231: an open run whose answer is recorded and unapplied is not "waiting on you".
+		const pending = await answersPendingFor(c.env, runs.filter((r) => r.status === "running" && r.waitingReason === "decision").map((r) => r.runId));
 		const decisions = new Map((decisionRows.results ?? []).map((r) => [r.instance_id, { pending: Number(r.n) || 0, first: r.message ?? "" }] as const));
 		const secrets = new Map(owner.map((o) => [o.instanceId, o.pending] as const));
 		const reposOf = new Map<string, string[]>();
@@ -133,6 +136,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				queueDepth: queueDepths.get(m.id) ?? 0,
 				decisions: decision?.pending ?? 0,
 				runQuestion: open?.waitingAsk ? { question: open.waitingAsk.question, taskId: open.waitingAsk.taskId } : null,
+				answerPending: open ? pending.has(open.runId) : false,
 				ownerSecrets: secrets.get(m.id) ?? 0,
 				issues,
 			});
@@ -145,7 +149,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				reason: verdict.reason,
 				health,
 				// What it is working on now — the open run only; a finished one is history, not work.
-				work: open ? { runId: open.runId, objective: open.objective, startedAt: open.startedAt, waitingReason: open.waitingReason, waitNote: waitClause(open, now) } : null,
+				work: open ? { runId: open.runId, objective: open.objective, startedAt: open.startedAt, waitingReason: open.waitingReason, answerPending: pending.has(open.runId), waitNote: waitClause({ ...open, answerPendingSince: pending.get(open.runId) ?? null }, now) } : null,
 				queueDepth: queueDepths.get(m.id) ?? 0,
 				decision,
 				ownerSecrets: secrets.get(m.id) ?? 0,

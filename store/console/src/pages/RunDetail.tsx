@@ -317,7 +317,8 @@ export default function RunDetail() {
 			if (/not found|\b404\b/i.test(e instanceof Error ? e.message : String(e))) setGone(true);
 		}
 		try {
-			const d = await api<{ events: RuntimeEvent[] }>(`/v1/instances/${instanceId}/task-events?limit=500`);
+			// This ticket's own events (#1231): the instance-wide newest 500 could have pushed its question out.
+			const d = await api<{ events: RuntimeEvent[] }>(`/v1/instances/${instanceId}/task-events?task_id=${encodeURIComponent(taskId ?? "")}&limit=500`);
 			const mine = (d.events || []).filter((e) => String(e.taskId ?? (e.data as Record<string, unknown>)?.taskId ?? "") === taskId);
 			mine.sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
 			setEvents(mine);
@@ -359,8 +360,11 @@ export default function RunDetail() {
 	const handoffEv = events.slice().reverse().find((e) => e.type === "job.human_handoff_required");
 	const needsInputEv = events.slice().reverse().find((e) => e.type === "agent.needs_input");
 	const reason = String((handoffEv?.data as Record<string, unknown>)?.reason ?? "");
+	// A coding session's card waiting on you is always a question (#1231, #1234): there is no browser to take over,
+	// so even with its question event out of reach it gets the answer box, never the take-over prompt.
+	const codingCard = task?.type === "coding.session" || (taskId ?? "").startsWith("csess-");
 	const kind: "value" | "captcha" | "stuck" =
-		reason === "needs_input" || needsInputEv || /needs a value|enter it/i.test(handoffEv?.message ?? "") ? "value"
+		codingCard || reason === "needs_input" || needsInputEv || /needs a value|enter it/i.test(handoffEv?.message ?? "") ? "value"
 		: reason === "challenge" || /captcha|verify you|human check/i.test(`${handoffEv?.message ?? ""}`) ? "captcha" : "stuck";
 	const detail = needsInputEv?.message ?? handoffEv?.message ?? "";
 	// Prefer the structured data the loop emits onto the event (#621): `agent.needs_input` carries

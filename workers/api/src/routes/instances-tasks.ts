@@ -822,7 +822,10 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.trunc(rawLimit))) : 100;
 		// Paged (#898): the newest `limit` (≤500) were all there was, and nothing said more existed.
 		const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
+		// `task_id` (#1231): ONE ticket's newest events — the instance's newest 500 could hold none of its question.
+		const taskFilter = c.req.query("task_id") || null;
 		const page = async () => {
+			if (taskFilter) return { events: await mirroredTaskEvents(c.env, instanceId, session.uid, taskFilter, limit), paging: { offset: 0, hasMore: false, nextOffset: null } };
 			const rows = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit + 1, offset);
 			const hasMore = rows.length > limit;
 			return { events: rows.slice(0, limit), paging: { offset, hasMore, nextOffset: hasMore ? offset + limit : null } };
