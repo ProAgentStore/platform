@@ -541,16 +541,16 @@ consolidation follow-up.
 
 ## 7. Follow-ups
 
-Filed against #1241 with the `mcp-audit` label:
+Filed against #1241:
 
-- **MCP tool consolidation**: retire the four §4 pairs, decide removals from the `summarize` data,
-  give the remaining short descriptions the conventions template, and record the tried name for
-  `unknown_tool` in the ledger.
-- **MCP agent eval harness**: an automated test in which a model is given a task, calls the
-  §6 offenders through a real client, and is scored on first-call success. That is the acceptance
-  measure this document's proxies stand in for.
-- **Label guidance**: which labels coding agents should apply and filter on.
-- **commit-close-watch noise**: about 40k of 46k error-log rows in 30 days (§3.3).
+- **Consolidation (#1243)**: retire the four §4 pairs, decide removals from the `summarize`
+  data, give the remaining short descriptions the conventions template, refresh the quick start
+  (#1241 B.7), record the tried name for `unknown_tool`, and make refusals say what to do next.
+- **Agent eval (#1244)**: a model is given owner-shaped tasks drawn from §6, calls tools through a
+  real client, and is scored on first-call success, with a baseline. That is the acceptance measure
+  this document's proxies stand in for.
+- **Label guidance (#1245)**: surface the label vocabulary in the tools that set labels.
+- **commit-close-watch noise (#1246)**: about 40k of 46k error-log rows in 30 days (§3.3).
 
 ## 8. Guards added by this audit
 
