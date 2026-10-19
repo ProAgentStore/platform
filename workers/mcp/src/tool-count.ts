@@ -28,3 +28,16 @@ export const MCP_TOOL_ALWAYS_ON = 339;
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
 export const MCP_TOOL_GATED = MCP_TOOL_COUNT - MCP_TOOL_ALWAYS_ON;
+
+/**
+ * How large the surface is ALLOWED to be (#1241): {@link MCP_TOOL_COUNT} may not exceed the last
+ * entry's `count`. Append-only — growing the surface means appending an entry that says why, so each
+ * new tool is a recorded decision, not a drift the count test merely follows. Merging or retiring
+ * tools needs no entry: the ceiling stays and the count drops under it.
+ *
+ * Before appending, check the tool you are adding has no sibling that already calls the same API
+ * route — the #1241 audit found four such pairs (`docs/mcp-tool-audit.md` §4).
+ */
+export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; date: string; reason: string }> = [
+	{ count: 366, issue: "#1241", date: "2026-10-20", reason: "Baseline recorded by the MCP tool surface audit." },
+];

@@ -121,7 +121,15 @@ export function normalizeArguments(shape: RawShape | undefined, input: unknown):
 		const t = shape[key];
 		if (!t) continue;
 		const k = kind(t);
-		if (k === "ZodString" && Array.isArray(value) && value.every((v) => typeof v === "string" || typeof v === "number")) {
+		// A client whose cached schema predates a parameter sends it as a string ("true", "5") — seen live on
+		// admin_mcp_audit's `summarize` the day it shipped.
+		if (k === "ZodBoolean" && (value === "true" || value === "false")) {
+			args[key] = value === "true";
+			warnings.push(`\`${key}\` takes a boolean; "${value}" was read as ${value}.`);
+		} else if (k === "ZodNumber" && typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) {
+			args[key] = Number(value);
+			warnings.push(`\`${key}\` takes a number; "${value}" was read as ${args[key]}.`);
+		} else if (k === "ZodString" && Array.isArray(value) && value.every((v) => typeof v === "string" || typeof v === "number")) {
 			args[key] = value.map(String).join(",");
 			warnings.push(`\`${key}\` takes a comma-separated string; the list was joined as "${args[key]}".`);
 		} else if (k === "ZodArray" && typeof value === "string") {

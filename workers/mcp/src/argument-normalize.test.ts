@@ -48,6 +48,14 @@ describe("normalizeArguments (#1241)", () => {
 		expect(warnings).toEqual(['`labels` takes a comma-separated string; the list was joined as "bug,p1".', '`repo_ids` takes a list; "r1, r2" was split on commas.']);
 	});
 
+	it("reads a stringified boolean or number as the type the schema declares", () => {
+		const shape = { flag: z.boolean().optional(), n: z.number().optional() };
+		const { args, warnings } = normalizeArguments(shape, { flag: "true", n: "12" });
+		expect(args).toEqual({ flag: true, n: 12 });
+		expect(warnings).toEqual(['`flag` takes a boolean; "true" was read as true.', '`n` takes a number; "12" was read as 12.']);
+		expect(normalizeArguments(shape, { flag: "yes", n: "lots" }).args).toEqual({ flag: "yes", n: "lots" });
+	});
+
 	it("names an argument the tool does not take, instead of zod stripping it unseen", () => {
 		expect(normalizeArguments(SHAPE, { instance_id: "i1", colour: "red" }).warnings).toEqual(["Ignored an argument this tool does not take: `colour`."]);
 	});
