@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { combinedOperatorManual } from "../lib/operator-manual.js";
 import { requireUser } from "../lib/auth.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { buildConnectionGuide, type ConnectionGuideResponse, type GuideRepoRow, type GuideToolRow } from "../lib/connection-guide.js";
@@ -50,12 +51,12 @@ export function registerGuideRoutes(router: Hono<{ Bindings: Env }>): void {
 		// two reads; `displayName` is the name the subscriber picked (#450) and falls back to the
 		// agent's, which is what every other surface shows.
 		const meta = await c.env.DB.prepare(
-			`SELECT a.name AS agent_name, a.slug AS slug, i.operator_manual AS operator_manual
+			`SELECT a.name AS agent_name, a.slug AS slug, i.operator_manual AS operator_manual, a.operator_manual AS inherited_manual
 			   FROM agent_instances i JOIN agents a ON a.id = i.agent_id
 			  WHERE i.id = ?1 AND i.user_id = ?2`,
 		)
 			.bind(instanceId, session.uid)
-			.first<{ agent_name: string | null; slug: string | null; operator_manual: string | null }>();
+			.first<{ agent_name: string | null; slug: string | null; operator_manual: string | null; inherited_manual: string | null }>();
 
 		let displayName = "";
 		let rules = "";
@@ -90,7 +91,7 @@ export function registerGuideRoutes(router: Hono<{ Bindings: Env }>): void {
 			runtime: capabilities?.runtime ?? null,
 			tools,
 			repos,
-			manual: meta?.operator_manual ?? "",
+			manual: combinedOperatorManual({ inherited: meta?.inherited_manual ?? "", instance: meta?.operator_manual ?? "" }), // #1237: template + instance
 			rules,
 		});
 

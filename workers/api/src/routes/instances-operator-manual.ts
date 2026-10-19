@@ -10,18 +10,13 @@ import type { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { buildOperatorGuidance } from "../lib/operator-guidance.js";
+import { combinedOperatorManual, operatorManualLayers, operatorManualTooLong } from "../lib/operator-manual.js";
 import { allowedToolRows } from "./instances-guide.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
-/**
- * Maximum length of the operator manual in characters.
- *
- * Exported as a named constant (not a bare `.slice(0, N)`) so every caller can cite it
- * by name. The `PUT` route rejects above this cap rather than silently truncating — open
- * question 1 in #739 resolved in favour of a 400 naming the submitted length.
- */
-export const OPERATOR_MANUAL_MAX_CHARS = 16_000;
+/** The cap, shared with the template manual (#1237): `lib/operator-manual.ts`. */
+export { OPERATOR_MANUAL_MAX_CHARS } from "../lib/operator-manual.js";
 
 export function registerOperatorManualRoutes(router: Hono<{ Bindings: Env }>): void {
 	/**
@@ -55,7 +50,16 @@ export function registerOperatorManualRoutes(router: Hono<{ Bindings: Env }>): v
 		// the owner's `manual` above is returned exactly as written.
 		const capabilities = await capabilitiesForInstance(c.env, instanceId, session.uid);
 		const context = buildOperatorGuidance({ instanceId, surfaces: capabilities?.surfaces ?? [], runtime: capabilities?.runtime ?? null, tools: await allowedToolRows(c.env, instanceId, session.uid, instance.config) });
-		return c.json({ manual: row?.operator_manual ?? "", rules, context });
+		// #1237: the template's manual, read LIVE (an edit reaches every instance on its next read), beside this one's own.
+		const layers = await operatorManualLayers(c.env, instanceId, session.uid);
+		return c.json({
+			manual: row?.operator_manual ?? "",
+			inherited: layers.inherited,
+			sections: { inherited: layers.inherited || null, instance: layers.instance || null },
+			combined: combinedOperatorManual(layers),
+			rules,
+			context,
+		});
 	});
 
 	/**
@@ -71,14 +75,8 @@ export function registerOperatorManualRoutes(router: Hono<{ Bindings: Env }>): v
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { manual?: unknown };
 		const manual = String(body.manual ?? "");
-		if (manual.length > OPERATOR_MANUAL_MAX_CHARS) {
-			return c.json(
-				{
-					error: `Operator manual too long: ${manual.length} chars (max ${OPERATOR_MANUAL_MAX_CHARS}).`,
-				},
-				400,
-			);
-		}
+		const tooLong = operatorManualTooLong(manual);
+		if (tooLong) return c.json({ error: tooLong }, 400);
 		await c.env.DB.prepare("UPDATE agent_instances SET operator_manual = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
 			.bind(manual, instanceId, session.uid)
 			.run();

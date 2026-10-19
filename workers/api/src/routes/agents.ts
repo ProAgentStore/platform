@@ -9,8 +9,10 @@ import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
 import { blockPublishReason } from "../lib/test-agent-guard.js";
 import { templateModelRefusal } from "../lib/brain-models.js";
+import { registerAgentOperatorManualRoutes } from "./agents-operator-manual.js";
 
 export const agentRoutes = new Hono<{ Bindings: Env }>();
+registerAgentOperatorManualRoutes(agentRoutes); // #1237: GET/PUT /:id/operator-manual
 
 interface AgentRow {
 	id: string;
@@ -140,8 +142,8 @@ agentRoutes.get("/my/agents", async (c) => {
 		`SELECT * FROM agents WHERE owner_id = ?1 ORDER BY updated_at DESC`,
 	)
 		.bind(session.uid)
-		.all<AgentRow>();
-	return c.json({ agents: results });
+		.all<AgentRow & { operator_manual?: string | null }>();
+	return c.json({ agents: results.map(({ operator_manual, ...a }) => ({ ...a, hasOperatorManual: !!operator_manual })) }); // #1237: the template manual (up to 16k) stays off the listing, like the instance one (0143)
 });
 
 /** Agent operations status: billing, runtime, deployment. */

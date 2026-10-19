@@ -3,6 +3,7 @@
 // API (routes/tools), and (later) MCP, so a new connector is declared in one place
 // instead of the current triple-definition. Additive: the legacy AGENT_TOOLS /
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
+import { combinedOperatorManual, operatorManualLayers } from "./operator-manual.js";
 import { ticketOverLimit } from "./write-limits.js";
 import { consentInstanceOf, describeAuthority, isDelegated } from "./execution-authority.js";
 import { logEvent } from "./events.js";
@@ -407,12 +408,8 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		jsonSchema: { type: "object", properties: {}, required: [] },
 		handler: async (ctx) => {
 			if (!ctx.instanceId || !ctx.userId) return { content: "read_operator_manual needs an owned instance context.", success: false };
-			const row = await ctx.env.DB.prepare(
-				"SELECT operator_manual FROM agent_instances WHERE id = ?1 AND user_id = ?2",
-			)
-				.bind(ctx.instanceId, ctx.userId)
-				.first<{ operator_manual: string | null }>();
-			const manual = row?.operator_manual ?? "";
+			// #1237: the template's inherited manual, then this instance's own — one sectioned document.
+			const manual = combinedOperatorManual(await operatorManualLayers(ctx.env, ctx.instanceId, ctx.userId));
 			if (!manual) return { content: "No operator manual has been set for this instance.", success: true };
 			// Content is the owner's authored text — `untrustedOutput:true` fences it in
 			// `renderToolContent` so the model reads it as DATA, not as an instruction.

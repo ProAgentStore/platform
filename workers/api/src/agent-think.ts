@@ -245,11 +245,11 @@ export async function runAgentThink(opts: {
 	// query does not carry it on the wire. `readInstanceConfigPairForDurableObject` selects
 	// `i.config` only; a second targeted query is the correct approach here.
 	if (state.agentId) {
-		const manualRow = await env.DB.prepare(
-			"SELECT operator_manual, length(operator_manual) AS manual_len FROM agent_instances WHERE id = ?1",
+		const manualRow = await env.DB.prepare( // #1237: the template's inherited manual counts too — one notice for both layers
+			"SELECT COALESCE(length(i.operator_manual), 0) + COALESCE(length(a.operator_manual), 0) AS manual_len FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1",
 		)
 			.bind(state.agentId)
-			.first<{ operator_manual: string | null; manual_len: number | null }>();
+			.first<{ manual_len: number | null }>();
 		const manualLen = manualRow?.manual_len ?? 0;
 		if (manualLen > 0) {
 			// Notice is capped at ≤400 chars (AC6). The body of the manual is not here — a

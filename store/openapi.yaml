@@ -5229,6 +5229,37 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/agents/{id}/operator-manual:
+    get:
+      summary: Read the template's operator manual
+      description: |
+        The agent template's operator manual (#1237): caller-facing operating standards every instance of the template
+        inherits, read live by each instance's operator-manual read (no resync). Owner (or admin) only. Returns
+        `{ manual, instances }` — the text ("" when none) and how many instances inherit it. Accepts an id or a slug.
+      operationId: getAgentOperatorManual
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "Not your agent." }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Replace the template's operator manual
+      description: |
+        Body `{ manual }`, at most `OPERATOR_MANUAL_MAX_CHARS` (16000); a longer one is refused with 400 naming its
+        length. Every existing and future instance of the template shows it on its next read. Owner (or admin) only.
+      operationId: putAgentOperatorManual
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "Not your agent." }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/agents/{id}/settings-schema:
     get:
       summary: Read the agent's subscriber-settings schema
@@ -8229,8 +8260,11 @@ paths:
       summary: Read operator manual
       description: |
         Caller-facing guidance for how this instance is meant to be driven. NOT injected as an
-        agent instruction (that is Special Instructions). Returns `{ manual, rules, context }`:
-        `manual` is the stored document, `rules` echoes the agent's Special Instructions so a
+        agent instruction (that is Special Instructions). Returns `{ manual, inherited, sections, combined, rules, context }`:
+        `manual` is this instance's own stored document; `inherited` is the agent template's manual (#1237), read live on
+        every read so a template edit reaches every instance with no resync; `sections` is `{ inherited, instance }` (null
+        when a layer is empty); `combined` is both as one sectioned document, the instance text last as an addendum that
+        wins where they conflict. `rules` echoes the agent's Special Instructions so a
         caller reading the manual also sees the standing orders that will make the agent refuse
         things, and `context` is generated on every read (#1109): how to operate this instance and
         every tool it may run (purpose, arguments, read-only or not, and a `call_instance_tool` example
