@@ -20,6 +20,7 @@ export const CI_GUARDS = [
 	["scripts/check-file-size.mjs"],
 	["scripts/check-migrations.mjs", "--require-history"],
 	["scripts/check-surface-lock.mjs", "--require-history"],
+	["scripts/check-server-json.mjs"],
 	["scripts/check-mcp-parity.mjs"],
 	["scripts/check-console-types.mjs"],
 	["scripts/check-design-tokens.mjs"],

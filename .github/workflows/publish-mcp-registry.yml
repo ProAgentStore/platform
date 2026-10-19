@@ -32,6 +32,16 @@ name: Publish MCP Registry
 # guard below therefore asks the registry what it already has and skips when it matches. It
 # does NOT swallow a failure: an unreachable or unparseable registry fails the step, because
 # "we could not ask" and "there is nothing to do" must not look the same (ADR 0002).
+#
+# ── It asks the by-name endpoint, retries a transient answer, and checks limits first (#1227)
+#
+# Three runs in a row (38993491470, 39176456274, 39187059839) went red at "already published?" with
+# `curl: (22) … 504` after ~3 minutes: the registry's SEARCH endpoint timing out, while its by-name
+# endpoint answered at once. The check now asks `/v0/servers/<name>/versions/<version>` (200 =
+# published, 404 = not), retries a 5xx / 429 / timeout four times with backoff, and on a persistent
+# failure names the status and the endpoint (`scripts/registry-has-version.sh`). The registry's own
+# `description` / `title` limits are checked first (`scripts/check-server-json.mjs`, also in CI), so an
+# over-long manifest fails in seconds with the field named instead of at publish.
 on:
   workflow_dispatch:
   push:
@@ -48,38 +58,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # States what it measured: the name it asked about, how many entries the registry holds
-      # under it, the version already marked latest, and the version this repo wants. A skip
+      # Fails fast, before any network call, when server.json breaks the registry schema's limits —
+      # naming the field, its length and the limit.
+      - name: server.json fits the registry's limits
+        run: node scripts/check-server-json.mjs
+
+      # States what it measured: the name and version asked about, the endpoint, and the answer. A skip
       # that printed nothing would be indistinguishable from a query that returned nothing.
       - name: Is this version already published?
         id: check
         run: |
-          set -euo pipefail
+          set -uo pipefail
           name=$(jq -er .name server.json)
           want=$(jq -er .version server.json)
-          resp=$(curl -sS --fail "https://registry.modelcontextprotocol.io/v0/servers?search=${name}")
-          seen=$(echo "$resp" | jq -er --arg n "$name" '[.servers[] | select(.server.name == $n)] | length')
-          have=$(echo "$resp" | jq -er --arg n "$name" \
-            '[.servers[] | select(.server.name == $n)
-                         | select(._meta["io.modelcontextprotocol.registry/official"].isLatest == true)
-                         | .server.version] | first // ""')
-          echo "registry holds ${seen} entry(ies) for ${name}; latest published = '${have}', server.json wants '${want}'"
-          if [ "$want" = "$have" ]; then
+          if bash scripts/registry-has-version.sh "$name" "$want"; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::${want} is already the registry's latest — nothing to publish."
+            echo "::notice::${name} ${want} is already in the registry — nothing to publish."
           else
+            rc=$?
+            [ "$rc" -eq 10 ] || exit "$rc"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install mcp-publisher
         if: steps.check.outputs.publish == 'true'
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          curl -fsSL --retry 4 --retry-delay 5 --retry-all-errors "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Authenticate to MCP Registry
         if: steps.check.outputs.publish == 'true'
         run: ./mcp-publisher login github-oidc
 
+      # A publish can fail transiently, or succeed and lose its answer. So after a failed attempt the
+      # registry is asked whether the version is there now: if it is, that is success (a re-publish of a
+      # held version is refused as a duplicate, so retrying blindly would turn success into a red run);
+      # if not, it waits and tries again — 4 attempts, 5s / 15s / 30s apart.
       - name: Publish server metadata
         if: steps.check.outputs.publish == 'true'
-        run: ./mcp-publisher publish
+        run: |
+          set -uo pipefail
+          name=$(jq -er .name server.json)
+          want=$(jq -er .version server.json)
+          delays=(5 15 30)
+          for attempt in 1 2 3 4; do
+            if ./mcp-publisher publish; then
+              echo "::notice::published ${name} ${want}"
+              exit 0
+            fi
+            if bash scripts/registry-has-version.sh "$name" "$want"; then
+              echo "::notice::the publish reported a failure, but the registry now holds ${name} ${want} — published."
+              exit 0
+            fi
+            if [ "$attempt" -lt 4 ]; then
+              echo "publish attempt ${attempt}/4 failed and ${want} is not in the registry; retrying in ${delays[$((attempt - 1))]}s"
+              sleep "${delays[$((attempt - 1))]}"
+            fi
+          done
+          echo "::error::mcp-publisher publish failed 4 times and the registry does not hold ${name} ${want}. Its output above has the registry's reason."
+          exit 1

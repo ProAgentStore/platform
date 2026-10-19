@@ -330,8 +330,16 @@ describe("same engine process versus a replacement (#1019 case 2)", () => {
 	});
 
 	it("a REPLACEMENT process after a lost reply is not credited with its predecessor's reading: it is sent the objective itself", async () => {
-		loseReplyOf(1, (m) => {
-			// The engine process dies after reading the act; the relaunch spawns a new one in the same session.
+		loseReplyOf(1, async (m) => {
+			// The engine process FINISHES the act's turn, then dies; the relaunch spawns a new one in the same session.
+			//
+			// "Finishes" is waited for, not assumed (#1227). Killing the moment the read was LOGGED raced the inert
+			// engine's own `result` line, which the runner needs to record the turn as consumed (#1019). On a loaded CI
+			// machine the SIGKILL sometimes landed first: the turn was then LOST rather than finished, and #1053 rightly
+			// sent the replacement its one recovery turn before "continue" — run 39205053900, `[true, false]` on the
+			// replacement. That is a different case, owned by turn-recovery.test.ts and coding-turn-recovery.test.ts;
+			// every assertion below describes this one, so the kill now waits for the runner to record the turn.
+			await until(() => (m.rt.snapshot("s1").consumedInputs?.length ?? 0) >= 1);
 			return killEngine(m);
 		});
 		decisions = [SEND("read the code"), SEND("continue"), FINISH];

@@ -76,6 +76,10 @@ jobs:
         # whole check IS the history comparison, so a shallow clone must fail rather than
         # skip. fetch-depth: 0 above.
         run: node scripts/check-surface-lock.mjs --require-history
+      - name: server.json fits the MCP registry's limits (#1227)
+        # The registry refuses a manifest whose description or title is over 100 characters — at
+        # publish, on main, after the version moved. Caught here, on the push that introduced it.
+        run: node scripts/check-server-json.mjs
       - name: MCP parity — console capabilities are reachable or recorded (#610)
         # The console and the MCP worker are two clients of ONE API, so a capability the
         # console has is structurally available over MCP. Three projection losses were found
