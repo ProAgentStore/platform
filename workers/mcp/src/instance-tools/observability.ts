@@ -235,9 +235,10 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 
 	server.tool(
 		"admin_mcp_audit",
-		"ADMIN only: every account's MCP tool-call audit events, newest first (the cross-owner view of mcp_audit_log), or one account's with `user`. Calls no account could be resolved for are filed here only, as subject \"unattributed\". Same filters (tool, action, since/until, receipt, request_id + session_id) and continuation as mcp_audit_log: pass `nextCursor` back as `cursor` until it is null, which is the end of the 90-day ledger. `coverage` says whether legacy events are still being indexed and whether recent events have yet to reach both indexes (`coverage.delivery`), so an empty page is never proof nothing happened. An event is a receipt for the TOOL CALL, not for the work it started. Each reply fits the wire budget by asking the ledger for fewer events, never by dropping one. Anyone else is refused.",
+		"ADMIN only: every account's MCP tool-call audit events, newest first (the cross-owner view of mcp_audit_log), or one account's with `user`. Calls no account could be resolved for are filed here only, as subject \"unattributed\". Same filters (tool, action, since/until, receipt, request_id + session_id) and continuation as mcp_audit_log: pass `nextCursor` back as `cursor` until it is null, which is the end of the 90-day ledger. `coverage` says whether legacy events are still being indexed and whether recent events have yet to reach both indexes (`coverage.delivery`), so an empty page is never proof nothing happened. An event is a receipt for the TOOL CALL, not for the work it started. Each reply fits the wire budget by asking the ledger for fewer events, never by dropping one. `summarize: true` (#1241) instead returns per-tool counts by outcome over since/until — `{tools: [{tool, total, byAction, failures}], scanned, window, nextCursor}`, worst failure count first — tallied from ledger key metadata without reading events; a successful read-only call is never recorded, so a read tool's counts are its failures and denials. With nextCursor set the window is unfinished: pass it back with the same summarize/since/until and add the counts. Anyone else is refused.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			summarize: z.boolean().optional().describe("Per-tool counts by outcome over since/until instead of events (#1241)."),
 			user: z.string().min(1).max(200).optional().describe("Only this account's events (its user id). Omit for every account."),
 			tool: z.string().min(1).max(100).optional().describe("Only events for this exact tool name. A filtered page may hold fewer than limit events; keep following nextCursor."),
 			receipt: z.string().min(1).max(200).optional().describe("Only events that ARE this id or carry it as a whole value (a runId, queueEntryId, session_id, task id). Exact; applied per page."),
@@ -247,11 +248,15 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			cursor: z.string().min(1).max(2048).optional().describe("nextCursor from the previous page. Omit for the newest page."),
 			limit: z.coerce.number().int().min(1).max(200).optional(),
 		},
-		async ({ token, user, tool, receipt, request_id, session_id, action, since, until, cursor, limit }) => {
+		async ({ token, summarize, user, tool, receipt, request_id, session_id, action, since, until, cursor, limit }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
 			for (const [k, v] of Object.entries({ user, tool, receipt, request_id, session_id, action, since, until, cursor })) if (v) qs.set(k, v);
+			if (summarize) {
+				qs.set("summarize", "true");
+				return jsonText(await authedCall(`/v1/audit/mcp?${qs.toString()}`, sessionToken, {}, env));
+			}
 			return text(
 				await fitFetchedPage({
 					limit: limit ?? 100,

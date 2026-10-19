@@ -14644,6 +14644,9 @@ paths:
       summary: Cross-owner MCP tool-call audit (admin)
       description: |
         Every account's MCP tool-call events, newest first, or one account's with `user` (#1090).
+        `summarize=true` (#1241) returns per-tool counts by outcome over `since`/`until` instead —
+        `{tools: [{tool, total, byAction, failures}], scanned, window, nextCursor, complete}` — tallied
+        from ledger key metadata without reading events (successful read-only calls are never recorded).
         Paged by the ledger's own cursor; same `tool`/`receipt` filters and `coverage` as
         `/v1/mcp-audit`. Outside `/v1/admin/*` so the MCP Worker can reach it; the admin role is the
         gate. 503 when the ledger cannot be read. MCP: `admin_mcp_audit`.

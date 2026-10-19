@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.157`
+- `serverInfo.version`: `0.1.158`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —

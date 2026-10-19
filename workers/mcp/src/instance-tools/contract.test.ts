@@ -398,7 +398,7 @@ const TABLE: Record<string, Row> = {
 	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
 	error_summary: ["observability", "none", null, null, "build,days,instance_id,level,limit,offset,run_id,scope,source,token"],
 	telemetry_health: ["observability", "none", null, null, "token"],
-	admin_mcp_audit: ["observability", "none", null, null, "action,cursor,limit,receipt,request_id,session_id,since,token,tool,until,user"],
+	admin_mcp_audit: ["observability", "none", null, null, "action,cursor,limit,receipt,request_id,session_id,since,summarize,token,tool,until,user"],
 	admin_action_audit: ["observability", "none", null, null, "action,actor,cursor,limit,since,target,target_type,token,until"],
 	list_errors: ["observability", "none", null, null, "build,cursor,instance_id,level,limit,offset,request_id,run_id,scope,since,source,token,until"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],

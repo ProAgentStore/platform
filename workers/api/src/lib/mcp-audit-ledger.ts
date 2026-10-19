@@ -241,7 +241,7 @@ export function parseAuditTime(raw: string | undefined): number | undefined | nu
 }
 
 /** The event time a ledger key encodes, read off the name — so a time bound costs no KV read. */
-function keyTime(name: string, prefix: string): number | null {
+export function keyTime(name: string, prefix: string): number | null {
 	const inverted = name.slice(prefix.length, prefix.length + 13);
 	return /^\d{13}$/.test(inverted) ? MAX_MS - Number(inverted) : null;
 }

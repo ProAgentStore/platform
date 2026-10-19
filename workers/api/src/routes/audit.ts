@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireAdmin } from "../lib/auth.js";
 import { historyCoverage, keysetBefore, keysetPage, parseHistoryCursor, parseTimeBound, sqlTimeOf } from "../lib/history-page.js";
 import { AUDIT_GLOBAL_PREFIX, AUDIT_INDEX_PREFIX } from "../lib/mcp-audit-ledger.js";
+import { summarizeAuditLedger } from "../lib/mcp-audit-summary.js";
 import { logDirectResponse } from "../lib/on-error.js";
 import { redactSecrets } from "../lib/redact.js";
 import type { AdminAuditRow } from "../lib/admin.js";
@@ -32,7 +33,16 @@ auditRoutes.get("/mcp", async (c) => {
 	const user = c.req.query("user")?.trim() || undefined;
 	const paging = parseAuditPaging(c.req.query());
 	if (!paging || (user && user.length > 200)) return c.json({ error: `${AUDIT_PAGING_LIMITS}; user at most 200` }, 400);
-	return auditPageOr503(c, kv, { prefix: user ? `${AUDIT_INDEX_PREFIX}${user}:` : AUDIT_GLOBAL_PREFIX, limit, ...paging });
+	const prefix = user ? `${AUDIT_INDEX_PREFIX}${user}:` : AUDIT_GLOBAL_PREFIX;
+	// #1241: per-tool counts over a window, from key metadata alone — the input to the tool-surface audit.
+	if (c.req.query("summarize") === "true") {
+		try {
+			return c.json(await summarizeAuditLedger(kv, { prefix, since: paging.since, until: paging.until, cursor: paging.cursor }));
+		} catch (e) {
+			return c.json({ error: "MCP audit ledger read failed", detail: e instanceof Error ? e.message : String(e) }, 503);
+		}
+	}
+	return auditPageOr503(c, kv, { prefix, limit, ...paging });
 });
 
 /**
