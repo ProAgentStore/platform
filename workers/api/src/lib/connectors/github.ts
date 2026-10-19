@@ -22,6 +22,7 @@ import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
 import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssuesPage, readIssue, searchIssues } from "../github-issues.js";
+import { listIssuesMultiRepo } from "../github-issues-multi.js";
 import { listPulls, readPull, readPullFiles, searchPulls } from "../github-prs.js";
 import { TOOL_RESULT_MAX_CHARS } from "../tool-result-cap.js";
 import { attachStartFailures, classifyStartFailure, fetchJobAnnotations, fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps, type WorkflowJob } from "../github-actions.js";
@@ -276,7 +277,59 @@ function listState(input: Record<string, unknown>, searching: boolean): ListStat
 	return searching ? "all" : "open";
 }
 
+/**
+ * The repos a multi-repo `github_list_issues` reads (#1240), or null when the call names ONE repo — the
+ * original single-repo path, unchanged. `scope: "account"`: every GitHub repo bound to any of the owner's
+ * live instances; `*` or no `repo`: this instance's; a comma list: those.
+ */
+async function multiRepoTargets(ctx: RegistryToolCtx, input: Record<string, unknown>): Promise<string[] | null | { error: string }> {
+	const scope = input.scope === undefined || input.scope === null || input.scope === "" ? null : String(input.scope);
+	if (scope !== null && scope !== "account") return { error: `Unknown scope "${scope}" — the only scope is "account" (every repo across your coding instances); omit it to use \`repo\`.` };
+	const repo = String(input.repo ?? "").trim();
+	if (scope === null && repo && repo !== "*" && !repo.includes(",")) return null;
+	if (scope === null && repo.includes(",")) return repo.split(",").map((r) => r.trim()).filter(Boolean);
+	const sql =
+		scope === "account"
+			? "SELECT DISTINCT r.github_repo AS repo FROM coding_repos r JOIN agent_instances i ON i.id = r.instance_id WHERE r.user_id = ?1 AND i.user_id = ?1 AND i.status != 'canceled' AND r.github_repo IS NOT NULL AND r.github_repo != '' ORDER BY r.github_repo"
+			: "SELECT github_repo AS repo FROM coding_repos WHERE instance_id = ?2 AND user_id = ?1 AND github_repo IS NOT NULL AND github_repo != '' ORDER BY github_repo";
+	if (scope !== "account" && !ctx.instanceId) return { error: "No instance to read repos from — pass `repo` (one or several, comma-separated) or `scope: \"account\"`." };
+	const stmt = scope === "account" ? ctx.env.DB.prepare(sql).bind(ctx.userId ?? "") : ctx.env.DB.prepare(sql).bind(ctx.userId ?? "", ctx.instanceId ?? "");
+	const { results } = await stmt.all<{ repo: string }>();
+	return (results ?? []).map((r) => r.repo);
+}
+
+const csv = (v: unknown): string[] => String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+
 const listIssuesHandler: ToolDef["handler"] = async (ctx, input) => {
+	const named = await multiRepoTargets(ctx, input);
+	if (named && "error" in named) return { content: named.error, success: false };
+	// One repo with a #1240 filter the REST listing cannot apply goes through search too, rather than
+	// silently ignoring the filter. One repo without them is the original path, byte for byte.
+	const newFilter = input.exclude_labels !== undefined || (typeof input.assignee === "string" && input.assignee.trim() !== "") || (typeof input.updated_since === "string" && input.updated_since.trim() !== "");
+	const targets = named ?? (newFilter ? [String(input.repo).trim()] : null);
+	if (targets) {
+		if (!githubAppConfigured(ctx.env)) return { content: "GitHub is not connected on this platform (GitHub App not configured).", success: false };
+		if (!targets.length) return { content: JSON.stringify({ issues: [], total_count: 0, per_repo_counts: {}, failures: [], repos: [], note: input.scope === "account" ? "None of your coding instances has a GitHub repo bound." : "This instance has no GitHub repo bound — pass `repo`." }, null, 2), success: true };
+		const result = await listIssuesMultiRepo(
+			targets,
+			{
+				state: listState(input, false),
+				labels: csv(input.labels),
+				// `needs-human` waits on a person, so a cross-repo triage list leaves it out unless told otherwise.
+				excludeLabels: input.exclude_labels === undefined || input.exclude_labels === null ? (named ? ["needs-human"] : []) : csv(input.exclude_labels),
+				assignee: typeof input.assignee === "string" && input.assignee.trim() ? input.assignee.trim() : undefined,
+				updatedSince: typeof input.updated_since === "string" && input.updated_since.trim() ? input.updated_since.trim() : undefined,
+				search: typeof input.search === "string" ? input.search : undefined,
+				...pageArgs(input),
+			},
+			// The same grant check as one repo: the token comes through this instance's GitHub connector.
+			async (_owner, sample) => {
+				const r = await resolveRepo(ctx, sample);
+				return "error" in r ? r : { token: r.token };
+			},
+		);
+		return { content: JSON.stringify(result, null, 2), success: true };
+	}
 	const repo = String(input.repo || "");
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
@@ -571,7 +624,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			untrustedOutput: true,
 			scope: "read",
 			description:
-				"List or search a repo's issues (excludes pull requests) — or several repos' at once. ONE repo (`repo: \"owner/name\"`, no `scope`) behaves exactly as described next. SEVERAL repos: a comma-separated `repo` list, `repo: \"*\"` or no `repo` for every repo bound to this instance, or `scope: \"account\"` for every repo across all your coding instances (de-duplicated). Multi-repo replies tag each issue with its `repo`, sort by most recently updated, page with `page`/`nextPage`, count per repo, report a repo that could not be read under `failures` instead of failing the call, and leave out `needs-human` issues unless `exclude_labels` says otherwise. Already have the issue NUMBER? Call github_read_issue. With one repo and without `search` this returns `{issues, hasMore, nextPage}`, most recently updated first, open ones unless `state` says otherwise; pass `page: nextPage` for more. With `search` it uses GitHub's issue search API over ALL the repo's issues and, unless you pass `state`, over every state — open AND closed. It returns `{total_count, incomplete_results, issues}`: `total_count` counts every match. A `search` that is only a number (\"274\" or \"#274\") is read directly by number instead, whatever its state (`matchedBy:\"number\"`). A refused search is an error, never an empty list.",
+				"List or search a repo's issues (excludes pull requests) — or several repos' at once. ONE repo (`repo: \"owner/name\"`, no `scope`) behaves exactly as described next. SEVERAL repos: a comma-separated `repo` list, `repo: \"*\"` or no `repo` for every repo bound to this instance, or `scope: \"account\"` for every repo across all your coding instances (de-duplicated). Multi-repo replies tag each issue with its `repo`, sort by most recently updated, page with `page`/`nextPage`, count per repo, report a repo that could not be read under `failures` instead of failing the call, and leave out `needs-human` issues unless `exclude_labels` says otherwise. On ONE repo, `exclude_labels`, `assignee` or `updated_since` answer in that same multi-repo shape (they need GitHub search). Already have the issue NUMBER? Call github_read_issue. With one repo and without `search` this returns `{issues, hasMore, nextPage}`, most recently updated first, open ones unless `state` says otherwise; pass `page: nextPage` for more. With `search` it uses GitHub's issue search API over ALL the repo's issues and, unless you pass `state`, over every state — open AND closed. It returns `{total_count, incomplete_results, issues}`: `total_count` counts every match. A `search` that is only a number (\"274\" or \"#274\") is read directly by number instead, whatever its state (`matchedBy:\"number\"`). A refused search is an error, never an empty list.",
 			handler: "github_list_issues",
 			params: {
 				repo: { type: "string", description: 'The repository, "owner/name" — or several, comma-separated ("acme/app,acme/console"), or "*" (or omit it) for every repo bound to this instance.' },

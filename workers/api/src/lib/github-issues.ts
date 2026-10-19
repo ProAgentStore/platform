@@ -101,7 +101,7 @@ function parseRepo(githubRepo: string): { owner: string; name: string } | null {
 }
 
 /** GitHub returns PRs from the issues endpoint too — they carry a `pull_request` field. */
-interface RawIssue {
+export interface RawIssue {
 	number: number;
 	title: string;
 	state: string;
@@ -133,7 +133,7 @@ function labelNames(labels: RawIssue["labels"]): string[] {
 		.filter((n): n is string => typeof n === "string" && n.length > 0);
 }
 
-function toSummary(raw: RawIssue): IssueSummary {
+export function toSummary(raw: RawIssue): IssueSummary {
 	return {
 		number: raw.number,
 		title: raw.title ?? "",
