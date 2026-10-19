@@ -463,6 +463,15 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 		expect(status).toBe(201);
 	});
 
+	it("REFUSES a Windows drive-letter path with what to use instead, before asking the machine (#1237)", async () => {
+		machine("https://github.com/o/r.git");
+		const { status, body, issued } = await addRepo({ localPath: "C:\\Users\\serge\\dev\\stash", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/^Windows drive-letter paths are not supported — use a home-relative `~\/` path instead/);
+		expect(inserted(issued)).toBe(false);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
 	it("REFUSES an owner/repo with no folder, naming the missing workdir", async () => {
 		machine("https://github.com/o/r.git");
 		const { status, body, issued } = await addRepo({ githubRepo: "o/r", requireGithub: true });
