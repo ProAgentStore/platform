@@ -539,10 +539,21 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		// flight loses its compare-and-swap and is discarded.
 		const recorded = await recordAnswer(c.env, { instanceId, userId: session.uid, taskId: body.taskId, value, via });
 		const q = recorded?.question;
+		const coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
+		if (recorded?.outcome === "already_applied" && coding && (coding.parkedSince ?? 0) > (q?.appliedAt ?? Number.POSITIVE_INFINITY)) {
+			// #1234: the card's latest question was consumed, yet a run parked on this card AFTER that — a new
+			// wait, on an ask with no row of its own (its capture failed). Reporting "already applied" left that
+			// run parked with the owner's answer in hand; the runner's pause is the one thing still waiting, so
+			// the answer goes there, and a failed delivery is said as one. A park from BEFORE the application is
+			// the one that answer ended, clearing as the run resumes, and keeps the already-applied reply.
+			const delivered = await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(() => true, () => false);
+			const base = { kind: "coding", runId: coding.runId, sessionId: coding.sessionId, recorded: false, questionId: null };
+			if (delivered) return c.json({ ok: true, ...base, outcome: "delivered", delivered: true, message: "Delivered to the waiting run." });
+			return c.json({ ok: false, ...base, outcome: "not_delivered", delivered: false, error: "The run is waiting on this card, but the coding runner could not be reached to hand it your answer. Make sure `pags up` is running on its machine and answer again." }, 409);
+		}
 		if (recorded?.outcome === "already_applied") {
 			return c.json({ ok: true, kind: "coding", outcome: "already_applied", delivered: false, recorded: true, questionId: q?.id, appliedRunId: q?.appliedRunId ?? null, message: `That question was already answered, and run ${q?.appliedRunId ?? "(unknown)"} acted on the earlier answer. Your new answer is saved on the question's history, but nothing applied it.` }, 202);
 		}
-		const coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
 		if (coding) {
 			// #1076: a run PARKED on the question is woken and reads the answer from the row; the runner push is for a live wait.
 			// With nothing on the row (a question that was never captured) the push is the only delivery, so its failure is the reply.

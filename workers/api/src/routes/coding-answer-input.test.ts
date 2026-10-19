@@ -247,6 +247,24 @@ describe("the question's row is the source of truth for an answer (#1075)", () =
 		expect(sent).toEqual([]);
 	});
 
+	it("an applied question with a NEWER park on the card goes to the run that is waiting, not to the history (#1234)", async () => {
+		// Run 75a17626: the version-bump question was applied at 07:12, the run parked again at 08:06 with no row of its
+		// own, and the owner's answer came back `already_applied` — recorded on the old question, delivered to nothing.
+		ask("answered_human", ", 5000, 'run1', 'human', 4000, 'yes'");
+		await recordLiveness(env(), "run1", 9_000, { reason: "decision", ask: { question: "Stopped: the same instruction 3 times", options: [], why: "", field: "Stopped: the same instruction 3 times", taskId: CARD } });
+		const r = await answer(CARD, "make the call yourself and keep going");
+		expect(r.status).toBe(200);
+		expect(r.body).toMatchObject({ ok: true, kind: "coding", outcome: "delivered", delivered: true, runId: "run1" });
+		expect(sent).toEqual([{ path: `/coding/takeover/${SID}/resolve`, body: { value: "make the call yourself and keep going" } }]);
+
+		// …and a delivery that cannot reach the runner is said as one, never as delivered.
+		getRunnerConn.mockImplementation(async () => null);
+		getBoundRunnerConn.mockImplementation(async () => null);
+		const down = await answer(CARD, "again");
+		expect(down.status).toBe(409);
+		expect(down.body).toMatchObject({ ok: false, outcome: "not_delivered", delivered: false });
+	});
+
 	it("an owner may revise an answer no run has used yet; the row holds the latest", async () => {
 		ask();
 		d1.exec("UPDATE agent_loop_runs SET status = 'cancelled' WHERE run_id = 'run1'");

@@ -242,7 +242,8 @@ describe("the Pilot moves its card at all three points of a run (#553)", () => {
 		const task = one<{ status: string }>("SELECT status FROM instance_runtime_tasks WHERE id = 'task-1'").status;
 		expect(task).toBe("needs_human");
 		expect(cardStatus()).toBe("needs_human");
-		expect(loopRun().stop_reason).toBe("escalated");
+		// #1234: a stuck run asks on its card and parks like any question, so a park nobody answers ends continuable.
+		expect(loopRun().stop_reason).toBe("decision");
 	});
 });
 
@@ -519,7 +520,7 @@ describe("liveness: a working run clears its park, a waiting one states when it 
 		};
 		decisions = [{ stuck: { why: "captcha" } }, { finish: { status: "done", detail: "ok" } }];
 		await run(params({ loopRunId: "run-1" }));
-		expect(parked).toMatchObject({ waiting_reason: "human" });
+		expect(parked).toMatchObject({ waiting_reason: "decision" }); // #1234: every wait on the owner is a question
 		expect(parked!.waiting_until).toBeGreaterThan(Date.now());
 	});
 });
@@ -556,7 +557,7 @@ describe("a question parks the run on `decision`, on its card, and the answer co
 		expect(decided[1].goal.userHint).toBe('The owner answered your question "Keep the old API or drop it?": drop it');
 	});
 
-	it("a takeover (`stuck`) still parks as `human`, with no ask and no needs_input event", async () => {
+	it("a stuck run parks as `decision` WITH its ask and a needs_input event — never a blank `human` wait (#1234)", async () => {
 		seedLoopRun();
 		let parked: { waiting_reason: string | null; waiting_ask: string | null } | null = null;
 		runner["/coding/takeover-status"] = () => {
@@ -565,8 +566,9 @@ describe("a question parks the run on `decision`, on its card, and the answer co
 		};
 		decisions = [{ stuck: { why: "captcha" } }, { finish: { status: "done", detail: "ok" } }];
 		await run(params({ loopRunId: "run-1" }));
-		expect(parked).toEqual({ waiting_reason: "human", waiting_ask: null });
-		expect(rows("SELECT id FROM instance_runtime_task_events WHERE type = 'agent.needs_input'")).toEqual([]);
+		expect(parked).toMatchObject({ waiting_reason: "decision" });
+		expect(JSON.parse(parked!.waiting_ask as string)).toMatchObject({ question: "captcha", options: [] });
+		expect(rows("SELECT id FROM instance_runtime_task_events WHERE type = 'agent.needs_input'")).toHaveLength(1);
 	});
 });
 

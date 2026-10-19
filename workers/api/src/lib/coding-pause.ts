@@ -235,15 +235,22 @@ export function askCardId(deps: Pick<PauseDeps, "taskId" | "sessionId">): string
 async function waitForHuman(deps: PauseDeps, input: { round: number; result: CodingResult }): Promise<PauseVerdict> {
 	const { result, round } = input;
 	const reason = result.outcome === "needs_input" ? "needs_input" : "stuck";
-	const label = reason === "needs_input" ? (result.fieldNeeded ?? "a value") : (result.detail ?? "this step");
+	// `||`, not `??` (#1234): a no-action decision reports `detail: decision.thought`, which can be "",
+	// and an empty label is the blank question the owner was sent.
+	const label = (reason === "needs_input" ? result.fieldNeeded?.trim() || "a value" : result.detail?.trim()) || "this step";
 	const options = reason === "needs_input" ? (result.options ?? []) : [];
-	const cardId = reason === "needs_input" ? askCardId(deps) : null;
+	// A stuck run asks too (#1234). It used to wait as a bare takeover — no question, no answer box —
+	// so a repetition-guard stop parked "waiting on a human" with `waitingAsk` null, the owner's typed
+	// answer fell through to an older question already applied, and nothing could resume it. Now every
+	// wait on a person is a question on the card: answerable from a conversation, parked at zero compute
+	// like any other, and decidable by the brain under the same rules.
+	const cardId = askCardId(deps);
 
 	await deps.takeover(label, reason);
 	// A QUESTION is published as one (#960): its event on the card and its park on the run, before the
 	// pushes below point anyone at it. Best-effort for the same reason the card is — a lost event is a
 	// visibility bug; failing the pause is a work bug.
-	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: result.detail ?? "", field: result.fieldNeeded ?? label, taskId: cardId, ...(result.fullQuestion ? { fullQuestion: result.fullQuestion } : {}), ...(result.parts?.length ? { parts: result.parts } : {}) }).catch(() => undefined)) : null;
+	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: reason === "needs_input" ? (result.detail ?? "") : "", field: result.fieldNeeded ?? label, taskId: cardId, ...(result.fullQuestion ? { fullQuestion: result.fullQuestion } : {}), ...(result.parts?.length ? { parts: result.parts } : {}) }).catch(() => undefined)) : null;
 	const giveUpMs = Math.max(HANDOFF_GIVE_UP_MS, wait?.waitMs ?? 0);
 	const minutes = Math.round((wait?.brain ? wait.humanMs : giveUpMs) / 60_000);
 	// #1076: a captured question PARKS — no compute, no deadline worth racing — rather than polling.
@@ -264,7 +271,9 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	const notificationUrl = cardId ? deepLinkFor({ kind: "task", instanceId: deps.instanceId, taskId: cardId }) : handoffLink(deps);
 	const offered = options.length ? ` Options: ${options.join(" | ")}.` : "";
 	const body = `${deps.repo}: ${label}.${offered} ${clock}`;
-	await deps.notify(reason === "needs_input" ? "❓ Coder has a question" : "🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl, reason === "needs_input" ? "coder_question" : undefined);
+	const title = reason === "needs_input" ? "Coder has a question" : "Coder needs you";
+	const icon = reason === "needs_input" ? "❓" : "🙋";
+	await deps.notify(`${icon} ${title}`, body, `coding-handoff:${reason}:${round}`, true, notificationUrl, "coder_question");
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
 	// announced in chat; a handoff never was, so the conversation the owner started the run from said
 	// nothing at all while the run waited on him, and then reported that it had failed.
@@ -274,9 +283,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// announced its resume time in this same thread. "Take over" without "by when" is why three runs
 	// sat here for the full fifteen minutes and then reported that they had been waiting on someone.
 	await deps.announce(
-		reason === "needs_input"
-			? `❓ **Coder has a question** — ${parkOn ? "parked" : "paused"} on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain || parkOn ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`
-			: `🙋 **Coder needs you** — paused on ${deps.repo}: ${label}. Open the session and take over; the run resumes where it stopped. If nobody does within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`,
+		`${icon} **${title}** — ${parkOn ? "parked" : "paused"} on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain || parkOn ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`,
 	);
 
 	if (parkOn && deps.park) return parkOnQuestion(deps, deps.park, { result, label, options, questionId: parkOn });
@@ -333,13 +340,15 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	return {
 		resume: true,
 		ownerTurn: true,
-		userHint: reason === "needs_input" ? answerHint(result, options, value) : undefined,
+		userHint: answerHint(result, options, value),
 	};
 }
 
 /** What the run is told when the owner answered: the answer, as one owner turn. */
 function answerHint(result: CodingResult, options: string[], value: string | undefined): string | undefined {
-	if (!value || !result.fieldNeeded) return undefined;
+	if (!value) return undefined;
+	if (result.outcome === "stuck") return `The owner answered your request for help ("${result.detail?.trim() || "this step"}"): ${value}`;
+	if (!result.fieldNeeded) return undefined;
 	return options.length ? `The owner answered your question "${result.fieldNeeded}": ${value}` : `${result.fieldNeeded}: ${value}`;
 }
 

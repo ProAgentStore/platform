@@ -177,10 +177,10 @@ describe("the pause publishes a question as a question (#960)", () => {
 		expect((d.asks[0] as { options: string[] }).options).toEqual([]);
 	});
 
-	it("a stuck handoff is not a question — nothing is published as one", async () => {
+	it("a stuck handoff is published as a question too, so the owner has something to answer (#1234)", async () => {
 		const d = pauseDeps();
 		await resolvePause(d, { round: 0, result: { outcome: "stuck", detail: "captcha", steps: 1 }, state: { waits: 0, spentMs: 0 } });
-		expect(d.asks).toEqual([]);
+		expect(d.asks).toEqual([expect.objectContaining({ question: "captcha", options: [] })]);
 		expect(d.notes[0].title).toBe("🙋 Coder needs you");
 	});
 

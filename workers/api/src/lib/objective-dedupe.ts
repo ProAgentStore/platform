@@ -54,6 +54,11 @@ export async function findDuplicateObjective(
 		    -- #1203: a run being CANCELLED is ending — it must not absorb a new start for its issue. The new start goes on to
 		    -- the queue behind it (the cancelling run still holds the repo) and runs when the cancel settles.
 		    AND COALESCE(r.cancel_requested, 0) = 0
+		    -- #1234: a run parked on a person with no answer still to apply — a takeover with no question, or a
+		    -- question a run already consumed — is waiting on nothing anyone can give it. It must not absorb a
+		    -- continuation either: the new start queues behind it instead of being handed back as a duplicate.
+		    AND NOT (COALESCE(r.waiting_reason, '') IN ('human', 'decision') AND NOT EXISTS (
+		      SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND q.state <> 'expired'))
 		  ORDER BY r.started_at DESC`,
 	)
 		.bind(input.userId, input.instanceId)

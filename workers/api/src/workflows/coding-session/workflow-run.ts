@@ -1088,8 +1088,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// parks as `decision`, not `human` (#960): the record used to make it indistinguishable from
 			// a hands-on takeover, which is why the fleet, the board and the status report all called it
 			// hard-blocked.
-			const parkReason: RunWaitReason =
-				result.outcome === "waiting" ? "engine_limit" : result.outcome === "needs_reauth" ? "engine_auth" : result.outcome === "needs_input" ? "decision" : "human";
+			// A `stuck` asks a question too (#1234): a `human` park carried no ask — the blank question nobody could answer.
+			const parkReason: RunWaitReason = result.outcome === "waiting" ? "engine_limit" : result.outcome === "needs_reauth" ? "engine_auth" : "decision";
 			parkedAsk = null;
 			const pause = await resolvePause(pauseDeps(round, parkReason), { round, result, state: waitState });
 			if (!pause.resume) {

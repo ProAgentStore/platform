@@ -204,7 +204,7 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		expect(s.announced.some((m) => m.includes("Coder needs you"))).toBe(true);
 		expect(s.notified).toHaveLength(1);
 		expect(s.notified[0].title).toBe("🙋 Coder needs you");
-		expect(s.notified[0].type).toBeUndefined(); // a takeover stays a `coding` notification; only a question is `coder_question`
+		expect(s.notified[0].type).toBe("coder_question"); // #1234: a stuck run asks a question on its card too
 		expect(s.notified[0].alert).toBe(true);
 		expect(s.notified[0].url).toBeDefined();
 	});
@@ -271,13 +271,14 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		expect(notif.url).toContain("/instances/test-instance/tasks/task-123");
 	});
 
-	it("deep-links to THE coding session when taskId is absent (#899, #894)", async () => {
+	it("deep-links to THE session's card when taskId is absent — the card its answer box is on (#899, #894, #1234)", async () => {
 		// This used to assert only `toContain("/coding")` — which the repo LIST also satisfies, and the
-		// list is where it went: the pause had no session id to link. Exact, now.
+		// list is where it went: the pause had no session id to link. Exact, now. Since #1234 a stuck run
+		// asks on the session's card, so the link opens that card rather than the bare session.
 		const s = spy({ resolveAfter: 1, sessionId: "sess-9" });
 		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
 		expect(s.notified).toHaveLength(1);
-		expect(s.notified[0].url).toBe("/console/instances/test-instance/coding/sess-9");
+		expect(s.notified[0].url).toBe("/console/instances/test-instance/tasks/csess-sess-9");
 	});
 
 	it("with neither a task nor a session, still opens the instance's Coding tab — never the console home", async () => {
@@ -479,5 +480,36 @@ describe("resolvePause — a question the coder brain holds stays parked past 15
 		expect(s.slept).toHaveLength(HANDOFF_WAIT_POLLS);
 		expect(v).toMatchObject({ resume: false, result: { detail: expect.stringMatching(/within 15 minutes/) } });
 		expect(s.announced[0]).toMatch(/If nobody answers within 15 minutes it stops/);
+	});
+});
+
+describe("resolvePause — a stuck run asks a real question on its card (#1234)", () => {
+	// Run 75a17626: the repetition guard stopped the Pilot polling CI, the run parked "waiting on a human" with
+	// `waitingAsk` null, and the owner's typed answer had nowhere to land. Every wait on a person is a question now.
+	const repeated: CodingResult = { outcome: "stuck", detail: "Stopped: the orchestrator sent the same instruction 3 times within 8 steps", steps: 8 };
+
+	it("publishes the stop as a question on the session's card, and the typed answer resumes the run as an owner turn", async () => {
+		const s = spy({ resolveAfter: 1, sessionId: "sess-1" });
+		const asked: Array<Record<string, unknown>> = [];
+		s.deps.ask = async (a) => {
+			asked.push(a as unknown as Record<string, unknown>);
+			return { waitMs: HANDOFF_GIVE_UP_MS, humanMs: HANDOFF_GIVE_UP_MS, brain: false };
+		};
+		const v = await resolvePause(s.deps, { round: 0, result: repeated, state: { waits: 0, spentMs: 0 } });
+		expect(asked).toEqual([expect.objectContaining({ question: repeated.detail, taskId: "csess-sess-1", options: [], why: "" })]);
+		expect(s.announced[0]).toMatch(/answer_instance_input/);
+		expect(v).toMatchObject({ resume: true, ownerTurn: true, userHint: `The owner answered your request for help ("${repeated.detail}"): typed by hand` });
+	});
+
+	it("never asks a blank question — an empty detail (a no-action decision with an empty thought) still names the step", async () => {
+		const s = spy({ resolveAfter: 1, sessionId: "sess-1" });
+		const asked: string[] = [];
+		s.deps.ask = async (a) => {
+			asked.push(a.question);
+			return undefined;
+		};
+		await resolvePause(s.deps, { round: 0, result: { outcome: "stuck", detail: "  ", steps: 1 }, state: { waits: 0, spentMs: 0 } });
+		expect(asked).toEqual(["this step"]);
+		expect(s.announced[0]).toContain(": this step");
 	});
 });

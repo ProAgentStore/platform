@@ -21,16 +21,16 @@ import type { Env } from "../types.js";
  * a question is waiting: the runner's resolve answers `ok` whether or not a takeover is pending, so
  * delivering without this check would report an answer as landed that nothing was waiting for.
  */
-export async function decisionRunForCard(env: Env, instanceId: string, userId: string, taskId: string): Promise<{ runId: string; sessionId: string; ask: WaitingAsk } | null> {
+export async function decisionRunForCard(env: Env, instanceId: string, userId: string, taskId: string): Promise<{ runId: string; sessionId: string; ask: WaitingAsk; parkedSince: number | null } | null> {
 	const { results } = await env.DB.prepare(
-		`SELECT run_id, session_id, waiting_ask FROM agent_loop_runs
+		`SELECT run_id, session_id, waiting_ask, parked_since FROM agent_loop_runs
 		  WHERE instance_id = ?1 AND user_id = ?2 AND status = 'running' AND waiting_reason = 'decision' AND session_id IS NOT NULL`,
 	)
 		.bind(instanceId, userId)
-		.all<{ run_id: string; session_id: string; waiting_ask: string | null }>();
+		.all<{ run_id: string; session_id: string; waiting_ask: string | null; parked_since: number | null }>();
 	for (const r of results ?? []) {
 		const ask = parseWaitingAsk(r.waiting_ask);
-		if (ask && ask.taskId === taskId) return { runId: r.run_id, sessionId: r.session_id, ask };
+		if (ask && ask.taskId === taskId) return { runId: r.run_id, sessionId: r.session_id, ask, parkedSince: r.parked_since };
 	}
 	return null;
 }

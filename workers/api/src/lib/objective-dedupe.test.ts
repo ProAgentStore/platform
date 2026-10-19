@@ -90,6 +90,28 @@ describe("findDuplicateObjective — the same issue already waiting or running o
 		expect(await find("Work issue #84")).toBeNull();
 	});
 
+	it("a run parked on a person with no answer left to apply does not absorb a continuation (#1234)", async () => {
+		// Run 75a17626: parked "waiting on a human" with no question — its only question already answered and applied —
+		// and a queue_if_busy start for the same issue came back `duplicate_of` that run, so no continuation could queue.
+		const park = (runId: string, reason: string) => d1.exec(`UPDATE agent_loop_runs SET waiting_reason = '${reason}' WHERE run_id = '${runId}'`);
+		const question = (runId: string, state: string, applied: boolean) =>
+			d1.exec(`INSERT INTO coder_questions (id, instance_id, user_id, session_id, run_id, task_id, question, state, asked_at, expires_at, applied_at) VALUES ('q-${runId}-${state}', 'i1', 'u1', 's-${runId}', '${runId}', 'csess-s-${runId}', 'Bump the version?', '${state}', 1, 2, ${applied ? 3 : "NULL"})`);
+		running("run-a", "Work issue #762", "r1");
+		park("run-a", "human");
+		expect(await find("Work issue #762")).toBeNull();
+		question("run-a", "answered_human", true);
+		park("run-a", "decision");
+		expect(await find("Work issue #762")).toBeNull();
+
+		// A question still open, or answered and not yet consumed, IS what the run is waiting on: that is the same work.
+		running("run-b", "Work issue #763", "r2");
+		park("run-b", "decision");
+		question("run-b", "waiting_human", false);
+		expect(await find("Work issue #763", "r2")).toEqual(expect.objectContaining({ kind: "running", runId: "run-b" }));
+		d1.exec(`UPDATE coder_questions SET state = 'answered_human' WHERE run_id = 'run-b'`);
+		expect(await find("Work issue #763", "r2")).toEqual(expect.objectContaining({ kind: "running", runId: "run-b" }));
+	});
+
 	it("prefers a waiting entry over the running run, since the entry is what a queued answer names", async () => {
 		running("run-a", "Work issue #925", "r1");
 		const e = await enqueueObjective(env, { instanceId: "i1", repoId: "r1", userId: "u1", objective: "Work issue #925" });
