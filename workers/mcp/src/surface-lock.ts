@@ -1211,4 +1211,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.155": "sha256:1b9b3d9de5d29aeb9cea48ea26a52c255e919a57cc1fa7d27df3c5248b94f220",
 	// #1233: set_auto_pickup (brain-free auto-pickup: on/off, priority + exclude labels, daily cap, iterations) and get_auto_pickup (read).
 	"0.1.156": "sha256:bdca0061b64725cf263adcdaa990708b1a21d6535be9ba5bb1e349ab20e87b5e",
+	// #1237: get_agent_operator_manual + set_agent_operator_manual (a template manual every instance inherits).
+	"0.1.157": "sha256:3d3cd7c3fa753c13fd7cd8edcdc3cc6fc4c0b683adfcbae70be8a2f25cfcfa53",
 };

@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**364 tool registrations.** 337 are always registered; 27 are gated to the console
+**366 tool registrations.** 339 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -386,6 +386,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `review_local_browser_finding` | Save one finding of a finished research run to the results collection (a duplicate is reported before any write; `force` saves it anyway), or skip it | write | yes | |
 | `get_instance_operator_manual` | Read the operator manual (caller-facing; echoes rules) | — | | |
 | `set_instance_operator_manual` | Replace the operator manual (max 16000 chars) | write | yes | |
+| `get_agent_operator_manual` | Read a template's operator manual, inherited by every instance of it (#1237) | read | | |
+| `set_agent_operator_manual` | Replace a template's operator manual (max 16000 chars); every instance shows it on its next read, no resync (#1237) | write | yes | |
 | `get_translation_config` | Read the translation display config | — | | |
 | `set_translation_config` | Patch it | write | yes | |
 | `get_instance_voice_settings` | Read the resolved voice config (TTS, STT, language, commands) + `hasOverride` | — | | |

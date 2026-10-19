@@ -110,7 +110,7 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"get_instance_operator_manual",
-		"Read the operator manual for a subscribed instance — caller-facing notes about HOW this instance is meant to be driven (not an instruction to the agent). Returns { manual, rules, context }: `manual` is the stored document, `rules` echoes the agent's Special Instructions so you can see the standing orders that will make it refuse things, and `context` is GENERATED on every read from the same rows list_instance_tools returns (#1109): how to operate the instance (discovery, call_instance_tool, the work queue, status and trace) and every tool it may run — purpose, arguments with types, read-only or changes-something, and a pasteable call_instance_tool call for the callable ones (chat-only ones are marked as reachable only through chat_with_instance). `context` is never stored; `manual` is the owner's own text, returned as written. When the reply would not fit the wire budget, `context` is paged: `contextPage` says where it stands — call again with `context_offset: contextPage.nextOffset`.",
+		"Read the operator manual for a subscribed instance — caller-facing notes about HOW this instance is meant to be driven (not an instruction to the agent). Returns { manual, inherited, sections, combined, rules, context }: `inherited` is the agent TEMPLATE's manual (#1237), read live so a template edit shows on every instance's next read; `manual` is this instance's own stored document; `sections` is { inherited, instance } (null when empty); `combined` is both as one sectioned document, the instance text last as an addendum that wins where they conflict — read it to get every rule that applies; `rules` echoes the agent's Special Instructions so you can see the standing orders that will make it refuse things, and `context` is GENERATED on every read from the same rows list_instance_tools returns (#1109): how to operate the instance (discovery, call_instance_tool, the work queue, status and trace) and every tool it may run — purpose, arguments with types, read-only or changes-something, and a pasteable call_instance_tool call for the callable ones (chat-only ones are marked as reachable only through chat_with_instance). `context` is never stored; `manual` is the owner's own text, returned as written. When the reply would not fit the wire budget, `context` is paged: `contextPage` says where it stands — call again with `context_offset: contextPage.nextOffset`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -470,6 +470,47 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 				env,
 			);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_agent_settings_schema", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+	// ── Creator: the template's operator manual (#1237) ─────────────────────────
+
+	server.tool(
+		"get_agent_operator_manual",
+		"Read an agent TEMPLATE's operator manual (#1237, owner only) — caller-facing operating standards that EVERY instance of the template inherits (checkout layout, delivery rules, machine map…). Returns { manual, instances }: the text (\"\" when none) and how many instances inherit it. Each instance's get_instance_operator_manual shows it live as its inherited section. Not an instruction to the agent.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			agent_id: z.string().describe("The agent template's id or slug (from my_agents)."),
+		},
+		async ({ token, agent_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_agent_operator_manual", { agent_id });
+			if (denied) return denied;
+			const data = await authedCall(`/v1/agents/${encodeURIComponent(agent_id)}/operator-manual`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_agent_operator_manual",
+		"Replace an agent TEMPLATE's operator manual (#1237, owner only, max 16000 chars). Every existing and future instance of the template shows it on its next get_instance_operator_manual read — no resync, no per-instance copy. Use it for fleet-wide operating standards; an instance's own manual (set_instance_operator_manual) stays as an addendum after it and wins where they conflict. Caller-facing guidance, NOT an agent instruction (that is set_instance_instructions). Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			agent_id: z.string().describe("The agent template's id or slug (from my_agents)."),
+			manual: z.string().max(16000).describe("The full manual (replaces the old one; \"\" clears it)."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, agent_id, manual, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id, chars: manual.length };
+			const denied = await requirePermission(safetyFor(token), "write", "set_agent_operator_manual", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}/operator-manual`;
+			if (dry_run) return dryRun(safetyFor(token), "set_agent_operator_manual", "replace the agent template's operator manual (inherited by every instance)", input, { endpoint, method: "PUT" });
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ manual }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_agent_operator_manual", action: "completed", input, result: data });
 			return jsonText(data);
 		},
 	);
