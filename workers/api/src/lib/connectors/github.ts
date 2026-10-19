@@ -571,12 +571,16 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			untrustedOutput: true,
 			scope: "read",
 			description:
-				"List or search a repo's issues (excludes pull requests). Already have the issue NUMBER? Call github_read_issue. Without `search` this returns `{issues, hasMore, nextPage}`, most recently updated first, open ones unless `state` says otherwise; pass `page: nextPage` for more. With `search` it uses GitHub's issue search API over ALL the repo's issues and, unless you pass `state`, over every state — open AND closed. It returns `{total_count, incomplete_results, issues}`: `total_count` counts every match. A `search` that is only a number (\"274\" or \"#274\") is read directly by number instead, whatever its state (`matchedBy:\"number\"`). A refused search is an error, never an empty list.",
+				"List or search a repo's issues (excludes pull requests) — or several repos' at once. ONE repo (`repo: \"owner/name\"`, no `scope`) behaves exactly as described next. SEVERAL repos: a comma-separated `repo` list, `repo: \"*\"` or no `repo` for every repo bound to this instance, or `scope: \"account\"` for every repo across all your coding instances (de-duplicated). Multi-repo replies tag each issue with its `repo`, sort by most recently updated, page with `page`/`nextPage`, count per repo, report a repo that could not be read under `failures` instead of failing the call, and leave out `needs-human` issues unless `exclude_labels` says otherwise. Already have the issue NUMBER? Call github_read_issue. With one repo and without `search` this returns `{issues, hasMore, nextPage}`, most recently updated first, open ones unless `state` says otherwise; pass `page: nextPage` for more. With `search` it uses GitHub's issue search API over ALL the repo's issues and, unless you pass `state`, over every state — open AND closed. It returns `{total_count, incomplete_results, issues}`: `total_count` counts every match. A `search` that is only a number (\"274\" or \"#274\") is read directly by number instead, whatever its state (`matchedBy:\"number\"`). A refused search is an error, never an empty list.",
 			handler: "github_list_issues",
 			params: {
-				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
+				repo: { type: "string", description: 'The repository, "owner/name" — or several, comma-separated ("acme/app,acme/console"), or "*" (or omit it) for every repo bound to this instance.' },
+				scope: { type: "string", description: '"account": every repo across all your coding instances, de-duplicated. Omit to use `repo`.' },
 				state: { type: "string", description: '"open" | "closed" | "all". Default: open when listing, all when searching.' },
 				labels: { type: "string", description: "Comma-separated label filter." },
+				exclude_labels: { type: "string", description: 'Comma-separated labels to leave out. Default with several repos: "needs-human"; pass "" to keep everything.' },
+				assignee: { type: "string", description: 'Only issues assigned to this GitHub login ("none" for unassigned).' },
+				updated_since: { type: "string", description: "Only issues updated on or after this date (ISO 8601, e.g. 2026-10-01)." },
 				search: {
 					type: "string",
 					description:
