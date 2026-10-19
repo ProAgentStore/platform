@@ -2,7 +2,7 @@
 
 **Status:** slice 1 shipped. The routing rules live in `workers/api/src/lib/runner-routing.ts`, with
 tests in `workers/api/src/lib/runner-routing.test.ts`. **Nothing is enabled live:** no runner is
-registered, no `PAGS_RUNNER` variable is written, and the GitHub App has no new permissions. Everything
+registered, no `PAGS_RUNNER` variable is written, and the GitHub App has no new permissions yet (the exact set to grant is in §1). Everything
 below that is marked *pending* needs either the owner's approval (new GitHub App permissions; software
 installed on owner machines) or work in another repository (PAS). Follow-ups to file:
 [`docs/issues/1113-followup.md`](issues/1113-followup.md).
@@ -39,11 +39,36 @@ GitHub-hosted", and "public repos are rejected" (the guard exists; nothing calls
 
 ## Pending — the live loop
 
-### 1. GitHub App permissions (owner approval)
-Org **Self-hosted runners: write** (register/remove runners, manage runner groups and their repo access),
-**Variables: write** on repos (`PAGS_RUNNER`), and **Administration/billing read** for Actions usage.
-Granting these changes what the App can do in every org it is installed on (ProAgentStore, pas-apps…).
-Until granted, every step below would fail at GitHub. The installation-token path is
+### 1. GitHub App permissions (owner approval — approved 2026-10-19, #1207)
+The App is **`proagentstore`** (id 4460892, owned by the ProAgentStore org,
+https://github.com/apps/proagentstore). Its permissions are set in its GitHub settings, not in this
+repo: no manifest or file here declares them, and a manifest only applies when an App is created.
+
+Read from `GET /apps/proagentstore` on 2026-10-19, before the change:
+`actions: read`, `contents: read`, `issues: write`, `members: read`, `metadata: read`.
+
+The three to add, named as GitHub's "Permissions required for GitHub Apps" reference names them
+(checked 2026-10-19), with the endpoints each one opens:
+
+| Settings page label | API key | Level | Opens |
+|---|---|---|---|
+| Organization → **Self-hosted runners** | `organization_self_hosted_runners` | **write** | `POST /orgs/{org}/actions/runners/registration-token` (#1208), runner removal, `/orgs/{org}/actions/runner-groups/*` and their repo access (#1210) |
+| Repository → **Variables** | `actions_variables` | **write** | `POST`/`PATCH /repos/{owner}/{repo}/actions/variables` — `PAGS_RUNNER` (#1212) |
+| Organization → **Administration** | `organization_administration` | **read** | `GET /organizations/{org}/settings/billing/usage` — Actions minutes (#1212) |
+
+`Administration: read` is the only App permission GitHub lists for the billing usage report. It also
+reads other org settings; nothing here uses it for anything but usage.
+
+Granting is two steps, both the owner's:
+1. Change the App: https://github.com/organizations/ProAgentStore/settings/apps/proagentstore/permissions
+   — set the three above and save.
+2. Accept on every installation: GitHub asks each org the App is installed on to review the new
+   permissions (Settings → GitHub Apps → proagentstore → *Review request*). Until an org accepts, its
+   installation tokens keep the old permissions and every call below fails there with 403. The
+   orgs that matter first are ProAgentStore and **proappstore-online** (the interns repo,
+   `proappstore-online/interns`, #1215).
+
+Until both are done, every step below would fail at GitHub. The installation-token path is
 `workers/api/src/lib/github-app.ts`.
 
 ### 2. Registration tokens — minted, pushed, never stored
