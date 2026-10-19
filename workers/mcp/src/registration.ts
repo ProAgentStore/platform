@@ -1,4 +1,5 @@
 import { type CallAuditRecord, callEvent, currentCallAudit, errorName, newCallRecord, noteArguments, withCallAudit } from "./call-audit.js";
+import { actionableInputError, closestToolNames, normalizeArguments, type RawShape } from "./argument-normalize.js";
 import { correlationFromExtra, currentCallCorrelation, withCallCorrelation } from "./call-context.js";
 import type { TextResult } from "./http.js";
 import { auditCallOutcome, type SafetyContext } from "./safety.js";
@@ -95,7 +96,7 @@ async function finishCall(rec: CallAuditRecord, safety: (provided?: string) => S
  * false, the handler wrapper still records every call that reaches a handler, and the conformance
  * test that drives a schema-invalid call through a real client fails.
  */
-function wrapToolsCall(target: RegistrationTarget, registered: Map<string, boolean>, safety: (provided?: string) => SafetyContext): boolean {
+function wrapToolsCall(target: RegistrationTarget, registered: Map<string, boolean>, safety: (provided?: string) => SafetyContext, shapes: Map<string, RawShape>): boolean {
 	const handlers = (target.server as { _requestHandlers?: unknown } | undefined)?._requestHandlers;
 	if (!(handlers instanceof Map)) return false;
 	const original = handlers.get("tools/call") as RequestHandler | undefined;
@@ -104,13 +105,16 @@ function wrapToolsCall(target: RegistrationTarget, registered: Map<string, boole
 		const params = (request as { params?: { name?: unknown; arguments?: unknown } } | undefined)?.params;
 		const name = typeof params?.name === "string" && registered.has(params.name) ? params.name : "(unregistered)";
 		const rec = newCallRecord(name, registered.get(name) === true);
-		noteArguments(rec, params?.arguments);
+		// #1241: a camelCase key or a list in the other form is fixed HERE, before the SDK validates, for every tool — and said.
+		const { args, warnings } = normalizeArguments(shapes.get(name), params?.arguments);
+		const call = warnings.length ? { ...(request as object), params: { ...params, arguments: args } } : request;
+		noteArguments(rec, args);
 		const token = (params?.arguments as { token?: unknown } | undefined)?.token;
 		if (typeof token === "string" && token) rec.provided = token;
 		return withCallCorrelation(correlationFromExtra(extra), () =>
 			withCallAudit(rec, async () => {
 				try {
-					rec.final = await original(request, extra);
+					rec.final = explainResult(await original(call, extra), { name, requested: params?.name, shape: shapes.get(name), args, warnings, registered });
 					return rec.final;
 				} catch (e) {
 					// Thrown out of the SDK (a URL elicitation, or a fault in the SDK itself): no result reached the caller.
@@ -126,6 +130,29 @@ function wrapToolsCall(target: RegistrationTarget, registered: Map<string, boole
 	return true;
 }
 
+/**
+ * The SDK's answer, made usable (#1241): a schema failure names each bad argument, lists what the tool
+ * takes and gives a corrected example; an unknown tool name suggests the nearest real ones; and any
+ * argument rewritten or ignored on the way in is said, as a note after the result. A tool's own
+ * result is otherwise returned as it was — nothing is added to a call that needed no fixing.
+ */
+function explainResult(result: unknown, c: { name: string; requested: unknown; shape?: RawShape; args: unknown; warnings: string[]; registered: Map<string, boolean> }): unknown {
+	const r = result as { isError?: boolean; content?: Array<{ type?: string; text?: string }> } | undefined;
+	const text = r?.content?.[0]?.type === "text" ? (r.content[0].text ?? "") : "";
+	const notes = c.warnings.length ? `\n\nNote:\n${c.warnings.map((w) => `- ${w}`).join("\n")}` : "";
+	// The SDK prefixes its own refusals with "MCP error -32602: ".
+	if (r?.isError && /^(MCP error -?\d+: )?Input validation error/.test(text)) {
+		return { ...r, content: [{ type: "text", text: actionableInputError(c.name, c.shape, c.args, text) + notes }, ...(r.content ?? []).slice(1)] };
+	}
+	if (r?.isError && /^(MCP error -?\d+: )?Tool \S+ not found/.test(text) && typeof c.requested === "string") {
+		const near = closestToolNames(c.requested, c.registered.keys());
+		const hint = near.length ? ` Did you mean ${near.map((n) => `\`${n}\``).join(", ")}?` : "";
+		return { ...r, content: [{ type: "text", text: `${text.replace(/^MCP error -?\d+: /, "")}.${hint} This connection's tools are in tools/list; an instance's own connector tools are reached with call_instance_tool (list them with list_instance_tools).` }] };
+	}
+	if (notes && r && Array.isArray(r.content)) return { ...r, content: [...r.content, { type: "text", text: notes.trimStart() }] };
+	return result;
+}
+
 export function installRegistrationPipeline(
 	server: RegistrationTarget,
 	opts: RegistrationOptions,
@@ -134,6 +161,8 @@ export function installRegistrationPipeline(
 	// Every registered name → whether it is read-only, so the boundary can tell a known tool from an
 	// arbitrary caller-supplied name before any handler runs.
 	const registered = new Map<string, boolean>();
+	// Every registered name → its zod raw shape, for the argument fixes and errors at the `tools/call` seam (#1241).
+	const shapes = new Map<string, RawShape>();
 	let boundaryWrapped = false;
 	server.tool = (...args: unknown[]) => {
 		let i = args.length - 1;
@@ -222,6 +251,7 @@ export function installRegistrationPipeline(
 			const arg = args[j];
 			if (typeof arg === "object" && arg !== null) inputSchema = arg as Record<string, unknown>;
 		}
+		if (inputSchema) shapes.set(name, inputSchema as RawShape);
 
 		const registeredTool = registerTool(
 			name,
@@ -234,7 +264,7 @@ export function installRegistrationPipeline(
 			gated,
 		);
 		// The SDK installs its `tools/call` dispatcher on the first registration; wrap it once, then.
-		if (!boundaryWrapped && opts.safety) boundaryWrapped = wrapToolsCall(server, registered, opts.safety);
+		if (!boundaryWrapped && opts.safety) boundaryWrapped = wrapToolsCall(server, registered, opts.safety, shapes);
 		return registeredTool;
 	};
 }
