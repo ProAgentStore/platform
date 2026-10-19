@@ -59,6 +59,10 @@ export async function addPairedRepo(
 			`Missing the local workdir: a coding repo needs the folder of its checkout as well as ${githubRepoIn ? `\`${githubRepoIn}\`` : "its GitHub owner/repo"}. Pass the checkout's path (~/dev/...).`,
 		);
 	}
+	// #1237: the same answer MCP's coding_repo_add gives, for any other caller of this route.
+	if (/^[A-Za-z]:[\\/]/.test(localPath)) {
+		return refuse(`Windows drive-letter paths are not supported — use a home-relative \`~/\` path instead (e.g. \`~/dev/myrepo\`), so the instance can move between machines. Got \`${localPath}\`.`);
+	}
 	const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
 	if (!conn) {
 		return refuse(

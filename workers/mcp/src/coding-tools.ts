@@ -487,6 +487,10 @@ export function registerCodingSessionTools(
 			// Both halves or nothing (#849): an owner/repo in `path` used to bind a repo with no
 			// folder, which then sat at `cloning` forever and no repo tool could reach.
 			const localPath = path.trim();
+			// #1237: a Windows drive-letter path is not "not a folder path" — it is the wrong kind of folder path.
+			if (/^[A-Za-z]:[\\/]/.test(localPath)) {
+				return text(`Error: Windows drive-letter paths are not supported — use a home-relative \`~/\` path instead (e.g. \`~/dev/myrepo\`), so the instance can move between machines. Got \`${localPath}\`.`);
+			}
 			if (!localPath.startsWith("~") && !localPath.startsWith("/")) {
 				return text(
 					`Error: missing the local workdir — \`${localPath}\` is not a folder path. A coding repo needs the checkout's folder as \`path\` (~/dev/...)${localPath.includes("/") ? `; pass \`${localPath}\` as \`github_repo\` alongside it` : ""}.`,
