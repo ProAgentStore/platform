@@ -513,3 +513,23 @@ describe("resolvePause — a stuck run asks a real question on its card (#1234)"
 		expect(s.announced[0]).toContain(": this step");
 	});
 });
+
+describe("reading the owner's answer at the iteration cap (#1236)", () => {
+	it("a deny word stops it; a number grants that many, within the ceiling; anything else grants what was asked", async () => {
+		const { readIterationAnswer, DENY_ITERATIONS, approveIterationsOption } = await import("./coding-pause.js");
+		for (const no of ["deny", "Deny — stop the run here", DENY_ITERATIONS, "stop", "No, leave it", "cancel it"]) expect(readIterationAnswer(no, 30, 100), no).toEqual({ approved: false });
+		expect(readIterationAnswer("approve 12", 30, 100)).toEqual({ approved: true, steps: 12, note: null });
+		expect(readIterationAnswer("500", 30, 100)).toMatchObject({ approved: true, steps: 100 });
+		expect(readIterationAnswer(approveIterationsOption(30), 30, 100)).toEqual({ approved: true, steps: 30, note: null });
+		expect(readIterationAnswer(undefined, 30, 100)).toEqual({ approved: true, steps: 30, note: null }); // a bare Resume
+		expect(readIterationAnswer("yes", 30, 100)).toEqual({ approved: true, steps: 30, note: null });
+		// An instruction is an approval of what was asked, and rides along as the owner's words.
+		expect(readIterationAnswer("go on, but skip the docs", 30, 100)).toEqual({ approved: true, steps: 30, note: "go on, but skip the docs" });
+	});
+
+	it("the coder brain never grants iterations: the question trips its spend guardrail", async () => {
+		const { declineBeforeModel } = await import("./coder-brain-decide.js");
+		const q = "This run reached its cap of 30 iterations without finishing. Approve 30 more to let the same run continue in the same session (the working tree is untouched), or deny to stop it here.";
+		expect(declineBeforeModel({ question: q, options: ["Approve 30 more iterations", "Deny — stop the run here"], issue: null }, 0, 3)).toMatch(/iteration budget/);
+	});
+});

@@ -249,3 +249,69 @@ describe("a coding run asks, PARKS at zero compute, and resumes with the owner's
 		expect(continueRefusal(run!)).toBeNull();
 	});
 });
+
+describe("a run at its iteration cap asks the owner instead of failing (#1236)", () => {
+	const send = (text: string) => toDecision({ name: "send_message", arguments: { text } });
+	const capped = (): CodingSessionParams => ({ ...params(), maxSteps: 2 }) as CodingSessionParams;
+	const loopRow = () => d1.sqlite.prepare("SELECT status, stop_reason, max_iterations, checkout_released_at, waiting_reason FROM agent_loop_runs WHERE run_id = 'run-1'").get() as Record<string, unknown>;
+	const cardQuestion = () => d1.sqlite.prepare("SELECT question, options, state, applied_run_id FROM coder_questions WHERE task_id = 'csess-s1'").get() as { question: string; options: string; state: string; applied_run_id: string | null };
+
+	async function runToCap(answer: string | "timeout") {
+		let whileParked: Record<string, unknown> | null = null;
+		const seen: { parkedRun: Awaited<ReturnType<typeof getLoopRun>>; reply: Awaited<ReturnType<typeof post>> | null } = { parkedRun: null, reply: null };
+		const result = await runCodingSessionWorkflow(
+			env,
+			{ payload: capped(), instanceId: "wf-run-1" } as unknown as WorkflowEvent<CodingSessionParams>,
+			step(
+				async () => undefined,
+				async () => {
+					whileParked = loopRow();
+					seen.parkedRun = await getLoopRun(env, "u1", "run-1");
+					if (answer === "timeout") return "timeout";
+					seen.reply = await post("csess-s1", answer);
+					return undefined;
+				},
+			),
+		);
+		return { result, whileParked: whileParked as Record<string, unknown> | null, ...seen };
+	}
+
+	it("parks as waiting on the owner — not failed — with the checkout and working tree left exactly as they are", async () => {
+		decisions = [send("step one"), send("step two"), { finish: { status: "done", detail: "unused" } }];
+		const { whileParked, parkedRun } = await runToCap("timeout");
+		expect(whileParked).toMatchObject({ status: "running", waiting_reason: "decision", checkout_released_at: null });
+		expect(callRunner.mock.calls.some((c) => c[1] === "/coding/park-snapshot")).toBe(false); // nothing set aside, nothing reset
+		expect(parkedRun?.waitingAsk?.question).toMatch(/reached its cap of 2 iterations without finishing\. Approve 2 more/);
+		expect(parkedRun?.waitingAsk?.options).toEqual(["Approve 2 more iterations", "Deny — stop the run here"]);
+		expect(waitClause(parkedRun!, Date.now())).toMatch(/PARKED, waiting for YOUR ANSWER to a question: "This run reached its cap/);
+	});
+
+	it("approve with N: the SAME run resumes in the same session with N more iterations, and finishes", async () => {
+		decisions = [send("step one"), send("step two"), send("step three"), { finish: { status: "done", detail: "objective complete" } }];
+		const { result, reply } = await runToCap("approve 5");
+		expect(reply).toMatchObject({ status: 200, body: { outcome: "delivered", runId: "run-1" } });
+		expect(result).toMatchObject({ outcome: "done" });
+		expect(acts).toEqual(["step one", "step two", "step three"]);
+		expect(decided[2].userHint).toMatch(/^The owner approved 5 more iterations after you reached your cap\. Continue the objective from exactly where you are/);
+		expect(loopRow()).toMatchObject({ status: "completed", max_iterations: 15 });
+		expect(cardQuestion()).toMatchObject({ state: "answered_human", applied_run_id: "run-1" });
+	});
+
+	it("deny: the run stops right there and takes no further step", async () => {
+		decisions = [send("step one"), send("step two"), send("NEVER SENT"), { finish: { status: "done", detail: "unused" } }];
+		const { result } = await runToCap("Deny — stop the run here");
+		expect(result).toMatchObject({ outcome: "cancelled", detail: expect.stringMatching(/Stopped by you at the iteration cap/) });
+		expect(decided).toHaveLength(2);
+		expect(acts).toEqual(["step one", "step two"]);
+		expect(loopRow()).toMatchObject({ status: "cancelled", stop_reason: "cancelled", max_iterations: 10 });
+	});
+
+	it("no answer: it gives up the way every human wait does — continuable, never failed / max_iterations", async () => {
+		decisions = [send("step one"), send("step two"), { finish: { status: "done", detail: "unused" } }];
+		await runToCap("timeout");
+		const row = loopRow();
+		expect(row.stop_reason).toBe("decision");
+		expect(row.status).not.toBe("failed");
+		expect(continueRefusal((await getLoopRun(env, "u1", "run-1"))!)).toBeNull(); // the owner can continue it later
+	});
+});

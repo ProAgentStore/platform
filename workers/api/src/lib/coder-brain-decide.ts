@@ -82,6 +82,8 @@ export function citedSources(evidence: readonly string[], labels: readonly strin
 export const GUARDRAILS: ReadonlyArray<{ id: string; why: string; re: RegExp }> = [
 	{ id: "owner_only", why: "it is an owner-only choice (pricing, legal, licensing, branding or product direction)", re: /\b(pric(e|es|ing)|legal|licen[cs](e|ing)|trademark|brand(ing)?|logo|product direction|roadmap|terms of service|privacy policy)\b/i },
 	{ id: "privileges", why: "it would grant or widen permissions, tokens, scopes or secrets", re: /\b(permissions?|scopes?|tokens?|secrets?|credentials?|api[- ]?keys?|passwords?|oauth|access (rights|control)|admin rights|grant access)\b/i },
+	// #1236: more iterations at a run's cap is more spend on the owner's account — always theirs to grant.
+	{ id: "spend", why: "it would extend a run's iteration budget, which is spend only the owner grants", re: /\bmore (iterations?|steps)\b|\b(iteration|step) (cap|limit|budget)\b|\breached its cap\b/i },
 	{ id: "money", why: "it touches payments, payouts, billing or production credentials", re: /\b(payments?|payouts?|billing|invoices?|stripe|refunds?|subscriptions?|charges?|pricing tiers?|production (credentials?|secrets?)|deploy(ment)? secrets?)\b/i },
 	{ id: "destructive", why: "it would delete data, a repository or an instance", re: /\b(delete|deletion|drop (the )?(table|database|column)|destroy|wipe|truncate|purge|remove (the )?(repo(sitory)?|data(base)?|instance|table|users?)|force[- ]push|rm -rf)\b/i },
 	{ id: "delivery_mode", why: "it would change delivery mode (this repo delivers straight to main: no branches, no pull requests)", re: /\b(branch(es|ing)?|pull requests?|merge requests?|\bPRs?\b|feature flag rollout process|release process)\b/i },

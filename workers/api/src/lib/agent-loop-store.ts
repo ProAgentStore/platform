@@ -757,3 +757,9 @@ export async function answersPendingFor(env: Pick<Env, "DB">, runIds: string[]):
 	}
 	return out;
 }
+
+/** #1236: the owner approved `steps` more iterations at the run's cap, so its ceiling grows by that much. */
+export async function grantRunIterations(env: Pick<Env, "DB">, runId: string, steps: number): Promise<null> {
+	await env.DB.prepare("UPDATE agent_loop_runs SET max_iterations = max_iterations + ?2 WHERE run_id = ?1 AND status = 'running'").bind(runId, steps).run();
+	return null;
+}

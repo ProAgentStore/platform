@@ -57,7 +57,7 @@ import {
 import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSlugs, unscopedWrites } from "../../lib/repo-write-scope.js";
 import { actsInWindow } from "../../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../../lib/run-attribution.js";
-import { finishLoopRun, settledRunStatus, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason, type WaitingAsk } from "../../lib/agent-loop-store.js";
+import { finishLoopRun, settledRunStatus, grantRunIterations, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason, type WaitingAsk } from "../../lib/agent-loop-store.js";
 import { mirrorRuntimeEvent } from "../../routes/instances-runtime.js";
 import { reauthCompletedSince } from "../../lib/engine-reauth-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
@@ -67,6 +67,7 @@ import { traceCodingRun } from "../../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, runOutcomeNote } from "../../lib/coding-run-report.js";
 import { statusFor, type LoopRunStatus, type LoopStopReason } from "../../lib/agent-loop.js";
 import { PILOT_DEFAULT_MAX_STEPS } from "../../lib/loop-limits.js";
+import { resolveAccountCeilings } from "../../lib/delegation-budget-store.js";
 import { CodingRunProbe, recordCodingFailure } from "../../lib/coding-failure.js";
 import { planInterruptionResume, roundThroughInterruptions, type InterruptionResume } from "../../lib/coding-interrupt.js";
 import { postSystemMessage } from "../../lib/instance-system-message.js";
@@ -792,7 +793,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// #1076: a captured question parks at zero compute; only a run with a loop-run row can be woken.
 		park: event.payload.loopRunId
 			? {
-					begin: (_questionId, until) =>
+					begin: (_questionId, until, opts) =>
 						runRetry(`park-${round}`, async () => {
 							const runId = event.payload.loopRunId as string;
 							await recordParkedWorkflow(env, runId, event.instanceId ?? runId);
@@ -800,6 +801,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 							// The engine PROCESS stops; its session row and its resume key stay. Its last acts are drained like the terminal path's.
 							const ended = await callRunner<{ acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
 							await recordEngineActs(env, { userId, sessionId, instanceId, traceId: runId, cardId: traceCtx.cardId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
+							if (opts?.keepCheckout) return { announce: "Its checkout and working tree stay exactly as they are while it waits for you.", released: false }; // #1236
 							// #1077: let go of the checkout (its work set aside first), so queued work runs while this waits.
 							const r = await releaseCheckout(env, conn, { runId, instanceId, userId, sessionId, repoId });
 							return { announce: r.line, onStop: r.onStop, released: r.released };
@@ -1054,12 +1056,15 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		const caps = await guard(runRetry, "objective-capabilities", () => callRunner(conn, "/capabilities", {})).catch(() => null);
 		const unsupported = objective.capabilities(caps, { runnerNode: conn.runnerNode ?? null });
 		if (unsupported) await reportObjective(unsupported);
+		const stepCap = event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS;
+		const stepCeiling = (await step.do("iteration-ceiling", async () => (await resolveAccountCeilings(env, userId).catch(() => null))?.loopMaxIterations ?? stepCap)) as number;
+		let grantedSteps: number | null = null; // #1236: the owner's approval at the cap sizes the NEXT round
 		for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 			// The caller's cap when it named one, the historical 40 when it did not (#374).
 			// An interruption is retried in place after a published backoff (#855); anything else — or
 			// one past the bound — is rethrown to the terminal catch below.
 			result = await roundThroughInterruptions(
-				() => runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS, evidence }),
+				() => runCodingLoop(deps, goal, { maxSteps: grantedSteps ?? stepCap, evidence }),
 				roundDeps,
 				{ next: () => ++interruptions },
 			);
@@ -1092,7 +1097,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// A `stuck` asks a question too (#1234): a `human` park carried no ask — the blank question nobody could answer.
 			const parkReason: RunWaitReason = result.outcome === "waiting" ? "engine_limit" : result.outcome === "needs_reauth" ? "engine_auth" : "decision";
 			parkedAsk = null;
-			const pause = await resolvePause(pauseDeps(round, parkReason), { round, result, state: waitState });
+			const pause = await resolvePause({ ...pauseDeps(round, parkReason), iterations: { cap: grantedSteps ?? stepCap, ceiling: stepCeiling } }, { round, result, state: waitState });
 			if (!pause.resume) {
 				result = pause.result;
 				if (pause.stopReason) crashReason = pause.stopReason; // `decision` (#1076): a park that ran out, continuable
@@ -1101,6 +1106,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// The human answered the handoff — this run has an owner turn in it, so a report that
 			// says "the user chose" may well be true and is left alone (#505).
 			if (pause.ownerTurn) ownerTurns++;
+			grantedSteps = pause.grantSteps ?? null;
+			if (grantedSteps && event.payload.loopRunId) await runRetry(`grant-${round}`, () => grantRunIterations(env, event.payload.loopRunId as string, grantedSteps as number));
 			goal.userHint = pause.userHint;
 			goal.ownerTurns = ownerTurns; // run-scoped; userHint is not — a resume clears it (#505, see CodingGoal)
 			goal.resumeNote = pause.resumeNote;

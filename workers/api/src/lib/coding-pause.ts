@@ -28,6 +28,7 @@ import {
 	type EngineWaitState,
 } from "./coding-wait.js";
 import type { LoopStopReason } from "./agent-loop.js";
+import { clipMarked } from "./clip-marked.js";
 import type { AskPart } from "./coding-ask.js";
 import type { CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
@@ -105,7 +106,7 @@ export interface PauseDeps {
 		 * release the checkout when its work could be set aside (#1077). `announce` says what happened to
 		 * the checkout; `onStop` is what an ending without a resume must tell the owner about their work.
 		 */
-		begin: (questionId: string, until: number) => Promise<{ announce?: string; onStop?: string } | undefined>;
+		begin: (questionId: string, until: number, opts?: { keepCheckout?: boolean }) => Promise<{ announce?: string; onStop?: string } | undefined>;
 		/** Wait for the question's event — no step runs while it waits. False when the wait timed out. */
 		wait: (questionId: string, k: number, timeoutMs: number) => Promise<boolean>;
 		/**
@@ -178,6 +179,11 @@ export interface PauseDeps {
 	 */
 	tick: (park?: { until?: number | null }) => Promise<boolean>;
 	now: () => number;
+	/**
+	 * #1236: the round's step cap and the account's ceiling, for a run that reaches its cap. The owner is
+	 * asked to approve more iterations (the cap again, at most the ceiling) instead of the run failing.
+	 */
+	iterations?: { cap: number; ceiling: number };
 }
 
 /**
@@ -204,7 +210,7 @@ function asQuestionWait(v: unknown): QuestionWait | null {
 export const BRAIN_WAIT_POLL_MS = 60_000;
 
 export type PauseVerdict =
-	| { resume: true; userHint?: string; resumeNote?: string; ownerTurn?: boolean }
+	| { resume: true; userHint?: string; resumeNote?: string; ownerTurn?: boolean; /** The owner's answer as given (#1236). */ answer?: string; /** #1236: steps the owner granted for the next round. */ grantSteps?: number }
 	| { resume: false; result: CodingResult; stopReason?: LoopStopReason };
 
 /**
@@ -220,6 +226,7 @@ export async function resolvePause(
 	const { result } = input;
 	if (result.outcome === "waiting") return waitForEngineReset(deps, input);
 	if (result.outcome === "needs_reauth") return waitForSignIn(deps, input);
+	if (result.outcome === "max_steps") return waitForIterationApproval(deps, input);
 	if (result.outcome !== "stuck" && result.outcome !== "needs_input") return { resume: false, result };
 	return waitForHuman(deps, input);
 }
@@ -232,7 +239,7 @@ export function askCardId(deps: Pick<PauseDeps, "taskId" | "sessionId">): string
 	return deps.taskId ?? (deps.sessionId ? codingCardId(deps.sessionId) : null);
 }
 
-async function waitForHuman(deps: PauseDeps, input: { round: number; result: CodingResult }): Promise<PauseVerdict> {
+async function waitForHuman(deps: PauseDeps, input: { round: number; result: CodingResult }, opts: { keepCheckout?: boolean } = {}): Promise<PauseVerdict> {
 	const { result, round } = input;
 	const reason = result.outcome === "needs_input" ? "needs_input" : "stuck";
 	// `||`, not `??` (#1234): a no-action decision reports `detail: decision.thought`, which can be "",
@@ -286,7 +293,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 		`${icon} **${title}** — ${parkOn ? "parked" : "paused"} on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain || parkOn ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`,
 	);
 
-	if (parkOn && deps.park) return parkOnQuestion(deps, deps.park, { result, label, options, questionId: parkOn });
+	if (parkOn && deps.park) return parkOnQuestion(deps, deps.park, { result, label, options, questionId: parkOn, keepCheckout: opts.keepCheckout });
 
 	let resolved = false;
 	let value: string | undefined;
@@ -341,6 +348,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 		resume: true,
 		ownerTurn: true,
 		userHint: answerHint(result, options, value),
+		answer: value,
 	};
 }
 
@@ -366,12 +374,12 @@ function answerHint(result: CodingResult, options: string[], value: string | und
 async function parkOnQuestion(
 	deps: PauseDeps,
 	park: NonNullable<PauseDeps["park"]>,
-	input: { result: CodingResult; label: string; options: string[]; questionId: string },
+	input: { result: CodingResult; label: string; options: string[]; questionId: string; keepCheckout?: boolean },
 ): Promise<PauseVerdict> {
 	const { result, label, options, questionId } = input;
 	const parkedAt = deps.now();
 	const until = parkedAt + DECISION_PARK_MS;
-	const parked = (await park.begin(questionId, until)) ?? {};
+	const parked = (await park.begin(questionId, until, input.keepCheckout ? { keepCheckout: true } : undefined)) ?? {};
 	if (parked.announce) await deps.announce(`⏸ ${parked.announce}`);
 	const onStop = parked.onStop ? ` ${parked.onStop}` : "";
 	let idle = 0;
@@ -401,12 +409,63 @@ async function parkOnQuestion(
 		await deps.card("running");
 		await deps.announce(`▶️ **Resumed with your answer** on ${deps.repo}: ${label}. ${engine.line}${engine.moved ? `\n\n${engine.moved}` : ""}`);
 		// What moved on the base rides the SAME turn as the answer (#1078): the answer was given against the state before it.
-		return { resume: true, ownerTurn: true, userHint: answerHint(result, options, status.value), ...(engine.moved ? { resumeNote: engine.moved } : {}) };
+		return { resume: true, ownerTurn: true, userHint: answerHint(result, options, status.value), answer: status.value, ...(engine.moved ? { resumeNote: engine.moved } : {}) };
 	}
 	return {
 		resume: false,
 		stopReason: "decision",
 		result: { ...result, detail: `Waiting on you: ${label}. Nobody answered within ${Math.round(DECISION_PARK_MS / 86_400_000)} days, so the run stopped here. An answer is still recorded on the question; continue the run once it is in.${onStop}` },
+	};
+}
+
+// ── #1236: the iteration cap asks instead of failing ───────────────────────────────────────────
+
+export const DENY_ITERATIONS = "Deny — stop the run here";
+export const approveIterationsOption = (n: number) => `Approve ${n} more iterations`;
+
+/**
+ * What the owner's answer to an iteration-cap question means. A deny word stops the run; a number
+ * grants that many (1 to the ceiling); anything else — "approve", "yes", a bare Resume, or an
+ * instruction — grants the requested amount, and text that is not just a yes rides along as an owner turn.
+ */
+export function readIterationAnswer(value: string | undefined, requested: number, ceiling: number): { approved: false } | { approved: true; steps: number; note: string | null } {
+	const text = (value ?? "").trim();
+	if (/^\s*(deny|denied|stop|no|cancel|reject)\b/i.test(text) || text === DENY_ITERATIONS) return { approved: false };
+	const n = /\b(\d{1,4})\b/.exec(text);
+	const steps = n ? Math.min(Math.max(Number(n[1]), 1), ceiling) : requested;
+	const bare = !text || text === approveIterationsOption(requested) || /^(approve[ds]?|yes|ok(ay)?|continue|go( on)?|resume)\b[\s\d.!]*(more )?(iterations?|steps?)?[.!]*$/i.test(text);
+	return { approved: true, steps, note: bare ? null : text };
+}
+
+/**
+ * The run reached its step cap. Before #1236 that ended it `max_iterations` (`failed`), and the work
+ * in its session waited for a new run to rediscover it. Now it asks: the question goes on the run's
+ * card like any other (answer_instance_input or the card's buttons), parks at zero compute, and —
+ * unlike a question — KEEPS its checkout, so the working tree stays exactly as the run left it.
+ * Approve resumes the SAME run in the same session with the steps granted; deny stops it with no
+ * further steps; no answer ends it the way every human wait ends, continuable, never `failed`.
+ */
+async function waitForIterationApproval(deps: PauseDeps, input: { round: number; result: CodingResult }): Promise<PauseVerdict> {
+	const { result, round } = input;
+	const cap = deps.iterations?.cap ?? result.steps;
+	const ceiling = Math.max(1, deps.iterations?.ceiling ?? cap);
+	const requested = Math.min(Math.max(cap, 1), ceiling);
+	const recent = (result.transcript ?? []).slice(-3).join(" · ");
+	const summary = recent ? `Its last steps: ${clipMarked(recent, 600, { within: true })}` : "";
+	const question = `This run reached its cap of ${result.steps} iterations without finishing. Approve ${requested} more to let the same run continue in the same session (the working tree is untouched), or deny to stop it here.`;
+	const asked: CodingResult = { ...result, outcome: "needs_input", fieldNeeded: question, options: [approveIterationsOption(requested), DENY_ITERATIONS], detail: summary || undefined };
+	const verdict = await waitForHuman(deps, { round, result: asked }, { keepCheckout: true });
+	if (!verdict.resume) return verdict;
+	const read = readIterationAnswer(verdict.answer, requested, ceiling);
+	if (!read.approved) {
+		return { resume: false, stopReason: "cancelled", result: { ...result, outcome: "cancelled", detail: `Stopped by you at the iteration cap (${result.steps} iterations): you denied more, so it took no further steps. Its work is in the session as it was.` } };
+	}
+	await deps.announce(`▶️ **${read.steps} more iterations approved** on ${deps.repo} — the same run continues.`);
+	return {
+		resume: true,
+		ownerTurn: true,
+		grantSteps: read.steps,
+		userHint: `The owner approved ${read.steps} more iterations after you reached your cap. Continue the objective from exactly where you are — the working tree is as you left it.${read.note ? ` They added: ${read.note}` : ""}`,
 	};
 }
 
