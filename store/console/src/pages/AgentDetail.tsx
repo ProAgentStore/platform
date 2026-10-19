@@ -16,6 +16,7 @@ import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
 import { BRAIN_MODELS } from "../../../../workers/api/src/lib/brain-models";
 import { templateModelField, templateModelOptions } from "../lib/template-models";
+import OperatorManualCard from "../components/OperatorManualCard";
 
 type Tab = "chat" | "knowledge" | "memory" | "tasks" | "settings" | "analytics" | "ops";
 
@@ -687,6 +688,7 @@ export default function AgentDetail() {
 						</div>
 					</div>
 
+					{id && <OperatorManualCard agentId={id} />}
 					{/* Subscriber settings (typed per-instance settings schema) */}
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
 						<h3 className="text-base font-semibold mb-1">Subscriber settings</h3>

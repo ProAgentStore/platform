@@ -13,6 +13,7 @@ import { buildOperatorGuidance } from "../lib/operator-guidance.js";
 import { combinedOperatorManual, operatorManualLayers, operatorManualTooLong } from "../lib/operator-manual.js";
 import { allowedToolRows } from "./instances-guide.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import type { OperatorManualResponse } from "../agent-types.js";
 import type { Env } from "../types.js";
 
 /** The cap, shared with the template manual (#1237): `lib/operator-manual.ts`. */
@@ -52,14 +53,15 @@ export function registerOperatorManualRoutes(router: Hono<{ Bindings: Env }>): v
 		const context = buildOperatorGuidance({ instanceId, surfaces: capabilities?.surfaces ?? [], runtime: capabilities?.runtime ?? null, tools: await allowedToolRows(c.env, instanceId, session.uid, instance.config) });
 		// #1237: the template's manual, read LIVE (an edit reaches every instance on its next read), beside this one's own.
 		const layers = await operatorManualLayers(c.env, instanceId, session.uid);
-		return c.json({
+		const body: OperatorManualResponse = {
 			manual: row?.operator_manual ?? "",
 			inherited: layers.inherited,
 			sections: { inherited: layers.inherited || null, instance: layers.instance || null },
 			combined: combinedOperatorManual(layers),
 			rules,
 			context,
-		});
+		};
+		return c.json(body);
 	});
 
 	/**

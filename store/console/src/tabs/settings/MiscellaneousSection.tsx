@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import ConnectionGuide from "../../components/ConnectionGuide";
+import OperatorManualCard from "../../components/OperatorManualCard";
 import HomeScreenShortcut from "../../components/HomeScreenShortcut";
 import PauseCard from "../../components/PauseCard";
 import { unsubscribeScope, type RosterInstance } from "../../lib/unsubscribeScope";
@@ -86,6 +87,9 @@ export default function MiscellaneousSection({
 					</li>
 				</ul>
 			</Card>
+
+			{/* Operator manual — the template's, inherited, above this instance's own (#1237) */}
+			<OperatorManualCard instanceId={instanceId} />
 
 			{/* Connection guide */}
 			<div className="mb-3 sm:mb-4">

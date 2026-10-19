@@ -8,6 +8,7 @@
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { operatorManualTooLong } from "../lib/operator-manual.js";
+import type { AgentOperatorManualResponse } from "../agent-types.js";
 import type { Env } from "../types.js";
 
 export function registerAgentOperatorManualRoutes(router: Hono<{ Bindings: Env }>): void {
@@ -25,7 +26,8 @@ export function registerAgentOperatorManualRoutes(router: Hono<{ Bindings: Env }
 	router.get("/:id/operator-manual", async (c) => {
 		const row = await ownedTemplate(c);
 		const n = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM agent_instances WHERE agent_id = ?1 AND status != 'canceled'").bind(row.id).first<{ n: number }>();
-		return c.json({ manual: row.operator_manual ?? "", instances: n?.n ?? 0 });
+		const body: AgentOperatorManualResponse = { manual: row.operator_manual ?? "", instances: n?.n ?? 0 };
+		return c.json(body);
 	});
 
 	/** Replace the template's manual: `{ manual }`, at most 16,000 characters (400 above, naming the length). */

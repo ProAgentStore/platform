@@ -31,8 +31,13 @@ async function mock(page: Page) {
 		// The coder brain card beside it, with its real shapes.
 		if (path === "/v1/instances/inst-1/po-triage/reports") return json({ settings: null, triggers: [], reports: [] });
 		if (path === "/v1/instances/inst-1/coder-questions") return json({ settings: null, questions: [] });
+		if (path === "/v1/instances/inst-1/operator-manual") return json({ manual: "", inherited: "", sections: { inherited: null, instance: null }, combined: "", rules: "", context: "" });
 		// Every coding instance's Settings tab reads its engine choice (#792); a bare {} crashes that card.
 		if (path === "/v1/instances/inst-1/coding/engine-choice") return json({ defaultEngineId: "claude", engines: [{ id: "claude", label: "Claude Code", command: "claude", clientType: "claude", model: null, modelSelectable: true, suggestions: [] }], lastObserved: null, appliesTo: "" });
+		// The triggers card reads these two lists; a bare {} crashes it (and the error boundary takes the tab).
+		if (path === "/v1/triggers") return json({ triggers: [] });
+		if (path === "/v1/triggers/actions") return json({ actions: [] });
+		if (path === "/v1/triggers/preview") return json({ schedule: null, timezone: null, jitterMinutes: null, runs: [], issues: [], error: null });
 		return json({});
 	});
 	return { puts };

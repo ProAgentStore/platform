@@ -589,3 +589,23 @@ export interface GithubInstallationSyncResponse {
 	/** Re-link GitHub with your own token (the browser flow) when the App could not verify an org. */
 	linkStart: string;
 }
+
+/**
+ * `GET /v1/instances/:id/operator-manual` (#739, #1109, #1237). `manual` is the instance's own text;
+ * `inherited` its agent template's, read live; `sections` names each layer (null when empty);
+ * `combined` is both as one sectioned document; `rules` and `context` as before.
+ */
+export interface OperatorManualResponse {
+	manual: string;
+	inherited: string;
+	sections: { inherited: string | null; instance: string | null };
+	combined: string;
+	rules: string;
+	context: string;
+}
+
+/** `GET /v1/agents/:id/operator-manual` (#1237): the template's manual and how many instances inherit it. */
+export interface AgentOperatorManualResponse {
+	manual: string;
+	instances: number;
+}

@@ -951,3 +951,6 @@ export interface ApplicationRunnerSettingsView {
 	};
 	error?: string;
 }
+
+/** The operator-manual responses (#1237), the worker's own types re-exported: `agent-types.ts` imports nothing, so it is safe here. */
+export type { AgentOperatorManualResponse, OperatorManualResponse } from "../../../../workers/api/src/agent-types";
