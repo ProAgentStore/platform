@@ -75,7 +75,16 @@ const NOT_IN_CATALOG_BY_DESIGN: Readonly<Record<string, string>> = {
  * Adding an entry here is a decision, and should be reviewed like one. The reason must say WHY the
  * tool is unreachable and WHAT would change that; "not used yet" is not a reason, it is the bug.
  */
+const NATIVE_DECLARATION_ONLY =
+		"Native control is a grantable capability (#1057 slice 2, owner decision 2026-10-19): a local_native agent " +
+		"declares it. No seeded agent does yet, because declaring it on a catalogue agent is a live capability change " +
+		"held for the owner's approval (as #1110's seed was). Reachable the moment an agent declares it.";
+
 const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
+	native_list_apps: NATIVE_DECLARATION_ONLY,
+	native_accessibility_tree: NATIVE_DECLARATION_ONLY,
+	native_maestro_devices: NATIVE_DECLARATION_ONLY,
+	native_maestro_hierarchy: NATIVE_DECLARATION_ONLY,
 	delete_record:
 		"COLLECTIONS_DESTRUCTIVE is its own group precisely so nobody inherits an irreversible delete: " +
 		"the group is outside FULL, so a creator opts in by declaring it. No seeded agent has yet had a " +

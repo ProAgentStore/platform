@@ -11,6 +11,7 @@ import { DISCORD_CONNECTOR } from "./discord.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { MCP_TOOLS } from "./mcp.js";
+import { NATIVE_TOOLS } from "./native.js";
 import { REPO_LOCAL_TOOLS } from "./repo-local.js";
 import { SUPERVISION_TOOLS } from "./supervision.js";
 import { META_CONNECTOR } from "./meta.js";
@@ -91,6 +92,17 @@ export const CONNECTORS: Connector[] = [
 			"Click, type and navigate in a browser on your own computer, as you, in the sessions you are already logged into.",
 		grantModel: "user",
 		tools: BROWSER_TOOLS,
+	},
+	{
+		id: "native",
+		label: "Native desktop & Maestro (local runner)",
+		// auth:"none" — reached over the runner relay like tmux; no cloud credential. Read-only in this
+		// slice (#1057): no write scope exists to consent to, and every call is refused unless the agent's
+		// runtime is local_native and the owner opted THIS machine in for the tool's backend.
+		auth: "none",
+		scopes: { read: true, write: false },
+		grantModel: "user",
+		tools: NATIVE_TOOLS,
 	},
 	{
 		id: "repo-local",

@@ -15,6 +15,12 @@
  *
  * This file measures the bytes the MCP tool RETURNS. That is the number a host applies its limit
  * to, and it is the only one that closes the issue.
+ *
+ * Its fixtures are synthetic, because this worker cannot import the real catalogue. The REAL one —
+ * every registry and built-in tool, measured through this file's own `budgetToolListing` for every
+ * capability shape including "declares every tool" — is held to the same limit in
+ * `workers/api/src/lib/tool-listing-budget.test.ts` (#1057), which owns the catalogue. The API body
+ * itself is held there only to a sanity bound: the 64 KiB limit is this layer's, not the console's.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";

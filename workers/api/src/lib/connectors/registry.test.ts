@@ -6,7 +6,7 @@ describe("connector registry", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
 		expect(ids).toEqual([
 			"browser", "discord", "github", "gmail", "google_drive", "google_sheets", "http", "mcp",
-			"meta", "repo-local", "supervision", "terminal", "tmux", "web-search", "zoho_workdrive",
+			"meta", "native", "repo-local", "supervision", "terminal", "tmux", "web-search", "zoho_workdrive",
 		]);
 	});
 

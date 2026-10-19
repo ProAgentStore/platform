@@ -80,7 +80,11 @@ export type NativeErrorCode =
 	| "NATIVE_MAESTRO_NOT_INSTALLED"
 	| "NATIVE_UNSUPPORTED_OS"
 	| "NATIVE_RUNNER_UNSUPPORTED"
-	| "NATIVE_RUNNER_UNREACHABLE";
+	| "NATIVE_RUNNER_UNREACHABLE"
+	// Slice 2 (the read tools):
+	| "NATIVE_INVALID_REQUEST"
+	| "NATIVE_TIMEOUT"
+	| "NATIVE_COMMAND_FAILED";
 
 /** Run lifecycle, for slice 2 onward. */
 export type NativeRunStatus = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
@@ -102,4 +106,96 @@ export interface NativeRunEvent {
 	type: NativeRunEventType;
 	at: number;
 	detail?: Record<string, unknown>;
+}
+
+// ── Slice 2: the READ tools ───────────────────────────────────────────────────
+//
+// Four reads an agent can make of the owner's machine, each behind the per-machine opt-in. None of
+// them clicks, types, launches or changes anything. Screenshots are not here yet: an image has no
+// way to reach the model or the owner from a tool result today (results are text), so they wait for
+// the slice that gives them one.
+
+/** The capability a runner advertises once it serves the read routes below. */
+export const NATIVE_READ_CAPABILITY = "native.read";
+
+/** Read tool → the runner route that answers it, and the backend whose opt-in it needs. */
+export const NATIVE_READ_ROUTES = {
+	native_list_apps: { path: "/native/list-apps", backend: "desktop" },
+	native_accessibility_tree: { path: "/native/accessibility-tree", backend: "desktop" },
+	native_maestro_devices: { path: "/native/maestro/devices", backend: "maestro" },
+	native_maestro_hierarchy: { path: "/native/maestro/hierarchy", backend: "maestro" },
+} as const satisfies Record<string, { path: string; backend: NativeBackend }>;
+export type NativeReadTool = keyof typeof NATIVE_READ_ROUTES;
+export const READ_ONLY_NATIVE_TOOLS = Object.keys(NATIVE_READ_ROUTES) as NativeReadTool[];
+
+/** Bounds on a UI tree, so one screen cannot fill a model's context. */
+export const NATIVE_TREE_MAX_DEPTH = 8;
+export const NATIVE_TREE_DEFAULT_DEPTH = 5;
+export const NATIVE_TREE_MAX_NODES = 200;
+/** How long one read may take on the machine before it is answered NATIVE_TIMEOUT. */
+export const NATIVE_READ_TIMEOUT_MS = 15_000;
+
+/** A running app with a window the owner could see. */
+export interface NativeApp {
+	name: string;
+	pid: number;
+	/** macOS bundle id, when the OS reports one. */
+	bundleId?: string;
+	/** Windows: the main window's title. */
+	windowTitle?: string;
+	frontmost?: boolean;
+}
+
+/** One element of an app's or a device's UI — the same shape for desktop and Maestro. */
+export interface NativeUiNode {
+	/** AX role (macOS), control type (Windows), or the element's class (Maestro). */
+	role: string;
+	name?: string;
+	value?: string;
+	/** A stable id where the platform has one (Windows AutomationId, Android resource-id). */
+	id?: string;
+	children?: NativeUiNode[];
+}
+
+export interface NativeAccessibilityTreeRequest {
+	/** The app, by its visible name. Omit for the frontmost app. */
+	app?: string;
+	/** How many levels below the window (default {@link NATIVE_TREE_DEFAULT_DEPTH}, at most {@link NATIVE_TREE_MAX_DEPTH}). */
+	maxDepth?: number;
+}
+export interface NativeMaestroHierarchyRequest {
+	/** The device id from native_maestro_devices (adb serial or simulator UDID). */
+	deviceId: string;
+}
+
+/** Every read answers in one envelope: the data, or a stable code with a sentence. */
+export type NativeReadResult<T> = { ok: true; data: T } | { ok: false; code: NativeErrorCode; message: string };
+
+export interface NativeTree {
+	/** What the tree is of: the app's name, or the device's id. */
+	of: string;
+	root: NativeUiNode | null;
+	nodes: number;
+	/** True when the node or depth cap cut the tree short. */
+	truncated: boolean;
+}
+
+export interface NativeListAppsData {
+	apps: NativeApp[];
+}
+export interface NativeMaestroDevicesData {
+	maestroInstalled: boolean;
+	devices: NativeDevice[];
+}
+
+/** Validate a read request's input; a message when it is not one. Shared so both sides refuse alike. */
+export function nativeReadInputError(tool: NativeReadTool, input: Record<string, unknown>): string | null {
+	if (tool === "native_accessibility_tree") {
+		if (input.app !== undefined && (typeof input.app !== "string" || !input.app.trim() || input.app.length > 120)) return "`app` must be an app's visible name (1–120 characters), or omitted for the frontmost app.";
+		if (input.maxDepth !== undefined && (typeof input.maxDepth !== "number" || !Number.isInteger(input.maxDepth) || input.maxDepth < 1)) return `\`maxDepth\` must be a whole number from 1 to ${NATIVE_TREE_MAX_DEPTH}.`;
+	}
+	if (tool === "native_maestro_hierarchy") {
+		if (typeof input.deviceId !== "string" || !/^[A-Za-z0-9._:-]{1,120}$/.test(input.deviceId)) return "`deviceId` must be a device id from native_maestro_devices.";
+	}
+	return null;
 }

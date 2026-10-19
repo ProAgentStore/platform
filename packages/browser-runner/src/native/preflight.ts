@@ -28,12 +28,12 @@ export interface ExecResult {
 	timedOut?: boolean;
 }
 
-export type Exec = (cmd: string, args: string[], timeoutMs?: number) => Promise<ExecResult>;
+export type Exec = (cmd: string, args: string[], timeoutMs?: number, maxBuffer?: number) => Promise<ExecResult>;
 
-/** Run one probe command; never rejects. */
-export const execProbe: Exec = (cmd, args, timeoutMs = 8000) =>
+/** Run one probe command; never rejects. `maxBuffer` is raised only by a read that returns a UI tree (#1057). */
+export const execProbe: Exec = (cmd, args, timeoutMs = 8000, maxBuffer = 1024 * 1024) =>
 	new Promise((resolve) => {
-		execFile(cmd, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+		execFile(cmd, args, { timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout, stderr) => {
 			const e = err as (NodeJS.ErrnoException & { code?: string | number; killed?: boolean }) | null;
 			if (e?.code === "ENOENT") return resolve({ found: false, code: null, stdout: "", stderr: "" });
 			resolve({

@@ -91,6 +91,7 @@ export const CONNECTOR_REACH: Readonly<Record<string, ToolReach>> = {
 	terminal: "machine",
 	tmux: "machine",
 	"repo-local": "machine",
+	native: "machine",
 	// Reached over the runner relay like tmux — but it drives a real browser to a URL the caller
 	// names, so the outermost boundary a call crosses is the internet, not the machine (rule 2).
 	browser: "internet",

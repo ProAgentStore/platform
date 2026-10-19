@@ -18,6 +18,7 @@ import { routeActionsRunner } from "./coding/actions-runner.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
 import { runNativePreflight } from "./native/preflight.js";
+import { nativeReadRoute } from "./native/read-route.js";
 import { routeLocalApplyReconciliation } from "./local-apply/reconciliation-routes.js";
 import { routeLocalApplySignIn } from "./local-apply/sign-in-runtime.js";
 
@@ -150,6 +151,13 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// machine. Runs fixed probe commands, installs nothing, prompts for nothing, never throws.
 	if ((req.method === "GET" || req.method === "POST") && path === "/native/preflight") {
 		return json(res, 200, await runNativePreflight());
+	}
+
+	// #1057 slice 2: the native READ routes — look, never touch. 400 for a malformed request, else
+	// 200 with the result envelope (the data, or a stable code: permissions, timeout, no device).
+	if (req.method === "POST" && path.startsWith("/native/") && path !== "/native/preflight") {
+		const answer = await nativeReadRoute(path, (await readJson<Record<string, unknown>>(req).catch(() => null)) ?? {});
+		if (answer) return json(res, answer.status, answer.body);
 	}
 
 	if (req.method === "GET" && path === "/sessions") {

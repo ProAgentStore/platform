@@ -3,6 +3,11 @@ import { allToolPolicyInputs, LISTING_DESCRIPTION_MAX_CHARS, projectToolListing,
 import { TOOL_TIERS, type ToolTier } from "./builtin-tool-policy.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { ToolDef } from "./connectors/types.js";
+// The MCP worker's OWN wire projection, imported rather than copied, so this measures exactly what an
+// MCP host receives and cannot drift from it. A test-only reach across the Worker boundary, as
+// `host-template-capture.test.ts` does for the host Worker: the real catalogue lives HERE, and the
+// MCP worker cannot import it (its own wire tests run on synthetic fixtures).
+import { budgetToolListing } from "../../../mcp/src/instance-tools/base.js";
 
 /**
  * How big `GET /v1/instances/:id/tools` is allowed to be, measured rather than assumed (#569).
@@ -20,8 +25,24 @@ import type { ToolDef } from "./connectors/types.js";
 const caps = (over: Partial<AgentCapabilities>): AgentCapabilities =>
 	({ surfaces: [], runtime: null, workflow: null, ...over }) as AgentCapabilities;
 
-/** 64 KiB — the acceptance criterion in #569, and a number hosts actually enforce. */
-const BUDGET = 64 * 1024;
+/**
+ * 64 KiB — the acceptance criterion in #569, and a number MCP hosts actually enforce. It is asserted
+ * on what the MCP tool SENDS (`budgetToolListing` over this listing, #578), because that is the layer
+ * the limit belongs to: #578 deliberately cut the not-runnable rows' prose in the MCP worker, not here.
+ */
+const HOST_LIMIT = 64 * 1024;
+
+/**
+ * The API body's own bound — a sanity ceiling, not the host's limit (#1057).
+ *
+ * This route's other consumer is the console's Tool Permissions panel, which renders every row's
+ * FULL description (#578's reason for cutting in MCP, not here) and has no 64 KiB limit. Holding the
+ * raw body to the MCP host's number refused a new tool while what MCP sent was 45–61 KB: #1057's four
+ * native tools put the body at ~67 KB. 128 KiB is about twice today's body, so a runaway — schemas
+ * leaking into the default path, an unbounded description — still goes red here, long before a
+ * browser would care.
+ */
+const API_BODY_BOUND = 128 * 1024;
 
 const wireBytes = (rows: readonly ToolListingRow[]) => new TextEncoder().encode(JSON.stringify({ tools: rows })).length;
 
@@ -37,7 +58,7 @@ function shapes(): Array<[string, AgentCapabilities]> {
 }
 
 describe("the tool listing fits in a response (#569)", () => {
-	it("keeps the DEFAULT response under 64 KiB for every capability shape", () => {
+	it("keeps what MCP SENDS under the 64 KiB host limit for every capability shape, and the API body under its sanity bound", () => {
 		const all = allToolPolicyInputs();
 		// G1 — the denominator. 104 rows were measured in production; under 90 means a connector or
 		// the built-in catalog failed to load and this budget is being met by measuring less.
@@ -45,10 +66,21 @@ describe("the tool listing fits in a response (#569)", () => {
 		for (const [label, c] of shapes()) {
 			const rows = projectToolListing(resolveToolPolicy(c, [], all, []));
 			const size = wireBytes(rows);
+			const mcp = wireBytes(budgetToolListing(rows));
 			expect(rows.length, label).toBe(all.length);
-			expect(size, `${label}: the default listing is ${size} bytes, over the ${BUDGET}-byte budget`).toBeLessThan(BUDGET);
-			console.log(`✓ #569: ${label} — ${rows.length} rows, ${size} bytes`);
+			expect(mcp, `${label}: list_instance_tools sends ${mcp} bytes over MCP, over the ${HOST_LIMIT}-byte host limit`).toBeLessThan(HOST_LIMIT);
+			expect(size, `${label}: the API body is ${size} bytes, over its ${API_BODY_BOUND}-byte sanity bound`).toBeLessThan(API_BODY_BOUND);
+			console.log(`✓ #569: ${label} — ${rows.length} rows, ${mcp} B over MCP (${Math.round((mcp / HOST_LIMIT) * 100)}% of the host limit), API body ${size} B`);
 		}
+	});
+
+	it("the MCP projection is what saves it: the not-runnable rows' prose is the cut, nothing else (#578)", () => {
+		// G4 — the guard can fail. Untrimmed, the permissive default no longer fits the host limit, so
+		// the assertion above holds BECAUSE of budgetToolListing, not by accident of a small catalogue.
+		const rows = projectToolListing(resolveToolPolicy(caps({}), [], allToolPolicyInputs(), []));
+		expect(wireBytes(rows), "the untrimmed listing fits the host limit — the MCP arm above proves nothing until the catalogue outgrows it").toBeGreaterThan(HOST_LIMIT);
+		const sent = budgetToolListing(rows);
+		expect(sent.filter((r, i) => r.allowed && r.description !== rows[i].description)).toEqual([]);
 	});
 
 	it("never sends a schema for a row the instance cannot run", () => {

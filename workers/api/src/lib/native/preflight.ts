@@ -9,32 +9,48 @@
 import type { Env } from "../../types.js";
 import { logEvent } from "../events.js";
 import { callRuntime, getLiveRuntime } from "../../routes/instances-runtime.js";
-import { NATIVE_PREFLIGHT_CAPABILITY, NATIVE_PREFLIGHT_PATH, type NativeErrorCode, type NativePreflightResult } from "./contract.js";
-import { getNativeOptIn, nativeAnyEnabled, nativeBackendEnabled, NATIVE_RISK_DISCLOSURE_V1 } from "./policy.js";
+import type { RuntimeRow } from "../../routes/instances-runtime.js";
+import { type NativeBackend, NATIVE_PREFLIGHT_CAPABILITY, NATIVE_PREFLIGHT_PATH, type NativeErrorCode, type NativePreflightResult } from "./contract.js";
+import { getNativeOptIn, nativeAnyEnabled, nativeBackendEnabled, type NativeOptIn, NATIVE_RISK_DISCLOSURE_V1 } from "./policy.js";
 
 export type NativePreflightOutcome =
 	| { status: 200; body: { machineId: string; node: string; enabled: { desktop: boolean; maestro: boolean }; preflight: NativePreflightResult } }
 	| { status: 403 | 409 | 503; body: { code: NativeErrorCode; error: string; machineId?: string; disclosureVersion?: string } };
 
-const refuse = (status: 403 | 409 | 503, code: NativeErrorCode, error: string, extra: Record<string, string> = {}): NativePreflightOutcome => ({ status, body: { code, error, ...extra } });
+type Refusal = Extract<NativePreflightOutcome, { status: 403 | 409 | 503 }>;
+const refuse = (status: 403 | 409 | 503, code: NativeErrorCode, error: string, extra: Record<string, string> = {}): Refusal => ({ status, body: { code, error, ...extra } });
 
-export async function nativePreflight(env: Env, instanceId: string, userId: string): Promise<NativePreflightOutcome> {
+/**
+ * The gate every native call passes, before the runner is asked anything (#1057): a live runner that
+ * names its machine, the owner's opt-in on THAT machine — for `backend` when one is named, else for
+ * either — and a runner that advertises `capability`. A refusal is a stable code with a sentence.
+ */
+export async function nativeGate(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	opts: { capability: string; backend?: NativeBackend; what: string },
+): Promise<{ ok: true; runtime: RuntimeRow; machineId: string; optIn: NativeOptIn } | { ok: false; refusal: Refusal }> {
 	const runtime = await getLiveRuntime(env, instanceId, userId);
-	if (!runtime) return refuse(409, "NATIVE_RUNNER_UNREACHABLE", "No runner is connected for this agent. Start `pags up` on the machine you want to check.");
+	if (!runtime) return { ok: false, refusal: refuse(409, "NATIVE_RUNNER_UNREACHABLE", "No runner is connected for this agent. Start `pags up` on the machine you want to check.") };
 	const machineId = runtime.machine_id ?? null;
-	if (!machineId) return refuse(409, "NATIVE_RUNNER_UNSUPPORTED", `The runner on ${runtime.runner_node} does not report a stable machine id, so its native-control opt-in cannot be checked. Update the CLI (npm i -g @proagentstore/cli) and run \`pags up\` again.`);
+	if (!machineId) return { ok: false, refusal: refuse(409, "NATIVE_RUNNER_UNSUPPORTED", `The runner on ${runtime.runner_node} does not report a stable machine id, so its native-control opt-in cannot be checked. Update the CLI (npm i -g @proagentstore/cli) and run \`pags up\` again.`) };
 
 	const optIn = await getNativeOptIn(env, userId, machineId);
-	if (!optIn || !nativeAnyEnabled(optIn)) {
+	if (!optIn || !(opts.backend ? nativeBackendEnabled(optIn, opts.backend) : nativeAnyEnabled(optIn))) {
 		const stale = optIn && (optIn.desktop || optIn.maestro) && !optIn.disclosureCurrent;
-		return refuse(
-			403,
-			"NATIVE_NOT_ENABLED",
-			stale
-				? `Native control on ${runtime.runner_node} was enabled under an older risk disclosure; the owner must review and acknowledge the current one (${NATIVE_RISK_DISCLOSURE_V1.version}) before it counts again.`
-				: `Native desktop / Maestro control is off for ${runtime.runner_node}. Only the owner can turn it on, per machine, after reading the account-risk disclosure (POST /v1/terminals/machines/${machineId}/native-optin).`,
-			{ machineId, disclosureVersion: NATIVE_RISK_DISCLOSURE_V1.version },
-		);
+		const which = opts.backend === "desktop" ? "Native desktop control" : opts.backend === "maestro" ? "Maestro phone/emulator control" : "Native desktop / Maestro control";
+		return {
+			ok: false,
+			refusal: refuse(
+				403,
+				"NATIVE_NOT_ENABLED",
+				stale
+					? `Native control on ${runtime.runner_node} was enabled under an older risk disclosure; the owner must review and acknowledge the current one (${NATIVE_RISK_DISCLOSURE_V1.version}) before it counts again.`
+					: `${which} is off for ${runtime.runner_node}. Only the owner can turn it on, per machine, after reading the account-risk disclosure (POST /v1/terminals/machines/${machineId}/native-optin).`,
+				{ machineId, disclosureVersion: NATIVE_RISK_DISCLOSURE_V1.version },
+			),
+		};
 	}
 
 	let advertised: string[] = [];
@@ -43,9 +59,16 @@ export async function nativePreflight(env: Env, instanceId: string, userId: stri
 	} catch {
 		advertised = [];
 	}
-	if (!advertised.includes(NATIVE_PREFLIGHT_CAPABILITY)) {
-		return refuse(409, "NATIVE_RUNNER_UNSUPPORTED", `The runner on ${runtime.runner_node} (CLI ${runtime.runner_version || "unknown"}) cannot run the native preflight. Update the CLI (npm i -g @proagentstore/cli) and run \`pags up\` again.`, { machineId });
+	if (!advertised.includes(opts.capability)) {
+		return { ok: false, refusal: refuse(409, "NATIVE_RUNNER_UNSUPPORTED", `The runner on ${runtime.runner_node} (CLI ${runtime.runner_version || "unknown"}) cannot run ${opts.what}. Update the CLI (npm i -g @proagentstore/cli) and run \`pags up\` again.`, { machineId }) };
 	}
+	return { ok: true, runtime, machineId, optIn };
+}
+
+export async function nativePreflight(env: Env, instanceId: string, userId: string): Promise<NativePreflightOutcome> {
+	const gate = await nativeGate(env, instanceId, userId, { capability: NATIVE_PREFLIGHT_CAPABILITY, what: "the native preflight" });
+	if (!gate.ok) return gate.refusal;
+	const { runtime, machineId, optIn } = gate;
 
 	let res: Response;
 	try {

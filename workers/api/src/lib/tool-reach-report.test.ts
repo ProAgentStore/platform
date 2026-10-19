@@ -73,6 +73,12 @@ const MACHINE = new Set<string>([
 	"repo_find",
 	"repo_grep",
 	"repo_remote",
+	// native connector (#1057 slice 2) — READS the owner's machine over the relay: running apps, an
+	// app's accessibility tree, Maestro's devices and a device's hierarchy. Nothing leaves for the internet.
+	"native_list_apps",
+	"native_accessibility_tree",
+	"native_maestro_devices",
+	"native_maestro_hierarchy",
 ]);
 
 /**
