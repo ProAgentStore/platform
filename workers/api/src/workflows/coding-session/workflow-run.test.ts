@@ -1070,3 +1070,22 @@ describe("a parked run is brought onto the current main before its answer is app
 		expect(order("/coding/act")).toBe(-1);
 	});
 });
+
+describe("a run that ends with nothing queued wakes its coder's triage at once (#1232)", () => {
+	it("the terminal step drains the queue, finds it empty, and runs a `queue_empty` triage in the same breath", async () => {
+		const { setCoderBrain } = await import("../../lib/coder-brain.js");
+		await setCoderBrain(env, "i1", "u1", { enabled: true, poEnabled: true });
+		seedLoopRun();
+		const { journal } = await run(params({ loopRunId: "run-1" }));
+		expect(journal.order.indexOf("po-triage-wake")).toBeGreaterThan(journal.order.indexOf("objective-queue-drain"));
+		expect(journal.done.get("po-triage-wake")).toBe(true);
+		expect(rows<{ trigger_source: string; status: string }>("SELECT trigger_source, status FROM po_triage_reports WHERE instance_id = 'i1'")).toEqual([{ trigger_source: "queue_empty", status: "completed" }]);
+	});
+
+	it("with triage off, the step runs and wakes nothing", async () => {
+		seedLoopRun();
+		const { journal } = await run(params({ loopRunId: "run-1" }));
+		expect(journal.done.get("po-triage-wake")).toBe(false);
+		expect(rows("SELECT id FROM po_triage_reports")).toEqual([]);
+	});
+});

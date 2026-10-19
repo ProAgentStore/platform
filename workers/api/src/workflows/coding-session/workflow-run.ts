@@ -61,6 +61,7 @@ import { finishLoopRun, settledRunStatus, isCancelRequested, recordIteration, re
 import { mirrorRuntimeEvent } from "../../routes/instances-runtime.js";
 import { reauthCompletedSince } from "../../lib/engine-reauth-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
+import { wakePoTriageIfIdle } from "../../lib/po-triage-wake.js";
 import { type PilotDecideOutcome, pilotDecide, unwrapPilotDecide } from "../../lib/pilot-decide.js";
 import { traceCodingRun } from "../../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, runOutcomeNote } from "../../lib/coding-run-report.js";
@@ -1319,10 +1320,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		//
 		// `tryDequeueAndStart` never throws, so no `.catch` here: a queue that cannot be drained
 		// is recorded in `error_log` and must not turn a finished run into a failed step.
-		await step.do("objective-queue-drain", async () => {
-			await tryDequeueAndStart(env, instanceId, repoId, userId);
-			return null;
-		});
+		const drained = (await step.do("objective-queue-drain", () => tryDequeueAndStart(env, instanceId, repoId, userId))) as { drained?: boolean } | null;
+		// #1232: nothing queued behind it → triage the coder now, not at the next hourly window (debounced, guarded there).
+		if (drained?.drained !== true) await step.do("po-triage-wake", async () => (await wakePoTriageIfIdle(env, instanceId, userId)).woke);
 	}
 	return result;
 }

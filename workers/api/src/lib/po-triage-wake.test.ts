@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { PO_TRIAGE_ACTION, poTriageDefaultMinute, readCoderBrain, setCoderBrain } from "./coder-brain.js";
 import { normalizeSchedule } from "./cron-schedule.js";
-import { type PoTriageDeps, runPoTriage } from "./po-triage-wake.js";
+import { type PoTriageDeps, runPoTriage, wakePoTriageIfIdle } from "./po-triage-wake.js";
 import type { PoIssue } from "./po-triage.js";
 import { runDueTriggers } from "./triggers.js";
 import type { Env } from "../types.js";
@@ -339,5 +339,73 @@ describe("the switch (#1025 §1 slice)", () => {
 	it("PO triage cannot be on while the brain is off", async () => {
 		await setCoderBrain(env, "coder", "u1", { enabled: false, poEnabled: true });
 		expect(await readCoderBrain(env, "coder", "u1")).toMatchObject({ enabled: false, poEnabled: false });
+	});
+});
+
+describe("a coder whose queue empties is triaged at once, not at the next hourly window (#1232)", () => {
+	const source = () => (d1.sqlite.prepare("SELECT trigger_source FROM po_triage_reports WHERE instance_id = 'coder' ORDER BY created_at, rowid").all() as Array<{ trigger_source: string }>).map((r) => r.trigger_source);
+	const run = (id: string, extra = "") =>
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at${extra ? ", checkout_released_at" : ""}) VALUES ('${id}', 'u1', 'coder', 'x', 'running', 10, 1${extra})`);
+
+	it("a run ended with nothing queued: the wake queues the ready issue and starts it, recorded as `queue_empty`", async () => {
+		const { deps, log } = github();
+		const w = await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps);
+		expect(w).toMatchObject({ woke: true, result: { skipped: false, dryRun: false, counts: { queued: 1 } } });
+		expect(queued().map((q) => q.objective)).toEqual([expect.stringMatching(/^Work issue #4 in acme\/app/)]);
+		expect(log.started).toEqual(["repo-1"]);
+		expect(source()).toEqual(["queue_empty"]);
+		// The report names the instance's own trigger, whose dry-run setting it used.
+		const trigger = d1.sqlite.prepare("SELECT id FROM agent_triggers WHERE instance_id = 'coder' AND action = ?").get(PO_TRIAGE_ACTION) as { id: string };
+		expect(d1.sqlite.prepare("SELECT trigger_id FROM po_triage_reports").get()).toEqual({ trigger_id: trigger.id });
+	});
+
+	it("debounced: rapid repeat ends produce ONE wake, and the next is allowed once the window has passed", async () => {
+		const { deps, log } = github();
+		const first = await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps);
+		d1.exec("UPDATE instance_objective_queue SET status = 'cancelled'"); // the queue is empty again, as after a run that failed at once
+		const again = [await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps), await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps)];
+		expect(first.woke).toBe(true);
+		expect(again).toEqual([{ woke: false, reason: expect.stringMatching(/already ran in the last 15 minutes/) }, { woke: false, reason: expect.stringMatching(/already ran/) }]);
+		expect(log.listed).toBe(1);
+		expect(await wakePoTriageIfIdle(env, "coder", "u1", new Date(Date.now() + 16 * 60_000), deps)).toMatchObject({ woke: true, result: { skipped: false } });
+		expect(source()).toEqual(["queue_empty", "queue_empty"]);
+	});
+
+	it("not idle, not woken: a pending objective, a working run, or a parked run whose answer is in", async () => {
+		const { deps, log } = github();
+		const { enqueueObjective } = await import("./objective-queue.js");
+		const entry = await enqueueObjective(env, { instanceId: "coder", userId: "u1", repoId: "repo-1", objective: "already lined up" });
+		expect(await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps)).toEqual({ woke: false, reason: "the coder still has queued or running work" });
+		d1.exec(`UPDATE instance_objective_queue SET status = 'cancelled' WHERE id = '${entry.id}'`);
+		run("working");
+		expect((await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps)).woke).toBe(false);
+		// Parked on an UNANSWERED question with its checkout released: it holds nothing, so the coder is idle (#1228).
+		d1.exec("UPDATE agent_loop_runs SET checkout_released_at = 1, waiting_reason = 'decision' WHERE run_id = 'working'");
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id) VALUES ('s1', 'coder', 'repo-1', 'u1')`);
+		d1.exec(`INSERT INTO coder_questions (id, instance_id, user_id, session_id, run_id, question, state, asked_at, expires_at) VALUES ('q1', 'coder', 'u1', 's1', 'working', 'Which?', 'waiting_human', 1, 2)`);
+		// …unless its answer is in: then it is about to take its repo back.
+		d1.exec("UPDATE coder_questions SET state = 'answered_human', answered_at = 5, decision = 'this one'");
+		expect((await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps)).woke).toBe(false);
+		d1.exec("UPDATE coder_questions SET state = 'waiting_human', answered_at = NULL, decision = NULL");
+		expect((await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps)).woke).toBe(true);
+		expect(log.listed).toBe(1);
+	});
+
+	it("respects the guards the hourly wake has: triage off, a paused instance", async () => {
+		const { deps, log } = github();
+		d1.exec("UPDATE agent_instances SET status = 'paused' WHERE id = 'coder'");
+		expect(await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps)).toMatchObject({ woke: true, result: { skipped: true, reason: expect.stringMatching(/paused/) } });
+		d1.exec("UPDATE agent_instances SET status = 'active' WHERE id = 'coder'");
+		await setCoderBrain(env, "coder", "u1", { poEnabled: false });
+		expect(await wakePoTriageIfIdle(env, "coder", "u1", new Date(), deps)).toEqual({ woke: false, reason: "product-owner triage is not on for this instance" });
+		expect(log.listed).toBe(0);
+		expect(queued()).toEqual([]);
+	});
+
+	it("a scheduled window records `cron` and a hand-run one `manual`", async () => {
+		const { deps } = github();
+		await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, { dryRun: true }, at("2026-10-12T01:17:00Z"), deps);
+		await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, { dryRun: true }, at("2026-10-12T01:18:00Z"), deps, "manual");
+		expect(source()).toEqual(["cron", "manual"]);
 	});
 });

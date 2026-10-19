@@ -43,7 +43,7 @@ export function registerCoderBrainTools(server: McpServer, ctx: InstanceToolsCtx
 	);
 	server.tool(
 		"po_triage_reports",
-		"Read a coder instance's product-owner triage (#1027): the brain switch, its `run_po_triage` triggers, and the most recent wake reports. Each report lists every open issue it read with its category (`waiting_on_human`, `blocked`, `needs_detail`, `ready`), a one-line reason and the action taken (`queued`, `would_queue`, `already_queued`, `held`, `commented`, …), plus counts and the digest sent (null when nothing changed). No issue bodies or comments are stored. Read-only.",
+		"Read a coder instance's product-owner triage (#1027): the brain switch, its `run_po_triage` triggers, and the most recent wake reports. Each report lists every open issue it read with its category (`waiting_on_human`, `blocked`, `needs_detail`, `ready`), a one-line reason and the action taken (`queued`, `would_queue`, `already_queued`, `held`, `commented`, …), plus counts and the digest sent (null when nothing changed), and `source` — what woke it: `cron` (its hourly window), `manual` (run by hand) or `queue_empty` (#1232: a coding run ended with nothing queued, so the coder was triaged at once; at most once per 15 minutes). No issue bodies or comments are stored. Read-only.",
 		{ token: z.string().optional(), instance_id: z.string(), limit: z.coerce.number().int().min(1).max(50).optional() },
 		async ({ token, instance_id, limit }) => {
 			const session = auth(token);

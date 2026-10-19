@@ -75,12 +75,16 @@ export type PoTriageResult = { skipped: true; reason: string; slot: string } | {
 
 const slotOf = (now: Date) => new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
 
+/** What woke a triage (#1232), recorded on its report. */
+export type PoTriageSource = "cron" | "manual" | "queue_empty";
+
 export async function runPoTriage(
 	env: Env,
 	target: { id?: string; instance_id: string; user_id: string },
 	config: { dryRun?: boolean },
 	now = new Date(),
 	deps: PoTriageDeps = {},
+	source: PoTriageSource = "cron",
 ): Promise<PoTriageResult> {
 	const iid = target.instance_id;
 	const uid = target.user_id;
@@ -95,9 +99,9 @@ export async function runPoTriage(
 	const dryRun = config.dryRun !== false;
 	const reportId = crypto.randomUUID();
 	const claim = await env.DB.prepare(
-		"INSERT INTO po_triage_reports (id, instance_id, user_id, trigger_id, slot, dry_run, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running') ON CONFLICT(instance_id, slot) DO NOTHING",
+		"INSERT INTO po_triage_reports (id, instance_id, user_id, trigger_id, slot, dry_run, status, trigger_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7) ON CONFLICT(instance_id, slot) DO NOTHING",
 	)
-		.bind(reportId, iid, uid, target.id ?? null, slot, dryRun ? 1 : 0)
+		.bind(reportId, iid, uid, target.id ?? null, slot, dryRun ? 1 : 0, source)
 		.run();
 	if (!claim.meta?.changes) return { skipped: true, reason: "Another product-owner window already woke this instance this minute.", slot };
 
@@ -252,4 +256,52 @@ function defaultNotify(env: Env, uid: string, iid: string, slot: string) {
 	return async (title: string, body: string) => {
 		await notifyUser(env, uid, "po_triage_digest", title, body, deepLinkFor({ kind: "triggers", instanceId: iid }), { kind: "update", instanceId: iid, key: `po-triage:${iid}:${slot}` });
 	};
+}
+
+/** At most one queue-empty wake per coder in this window, so a run that fails at once cannot loop (#1232). */
+export const QUEUE_EMPTY_DEBOUNCE_MS = 15 * 60_000;
+
+export type QueueEmptyWake = { woke: false; reason: string } | { woke: true; result: PoTriageResult };
+
+/**
+ * #1232: a coding run has just ended. If the coder now has nothing to do, triage it NOW instead of
+ * leaving it idle until its next hourly window (which stays, as the safety net for issues filed
+ * while it was busy).
+ *
+ * "Nothing to do" is: no objective pending in its queue, and no open run that holds a repo or is
+ * about to resume one (a run parked on an unanswered question with its checkout released holds
+ * nothing, #1228). The wake runs the instance's own `run_po_triage` trigger — its dry-run setting,
+ * its id on the report — and so every guard the hourly wake has: triage on, instance active, the
+ * Pro gate, the daily budget, a question waiting on the owner, `needs-human` and blocked issues
+ * left alone, and a digest only when something changed. Never throws: it runs on a finished run's
+ * terminal path.
+ */
+export async function wakePoTriageIfIdle(env: Env, instanceId: string, userId: string, now = new Date(), deps: PoTriageDeps = {}): Promise<QueueEmptyWake> {
+	try {
+		const trigger = await env.DB.prepare("SELECT id, config FROM agent_triggers WHERE instance_id = ?1 AND user_id = ?2 AND action = 'run_po_triage' AND enabled = 1 ORDER BY created_at ASC LIMIT 1")
+			.bind(instanceId, userId)
+			.first<{ id: string; config: string | null }>();
+		if (!trigger) return { woke: false, reason: "product-owner triage is not on for this instance" };
+		const busy = await env.DB.prepare(
+			`SELECT (SELECT COUNT(*) FROM instance_objective_queue WHERE instance_id = ?1 AND status = 'pending')
+			      + (SELECT COUNT(*) FROM agent_loop_runs r WHERE r.instance_id = ?1 AND r.status = 'running'
+			           AND (r.checkout_released_at IS NULL OR EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')))) AS n`,
+		)
+			.bind(instanceId)
+			.first<{ n: number }>();
+		if (busy?.n) return { woke: false, reason: "the coder still has queued or running work" };
+		const recent = await env.DB.prepare("SELECT 1 AS x FROM po_triage_reports WHERE instance_id = ?1 AND trigger_source = 'queue_empty' AND created_at > datetime(?2 / 1000, 'unixepoch') LIMIT 1")
+			.bind(instanceId, now.getTime() - QUEUE_EMPTY_DEBOUNCE_MS)
+			.first<{ x: number }>();
+		if (recent) return { woke: false, reason: `a queue-empty triage already ran in the last ${QUEUE_EMPTY_DEBOUNCE_MS / 60_000} minutes` };
+		let config: { dryRun?: boolean } = {};
+		try {
+			config = trigger.config ? (JSON.parse(trigger.config) as { dryRun?: boolean }) : {};
+		} catch {
+			// A malformed config reads as the wake's own default: a dry run.
+		}
+		return { woke: true, result: await runPoTriage(env, { id: trigger.id, instance_id: instanceId, user_id: userId }, { dryRun: config.dryRun }, now, deps, "queue_empty") };
+	} catch (e) {
+		return { woke: false, reason: `the wake failed: ${e instanceof Error ? e.message : String(e)}` };
+	}
 }

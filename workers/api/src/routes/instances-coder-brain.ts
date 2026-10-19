@@ -73,13 +73,13 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		const { instanceId, uid } = await owned(c);
 		const limit = Math.min(Math.max(Number(new URL(c.req.url).searchParams.get("limit")) || 10, 1), 50);
 		const { results } = await c.env.DB.prepare(
-			"SELECT id, trigger_id, slot, dry_run, status, report, digest, error, created_at FROM po_triage_reports WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, rowid DESC LIMIT ?3",
+			"SELECT id, trigger_id, trigger_source, slot, dry_run, status, report, digest, error, created_at FROM po_triage_reports WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, rowid DESC LIMIT ?3",
 		)
 			.bind(instanceId, uid, limit)
-			.all<{ id: string; trigger_id: string | null; slot: string; dry_run: number; status: string; report: string | null; digest: string | null; error: string | null; created_at: string }>();
+			.all<{ id: string; trigger_id: string | null; trigger_source: string; slot: string; dry_run: number; status: string; report: string | null; digest: string | null; error: string | null; created_at: string }>();
 		return c.json({
 			...(await view(c.env, instanceId, uid)),
-			reports: (results ?? []).map((r) => ({ id: r.id, triggerId: r.trigger_id, slot: r.slot, dryRun: !!r.dry_run, status: r.status, digest: r.digest, error: r.error, createdAt: r.created_at, report: r.report ? JSON.parse(r.report) : null })),
+			reports: (results ?? []).map((r) => ({ id: r.id, triggerId: r.trigger_id, source: r.trigger_source, slot: r.slot, dryRun: !!r.dry_run, status: r.status, digest: r.digest, error: r.error, createdAt: r.created_at, report: r.report ? JSON.parse(r.report) : null })),
 		});
 	});
 }

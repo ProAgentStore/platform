@@ -306,8 +306,8 @@ export async function executeTriggerAction(
 		// it: two windows due together were each claiming a different minute whenever the clock turned
 		// over between their dispatches, and both fired. A manual run has no slot and uses now.
 		const slotAt = stringValue(payloadRecord(payload).slotAt);
-		const scheduled = slotAt ? new Date(slotAt) : null;
-		resultPayload = await runPoTriage(env, target, config, scheduled && !Number.isNaN(scheduled.getTime()) ? scheduled : undefined);
+		const onSchedule = slotAt && !Number.isNaN(new Date(slotAt).getTime()) ? new Date(slotAt) : undefined; // #1232: and the source, on the report
+		resultPayload = await runPoTriage(env, target, config, onSchedule, {}, onSchedule ? "cron" : "manual");
 	} else if (target.action === "run_browse") {
 		// #172: schedule a generic browser task — fire the BROWSER_TASK workflow at the
 		// configured start URL. Runner-offline (503) or a run already active (409) aren't
