@@ -135,7 +135,7 @@ must say which, and name the sibling:
 
 ## 5. Inventory
 
-All 366 tools. **Words** is the description length in the published `tools/list`. **Ex** means the
+Every tool at 0.1.158. **Words** is the description length in the published `tools/list`. **Ex** means the
 description shows an example. **Sib** means it names another tool. The 90-day call/failure columns
 are deliberately absent (§3 gap); add them from the `summarize` output.
 

@@ -192,6 +192,9 @@ export const RUN_HEALTH_STATES = ["working", "waiting", "stalled", "ended"] as c
  */
 export const AGENT_CHAT_STATUSES = ["idle", "thinking", "error"] as const;
 
+/** What a Gmail Scout scan took an email for (#1247) — a COPY of `ScanLogClassification` in `workers/api/src/lib/gmail-scout/scan-log.ts`. */
+export const SCAN_LOG_CLASSIFICATIONS = ["single_posting", "digest", "non_job", "duplicate", "too_old", "digest_item"] as const;
+
 /**
  * What each verdict means, and — for two of them — what it deliberately does NOT claim.
  *
@@ -384,6 +387,11 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 		sources: ["workers/api/src/lib/job-lead-browser-verification.ts"],
 		values: JOB_LEAD_VERIFICATION_STATES,
 	},
+	// #1247. gmail_scout_scan_log publishes what each logged email was taken for, and what was decided.
+	"gmail scan log classification": {
+		sources: ["workers/api/src/lib/gmail-scout/scan-log.ts"],
+		values: SCAN_LOG_CLASSIFICATIONS,
+	},
 	// #961. `fleet_snapshot` publishes it; the API derives it in one pure function.
 	"fleet status": {
 		sources: ["workers/api/src/lib/fleet-snapshot.ts"],
@@ -446,6 +454,13 @@ export interface UnbackedClaim {
  * ceiling tier, so both the file AND the noun were wrong on that entry.
  */
 export const UNBACKED_CLAIMS: Record<string, UnbackedClaim> = {
+	"added|awaiting_browser_verification|deduped|rejected": {
+		reason:
+			"gmail_scout_scan_log's decision per email (#1247). Inventoried rather than backed: as a backed " +
+			"vocabulary its `added` would overlap the `list_pipeline_runs` tally below and fail that claim as unemittable.",
+		source: "workers/api/src/lib/gmail-scout/scan-log.ts",
+		symbol: "ScanLogDecision",
+	},
 	"kanban|list": {
 		reason: "board view",
 		source: "workers/api/src/lib/board.ts",

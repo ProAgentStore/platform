@@ -1215,4 +1215,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.157": "sha256:3d3cd7c3fa753c13fd7cd8edcdc3cc6fc4c0b683adfcbae70be8a2f25cfcfa53",
 	// #1241: admin_mcp_audit gains summarize (per-tool counts by outcome, from ledger key metadata).
 	"0.1.158": "sha256:263b9fdd18d8056a7cc422b163b8b6f0fea7a5c40554f37a9a5ed4356c83f8d2",
+	// #1247: gmail_scout_scan_log (one scan's per-email decisions, paged).
+	"0.1.159": "sha256:b9bbbcca088c3103db60a58b9bbc28ff979d842aca2f23b0cb591e8605d90675",
 };

@@ -502,6 +502,7 @@ const TABLE: Record<string, Row> = {
 	review_local_browser_finding: ["localBrowser", "write", null, "envelope", "decision,dry_run,force,index,instance_id,run_id,token"],
 	gmail_scout_config_get: ["gmailScout", "read", null, null, "instance_id,token"],
 	gmail_scout_status: ["gmailScout", "read", null, null, "instance_id,token"],
+	gmail_scout_scan_log: ["gmailScout", "read", null, null, "cursor,instance_id,limit,scan_id,token"],
 	gmail_scout_config_set: ["gmailScout", "write", null, "envelope", "dry_run,enabled,instance_id,pinned_email,token"],
 	gmail_scout_scan: ["gmailScout", "write", null, "envelope", "dry_run,instance_id,token"],
 	gmail_scout_reprocess: ["gmailScout", "write", null, "envelope", "after,before,dry_run,instance_id,message_ids,token"],

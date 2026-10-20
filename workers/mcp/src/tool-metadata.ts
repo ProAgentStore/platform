@@ -285,6 +285,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	local_browser_preflight: "read",
 	gmail_scout_config_get: "read",
 	gmail_scout_status: "read",
+	gmail_scout_scan_log: "read",
 	po_triage_reports: "read",
 	coder_questions: "read",
 	get_instance_local_browser_settings: "read",

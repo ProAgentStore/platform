@@ -236,7 +236,7 @@ describe("PagsMcp.init — tool registration", () => {
 
 	it("publishes Gmail Scout configuration and scan tools to a fresh MCP client (#997)", async () => {
 		const { tools } = await setup();
-		for (const name of ["gmail_scout_config_get", "gmail_scout_config_set", "gmail_scout_scan", "gmail_scout_reprocess", "gmail_scout_status"]) {
+		for (const name of ["gmail_scout_config_get", "gmail_scout_config_set", "gmail_scout_scan", "gmail_scout_reprocess", "gmail_scout_status", "gmail_scout_scan_log"]) {
 			expect(tools.has(name), `${name} is missing from a new tools/list surface`).toBe(true);
 		}
 	});

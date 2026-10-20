@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**366 tool registrations.** 339 are always registered; 27 are gated to the console
+**367 tool registrations.** 340 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -355,6 +355,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `local_browser_preflight` | Is a local CLI browser research agent ready to run: settings vs the agent's limits, runner connected, runner supports it, signed-in-profile consent, and the engine sign-in the runner last observed (`engineAuth`) — with the step that fixes each | read | | |
 | `gmail_scout_config_get` | Read the Gmail Job Search Scout source configuration | read | | |
 | `gmail_scout_status` | Read mailbox binding, scan counts and failures | read | | |
+| `gmail_scout_scan_log` | Read one scan's per-email decisions: link, sender, subject, classification, decision and reason (paged, 30 days) | read | | |
 | `gmail_scout_config_set` | Configure the pinned, read-only Gmail source | write | yes | |
 | `gmail_scout_scan` | Scan configured Gmail job alerts into new private Scout leads | write | yes | |
 | `gmail_scout_reprocess` | Reprocess selected or windowed (≤30 days, ≤25 messages) historical job alerts into private Scout leads; never moves the cursor, never replays a job that has an application | write | yes | |

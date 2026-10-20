@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 366;
+export const MCP_TOOL_COUNT = 367;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 339;
+export const MCP_TOOL_ALWAYS_ON = 340;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -40,4 +40,5 @@ export const MCP_TOOL_GATED = MCP_TOOL_COUNT - MCP_TOOL_ALWAYS_ON;
  */
 export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; date: string; reason: string }> = [
 	{ count: 366, issue: "#1241", date: "2026-10-20", reason: "Baseline recorded by the MCP tool surface audit." },
+	{ count: 367, issue: "#1247", date: "2026-10-20", reason: "gmail_scout_scan_log: one scan's per-email decisions, paged — too large for gmail_scout_status's receipts, which link to it." },
 ];
