@@ -407,7 +407,7 @@ const TABLE: Record<string, Row> = {
 	list_instance_files: ["knowledge", "none", null, null, "instance_id,token"],
 	list_instance_knowledge: ["knowledge", "none", null, null, "instance_id,token"],
 	// +schemas at #569: the input schemas are opt-in now, because the default response was 89 KB.
-	list_instance_tools: ["base", "none", null, null, "allowed_only,instance_id,schemas,token"],
+	list_instance_tools: ["base", "none", null, null, "allowed_only,cursor,instance_id,schemas,token"],
 	list_connectors: ["connectors", "none", null, null, "token"],
 	list_instance_connectors: ["connectors", "none", null, null, "instance_id,token"],
 	list_instance_connector_consents: ["connectors", "none", null, null, "instance_id,token"],

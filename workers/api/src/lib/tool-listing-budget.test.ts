@@ -7,7 +7,8 @@ import type { ToolDef } from "./connectors/types.js";
 // MCP host receives and cannot drift from it. A test-only reach across the Worker boundary, as
 // `host-template-capture.test.ts` does for the host Worker: the real catalogue lives HERE, and the
 // MCP worker cannot import it (its own wire tests run on synthetic fixtures).
-import { budgetToolListing } from "../../../mcp/src/instance-tools/base.js";
+import { budgetToolListing, pageToolListing } from "../../../mcp/src/instance-tools/base.js";
+import { WIRE_BUDGET_BYTES } from "../../../mcp/src/wire-budget.js";
 
 /**
  * How big `GET /v1/instances/:id/tools` is allowed to be, measured rather than assumed (#569).
@@ -27,8 +28,9 @@ const caps = (over: Partial<AgentCapabilities>): AgentCapabilities =>
 
 /**
  * 64 KiB — the acceptance criterion in #569, and a number MCP hosts actually enforce. It is asserted
- * on what the MCP tool SENDS (`budgetToolListing` over this listing, #578), because that is the layer
- * the limit belongs to: #578 deliberately cut the not-runnable rows' prose in the MCP worker, not here.
+ * on what the MCP tool SENDS, because that is the layer the limit belongs to: #578 cut the not-runnable
+ * rows' prose in the MCP worker, not here, and since #1225 the tool sends the listing in PAGES, each
+ * under `WIRE_BUDGET_BYTES` — the first describe below.
  */
 const HOST_LIMIT = 64 * 1024;
 
@@ -57,8 +59,59 @@ function shapes(): Array<[string, AgentCapabilities]> {
 	];
 }
 
+/**
+ * Walk the listing the way `list_instance_tools` serves it (#1225): pages fitted to the wire budget, joined by
+ * `page.nextCursor`. Returns each page's wire size and every row across the walk.
+ */
+function pagesOf(rows: readonly ToolListingRow[]): { sizes: number[]; rows: ToolListingRow[] } {
+	const sizes: number[] = [];
+	const out: ToolListingRow[] = [];
+	let cursor: string | undefined;
+	do {
+		const page = pageToolListing({ tools: [...rows] as never, runtime: null }, cursor);
+		if ("error" in page) throw new Error(page.error);
+		const body = JSON.parse(page.text) as { tools: ToolListingRow[]; page: { nextCursor: string | null } };
+		sizes.push(new TextEncoder().encode(page.text).length);
+		out.push(...body.tools);
+		cursor = body.page.nextCursor ?? undefined;
+	} while (cursor && sizes.length < 200);
+	return { sizes, rows: out };
+}
+
+describe("the tool listing PAGES, so no catalogue size can overflow a host (#1225)", () => {
+	it("every page of the real catalogue is under the wire budget for every capability shape, and the pages tile it", () => {
+		const all = allToolPolicyInputs();
+		for (const [label, c] of shapes()) {
+			for (const schemas of [false, true]) {
+				const rows = projectToolListing(resolveToolPolicy(c, [], all, []), { schemas });
+				const walked = pagesOf(rows);
+				const worst = Math.max(...walked.sizes);
+				expect(worst, `${label}${schemas ? " +schemas" : ""}: a page is ${worst} B, over the ${WIRE_BUDGET_BYTES} B wire budget`).toBeLessThanOrEqual(WIRE_BUDGET_BYTES);
+				expect(worst).toBeLessThan(HOST_LIMIT);
+				// #525: the walk is the WHOLE listing, runnable or not, in order, each once.
+				expect(walked.rows.map((r) => r.name), label).toEqual(rows.map((r) => r.name));
+				console.log(`✓ #1225: ${label}${schemas ? " +schemas" : ""} — ${rows.length} rows in ${walked.sizes.length} page(s), largest ${worst} B (${Math.round((worst / HOST_LIMIT) * 100)}% of the host limit)`);
+			}
+		}
+	});
+
+	it("still holds when the REAL catalogue grows to 4x — the acceptance test (#1225)", () => {
+		const all = allToolPolicyInputs();
+		const grown = Array.from({ length: 4 }, (_, k) => all.map((t) => ({ ...t, name: `${t.name}__copy${k}` }))).flat();
+		expect(grown.length, "the grown catalogue is not 4x the real one").toBe(all.length * 4);
+		const rows = projectToolListing(resolveToolPolicy(caps({ tools: all.map((t) => t.name) }), [], grown, []), { schemas: true });
+		const walked = pagesOf(rows);
+		expect(Math.max(...walked.sizes)).toBeLessThanOrEqual(WIRE_BUDGET_BYTES);
+		expect(walked.rows).toHaveLength(grown.length);
+		// The point of paging: unpaged, this same listing is several times the host limit.
+		const unpaged = wireBytes(budgetToolListing(rows));
+		expect(unpaged, "the grown listing fits unpaged — the arm above proves nothing").toBeGreaterThan(HOST_LIMIT * 2);
+		console.log(`✓ #1225: ${grown.length} rows — ${unpaged} B unpaged (${(unpaged / HOST_LIMIT).toFixed(1)}x the host limit), ${walked.sizes.length} pages, largest ${Math.max(...walked.sizes)} B`);
+	});
+});
+
 describe("the tool listing fits in a response (#569)", () => {
-	it("keeps what MCP SENDS under the 64 KiB host limit for every capability shape, and the API body under its sanity bound", () => {
+	it("keeps the API body under its sanity bound for every capability shape; what MCP sends is bounded per page (#1225)", () => {
 		const all = allToolPolicyInputs();
 		// G1 — the denominator. 104 rows were measured in production; under 90 means a connector or
 		// the built-in catalog failed to load and this budget is being met by measuring less.
@@ -66,11 +119,13 @@ describe("the tool listing fits in a response (#569)", () => {
 		for (const [label, c] of shapes()) {
 			const rows = projectToolListing(resolveToolPolicy(c, [], all, []));
 			const size = wireBytes(rows);
+			// Unpaged, MCP's projection of the whole listing — the number #578 held under the host limit and that
+			// #1225 stopped depending on: `list_instance_tools` now sends it in pages (asserted above), so the
+			// listing may outgrow one reply without this going red. Recorded, not asserted.
 			const mcp = wireBytes(budgetToolListing(rows));
 			expect(rows.length, label).toBe(all.length);
-			expect(mcp, `${label}: list_instance_tools sends ${mcp} bytes over MCP, over the ${HOST_LIMIT}-byte host limit`).toBeLessThan(HOST_LIMIT);
 			expect(size, `${label}: the API body is ${size} bytes, over its ${API_BODY_BOUND}-byte sanity bound`).toBeLessThan(API_BODY_BOUND);
-			console.log(`✓ #569: ${label} — ${rows.length} rows, ${mcp} B over MCP (${Math.round((mcp / HOST_LIMIT) * 100)}% of the host limit), API body ${size} B`);
+			console.log(`✓ #569: ${label} — ${rows.length} rows, ${mcp} B unpaged over MCP (${Math.round((mcp / HOST_LIMIT) * 100)}% of the host limit), API body ${size} B`);
 		}
 	});
 

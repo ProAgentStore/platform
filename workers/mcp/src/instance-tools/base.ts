@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, chatReplyText, jsonResult, jsonText, structuredText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
-import { pagedToolResult } from "../wire-budget.js";
+import { fitPage, pagedToolResult } from "../wire-budget.js";
 import { findInstanceForAgent, type InstanceSummary, type InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -125,6 +125,72 @@ export function budgetToolListing<T extends ListingRow>(rows: readonly T[]): T[]
 	});
 }
 
+// ── PAGING (#1225) — the bound #578 said it was not ────────────────────────────────────────────
+//
+// `budgetToolListing` shrinks each row; it cannot bound the listing, because the listing is one row per
+// tool the platform has. Measured on the real catalogue with the four native tools (133 rows) the worst
+// case, an agent that declares every tool, was 60,853 B of the 65,536 B host limit — 93%, with room for
+// 8-10 more tools. Every new connector spends it.
+//
+// So `list_instance_tools` now PAGES, by wire size, the way `vector_stats` and `my_agents` do (#595):
+// as many rows as fit `WIRE_BUDGET_BYTES` (48,000 B, a margin under the host limit), then
+// `page.nextCursor` for the rest. The budget is on the collection, so no catalogue size can overflow it.
+//
+// BACKWARDS-COMPATIBLE: the reply is still `{tools, runtime}`. A listing that fits one page — every
+// instance with a narrower catalogue than today's worst case — comes back whole, in the same order, with
+// one added key, `page: {total, count, hasMore: false, nextCursor: null}`. Only a listing that would not
+// fit gets `hasMore: true`, and the caller is told so in `page.note` as well as in the fields.
+//
+// #525'S CONTRACT STANDS: the pages TILE the listing — every row, including the ones the instance
+// cannot run, appears exactly once across a walk. Paging never narrows to "allowed only"; `allowed_only`
+// remains the caller's own choice.
+//
+// THE CURSOR is opaque: a caller passes back `page.nextCursor` and nothing else. It encodes the offset
+// into this listing's stable order, so a catalogue that changes between two calls (a deploy, an owner
+// switching a tool off under `allowed_only`) can shift a row across a page boundary; `page.total` is
+// re-read on every page so that is visible, and an out-of-range cursor lands on an empty last page
+// rather than an error.
+
+const LISTING_CURSOR = /^t(\d{1,6})$/;
+
+/** The opaque cursor for the page that starts at `offset`. */
+export const listingCursor = (offset: number): string => `t${offset}`;
+
+/** The offset a cursor stands for, or null when it is not one this listing issued. */
+export function listingOffset(cursor: string | undefined): number | null {
+	if (cursor === undefined) return 0;
+	const m = LISTING_CURSOR.exec(cursor);
+	return m ? Number(m[1]) : null;
+}
+
+/**
+ * One page of the tool listing, fitted to the wire budget. `data` is the API's `{tools, runtime, …}`; every
+ * key but `tools` rides on EVERY page (it is small, and a caller that reads one page still gets it).
+ * Returns the JSON text, or `{error}` for a cursor this listing did not issue.
+ */
+export function pageToolListing(data: { tools: Array<ListingRow & Record<string, unknown>> } & Record<string, unknown>, cursor?: string): { text: string } | { error: string } {
+	const offset = listingOffset(cursor);
+	if (offset === null) return { error: `cursor ${JSON.stringify(cursor)} is not one list_instance_tools issued. Pass the previous reply's page.nextCursor exactly, or omit cursor to start from the first page.` };
+	const { tools, ...rest } = data;
+	const fitted = fitPage({
+		rows: budgetToolListing(tools),
+		offset,
+		build: (rows, meta) => ({
+			...rest,
+			tools: rows,
+			page: {
+				total: meta.of,
+				count: meta.count,
+				hasMore: meta.hasMore,
+				nextCursor: meta.nextOffset === null ? null : listingCursor(meta.nextOffset),
+				...(meta.hasMore ? { note: `This is ${meta.count} of ${meta.of} tools. The rest are NOT missing — pass cursor: page.nextCursor to read them; the pages together are the whole listing.` } : {}),
+				...(meta.note ? { sizeNote: meta.note } : {}),
+			},
+		}),
+	});
+	return { text: fitted.text };
+}
+
 /**
  * The instance surface's LIFECYCLE core: what an instance may do (the connector-tool gate),
  * how one comes into and goes out of existence, and how you talk to it.
@@ -167,7 +233,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			// Rendered from TOOL_TIERS, never typed out: the two-of-four description that shipped is
 			// what #569 is about.
 			tierGloss() +
-			") and `invocableBy`, the surfaces that can actually reach it. Input schemas are NOT included by default: pass schemas:true to get them for the tools this instance may run (a schema for a tool it may not run describes inputs you could never send). Pass allowed_only:true for just the runnable set. To keep the response inside a calling host's limit, the `description` of a row this instance CANNOT run is truncated to its first clause and ends in `…` — every verdict field on it is complete, only the prose is cut; ask for allowed_only:true if you want full descriptions of the tools it can run. To verify an agent is read-only before trusting it with sensitive data, read `mutates` — NOT `scope`: a tool with no `connector` has nothing to consent to, so it reports scope `read` however much it changes (start_work, run_pipeline, dedupe_upsert all do). Then read `allowed`: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit what an agent can REACH, read `reach` — `platform` (never leaves ProAgentStore), `machine` (the owner's computer) or `internet` (anywhere else). Do NOT filter on `connector` for this: it is wrong in both directions and was measured so — fetch_url names no connector and reaches the internet, which is how 10 of 34 instances were told they had nothing reaching outside the platform while it was allowed on all ten; every supervision tool names one and never leaves.",
+			") and `invocableBy`, the surfaces that can actually reach it. Input schemas are NOT included by default: pass schemas:true to get them for the tools this instance may run (a schema for a tool it may not run describes inputs you could never send). Pass allowed_only:true for just the runnable set. To keep the response inside a calling host's limit, the `description` of a row this instance CANNOT run is truncated to its first clause and ends in `…` — every verdict field on it is complete, only the prose is cut; ask for allowed_only:true if you want full descriptions of the tools it can run. To verify an agent is read-only before trusting it with sensitive data, read `mutates` — NOT `scope`: a tool with no `connector` has nothing to consent to, so it reports scope `read` however much it changes (start_work, run_pipeline, dedupe_upsert all do). Then read `allowed`: a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool. Read `invocableBy` before concluding a tool is unreachable from here — `[\"chat\"]` means the agent runs it in conversation and `call_instance_tool` cannot; only tools listing `call_instance_tool` are callable through that tool. To audit what an agent can REACH, read `reach` — `platform` (never leaves ProAgentStore), `machine` (the owner's computer) or `internet` (anywhere else). Do NOT filter on `connector` for this: it is wrong in both directions and was measured so — fetch_url names no connector and reaches the internet, which is how 10 of 34 instances were told they had nothing reaching outside the platform while it was allowed on all ten; every supervision tool names one and never leaves. The listing PAGES (#1225) so no catalogue size can overflow a host: each reply carries as many rows as fit, and `page` = {total, count, hasMore, nextCursor}. When `page.hasMore` is true the reply is NOT the whole listing — call again with `cursor: page.nextCursor` until `hasMore` is false; the pages together are every tool, runnable or not, each exactly once. A listing that fits one page comes back whole, with `hasMore: false`. Example: {\"instance_id\":\"<id>\",\"cursor\":\"t60\"}.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
@@ -176,8 +242,9 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			// across all 34 instances every schema together is 18% of the worst-case payload, while
 			// the descriptions of the rows the agent cannot run are 38%.
 			schemas: z.boolean().optional().describe("Include each allowed tool's input schema. Off by default — ask for them when you are about to call one."),
+			cursor: z.string().min(1).max(16).optional().describe("The previous reply's `page.nextCursor`, to read the next page of the listing (#1225). Opaque — copy it exactly. Omit it for the first page."),
 		},
-		async ({ token, instance_id, allowed_only, schemas }) => {
+		async ({ token, instance_id, allowed_only, schemas, cursor }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = [allowed_only ? "allowed=true" : "", schemas ? "schemas=true" : ""].filter(Boolean).join("&");
@@ -188,14 +255,17 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			// The remaining overflow (#578) — see `budgetToolListing` for where the bytes actually
 			// are and why this is done here rather than in the route. An `{error}` body carries no
 			// `tools`, so it passes through untouched rather than being reshaped into a success.
-			const budgeted = Array.isArray(data.tools) ? { ...data, tools: budgetToolListing(data.tools) } : data;
+			if (!Array.isArray(data.tools)) return jsonText(data);
+			const paged = pageToolListing(data as { tools: Array<ListingRow & Record<string, unknown>> } & Record<string, unknown>, cursor);
+			if ("error" in paged) return jsonText({ error: paged.error });
 			// The API body for a 104-row instance is ~54 KB; pretty-printing it here added ~22% and
 			// took the WIRE response to 66,042 bytes — still over the calling host's limit this was
 			// filed about, after the payload had already been budgeted down. Measured in production,
 			// which is the only reason it was noticed at all: every test asserted the API's compact
 			// body, not what MCP sends. `jsonText` is compact for every tool since #586, so the
-			// `{compact:true}` this line carried is no longer expressible or needed.
-			return jsonText(budgeted);
+			// `{compact:true}` this line carried is no longer expressible or needed. `pageToolListing` already
+			// returns compact JSON text, fitted to the budget (#1225).
+			return text(paged.text);
 		},
 	);
 

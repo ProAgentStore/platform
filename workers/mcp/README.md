@@ -194,7 +194,7 @@ object/array unless your host cannot.
 For `call_instance_tool`, do not guess the nested shape. Call:
 
 ```text
-list_instance_tools { instance_id, allowed_only: true, schemas: true }
+list_instance_tools { instance_id, allowed_only: true, schemas: true }   # then cursor: page.nextCursor while page.hasMore
 call_instance_tool { instance_id, tool: "<exact nested tool name>", input: { ...nested args... } }
 ```
 
@@ -540,7 +540,7 @@ immediately instead of a whole transcript.
 
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
-| `list_instance_tools` | Every tool the instance could run — built-ins as well as connector tools — with this instance's verdict (`allowed`, `scope`, `mutates`, `reach`, `disabled`, `reason`, `tier`, `invocableBy`) + input schemas. Read `mutates` for "does this change anything" (not `scope`) and `reach` for "does this leave the platform" (never the connector name) | — | | |
+| `list_instance_tools` | Every tool the instance could run — built-ins as well as connector tools — with this instance's verdict (`allowed`, `scope`, `mutates`, `reach`, `disabled`, `reason`, `tier`, `invocableBy`) + input schemas. Read `mutates` for "does this change anything" (not `scope`) and `reach` for "does this leave the platform" (never the connector name). Pages by wire size (#1225): while `page.hasMore`, call again with `cursor: page.nextCursor` | — | | |
 | `set_instance_tool` | Switch one tool on or off for this instance | write | yes | |
 | `call_instance_tool` | Invoke a connector tool directly (`tool` + `input`) | write | no ([why](#tools-with-no-dry-run)) | |
 | `connector_status` | Is a file connector connected, and is this deployment configured for it? | — | | |

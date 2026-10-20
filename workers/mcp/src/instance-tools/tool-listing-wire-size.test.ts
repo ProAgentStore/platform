@@ -27,6 +27,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 import type { McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
+import { WIRE_BUDGET_BYTES } from "../wire-budget.js";
 import { registerBaseTools } from "./base.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
@@ -35,6 +36,31 @@ type Handler = (args: Record<string, unknown>) => Promise<ToolContent>;
 type Shape = Record<string, z.ZodTypeAny>;
 
 const env: McpEnv = { API_BASE: "https://api.test" };
+
+const wireOf = (text: string) => new TextEncoder().encode(text).length;
+
+interface ListingPage<Row = Record<string, unknown>> {
+	tools: Row[];
+	runtime?: unknown;
+	page: { total: number; count: number; hasMore: boolean; nextCursor: string | null; note?: string; sizeNote?: string };
+}
+
+/**
+ * Walk a listing the way a caller must (#1225): call, read `page.nextCursor`, call again until `hasMore`
+ * is false. Every page's wire size is kept, because the bound is per page.
+ */
+async function walk<Row = Record<string, unknown>>(handler: Handler, args: Record<string, unknown>): Promise<{ pages: Array<{ bytes: number; body: ListingPage<Row> }>; rows: Row[] }> {
+	const pages: Array<{ bytes: number; body: ListingPage<Row> }> = [];
+	let cursor: string | undefined;
+	do {
+		const out = await handler({ ...args, ...(cursor ? { cursor } : {}) });
+		const text = out.content[0].text;
+		const body = JSON.parse(text) as ListingPage<Row>;
+		pages.push({ bytes: wireOf(text), body });
+		cursor = body.page.nextCursor ?? undefined;
+	} while (cursor && pages.length < 100);
+	return { pages, rows: pages.flatMap((p) => p.body.tools) };
+}
 
 /** 64 KiB — the limit the calling host in #569 applied. */
 const HOST_LIMIT = 64 * 1024;
@@ -174,9 +200,10 @@ describe("list_instance_tools wire size (#569)", () => {
 		// asserted in the block below.
 		const t = tools.get("list_instance_tools");
 		if (!t) throw new Error("list_instance_tools not registered");
-		const out = await t.handler({ instance_id: "inst-1", schemas: true });
-		const parsed = JSON.parse(out.content[0].text) as { tools: { allowed: boolean; jsonSchema?: unknown }[] };
-		const bytes = new TextEncoder().encode(out.content[0].text).length;
+		const walked = await walk<{ allowed: boolean; jsonSchema?: unknown }>(t.handler, { instance_id: "inst-1", schemas: true });
+		const parsed = { tools: walked.rows };
+		// Per page since #1225: no single reply is the whole listing once it outgrows one page.
+		const bytes = Math.max(...walked.pages.map((p) => p.bytes));
 
 		// G1 — the denominator, before any claim about it.
 		expect(parsed.tools).toHaveLength(104);
@@ -312,15 +339,17 @@ describe("list_instance_tools worst case (#578)", () => {
 			["default", { instance_id: "inst-1" }],
 			["schemas:true", { instance_id: "inst-1", schemas: true }],
 		] as const) {
-			const out = await t.handler(args);
-			const bytes = new TextEncoder().encode(out.content[0].text).length;
-			const parsed = JSON.parse(out.content[0].text) as { tools: Array<{ allowed: boolean; description: string }> };
+			const walked = await walk<{ allowed: boolean; description: string }>(t.handler, args);
+			const parsed = { tools: walked.rows };
+			// The worst page, since #1225: the bound is per page, and each is under the wire budget too.
+			const bytes = Math.max(...walked.pages.map((p) => p.bytes));
 
 			// G1 again — measured on what came back, not on what was sent in.
 			expect(parsed.tools, label).toHaveLength(104);
 			expect(parsed.tools.filter((r) => !r.allowed), label).toHaveLength(68);
 
 			expect(bytes, `${label}: ${bytes} B, over the ${HOST_LIMIT} B host limit`).toBeLessThan(HOST_LIMIT);
+			expect(bytes, `${label}: a page of ${bytes} B is over the ${WIRE_BUDGET_BYTES} B wire budget`).toBeLessThanOrEqual(WIRE_BUDGET_BYTES);
 
 			// The cut lands only where it was aimed: every not-runnable row is truncated, and no
 			// runnable row is. A projection that trimmed everything would also fit, and would be a
@@ -329,7 +358,7 @@ describe("list_instance_tools worst case (#578)", () => {
 			expect(parsed.tools.filter((r) => r.allowed && r.description.endsWith("…")), label).toEqual([]);
 			expect(parsed.tools.find((r) => r.allowed)?.description, label).toBe(NOT_DECLARED_DESCRIPTION.slice(0, 200));
 
-			console.log(`✓ #578 ${label}: ${bytes} B, ${Math.round((bytes / HOST_LIMIT) * 100)}% of the ${HOST_LIMIT} B limit`);
+			console.log(`✓ #578/#1225 ${label}: ${walked.pages.length} page(s), the largest ${bytes} B, ${Math.round((bytes / HOST_LIMIT) * 100)}% of the ${HOST_LIMIT} B limit`);
 		}
 	});
 
@@ -349,8 +378,7 @@ describe("list_instance_tools worst case (#578)", () => {
 	it("carries `reach` through both projections, including onto a truncated row (#585 AC2)", async () => {
 		const t = worstTools.get("list_instance_tools");
 		if (!t) throw new Error("list_instance_tools not registered");
-		const out = await t.handler({ instance_id: "inst-1" });
-		const parsed = JSON.parse(out.content[0].text) as { tools: Array<{ allowed: boolean; reach?: string; description: string }> };
+		const parsed = { tools: (await walk<{ allowed: boolean; reach?: string; description: string }>(t.handler, { instance_id: "inst-1" })).rows };
 
 		// G1 — the denominator: both halves of the listing are present before either is checked.
 		const cut = parsed.tools.filter((r) => !r.allowed);
@@ -387,5 +415,154 @@ describe("list_instance_tools worst case (#578)", () => {
 		// And the prose that survives is the first clause, not a mid-word stump.
 		expect(String(cut.description).endsWith(" …")).toBe(false);
 		expect(String(cut.description)).toContain("An accurate description of what this tool does");
+	});
+});
+
+/**
+ * PAGING (#1225) — the bound #578 said it was not.
+ *
+ * `budgetToolListing` shrinks each row; only paging bounds the listing, because the listing grows by one
+ * row per tool. Acceptance: no shape's page exceeds the host limit however large the catalogue grows, with
+ * a test that grows it past today's size. These grow it to 4×.
+ */
+describe("list_instance_tools pages (#1225)", () => {
+	/** `n` rows shaped like the measured worst case: ~65% not runnable, each with a 369-char description and a verdict. */
+	function catalogue(n: number): { tools: Array<Record<string, unknown>>; runtime: string } {
+		const prose = "An accurate description of what this tool does, including the caveat that matters and the constraint a caller has to know about before invoking it, plus the sentence naming the external system it reaches and what it costs. ".repeat(2).slice(0, 369);
+		const tools = Array.from({ length: n }, (_, i) => {
+			const allowed = i % 3 === 0;
+			return {
+				name: `connector_tool_with_a_realistic_name_${String(i).padStart(4, "0")}`,
+				scope: "read",
+				mutates: i % 2 === 0,
+				description: prose,
+				allowed,
+				reason: allowed ? "ok" : "not_declared",
+				reach: "internet",
+				tier: "connector",
+				invocableBy: ["chat", "call_instance_tool"],
+				...(allowed ? { jsonSchema: { type: "object", properties: { parameter_0: { type: "string", description: "What this parameter selects." } }, required: ["parameter_0"] } } : {}),
+			};
+		});
+		return { tools, runtime: "local_browser" };
+	}
+
+	async function listingTool(body: unknown, seen?: string[]): Promise<Handler> {
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			seen?.push(typeof input === "string" ? input : input.toString());
+			return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+		});
+		const registered = new Map<string, { schema: Shape; handler: Handler }>();
+		const ctx: InstanceToolsCtx = {
+			env,
+			tokenFor: (provided?: string) => provided || "session-token",
+			safetyFor: (): SafetyContext => ({ env, subject: "user-1", scopes: ["read", "write", "runtime", "destructive"] }),
+		} as InstanceToolsCtx;
+		registerBaseTools(
+			// biome-ignore lint/suspicious/noExplicitAny: minimal fake MCP server
+			{ tool: (name: string, _d: string, schema: Shape, handler: Handler) => void registered.set(name, { schema, handler }) } as any,
+			ctx,
+		);
+		const t = registered.get("list_instance_tools");
+		if (!t) throw new Error("list_instance_tools not registered");
+		return t.handler;
+	}
+
+	it("no page exceeds the host limit however large the catalogue grows — 104, 208, 416 and 1,000 rows", async () => {
+		for (const n of [104, 208, 416, 1000]) {
+			for (const args of [{ instance_id: "i" }, { instance_id: "i", schemas: true }]) {
+				const handler = await listingTool(catalogue(n));
+				const { pages, rows } = await walk(handler, args);
+				const worst = Math.max(...pages.map((p) => p.bytes));
+				expect(worst, `${n} rows ${JSON.stringify(args)}: a page is ${worst} B, over the ${WIRE_BUDGET_BYTES} B wire budget`).toBeLessThanOrEqual(WIRE_BUDGET_BYTES);
+				expect(worst).toBeLessThan(HOST_LIMIT);
+				// G1 — the denominator: the walk returned the whole catalogue, not a fraction of it.
+				expect(rows, `${n} rows`).toHaveLength(n);
+				if (n >= 208) expect(pages.length, `${n} rows should need several pages`).toBeGreaterThan(1);
+				console.log(`✓ #1225 ${n} rows ${args.schemas ? "schemas:true" : "default"}: ${pages.length} page(s), largest ${worst} B (${Math.round((worst / HOST_LIMIT) * 100)}% of the host limit)`);
+			}
+		}
+	});
+
+	it("the pages TILE the listing: every row once, in order, runnable or not (#525's contract)", async () => {
+		const body = catalogue(416);
+		const { pages, rows } = await walk(await listingTool(body), { instance_id: "i" });
+		expect(rows.map((r) => r.name)).toEqual(body.tools.map((r) => r.name));
+		expect(rows.filter((r) => r.allowed === false)).toHaveLength(body.tools.filter((r) => r.allowed === false).length);
+		// Every page says how many there are in all, and the counts add up to it.
+		for (const p of pages) expect(p.body.page.total).toBe(416);
+		expect(pages.reduce((n, p) => n + p.body.page.count, 0)).toBe(416);
+		// Only the last page is the end.
+		expect(pages.map((p) => p.body.page.hasMore)).toEqual([...pages.slice(1).map(() => true), false]);
+		expect(pages.at(-1)?.body.page.nextCursor).toBeNull();
+		// …and a non-final page says plainly that it is not the whole listing.
+		expect(pages[0].body.page.note).toMatch(/NOT missing — pass cursor: page.nextCursor/);
+	});
+
+	it("every key but `tools` rides on every page", async () => {
+		const { pages } = await walk(await listingTool(catalogue(416)), { instance_id: "i" });
+		expect(pages.length).toBeGreaterThan(1);
+		for (const p of pages) expect(p.body.runtime).toBe("local_browser");
+	});
+
+	it("BACKWARDS COMPATIBLE: a listing that fits comes back whole, in order, with one added key", async () => {
+		const body = catalogue(30);
+		const out = await (await listingTool(body))({ instance_id: "i" });
+		const parsed = JSON.parse(out.content[0].text) as ListingPage;
+		const { page, ...rest } = parsed;
+		// Same shape as before #1225 — `{tools, runtime}` — plus `page`.
+		expect(Object.keys(rest).sort()).toEqual(["runtime", "tools"]);
+		expect(page).toEqual({ total: 30, count: 30, hasMore: false, nextCursor: null });
+		expect(parsed.tools.map((r) => r.name)).toEqual(body.tools.map((r) => r.name));
+		// The compact serialisation, byte for byte (#586).
+		expect(out.content[0].text).toBe(JSON.stringify(parsed));
+	});
+
+	it("an API error passes through untouched, and is not given a page", async () => {
+		const out = await (await listingTool({ error: "Instance not found" }))({ instance_id: "i" });
+		expect(JSON.parse(out.content[0].text)).toEqual({ error: "Instance not found" });
+	});
+
+	it("allowed_only and schemas reach the API as before, and paging applies on top", async () => {
+		const seen: string[] = [];
+		const handler = await listingTool(catalogue(416), seen);
+		const { rows } = await walk(handler, { instance_id: "i", allowed_only: true, schemas: true });
+		expect(seen.every((u) => u.includes("allowed=true") && u.includes("schemas=true"))).toBe(true);
+		expect(rows).toHaveLength(416); // the stub ignores the filter; the point is the query went out, and paging walks what came back
+	});
+
+	it("refuses a cursor the listing did not issue, naming the way out", async () => {
+		const handler = await listingTool(catalogue(416));
+		for (const bad of ["abc", "t", "t-5", "5", "t1.5", "t99999999"]) {
+			const out = await handler({ instance_id: "i", cursor: bad });
+			expect(JSON.parse(out.content[0].text).error, bad).toMatch(/is not one list_instance_tools issued\. Pass the previous reply's page\.nextCursor exactly, or omit cursor/);
+		}
+	});
+
+	it("a cursor past the end lands on an empty last page rather than an error (the catalogue shrank between calls)", async () => {
+		const out = await (await listingTool(catalogue(40)))({ instance_id: "i", cursor: "t5000" });
+		const parsed = JSON.parse(out.content[0].text) as ListingPage;
+		expect(parsed.tools).toEqual([]);
+		expect(parsed.page).toMatchObject({ total: 40, count: 0, hasMore: false, nextCursor: null });
+	});
+
+	it("one row larger than the whole budget still advances — carried alone, said so, never an infinite empty page", async () => {
+		const body = catalogue(5);
+		body.tools[2] = { ...body.tools[2], description: "x".repeat(60_000), allowed: true };
+		const { pages, rows } = await walk(await listingTool(body), { instance_id: "i" });
+		expect(rows.map((r) => r.name)).toEqual(body.tools.map((r) => r.name));
+		const oversize = pages.find((p) => p.bytes > WIRE_BUDGET_BYTES);
+		expect(oversize?.body.page.sizeNote).toMatch(/on its own, over this tool's 48000-byte budget/);
+		expect(oversize?.body.tools).toHaveLength(1);
+		// Every page but that one is within budget.
+		expect(pages.filter((p) => p !== oversize).every((p) => p.bytes <= WIRE_BUDGET_BYTES)).toBe(true);
+	});
+
+	it("non-ASCII prose is counted in BYTES, so a page of em dashes and CJK still fits", async () => {
+		const body = catalogue(300);
+		for (const r of body.tools) r.description = "一个准确的工具说明 — 包括重要的注意事项。".repeat(14);
+		const { pages, rows } = await walk(await listingTool(body), { instance_id: "i" });
+		expect(rows).toHaveLength(300);
+		expect(Math.max(...pages.map((p) => p.bytes))).toBeLessThanOrEqual(WIRE_BUDGET_BYTES);
 	});
 });

@@ -1223,4 +1223,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.161": "sha256:4c7d77c70319bf8c0f0fbd1d719a41e38034637fe62b662a1e279acb4cde34e7",
 	// #1243: SERVER_INSTRUCTIONS gains the common-task sentence pointing at platform_guide's quick start.
 	"0.1.162": "sha256:21778844425116f2c9c30f9849509002f6a9c27cf8058a566f4e19ce80eb8551",
+	// #1225: list_instance_tools gains cursor, and pages by wire size (page = {total, count, hasMore, nextCursor}).
+	"0.1.163": "sha256:e12d1fc93f772b0c739037f08cffd896b72c32a101e5542252d7be749eeab6c4",
 };

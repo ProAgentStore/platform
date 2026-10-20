@@ -92,7 +92,7 @@ function procedures(input: OperatorGuidanceInput, callable: number): string[] {
 	const out = [
 		"### Procedures",
 		"",
-		`1. **Discover.** \`list_instance_tools\` with \`{"instance_id":"${input.instanceId}","allowed_only":true,"schemas":true}\` is the authority; this reference is rendered from it on every read.`,
+		`1. **Discover.** \`list_instance_tools\` with \`{"instance_id":"${input.instanceId}","allowed_only":true,"schemas":true}\` is the authority; this reference is rendered from it on every read. It pages: while \`page.hasMore\` is true, call again with \`cursor: page.nextCursor\`.`,
 		callable
 			? '2. **Call a nested tool.** `call_instance_tool` with `instance_id`, `tool` and `input` — `input` is the tool\'s OWN argument object: do not wrap it again or rename its fields. Angle-bracketed values are placeholders.'
 			: "2. **No nested tool is callable here.** Every tool below runs inside the agent's own conversation.",
