@@ -335,6 +335,15 @@ is not thrown away. It is stored `awaiting_browser_verification` and checked in 
 browser, under the instance's browser verification settings. Only the canonical URL is sent, never
 the personalised alert link.
 
+A digest or recommendation email ("20 new jobs for …") is handled one posting at a time (#1248).
+Each SEEK, LinkedIn or Indeed posting it links to is deduplicated by its job id, then checked on its
+own canonical page. It is added, queued for this browser check, or rejected, and each outcome is logged
+with its reason in the scan log (`gmail_scout_scan_log`). Its tracking redirects are never followed.
+
+SEEK refuses the server, and its digests leave the canonical links unnamed, so a SEEK digest posting
+usually waits here with no title until the browser has read it. A digest that links to no identifiable
+posting is rejected as `digest`.
+
 The Gmail Scout declares a local browser for this (#1048). It runs research only, on your own Codex or
 Claude subscription. Browser verification is off until you turn it on for the Scout and pin a machine.
 
