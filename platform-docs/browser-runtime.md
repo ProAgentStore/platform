@@ -340,9 +340,10 @@ Each SEEK, LinkedIn or Indeed posting it links to is deduplicated by its job id,
 own canonical page. It is added, queued for this browser check, or rejected, and each outcome is logged
 with its reason in the scan log (`gmail_scout_scan_log`). Its tracking redirects are never followed.
 
-SEEK refuses the server, and its digests leave the canonical links unnamed, so a SEEK digest posting
-usually waits here with no title until the browser has read it. A digest that links to no identifiable
-posting is rejected as `digest`.
+SEEK refuses the server, so a SEEK digest posting usually waits here for the browser check. It carries
+the title and employer from the digest's own listing for that job (#1251). A lead stored untitled
+before that is named the next time a scan or reprocess sees a listing for it. A digest that links to
+no identifiable posting is rejected as `digest`.
 
 The Gmail Scout declares a local browser for this (#1048). It runs research only, on your own Codex or
 Claude subscription. Browser verification is off until you turn it on for the Scout and pin a machine.
