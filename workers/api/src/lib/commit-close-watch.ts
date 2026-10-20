@@ -349,6 +349,10 @@ interface RepoRow {
 	instance_config: string | null;
 	last_scanned_commit_sha: string | null;
 	last_scanned_commit_at: string | null;
+	/** Why the sweep could not reach this repo last time (#1246); null when it could. */
+	commit_watch_unreachable?: string | null;
+	/** The `github_repo` that reason was true for — a re-pointed binding is a different question. */
+	commit_watch_unreachable_repo?: string | null;
 }
 
 /**
@@ -410,9 +414,11 @@ export const COMMITS_RESOURCE = "commits";
  * `deploy-watch.ts` records: a sha with a mismatched instant is worse than either alone.
  */
 async function writeWatermark(env: Env, repoId: string, seenSha: string | null, seenAt: string | null): Promise<void> {
+	// Reaching the commits page at all clears an unreachable record (#1246) — in the same statement.
 	await env.DB.prepare(
 		`UPDATE coding_repos
-		    SET last_scanned_commit_sha = ?1, last_scanned_commit_at = ?2, last_commit_scan_at = datetime('now')
+		    SET last_scanned_commit_sha = ?1, last_scanned_commit_at = ?2, last_commit_scan_at = datetime('now'),
+		        commit_watch_unreachable = NULL, commit_watch_unreachable_repo = NULL, commit_watch_retry_at = NULL
 		  WHERE id = ?3`,
 	)
 		.bind(seenSha, seenAt, repoId)
@@ -441,6 +447,43 @@ async function recordDeclined(env: Env, repo: RepoRow, why: string): Promise<voi
 		.catch(() => undefined);
 }
 
+/**
+ * How long a repo the sweep cannot reach is left alone before it is tried again (#1246).
+ *
+ * Unreachable means the answer cannot change between ticks: no installation for the owner, or a
+ * commits page GitHub answers 404 (a repo renamed or moved, an org that does not exist, a private
+ * repo outside the installation). Six hours, not "until something changes", because nothing tells
+ * this sweep when an installation is added; a binding re-pointed at another slug is tried at once.
+ */
+export const COMMIT_CLOSE_UNREACHABLE_RETRY_HOURS = 6;
+
+/**
+ * The repo cannot be reached. Say why ONCE — when the reason first appears or changes — and back
+ * off. Before #1246 this was `recordDeclined` on every tick: ~40k occurrences in 30 days for a
+ * handful of bindings, burying every real failure in `list_errors` and `error_summary`.
+ */
+async function recordUnreachable(env: Env, repo: RepoRow, why: string): Promise<void> {
+	const known = repo.commit_watch_unreachable === why && repo.commit_watch_unreachable_repo === repo.github_repo;
+	if (!known) {
+		await logError(env, {
+			source: "commit-close-watch",
+			level: "warn",
+			message: `cannot reach ${repo.github_repo}: ${why}. Retried every ${COMMIT_CLOSE_UNREACHABLE_RETRY_HOURS}h, and not logged again unless the reason changes.`,
+			userId: repo.user_id,
+			context: { repoId: repo.id, instanceId: repo.instance_id, githubRepo: repo.github_repo, previously: repo.commit_watch_unreachable ?? null },
+		}).catch(() => undefined);
+	}
+	await env.DB.prepare(
+		`UPDATE coding_repos
+		    SET commit_watch_unreachable = ?1, commit_watch_unreachable_repo = ?2,
+		        commit_watch_retry_at = datetime('now', ?3), last_commit_scan_at = datetime('now')
+		  WHERE id = ?4`,
+	)
+		.bind(why, repo.github_repo, `+${COMMIT_CLOSE_UNREACHABLE_RETRY_HOURS} hours`, repo.id)
+		.run()
+		.catch(() => undefined);
+}
+
 /** Scan one repo's unscanned default-branch commits. Extracted so the sweep's loop stays readable. */
 async function sweepRepo(env: Env, repo: RepoRow): Promise<void> {
 	if (!repoDirectPushes(repo)) {
@@ -462,7 +505,7 @@ async function sweepRepo(env: Env, repo: RepoRow): Promise<void> {
 	// things it is not able to do.
 	const token = await installationTokenForOwner(env, repo.user_id, owner).catch(() => null);
 	if (!token) {
-		await recordDeclined(env, repo, "no GitHub App installation token for this owner — cannot close issues");
+		await recordUnreachable(env, repo, "no GitHub App installation token for this owner — cannot close issues");
 		return;
 	}
 
@@ -479,7 +522,9 @@ async function sweepRepo(env: Env, repo: RepoRow): Promise<void> {
 		headers: { ...GH_HEADERS(token) },
 	});
 	if (!res.ok) {
-		await recordDeclined(env, repo, `GitHub returned ${res.status ?? "no status"} for the commits page`);
+		// A 404 is the repo, not GitHub's mood: renamed, moved, deleted, or outside the installation.
+		if (res.status === 404) await recordUnreachable(env, repo, "GitHub returned 404 for the commits page (renamed, moved, deleted, or not in the installation)");
+		else await recordDeclined(env, repo, `GitHub returned ${res.status ?? "no status"} for the commits page`);
 		return;
 	}
 	if (res.stale) {
@@ -590,10 +635,13 @@ export async function runCommitCloseWatch(env: Env): Promise<void> {
 			// matching `readMergePolicyForRun`, which also declines to manufacture a restriction.
 			`SELECT r.id, r.instance_id, r.user_id, r.github_repo, r.merge_policy,
 			        r.last_scanned_commit_sha, r.last_scanned_commit_at,
+			        r.commit_watch_unreachable, r.commit_watch_unreachable_repo,
 			        i.config AS instance_config
 			   FROM coding_repos r
 			   LEFT JOIN agent_instances i ON i.id = r.instance_id AND i.user_id = r.user_id
 			  WHERE r.github_repo IS NOT NULL AND r.github_repo <> ''
+			    -- #1246: an unreachable repo waits out its back-off — unless its binding was re-pointed.
+			    AND (r.commit_watch_retry_at IS NULL OR r.commit_watch_retry_at <= datetime('now') OR r.commit_watch_unreachable_repo IS NOT r.github_repo)
 			  ORDER BY COALESCE(r.last_commit_scan_at, '') ASC
 			  LIMIT ?1`,
 		)
