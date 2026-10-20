@@ -113,7 +113,7 @@ export async function upsertIssueTicket(
 }
 
 /** `owner/repo#N` in an objective names a repo; a reference to ANOTHER repo is not this run's issue. */
-function namesOtherRepo(objective: string, githubRepo: string | null): boolean {
+export function namesOtherRepo(objective: string, githubRepo: string | null): boolean {
 	const m = /\b([\w.-]+\/[\w.-]+)#\d+\b/.exec(objective);
 	return !!m && !!githubRepo && m[1].toLowerCase() !== githubRepo.toLowerCase();
 }

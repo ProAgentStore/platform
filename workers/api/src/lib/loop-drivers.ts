@@ -35,7 +35,7 @@ import { checkWorkdirVia } from "./coding-workdir.js";
 import { cloneSourceFor } from "./git-providers.js";
 import { callRunner, getBoundRunnerConn, getRunnerConn } from "./runner-client.js";
 import { pausedStartRefusal } from "./instance-pause.js";
-import { describeOwner, repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
+import { describeOwner, repoFreeForRun, repoOwners, runnerEngineProbe } from "./coding-ownership.js";
 import { codingRunRefusal } from "./billing.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
@@ -43,6 +43,7 @@ import { recordEngineAuthRefusal } from "./engine-auth-refusal.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
+import { checkStartIdempotency } from "./start-idempotency.js";
 import type { Env } from "../types.js";
 
 /**
@@ -147,6 +148,10 @@ export interface LoopStartInput {
 	 * caller leaves it absent: inheriting a tree must be a statement, never an inference.
 	 */
 	continueFromRunId?: string;
+	/** Start although the issue is closed or was finished recently (#1253). Needs `forceReason`; never overrides a run in flight. */
+	force?: boolean;
+	/** Why — posted as a comment on the issue. */
+	forceReason?: string;
 }
 
 export type LoopStartResult =
@@ -178,7 +183,9 @@ export type LoopStartResult =
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline";
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "duplicate" | "issue_closed" | "already_done";
+			/** Set with `duplicate` / `issue_closed` / `already_done` (#1253): the prior run, issue and times. */
+			detail?: Record<string, unknown>;
 			/**
 			 * Set with `reason: "engine_auth"` (#891): the refused run was RECORDED, finished with that
 			 * stop reason, so sign-in tooling can find it and `continue` can pick it back up.
@@ -314,6 +321,12 @@ const codingDriver: LoopDriver = {
 		const chosen = pickLoopRepo(repos, input.repoId, { requireChoice: input.requireRepoChoice });
 		if (!chosen.ok) return { ok: false, status: 409, error: chosen.error };
 		const repo = chosen.repo;
+		// One unit of work, started once (#1253): the same issue in this repo is not worked twice, whichever
+		// path started it. A repair and an explicit continue are the deliberate exceptions.
+		if (input.repairCheckout !== true && !input.continueFromRunId) {
+			const refused = await checkStartIdempotency(env, { userId, instanceId, repo: { id: repo.id, githubRepo: repo.githubRepo ?? null }, objective, issue: input.issue, force: input.force, forceReason: input.forceReason });
+			if (refused) return { ok: false, status: 409, reason: refused.reason, error: refused.error, detail: refused.detail };
+		}
 		// Connectivity FIRST, and from the same resolver delegation itself uses — so the refusal
 		// names the real blocker. The old code went straight to "no live session" and appended
 		// "(and run `pags up`)" unconditionally, which fired with the runner connected and
@@ -482,8 +495,9 @@ const codingDriver: LoopDriver = {
 		// no row to act on — an autonomous run editing the user's repo and spending their tokens
 		// that they could not see and could not stop. `chatDriver` never swallowed it; the
 		// asymmetry was the bug. Fail the START instead, and give back what was claimed.
+		let created: boolean;
 		try {
-			await createLoopRun(env, {
+			created = await createLoopRun(env, {
 				runId,
 				userId,
 				instanceId,
@@ -495,6 +509,9 @@ const codingDriver: LoopDriver = {
 				// #465: link the run to its session so `check_work` can reach the live `runState`
 				// via `/coding/capture` and report "the engine is working" instead of only "NOT stalled".
 				sessionId: session.id,
+				// The atomic repo lock (#1253): the checks above are reads, so two starts can both pass them. The
+				// INSERT itself refuses while another run holds this repo, and the loser queues like any busy start.
+				exclusiveRepoId: repo.id,
 			});
 		} catch (e) {
 			await releaseSessionDriver(env, instanceId, userId, session.id, driverId).catch(() => undefined);
@@ -504,6 +521,13 @@ const codingDriver: LoopDriver = {
 				status: 500,
 				error: `Could not start the run: ${e instanceof Error ? e.message : String(e)}`,
 			};
+		}
+
+		if (!created) {
+			await releaseSessionDriver(env, instanceId, userId, session.id, driverId).catch(() => undefined);
+			if (opened) await endSession(env, instanceId, userId, session.id, "ended").catch(() => undefined);
+			const owner = (await repoOwners(env, { instanceId, userId, repoId: repo.id }).catch(() => []))[0];
+			return { ok: false, status: 409, reason: "busy", error: owner ? describeOwner(owner, repo.name) : `${repo.name} is already being worked on — wait for the current run to finish.` };
 		}
 
 		// The checkout's owner, now that the run has an id (#984). Written at the moment the run row

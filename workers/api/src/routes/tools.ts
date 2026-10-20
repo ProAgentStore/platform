@@ -43,7 +43,8 @@ import { answersPendingFor, countLoopRuns, getLoopRun, pageLoopRuns, requestCanc
 import { autoPickupStatus } from "../lib/auto-pickup.js";
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
-import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
+import { loopDriverFor, pickLoopRepo, startRefusalIsWaitable } from "../lib/loop-drivers.js";
+import { listRepos } from "../lib/coding-store.js";
 import { dispatchLoopStartReceipt, getLoopStart, loopStartsPage } from "../lib/loop-start-receipts.js";
 import { cursorParam } from "../lib/keyset-cursor.js";
 import { recoverPolicyRefusal } from "../lib/instance-permission-recovery.js";
@@ -1169,6 +1170,9 @@ toolRoutes.post("/:id/loop", async (c) => {
 		repairCheckout?: boolean;
 		/** The GitHub issue this run works on (#895); its card is linked to the run. */
 		issue?: number;
+		/** Start although the issue is closed or finished recently (#1253); needs `forceReason`. Never overrides a run in flight. */
+		force?: boolean;
+		forceReason?: string;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
 	if (body.queuePosition !== undefined && body.queuePosition !== "end" && body.queuePosition !== "next") throw new HttpError(400, "queuePosition must be end or next");
@@ -1225,6 +1229,19 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// no spend bound is the failure #184 exists to prevent, and "we'll set a limit later" is how
 	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.
 	const start = async () => {
+		// Same issue already waiting or running in the repo this start resolves to (#925, #1253): hand THAT back on
+		// every path, not only when the repo is busy. Resolved the way the driver resolves it, so repo-qualified.
+		let dedupeRepoId = repoId;
+		if (driver.id === "coding") {
+			const repos = await listRepos(c.env, instanceId, session.uid).catch(() => []);
+			const dupRepo = pickLoopRepo(repos, repoId, { requireChoice: requireRepoChoice });
+			if (dupRepo.ok) dedupeRepoId = dupRepo.repo.id;
+			if (dupRepo.ok && !repairCheckout) {
+				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dupRepo.repo.id, objective, issue });
+				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, reason: "duplicate", startState: "not_started" }, 202);
+				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, reason: "duplicate", objective: dup.objective, startState: "not_started" }, 200);
+			}
+		}
 		const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
 		const started = await driver.start({
 			env: c.env,
@@ -1239,6 +1256,8 @@ toolRoutes.post("/:id/loop", async (c) => {
 			depth: 0,
 			repairCheckout,
 			issue,
+			force: body.force === true,
+			forceReason: typeof body.forceReason === "string" ? body.forceReason : undefined,
 		});
 		if (!started.ok) {
 			// Queue only the refusals WAITING fixes: an unusable checkout cannot be, while a busy repo, one
@@ -1246,7 +1265,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 			// The drain opens its own budget; this unspent pool is not reused.
 			if (body.queueIfBusy === true && startRefusalIsWaitable(started.reason)) {
 				// Same issue already waiting or running on this repo (#925): hand THAT back, not a second entry.
-				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId, objective });
+				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dedupeRepoId, objective, issue });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
 				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, position: body.queuePosition });
@@ -1254,6 +1273,9 @@ toolRoutes.post("/:id/loop", async (c) => {
 				// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
 				// it is waiting.
 				return c.json({ queued: true, entry, blocked: started.error }, 202);
+			}
+			if (started.reason === "duplicate" || started.reason === "issue_closed" || started.reason === "already_done") {
+				return c.json({ error: started.error, reason: started.reason, startState: "not_started", ...(started.detail ?? {}) }, 409);
 			}
 			if (started.reason === "engine_auth") return c.json({ error: started.error, stopReason: "engine_auth", needsReauth: true, runId: started.runId ?? null }, 409); // #891: see lib/engine-auth-refusal.ts
 			// A busy refusal names what holds the repo (#886), so "my earlier start landed" is a field, not a sentence.
@@ -1266,7 +1288,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 	const clientClaimed = clientClaimFrom(c.req.header("X-PAGS-Client"));
 	const tracked = () => trackStartOutcome(c.env, { userId: session.uid, instanceId, requestId: body.requestId ?? null, clientClaimed }, start);
 	return body.requestId
-		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, issue: issue ?? null, budget: body.budget ?? null }, tracked, (operation) => c.executionCtx.waitUntil(operation), clientClaimed)
+		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, issue: issue ?? null, force: body.force === true, forceReason: body.forceReason ?? null, budget: body.budget ?? null }, tracked, (operation) => c.executionCtx.waitUntil(operation), clientClaimed)
 		: tracked();
 });
 

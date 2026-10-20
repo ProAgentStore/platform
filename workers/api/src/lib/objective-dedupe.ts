@@ -9,8 +9,8 @@
 // hashing of objective text: two phrasings of "work #925" are the same work, and two different
 // objectives that merely mention #925 in passing are told apart by WHICH issue each one leads with.
 //
-// Consulted only on the queue_if_busy path, where the repo is already taken — so "already in
-// flight" means a pending queue entry for this repo, or the run holding the repo right now.
+// Consulted on every start from the route (#1253), not only queue_if_busy: "already in flight" means a
+// pending queue entry for this repo, or a run on it.
 
 import type { Env } from "../types.js";
 import { listQueue, type ObjectiveQueueEntry } from "./objective-queue.js";
@@ -40,16 +40,18 @@ export type DuplicateObjective = { kind: "queued"; entry: ObjectiveQueueEntry } 
  */
 export async function findDuplicateObjective(
 	env: Env,
-	input: { userId: string; instanceId: string; repoId?: string; objective: string },
+	input: { userId: string; instanceId: string; repoId?: string; objective: string; issue?: number },
 ): Promise<DuplicateObjective | null> {
-	const issue = referencedIssue(input.objective);
+	// The caller's explicit `issue` wins over the objective's text (#1253).
+	const issue = input.issue ?? referencedIssue(input.objective);
 	if (issue == null) return null;
 	const pending = await listQueue(env, input.instanceId, input.repoId ?? null);
 	const entry = pending.find((e) => e.userId === input.userId && referencedIssue(e.objective) === issue);
 	if (entry) return { kind: "queued", entry };
 	const runs = await env.DB.prepare(
-		`SELECT r.run_id, r.objective, s.repo_id FROM agent_loop_runs r
+		`SELECT r.run_id, r.objective, s.repo_id, t.issue_number FROM agent_loop_runs r
 		   LEFT JOIN coding_sessions s ON s.id = r.session_id
+		   LEFT JOIN tickets t ON t.id = r.ticket_id
 		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND r.status = 'running'
 		    -- #1203: a run being CANCELLED is ending — it must not absorb a new start for its issue. The new start goes on to
 		    -- the queue behind it (the cancelling run still holds the repo) and runs when the cancel settles.
@@ -62,9 +64,9 @@ export async function findDuplicateObjective(
 		  ORDER BY r.started_at DESC`,
 	)
 		.bind(input.userId, input.instanceId)
-		.all<{ run_id: string; objective: string; repo_id: string | null }>();
-	const run = (runs.results ?? []).find(
-		(r) => (input.repoId === undefined || r.repo_id == null || r.repo_id === input.repoId) && referencedIssue(r.objective) === issue,
-	);
+		.all<{ run_id: string; objective: string; repo_id: string | null; issue_number: number | null }>();
+	// Repo-qualified (#1253): `#12` in one repo is not `#12` in another. A run's issue is the one it was
+	// linked to (the explicit param, when it had one), else its objective's text.
+	const run = (runs.results ?? []).find((r) => (r.repo_id ?? undefined) === input.repoId && (r.issue_number ?? referencedIssue(r.objective)) === issue);
 	return run ? { kind: "running", runId: run.run_id, objective: run.objective } : null;
 }

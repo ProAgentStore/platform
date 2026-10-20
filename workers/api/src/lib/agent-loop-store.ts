@@ -290,11 +290,17 @@ export async function createLoopRun(
 		 * Written once; read by `check_work` to reach the live `runState` via `/coding/capture`.
 		 */
 		sessionId?: string | null;
+		/** #1253: insert only if no other run holds this repo's checkout — one statement, so racing starts cannot both win. */
+		exclusiveRepoId?: string | null;
 	},
-): Promise<void> {
-	await env.DB.prepare(
+): Promise<boolean> {
+	const exclusive = input.exclusiveRepoId
+		? `WHERE NOT EXISTS (SELECT 1 FROM agent_loop_runs o JOIN coding_sessions os ON os.id = o.session_id
+		     WHERE o.instance_id = ?3 AND os.repo_id = ?10 AND o.status = 'running' AND o.checkout_released_at IS NULL)`
+		: "";
+	const res = await env.DB.prepare(
 		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9)`,
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9 ${exclusive}`,
 	)
 		.bind(
 			input.runId,
@@ -306,8 +312,10 @@ export async function createLoopRun(
 			input.startedAt,
 			input.delegatedBy ?? null,
 			input.sessionId ?? null,
+			...(input.exclusiveRepoId ? [input.exclusiveRepoId] : []),
 		)
 		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 export async function getLoopRun(env: Env, userId: string, runId: string): Promise<LoopRunView | null> {

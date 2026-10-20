@@ -129,11 +129,35 @@ describe("POST /:id/loop — a retried queued start is not queued twice (#925)",
 		expect(pendingRows()).toHaveLength(0);
 	});
 
-	it("only the queue_if_busy path looks: without it a busy repo is still the plain refusal", async () => {
-		await post({ requestId: "a", objective: "Work issue #925", repoId: "r1", queueIfBusy: true });
+	it("#1253: a plain start (no queue_if_busy) of an issue already waiting is told so too, not started a second time", async () => {
+		const queued = (await (await post({ requestId: "a", objective: "Work issue #925", repoId: "r1", queueIfBusy: true })).json()) as { entry: { id: string } };
 		const res = await post({ requestId: "b", objective: "Work issue #925", repoId: "r1" });
-		expect(res.status).toBe(409);
+		expect(res.status).toBe(202);
+		expect(await res.json()).toMatchObject({ duplicate_of: queued.entry.id, reason: "duplicate" });
+		expect(pendingRows()).toHaveLength(1);
+		// …and it never reached the driver for the second call.
+		expect(driverStart).toHaveBeenCalledTimes(1);
+	});
+
+	it("#1253: the explicit `issue` wins over the objective's text, and a different phrasing is the same work", async () => {
+		const first = (await (await post({ requestId: "a", objective: "Work issue #925", repoId: "r1", queueIfBusy: true })).json()) as { entry: { id: string } };
+		// Text says #7; the explicit issue says 925 — same unit of work as the queued one.
+		const viaParam = await post({ requestId: "b", objective: "Context: see #7 first. Please fix the thing.", issue: 925, repoId: "r1", queueIfBusy: true });
+		expect(await viaParam.json()).toMatchObject({ duplicate_of: first.entry.id });
+		// An unusual phrasing is the same issue.
+		const phrased = await post({ requestId: "c", objective: "Pick up https://github.com/ProAgentStore/platform/issues/925 now", repoId: "r1", queueIfBusy: true });
+		expect(await phrased.json()).toMatchObject({ duplicate_of: first.entry.id });
+	});
+
+	it("#1253: the same #N in two repos is never confused", async () => {
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id) VALUES ('s2', 'i1', 'r2', 'u1')`);
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-r2', 'u1', 'i1', 'Work issue #12', 'running', 10, 1, 's2')`);
+		// The run is on r2: the same number on r1 is a different issue.
+		const res = await post({ requestId: "x", objective: "Work issue #12", repoId: "r1", queueIfBusy: true });
+		expect(res.status).toBe(202);
 		expect(await res.json()).not.toHaveProperty("duplicate_of");
+		const onR2 = await post({ requestId: "y", objective: "Work issue #12", repoId: "r2", queueIfBusy: true });
+		expect(await onR2.json()).toMatchObject({ duplicate_of: "run-r2" });
 	});
 });
 
@@ -150,7 +174,7 @@ describe("POST /:id/loop — a busy refusal names what holds the repo (#886)", (
 		// The caller's first start timed out in its own approval gate, was approved and sent as req-A,
 		// and its run is working. The retry used req-B. "already being worked on" used to be all it got.
 		startedRun("run-A", "req-A");
-		const res = await post({ requestId: "req-B", objective: "slice 1 of epic #48", repoId: "r1" });
+		const res = await post({ requestId: "req-B", objective: "the next slice of the work", repoId: "r1" });
 		expect(res.status).toBe(409);
 		const body = (await res.json()) as Record<string, unknown>;
 		expect(body).toMatchObject({ reason: "busy", startState: "not_started", activeRun: { runId: "run-A", requestId: "req-A" } });
