@@ -646,6 +646,7 @@ const READBACK: Record<string, string | null> = {
 	// The bot token itself is never returned — `discord_bot_status` reports which BOT it is, not the token.
 	"connect_discord_bot.bot_token": null,
 	"grant_instance_discord_channel.channel_id": "list_instance_discord_grants",
+	"grant_instance_discord_channel.purpose": "list_instance_discord_grants",
 	"revoke_instance_discord_grant.grant_id": "list_instance_discord_grants",
 
 	// ── #1217: release notes + the Slack bot and channel grants ──

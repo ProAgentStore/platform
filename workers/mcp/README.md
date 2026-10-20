@@ -577,7 +577,7 @@ immediately instead of a whole transcript.
 | `list_discord_guilds` | The Discord servers the connected bot is in (#1132) | read | | |
 | `list_discord_channels` | The text/announcement channels the bot can see in one server (#1132) | read | | |
 | `list_instance_discord_grants` | One instance's granted Discord channels, with the stable grant ids its Discord tools take (#1132) | read | | |
-| `grant_instance_discord_channel` | Grant one instance one channel, checked with the bot first; a re-grant returns the same id (#1132) | write | yes | |
+| `grant_instance_discord_channel` | Grant one instance one channel, checked with the bot first; a re-grant returns the same id; `purpose: release_notes` grants release notes only, no Discord tools needed (#1132, #1218) | write | yes | |
 | `revoke_instance_discord_grant` | Revoke one instance's channel grant by id (#1132) | destructive | yes | `revoke_instance_discord_grant` |
 | `get_instance_release_notes` | Who receives an instance's release notes: its own setting, the account default, and each granted Discord/Slack channel marked `selected` (#1217) | read | | |
 | `set_instance_release_notes` | Turn an instance's release notes on/off (null = follow the account) and choose which granted channels receive them; an ungranted grant id is refused (#1217) | write | yes | |

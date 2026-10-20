@@ -1225,4 +1225,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.162": "sha256:21778844425116f2c9c30f9849509002f6a9c27cf8058a566f4e19ce80eb8551",
 	// #1225: list_instance_tools gains cursor, and pages by wire size (page = {total, count, hasMore, nextCursor}).
 	"0.1.163": "sha256:e12d1fc93f772b0c739037f08cffd896b72c32a101e5542252d7be749eeab6c4",
+	// #1218: grant_instance_discord_channel gains purpose (agent | release_notes) — a release-notes grant needs no Discord tools.
+	"0.1.164": "sha256:05bd61185451a9815fa4305eb9a8243d8b63b0b631f841919ffd2a6c4327615e",
 };
