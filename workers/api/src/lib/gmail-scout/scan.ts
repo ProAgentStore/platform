@@ -8,6 +8,7 @@ import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage
 import { clipMarked } from "../clip-marked.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 import { appliedWorkKeys, enqueueBrowserVerification } from "../job-lead-queue.js";
+import { seekDigestListings } from "./seek-digest.js";
 import { checkDigestPostings, DIGEST_POSTINGS_MAX, jobProviderOf, providerPostingUrl, resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
 
 /** A lead stored `awaiting_browser_verification` (#1030), to be queued for the Scout's browser. */
@@ -198,12 +199,12 @@ export function readSummary(message: GmailMessage): ScanLogRead {
 }
 
 /**
- * The jobs a digest lists (#1247), each by its canonical posting URL and — only where a link's own anchor
- * text names it — its title. No title is better than a wrong one: live, the nearest plain-text line to a
- * SEEK link was a location, a salary or a bullet, never reliably the role. Only links that name their posting are kept; a tracking redirect is counted, not
- * stored and not followed, since a digest is never resolved into leads.
+ * The jobs a digest lists (#1247), each by its canonical posting URL, with a title and employer only where
+ * the email itself names them: a link's own anchor text, or SEEK's listing block (#1251, `seek-digest.ts`).
+ * No title is better than a wrong one — the nearest plain-text line to a SEEK link was a location, a salary
+ * or a bullet. Only links that name their posting are kept; a tracking redirect is counted, not followed.
  */
-export function digestJobs(message: GmailMessage): { jobs: Array<{ title: string | null; url: string }>; unresolved: number } {
+export function digestJobs(message: GmailMessage): { jobs: Array<{ title: string | null; company: string | null; url: string }>; unresolved: number } {
 	const text = `${message.text}\n${message.snippet}`;
 	const jobs = new Map<string, { title: string | null; url: string; anchored: boolean }>();
 	const unresolvedLinks = new Set<string>();
@@ -224,7 +225,11 @@ export function digestJobs(message: GmailMessage): { jobs: Array<{ title: string
 		if (prior?.anchored || (prior && !anchor)) continue;
 		jobs.set(url, { url, title: anchor, anchored: anchor !== null });
 	}
-	return { jobs: [...jobs.values()].map(({ title, url }) => ({ title, url })), unresolved: unresolvedLinks.size };
+	const listed = seekDigestListings(text);
+	return {
+		jobs: [...jobs.values()].map(({ title, url }) => ({ title: title ?? listed.get(url)?.title ?? null, company: listed.get(url)?.company ?? null, url })),
+		unresolved: unresolvedLinks.size,
+	};
 }
 const safeHost = (raw: string) => {
 	try {
@@ -472,11 +477,11 @@ export async function ingestGmailCandidates(input: {
 				deduped++;
 				counts.deduped++;
 				const id = dup.record.id ?? null;
-				sub(i, { evidence: `the same job (${job.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""}, so it was not added twice.`, leadId: id, job: { title: job.title, company: null, url: job.url } });
+				sub(i, { evidence: `the same job (${job.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""}, so it was not added twice.`, leadId: id, job: { title: job.title, company: job.company, url: job.url } });
 				continue;
 			}
 			const r = result.get(job.url);
-			const notTaken = (rejection: GmailScoutRejection, reason: string, evidence: string | null, title: string | null = job.title, company: string | null = null) => {
+			const notTaken = (rejection: GmailScoutRejection, reason: string, evidence: string | null, title: string | null = job.title, company: string | null = job.company) => {
 				rejected[rejection] = (rejected[rejection] ?? 0) + 1;
 				counts.notTaken++;
 				sub(i, { evidence, decision: "rejected", rejection, reason, leadId: null, job: { title, company, url: job.url } });
@@ -492,9 +497,9 @@ export async function ingestGmailCandidates(input: {
 				continue;
 			} else if (job.title) {
 				// The board would not show the page (or it is not a job board): the email's own link text names it.
-				candidate = candidateFor(message, job.url, undefined, job.title);
+				candidate = candidateFor(message, job.url, job.company ?? undefined, job.title);
 				gap = r && "awaitingBrowser" in r ? r.awaitingBrowser.reason : null;
-				evidence = gap ? `title from the email's link text; the job board's page could not be read here (${gap.replace(/_/g, " ")})` : "title from the email's link text (not a job board the server can check)";
+				evidence = gap ? `title${job.company ? " and employer" : ""} as the email lists them; the job board's page could not be read here (${gap.replace(/_/g, " ")})` : `title${job.company ? " and employer" : ""} as the email lists them (not a job board the server can check)`;
 			} else if (r && "awaitingBrowser" in r) {
 				// A known job board's posting, identified by its id, whose page the server cannot read and whose
 				// link the email leaves unnamed — live, every SEEK digest posting (#1248). Like a URL the owner

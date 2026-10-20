@@ -121,13 +121,15 @@ describe("every decision path is logged with its reason (#1247)", () => {
 		]);
 	});
 
-	it("a digest job's title is its link text, or none — never a nearby plain-text line (live, Scout 2: \"[\", a suburb, a salary)", () => {
+	it("a digest job's title is its link text or its own listing block — never a nearby plain-text line (live, Scout 2: \"[\", a suburb, a salary)", () => {
 		const plain = "Scrum Master\nAcme Pty Ltd\n[\nhttps://au.seek.com/job/95335702?tracking=PLAIN1]\n\nProduct Owner\n[\nhttps://au.seek.com/job/95335703?tracking=PLAIN2]";
 		const html = '<a href="https://au.seek.com/job/95335702?tracking=HTML1"><span>Scrum Master</span></a>';
 		const { jobs } = digestJobs(msg("m-seek-digest", "2 new jobs for Scrum Master", `${plain}\n${html}`));
 		expect(jobs).toEqual([
-			{ title: "Scrum Master", url: "https://au.seek.com/job/95335702" }, // the anchor wins over the plain-text line
-			{ title: null, url: "https://au.seek.com/job/95335703" }, // no anchor: no title, rather than a guessed line
+			// The anchor names it; the first block has no start that can be placed (no `logo`), so it adds nothing.
+			{ title: "Scrum Master", company: null, url: "https://au.seek.com/job/95335702" },
+			// #1251: read from where its listing STARTS (just after the previous job's link), not beside its own link.
+			{ title: "Product Owner", company: null, url: "https://au.seek.com/job/95335703" },
 		]);
 		expect(JSON.stringify(jobs)).not.toMatch(/tracking|PLAIN|HTML1/);
 	});
