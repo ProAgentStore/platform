@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { ensureConsent } from "../lib/connector-consent.js";
 import { realSchemaD1, type RealSchemaD1 } from "../lib/d1-sqlite.js";
+import { grantedReleaseChannels } from "../lib/release-notes-settings.js";
+import { sendTestReleaseNote } from "../lib/release-notes.js";
 import type { Env } from "../types.js";
 
 vi.mock("../lib/auth.js", async () => {
@@ -61,6 +63,7 @@ function discord(path: string, method: string, auth: string | null): Response {
 	}
 	if (path === `/channels/${CH_HIDDEN}`) return json({ message: "Missing Access", code: 50001 }, 403);
 	if (path === `/channels/${CH_ALERTS}`) return json({ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD });
+	if (path === `/channels/${CH_VOICE}`) return json({ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD });
 	if (path === `/channels/${CH_PRIVATE}`) return json({ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD });
 	if (path.startsWith(`/channels/${CH_ALERTS}/messages`) && method === "GET") return json([{ id: "888888888888888888", content: "deploy failed on main" }]);
 	if (path === `/channels/${CH_ALERTS}/messages` && method === "POST") return json({ id: "999999999999999990" });
@@ -233,5 +236,137 @@ describe("a newly connected bot, through the agent's own tools (#1132)", () => {
 		// The audit names ids, never the token or a message's content.
 		for (const e of events()) expect(`${e.message}${e.context}`).not.toMatch(/secret-value|deploy failed|on it/);
 		expect(events().map((e) => e.event)).toEqual(["discord.bot_connect", "discord.grant", "discord.revoke"]);
+	});
+});
+
+describe("release-note grants reach a coder that declares no Discord tools (#1218)", () => {
+	const CODER = "inst-coder-1218";
+	const grantFor = (instance: string, channelId: string, purpose?: string) => call("POST", `/v1/discord/instances/${instance}/grants`, { channelId, ...(purpose === undefined ? {} : { purpose }) });
+	const forReleaseNotes = (channelId: string, instance = CODER) => grantFor(instance, channelId, "release_notes");
+	/** The coder's agent declares repo tools and NO Discord tool — exactly what Repo Coder and Local Coder do. */
+	function addCoder() {
+		d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag-coder', 'u1', 'repo-coder-1218', 'Repo Coder', '${JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: null, tools: ["repo_tree", "repo_read_file"] } })}')`);
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('${CODER}', 'ag-coder', 'u1', 'active', '{}')`);
+	}
+	const grantsOf = (instance: string) => d1.sqlite.prepare("SELECT id, resource_id, resource_type FROM instance_connector_grants WHERE instance_id = ? AND provider = 'discord'").all(instance) as Array<{ id: string; resource_id: string; resource_type: string }>;
+
+	beforeEach(async () => {
+		addCoder();
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+	});
+
+	it("the agent grant is still refused for a coder — the check is not weakened", async () => {
+		const refused = await grantFor(CODER, CH_ALERTS);
+		expect(refused.status).toBe(403);
+		expect(refused.json.error).toMatch(/declares none of that connector's tools/);
+		// …and so is an explicit `agent` purpose, which is the same request.
+		expect((await grantFor(CODER, CH_ALERTS, "agent")).status).toBe(403);
+		expect(grantsOf(CODER)).toEqual([]);
+	});
+
+	it("a release-notes grant is made for the coder, verified with Discord, and stable on a repeat", async () => {
+		const first = await forReleaseNotes(CH_ALERTS);
+		expect(first.status).toBe(201);
+		expect(first.json.grant).toMatchObject({ resourceId: CH_ALERTS, resourceName: "#alerts", resourceType: "discord_release_channel" });
+		const again = await forReleaseNotes(CH_ALERTS);
+		expect([again.status, again.json.grant.id]).toEqual([200, first.json.grant.id]);
+		expect(grantsOf(CODER)).toHaveLength(1);
+		// The audit says what it was for, by id and never a token.
+		expect(events().at(-1)).toMatchObject({ event: "discord.grant", message: "Granted Discord channel #alerts for release notes" });
+		expect(JSON.parse(events().at(-1)?.context ?? "{}")).toMatchObject({ purpose: "release_notes", channelId: CH_ALERTS });
+	});
+
+	it("every OTHER grant check still applies to a release-notes grant", async () => {
+		// Discord's own view of the channel: one the bot cannot see is refused, and nothing is stored.
+		const hidden = await forReleaseNotes(CH_HIDDEN);
+		expect(hidden.status).toBe(403);
+		expect(hidden.json.error).toMatch(/lacks access or permission/);
+		// A voice channel is not a text channel.
+		expect((await forReleaseNotes(CH_VOICE)).status).toBe(400);
+		// The id must be a snowflake.
+		expect((await forReleaseNotes("not-an-id")).status).toBe(400);
+		// An instance the caller does not own does not exist for them.
+		d1.exec("INSERT INTO users (id, github_login) VALUES ('u2', 'u2')");
+		d1.exec("INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('inst-other', 'ag-coder', 'u2', 'active', '{}')");
+		expect((await forReleaseNotes(CH_ALERTS, "inst-other")).status).toBe(404);
+		// No connected bot: 409, never a 401.
+		await call("DELETE", "/v1/discord/bot");
+		expect((await forReleaseNotes(CH_ALERTS)).status).toBe(409);
+		expect(grantsOf(CODER)).toEqual([]);
+	});
+
+	it("an unknown purpose is refused, naming the two that exist", async () => {
+		const bad = await grantFor(CODER, CH_ALERTS, "everything");
+		expect(bad.status).toBe(400);
+		expect(bad.json.error).toMatch(/purpose must be "agent".*"release_notes"/);
+		expect((await grantFor(CODER, CH_ALERTS, "")).status).toBe(400);
+		expect(grantsOf(CODER)).toEqual([]);
+	});
+
+	it("the agent's Discord tools cannot reach a release-notes grant — even once the coder declares them", async () => {
+		const made = await forReleaseNotes(CH_ALERTS);
+		const grantId: string = made.json.grant.id;
+		// The owner later gives the coder the Discord tools (update_agent): the wall must hold anyway.
+		d1.exec(`UPDATE agents SET config = '${JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: null, tools: DISCORD_TOOLS } })}' WHERE id = 'ag-coder'`);
+		await ensureConsent(env, CODER, "u1", "discord", "write");
+		const callTool = (name: string, args: Record<string, unknown> = {}) => call("POST", `/v1/instances/${CODER}/tools/${name}`, args);
+
+		expect(JSON.parse((await callTool("discord_list_granted_channels")).json.content)).toEqual({ channels: [] });
+		sent = [];
+		for (const [name, args] of [["discord_read_messages", { grantId }], ["discord_send_message", { grantId, content: "hello" }], ["discord_add_reaction", { grantId, messageId: "888888888888888888", emoji: "👍" }]] as const) {
+			const r = await callTool(name, args);
+			expect(r.json.success, name).toBe(false);
+			expect(r.json.content, name).toMatch(/reserved for release notes/);
+		}
+		expect(sent.filter((x) => x.path.includes(CH_ALERTS)), "a tool reached the channel").toEqual([]);
+	});
+
+	it("a release-notes grant is a release-note channel: listed, selectable, and a test note reaches Discord", async () => {
+		const made = await forReleaseNotes(CH_ALERTS);
+		const grantId: string = made.json.grant.id;
+		expect(await grantedReleaseChannels(env, CODER, "u1")).toEqual([{ provider: "discord", grantId, channelId: CH_ALERTS, name: "#alerts" }]);
+		sent = [];
+		const out = await sendTestReleaseNote(env, "u1", CODER, grantId);
+		expect(out.channel).toMatchObject({ provider: "discord", grantId });
+		const post = sent.find((x) => x.method === "POST");
+		expect(post).toMatchObject({ path: `/channels/${CH_ALERTS}/messages`, auth: `Bot ${TOKEN_A}` });
+		expect(JSON.parse(post?.body ?? "{}").content).toMatch(/Test release note from ProAgentStore/);
+	});
+
+	it("it never takes away what the agent already has: a release-notes request on an agent grant changes nothing", async () => {
+		// An instance whose agent DOES declare Discord tools holds the channel as an agent grant.
+		const agent = await grantFor(INSTANCE, CH_ALERTS);
+		expect(agent.json.grant.resourceType).toBe("discord_channel");
+		const asked = await forReleaseNotes(CH_ALERTS, INSTANCE);
+		expect(asked.status).toBe(200);
+		expect(asked.json.grant).toMatchObject({ id: agent.json.grant.id, resourceType: "discord_channel" });
+		expect(asked.json.note).toMatch(/already granted to the agent, which includes release notes/);
+		expect(grantsOf(INSTANCE).map((g) => g.resource_type)).toEqual(["discord_channel"]);
+		// …and the agent still lists it.
+		const listed = await call("POST", `/v1/instances/${INSTANCE}/tools/discord_list_granted_channels`, {});
+		expect(JSON.parse(listed.json.content).channels).toHaveLength(1);
+	});
+
+	it("an agent grant over a release-notes grant upgrades the same grant (gated), keeping its id", async () => {
+		const release = await forReleaseNotes(CH_ALERTS, INSTANCE);
+		expect(release.json.grant.resourceType).toBe("discord_release_channel");
+		const upgraded = await grantFor(INSTANCE, CH_ALERTS);
+		expect(upgraded.status).toBe(200);
+		expect(upgraded.json.grant).toMatchObject({ id: release.json.grant.id, resourceType: "discord_channel" });
+		// The same upgrade is refused for the coder: the tools check is the gate.
+		await forReleaseNotes(CH_PRIVATE);
+		expect((await grantFor(CODER, CH_PRIVATE)).status).toBe(403);
+		expect(grantsOf(CODER).map((g) => g.resource_type)).toEqual(["discord_release_channel"]);
+	});
+
+	it("a release-notes grant is listed with its type, revoked like any other, and removed with the bot", async () => {
+		const made = await forReleaseNotes(CH_ALERTS);
+		const listed = await call("GET", `/v1/discord/instances/${CODER}/grants`);
+		expect(listed.json.grants).toEqual([expect.objectContaining({ id: made.json.grant.id, resourceType: "discord_release_channel" })]);
+		expect((await call("DELETE", `/v1/discord/instances/${CODER}/grants/${made.json.grant.id}`)).status).toBe(200);
+		expect(grantsOf(CODER)).toEqual([]);
+		await forReleaseNotes(CH_ALERTS);
+		await call("DELETE", "/v1/discord/bot");
+		expect(grantsOf(CODER)).toEqual([]);
 	});
 });

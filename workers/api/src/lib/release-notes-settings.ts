@@ -16,14 +16,17 @@
  */
 import { HttpError } from "./auth.js";
 import { listConnectorGrants } from "./connector-grants.js";
+import { DISCORD_AGENT_GRANT, DISCORD_RELEASE_GRANT } from "./connectors/discord.js";
 import { parseAccountPreferences } from "./preferences.js";
 import type { AccountReleaseNotes, InstanceReleaseNotes, ReleaseChannel, ReleaseNoteProvider, ReleaseNotesEnabledFrom, ResolvedReleaseNotes } from "../agent-types.js";
 import type { Env } from "../types.js";
 
 /** The messaging connectors whose granted channels can receive a release note. */
-export const RELEASE_NOTE_PROVIDERS: ReadonlyArray<{ provider: ReleaseNoteProvider; resourceType: string }> = [
-	{ provider: "discord", resourceType: "discord_channel" },
-	{ provider: "slack", resourceType: "slack_channel" },
+export const RELEASE_NOTE_PROVIDERS: ReadonlyArray<{ provider: ReleaseNoteProvider; resourceTypes: readonly string[] }> = [
+	// A release note goes to either kind of Discord grant (#1218): the agent's own channel, or a channel
+	// granted for release notes only.
+	{ provider: "discord", resourceTypes: [DISCORD_AGENT_GRANT, DISCORD_RELEASE_GRANT] },
+	{ provider: "slack", resourceTypes: ["slack_channel"] },
 ];
 export type { AccountReleaseNotes, InstanceReleaseNotes, ReleaseChannel, ReleaseNoteProvider, ReleaseNotesEnabledFrom, ResolvedReleaseNotes } from "../agent-types.js";
 
@@ -88,9 +91,9 @@ export function applyInstanceReleaseNotesPatch(current: InstanceReleaseNotes, pa
 /** The instance's granted messaging channels, Discord and Slack. */
 export async function grantedReleaseChannels(env: Env, instanceId: string, userId: string): Promise<ReleaseChannel[]> {
 	const out: ReleaseChannel[] = [];
-	for (const { provider, resourceType } of RELEASE_NOTE_PROVIDERS) {
+	for (const { provider, resourceTypes } of RELEASE_NOTE_PROVIDERS) {
 		for (const g of await listConnectorGrants(env, instanceId, userId, provider)) {
-			if (g.resourceType === resourceType) out.push({ provider, grantId: g.id, channelId: g.resourceId, name: g.resourceName });
+			if (resourceTypes.includes(g.resourceType)) out.push({ provider, grantId: g.id, channelId: g.resourceId, name: g.resourceName });
 		}
 	}
 	return out;

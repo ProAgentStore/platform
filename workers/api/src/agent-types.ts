@@ -285,6 +285,8 @@ export interface DiscordGrantListResponse {
 
 export interface DiscordGrantResponse {
 	grant: DiscordConnectorGrant;
+	/** Present when the grant asked for was not made as asked, and why (#1218). */
+	note?: string;
 }
 
 /** The bot a Discord token authenticates as (#1132). Never the token. */

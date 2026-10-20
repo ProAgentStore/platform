@@ -7,7 +7,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { clipMarked } from "../lib/clip-marked.js";
 import { connectorGrantReach, deleteConnectorGrant, listConnectorGrants, revokeUserConnectorGrants, upsertConnectorGrant } from "../lib/connector-grants.js";
 import { connectorClient } from "../lib/connectors/client.js";
-import { DISCORD_NOT_CONNECTED, discordFailure } from "../lib/connectors/discord.js";
+import { DISCORD_AGENT_GRANT, DISCORD_NOT_CONNECTED, DISCORD_RELEASE_GRANT, discordFailure } from "../lib/connectors/discord.js";
 import { logEvent } from "../lib/events.js";
 import { hasUserProviderKey, upsertUserProviderKey } from "../lib/user-api-key-store.js";
 import { connectorRefusalFor } from "../lib/instance-connector-access.js";
@@ -160,14 +160,30 @@ discordRoutes.get("/instances/:instanceId/grants", async (c) => {
  * Grant a text channel after asking Discord for its metadata with the owner’s bot token. The
  * caller supplies an id only to choose a channel in the picker; the verified metadata is what
  * becomes the durable grant.
+ *
+ * `purpose` (#1218) says what the grant is FOR:
+ *   - `agent` (the default): the channel the agent's Discord tools may read and post in. The agent must
+ *     declare those tools, or the grant is refused — unchanged.
+ *   - `release_notes`: the channel the PLATFORM posts a release note to (#1216). A coder declares no
+ *     Discord tools, so the check above would refuse it; this purpose skips THAT check and nothing else
+ *     (ownership, the connected bot and Discord's own view of the channel all still apply). The grant is
+ *     stored as `discord_release_channel`, which the agent's tools refuse and do not list, so it gives the
+ *     agent no reach. Asking for it on a channel the agent already holds returns that grant as it is —
+ *     never a downgrade of the agent's access.
  */
 discordRoutes.post("/instances/:instanceId/grants", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
-	const refusal = await connectorRefusalFor(c.env, "discord", instanceId, session.uid, instance.config);
-	if (refusal) throw new HttpError(403, refusal);
-	const body = (await c.req.json().catch(() => ({}))) as { channelId?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { channelId?: string; purpose?: unknown };
+	if (body.purpose !== undefined && body.purpose !== "agent" && body.purpose !== "release_notes") {
+		throw new HttpError(400, 'purpose must be "agent" (the default: a channel the agent\'s Discord tools may use) or "release_notes" (a channel the platform posts release notes to).');
+	}
+	const forReleaseNotes = body.purpose === "release_notes";
+	if (!forReleaseNotes) {
+		const refusal = await connectorRefusalFor(c.env, "discord", instanceId, session.uid, instance.config);
+		if (refusal) throw new HttpError(403, refusal);
+	}
 	const channelId = requireSnowflake(body.channelId, "channelId");
 	const data = await discordJson(await botToken(c.env, session.uid), `/channels/${channelId}`);
 	if (!data || typeof data !== "object") throw new HttpError(502, "Discord returned no channel metadata.");
@@ -177,14 +193,24 @@ discordRoutes.post("/instances/:instanceId/grants", async (c) => {
 	}
 	const guildId = typeof channel.guild_id === "string" && SNOWFLAKE.test(channel.guild_id) ? channel.guild_id : null;
 	const existing = (await listConnectorGrants(c.env, instanceId, session.uid, "discord")).find((g) => g.resourceId === channelId);
+	if (forReleaseNotes && existing?.resourceType === DISCORD_AGENT_GRANT) {
+		// The agent already holds this channel, and release notes read every Discord grant: nothing to add,
+		// and converting it would take the agent's access away.
+		return c.json({ grant: existing, note: "This channel is already granted to the agent, which includes release notes — nothing was changed." } satisfies DiscordGrantResponse, 200);
+	}
+	const resourceType = forReleaseNotes ? DISCORD_RELEASE_GRANT : DISCORD_AGENT_GRANT;
 	const grant = await upsertConnectorGrant(c.env, instanceId, session.uid, {
 		provider: "discord",
 		resourceId: channelId,
 		resourceName: clipMarked(`#${channel.name}`, 500, { within: true, what: "characters in Discord channel name" }),
-		resourceType: "discord_channel",
+		resourceType,
 		resourceUrl: guildId ? `https://discord.com/channels/${guildId}/${channelId}` : null,
 	});
-	if (!existing) await audit(c.env, session.uid, "discord.grant", `Granted Discord channel ${grant.resourceName}`, { grantId: grant.id, channelId, guildId }, instanceId);
+	// A re-grant of a release-notes channel as the agent's own (an owner who has since given it the tools) upgrades
+	// the same grant, so that is worth a line too.
+	if (!existing || existing.resourceType !== resourceType) {
+		await audit(c.env, session.uid, "discord.grant", `Granted Discord channel ${grant.resourceName}${forReleaseNotes ? " for release notes" : ""}`, { grantId: grant.id, channelId, guildId, purpose: forReleaseNotes ? "release_notes" : "agent" }, instanceId);
+	}
 	// Granting a channel twice returns the SAME grant id: the id is the stable handle the agent holds.
 	return c.json({ grant } satisfies DiscordGrantResponse, existing ? 200 : 201);
 });

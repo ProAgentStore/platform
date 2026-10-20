@@ -12,6 +12,19 @@ const MAX_MESSAGE_LENGTH = 2_000;
 
 type DiscordReply = { ok: true; data: unknown } | { ok: false; status: number; message: string };
 
+/**
+ * The two kinds of Discord channel grant (#1218), told apart by `resourceType`.
+ *
+ * `discord_channel` is the AGENT's grant: the channel its Discord tools may read and post in. Granting one
+ * requires that the agent declares those tools. `discord_release_channel` is the PLATFORM's: the channel a
+ * release note (#1216) is posted to. It needs no tools — a coder declares none — and the agent's tools can
+ * never use it: {@link grantedChannel} refuses any grant that is not `discord_channel`, and the listing below
+ * leaves it out. So giving a coder a release-notes channel gives it no Discord reach, now or if its owner
+ * later declares the tools.
+ */
+export const DISCORD_AGENT_GRANT = "discord_channel";
+export const DISCORD_RELEASE_GRANT = "discord_release_channel";
+
 export const DISCORD_NOT_CONNECTED = "No Discord bot is connected. Connect one with the MCP tool connect_discord_bot, or in Profile → API Keys → Discord bot token.";
 
 /**
@@ -39,7 +52,8 @@ async function grantedChannel(ctx: RegistryToolCtx, grantId: unknown): Promise<{
 	if (!ctx.connectorClient) return { error: "Discord connector client is unavailable." };
 	try {
 		const grant = await ctx.connectorClient("discord").requireGrant(id);
-		if (grant.resourceType !== "discord_channel" || !snowflake(grant.resourceId)) {
+		if (grant.resourceType === DISCORD_RELEASE_GRANT) return { error: "This Discord grant is reserved for release notes (the platform posts there); it is not a channel this agent can read or post in." };
+		if (grant.resourceType !== DISCORD_AGENT_GRANT || !snowflake(grant.resourceId)) {
 			return { error: "This Discord grant is not a text-channel grant." };
 		}
 		return { channelId: grant.resourceId };
@@ -96,7 +110,8 @@ export async function postDiscordMessage(token: string, channelId: string, conte
 
 const listGrantedChannels: ToolDef["handler"] = async (ctx) => {
 	if (!ctx.instanceId || !ctx.userId) return { content: "Discord channel grants are available only from a subscribed agent instance.", success: false };
-	const grants = await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord");
+	// Only the AGENT's grants: a release-notes channel (#1218) is the platform's, not a channel to act in.
+	const grants = (await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord")).filter((g) => g.resourceType === DISCORD_AGENT_GRANT);
 	return {
 		content: JSON.stringify({ channels: grants.map((g) => ({ grantId: g.id, channelId: g.resourceId, name: g.resourceName, url: g.resourceUrl ?? null })) }, null, 2),
 		success: true,
