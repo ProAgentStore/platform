@@ -59,6 +59,12 @@ describe("machinesToShow", () => {
 		expect(machinesToShow([other], "", INST, []).map((m) => m.node)).toEqual(["desktop"]);
 	});
 
+	it("titles a named machine by its display name, with its hostnames as aliases (#1250)", () => {
+		const tile = machineTile({ displayName: "rl-laptop", node: "Mac.modem", aka: ["RLs-MacBook-Air.local"], connected: true, instances: [] }, INST, "Mac.modem");
+		expect(tile).toMatchObject({ node: "Mac.modem", label: "rl-laptop", pinned: true, alsoKnownAs: "also Mac.modem · RLs-MacBook-Air.local" });
+		expect(machineTile({ node: "Macmini", connected: false, instances: [] }, INST, "")).toMatchObject({ label: "Macmini", alsoKnownAs: "" });
+	});
+
 	it("shows the pinned machine first when Terminals does not list it", () => {
 		expect(machinesToShow([other], "laptop", INST, []).map((m) => m.node)).toEqual(["laptop", "desktop"]);
 	});

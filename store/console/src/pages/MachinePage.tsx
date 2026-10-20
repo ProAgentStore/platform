@@ -83,6 +83,23 @@ export default function MachinePage() {
 		}
 	}, [load, machine, machineId]);
 
+	// #1250: the owner's name for this machine — unique per account; the API refuses a duplicate with the reason.
+	const [nameDraft, setNameDraft] = useState<string | null>(null);
+	const saveName = useCallback(async () => {
+		if (!machineId || nameDraft === null) return;
+		setSaving(true);
+		setError("");
+		try {
+			const response = await api<MachineDetailResponse>(`/v1/terminals/machines/${encodeURIComponent(machineId)}/policy`, { method: "PUT", body: JSON.stringify({ display_name: nameDraft }) });
+			if (response && typeof response === "object") setMachine(machineFromResponse(response));
+			setNameDraft(null);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Could not rename this machine.");
+		} finally {
+			setSaving(false);
+		}
+	}, [machineId, nameDraft]);
+
 	const status = machine ? machineAutoUpdateStatus(machine) : {};
 	const enabled = machine ? machineAutoUpdateEnabled(machine) : false;
 	const canRunAutomaticUpdates = machine ? machineCanRunAutomaticUpdates(machine) : false;
@@ -100,7 +117,7 @@ export default function MachinePage() {
 				<div className="min-w-0">
 					<div className="flex items-center gap-2">
 						<Terminal size={20} className="text-accent shrink-0" />
-						<h1 className="font-display text-xl font-bold truncate">{machine?.node || "Machine"}</h1>
+						<h1 className="font-display text-xl font-bold truncate">{machine?.displayName || machine?.node || "Machine"}</h1>
 					</div>
 					<p className="text-sm text-muted mt-1">Machine settings and automatic CLI updates.</p>
 				</div>
@@ -119,7 +136,13 @@ export default function MachinePage() {
 				<div className="flex flex-col gap-4">
 					<Card className="p-4" data-testid="machine-detail-info">
 						<h2 className="font-semibold text-sm mb-3">Machine</h2>
+						<div className="flex flex-wrap items-center gap-2 mb-3" data-testid="machine-name">
+							<label htmlFor="machine-display-name" className="text-sm text-muted">Name</label>
+							<input id="machine-display-name" value={nameDraft ?? machine.displayName ?? ""} placeholder="e.g. rl-laptop" maxLength={40} onChange={(e) => setNameDraft(e.target.value)} className="min-w-0 flex-1 rounded border border-line bg-paper px-2 py-1 text-sm" />
+							<Button onClick={() => void saveName()} disabled={saving || nameDraft === null || nameDraft === (machine.displayName ?? "")}>Save name</Button>
+						</div>
 						<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+							<dt className="text-muted">Hostname</dt><dd>{machine.node || "Unknown"}</dd>
 							<dt className="text-muted">Connection</dt><dd>{machine.connected ? <span className="text-success">Connected</span> : <span className="text-muted-soft">Offline</span>}</dd>
 							<dt className="text-muted">CLI version</dt><dd>{machine.runnerVersion || "Unknown"}</dd>
 							<dt className="text-muted">Latest version</dt><dd>{machineLatestVersion(machine) || "Not checked yet"}</dd>

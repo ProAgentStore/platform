@@ -15,6 +15,8 @@ export interface AutoUpdateStatus {
 
 export interface MachineDetail {
 	machineId: string;
+	/** The owner's name for the machine (#1250); null until named. */
+	displayName?: string | null;
 	node?: string | null;
 	aka?: string[] | null;
 	placement?: string | null;

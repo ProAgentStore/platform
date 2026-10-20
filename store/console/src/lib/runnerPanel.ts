@@ -60,6 +60,8 @@ export interface NodeDetail {
 
 /** One of the user's machines, from `GET /v1/terminals/nodes`. */
 export interface Machine {
+	/** The owner's name for the machine (#1250); null until named. */
+	displayName?: string | null;
 	node: string;
 	/** Names this machine has also answered to, freshest first (#393). */
 	aka?: string[];
@@ -165,6 +167,8 @@ export type TileTone = "attached" | "connected" | "online" | "offline";
 
 export interface MachineTile {
 	node: string;
+	/** What the tile is titled: the owner's name for the machine (#1250), else its hostname. */
+	label: string;
 	tone: TileTone;
 	statusText: string;
 	pinned: boolean;
@@ -203,6 +207,7 @@ export function machineTile(m: Machine, instanceId: string, runnerNode: string, 
 	const tone: TileTone = socket ? (routesHere ? "attached" : "connected") : m.connected ? "online" : "offline";
 	return {
 		node: m.node,
+		label: m.displayName || m.node,
 		tone,
 		// The word says which fact it means. "Attached" is a claim about routing and is reserved for
 		// a machine work actually reaches; a machine the pin excludes is described as connected and
@@ -222,7 +227,8 @@ export function machineTile(m: Machine, instanceId: string, runnerNode: string, 
 		// hostname, so these strings are what a stranded pin literally says. Seeing them is how a
 		// user recognises their own laptop under last week's name instead of a machine they do not
 		// know — the fold is only trustworthy if what it folded stays visible.
-		alsoKnownAs: (m.aka || []).length ? `also ${(m.aka || []).join(" · ")}` : "",
+		// With a display name (#1250), the hostname itself is shown as an alias too.
+		alsoKnownAs: (() => { const aka = m.displayName ? [m.node, ...(m.aka || [])] : m.aka || []; return aka.length ? `also ${aka.join(" · ")}` : ""; })(),
 		// A machine about to drop its relays looks like any other green tile without these (#929).
 		health: tileHealth(m.resources),
 		alerts: (m.resources?.warnings ?? []).map(warningHead),

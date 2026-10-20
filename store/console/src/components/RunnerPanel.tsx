@@ -281,7 +281,7 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 										{/* Green is reserved for "work runs here". A machine that is up but serving this
 										    agent nothing — whether it never attached, or the pin excludes it — is amber. */}
 										<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.tone === "attached" ? "bg-success" : t.tone === "offline" ? "bg-muted-soft" : "bg-amber-500"}`} />
-										<span className="font-semibold text-sm truncate">{t.node}</span>
+										<span className="font-semibold text-sm truncate">{t.label}</span>
 										{t.pinned && <span className="ml-auto shrink-0 text-2xs font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
 									</div>
 									{/* `break-words`: this line now carries a machine NAME, and a hostname is one

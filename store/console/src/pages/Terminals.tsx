@@ -13,7 +13,7 @@ import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin, PinOff, Settings2 } f
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean; pinnedNode?: string | null }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
-interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[]; update?: RunnerUpdateOpView; auto_update_policy?: boolean; latest_version?: string | null; auto_update_status?: unknown; auto_update_stuck?: AutoUpdateStuck | null }
+interface TerminalNode { displayName?: string | null; node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[]; update?: RunnerUpdateOpView; auto_update_policy?: boolean; latest_version?: string | null; auto_update_status?: unknown; auto_update_stuck?: AutoUpdateStuck | null }
 
 function ago(iso: string | null): string {
 	if (!iso) return "never";
@@ -148,7 +148,7 @@ export default function Terminals() {
 										<Terminal size={14} className="text-muted shrink-0" />
 										{n.machineId ? (
 											<Link to={`/terminals/machines/${encodeURIComponent(n.machineId)}`} className="truncate hover:text-accent" data-testid="machine-details-link">
-												{n.node}
+												{n.displayName || n.node}
 											</Link>
 										) : <span className="truncate">{n.node}</span>}
 										{/* Last week's name for the same machine (#393) — the string a stranded pin
@@ -158,7 +158,8 @@ export default function Terminals() {
 									    "also …" line straight out of the card and under the Forget button. Measured
 									    in WebKit; the horizontal-overflow guards cannot see it, because the text
 									    escapes its own box without widening the document. */}
-									{!!n.aka?.length && <span className="text-2xs text-muted-soft truncate min-w-0">also {n.aka.join(" · ")}</span>}
+									{/* #1250: with a display name, the hostname itself is an alias too. */}
+									{(() => { const aka = n.displayName ? [n.node, ...(n.aka ?? [])] : (n.aka ?? []); return aka.length ? <span className="text-2xs text-muted-soft truncate min-w-0">also {aka.join(" · ")}</span> : null; })()}
 										<span className={`text-2xs font-bold px-1.5 py-0.5 rounded ${n.connected ? "bg-success-soft text-success" : "bg-line text-muted-soft"}`}>{n.connected ? "connected" : "offline"}</span>
 									</div>
 									<div className="text-xs text-muted-soft mt-0.5">
