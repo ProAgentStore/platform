@@ -77,6 +77,8 @@ src/
 ├── tool-metadata.ts      annotations, titles, output schemas (advisory, never a check)
 ├── instance-tool-guidance.ts  the nested-tool routing sentences (#774) that BOTH
 │                         `SERVER_INSTRUCTIONS` and `PLATFORM_GUIDE` render — one copy, two channels
+├── label-guidance.ts     the GitHub label vocabulary + list format `platform_guide` carries (#1245) — a COPY
+│                         of workers/api/src/lib/label-vocabulary.ts, held equal by label-guidance.test.ts
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── call-audit.ts         the one outcome event every tool call closes with (#1089)
 ├── request-isolation.ts  refuses a POST whose JSON-RPC id is in flight elsewhere in the session (#1111)

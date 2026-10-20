@@ -1,6 +1,7 @@
 import { MCP_SERVER_VERSION } from "./server-version.js";
 import { SURFACE_LOCK } from "./surface-lock.js";
 import { DIRECT_BEFORE_RUN, NESTED_TOOL_SEQUENCE } from "./instance-tool-guidance.js";
+import { LABEL_GUIDANCE } from "./label-guidance.js";
 import { MCP_TOOL_ALWAYS_ON, MCP_TOOL_COUNT, MCP_TOOL_GATED } from "./tool-count.js";
 
 /**
@@ -66,6 +67,7 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 ## Subscriber runtime: subscribe_agent then my_instances for what you own, or recent_instances for the few you drove last and how their latest runs stand; chat_with_instance to talk to one; add documents, settings, triggers and connector tools per instance; register a local machine and queue work on it.
 ## Instance tools — an agent's OWN tools are one level down from this surface, and are usually the DIRECT path: list_instance_tools names what one instance may actually run (its GitHub, HTTP and search connectors as well as its own memory, files and knowledge) with a per-tool verdict, and call_instance_tool invokes one. Check there BEFORE reaching for coding_session_message: making a terminal shell out for something an instance tool already does returns a truncated pane instead of structured data, and is the fallback rather than the first path. ${NESTED_TOOL_SEQUENCE} ${DIRECT_BEFORE_RUN}
 ## Coding — watching and driving a run on your own machine: coding_timeline is what a run is DOING and what a finished one did (objective, every instruction, tool calls, outcome). coding_session_capture reads the live pane; a session that has ENDED answers it empty, and coding_terminal returns that run's stored pane text in full instead. coding_loop_start gives an agent an objective and returns immediately — supervise it with coding_loop_status and end it with coding_loop_stop.
+## Labels — ${LABEL_GUIDANCE}
 ## Observability — what an agent actually did, and what it cost: agent_trace first (chat turns, run steps and failures interleaved on one timeline, filterable by trace or source), then instance_activity for an instance's own record, list_errors for the durable error log, instance_board for the work it is tracking, and usage_summary for tokens and spend.
 ## Public trial: chat_with_agent calls /v1/public/agents/:id/try and is for previews, not the main user runtime
 ## URLs: Store proagentstore.online, API api.proagentstore.online, MCP mcp.proagentstore.online/mcp
