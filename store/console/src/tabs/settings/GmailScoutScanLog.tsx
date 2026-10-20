@@ -62,7 +62,7 @@ function LogRow({ item }: { item: GmailScoutScanLogItem }) {
 						const v = scanLogVerdict(sub);
 						return (
 							<li key={`${sub.seq}-${sub.job?.url}`} className="break-words">
-								<span className={toneClass[v.tone]}>{v.text.split(" · ")[0]}</span> · {sub.job?.title ?? "Untitled job"}
+								<span className={toneClass[v.tone]}>{v.text.split(" · ")[0]}</span> · {sub.job?.title ?? "Job (title not in the email's link)"}
 								{sub.job?.url && <> · <a href={sub.job.url} target="_blank" rel="noreferrer" className="text-accent underline">posting</a></>}
 								{sub.leadId && <> · lead <code>{sub.leadId}</code></>}
 							</li>

@@ -121,13 +121,13 @@ describe("every decision path is logged with its reason (#1247)", () => {
 		expect(digest.subItems?.[0].reason).toMatch(/job_lead_intake_url/);
 	});
 
-	it("a digest job's title is its link text — never the lone \"[\" a plain-text part puts before the link (live, Scout 2)", () => {
+	it("a digest job's title is its link text, or none — never a nearby plain-text line (live, Scout 2: \"[\", a suburb, a salary)", () => {
 		const plain = "Scrum Master\nAcme Pty Ltd\n[\nhttps://au.seek.com/job/95335702?tracking=PLAIN1]\n\nProduct Owner\n[\nhttps://au.seek.com/job/95335703?tracking=PLAIN2]";
 		const html = '<a href="https://au.seek.com/job/95335702?tracking=HTML1"><span>Scrum Master</span></a>';
 		const { jobs } = digestJobs(msg("m-seek-digest", "2 new jobs for Scrum Master", `${plain}\n${html}`));
 		expect(jobs).toEqual([
 			{ title: "Scrum Master", url: "https://au.seek.com/job/95335702" }, // the anchor wins over the plain-text line
-			{ title: "Product Owner", url: "https://au.seek.com/job/95335703" }, // no anchor: the nearest line that reads as words
+			{ title: null, url: "https://au.seek.com/job/95335703" }, // no anchor: no title, rather than a guessed line
 		]);
 		expect(JSON.stringify(jobs)).not.toMatch(/tracking|PLAIN|HTML1/);
 	});

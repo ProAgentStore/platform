@@ -196,8 +196,9 @@ export function readSummary(message: GmailMessage): ScanLogRead {
 }
 
 /**
- * The jobs a digest lists (#1247), each by its canonical posting URL and — where the mail shows one — the
- * title it linked from. Only links that name their posting are kept; a tracking redirect is counted, not
+ * The jobs a digest lists (#1247), each by its canonical posting URL and — only where a link's own anchor
+ * text names it — its title. No title is better than a wrong one: live, the nearest plain-text line to a
+ * SEEK link was a location, a salary or a bullet, never reliably the role. Only links that name their posting are kept; a tracking redirect is counted, not
  * stored and not followed, since a digest is never resolved into leads.
  */
 export function digestJobs(message: GmailMessage): { jobs: Array<{ title: string | null; url: string }>; unresolved: number } {
@@ -219,7 +220,7 @@ export function digestJobs(message: GmailMessage): { jobs: Array<{ title: string
 		const anchor = anchorText(text, (m.index ?? 0) + raw.length);
 		const prior = jobs.get(url);
 		if (prior?.anchored || (prior && !anchor)) continue;
-		jobs.set(url, { url, title: anchor ?? lineBefore(text, m.index ?? 0), anchored: anchor !== null });
+		jobs.set(url, { url, title: anchor, anchored: anchor !== null });
 	}
 	return { jobs: [...jobs.values()].map(({ title, url }) => ({ title, url })), unresolved: unresolvedLinks.size };
 }
@@ -239,16 +240,6 @@ function titleText(v: string | undefined): string | null {
 function anchorText(text: string, end: number): string | null {
 	return titleText(text.slice(end, end + 700).match(/^["']?[^>\n]{0,200}>([\s\S]{0,400}?)<\/a>/i)?.[1]);
 }
-/** The nearest line before `at` that reads as words — the plain-text part's title line. */
-function lineBefore(text: string, at: number): string | null {
-	const lines = text.slice(Math.max(0, at - 400), at).split(/\n/).reverse();
-	for (const line of lines) {
-		const t = titleText(line);
-		if (t) return t;
-	}
-	return null;
-}
-
 /** The lead a message becomes once its posting URL is known — from the mail itself, or resolved (#1024). */
 function candidateFor(message: GmailMessage, url: string, resolvedCompany?: string): ScoutCandidate {
 	const host = new URL(url).hostname.toLowerCase();
@@ -465,7 +456,7 @@ function logDigestJobs(log: ScanLogEntry[], seq: number, message: GmailMessage, 
 		log.push({
 			...base,
 			subIndex: i + 1,
-			evidence: job.title ? "title taken from the link's text in the email" : null,
+			evidence: job.title ? "title taken from the link's text in the email" : "no link text in the email names this job — open the posting to see it",
 			job: { title: job.title, company: null, url: job.url },
 			...(dup
 				? { decision: "deduped" as const, leadId: id, reason: `Already a lead${id ? ` (${id})` : ""} from another email.` }
