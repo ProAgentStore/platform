@@ -8,8 +8,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { getLoopRun, recordIteration, recordLiveness, type WaitingAsk } from "./agent-loop-store.js";
 import { codingCardId } from "./coding-board.js";
-import { ASK_OPTION_CHARS, ASK_OPTIONS_MAX, askAnnouncement, askOptions, askParts } from "./coding-ask.js";
-import { ASK_QUESTION_MAX, CODING_TOOLS, runCodingLoop, systemPrompt, toDecision, type CodingDeps, type CodingPaneSnapshot } from "./coding-loop.js";
+import { ASK_OPTIONS_MAX, ASK_QUESTION_MAX, askAnnouncement, askOptions, askParts } from "./coding-ask.js";
+import { CODING_TOOLS, runCodingLoop, systemPrompt, toDecision, type CodingDeps, type CodingPaneSnapshot } from "./coding-loop.js";
 import { askCardId, resolvePause, type PauseDeps } from "./coding-pause.js";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import { deriveFleetStatus, type FleetFacts } from "./fleet-snapshot.js";
@@ -83,8 +83,8 @@ describe("ask_owner is a verb the Pilot has, and a choice it does not make (#960
 		expect(askAnnouncement({ question: "Which DB?" })).toBe("Which DB?");
 	});
 
-	it("cleans options: strings only, trimmed, de-duplicated, short, at most six", () => {
-		expect(askOptions([" yes ", "yes", 3, null, "no", "x".repeat(ASK_OPTION_CHARS + 1)])).toEqual(["yes", "no"]);
+	it("cleans options: strings only, trimmed, de-duplicated, at most six — a long one is kept (#1224)", () => {
+		expect(askOptions([" yes ", "yes", 3, null, "no"])).toEqual(["yes", "no"]);
 		expect(askOptions(["1", "2", "3", "4", "5", "6", "7", "8"])).toHaveLength(ASK_OPTIONS_MAX);
 	});
 

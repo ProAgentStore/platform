@@ -1,7 +1,6 @@
-import { ASK_QUESTION_FULL_MAX, askOptions, askParts, type AskPart } from "./coding-ask.js";
+import { askOwnerDecision, type AskNeedsInput, type AskPart } from "./coding-ask.js";
 import type { EngineInputs } from "./coding-engine-inputs.js";
 import type { ObjectiveOrigin } from "./coding-objective-origin.js";
-import { clipMarked } from "./clip-marked.js";
 import { runUserWorkersAi, systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
 import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
@@ -197,7 +196,7 @@ export interface CodingDecision {
 	 * between options (`ask_owner`, #960) — in which case `field` is the question itself and
 	 * `options` the answers offered. Both are answered from a conversation, not by taking over.
 	 */
-	needsInput?: { field: string; why?: string; options?: string[]; fullQuestion?: string; parts?: AskPart[] };
+	needsInput?: AskNeedsInput;
 	/**
 	 * The Engine reported ITS OWN usage/rate limit (#541). `at` is the reset instant it named, as an
 	 * ISO-8601 string that must carry an explicit offset to be believed — see `coding-wait.ts`.
@@ -272,6 +271,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	const transcript: string[] = [];
 	const actionLog: string[] = [];
 	let refusals = 0;
+	let askSentBack = false;
 	let emptyInstructions = 0;
 	/** Normalised key of every instruction actually driven into the engine, in order (#522). */
 	const sentKeys: string[] = [];
@@ -382,6 +382,16 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// The turn it is looking at CRASHED (#1200): "ask a person" is the brain reading that off the pane — say what the CLI said.
 			if (turns.consecutive > 0) return { ...engineErrorEnding(turns, goal.repo, transcript), steps: step, transcript };
 			return { outcome: "stuck", detail: decision.stuck.why, steps: step, transcript };
+		}
+		if (decision.needsInput?.incomplete && !askSentBack) {
+			// #1224: a question that introduces choices and gives none would park as a headline nobody can
+			// answer. Sent back once through the step log, as a merge refusal is; a second one parks free-form.
+			askSentBack = true;
+			const note = `ask_owner not sent: "${decision.needsInput.field}" introduces choices but gave no options — put them in options (or parts), a sentence each is fine, or ask the whole question in question`;
+			actionLog.push(note);
+			transcript.push(note);
+			await deps.onEvent?.("refused", note);
+			continue;
 		}
 		if (decision.needsInput) {
 			const options = decision.needsInput.options ?? [];
@@ -912,16 +922,8 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 			return { stuck: { why: str(a.why) || "needs a human" } };
 		case "request_user_info":
 			return { needsInput: { field: str(a.field) || "a value", why: str(a.why) } };
-		case "ask_owner": {
-			const asked = str(a.question).trim();
-			const question = clipMarked(asked, ASK_QUESTION_MAX, { within: true });
-			if (!question) return { stuck: { why: "Asked the owner a question but did not say what it was." } };
-			// The question stays phone-sized everywhere it travels (#960); the ticket page can also show it
-			// uncut (#1129), so the owner is never left with `[cut: …]` and no way to read the rest.
-			const fullQuestion = question === asked ? undefined : clipMarked(asked, ASK_QUESTION_FULL_MAX, { within: true });
-			const parts = askParts(a.parts);
-			return { needsInput: { field: question, why: str(a.why).trim(), options: parts.length ? [] : askOptions(a.options), ...(fullQuestion ? { fullQuestion } : {}), ...(parts.length ? { parts } : {}) } };
-		}
+		case "ask_owner":
+			return askOwnerDecision(a);
 		case "wait_for_reset":
 			// `at` is passed through UNVALIDATED. Judging it here would put the timezone rule in two
 			// places, and the planner is the one that knows the run's remaining budget.
@@ -931,8 +933,6 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 	}
 }
 
-/** Bounds on an `ask_owner` (#960) — a phone-sized question; a longer one is cut WITH a marker. Options: `coding-ask.ts`. */
-export const ASK_QUESTION_MAX = 300;
 /** The loop's `needs_reauth` ending (#881): what the engine said, and what fixes it. */
 export function reauthDetail(block: EngineAuthPrompt, clientType: CodingGoal["clientType"]): string {
 	const said = block.evidence ? ` It said: "${block.evidence}".` : "";

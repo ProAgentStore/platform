@@ -5,6 +5,7 @@
 
 import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
+import type { AskPart } from "./coding-ask.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
@@ -116,6 +117,10 @@ export interface WaitingAsk {
 	why: string;
 	field: string;
 	taskId: string;
+	/** The ask as the Pilot wrote it, when cleaning took anything from it (#1129, #1224) — what an MCP reader can answer from. */
+	fullQuestion?: string;
+	/** A multi-part ask's decisions, each with its own options (#1129). */
+	parts?: AskPart[];
 }
 
 export function parseWaitingAsk(raw: string | null | undefined): WaitingAsk | null {
@@ -129,6 +134,9 @@ export function parseWaitingAsk(raw: string | null | undefined): WaitingAsk | nu
 			why: typeof o.why === "string" ? o.why : "",
 			field: typeof o.field === "string" ? o.field : o.question,
 			taskId: o.taskId,
+			// Stored with the park all along, and dropped HERE on read (#1224) — so coding_loop_status showed a headline.
+			...(typeof o.fullQuestion === "string" && o.fullQuestion ? { fullQuestion: o.fullQuestion } : {}),
+			...(Array.isArray(o.parts) && o.parts.length ? { parts: o.parts } : {}),
 		};
 	} catch {
 		return null;
