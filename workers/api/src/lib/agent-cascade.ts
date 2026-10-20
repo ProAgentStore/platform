@@ -102,6 +102,7 @@ export const INSTANCE_CHILD_TABLES = [
 	"gmail_scout_configs",
 	"gmail_scout_scan_state",
 	"gmail_scout_scan_receipts",
+	"gmail_scout_scan_log_items",
 	// #1027 — one product-owner triage report per wake.
 	"po_triage_reports",
 	// #1233 — brain-free auto-pickup's decision log.
