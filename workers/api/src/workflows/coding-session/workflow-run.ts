@@ -2,7 +2,7 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-question-sweep.js";
 import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
-import { answerEventType, recordParkedWorkflow, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
+import { answerEventType, recordParkedWorkflow, recordParkMachine, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
 import { askAnnouncement } from "../../lib/coding-ask.js";
 import {
 	runCodingLoop,
@@ -801,6 +801,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 							// The engine PROCESS stops; its session row and its resume key stay. Its last acts are drained like the terminal path's.
 							const ended = await callRunner<{ acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
 							await recordEngineActs(env, { userId, sessionId, instanceId, traceId: runId, cardId: traceCtx.cardId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
+							// #1242: where this park's work is — it resumes on that machine and nowhere else.
+							await recordParkMachine(env, { runId, instanceId, userId, sessionId, repoId }, conn);
 							if (opts?.keepCheckout) return { announce: "Its checkout and working tree stay exactly as they are while it waits for you.", released: false }; // #1236
 							// #1077: let go of the checkout (its work set aside first), so queued work runs while this waits.
 							const r = await releaseCheckout(env, conn, { runId, instanceId, userId, sessionId, repoId });
@@ -818,8 +820,10 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 						// #1076–#1078, in order: take the checkout back, relaunch, re-sync onto upstream, put the work back (`resumeFromPark`).
 						const r = (await runRetry(`unpark-${round}-${unparks++}`, () =>
 							resumeFromPark(env, conn, { runId: event.payload.loopRunId as string, instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: event.payload.driverId ?? undefined, parkedForMs }),
-						)) as { resumed: boolean; line: string; moved: string | null } | { busy: string } | { blocked: string };
+						)) as { resumed: boolean; line: string; moved: string | null; node?: string | null } | { busy: string } | { blocked: string };
 						if (!("line" in r)) return r;
+						// #1242: it resumed on the machine it parked on, which may not be the one this Workflow re-resolved on waking.
+						if (r.node && normalizeRunnerNode(r.node) !== normalizeRunnerNode(conn.runnerNode)) conn = (await getRunnerConnIgnoringLiveness(env, instanceId, userId, r.node).catch(() => null)) ?? conn;
 						await recordLiveness(env, event.payload.loopRunId as string, Date.now(), null).catch(() => undefined); // no longer parked, from this instant
 						if (!r.resumed) objective?.replaced(); // a fresh engine has read nothing: the objective is owed to it again (#1019)
 						return { line: r.line, moved: r.moved };

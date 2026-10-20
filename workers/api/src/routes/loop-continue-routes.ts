@@ -63,7 +63,8 @@ import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-sto
 import { pendingCodingResumeCheckpoint } from "../lib/coding-resume-note.js";
 import { continueBriefingPreview, continueBriefingSentence, type WorkingTreeRead } from "../lib/loop-continue-preview.js";
 import { readRepoWorkingState } from "../lib/repo-state.js";
-import { getBoundRunnerConn } from "../lib/runner-client.js";
+import { callRunner, getBoundRunnerConn, getRunnerConnIgnoringLiveness, relayConnected } from "../lib/runner-client.js";
+import { repoFreeForRun, runnerEngineProbe } from "../lib/coding-ownership.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
@@ -100,6 +101,10 @@ const REFUSAL: Record<string, string> = {
 export function continueRefusal(run: LoopRunView): string | null {
 	if (run.finishedAt === null) return "that run is still going — stop it first, then continue it";
 	if (isResumableStopReason(run.stopReason)) return null;
+	// #1242: a run that asked, got its answer, and then could not put its set-aside work back has no
+	// handoff left to answer it through. Continuing it is the owner's explicit move: the work is put
+	// back first (fetched from origin when this machine lacks it), then the new run starts on it.
+	if (run.stopReason === "escalated" && run.parked?.snapshot) return null;
 	return REFUSAL[run.stopReason ?? ""] ?? "that run reached a verdict on its objective and cannot be continued";
 }
 
@@ -161,6 +166,33 @@ async function continueRepoId(env: Env, instanceId: string, userId: string, run:
 	return (await getSession(env, instanceId, userId, run.sessionId).catch(() => null))?.repoId;
 }
 
+/**
+ * Put a stopped run's set-aside work back into the checkout a continue will run in (#1242), or refuse
+ * with why — nothing started either way until it is back. The machine is the one the continue runs on
+ * (the parking machine whenever it is connected, since the work is there). Fetching origin's copy is
+ * allowed here and nowhere else: this is the owner's explicit move. The repo must be free.
+ */
+async function restoreParkedForContinue(env: Env, instanceId: string, userId: string, run: LoopRunView, repoId: string): Promise<void> {
+	const parked = run.parked as NonNullable<LoopRunView["parked"]>;
+	const free = await repoFreeForRun(env, { instanceId, userId, repoId, sessionId: run.sessionId ?? "" }, runnerEngineProbe(env, instanceId, userId));
+	if (!free.free) throw new HttpError(409, "the repository is busy with another run — continue this one once it is free, and its set-aside work is put back then");
+	const onParkingMachine = parked.node && (await relayConnected(env, instanceId, parked.node).catch(() => false)) ? await getRunnerConnIgnoringLiveness(env, instanceId, userId, parked.node).catch(() => null) : null;
+	const conn = onParkingMachine ?? (await getBoundRunnerConn(env, instanceId, userId).catch(() => null));
+	if (!conn) throw new HttpError(409, `no machine is connected to put its set-aside work (${parked.snapshot}) back on — run \`pags up\`, then continue it`);
+	const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+	let r: { restored?: boolean; refused?: string; conflicts?: string[]; fetched?: boolean };
+	try {
+		r = await callRunner(conn, "/coding/park-restore", { workDir: repo?.workdir || undefined, repoId, runId: run.runId, snapshot: parked.snapshot, fetch: true });
+	} catch (e) {
+		throw new HttpError(409, `its set-aside work could not be put back on ${conn.runnerNode ?? "the machine"} (${e instanceof Error ? e.message : String(e)}; needs CLI 0.4.165 or later) — nothing was started`);
+	}
+	if (!r.restored) {
+		const files = r.conflicts?.length ? ` Conflicting files: ${r.conflicts.join(", ")}.` : "";
+		throw new HttpError(409, `its set-aside work (${parked.snapshot}) was not put back on ${conn.runnerNode ?? "the machine"}: ${r.refused ?? "the runner refused"}.${files} Nothing was started or changed.`);
+	}
+	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_snapshot = NULL, checkout_released_at = NULL WHERE run_id = ?1").bind(run.runId).run();
+}
+
 export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): void {
 	/**
 	 * Carry a stopped run's objective onto a fresh run with a new iteration ceiling.
@@ -202,6 +234,9 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 		// shown is the number they get.
 		const maxIterations = await continueCeiling(c.env, session.uid, instanceId, run, body.maxIterations);
 		const repoId = await continueRepoId(c.env, instanceId, session.uid, run);
+
+		// #1242: put a parked run's set-aside work back BEFORE anything is opened — a refusal must leave no budget or run behind.
+		if (run.parked?.snapshot && repoId) await restoreParkedForContinue(c.env, instanceId, session.uid, run, repoId);
 
 		const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null);
@@ -304,6 +339,8 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 			repoId: repoId ?? null,
 			briefing,
 			summary: continueBriefingSentence(briefing),
+			// #1242: work a continue would put back first, and where it is.
+			parked: run.parked,
 		});
 	});
 }

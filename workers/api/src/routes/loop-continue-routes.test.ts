@@ -39,7 +39,20 @@ vi.mock("../lib/agent-loop-store.js", async () => {
 	const actual = await vi.importActual<typeof import("../lib/agent-loop-store.js")>("../lib/agent-loop-store.js");
 	return { ...actual, getLoopRun: (...a: unknown[]) => getLoopRun(...a) };
 });
-vi.mock("../lib/coding-store.js", () => ({ getSession: (...a: unknown[]) => getSession(...a) }));
+vi.mock("../lib/coding-store.js", () => ({ getSession: (...a: unknown[]) => getSession(...a), getRepo: async () => ({ id: "r1", workdir: "~/dev/tradeport" }) }));
+// #1242: the restore a continue performs first — where it runs, and what the runner said.
+const repoFreeForRun = vi.fn();
+const relayConnected = vi.fn();
+const getRunnerConnIgnoringLiveness = vi.fn();
+const getBoundRunnerConn = vi.fn();
+const callRunner = vi.fn();
+vi.mock("../lib/coding-ownership.js", () => ({ repoFreeForRun: (...a: unknown[]) => repoFreeForRun(...a), runnerEngineProbe: () => async () => "idle" }));
+vi.mock("../lib/runner-client.js", () => ({
+	relayConnected: (...a: unknown[]) => relayConnected(...a),
+	getRunnerConnIgnoringLiveness: (...a: unknown[]) => getRunnerConnIgnoringLiveness(...a),
+	getBoundRunnerConn: (...a: unknown[]) => getBoundRunnerConn(...a),
+	callRunner: (...a: unknown[]) => callRunner(...a),
+}));
 vi.mock("../lib/delegation-budget-store.js", () => ({
 	openBudget: (...a: unknown[]) => openBudget(...a),
 	resolveAccountCeilings: (...a: unknown[]) => resolveAccountCeilings(...a),
@@ -71,8 +84,10 @@ const stoppedRun = {
 	sessionId: "csess_a",
 };
 
+const dbWrites: Array<{ sql: string; args: unknown[] }> = [];
+const testEnv = { DB: { prepare: (sql: string) => ({ bind: (...args: unknown[]) => ({ run: async () => void dbWrites.push({ sql, args }) }) }) } } as unknown as Env;
 const post = (path: string, body?: unknown) =>
-	app().request(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body), headers: { "content-type": "application/json" } }, {} as Env);
+	app().request(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body), headers: { "content-type": "application/json" } }, testEnv);
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -114,13 +129,13 @@ describe("the happy path", () => {
 
 	it("continues on the stopped run's own repo, not the driver's first one", async () => {
 		await post("/i1/loop/run-1/continue", {});
-		expect(getSession).toHaveBeenCalledWith({}, "i1", "u1", "csess_a");
+		expect(getSession).toHaveBeenCalledWith(expect.anything(), "i1", "u1", "csess_a");
 		expect(start.mock.calls[0][0].repoId).toBe("repo-7");
 	});
 
 	it("opens a FRESH budget rather than inheriting the stopped run's", async () => {
 		await post("/i1/loop/run-1/continue", { budget: { costMicros: 5 } });
-		expect(openBudget).toHaveBeenCalledWith({}, "u1", "i1", { costMicros: 5 });
+		expect(openBudget).toHaveBeenCalledWith(expect.anything(), "u1", "i1", { costMicros: 5 });
 		expect(start.mock.calls[0][0].budgetId).toBe("budget-new");
 	});
 
@@ -278,5 +293,63 @@ describe("when the driver refuses", () => {
 		const res = await post("/i1/loop/run-1/continue", {});
 		expect(res.status).toBe(409);
 		expect((await res.json() as { error: string }).error).toContain("already being worked on");
+	});
+});
+
+describe("#1242: a run whose parked work was never put back is continuable — the continue moves the work first", () => {
+	const SNAP = "7cf586197ba4f9be0ab07e3196cb4eae18687970";
+	const stuckRun = {
+		...stoppedRun,
+		status: "needs_human",
+		stopReason: "escalated",
+		sessionId: "csess_541ec537",
+		parked: { machineId: "pink-id-0001", node: "pink-laptop", workdir: "~/dev/tradeport", snapshot: SNAP, ref: "refs/pags/parked/run-1", pushedToOrigin: true },
+	};
+	beforeEach(() => {
+		dbWrites.length = 0;
+		getSession.mockResolvedValue({ repoId: "r1" });
+		getLoopRun.mockResolvedValue({ ...stuckRun });
+		repoFreeForRun.mockResolvedValue({ free: true });
+		relayConnected.mockResolvedValue(false);
+		getBoundRunnerConn.mockResolvedValue({ runnerNode: "Mac.modem" });
+		callRunner.mockResolvedValue({ restored: true, fetched: true });
+	});
+
+	it("puts the work back FIRST — fetching origin's copy, the owner's explicit move — then starts the new run", async () => {
+		const res = await post("/i1/loop/run-1/continue");
+		expect(res.status).toBe(201);
+		expect(callRunner).toHaveBeenCalledWith({ runnerNode: "Mac.modem" }, "/coding/park-restore", { workDir: "~/dev/tradeport", repoId: "r1", runId: "run-1", snapshot: SNAP, fetch: true });
+		expect(callRunner.mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
+		expect(dbWrites.some((w) => /SET checkout_snapshot = NULL/.test(w.sql) && w.args[0] === "run-1")).toBe(true);
+	});
+
+	it("prefers the machine it parked on when that machine is connected", async () => {
+		relayConnected.mockImplementation(async (_e: unknown, _i: unknown, node: string) => node === "pink-laptop");
+		getRunnerConnIgnoringLiveness.mockResolvedValue({ runnerNode: "pink-laptop" });
+		expect((await post("/i1/loop/run-1/continue")).status).toBe(201);
+		expect(callRunner.mock.calls[0][0]).toEqual({ runnerNode: "pink-laptop" });
+	});
+
+	it("a restore the runner refuses starts NOTHING and opens no budget, and says why", async () => {
+		callRunner.mockResolvedValue({ restored: false, missing: true, refused: "the saved work is not in this checkout, and origin's ref does not hold it" });
+		const res = await post("/i1/loop/run-1/continue");
+		expect(res.status).toBe(409);
+		expect(((await res.json()) as { error: string }).error).toMatch(/was not put back on Mac\.modem: the saved work is not in this checkout.*Nothing was started or changed/);
+		expect(start).not.toHaveBeenCalled();
+		expect(openBudget).not.toHaveBeenCalled();
+	});
+
+	it("waits for a busy repository rather than restoring into another run's checkout", async () => {
+		repoFreeForRun.mockResolvedValue({ free: false });
+		expect((await post("/i1/loop/run-1/continue")).status).toBe(409);
+		expect(callRunner).not.toHaveBeenCalled();
+		expect(start).not.toHaveBeenCalled();
+	});
+
+	it("an escalated run with NO set-aside work is still answered through its own handoff", async () => {
+		getLoopRun.mockResolvedValue({ ...stuckRun, parked: null });
+		const res = await post("/i1/loop/run-1/continue");
+		expect(res.status).toBe(409);
+		expect(((await res.json()) as { error: string }).error).toMatch(/answered through its own handoff/);
 	});
 });

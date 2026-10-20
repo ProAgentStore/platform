@@ -3,6 +3,7 @@
 // Shape and vocabulary mirror `pipeline-runs.ts` on purpose: a user should not have to learn two
 // mental models for "what did my agent do", and #19/#182 want both histories rendered from one.
 
+import { type ParkedWork, parkedWork } from "./parked-work.js";
 import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
 import type { AskPart } from "./coding-ask.js";
@@ -57,7 +58,15 @@ export interface LoopRunRow {
 	request_id?: string | null;
 	/** When a run parked on a question let go of its checkout (0246, #1077); null while it holds it. */
 	checkout_released_at?: number | null;
+	/** The commit its set-aside work was saved as (0246); cleared once put back. */
+	checkout_snapshot?: string | null;
+	/** Where it parked (0263, #1242): the machine's id and hostname, the checkout, and whether the ref reached origin. */
+	parked_machine_id?: string | null;
+	parked_node?: string | null;
+	parked_workdir?: string | null;
+	parked_pushed?: number | null;
 }
+
 
 /**
  * Why a run is deliberately not advancing (#580) — as a VALUE, so a guard can count it (#596).
@@ -225,7 +234,13 @@ export interface LoopRunView {
 	 * list it apart from working runs, so an instance with a question pending is never just "waiting".
 	 */
 	blockedOnAnswer: boolean;
+	/**
+	 * Where its parked work is (#1242), while it has any: on a run still parked, or one that stopped with
+	 * its work not put back. Null when there is none to account for.
+	 */
+	parked: ParkedWork | null;
 }
+
 
 export function toLoopRunView(row: LoopRunRow): LoopRunView {
 	return {
@@ -254,6 +269,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		queueEntryId: row.queue_entry_id ?? null,
 		requestId: row.request_id ?? null,
 		blockedOnAnswer: row.status === "running" && row.waiting_reason === "decision" && row.checkout_released_at != null,
+		parked: parkedWork(row),
 	};
 }
 

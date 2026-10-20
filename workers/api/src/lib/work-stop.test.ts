@@ -41,6 +41,7 @@ const run = (over: Partial<LoopRunView> = {}): LoopRunView => ({
 	queueEntryId: null,
 	requestId: null,
 	blockedOnAnswer: false,
+	parked: null,
 	...over,
 });
 

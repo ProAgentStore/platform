@@ -99,6 +99,7 @@ export {
 import { adoptableIdByName, freshestVersion, namesOfMachine, normalizeMachineId, pinCandidates, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { resolveRunnerPin, resolveRunnerPins } from "../lib/runtime-nodes.js";
 import { machineDisplayNames } from "../lib/machine-names.js";
+import { wakeRunsParkedOnMachine } from "../lib/coding-park.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { healthOfError, healthOfResponse, runnerStatusView } from "../lib/runner-health.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
@@ -532,8 +533,10 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		}
 		const resumed = await resumeSessionsForNode(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
 		if (resumed) console.log(`Resumed ${resumed} suspended session(s) on ${runnerNode}`);
-		// A run parked on its machine continues now, not at its next own look (#1160).
+		// A run parked on its machine continues now, not at its next own look (#1160) — and an answered run
+		// parked on a question waits for THIS machine (#1242), so its coming back is what resumes it.
 		await wakeRunnerParkedRuns(c.env, instanceId, session.uid);
+		if (machineId) await wakeRunsParkedOnMachine(c.env, session.uid, machineId);
 	}
 
 	if (runnerNode) {
