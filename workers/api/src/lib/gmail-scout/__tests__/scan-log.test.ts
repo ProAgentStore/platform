@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../../d1-sqlite.js";
 import { GMAIL_SCOUT_PINNED_EMAIL } from "../config.js";
 import { pruneGmailScoutReceipts, RECEIPTS_KEPT } from "../receipts.js";
-import { ingestGmailCandidates, type GmailScoutMailboxFactory, gmailScoutStatus, runDueGmailScoutScans, scanGmailScout } from "../scan.js";
+import { digestJobs, ingestGmailCandidates, type GmailScoutMailboxFactory, gmailScoutStatus, runDueGmailScoutScans, scanGmailScout } from "../scan.js";
 import { pruneScanLog, readScanLog, SCAN_LOG_SNIPPET_MAX } from "../scan-log.js";
 import type { GmailMessage } from "../../gmail.js";
 import { workKeyForLead } from "../../job-lead-triage.js";
@@ -119,6 +119,17 @@ describe("every decision path is logged with its reason (#1247)", () => {
 			expect.objectContaining({ classification: "digest_item", decision: "deduped", leadId: "existing", job: { title: "Backend Engineer", company: null, url: "https://jobs.example.com/job/7" } }),
 		]);
 		expect(digest.subItems?.[0].reason).toMatch(/job_lead_intake_url/);
+	});
+
+	it("a digest job's title is its link text — never the lone \"[\" a plain-text part puts before the link (live, Scout 2)", () => {
+		const plain = "Scrum Master\nAcme Pty Ltd\n[\nhttps://au.seek.com/job/95335702?tracking=PLAIN1]\n\nProduct Owner\n[\nhttps://au.seek.com/job/95335703?tracking=PLAIN2]";
+		const html = '<a href="https://au.seek.com/job/95335702?tracking=HTML1"><span>Scrum Master</span></a>';
+		const { jobs } = digestJobs(msg("m-seek-digest", "2 new jobs for Scrum Master", `${plain}\n${html}`));
+		expect(jobs).toEqual([
+			{ title: "Scrum Master", url: "https://au.seek.com/job/95335702" }, // the anchor wins over the plain-text line
+			{ title: "Product Owner", url: "https://au.seek.com/job/95335703" }, // no anchor: the nearest line that reads as words
+		]);
+		expect(JSON.stringify(jobs)).not.toMatch(/tracking|PLAIN|HTML1/);
 	});
 
 	it("rejected non-job, security mail and a stale alert each say why", async () => {

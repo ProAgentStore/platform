@@ -202,20 +202,26 @@ export function readSummary(message: GmailMessage): ScanLogRead {
  */
 export function digestJobs(message: GmailMessage): { jobs: Array<{ title: string | null; url: string }>; unresolved: number } {
 	const text = `${message.text}\n${message.snippet}`;
-	const jobs = new Map<string, { title: string | null; url: string }>();
-	let unresolved = 0;
-	for (const raw of new Set(text.match(URL_RE) ?? [])) {
+	const jobs = new Map<string, { title: string | null; url: string; anchored: boolean }>();
+	const unresolvedLinks = new Set<string>();
+	// Every occurrence, not every distinct link: one job's HTML anchor and its plain-text line carry
+	// different tracking parameters, and only the anchor reliably holds the title (#1247 — live, the
+	// plain-text line before a SEEK link was a lone "[").
+	for (const m of text.matchAll(URL_RE)) {
+		const raw = m[0];
 		const clean = raw.replace(/&amp;/g, "&").replace(/[).,;\]]+$/, "");
 		const canonical = canonicalJobUrl(clean);
 		const url = providerPostingUrl(clean) ?? (canonical && isSpecificJobUrl(canonical) ? canonical : null);
 		if (!url) {
-			if (jobProviderOf(safeHost(clean)) !== null) unresolved++;
+			if (jobProviderOf(safeHost(clean)) !== null) unresolvedLinks.add(clean);
 			continue;
 		}
-		if (jobs.has(url)) continue;
-		jobs.set(url, { title: linkTitle(text, raw), url });
+		const anchor = anchorText(text, (m.index ?? 0) + raw.length);
+		const prior = jobs.get(url);
+		if (prior?.anchored || (prior && !anchor)) continue;
+		jobs.set(url, { url, title: anchor ?? lineBefore(text, m.index ?? 0), anchored: anchor !== null });
 	}
-	return { jobs: [...jobs.values()], unresolved };
+	return { jobs: [...jobs.values()].map(({ title, url }) => ({ title, url })), unresolved: unresolvedLinks.size };
 }
 const safeHost = (raw: string) => {
 	try {
@@ -224,13 +230,23 @@ const safeHost = (raw: string) => {
 		return "";
 	}
 };
-/** The words a link was shown as: its anchor text in HTML, else the line before it in plain text. */
-function linkTitle(text: string, raw: string): string | null {
-	const at = text.indexOf(raw);
-	const anchor = text.slice(at + raw.length).match(/^["']?[^>\n]{0,200}>([\s\S]{0,400}?)<\/a>/i)?.[1];
-	const before = text.slice(Math.max(0, at - 300), at).split(/\n/).map((l) => l.replace(/<[^>]*>/g, " ").trim()).filter(Boolean).at(-1);
-	const t = (anchor ?? before ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-	return t && !MARKUP_VALUE_RE.test(t) && !/^https?:/i.test(t) ? clipMarked(t, 160, { within: true }) : null;
+/** Shown words only: no markup, no bare URL, and at least one letter or digit (a lone "[" is not a title). */
+function titleText(v: string | undefined): string | null {
+	const t = (v ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+	return t && /[\p{L}\p{N}]/u.test(t) && !MARKUP_VALUE_RE.test(t) && !/^https?:/i.test(t) ? clipMarked(t, 160, { within: true }) : null;
+}
+/** The text of the `<a>` whose href ends at `end`, if the link sits in one. */
+function anchorText(text: string, end: number): string | null {
+	return titleText(text.slice(end, end + 700).match(/^["']?[^>\n]{0,200}>([\s\S]{0,400}?)<\/a>/i)?.[1]);
+}
+/** The nearest line before `at` that reads as words — the plain-text part's title line. */
+function lineBefore(text: string, at: number): string | null {
+	const lines = text.slice(Math.max(0, at - 400), at).split(/\n/).reverse();
+	for (const line of lines) {
+		const t = titleText(line);
+		if (t) return t;
+	}
+	return null;
 }
 
 /** The lead a message becomes once its posting URL is known — from the mail itself, or resolved (#1024). */
