@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
+import type { DiscordChannel, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse } from "../lib/discordTypes";
 import type { InstanceReleaseNotesResponse, ReleaseNoteTestResponse, SlackBotConnectResponse, SlackBotStatusResponse, SlackChannelListResponse, SlackGrantResponse, SlackOauthStartResponse } from "../lib/types";
 
 interface Props {
@@ -15,7 +16,8 @@ const errorText = (e: unknown, fallback: string) => (e instanceof Error ? e.mess
  * Release notes (#1216, #1217): whether this agent posts one note per coder run that ships to the
  * default branch, which of its granted Discord and Slack channels receive it, and a test send per
  * channel. Slack is connected here too — the bot belongs to the owner, a channel grant to one agent,
- * as with Discord. Every rule (inheritance, which grant ids are allowed) is the server's; this panel
+ * as with Discord. A Discord channel can be granted here for release notes alone (#1218): a coder declares
+ * no Discord tools, so the agent grant is refused for it, and this grant gives the agent no reach. Every rule (inheritance, which grant ids are allowed) is the server's; this panel
  * renders `effective` and never resolves precedence itself.
  */
 export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props) {
@@ -24,6 +26,12 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 	const [slackChannels, setSlackChannels] = useState<SlackChannelListResponse | null>(null);
 	const [slackChannelId, setSlackChannelId] = useState("");
 	const [slackToken, setSlackToken] = useState("");
+	const [guilds, setGuilds] = useState<DiscordGuild[] | null>(null);
+	const [guildId, setGuildId] = useState("");
+	const [discordChannels, setDiscordChannels] = useState<DiscordChannel[] | null>(null);
+	const [discordChannelId, setDiscordChannelId] = useState("");
+	/** Discord grants made for release notes alone — the only ones this panel may remove; the rest are the agent's. */
+	const [releaseOnly, setReleaseOnly] = useState<Set<string>>(new Set());
 	const [message, setMessage] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState("");
@@ -34,6 +42,8 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 			setView(await api<InstanceReleaseNotesResponse>(`/v1/instances/${instanceId}/release-notes`));
 			const s = await api<SlackBotStatusResponse>("/v1/slack/bot");
 			setSlack(s);
+			const dg = await api<DiscordGrantListResponse>(`/v1/discord/instances/${instanceId}/grants`).catch(() => null);
+			setReleaseOnly(new Set((dg?.grants ?? []).filter((g) => g.resourceType === "discord_release_channel").map((g) => g.id)));
 			setSlackChannels(s.connected && s.valid ? await api<SlackChannelListResponse>("/v1/slack/channels") : null);
 		} catch (e) {
 			setError(errorText(e, "Release-notes settings could not be loaded."));
@@ -44,6 +54,22 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 	useEffect(() => {
 		void load();
 	}, [load, refreshKey]);
+
+	// The bot is the owner's: with none connected the guild list is refused and the Discord picker stays hidden.
+	useEffect(() => {
+		api<DiscordGuildListResponse>("/v1/discord/guilds")
+			.then((d) => setGuilds(d.guilds))
+			.catch(() => setGuilds(null));
+	}, []);
+
+	useEffect(() => {
+		setDiscordChannelId("");
+		setDiscordChannels(null);
+		if (!guildId) return;
+		api<DiscordChannelListResponse>(`/v1/discord/guilds/${encodeURIComponent(guildId)}/channels`)
+			.then((d) => setDiscordChannels(d.channels))
+			.catch(() => setError("Discord channels could not be loaded. Check that the bot can view this server."));
+	}, [guildId]);
 
 	const run = async (label: string, fn: () => Promise<void>) => {
 		setBusy(label);
@@ -75,6 +101,21 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 		run(`test:${grantId}`, async () => {
 			const d = await api<ReleaseNoteTestResponse>(`/v1/instances/${instanceId}/release-notes/test`, { method: "POST", body: JSON.stringify({ grantId }) });
 			setMessage(`Test note sent to ${d.channel.provider} ${d.channel.name}.`);
+		});
+
+	const grantDiscord = () =>
+		run("discord-grant", async () => {
+			const d = await api<DiscordGrantResponse>(`/v1/discord/instances/${instanceId}/grants`, { method: "POST", body: JSON.stringify({ channelId: discordChannelId, purpose: "release_notes" }) });
+			setDiscordChannelId("");
+			setMessage(d.note ?? `Release notes can now be posted to ${d.grant.resourceName}.`);
+			await load();
+		});
+
+	const revokeDiscord = (grantId: string, name: string) =>
+		run(`discord-revoke:${grantId}`, async () => {
+			await api(`/v1/discord/instances/${instanceId}/grants/${encodeURIComponent(grantId)}`, { method: "DELETE" });
+			setMessage(`Removed ${name}.`);
+			await load();
 		});
 
 	const connectSlack = () =>
@@ -141,7 +182,7 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 				</div>
 				<div className="flex flex-col gap-1.5 mb-3">
 					{!eff ? null : eff.channels.length === 0 ? (
-						<p className="text-xs text-muted">No channels granted yet. Grant a Discord channel above or a Slack channel below.</p>
+						<p className="text-xs text-muted">No channels granted yet. Grant a Discord or Slack channel below.</p>
 					) : (
 						eff.channels.map((c) => (
 							<div key={c.grantId} className="flex items-center justify-between gap-2 text-xs bg-paper border border-line rounded-lg px-2.5 py-2">
@@ -154,8 +195,8 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 									<button type="button" className="text-muted hover:text-ink disabled:opacity-50" disabled={busy === `test:${c.grantId}`} onClick={() => void sendTest(c.grantId)}>
 										{busy === `test:${c.grantId}` ? "Sending…" : "Send test"}
 									</button>
-									{c.provider === "slack" && (
-										<button type="button" className="text-muted hover:text-danger" onClick={() => void revokeSlack(c.grantId, c.name)}>
+									{(c.provider === "slack" || releaseOnly.has(c.grantId)) && (
+										<button type="button" className="text-muted hover:text-danger" onClick={() => void (c.provider === "slack" ? revokeSlack(c.grantId, c.name) : revokeDiscord(c.grantId, c.name))}>
 											Remove
 										</button>
 									)}
@@ -165,6 +206,40 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 					)}
 					{eff && eff.missing.length > 0 && <p className="text-2xs text-muted-soft">{eff.missing.length} chosen channel(s) were since revoked and receive nothing.</p>}
 				</div>
+
+				{guilds && (
+					<>
+						<div className="text-xs text-muted mb-1">Discord</div>
+						<div className="flex gap-2 flex-wrap mb-1">
+							<select aria-label="Discord server" value={guildId} onChange={(e) => setGuildId(e.target.value)} className="flex-1 min-w-0 sm:min-w-[10rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm">
+								<option value="">Choose a server</option>
+								{guilds.map((g) => (
+									<option key={g.id} value={g.id}>
+										{g.name}
+									</option>
+								))}
+							</select>
+							<select
+								aria-label="Discord channel for release notes"
+								value={discordChannelId}
+								disabled={!guildId}
+								onChange={(e) => setDiscordChannelId(e.target.value)}
+								className="flex-1 min-w-0 sm:min-w-[10rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+							>
+								<option value="">{guildId && !discordChannels ? "Loading channels…" : "Choose a channel"}</option>
+								{discordChannels?.map((ch) => (
+									<option key={ch.id} value={ch.id}>
+										#{ch.name}
+									</option>
+								))}
+							</select>
+							<Button onClick={() => void grantDiscord()} disabled={!discordChannelId || busy === "discord-grant"}>
+								Grant for release notes
+							</Button>
+						</div>
+						<p className="text-2xs text-muted-soft mb-3">Posts release notes only — the agent itself gets no access to this channel. To let the agent read or post there, grant it under Discord above.</p>
+					</>
+				)}
 
 				<div className="text-xs text-muted mb-1">Slack</div>
 				{slack && (!slack.connected || !slack.valid) ? (

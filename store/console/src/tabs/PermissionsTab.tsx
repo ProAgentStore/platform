@@ -72,7 +72,8 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 			}
 			try {
 				const d = await api<DiscordGrantListResponse>(`/v1/discord/instances/${instanceId}/grants`);
-				setDiscordGrants(d.grants);
+				// A release-notes-only grant is the platform's, not the agent's (#1218): it is managed in the release-notes panel.
+				setDiscordGrants(d.grants.filter((g) => g.resourceType !== "discord_release_channel"));
 			} catch {
 				failed.push("your Discord channels");
 			}
