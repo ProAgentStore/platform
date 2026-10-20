@@ -79,9 +79,14 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 		expected_version: z.coerce.number().int().min(0).optional().describe("Compare-and-set: stateVersion (an application) or leadVersion (a lead) as you read it."),
 	};
 
+	// #1243: these tools read or act through the application queue, which exists only for a pipeline
+	// instance; any other instance answers 409 "not part of an application pipeline" (lib/applications/control.ts).
+	const PIPELINE_INSTANCE =
+		" Needs an instance that is part of an application pipeline: a Job Search Scout, an Application Tailor or an Application Runner, joined by connections (list_connections). Any other instance answers 409 \"not part of an application pipeline\" — find the right one with my_instances.";
+
 	server.tool(
 		"list_applications",
-		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each application has `execution`, the ONE durable redacted projection shared with Board and Console: lifecycle, current run, checkpoint counts, directive delivery/runner acknowledgement, evidence-based progress, reconciliation state and permitted actions. It excludes page text, snapshots, typed values, credentials and artifact contents. `fillProgress` remains a compatibility alias; read `execution.progress` rather than inferring progress from `status`. The projection does not grant submission authority — actions remain fail-closed. Also returns counts, limits, connection outbox health and `health` (#1022): `ok`, every `problems[]` entry (a disabled or dead-lettered edge, a missing Tailor/Runner, a Scout source that is unavailable, disabled, without email access, failing, unscheduled, never scanned or stale, or that still holds stored leads today's intake rules reject) and each Scout source's readiness and last scan. Read-only.",
+		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each application has `execution`, the ONE durable redacted projection shared with Board and Console: lifecycle, current run, checkpoint counts, directive delivery/runner acknowledgement, evidence-based progress, reconciliation state and permitted actions. It excludes page text, snapshots, typed values, credentials and artifact contents. `fillProgress` remains a compatibility alias; read `execution.progress` rather than inferring progress from `status`. The projection does not grant submission authority — actions remain fail-closed. Also returns counts, limits, connection outbox health and `health` (#1022): `ok`, every `problems[]` entry (a disabled or dead-lettered edge, a missing Tailor/Runner, a Scout source that is unavailable, disabled, without email access, failing, unscheduled, never scanned or stale, or that still holds stored leads today's intake rules reject) and each Scout source's readiness and last scan. Read-only." + PIPELINE_INSTANCE,
 		{
 			...who,
 			status: z.enum(["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"]).optional().describe("Only this status."),
@@ -113,7 +118,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"get_application",
-		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now. Applications include the shared durable `execution` projection (lifecycle, current run, redacted checkpoint/directive delivery state, progress and permitted actions) plus compatibility `fillProgress`; it never says a form is filled without durable counts and never exposes page/form/credential/artifact contents. Read-only.",
+		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now. Applications include the shared durable `execution` projection (lifecycle, current run, redacted checkpoint/directive delivery state, progress and permitted actions) plus compatibility `fillProgress`; it never says a form is filled without durable counts and never exposes page/form/credential/artifact contents. Read-only." + PIPELINE_INSTANCE,
 		{ ...who, application_id: target.application_id, scout_instance_id: target.scout_instance_id, record_id: target.record_id },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
@@ -134,7 +139,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"application_trace",
-		"One application's history on a single timeline: the Scout's triage of the lead, the outbox deliveries, the Tailor run, the Runner run(s) and every lifecycle move, with the ids that correlate them (lead event, tailoring runs, materials_ready event, fill runs). Classes, decisions and handles only — never typed values or document text. Oldest first, in real time order across sources, paged: pass `cursor: nextCursor` while `hasMore`; `total` is every entry. Works during a run (it includes the steps synced so far) and after. Read-only.",
+		"One application's history on a single timeline: the Scout's triage of the lead, the outbox deliveries, the Tailor run, the Runner run(s) and every lifecycle move, with the ids that correlate them (lead event, tailoring runs, materials_ready event, fill runs). Classes, decisions and handles only — never typed values or document text. Oldest first, in real time order across sources, paged: pass `cursor: nextCursor` while `hasMore`; `total` is every entry. Works during a run (it includes the steps synced so far) and after. Read-only." + PIPELINE_INSTANCE,
 		{
 			...who,
 			application_id: z.string().describe("The application's id."),
@@ -582,7 +587,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	});
 	server.tool(
 		"triage_application",
-		"Decide a lead or an application. apply: a lead goes to the Tailor (the Scout's own triage, emitting its handoff once — refused when another lead for the same job was already applied for), a deferred application goes back in the queue. skip: a lead. mark_not_interested: a skip (lead) or an archive (application) recorded as not interested. defer / archive: either — PAGS records only, nothing on an employer's site is touched. Only actions listed in the item's `actions` are accepted. Pass expected_status (and expected_version) as you read them.",
+		"Decide a lead or an application. apply: a lead goes to the Tailor (the Scout's own triage, emitting its handoff once — refused when another lead for the same job was already applied for), a deferred application goes back in the queue. skip: a lead. mark_not_interested: a skip (lead) or an archive (application) recorded as not interested. defer / archive: either — PAGS records only, nothing on an employer's site is touched. Only actions listed in the item's `actions` are accepted. Pass expected_status (and expected_version) as you read them." + PIPELINE_INSTANCE,
 		triage.shape,
 		triage.handler,
 	);
@@ -599,7 +604,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	);
 	server.tool(
 		"approve_application",
-		"Approve ONE job application and let it be submitted — the owner's per-application decision (#973, #981), the same command the Applications board's \"Approve & proceed\" / \"Approve & continue\" button sends. It records a durable, single-use authorization bound to this application and the exact state version you pass; the reply carries the authorization, the run and the next action. This is NOT a global auto-submit toggle: it requires no daily cap, consumes none, and authorizes nothing but this one application. It cannot be replayed — for another lead, after the materials are re-tailored, or after the run that holds it. WHAT IT THEN DOES depends on where the application is, and the reply says which happened. `materials_ready`: it dispatches the fill that spends the authorization. `awaiting_review`, an application parked at a supervisor checkpoint (#981), or one `blocked` because its fill reached a control it may not press under fill-and-review — a genuine one-click apply, which the runner refuses and must (#991): the run stopped and nothing was sent, so it continues THAT run — releasing the exact checkpoint it is parked at (`resumable: true`, with `checkpointId`) when the run is still open. When the run has ended its browser session is gone with it, so nothing is resumed and nothing is recreated: the reply is `resumable: false` with a closed-vocabulary `reason` and `recovery: \"retry_fill\"`, and the approval is HELD for that retry (retry_application), which spends it and may submit once. The Runner still has to pass its own submit gate (complete materials, an allow-listed domain, no blocker, nothing else running) and its browser safety checks, so an approval permits a submission rather than forcing one. A `blocked` application that never filled (its TAILORING stopped) is not approvable: there is no form and no final control, so retry_application is the answer there. Accepted only when the item's `actions` include approve_and_proceed. Pass `dry_run` first to see what would happen.",
+		"Approve ONE job application and let it be submitted — the owner's per-application decision (#973, #981), the same command the Applications board's \"Approve & proceed\" / \"Approve & continue\" button sends. It records a durable, single-use authorization bound to this application and the exact state version you pass; the reply carries the authorization, the run and the next action. This is NOT a global auto-submit toggle: it requires no daily cap, consumes none, and authorizes nothing but this one application. It cannot be replayed — for another lead, after the materials are re-tailored, or after the run that holds it. WHAT IT THEN DOES depends on where the application is, and the reply says which happened. `materials_ready`: it dispatches the fill that spends the authorization. `awaiting_review`, an application parked at a supervisor checkpoint (#981), or one `blocked` because its fill reached a control it may not press under fill-and-review — a genuine one-click apply, which the runner refuses and must (#991): the run stopped and nothing was sent, so it continues THAT run — releasing the exact checkpoint it is parked at (`resumable: true`, with `checkpointId`) when the run is still open. When the run has ended its browser session is gone with it, so nothing is resumed and nothing is recreated: the reply is `resumable: false` with a closed-vocabulary `reason` and `recovery: \"retry_fill\"`, and the approval is HELD for that retry (retry_application), which spends it and may submit once. The Runner still has to pass its own submit gate (complete materials, an allow-listed domain, no blocker, nothing else running) and its browser safety checks, so an approval permits a submission rather than forcing one. A `blocked` application that never filled (its TAILORING stopped) is not approvable: there is no form and no final control, so retry_application is the answer there. Accepted only when the item's `actions` include approve_and_proceed. Pass `dry_run` first to see what would happen." + PIPELINE_INSTANCE,
 		approve.shape,
 		approve.handler,
 	);
@@ -621,7 +626,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	);
 	server.tool(
 		"assert_application_not_submitted",
-		`Record the OWNER's assertion that an uncertain submit sent nothing, so the application can be filled once more (#1073). Use it when a fill ended with its submit pressed and unconfirmed (blockReason submit_unconfirmed — e.g. a "Quick apply" press that landed on a sign-in page, with nothing filled) and the owner has checked the employer's site and says nothing was submitted. Accepted only when the item's \`actions\` include assert_not_submitted, and only for its current fill run. It is recorded as an OWNER ASSERTION — never as proof: the reconciliation record is left as it was, and any later double submission is traceable to this record. One assertion allows exactly ONE new fill; it is spent by that run. It does not itself fill, retry or submit anything — call retry_application (blocked) or request_application_review (materials_ready) next. Without an assertion, an attempted submit stays blocked. Pass dry_run first.`,
+		`Record the OWNER's assertion that an uncertain submit sent nothing, so the application can be filled once more (#1073). Use it when a fill ended with its submit pressed and unconfirmed (blockReason submit_unconfirmed — e.g. a "Quick apply" press that landed on a sign-in page, with nothing filled) and the owner has checked the employer's site and says nothing was submitted. Accepted only when the item's \`actions\` include assert_not_submitted, and only for its current fill run. It is recorded as an OWNER ASSERTION — never as proof: the reconciliation record is left as it was, and any later double submission is traceable to this record. One assertion allows exactly ONE new fill; it is spent by that run. It does not itself fill, retry or submit anything — call retry_application (blocked) or request_application_review (materials_ready) next. Without an assertion, an attempted submit stays blocked. Pass dry_run first.` + PIPELINE_INSTANCE,
 		assertNotSubmitted.shape,
 		assertNotSubmitted.handler,
 	);
@@ -629,7 +634,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	const generate = decision("generate_application_materials", ["generate_materials", "retry_tailoring"], "A tailoring run would start on the owner's runner.");
 	server.tool(
 		"generate_application_materials",
-		"Tailor a résumé and cover letter on the owner's machine. generate_materials: a lead already apply_requested (hands its stored handoff to the Tailor). retry_tailoring: an application whose tailoring stopped (blocked/failed/cancelled, never filled).",
+		"Tailor a résumé and cover letter on the owner's machine. generate_materials: a lead already apply_requested (hands its stored handoff to the Tailor). retry_tailoring: an application whose tailoring stopped (blocked/failed/cancelled, never filled)." + PIPELINE_INSTANCE,
 		generate.shape,
 		generate.handler,
 	);
@@ -637,7 +642,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	const fill = decision("start_application_fill", ["start_fill"], "The Runner would fill the application and, as its auto-submit policy allows, submit it once.", runnerArg);
 	server.tool(
 		"start_application_fill",
-		"Fill a materials_ready application with the Runner UNDER ITS POLICY, which may submit it: accepted only when the item's submitPolicy.allowed is true (its `actions` then include start_fill). Under the default fill-and-review policy it is refused — use request_application_review.",
+		"Fill a materials_ready application with the Runner UNDER ITS POLICY, which may submit it: accepted only when the item's submitPolicy.allowed is true (its `actions` then include start_fill). Under the default fill-and-review policy it is refused — use request_application_review." + PIPELINE_INSTANCE,
 		fill.shape,
 		fill.handler,
 	);
@@ -645,7 +650,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	const review = decision("request_application_review", ["request_review"], "The Runner would fill the application and stop before submitting.", runnerArg);
 	server.tool(
 		"request_application_review",
-		"Fill a materials_ready application with the Runner and STOP before the final submit, whatever the policy allows. The run ends awaiting_review for the owner.",
+		"Fill a materials_ready application with the Runner and STOP before the final submit, whatever the policy allows. The run ends awaiting_review for the owner." + PIPELINE_INSTANCE,
 		review.shape,
 		review.handler,
 	);
@@ -692,7 +697,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	});
 	server.tool(
 		"retry_application",
-		"Retry the stage that stopped. retry_fill: a fill that ended blocked, failed or awaiting_review — refused after any submit attempt, which needs checking on the employer's site instead. This is the path approve_application names when a filled application's browser session has already closed (#981): the fresh run spends the approval that is being held and may submit once, and without an approval it fills and stops for review again. retry_tailoring: tailoring that stopped — pass `answers` to the questions it stopped on; they are saved to the owner's Profile and every later Tailor run reads them, so the question is not asked again (#1066).",
+		"Retry the stage that stopped. retry_fill: a fill that ended blocked, failed or awaiting_review — refused after any submit attempt, which needs checking on the employer's site instead. This is the path approve_application names when a filled application's browser session has already closed (#981): the fresh run spends the approval that is being held and may submit once, and without an approval it fills and stops for review again. retry_tailoring: tailoring that stopped — pass `answers` to the questions it stopped on; they are saved to the owner's Profile and every later Tailor run reads them, so the question is not asked again (#1066)." + PIPELINE_INSTANCE,
 		retry.shape,
 		retry.handler,
 	);
@@ -702,7 +707,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	});
 	server.tool(
 		"resume_application",
-		"Release a paused fill once the owner has handled what it waits on (a captcha, a sign-in, a consent box in the runner's browser) — optionally with answers to its question. Answers are stored on the application first (#1079): delivered to a paused run, and kept for the next fill of this application when the run has already ended.",
+		"Release a paused fill once the owner has handled what it waits on (a captcha, a sign-in, a consent box in the runner's browser) — optionally with answers to its question. Answers are stored on the application first (#1079): delivered to a paused run, and kept for the next fill of this application when the run has already ended." + PIPELINE_INSTANCE,
 		resume.shape,
 		resume.handler,
 	);
@@ -710,7 +715,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	const cancel = decision("cancel_application", ["cancel"], "The running tailoring or fill would stop.");
 	server.tool(
 		"cancel_application",
-		"Stop an application's running tailoring or fill. The local CLI stops; nothing on an employer's site is touched. The application is left blocked (cancelled_by_owner).",
+		"Stop an application's running tailoring or fill. The local CLI stops; nothing on an employer's site is touched. The application is left blocked (cancelled_by_owner)." + PIPELINE_INSTANCE,
 		cancel.shape,
 		cancel.handler,
 	);
