@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
 import { setServerBuild } from "./lib/error-log.js";
-import { REQUEST_ID_HEADER, requestIdFor, requestRecorded, withRequestId } from "./lib/request-context.js";
+import { REQUEST_ID_HEADER, currentRequestId, requestIdFor, requestRecorded, withRequestId } from "./lib/request-context.js";
 import { isTransientInfraError, logReturnedFailure, logUnhandled } from "./lib/on-error.js";
 import { verifySession } from "./lib/session.js";
 import { rateLimitAdmin, rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
@@ -286,10 +286,15 @@ app.onError(async (err, c) => {
 	// Transient infra (DO reset on deploy, overload) included (#1086): it returned its 503 BEFORE
 	// this line, so `logUnhandled`'s own `transient` warn branch was unreachable from a request.
 	await logUnhandled(c.env, err, { path: c.req.path, method: c.req.method, userId: uid });
+	// #1256: the body carries the request id too, not just the `X-Request-Id` header — a caller that
+	// only sees a tool's JSON result (MCP's call_instance_tool, among others) never sees response
+	// headers, so a bare `{"error":"Internal server error"}` gave it nothing to correlate against this
+	// log or tell a transient blip from a real bug.
+	const requestId = currentRequestId();
 	// Not a bug, so not a 500 — tell the client to retry. This is what the two "chat → 500" reports were.
-	if (isTransientInfraError(err)) return c.json({ error: "The service is updating — please try again in a moment." }, 503);
-	if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
-	return c.json({ error: "Internal server error" }, 500);
+	if (isTransientInfraError(err)) return c.json({ error: "The service is updating — please try again in a moment.", requestId }, 503);
+	if (err instanceof HttpError) return c.json({ error: err.message, requestId }, err.status as 400);
+	return c.json({ error: "Internal server error", requestId }, 500);
 });
 
 /** Best-effort uid from the request's bearer token — null if absent/invalid. Mirrors

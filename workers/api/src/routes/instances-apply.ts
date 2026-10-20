@@ -540,7 +540,29 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		// flight loses its compare-and-swap and is discarded.
 		const recorded = await recordAnswer(c.env, { instanceId, userId: session.uid, taskId: body.taskId, value, via });
 		const q = recorded?.question;
-		const coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
+		// #1256: recordAnswer, above, already committed the write — the owner's answer is safe on the
+		// question's row. A failure in THIS lookup (which run, if any, is waiting on it) used to bubble
+		// straight to app.onError as a bare 500, telling the console the answer was lost when it was not.
+		// Report the degraded step instead: the run still reads the row on its next check or the minute
+		// backstop's re-send, so nothing here is actually lost, only not delivered on this request.
+		let coding: Awaited<ReturnType<typeof decisionRunForCard>>;
+		try {
+			coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
+		} catch (e) {
+			if (!recorded) throw e;
+			await logError(c.env, {
+				source: "coder-question",
+				level: "warn",
+				status: 202,
+				message: `answer recorded (${q?.id ?? "?"}), but looking up the run waiting on it failed: ${e instanceof Error ? e.message : String(e)}`,
+				userId: session.uid,
+				context: { instanceId, taskId: body.taskId, questionId: q?.id ?? null },
+			}).catch(() => undefined);
+			return c.json(
+				{ ok: true, kind: "coding", outcome: "stored", delivered: false, recorded: true, questionId: q?.id ?? null, message: "Saved on the question. Something went wrong finding the run waiting on it just now; it reads your answer automatically within a minute." },
+				202,
+			);
+		}
 		if (recorded?.outcome === "already_applied" && coding && (coding.parkedSince ?? 0) > (q?.appliedAt ?? Number.POSITIVE_INFINITY)) {
 			// #1234: the card's latest question was consumed, yet a run parked on this card AFTER that — a new
 			// wait, on an ask with no row of its own (its capture failed). Reporting "already applied" left that
@@ -584,6 +606,12 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			return c.json({ ok: true, ...base, outcome: "stored", delivered: false, message: "Saved on the question. The coding runner could not be reached just now; the waiting run reads your answer from the question on its next check." }, 202);
 		}
 		if (recorded && q) {
+			// #1256: a byte-identical resubmission of an answer already on this question's row (a retry
+			// after a timeout, a double-click) is reported plainly and does not repeat the issue comment
+			// or the "answered_late" log event below — nothing about the question changed.
+			if (recorded.outcome === "already_answered") {
+				return c.json({ ok: true, kind: "coding_late", outcome: "already_answered", delivered: false, recorded: true, questionId: q.id, message: "That's the same answer already on record for this question — nothing changed." });
+			}
 			// #1074: the run stopped waiting, but the owner's answer is still their decision. It is on the row
 			// (unapplied, for a resume), and posted under the question on its issue, which the next run reads.
 			const issue = q.repo && q.issueNumber ? q.issueNumber : null;

@@ -229,12 +229,13 @@ export interface RecordAnswerInput {
 
 /**
  * What `recordAnswer` did with the answer.
- *   answered        → an open question (or one the brain answered and no run has used yet) now holds it
- *   revised         → the owner replaced their own earlier answer before any run used it
- *   late            → the question had expired; the answer is kept on it for the resume / next run
- *   already_applied → a run already consumed an earlier answer; this one is recorded in the history only
+ *   answered         → an open question (or one the brain answered and no run has used yet) now holds it
+ *   revised          → the owner replaced their own earlier answer before any run used it
+ *   already_answered → byte-identical to the answer already on the row; nothing was written again (#1256)
+ *   late             → the question had expired; the answer is kept on it for the resume / next run
+ *   already_applied  → a run already consumed an earlier answer; this one is recorded in the history only
  */
-export type RecordedOutcome = "answered" | "revised" | "late" | "already_applied";
+export type RecordedOutcome = "answered" | "revised" | "already_answered" | "late" | "already_applied";
 
 /**
  * #1075: the ONE writer of a person's answer. Every door (`POST /input`, MCP `answer_instance_input`,
@@ -278,6 +279,10 @@ export async function recordAnswer(env: Pick<Env, "DB">, input: RecordAnswerInpu
 			outcome = "late";
 			moved = await transitionCoderQuestion(env, q.id, ["expired"], "expired", `answered by a person (${input.via}) after the run stopped waiting`, fields, now);
 		} else if (q.state === "answered_human") {
+			// #1256: a byte-identical resubmission — a client retry after a timeout, a double-click on
+			// submit — is not a revision. Reported plainly, and nothing is written again: a second write
+			// of the same value would only add history noise for something that did not change.
+			if ((decision ?? null) === (q.decision ?? null)) return { question: q, outcome: "already_answered" };
 			outcome = "revised";
 			moved = await transitionCoderQuestion(env, q.id, ["answered_human"], "answered_human", `answer revised by a person (${input.via}) before any run used it`, fields, now);
 		} else {

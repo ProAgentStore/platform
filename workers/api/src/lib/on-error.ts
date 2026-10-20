@@ -6,9 +6,12 @@ import { redactText } from "./redact.js";
 
 /**
  * Transient infrastructure errors that are NOT bugs — a Durable Object being reset
- * mid-request because a new code version deployed, or a briefly-overloaded DO. These
- * are self-healing (the client just retries) and shouldn't pollute the error log or
- * be surfaced to the operator as a real 500. Matched on the platform's own messages.
+ * mid-request because a new code version deployed, a briefly-overloaded DO, or D1
+ * queueing more requests than it can serve in a burst (#1256: a console answer-submit
+ * hit this mid-burst, and — like the DO cases — was a bare "Internal server error" to
+ * the client even though nothing was actually broken). These are self-healing (the
+ * client just retries) and shouldn't pollute the error log or be surfaced to the
+ * operator as a real 500. Matched on the platform's own messages.
  */
 export function isTransientInfraError(err: unknown): boolean {
 	const msg = err instanceof Error ? err.message : String(err ?? "");
@@ -16,7 +19,8 @@ export function isTransientInfraError(err: unknown): boolean {
 		/Durable Object reset because its code was updated/i.test(msg) ||
 		/Durable Object is overloaded/i.test(msg) ||
 		/The Durable Object's code has been updated/i.test(msg) ||
-		/Network connection lost/i.test(msg)
+		/Network connection lost/i.test(msg) ||
+		/D1_ERROR: D1 DB is overloaded/i.test(msg)
 	);
 }
 

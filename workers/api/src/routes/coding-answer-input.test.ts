@@ -275,6 +275,20 @@ describe("the question's row is the source of truth for an answer (#1075)", () =
 		expect(JSON.parse(row().history).at(-1).note).toMatch(/answer revised by a person \(console\) before any run used it/);
 	});
 
+	it("resubmitting the SAME answer is idempotent — a clear 'already answered' result, no 500, no duplicate history entry (#1256)", async () => {
+		ask();
+		d1.exec("UPDATE agent_loop_runs SET status = 'cancelled' WHERE run_id = 'run1'");
+		await answer(CARD, "yes");
+		const historyAfterFirst = JSON.parse(row().history).length;
+		const postedAfterFirst = posted.length;
+		const r = await answer(CARD, "yes");
+		expect(r.status).toBe(200);
+		expect(r.body).toMatchObject({ ok: true, outcome: "already_answered", recorded: true, delivered: false, questionId: "q1" });
+		expect(row()).toMatchObject({ state: "answered_human", decision: "yes" });
+		expect(JSON.parse(row().history)).toHaveLength(historyAfterFirst); // nothing written again
+		expect(posted).toHaveLength(postedAfterFirst); // no duplicate issue comment either
+	});
+
 	it("an answer days after the question expired is stored on its row and readable through GET coder-questions (MCP coder_questions)", async () => {
 		ask("expired");
 		const days = Date.now() + 3 * 24 * 60 * 60_000;
