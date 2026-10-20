@@ -187,7 +187,8 @@ export const upCommand = new Command("up")
 		// screen never left "Still connecting". `--instance X` is exempt: it names exactly that
 		// agent, and the user debugging it knows where it is pinned.
 		if (!opts.instance) {
-			const split = partitionByPin(instances, hostname(), loadMachineIdentity(hostname()).names);
+			const me = loadMachineIdentity(hostname());
+			const split = partitionByPin(instances, hostname(), [...me.names, me.id]);
 			instances = split.here;
 			elsewhere = split.elsewhere;
 		}

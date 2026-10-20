@@ -35,6 +35,21 @@ describe("isEligible", () => {
 	// name it no longer answers to. Without the machine's own name history that reads as "pinned
 	// elsewhere", and the 20s poll detached the agent the user had pinned to this very machine —
 	// leaving the platform with no socket to resolve the pin onto.
+	// #1250. The pin is a machine id now; the server still sends the hostname the machine answers to,
+	// but a CLI whose own id matches keeps the agent whatever hostname it has at this moment.
+	it("keeps an instance pinned to this machine's id, even under a hostname it has not reported yet", () => {
+		const MID = "3901c9c4-004f-435e-bfc5-0b87b7ac5173";
+		const pinned = inst({ id: "a", config: { runnerNode: "RLs-MacBook-Air.local", runnerMachineId: MID } });
+		expect(isEligible(pinned, NODE, ["Mac", MID])).toBe(true);
+		expect(pinnedAway(["a"], [pinned], NODE, ["Mac", MID])).toEqual([]);
+		// Another machine's id still defers to the hostname check: pinned elsewhere is still elsewhere.
+		const elsewhere = inst({ id: "b", config: { runnerNode: "Macmini", runnerMachineId: "machine-macmini01" } });
+		expect(isEligible(elsewhere, NODE, ["Mac", MID])).toBe(false);
+		expect(pinnedAway(["b"], [elsewhere], NODE, ["Mac", MID])).toEqual(["b"]);
+		// A caller that passes no id behaves exactly as before (the server-resolved hostname decides).
+		expect(isEligible(inst({ id: "c", config: { runnerNode: NODE, runnerMachineId: MID } }), NODE)).toBe(true);
+	});
+
 	it("keeps an instance pinned to a hostname this machine used to wear", () => {
 		const pinnedToOldName = inst({ id: "a", config: { runnerNode: "RLs-MacBook-Air.local" } });
 		expect(isEligible(pinnedToOldName, NODE)).toBe(false);

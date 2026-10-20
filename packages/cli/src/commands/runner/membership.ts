@@ -15,7 +15,8 @@ export interface DiscoverableInstance {
 	status?: string;
 	/** Also what the relay confines each agent's socket to (#1164, `route-policy.ts`). */
 	capabilities?: { runtime?: string | null; surfaces?: string[] | null; tools?: string[] | null } | null;
-	config?: { runnerNode?: string | null } | null;
+	/** `runnerNode` is the hostname the pinned machine answers to now; `runnerMachineId` the machine itself (#1250). */
+	config?: { runnerNode?: string | null; runnerMachineId?: string | null } | null;
 }
 
 /**
@@ -30,8 +31,10 @@ export interface DiscoverableInstance {
 export function isEligible(inst: DiscoverableInstance, thisNode: string, alsoKnownAs: readonly string[] = []): boolean {
 	if (inst.status !== "active") return false;
 	if (inst.capabilities?.runtime == null) return false;
+	// A pin is a MACHINE (#1250): pinned to this machine's own id, it is here whatever hostname it has.
+	if (pinnedHere(inst, alsoKnownAs)) return true;
 	const pin = inst.config?.runnerNode;
-	// A pin names a HOSTNAME, and `os.hostname()` moves under the machine — DHCP, a VPN, the
+	// A pin named a HOSTNAME, and `os.hostname()` moves under the machine — DHCP, a VPN, the
 	// `.local` mDNS form (#379). So "pinned elsewhere" and "pinned here under the name I had
 	// yesterday" look identical unless this machine says which names are its own. Without
 	// `alsoKnownAs`, a rename made the poll DETACH the very agent the user pinned to this laptop,
@@ -133,11 +136,22 @@ export function partitionByPin<T extends DiscoverableInstance>(
  * names), unpinned, or not in the listing at all is kept, because a scoped run was started for it.
  */
 export function pinnedAway(held: Iterable<string>, instances: readonly DiscoverableInstance[], thisNode: string, alsoKnownAs: readonly string[] = []): string[] {
-	const pins = new Map(instances.map((i) => [i.id, i.config?.runnerNode]));
+	const byId = new Map(instances.map((i) => [i.id, i]));
 	return [...held].filter((id) => {
-		const pin = pins.get(id);
-		return !!pin && pin !== thisNode && !alsoKnownAs.includes(pin);
+		const inst = byId.get(id);
+		const pin = inst?.config?.runnerNode;
+		return !!inst && !pinnedHere(inst, alsoKnownAs) && !!pin && pin !== thisNode && !alsoKnownAs.includes(pin);
 	});
+}
+
+/**
+ * Pinned to THIS machine by id (#1250). `alsoKnownAs` carries the machine's id beside its past
+ * hostnames. Only ever a reason to keep an agent: a pin to another id still falls through to the
+ * hostname check the server resolved it to, so a caller that omits the id behaves exactly as before.
+ */
+function pinnedHere(inst: DiscoverableInstance, alsoKnownAs: readonly string[]): boolean {
+	const id = inst.config?.runnerMachineId;
+	return !!id && alsoKnownAs.includes(id);
 }
 
 /**
