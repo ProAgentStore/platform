@@ -28,6 +28,7 @@ import { deepLinkFor } from "./console-links.js";
 import { listIssuesPage, postIssueComment, type IssueSummary } from "./github-issues.js";
 import { patchInstanceConfig, parseConfigBlob } from "./instance-config.js";
 import { issueJobKey } from "./issue-tickets.js";
+import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS } from "./label-vocabulary.js"; // the label vocabulary's single source (#1245)
 import { referencedIssue } from "./objective-dedupe.js";
 import { enqueueObjective } from "./objective-queue.js";
 import { tryDequeueAndStart } from "./objective-queue-start.js";
@@ -46,8 +47,7 @@ export interface AutoPickupSettings {
 	maxIterations: number;
 }
 
-export const BUILTIN_EXCLUDE_LABELS = ["needs-human", "blocked-on-serge", "blocked", "question", "wontfix"] as const;
-export const AUTO_PICKUP_DEFAULTS: AutoPickupSettings = { enabled: false, priorityLabels: ["P0", "P1", "P2", "P3"], excludeLabels: [], maxPerDay: 10, maxIterations: 30 };
+export const AUTO_PICKUP_DEFAULTS: AutoPickupSettings = { enabled: false, priorityLabels: [...DEFAULT_PRIORITY_LABELS], excludeLabels: [], maxPerDay: 10, maxIterations: 30 };
 /** Two auto-picked runs ended failed on an issue → it is passed over (#1233's loop guard). */
 export const MAX_AUTO_FAILURES = 2;
 const MAX_LABELS = 20;

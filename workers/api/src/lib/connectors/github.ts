@@ -28,6 +28,7 @@ import { TOOL_RESULT_MAX_CHARS } from "../tool-result-cap.js";
 import { attachStartFailures, classifyStartFailure, fetchJobAnnotations, fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps, type WorkflowJob } from "../github-actions.js";
 import { READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "../repo-file-window.js";
 import { listGithubTree, readGithubFile } from "../github-contents.js";
+import { LABEL_FILTER_HINT, LABEL_LIST_FORMAT, LABEL_VOCABULARY } from "../label-vocabulary.js";
 
 const GH = (token: string) => ({
 	Authorization: `token ${token}`,
@@ -630,8 +631,8 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 				repo: { type: "string", description: 'The repository, "owner/name" — or several, comma-separated ("acme/app,acme/console"), or "*" (or omit it) for every repo bound to this instance.' },
 				scope: { type: "string", description: '"account": every repo across all your coding instances, de-duplicated. Omit to use `repo`.' },
 				state: { type: "string", description: '"open" | "closed" | "all". Default: open when listing, all when searching.' },
-				labels: { type: "string", description: "Comma-separated label filter." },
-				exclude_labels: { type: "string", description: 'Comma-separated labels to leave out. Default with several repos: "needs-human"; pass "" to keep everything.' },
+				labels: { type: "string", description: `Only issues carrying these labels. ${LABEL_LIST_FORMAT} ${LABEL_FILTER_HINT}` },
+				exclude_labels: { type: "string", description: `Labels to leave out. ${LABEL_LIST_FORMAT} Default with several repos: "needs-human" (waiting on a person); pass "" to keep everything.` },
 				assignee: { type: "string", description: 'Only issues assigned to this GitHub login ("none" for unassigned).' },
 				updated_since: { type: "string", description: "Only issues updated on or after this date (ISO 8601, e.g. 2026-10-01)." },
 				search: {
@@ -702,13 +703,13 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_create_issue",
 			untrustedOutput: false,
 			scope: "write",
-			description: "Open a new GitHub issue in a repo. WRITE — the issue is really created.",
+			description: `Open a new GitHub issue in a repo. WRITE — the issue is really created. ${LABEL_VOCABULARY}`,
 			handler: "github_create_issue",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				title: { type: "string", required: true, description: "Issue title." },
 				body: { type: "string", description: "Issue body (markdown)." },
-				labels: { type: "string", description: "Comma-separated labels to apply." },
+				labels: { type: "string", description: `Labels to apply. ${LABEL_LIST_FORMAT}` },
 			},
 		},
 		{
@@ -729,13 +730,13 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Change an existing GitHub issue: close or reopen it, relabel it, assign it, or edit its title/body. WRITE — the change is really made. Supply only the fields you want to change. IMPORTANT: `labels` and `assignees` REPLACE what the issue currently has, they are not added to it — so to ADD a label, first read the issue (github_read_issue) and pass the existing labels along with the new one. There is no way to clear a field here: an empty value means 'leave it alone'.",
+				"Change an existing GitHub issue: close or reopen it, relabel it, assign it, or edit its title/body. WRITE — the change is really made. Supply only the fields you want to change. IMPORTANT: `labels` and `assignees` REPLACE what the issue currently has, they are not added to it — so to ADD a label, first read the issue (github_read_issue) and pass the existing labels along with the new one. There is no way to clear a field here: an empty value means 'leave it alone'. " + LABEL_VOCABULARY,
 			handler: "github_update_issue",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				number: { type: "number", required: true, description: "The issue number to update." },
 				state: { type: "string", description: '"closed" to close it, "open" to reopen it. Omit to leave the state alone.' },
-				labels: { type: "string", description: "Comma-separated labels — REPLACES the issue's current labels. Omit to leave them alone." },
+				labels: { type: "string", description: `Labels — REPLACES the issue's current labels. Omit to leave them alone. ${LABEL_LIST_FORMAT}` },
 				assignees: { type: "string", description: "Comma-separated GitHub logins — REPLACES the issue's current assignees. Omit to leave them alone." },
 				title: { type: "string", description: "A new title. Omit to leave it alone." },
 				body: { type: "string", description: "A new body (markdown). This overwrites the existing body — omit to leave it alone." },

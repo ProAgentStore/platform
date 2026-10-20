@@ -4,7 +4,8 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { type CoderBrainSettings, PO_TRIAGE_ACTION, coderBrainPatchProblem, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
 import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-question-store.js";
 import { brainModelRefusal, writeInstanceBrain } from "../lib/instance-brain.js";
-import { BUILTIN_EXCLUDE_LABELS, autoPickupPatchProblem, readAutoPickup, setAutoPickup } from "../lib/auto-pickup.js";
+import { autoPickupPatchProblem, readAutoPickup, setAutoPickup } from "../lib/auto-pickup.js";
+import { BUILTIN_EXCLUDE_LABELS } from "../lib/label-vocabulary.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 

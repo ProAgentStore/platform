@@ -682,6 +682,13 @@ describe("github connector — github_create_issue dispatch", () => {
 		expect((init.headers as Record<string, string>).Authorization).toBe("token gh-token-abc");
 	});
 
+	it("sends the documented label example — a name with spaces and a colon stays one label (#1245)", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ number: 13, html_url: "u" }));
+		await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "t", labels: "bug,P1: blocks external users" });
+		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+		expect(sent.labels).toEqual(["bug", "P1: blocks external users"]);
+	});
+
 	it("omits the labels key entirely when none are supplied", async () => {
 		fetchMock.mockResolvedValue(jsonResponse({ number: 12, html_url: "u" }));
 		await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "No labels" });
