@@ -251,7 +251,7 @@ export function registerBrowserVerificationTools(server: McpServer, ctx: Instanc
 
 	server.tool(
 		"verify_job_lead_now",
-		"Check one waiting Gmail job lead in the Scout's browser now, instead of at its next turn (#1030) — the same dispatch the platform makes on its own: a read-only browser run of the canonical posting. Only a lead whose verification is `awaiting` can be started (409 otherwise). With browser verification off, or no browser available, it answers what the setting decides instead of starting a run. Call with dry_run first.",
+		"Check one waiting Gmail job lead in the Scout's browser now, instead of at its next turn (#1030) — the same dispatch the platform makes on its own: a read-only browser run of the canonical posting. Only a lead whose verification is `awaiting` can be started (409 otherwise) — except one closed ONLY because its site was not allowed in time (`closedReason: consent_expired`, #1235): once the owner allows the site (set_local_browser_consent), this reopens that lead and checks it, provided no browser run was ever made for it and no application exists. With browser verification off, or no browser available, it answers what the setting decides instead of starting a run. Call with dry_run first.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Job Search Scout instance ID from my_instances."),

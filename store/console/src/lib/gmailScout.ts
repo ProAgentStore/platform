@@ -142,6 +142,8 @@ export interface LeadVerification {
 	nextAttemptAt: string;
 	lastOutcome: string | null;
 	lastDetail: string | null;
+	/** `consent_expired`: closed only because its site was not allowed in time — reopenable once it is (#1235). */
+	closedReason?: "consent_expired" | null;
 }
 
 /** `GET …/job-leads/browser-verifications` — the panel reads the leads, not the per-attempt receipts. */
@@ -163,6 +165,10 @@ const STATE_WORDS: Record<LeadVerificationState, string> = {
 export function leadVerificationLine(v: LeadVerification): { text: string; tone: "ok" | "warn" | "muted"; canVerifyNow: boolean } {
 	const job = v.expectedTitle ? `${v.expectedTitle}${v.expectedCompany ? ` · ${v.expectedCompany}` : ""}` : "Job lead";
 	const tries = v.attempts ? ` (attempt ${v.attempts})` : "";
+	// #1235: the one closed lead that can come back — the server reopens it once its site is allowed.
+	if (v.state === "unverifiable" && v.closedReason === "consent_expired") {
+		return { text: `${job}: closed because its site was not allowed in time — allow the site, then verify again.`, tone: "warn", canVerifyNow: true };
+	}
 	return {
 		text: `${job}: ${STATE_WORDS[v.state]}${tries}.`,
 		tone: v.state === "active" ? "ok" : v.state === "awaiting" || v.state === "dispatched" ? "warn" : "muted",

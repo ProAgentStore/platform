@@ -18,6 +18,18 @@ const v = (over: Partial<LeadVerification> = {}): LeadVerification => ({
 	...over,
 });
 
+describe("a lead closed only for site consent (#1235)", () => {
+	it("says why, and offers to verify again — the server reopens it once the site is allowed", () => {
+		expect(leadVerificationLine(v({ state: "unverifiable", closedReason: "consent_expired" }))).toEqual({
+			text: "Platform Engineer · Acme: closed because its site was not allowed in time — allow the site, then verify again.",
+			tone: "warn",
+			canVerifyNow: true,
+		});
+		// Any other closure stays closed in the UI too.
+		expect(leadVerificationLine(v({ state: "unverifiable", closedReason: null })).canVerifyNow).toBe(false);
+	});
+});
+
 describe("lead browser verification (#1030)", () => {
 	it("says what the browser found, and offers Verify now only while waiting", () => {
 		expect(leadVerificationLine(v())).toEqual({ text: "Platform Engineer · Acme: waiting for the browser.", tone: "warn", canVerifyNow: true });

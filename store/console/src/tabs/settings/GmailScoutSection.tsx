@@ -123,7 +123,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 											setMessage(e instanceof Error ? e.message : String(e));
 										}
 										await load();
-									}}>Verify now</Button>
+									}}>{v.state === "unverifiable" ? "Verify again" : "Verify now"}</Button>
 								)}
 							</li>
 						);
