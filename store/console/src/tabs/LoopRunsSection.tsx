@@ -1,4 +1,5 @@
 import { plainMarkdown } from "../lib/agentText";
+import { type ParkedWork, parkedLine } from "../lib/parkedWork";
 import MarkdownText from "../components/MarkdownText";
 import { useCallback, useEffect, useState } from "react";
 import { objectiveCardKey, postBoardOrder } from "../lib/boardOrder";
@@ -40,6 +41,8 @@ type LoopRun = {
 	 */
 	health?: RunHealth;
 	waitNote?: string | null;
+	/** Where its parked work is (#1242): the machine it resumes on, the commit, whether origin has a copy. */
+	parked?: ParkedWork | null;
 	startedAt: number;
 	finishedAt?: number | null;
 };
@@ -324,6 +327,8 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 						{activityLabel(r) && (
 							<div className={`text-xs mt-1 ${HEALTH_TONE[runActivity(r) ?? "ended"]}`}>{activityLabel(r)}</div>
 						)}
+						{/* Which machine holds its set-aside work (#1242) — the only one it resumes on. */}
+						{parkedLine(r.parked) && <div className="text-xs text-muted mt-1" data-testid="loop-run-parked">{parkedLine(r.parked)}</div>}
 						{/* What the wait is FOR. Without it a multi-minute settling window reads as a hang. */}
 						{ctl.hint && <div className="text-xs text-muted mt-1">{ctl.hint}</div>}
 						{r.detail && ctl.phase === "ended" && (
