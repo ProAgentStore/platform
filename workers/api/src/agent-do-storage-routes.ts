@@ -25,6 +25,7 @@ import {
 	planApplicationWriteback,
 	planJobLeadTriage,
 	planBrowserVerificationOutcome,
+	planConsentReopen,
 	BROWSER_VERIFICATION_OUTCOMES,
 	type BrowserVerificationOutcome,
 	type JobLeadTriageAction,
@@ -195,6 +196,16 @@ export async function triageJobLead(
  */
 export async function applyJobLeadBrowserVerification(engine: Pick<AgentStorageEngine, "recordGet" | "recordUpdate">, id: string, request: Request): Promise<Response> {
 	const b = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+	// #1235: the same route reopens a lead closed only for site consent — `planConsentReopen` decides.
+	if (b?.reopen === true) {
+		if (typeof b.receipt_id !== "string") return json({ error: "receipt_id is required to reopen" }, 400);
+		const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
+		if (!record) return json({ error: "Not found" }, 404);
+		const plan = planConsentReopen(record, { receiptId: b.receipt_id });
+		if (!plan.ok) return json({ error: plan.error }, 409);
+		const updated = plan.patch ? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch) : record;
+		return json({ record: updated, transitioned: plan.transitioned, status: plan.to });
+	}
 	const outcome = b?.outcome;
 	if (typeof outcome !== "string" || !(BROWSER_VERIFICATION_OUTCOMES as readonly string[]).includes(outcome)) return json({ error: `outcome must be one of ${BROWSER_VERIFICATION_OUTCOMES.join(", ")}` }, 400);
 	if (typeof b?.attempt !== "number" || typeof b?.receipt_id !== "string") return json({ error: "attempt and receipt_id are required" }, 400);

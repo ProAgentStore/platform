@@ -114,7 +114,7 @@ export type JobLeadTriageInput = {
 
 /** One entry of a lead's `lifecycle` audit trail. `browser_verification` is #1030's, never a triage action. */
 /** `intake` (#1056): how an owner-selected lead entered — `from` is null, there was no state before it. */
-export type JobLeadLifecycleEntry = { from: JobLeadStatus | null; to: JobLeadStatus; action: JobLeadTriageAction | "browser_verification" | "intake"; version: number; at: string; note?: string };
+export type JobLeadLifecycleEntry = { from: JobLeadStatus | null; to: JobLeadStatus; action: JobLeadTriageAction | "browser_verification" | "intake" | "consent_reopen"; version: number; at: string; note?: string };
 
 export type JobLeadTriagePlan =
 	| { ok: true; transitioned: boolean; patch: Record<string, unknown> | null; event: JobLeadApplyEvent | null }
@@ -374,6 +374,45 @@ export function planBrowserVerificationOutcome(
 			lifecycle: [...history, entry],
 			verification,
 			...(target === "archived" ? { archive_reason: input.outcome === "expired" ? "job_expired" : "job_mismatch", archived_at: now } : {}),
+		},
+	};
+}
+
+/**
+ * Reopen a lead closed ONLY because its site was not allowed in time (#1235), once the owner has allowed it.
+ * Pure; the DO runs it serialized with every other write, like {@link planBrowserVerificationOutcome}.
+ *
+ * Narrow on purpose — every condition is something the closure itself recorded:
+ *   - the lead is `unverifiable` from an exhausted check that dispatched NOTHING (`attempts` 0): the browser
+ *     never opened the posting, so there is no read of it to contradict;
+ *   - the closing receipt is the one being reopened (`receiptId`), so a different, later closure is never
+ *     undone by an old request;
+ *   - no application exists for the lead — an attempted or uncertain application is never replayed (#1013).
+ * Asked twice, the second answer is "already reopened", not a second transition. The intake receipt and
+ * every other field stay as they were: the patch touches the status, its lifecycle and `verification` only.
+ */
+export function planConsentReopen(record: CollectionRecord, input: { receiptId: string }, deps: { now?: string } = {}): BrowserVerificationPlan {
+	const current = jobLeadStatus(record.data);
+	const prior = record.data.verification && typeof record.data.verification === "object" && !Array.isArray(record.data.verification) ? (record.data.verification as Record<string, unknown>) : {};
+	if (current === "awaiting_browser_verification" && prior.reopened_from_receipt === input.receiptId) return { ok: true, transitioned: false, to: current, patch: null };
+	const refuse = (why: string): BrowserVerificationPlan => ({ ok: false, stale: true, error: `This lead cannot be reopened: ${why}.` });
+	if (current !== "unverifiable") return refuse(`it is ${current}, not closed as unverifiable`);
+	if (prior.reason !== "temporarily_unverifiable_exhausted" || prior.attempts !== 0) return refuse("it was closed after the browser checked it, not only for site consent");
+	if (prior.receipt_id !== input.receiptId) return refuse("it was closed by a different check than the one being reopened");
+	if (record.data.application_id || record.data.application_status) return refuse("an application exists for it, and an application is never replayed");
+	const now = deps.now ?? new Date().toISOString();
+	const version = jobLeadVersion(record.data);
+	const history = Array.isArray(record.data.lifecycle) ? record.data.lifecycle : [];
+	const entry: JobLeadLifecycleEntry = { from: current, to: "awaiting_browser_verification", action: "consent_reopen", version: version + 1, at: now, note: "reopened: the site was allowed after the consent wait ran out" };
+	return {
+		ok: true,
+		transitioned: true,
+		to: "awaiting_browser_verification",
+		patch: {
+			status: "awaiting_browser_verification",
+			lifecycle_version: version + 1,
+			lifecycle: [...history, entry],
+			verification: { ...prior, state: "awaiting_browser_verification", reason: "consent_granted", reopened_at: now, reopened_from_receipt: input.receiptId },
 		},
 	};
 }

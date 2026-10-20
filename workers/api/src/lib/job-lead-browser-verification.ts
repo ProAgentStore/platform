@@ -57,6 +57,8 @@ interface LeadRow {
 	last_outcome: string | null;
 	last_detail: string | null;
 	updated_at: number;
+	/** `consent_expired` when the lead closed ONLY because its site was not allowed in time (#1235). */
+	closed_reason?: string | null;
 }
 
 const presentLead = (r: LeadRow): LeadVerification => ({
@@ -73,6 +75,7 @@ const presentLead = (r: LeadRow): LeadVerification => ({
 	lastOutcome: (BROWSER_VERIFICATION_OUTCOMES as readonly string[]).includes(r.last_outcome ?? "") ? (r.last_outcome as BrowserVerificationOutcome) : null,
 	lastDetail: r.last_detail,
 	updatedAt: iso(r.updated_at) ?? "",
+	closedReason: r.closed_reason === "consent_expired" ? "consent_expired" : null,
 });
 
 interface AttemptRow {
@@ -243,7 +246,31 @@ function hostOf(url: string): string {
 /** The durable request for the owner's decision on one new site (#1049) — one per site, not per lead. */
 const consentSubject = (host: string) => `site-consent:${host}`;
 
-type SourceGate = { kind: "open" } | { kind: "refused"; detail: string; why: string } | { kind: "needs_consent"; state: VerificationState };
+type SourceGate = { kind: "open" } | { kind: "refused"; detail: string; why: string; consentExpired?: true } | { kind: "needs_consent"; state: VerificationState };
+
+/**
+ * The Scout's standing decision on a posting's site (#1049), with no side effect: open, refused (and why),
+ * not decided yet, or unreadable settings. {@link sourceGate} acts on it; a reopen (#1235) only reads it.
+ */
+type SiteDecision = { kind: "open"; host: string } | { kind: "refused"; detail: string; why: string } | { kind: "undecided"; host: string } | { kind: "invalid"; error: string };
+async function siteDecision(env: Env, row: LeadRow, cap: LocalBrowserCapability, now: number): Promise<SiteDecision> {
+	const host = hostOf(row.canonical_url);
+	if (!host) return { kind: "refused", detail: "The posting has no site the browser could open.", why: "the posting has no readable site" };
+	const { settings } = await readLocalBrowserSettings(env, row.instance_id, row.user_id);
+	const policy = effectiveLocalBrowserPolicy(cap, settings);
+	if ("error" in policy) return { kind: "invalid", error: policy.error };
+	if (policy.denyDomains.some((d) => domainWithin(host, d))) {
+		return { kind: "refused", detail: `${host} is on this Scout's denied sites.`, why: `${host} is on this Scout's denied sites` };
+	}
+	if (policy.allowDomains.length) {
+		return policy.allowDomains.some((d) => domainWithin(host, d))
+			? { kind: "open", host }
+			: { kind: "refused", detail: `${host} is outside this Scout's allowed sites (${policy.allowDomains.join(", ")}).`, why: `${host} is outside this Scout's allowed sites` };
+	}
+	const decision = (await listDomainConsent(env, row.instance_id, row.user_id, now)).find((c) => c.scope === "navigate" && domainWithin(host, c.domain));
+	if (decision?.decision === "deny") return { kind: "refused", detail: `You declined ${host} for this Scout's browser.`, why: `you declined ${host}` };
+	return decision?.decision === "allow" ? { kind: "open", host } : { kind: "undecided", host };
+}
 
 /**
  * May the Scout's browser open this posting's site (#1049)?
@@ -257,30 +284,21 @@ type SourceGate = { kind: "open" } | { kind: "refused"; detail: string; why: str
  * Invalid saved settings are not a reason to open anything: the lead waits and says why (fail closed).
  */
 async function sourceGate(env: Env, row: LeadRow, cap: LocalBrowserCapability, verification: BrowserVerificationSettings, now: number): Promise<SourceGate> {
-	const host = hostOf(row.canonical_url);
-	if (!host) return { kind: "refused", detail: "The posting has no site the browser could open.", why: "the posting has no readable site" };
-	const { settings } = await readLocalBrowserSettings(env, row.instance_id, row.user_id);
-	const policy = effectiveLocalBrowserPolicy(cap, settings);
-	if ("error" in policy) {
-		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `${policy.error} Nothing was opened; fix them in Settings → Local browser research.` }, now);
+	const site = await siteDecision(env, row, cap, now);
+	if (site.kind === "invalid") {
+		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `${site.error} Nothing was opened; fix them in Settings → Local browser research.` }, now);
 		return { kind: "needs_consent", state: "awaiting" };
 	}
-	if (policy.denyDomains.some((d) => domainWithin(host, d))) {
-		return { kind: "refused", detail: `${host} is on this Scout's denied sites.`, why: `${host} is on this Scout's denied sites` };
-	}
-	if (policy.allowDomains.length) {
-		return policy.allowDomains.some((d) => domainWithin(host, d))
-			? { kind: "open" }
-			: { kind: "refused", detail: `${host} is outside this Scout's allowed sites (${policy.allowDomains.join(", ")}).`, why: `${host} is outside this Scout's allowed sites` };
-	}
-	const decision = (await listDomainConsent(env, row.instance_id, row.user_id, now)).find((c) => c.scope === "navigate" && domainWithin(host, c.domain));
-	if (decision?.decision === "deny") return { kind: "refused", detail: `You declined ${host} for this Scout's browser.`, why: `you declined ${host}` };
-	if (decision?.decision === "allow") {
+	if (site.kind === "refused") return site;
+	const host = site.host;
+	if (site.kind === "open") {
 		await closeLiveTakeoverFor(env, row.user_id, row.instance_id, "manual", consentSubject(host), "resumed", now).catch(() => undefined);
 		return { kind: "open" };
 	}
 	if (now - row.awaiting_since >= verification.waitLimitMinutes * 60_000) {
-		return { kind: "refused", detail: `Nobody allowed ${host} within ${verification.waitLimitMinutes} minutes, so it was not opened.`, why: `${host} was not allowed in time` };
+		// The ONE refusal a later "allow" can undo (#1235): marked so it is never confused with a runner,
+		// network or protocol failure, or with a site the policy refuses.
+		return { kind: "refused", detail: `Nobody allowed ${host} within ${verification.waitLimitMinutes} minutes, so it was not opened.`, why: `${host} was not allowed in time`, consentExpired: true };
 	}
 	const asked = await requestTakeover(env, { userId: row.user_id, instanceId: row.instance_id, subjectKind: "manual", subjectId: consentSubject(host), reason: "consent_required", mobileAllowed: verification.allowMobile, now }).catch(() => null);
 	if (asked?.created) {
@@ -318,7 +336,11 @@ export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Dat
 	const gate = await sourceGate(env, row, cap.cap, settings, now);
 	if (gate.kind === "refused") {
 		const receiptId = await recordAttempt(env, row, { attempt: row.attempts, state: "refused", detail: gate.detail }, now);
-		return settle(env, row, "temporarily_unverifiable", { attempt: row.attempts, receiptId, exhausted: true, detail: gate.detail, why: gate.why }, now);
+		const state = await settle(env, row, "temporarily_unverifiable", { attempt: row.attempts, receiptId, exhausted: true, detail: gate.detail, why: gate.why }, now);
+		if (gate.consentExpired && state === "unverifiable") {
+			await env.DB.prepare("UPDATE job_lead_browser_verifications SET closed_reason = 'consent_expired' WHERE instance_id = ?1 AND lead_id = ?2").bind(row.instance_id, row.lead_id).run();
+		}
+		return state;
 	}
 	if (gate.kind === "needs_consent") return gate.state;
 	const attempt = row.attempts + 1;
@@ -371,10 +393,55 @@ export async function runLeadBrowserVerification(env: Env, now = Date.now(), lim
 	return { settled, dispatched };
 }
 
-/** An owner's "verify now": a waiting lead is dispatched at once instead of at its next turn. */
+/**
+ * Reopen a lead closed only because its site was not allowed in time (#1235), now that it is. Everything is
+ * checked again here rather than trusted from the row: the site must be allowed NOW, nothing may ever have
+ * been dispatched for the lead, and the lead itself (in the Scout's DO, `planConsentReopen`) must still be
+ * the unattempted, application-free closure of that same refused receipt. The wait restarts from now.
+ */
+async function reopenAfterConsent(env: Env, row: LeadRow, now: number): Promise<{ row: LeadRow } | { error: string }> {
+	const cap = await localBrowserCapability(env, row.instance_id, row.user_id);
+	if ("error" in cap) return { error: "This Scout's agent does not declare a local browser, so it cannot verify in a browser" };
+	const site = await siteDecision(env, row, cap.cap, now);
+	if (site.kind !== "open") {
+		const host = hostOf(row.canonical_url);
+		return { error: site.kind === "refused" ? site.detail.replace(/\.$/, "") : `${host} is not allowed yet — allow it in Settings → Local browser research (or set_local_browser_consent), then verify again` };
+	}
+	const ran = await env.DB.prepare("SELECT COUNT(*) AS n FROM job_lead_browser_verification_attempts WHERE instance_id = ?1 AND lead_id = ?2 AND state IN ('dispatched', 'completed', 'no_runtime')")
+		.bind(row.instance_id, row.lead_id)
+		.first<{ n: number }>();
+	if (row.attempts !== 0 || (ran?.n ?? 0) > 0) return { error: "A browser run was already made for this lead, so it is not reopened" };
+	const receipt = await env.DB.prepare("SELECT id FROM job_lead_browser_verification_attempts WHERE instance_id = ?1 AND lead_id = ?2 AND state = 'refused' ORDER BY created_at DESC LIMIT 1")
+		.bind(row.instance_id, row.lead_id)
+		.first<{ id: string }>();
+	if (!receipt) return { error: "The refusal that closed this lead is not on record, so it is not reopened" };
+	const res = await env.AGENT.get(env.AGENT.idFromName(row.instance_id)).fetch(
+		new Request(`https://agent/job-leads/${encodeURIComponent(row.lead_id)}/browser-verification`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reopen: true, receipt_id: receipt.id }) }),
+	);
+	if (!res.ok) return { error: ((await res.json().catch(() => ({}))) as { error?: string }).error?.replace(/\.$/, "") ?? "The Scout could not reopen this lead" };
+	// The lead is reopened in the DO (or already was, idempotently); the queue row follows, once.
+	await env.DB.prepare(
+		`UPDATE job_lead_browser_verifications SET state = 'awaiting', closed_reason = NULL, awaiting_since = ?1, next_attempt_at = ?1, last_detail = ?2, updated_at = ?1
+		  WHERE instance_id = ?3 AND lead_id = ?4 AND state = 'unverifiable' AND closed_reason = 'consent_expired'`,
+	)
+		.bind(now, `Reopened: you allowed ${site.host} after the consent wait ran out. Checking it in the browser.`, row.instance_id, row.lead_id)
+		.run();
+	const after = await getLeadRow(env, row.instance_id, row.lead_id);
+	return after ? { row: after } : { error: "The lead's verification could not be read back" };
+}
+
+/**
+ * An owner's "verify now": a waiting lead is dispatched at once instead of at its next turn — and a lead
+ * closed only because its site was not allowed in time is reopened first, once the site is allowed (#1235).
+ */
 export async function verifyLeadNow(env: Env, instanceId: string, userId: string, leadId: string, now = Date.now()): Promise<{ state: VerificationState; lead: LeadVerification } | { error: string; status: 404 | 409 }> {
-	const row = await getLeadRow(env, instanceId, leadId);
+	let row = await getLeadRow(env, instanceId, leadId);
 	if (!row || row.user_id !== userId) return { error: "This lead is not waiting for browser verification.", status: 404 };
+	if (row.state === "unverifiable" && row.closed_reason === "consent_expired") {
+		const reopened = await reopenAfterConsent(env, row, now);
+		if ("error" in reopened) return { error: `${reopened.error}.`, status: 409 };
+		row = reopened.row;
+	}
 	if (row.state !== "awaiting") return { error: `This lead's verification is ${row.state}; only a waiting one can be started now.`, status: 409 };
 	const state = await dispatchLeadVerification(env, row, now);
 	const after = await getLeadRow(env, instanceId, leadId);

@@ -21,6 +21,11 @@ export interface LeadVerification {
 	lastOutcome: BrowserVerificationOutcome | null;
 	lastDetail: string | null;
 	updatedAt: string;
+	/**
+	 * `consent_expired`: closed ONLY because its site was not allowed in time (#1235). Once the site is
+	 * allowed, "Verify now" (`verify_job_lead_now`) reopens and checks it. Null for every other state or close.
+	 */
+	closedReason: "consent_expired" | null;
 }
 
 /** `GET /v1/instances/:id/job-leads/browser-verifications` response. */

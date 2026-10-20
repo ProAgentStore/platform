@@ -469,3 +469,122 @@ describe("#1050: a LinkedIn Gmail alert reaches the owner's per-site consent wit
 		expect(written).not.toMatch(/SECRET|trackingId|midToken|otpToken/);
 	});
 });
+
+describe("a lead closed only for site consent is recovered once the site is allowed (#1235)", () => {
+	// The live case: an owner-selected SEEK lead waited for consent; at the wait limit it became terminal
+	// `unverifiable` with a refused receipt and no run, and "Verify now" refused it for not being `awaiting`.
+	const SEEK = "https://www.seek.com.au/job/81234567";
+	const allowSeek = () => d1.exec(`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at) VALUES ('s1', 'u1', 'seek.com.au', 'navigate', 'allow', 5)`);
+	const row = () => d1.sqlite.prepare("SELECT state, closed_reason, attempts, awaiting_since FROM job_lead_browser_verifications WHERE lead_id = 'lead-1'").get() as Record<string, unknown>;
+	/** Wait out the consent window unanswered, as the Coles lead did. */
+	async function closeForConsent() {
+		d1.exec(`DELETE FROM local_browser_domain_consent`);
+		d1.exec(`UPDATE agent_instances SET config = json_set(config, '$.browserVerification.waitLimitMinutes', 10) WHERE id = 's1'`);
+		await d1.DB.prepare("UPDATE job_lead_browser_verifications SET canonical_url = ?1").bind(SEEK).run();
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), intake: { kind: "owner_selected", receipt_id: "intake-rcpt-1" } } } as CollectionRecord);
+		await runLeadBrowserVerification(env, 2_000);
+		await runLeadBrowserVerification(env, 1_000 + 10 * 60_000);
+	}
+
+	it("the consent-only closure is marked as such; nothing was dispatched", async () => {
+		await closeForConsent();
+		expect(row()).toMatchObject({ state: "unverifiable", closed_reason: "consent_expired", attempts: 0 });
+		expect(lead()).toMatchObject({ status: "unverifiable", verification: { reason: "temporarily_unverifiable_exhausted", attempts: 0 } });
+		expect(started).toEqual([]);
+		expect(await queue()).toMatchObject({ closedReason: "consent_expired" });
+	});
+
+	it("before the site is allowed, Verify now says what to do and changes nothing", async () => {
+		await closeForConsent();
+		const out = await verifyLeadNow(env, "s1", "u1", "lead-1", 2_000 + 20 * 60_000);
+		expect(out).toEqual({ error: expect.stringMatching(/www\.seek\.com\.au is not allowed yet — allow it in Settings → Local browser research \(or set_local_browser_consent\)/), status: 409 });
+		expect(row()).toMatchObject({ state: "unverifiable", closed_reason: "consent_expired" });
+		expect(lead().status).toBe("unverifiable");
+	});
+
+	it("once allowed: Verify now reopens it — fresh wait, same lead, same intake receipt — and dispatches the check", async () => {
+		await closeForConsent();
+		allowSeek();
+		const now = 2_000 + 30 * 60_000;
+		const out = await verifyLeadNow(env, "s1", "u1", "lead-1", now);
+		expect(out).toMatchObject({ state: "dispatched", lead: { state: "dispatched", closedReason: null, attempts: 1 } });
+		expect(started).toEqual([expect.objectContaining({ requestId: "bv-lead-1-1" })]);
+		expect(row()).toMatchObject({ closed_reason: null, awaiting_since: now });
+		// The lead itself: back to awaiting through one versioned lifecycle step, its intake receipt untouched.
+		expect(lead()).toMatchObject({ status: "awaiting_browser_verification", lifecycle_version: 2, intake: { kind: "owner_selected", receipt_id: "intake-rcpt-1" }, verification: { reason: "consent_granted" } });
+		expect((lead().lifecycle as Array<{ action: string }>).map((e) => e.action)).toEqual(["browser_verification", "consent_reopen"]);
+		// And it verifies like any other lead.
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, now + 60_000);
+		expect(lead()).toMatchObject({ status: "new", verification: { state: "live" } });
+	});
+
+	it("idempotent: the DO's reopen of the same receipt twice transitions once", async () => {
+		await closeForConsent();
+		allowSeek();
+		const receipt = (await listLeadVerifications(env, "s1", "u1")).attempts.find((a) => a.state === "refused")!.id;
+		const reopen = () => applyJobLeadBrowserVerification({ recordGet: async () => leads.get("lead-1")!, recordUpdate: async (_c: string, _id: string, patch: Record<string, unknown>) => {
+			leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), ...patch } } as CollectionRecord);
+			return leads.get("lead-1")!;
+		} } as never, "lead-1", new Request("https://agent/x", { method: "POST", body: JSON.stringify({ reopen: true, receipt_id: receipt }) }));
+		expect(await (await reopen()).json()).toMatchObject({ transitioned: true, status: "awaiting_browser_verification" });
+		expect(await (await reopen()).json()).toMatchObject({ transitioned: false, status: "awaiting_browser_verification" });
+		expect(lead().lifecycle_version).toBe(2);
+	});
+
+	it("a lead with an application is never reopened — an attempted or uncertain application is never replayed", async () => {
+		await closeForConsent();
+		allowSeek();
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), application_id: "app-1", application_status: "submit_uncertain" } } as CollectionRecord);
+		const out = await verifyLeadNow(env, "s1", "u1", "lead-1", 2_000 + 30 * 60_000);
+		expect(out).toEqual({ error: expect.stringMatching(/an application exists for it, and an application is never replayed/), status: 409 });
+		expect(started).toEqual([]);
+		expect(row()).toMatchObject({ state: "unverifiable", closed_reason: "consent_expired" });
+		expect(lead().status).toBe("unverifiable");
+	});
+
+	it("runner, network and policy closures stay closed: no runtime under mark_unverifiable, a declined site, an exhausted check", async () => {
+		// No eligible browser, fallback mark_unverifiable.
+		d1.exec(`UPDATE agent_instances SET config = json_set(config, '$.browserVerification.fallback', 'mark_unverifiable') WHERE id = 's1'`);
+		startAs = "offline";
+		await runLeadBrowserVerification(env, 2_000);
+		expect(row()).toMatchObject({ state: "unverifiable", closed_reason: null });
+		expect(await verifyLeadNow(env, "s1", "u1", "lead-1", 3_000)).toMatchObject({ status: 409, error: expect.stringMatching(/only a waiting one can be started now/) });
+
+		// A site the owner declined.
+		d1.exec(`DELETE FROM local_browser_domain_consent`);
+		d1.exec(`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at) VALUES ('s1', 'u1', 'seek.com.au', 'navigate', 'deny', 1)`);
+		await d1.DB.prepare("UPDATE job_lead_browser_verifications SET state = 'awaiting', attempts = 0, next_attempt_at = 0, canonical_url = ?1").bind(SEEK).run();
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), status: "awaiting_browser_verification" } } as CollectionRecord);
+		await runLeadBrowserVerification(env, 4_000);
+		expect(row()).toMatchObject({ state: "unverifiable", closed_reason: null });
+	});
+
+	it("a consent-expired row whose lead WAS checked in a browser is not reopened", async () => {
+		await closeForConsent();
+		allowSeek();
+		// A dispatched attempt on record contradicts "never opened": refuse rather than replay.
+		await d1.DB.prepare("INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, run_id, state, created_at) VALUES ('x', 's1', 'u1', 'lead-1', 1, 'run-x', 'dispatched', 1)").run();
+		expect(await verifyLeadNow(env, "s1", "u1", "lead-1", 2_000 + 30 * 60_000)).toEqual({ error: "A browser run was already made for this lead, so it is not reopened.", status: 409 });
+		expect(lead().status).toBe("unverifiable");
+	});
+});
+
+describe("migration 0266 marks the leads already closed only for consent (#1235)", () => {
+	it("the backfill marks an unattempted consent closure, and nothing else", async () => {
+		const { readFileSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const sql = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0266_lead_verification_closed_reason.sql"), "utf8");
+		const backfill = sql.slice(sql.indexOf("UPDATE job_lead_browser_verifications"));
+		const put = (lead: string, attempts: number, detail: string) =>
+			d1.exec(`INSERT INTO job_lead_browser_verifications (instance_id, lead_id, user_id, work_key, canonical_url, state, attempts, next_attempt_at, awaiting_since, last_detail, updated_at, created_at) VALUES ('s1', '${lead}', 'u1', NULL, 'https://www.seek.com.au/job/1', 'unverifiable', ${attempts}, 0, 0, '${detail}', 0, 0)`);
+		put("coles", 0, "Nobody allowed www.seek.com.au within 60 minutes, so it was not opened.");
+		put("declined", 0, "You declined www.seek.com.au for this Scout''s browser.");
+		put("checked", 2, "Nobody allowed www.seek.com.au within 60 minutes, so it was not opened.");
+		put("ran", 0, "Nobody allowed www.seek.com.au within 60 minutes, so it was not opened.");
+		d1.exec("INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, run_id, state, created_at) VALUES ('r1', 's1', 'u1', 'ran', 1, 'run', 'completed', 1)");
+		d1.exec(backfill);
+		const marked = d1.sqlite.prepare("SELECT lead_id FROM job_lead_browser_verifications WHERE closed_reason = 'consent_expired' ORDER BY lead_id").all();
+		expect(marked).toEqual([{ lead_id: "coles" }]);
+	});
+});
