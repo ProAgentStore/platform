@@ -45,6 +45,12 @@ export interface CallAuditRecord {
 	provided?: string;
 	/** Top-level argument NAMES and the instance the call was about — never argument values. */
 	argKeys?: string[];
+	/**
+	 * The name an UNKNOWN tool call asked for (#1243) — only when it is identifier-shaped (`SAFE_NAME`, ≤ 64
+	 * chars). The audit could not say which names agents guess while every miss was `(unregistered)`; it is
+	 * a name, never an argument value, and anything that is not name-shaped is still not recorded.
+	 */
+	attempted?: string;
 	/** The full number of argument names, present only when `argKeys` was cut. */
 	argCount?: number;
 	instanceId?: string;
@@ -101,6 +107,11 @@ export function apiRequestIdForCall(): string | undefined {
 	if (!rec) return undefined;
 	rec.apiRequestId ??= `mcp-${crypto.randomUUID()}`;
 	return rec.apiRequestId;
+}
+
+/** The tool name an unknown call asked for, if it is name-shaped (#1243). */
+export function noteAttemptedTool(rec: CallAuditRecord, requested: unknown): void {
+	if (typeof requested === "string" && SAFE_NAME.test(requested)) rec.attempted = requested;
 }
 
 /** What may be recorded about the arguments: their names, and the instance id the call targeted. */
@@ -262,6 +273,7 @@ export function callEvent(rec: CallAuditRecord): Record<string, unknown> | null 
 		...(typeof auditedAs === "string" && auditedAs !== rec.tool ? { auditedAs } : {}),
 		...(typeof handlerAction === "string" && handlerAction !== v.action ? { handlerAction } : {}),
 		tool: rec.tool,
+		...(rec.attempted ? { attempted: rec.attempted } : {}),
 		action: v.action,
 		...(v.failureClass ? { failureClass: v.failureClass } : {}),
 		...(v.reason ? { reason: v.reason } : {}),

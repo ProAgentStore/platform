@@ -157,12 +157,23 @@ describe("one audit event per MCP call, read back with its reason (#1089)", () =
 		expect(e.gate).toBeUndefined(); // rejected before the gate
 	});
 
-	it("an unknown tool name is recorded without echoing the caller-supplied name", async () => {
+	it("an unknown tool is filed under (unregistered), with the name it asked for when that is name-shaped (#1243)", async () => {
 		const c = await connect();
-		await c.call("drop_table_users", {});
+		await c.call("start_loop", {});
 		const [e] = (await readBack(c)).events;
-		expect(e).toMatchObject({ tool: "(unregistered)", action: "invalid_input", reason: "unknown_tool" });
-		expect(JSON.stringify(e)).not.toContain("drop_table_users");
+		// The audit can now say which names agents guess; the per-tool key still groups every miss.
+		expect(e).toMatchObject({ tool: "(unregistered)", attempted: "start_loop", action: "invalid_input", reason: "unknown_tool" });
+	});
+
+	it("a requested name that is not name-shaped, or too long, is still never recorded", async () => {
+		for (const bad of ["drop table users; --", "x".repeat(65), "tool\nname"]) {
+			const c = await connect();
+			await c.call(bad, {});
+			const [e] = (await readBack(c)).events;
+			expect(e).toMatchObject({ tool: "(unregistered)" });
+			expect(e).not.toHaveProperty("attempted");
+			expect(JSON.stringify(e)).not.toContain(bad.slice(0, 20));
+		}
 	});
 
 	it("a scope denial is ONE denied event with the reason — not a denied row plus a call row", async () => {

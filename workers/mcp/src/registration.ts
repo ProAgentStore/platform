@@ -1,4 +1,4 @@
-import { type CallAuditRecord, callEvent, currentCallAudit, errorName, newCallRecord, noteArguments, withCallAudit } from "./call-audit.js";
+import { type CallAuditRecord, callEvent, currentCallAudit, errorName, newCallRecord, noteArguments, noteAttemptedTool, withCallAudit } from "./call-audit.js";
 import { actionableInputError, closestToolNames, normalizeArguments, type RawShape } from "./argument-normalize.js";
 import { correlationFromExtra, currentCallCorrelation, withCallCorrelation } from "./call-context.js";
 import type { TextResult } from "./http.js";
@@ -105,6 +105,7 @@ function wrapToolsCall(target: RegistrationTarget, registered: Map<string, boole
 		const params = (request as { params?: { name?: unknown; arguments?: unknown } } | undefined)?.params;
 		const name = typeof params?.name === "string" && registered.has(params.name) ? params.name : "(unregistered)";
 		const rec = newCallRecord(name, registered.get(name) === true);
+		if (name === "(unregistered)") noteAttemptedTool(rec, params?.name);
 		// #1241: a camelCase key or a list in the other form is fixed HERE, before the SDK validates, for every tool — and said.
 		const { args, warnings } = normalizeArguments(shapes.get(name), params?.arguments);
 		const call = warnings.length ? { ...(request as object), params: { ...params, arguments: args } } : request;
