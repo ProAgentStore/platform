@@ -299,6 +299,13 @@ async function insert(env: Env, instanceId: string, data: Record<string, unknown
 	return { created: body.created !== false, ...(typeof body.id === "string" ? { id: body.id } : {}) };
 }
 
+/** Merge a digest listing's names into an untitled lead (#1251) — two fields, nothing else. */
+async function nameLead(env: Env, instanceId: string, id: string, names: { title: string; company: string | null }): Promise<void> {
+	const data = { title: names.title, ...(names.company ? { company: names.company } : {}) };
+	const res = await stub(env, instanceId).fetch(new Request(`https://agent/collections/job_leads/records/${encodeURIComponent(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data }) }));
+	if (!res.ok) throw new Error(`could not name lead ${id}`);
+}
+
 /** The two durable duplicate keys: Gmail message identity and platform-wide job identity. */
 export function duplicateGmailLead(candidate: Pick<ScoutCandidate, "url" | "gmail_message_id">, existing: readonly { data?: Record<string, unknown> }[]): boolean {
 	return matchingGmailLead(candidate, existing) !== null;
@@ -350,6 +357,8 @@ export async function ingestGmailCandidates(input: {
 	mailbox?: string | null;
 	/** `false` means the owning Scout returned an existing unchanged lead (a concurrent duplicate). The record id, when known, queues a browser verification (#1030). */
 	insertLead: (data: Record<string, unknown>) => Promise<boolean | undefined | { created: boolean; id?: string }>;
+	/** Fill in a stored lead's missing title/employer from a digest listing (#1251); merges, never overwrites a name. */
+	nameLead?: (id: string, names: { title: string; company: string | null }) => Promise<void>;
 	/** How a provider redirect is resolved (#1024); the global `fetch` in production. */
 	fetchImpl?: typeof fetch;
 	/** Oldest message accepted; an ordinary scan keeps the 2-day bound, a reprocess widens it (#1052). */
@@ -477,7 +486,9 @@ export async function ingestGmailCandidates(input: {
 				deduped++;
 				counts.deduped++;
 				const id = dup.record.id ?? null;
-				sub(i, { evidence: `the same job (${job.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""}, so it was not added twice.`, leadId: id, job: { title: job.title, company: job.company, url: job.url } });
+				// #1251: a lead stored untitled (#1248) is named by the listing that names it now.
+				const named = !!(id && job.title && dup.record.data?.title == null && input.nameLead && (await input.nameLead(id, { title: job.title, company: job.company }).then(() => true, () => false)));
+				sub(i, { evidence: `the same job (${job.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""}, so it was not added twice.${named ? " Its missing title and employer were filled in from this digest." : ""}`, leadId: id, job: { title: job.title, company: job.company, url: job.url } });
 				continue;
 			}
 			const r = result.get(job.url);
@@ -636,6 +647,7 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 			existing,
 			mailbox: config.pinnedEmail ?? account.label ?? null,
 			insertLead: (data) => insert(env, instanceId, data),
+			nameLead: (id, names) => nameLead(env, instanceId, id, names),
 		});
 		await writeScanLog(env, receiptId, instanceId, log);
 		await queueAwaitingLeads(env, instanceId, userId, awaiting);
@@ -724,6 +736,7 @@ export async function reprocessGmailScout(env: Env, instanceId: string, userId: 
 			existing,
 			mailbox: config.pinnedEmail ?? account.label ?? null,
 			insertLead: (data) => insert(env, instanceId, data),
+			nameLead: (id, names) => nameLead(env, instanceId, id, names),
 			maxAgeMs: REPROCESS_MAX_AGE_MS,
 			appliedWorkKeys: applied,
 			leadExtras: { materialized_via: { mode: "reprocess", receipt_id: receiptId } },

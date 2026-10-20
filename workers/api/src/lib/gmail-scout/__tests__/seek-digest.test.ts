@@ -160,4 +160,38 @@ describe("in the scan log and the leads (#1251)", () => {
 		expect(subs[0].evidence).toMatch(/^title and employer as the email lists them; the job board's page could not be read here/);
 		expect(subs[4]).toMatchObject({ decision: "deduped", leadId: "lead-old" });
 	});
+
+	it("a lead #1248 stored UNTITLED is named when a digest lists it again — and a titled lead is never renamed", async () => {
+		const named: Array<[string, unknown]> = [];
+		const existing = [
+			{ id: "lead-untitled", data: { url: job(90000001), title: null, from_digest: true } },
+			{ id: "lead-titled", data: { url: job(90000002), title: "Software Engineer (contract)", from_digest: true } },
+		];
+		const result = await ingestGmailCandidates({
+			hits: [{ id: "m-seek" }],
+			readMessage: async () => message(SEEK_PLAIN),
+			existing,
+			insertLead: async () => ({ created: true, id: "new" }),
+			nameLead: async (id, names) => void named.push([id, names]),
+			fetchImpl: (async () => new Response("blocked", { status: 403 })) as unknown as typeof fetch,
+		});
+		expect(named).toEqual([["lead-untitled", { title: "Software Developer", company: "Acme Health" }]]);
+		const subs = result.log.filter((e) => e.classification === "digest_item");
+		expect(subs[0].reason).toMatch(/Its missing title and employer were filled in from this digest\.$/);
+		expect(subs[1].reason).not.toMatch(/filled in/);
+	});
+
+	it("naming that fails is not claimed in the log", async () => {
+		const result = await ingestGmailCandidates({
+			hits: [{ id: "m-seek" }],
+			readMessage: async () => message(SEEK_PLAIN),
+			existing: [{ id: "lead-untitled", data: { url: job(90000001), title: null } }],
+			insertLead: async () => ({ created: true, id: "new" }),
+			nameLead: async () => {
+				throw new Error("DO down");
+			},
+			fetchImpl: (async () => new Response("blocked", { status: 403 })) as unknown as typeof fetch,
+		});
+		expect(result.log.find((e) => e.classification === "digest_item")?.reason).not.toMatch(/filled in/);
+	});
 });
