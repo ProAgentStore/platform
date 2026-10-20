@@ -101,5 +101,3 @@ export function DiscordConnectorPanel({ grants, message, onAddGrant, onRemoveGra
 		</div>
 	);
 }
-
-export default DiscordConnectorPanel;

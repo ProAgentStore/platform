@@ -85,5 +85,3 @@ export function FileConnectorPanel({
 		</div>
 	);
 }
-
-export default FileConnectorPanel;
