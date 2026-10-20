@@ -593,9 +593,19 @@ consolidation follow-up.
 
 Filed against #1241:
 
-- **Consolidation (#1243)**: retire the four §4 pairs, decide removals from the `summarize`
-  data, give the remaining short descriptions the conventions template, refresh the quick start
-  (#1241 B.7), record the tried name for `unknown_tool`, and make refusals say what to do next.
+- **Consolidation (#1243), done 2026-10-20.** Each part, in order:
+  - **Pairs:** the four §4 pairs are deprecated aliases of their survivors, removed after
+    2027-01-18 if the ledger shows no calls (`643fc5f0`, `9db62581`).
+  - **Unknown tools:** `unknown_tool` events record the name tried, when it is name-shaped
+    (`d7930ec4`).
+  - **Refusals:** the busy start and the answer handoff say what to do next (`a2fe9a8b`).
+  - **Usage data:** §5 carries the 90-day ledger counts, and §5.1 records the removal decision —
+    none now, re-run with the aliases (`f4b2dac5`).
+  - **Application tools:** they name the instance type they need (`365eefbb`).
+  - **Quick start:** `platform_guide` opens with a task-to-tool map (`5784f10c`).
+  - **Descriptions:** the 40 remaining short ones follow the conventions template (`e6f39ced`).
+  - **Found on the way:** `coding_session_restart` reports success with no runner connected
+    (#1262).
 - **Agent eval (#1244)**: a model is given owner-shaped tasks drawn from §6, calls tools through a
   real client, and is scored on first-call success, with a baseline. That is the acceptance measure
   this document's proxies stand in for.
