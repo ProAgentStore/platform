@@ -93,17 +93,25 @@ export interface TmuxSessionInfo {
  * apart: window count, attach state, and what's running in the active pane. Returns
  * an empty array when no tmux server is running (never throws).
  */
+/**
+ * The field separator in `-F`'s output. NOT a tab (#1254): tmux ≥3.6 sanitizes control characters
+ * out of format output, rewriting every tab to `_` — so a tab-separated format string silently
+ * collapses to one field, and every session disappeared from this listing on that tmux version.
+ * `|` is printable, so it survives; verified against a real session list, not assumed.
+ */
+const FIELD_SEP = "|";
+
 export function listSessionsDetailed(): TmuxSessionInfo[] {
 	try {
-		// Tab-separated so a session name containing spaces can't split a field.
-		const fmt = "#{session_name}\t#{session_windows}\t#{session_attached}\t#{pane_current_command}\t#{window_name}\t#{session_created}";
+		// `|`-separated — see FIELD_SEP's comment for why not tab.
+		const fmt = `#{session_name}${FIELD_SEP}#{session_windows}${FIELD_SEP}#{session_attached}${FIELD_SEP}#{pane_current_command}${FIELD_SEP}#{window_name}${FIELD_SEP}#{session_created}`;
 		const out = execFileSync("tmux", ["list-sessions", "-F", fmt], { encoding: "utf8", stdio: "pipe" });
 		return out
 			.split("\n")
 			.map((l) => l.trim())
 			.filter(Boolean)
 			.map((line) => {
-				const [name, windows, attached, activeCommand, activeWindow, created] = line.split("\t");
+				const [name, windows, attached, activeCommand, activeWindow, created] = line.split(FIELD_SEP);
 				return {
 					name: name ?? "",
 					windows: Number(windows) || 0,

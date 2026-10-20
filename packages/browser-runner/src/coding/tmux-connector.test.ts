@@ -19,7 +19,11 @@ const HAS_TMUX = (() => {
 	}
 })();
 
-const SESSION = "pags-tmux-connector-test";
+// Unique per run (#1254): this talks to the ONE system tmux server, shared with every other
+// process on the machine — including another checkout of this same repo running this same suite
+// at the same time. A fixed name collided: one run's kill-then-create raced another's, so
+// `listSessionsDetailed` sometimes read a session a concurrent run had just torn down.
+const SESSION = `pags-tmux-connector-test-${process.pid}`;
 
 describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 	afterAll(() => {
