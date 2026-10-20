@@ -49,7 +49,7 @@ import { cursorParam } from "../lib/keyset-cursor.js";
 import { recoverPolicyRefusal } from "../lib/instance-permission-recovery.js";
 import { clientClaimFrom, trackStartOutcome } from "../lib/objective-lifecycle.js";
 import { findDuplicateObjective } from "../lib/objective-dedupe.js";
-import { describeBusyHolder } from "../lib/loop-busy.js";
+import { BUSY_NEXT, describeBusyHolder } from "../lib/loop-busy.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { enqueueObjective } from "../lib/objective-queue.js";
@@ -1258,7 +1258,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 			if (started.reason === "engine_auth") return c.json({ error: started.error, stopReason: "engine_auth", needsReauth: true, runId: started.runId ?? null }, 409); // #891: see lib/engine-auth-refusal.ts
 			// A busy refusal names what holds the repo (#886), so "my earlier start landed" is a field, not a sentence.
 			const holder = started.reason === "busy" ? await describeBusyHolder(c.env, { userId: session.uid, instanceId, repoId, excludeRequestId: body.requestId }).catch(() => null) : null;
-			return c.json({ error: started.error, reason: started.reason ?? "refused", startState: "not_started", ...(holder ?? {}) }, started.status as 409);
+			return c.json({ error: started.error, reason: started.reason ?? "refused", startState: "not_started", ...(holder ?? {}), ...(started.reason === "busy" ? { next: BUSY_NEXT } : {}) }, started.status as 409);
 		}
 		return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running", startState: "started" }, 201);
 	};

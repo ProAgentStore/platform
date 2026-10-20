@@ -550,7 +550,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			const delivered = await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(() => true, () => false);
 			const base = { kind: "coding", runId: coding.runId, sessionId: coding.sessionId, recorded: false, questionId: null };
 			if (delivered) return c.json({ ok: true, ...base, outcome: "delivered", delivered: true, message: "Delivered to the waiting run." });
-			return c.json({ ok: false, ...base, outcome: "not_delivered", delivered: false, error: "The run is waiting on this card, but the coding runner could not be reached to hand it your answer. Make sure `pags up` is running on its machine and answer again." }, 409);
+			return c.json({ ok: false, ...base, outcome: "not_delivered", delivered: false, next: "retry", error: "The run is waiting on this card, but the coding runner could not be reached to hand it your answer. Make sure `pags up` is running on its machine and answer again." }, 409);
 		}
 		if (recorded?.outcome === "already_applied") {
 			return c.json({ ok: true, kind: "coding", outcome: "already_applied", delivered: false, recorded: true, questionId: q?.id, appliedRunId: q?.appliedRunId ?? null, message: `That question was already answered, and run ${q?.appliedRunId ?? "(unknown)"} acted on the earlier answer. Your new answer is saved on the question's history, but nothing applied it.` }, 202);
@@ -565,7 +565,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			}
 			if (wake === "gone") {
 				await recoverDeadParkedRun(c.env, coding.runId).catch(() => false);
-				return c.json({ ok: false, ...base, outcome: "run_gone", delivered: false, error: "The run that asked is no longer running: its workflow stopped while it was parked, so it cannot take your answer. Your answer is saved on the question and posted on its issue, and the run was closed so its queue can move. Continue the run (continue_instance_run, or Continue on its card); the continuation reads your answer." }, 409);
+				return c.json({ ok: false, ...base, outcome: "run_gone", delivered: false, next: "continue_run", error: "The run that asked is no longer running: its workflow stopped while it was parked, so it cannot take your answer. Your answer is saved on the question and posted on its issue, and the run was closed so its queue can move. Continue the run (continue_instance_run, or Continue on its card); the continuation reads your answer." }, 409);
 			}
 			if (wake === "failed") {
 				return c.json({ ok: true, ...base, outcome: "stored", delivered: false, message: "Saved on the question, but the parked run could not be signalled just now. The platform signals it again within a minute; nothing else is needed from you." }, 202);
@@ -595,7 +595,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		}
 		// A coding session's card with no question on it is not a lost BROWSER session — say what it is.
 		if (body.taskId.startsWith(CODING_CARD_PREFIX)) {
-			return c.json({ ok: false, error: "No question was asked on that coding session, so there is nothing to answer." }, 409);
+			return c.json({ ok: false, next: "reread", error: "No question was asked on that coding session, so there is nothing to answer. Re-read the board (instance_board) for the card that is waiting." }, 409);
 		}
 		// #1079: a browser (JOB_APPLY) question is a durable decision too — the answer is written to it
 		// FIRST, then delivered. If the run has stopped waiting, it is kept and used next time, not refused.
@@ -609,8 +609,10 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			await logEvent(c.env, { source: "apply", event: "apply.answered_late", message: "an answer arrived after the application stopped waiting; recorded for the next run", userId: session.uid, instanceId, level: "info", traceId: body.taskId, context: { decisionId: d.id, via } }).catch(() => undefined);
 			return c.json({ ok: true, kind: "job_apply_late", outcome: "recorded", delivered: false, recorded: true, decisionId: d.id, message: "The application had already stopped waiting, so this was not delivered to it. It is saved — on the question and in your Profile — and the next application to this posting uses it (Retry it from the board)." }, 202);
 		};
-		const runtime = decided ? await getLiveRuntime(c.env, instanceId, session.uid).catch(() => null) : await requireLiveRuntime(c.env, instanceId, session.uid);
-		if (!runtime) return keepForNextRun();
+		const runtime = await getLiveRuntime(c.env, instanceId, session.uid).catch(() => null);
+		if (!runtime && decided) return keepForNextRun();
+		// #1243: say that nothing was delivered and that the same answer is safe to send again.
+		if (!runtime) return c.json({ ok: false, delivered: false, next: "retry", error: "No runner is connected, so nothing was delivered. Start it with `pags up` on its machine, then send the same answer again." }, 503);
 		const res = await callRuntime(c.env, runtime, "/browser/input", {
 			method: "POST",
 			body: JSON.stringify({ taskId: body.taskId, value }),
@@ -625,10 +627,13 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		// the answer the user typed recorded nowhere.
 		if (payload && payload.ok === false) {
 			return c.json(
-				{ ...payload, error: "That takeover session is gone (the runner restarted). Re-run the application and answer again." },
+				{ ...payload, next: "rerun", error: "That takeover session is gone (the runner restarted). Re-run the application and answer again." },
 				409,
 			);
 		}
+		// The runner refused or could not be reached (a 503 when its relay is down, #1243): nothing was
+		// delivered, and the same answer is safe to send again once it is back.
+		if (!res.ok) return c.json({ ...(payload ?? {}), ok: false, delivered: false, next: "retry", error: `The runner did not take the answer (HTTP ${res.status}), so nothing was delivered. Send the same answer again once \`pags up\` is running on its machine.` }, runtimeStatus(res, 200));
 		return c.json((payload ?? {}) as object, runtimeStatus(res, 200));
 	});
 

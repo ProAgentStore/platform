@@ -101,6 +101,7 @@ describe("an answer reaches the pause it answers (#960)", () => {
 		const r = await answer(CARD, "yes");
 		expect(r.status).toBe(409);
 		expect(r.body.error).toMatch(/No question was asked on that coding session/);
+		expect(r.body.next).toBe("reread"); // #1243: what to do next, as a field
 		expect(r.body.error).not.toMatch(/runner restarted/);
 		expect(sent).toEqual([]);
 	});
@@ -262,7 +263,7 @@ describe("the question's row is the source of truth for an answer (#1075)", () =
 		getBoundRunnerConn.mockImplementation(async () => null);
 		const down = await answer(CARD, "again");
 		expect(down.status).toBe(409);
-		expect(down.body).toMatchObject({ ok: false, outcome: "not_delivered", delivered: false });
+		expect(down.body).toMatchObject({ ok: false, outcome: "not_delivered", delivered: false, next: "retry" });
 	});
 
 	it("an owner may revise an answer no run has used yet; the row holds the latest", async () => {

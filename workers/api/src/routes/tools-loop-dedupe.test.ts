@@ -154,6 +154,8 @@ describe("POST /:id/loop — a busy refusal names what holds the repo (#886)", (
 		expect(res.status).toBe(409);
 		const body = (await res.json()) as Record<string, unknown>;
 		expect(body).toMatchObject({ reason: "busy", startState: "not_started", activeRun: { runId: "run-A", requestId: "req-A" } });
+		// #1243: the refusal says what to do — queue it.
+		expect(body.next).toMatch(/^Retry the same call with queue_if_busy: true/);
 		// …and the retry's OWN receipt, provisioning while it was refused, is not reported as in flight.
 		expect(body.inFlightStarts).toEqual([]);
 	});
@@ -174,5 +176,6 @@ describe("POST /:id/loop — a busy refusal names what holds the repo (#886)", (
 		expect(body).toMatchObject({ error: "No runner is connected for this agent", reason: "refused", startState: "not_started" });
 		expect(body).not.toHaveProperty("activeRun");
 		expect(body).not.toHaveProperty("inFlightStarts");
+		expect(body).not.toHaveProperty("next"); // a queue does not fix "no runner"
 	});
 });

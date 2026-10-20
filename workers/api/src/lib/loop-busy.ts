@@ -14,6 +14,9 @@
 
 import type { Env } from "../types.js";
 
+/** What a caller does about a busy refusal (#1243): the one refusal a queue answers. */
+export const BUSY_NEXT = "Retry the same call with queue_if_busy: true (the same request_id is safe) to queue this objective; it starts by itself when the active run ends.";
+
 /** A provisioning receipt older than this is reported `unknown` by `listLoopStarts`, so it is not "in flight". */
 export const IN_FLIGHT_MS = 5 * 60_000;
 

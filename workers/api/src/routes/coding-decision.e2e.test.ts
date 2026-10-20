@@ -207,7 +207,7 @@ describe("a coding run asks, PARKS at zero compute, and resumes with the owner's
 				},
 			),
 		);
-		expect(answered).toMatchObject({ status: 409, body: { ok: false, outcome: "run_gone", delivered: false, recorded: true, runId: "run-1" } });
+		expect(answered).toMatchObject({ status: 409, body: { ok: false, outcome: "run_gone", delivered: false, recorded: true, runId: "run-1", next: "continue_run" } });
 		expect(answered!.body.error).toMatch(/no longer running.*Continue the run/s);
 		expect(woken).toEqual([]); // nothing was sent to a dead instance and called delivered
 		expect(await getLoopRun(env, "u1", "run-1")).toMatchObject({ stopReason: "decision" });
