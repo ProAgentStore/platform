@@ -5,13 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
-const issueState = { state: "open" };
 const posted: Array<{ number: number; body: string }> = [];
 vi.mock("./github-issues.js", async () => {
 	const actual = await vi.importActual<typeof import("./github-issues.js")>("./github-issues.js");
 	return {
 		...actual,
-		readIssue: async (_e: unknown, _u: string, _r: string, number: number) => ({ number, state: issueState.state, url: `https://github.com/o/r/issues/${number}` }),
 		postIssueComment: async (_e: unknown, _u: string, _r: string, number: number, body: string) => {
 			posted.push({ number, body });
 			return true;
@@ -40,12 +38,22 @@ function run(runId: string, repoId: string, o: { status?: string; stop?: string 
 }
 const check = (r: string, objective: string, extra: Record<string, unknown> = {}) => checkStartIdempotency(env, { userId: "u1", instanceId: "i1", repo: repo(r), objective, now: NOW, ...extra });
 
+/**
+ * Set an issue's CACHED GitHub state — the only signal `checkStartIdempotency` reads for "closed"
+ * (migration 0183: "the board reads ONLY this cache — it must never call GitHub"). Upserts the ticket
+ * row so a never-ticketed issue can be closed too.
+ */
+function cacheIssueState(repoId: string, issue: number, state: string) {
+	const cache = JSON.stringify({ number: issue, repo: "o/r", title: "T", state, stateReason: null, labels: [], assignees: [], url: `https://github.com/o/r/issues/${issue}`, updatedAt: "", closedAt: null, summary: "" });
+	d1.exec(`INSERT INTO tickets (id, instance_id, user_id, job_key, title, created_by, repo_id, issue_number, issue_cache) VALUES ('t-${repoId}-${issue}', 'i1', 'u1', 'issue:${repoId}#${issue}', 'T', 'human', '${repoId}', ${issue}, '${cache}')
+	  ON CONFLICT(id) DO UPDATE SET issue_cache = excluded.issue_cache`);
+}
+
 beforeEach(() => {
 	d1 = realSchemaD1();
 	seedTenant(d1, { userId: "u1", instanceIds: ["i1"] });
 	d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name) VALUES ('r1', 'i1', 'u1', 'a'), ('r2', 'i1', 'u1', 'b')`);
 	env = { DB: d1.DB } as unknown as Env;
-	issueState.state = "open";
 	posted.length = 0;
 });
 afterEach(() => d1.close());
@@ -87,14 +95,23 @@ describe("a start for work already in flight (#1253)", () => {
 
 describe("closed and recently-done work (#1253)", () => {
 	it("a closed issue is refused without force, naming the run that finished it", async () => {
-		issueState.state = "closed";
 		run("run-1", "r1", { status: "completed", stop: "done", issue: 5, finished: NOW - 3_600_000 });
+		cacheIssueState("r1", 5, "closed");
 		expect(await check("r1", "x", { issue: 5 })).toMatchObject({ reason: "issue_closed", detail: { issue: 5, run_id: "run-1" } });
 	});
 
-	it("a closed issue with no prior run is still refused", async () => {
-		issueState.state = "closed";
+	it("a closed issue with no prior run is still refused, from the ticket's cache alone", async () => {
+		cacheIssueState("r1", 6, "closed");
 		expect(await check("r1", "x", { issue: 6 })).toMatchObject({ reason: "issue_closed" });
+	});
+
+	it("an issue nobody has ever ticketed is not refused as closed — the cache has nothing to say", async () => {
+		expect(await check("r1", "x", { issue: 999 })).toBeNull();
+	});
+
+	it("never reads GitHub live: an open cache does not refuse, however the real issue reads", async () => {
+		cacheIssueState("r1", 7, "open");
+		expect(await check("r1", "x", { issue: 7 })).toBeNull();
 	});
 
 	it("a run that ended done within the window is refused without force, with its id and time", async () => {
@@ -110,8 +127,8 @@ describe("closed and recently-done work (#1253)", () => {
 	});
 
 	it("force WITH a reason starts it and records the reason on the issue; force without one does not", async () => {
-		issueState.state = "closed";
 		run("run-1", "r1", { status: "completed", stop: "done", issue: 5, finished: NOW - 1000 });
+		cacheIssueState("r1", 5, "closed");
 		expect(await check("r1", "x", { issue: 5, force: true })).toMatchObject({ reason: "issue_closed" });
 		expect(await check("r1", "x", { issue: 5, force: true, forceReason: "  " })).toMatchObject({ reason: "issue_closed" });
 		expect(posted).toEqual([]);

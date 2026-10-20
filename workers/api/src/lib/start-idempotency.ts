@@ -9,14 +9,18 @@
 // naming the prior work:
 //   - `duplicate`    a run for this issue is running now. `force` cannot override: a second writer on one
 //                    issue is the failure this exists to stop.
-//   - `issue_closed` the GitHub issue is closed. `force` + a reason reopens the question.
+//   - `issue_closed` the ticket's CACHED GitHub state is closed (migration 0183's `issue_cache`, kept
+//                    fresh by `lib/issue-sync.ts`). Read ONLY from the cache, same rule as the board
+//                    ("must never call GitHub") — a live read here would put a GitHub round trip, and
+//                    that repo's live state, on every single start. An issue this platform has never
+//                    ticketed has no cache and is not refused by this branch.
 //   - `already_done` a run for this issue ended `done` within RECENTLY_DONE_DAYS. Same override.
 // A forced start records its reason as a comment on the issue, so the next reader sees why.
 
 import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
-import { readIssue, postIssueComment } from "./github-issues.js";
-import { namesOtherRepo } from "./issue-tickets.js";
+import { postIssueComment } from "./github-issues.js";
+import { namesOtherRepo, parseIssueCache } from "./issue-tickets.js";
 import { referencedIssue } from "./objective-dedupe.js";
 
 export const RECENTLY_DONE_DAYS = 7;
@@ -70,10 +74,13 @@ export async function checkStartIdempotency(
 	const done = await env.DB.prepare(`${where("r.status = 'completed' AND r.stop_reason = 'done' AND r.finished_at > ?5")} ORDER BY r.finished_at DESC LIMIT 1`)
 		.bind(...base, now - RECENTLY_DONE_DAYS * 86_400_000)
 		.first<{ run_id: string; finished_at: number }>();
-	const closed = githubRepo ? await readIssue(env, input.userId, githubRepo, issue).catch(() => null) : null;
+	const ticket = await env.DB.prepare("SELECT issue_cache FROM tickets WHERE instance_id = ?1 AND user_id = ?2 AND repo_id = ?3 AND issue_number = ?4")
+		.bind(input.instanceId, input.userId, input.repo.id, issue)
+		.first<{ issue_cache: string | null }>();
+	const cache = parseIssueCache(ticket?.issue_cache);
 	const how = "Pass force: true with force_reason to start it anyway.";
-	if (closed && closed.state === "closed") {
-		return { reason: "issue_closed", error: `Issue #${issue} is closed on GitHub${done ? ` (run ${done.run_id} finished it)` : ""}. ${how}`, detail: { issue, repoId: input.repo.id, issue_url: closed.url, ...(done ? { run_id: done.run_id, finished_at: done.finished_at } : {}) } };
+	if (cache?.state === "closed") {
+		return { reason: "issue_closed", error: `Issue #${issue} is closed on GitHub${done ? ` (run ${done.run_id} finished it)` : ""}. ${how}`, detail: { issue, repoId: input.repo.id, issue_url: cache.url || undefined, ...(done ? { run_id: done.run_id, finished_at: done.finished_at } : {}) } };
 	}
 	if (done) {
 		return { reason: "already_done", error: `Issue #${issue} was finished by run ${done.run_id} within the last ${RECENTLY_DONE_DAYS} days. ${how}`, detail: { issue, repoId: input.repo.id, run_id: done.run_id, finished_at: done.finished_at } };
