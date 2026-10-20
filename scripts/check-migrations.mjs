@@ -107,6 +107,13 @@ const KNOWN_DUPLICATES = {
  * the text the file now claims. Delete the entry when that lands.
  */
 const GRANDFATHERED = {
+	"0266_lead_verification_closed_reason.sql": {
+		baseline: "d25155b",
+		why:
+			"Rolled back ON DEPLOY (run 39387828573): D1 refused its backfill's 57-byte LIKE pattern\n" +
+			"      (\"LIKE or GLOB pattern too complex\" — D1 caps a pattern at 50 bytes; local SQLite does not),\n" +
+			"      so the first version was never applied anywhere. d25155b is the shape that runs (#1235).",
+	},
 	"0043_multi_instance.sql": {
 		baseline: "a662efc",
 		why:
