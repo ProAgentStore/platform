@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BADGE_BASE, BUTTON_BASE, BUTTON_SIZE, BUTTON_VARIANT, CARD_GEOMETRY, CARD_TONE, badgeClass, buttonClass, cardClass } from "./control-classes.js";
-import { INTENT_CLASS } from "./statusBadge.js";
+import { BUTTON_BASE, BUTTON_SIZE, BUTTON_VARIANT, CARD_GEOMETRY, CARD_TONE, buttonClass, cardClass } from "./control-classes.js";
 
 /**
  * The tables, tested as tables (#366).
@@ -121,17 +120,6 @@ describe("cardClass", () => {
 	it("differs between tones only in the fill", () => {
 		const diff = utilities(CARD_TONE.paper).filter((u) => !utilities(CARD_TONE.panel).includes(u));
 		expect(diff).toEqual(["bg-paper"]);
-	});
-});
-
-describe("badgeClass", () => {
-	it("takes its colour from the shared intent layer, not a copy of it", () => {
-		// #368 refused to invent a third status vocabulary; a private table here would be a fourth.
-		expect(badgeClass("success")).toBe(`${BADGE_BASE} ${INTENT_CLASS.success}`);
-	});
-
-	it("defaults to neutral", () => {
-		expect(badgeClass()).toContain(INTENT_CLASS.neutral);
 	});
 });
 

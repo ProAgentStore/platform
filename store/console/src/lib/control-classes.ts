@@ -34,8 +34,6 @@
  *    not to a control's label. No size below carries it.
  */
 
-import { INTENT_CLASS, type StatusIntent } from "./statusBadge";
-
 /* ── vendored:button-vocabulary ──────────────────────────────────────────────────────────────
  * This region exists TWICE and is held byte-identical by `control-classes.test.ts`:
  * `store/console/src/lib/control-classes.ts` and `agents/coder/web/src/control-classes.ts`.
@@ -130,15 +128,4 @@ export const CARD_GEOMETRY = "rounded-xl p-3 sm:p-4";
 
 export function cardClass(tone: CardTone = "panel", extra = ""): string {
 	return `${CARD_TONE[tone]} ${CARD_GEOMETRY}${extra ? ` ${extra}` : ""}`;
-}
-
-/**
- * Status pills. The tone vocabulary is `statusBadge.ts`'s existing intent layer, imported
- * rather than restated — #368 refused to invent a third status vocabulary and this would have
- * been the fourth.
- */
-export const BADGE_BASE = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium";
-
-export function badgeClass(tone: StatusIntent = "neutral", extra = ""): string {
-	return `${BADGE_BASE} ${INTENT_CLASS[tone]}${extra ? ` ${extra}` : ""}`;
 }
