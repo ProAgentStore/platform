@@ -39,7 +39,7 @@ Read `health` rather than deriving your own verdict from the timestamps. That in
 
 ### `ended` Is The Common Answer, Not An Edge Case
 
-`check_instance_loop` and `coding_loop_status` list an instance's recent runs without filtering by status, most of which finished hours or days ago. So most rows you see carry `ended`, and that is the expected reading rather than a sign something went wrong.
+`coding_loop_status` (and its deprecated alias `check_instance_loop`) lists an instance's recent runs without filtering by status, most of which finished hours or days ago. So most rows you see carry `ended`, and that is the expected reading rather than a sign something went wrong.
 
 `ended` makes **no liveness claim in either direction**. It does not mean the run succeeded — a run that failed days ago is `ended` too. It is a statement that the liveness question no longer applies, and the answer to "what happened" is `status` and `stopReason`.
 
@@ -51,13 +51,13 @@ This is the most important limit on everything above, and the one that has cause
 
 `lastAliveAt` is the **orchestrator's** heartbeat and `lastProgressAt` is its last advance. Neither is the engine's last output. A run's `health` describes the platform's own loop — and some runs have no engine at all.
 
-The engine's own state lives behind `/capture`, on the coding surface. The two genuinely disagree: `check_instance_loop` has reported `running` with a fresh timestamp at the same moment `coding_session_capture.runState` said `idle` and the terminal pane showed the CLI's own usage-limit message.
+The engine's own state lives behind `/capture`, on the coding surface. The two genuinely disagree: the run read (`coding_loop_status`) has reported `running` with a fresh timestamp at the same moment `coding_session_capture.runState` said `idle` and the terminal pane showed the CLI's own usage-limit message.
 
 So a fresh heartbeat is not an all-clear about the engine. If the question is "what is the CLI doing right now", read the capture; `health` cannot answer it, and treating it as though it can replaces a false stall with a false all-clear.
 
 ## `repoCi` — The Repository's Pipeline, Not The Run
 
-A coding instance can read perfectly healthy — idle, last run done — while its repository's CI on the default branch is red. So the two loop reads (`coding_loop_status`, `check_instance_loop`) also carry `repoCi` for an instance with GitHub repos: a separate verdict on each repo's latest **default-branch** CI and deploy workflows (#903).
+A coding instance can read perfectly healthy — idle, last run done — while its repository's CI on the default branch is red. So the two loop reads (`coding_loop_status`, and its deprecated alias `check_instance_loop`) also carry `repoCi` for an instance with GitHub repos: a separate verdict on each repo's latest **default-branch** CI and deploy workflows (#903).
 
 - `state` is the worst across the instance's repos: `failing`, `unknown`, `pending`, `passing`, `none`. `attention` is set, naming the repo and workflow, whenever one is red.
 - It counts `push`, `schedule` and `workflow_run` runs on the default branch. Per workflow, the newest **decisive** run decides: `success` passes; `failure`, `timed_out` and `startup_failure` fail. `cancelled`, `skipped`, `neutral` and `action_required` are passed over, never counted as failures, and manually triggered runs are ignored. A run still going is `pending`. A workflow with no decisive run in 30 days drops out.
@@ -136,7 +136,7 @@ A flow noticed in a tmux session is timed from when the platform first saw its c
 
 ## Where You See This
 
-- **`check_instance_loop`** and **`coding_loop_status`** (MCP) — an instance's recent runs, each with `health` and, when parked, a note saying what for and until when.
+- **`coding_loop_status`** (MCP; `check_instance_loop` is its deprecated alias until 2027-01-18, #1243) — an instance's recent runs, each with `health` and, when parked, a note saying what for and until when.
 - **`check_work`** (agent tool) — how an agent reads back a run it started itself.
 - The **recent work** block the agent receives automatically, which is rendered by the same code, so the tool result and the context block can never tell different stories about one run.
 

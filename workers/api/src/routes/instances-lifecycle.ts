@@ -108,7 +108,7 @@ export function registerInstanceLifecycleRoutes(router: Hono<{ Bindings: Env }>)
 			/**
 			 * How many in-flight runs were ASKED to stop — not how many have stopped. There is no
 			 * way to kill a Workflow mid-step; each stops at the top of its next iteration and the
-			 * sweeper enforces the ones that do not. `check_instance_loop` is where that is watched.
+			 * sweeper enforces the ones that do not. `coding_loop_status` is where that is watched.
 			 */
 			runsAskedToStop: asked,
 		});

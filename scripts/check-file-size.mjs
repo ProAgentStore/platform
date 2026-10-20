@@ -1554,7 +1554,7 @@ const PINS = {
 	// +20 at #589, and every line of it is the file paying a debt it created. This module holds
 	// TWO of the five readers of `agent_loop_runs` (`subordinate_status`, `check_delegation`) and
 	// neither applied the platform's own health verdict: for one run parked 4.35 hours they
-	// reported `activity:"working"` while `check_instance_loop` reported `waiting` about the same
+	// reported `activity:"working"` while `check_instance_loop` (now `coding_loop_status`) reported `waiting` about the same
 	// row at the same instant, so a Coder Lead kept waiting on a subordinate that had stopped.
 	// The lines are `health`/`waitNote`/`healthLegend` on the drill-down payload plus the two tool
 	// descriptions, which had to change because the vocabulary they sell did: `activity` used to

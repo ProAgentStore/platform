@@ -45,7 +45,7 @@
 // iteration, and `lib/run-sweeper.ts` enforces the ones that never read it (0150, #790). There is
 // no way to kill a Workflow mid-step, so "paused" is honest about being the state it is entering
 // rather than a state it has already reached — the route reports how many runs it ASKED to stop,
-// and `check_instance_loop` is where a caller watches them actually stop.
+// and `coding_loop_status` is where a caller watches them actually stop.
 
 import { ACTIVE_INSTANCE_STATUS } from "./trigger-eligibility.js";
 

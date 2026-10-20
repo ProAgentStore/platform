@@ -191,7 +191,7 @@ export const RUN_HEALTH_LEGEND =
  * `agent_loop_runs` hold one. The supervision path reads its own narrower row shape
  * (`instance-work.ts`'s `RunItem`, a cross-instance `UNION ALL`), and because it could not satisfy
  * `LoopRunView` it derived activity from the raw `status` column instead — reporting a run parked
- * 4.35 hours as `activity:"working"` while `check_instance_loop` said `waiting` about the same row
+ * 4.35 hours as `activity:"working"` while `check_instance_loop` (now `coding_loop_status`) said `waiting` about the same row
  * at the same instant.
  *
  * So the input is the SIGNALS rather than a producer's record type. Anything holding these four
@@ -446,7 +446,7 @@ export function askClause(ask: WaitingAsk | null | undefined): string {
  * describes loop runs that may have no engine at all. Asserting "engine: working" from these columns
  * would replace a false stall with a false all-clear, which is the same defect facing the other way.
  *
- * #580 measured that gap from the other end: `check_instance_loop` reported `running` with a fresh
+ * #580 measured that gap from the other end: `check_instance_loop` (now `coding_loop_status`) reported `running` with a fresh
  * timestamp at the same moment `coding_session_capture.runState` said `idle` and the pane showed the
  * engine's own limit message. The caveat written here was correct and was confined to this file.
  */

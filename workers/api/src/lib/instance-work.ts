@@ -44,7 +44,7 @@ export interface WorkItem {
  * died — migration 0127 split those into three columns precisely so it could — and this SELECT
  * carried none of them. So the supervision path could not form the platform's verdict even in
  * principle, and did the only thing left: it read the raw column. Measured on one run at one
- * instant: `check_instance_loop` said `health:"waiting"` while `subordinate_status` said
+ * instant: `check_instance_loop` (now `coding_loop_status`) said `health:"waiting"` while `subordinate_status` said
  * `activity:"working"` about the same row, 4.35 hours into a park.
  *
  * These four fields are exactly {@link RunHealthInput}'s. The judgement is NOT made here — this

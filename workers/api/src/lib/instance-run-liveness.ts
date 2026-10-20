@@ -20,7 +20,7 @@
 // the rule this module obeys: "Anything holding these four fields gets the platform's verdict;
 // nothing has an excuse to compute a second one." #589 is the incident behind that sentence —
 // `subordinate_status` derived activity from the raw `status` column and reported `working` for a
-// run parked 4h35m, while `check_instance_loop` said `waiting` about the same row at the same
+// run parked 4h35m, while `check_instance_loop` (now `coding_loop_status`) said `waiting` about the same row at the same
 // instant. Deriving a third answer here would recreate exactly that, on the surface #791 is about.
 //
 // So this module SHAPES a payload. The only judgement in it is `runHealth`'s.

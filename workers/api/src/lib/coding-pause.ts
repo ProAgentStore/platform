@@ -574,7 +574,7 @@ async function waitForSignIn(deps: PauseDeps, input: { round: number; result: Co
  *   * `stuck` / `needs_input` → `escalated`, so an unanswered handoff reads "needs you" instead of
  *     "failed". `statusFor("escalated")` is `needs_human`.
  *   * `waiting` → `engine_limit`, distinct from BOTH, which is what makes "the CLI is still
- *     throttled" and "somebody has to click something" tellable apart in `check_instance_loop`'s
+ *     throttled" and "somebody has to click something" tellable apart in `coding_loop_status`'s
  *     `stopReason` — the two now end in different states for different reasons and must not be
  *     read as the same event.
  */

@@ -563,7 +563,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			"that detail is shortened when it does not fit, and `coverage` says when it was. " +
 			// #589: this sentence sold `activity` hardest while it was computed from the raw
 			// `status` column, so a run parked four hours read as `working` here and `waiting` on
-			// `check_instance_loop` at the same instant. Only `idle` now means "ready for work".
+			// `check_instance_loop` (now `coding_loop_status`) at the same instant. Only `idle` now means "ready for work".
 			"`activity` is the platform's verdict, not the raw status: only `idle` means an agent is " +
 			"free to take work. `waiting` and `stalled` are runs still IN FLIGHT — `waiting` resumes " +
 			"on its own and wants nothing from you, `stalled` means nothing has ticked and somebody " +

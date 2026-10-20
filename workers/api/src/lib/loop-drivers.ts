@@ -677,7 +677,7 @@ function withProGate(driver: LoopDriver): LoopDriver {
  * Refuse autonomous work on an agent whose WORKFLOW is retired (#979), at the same one door.
  *
  * A retired agent's own start path refuses, but its chat loop would not: the Loop button,
- * `start_instance_loop`, a trigger and a supervisor's `delegate_goal` would all start a run on an
+ * `start_instance_loop` (now `coding_loop_start`), a trigger and a supervisor's `delegate_goal` would all start a run on an
  * agent whose work cannot run — burning the owner's tokens to arrive at the migration message the
  * refusal could have given for nothing. #979 asks for exactly that: no silent no-op, an explanatory
  * migration message instead. (No workflow is retired today: JOB_APPLY was restored at #1062.)

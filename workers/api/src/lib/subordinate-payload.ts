@@ -153,7 +153,7 @@ export type Activity = Exclude<RunHealth, "ended"> | "idle" | "unknown";
  * called the result `working`, which is the platform's strongest positive word applied to the one
  * column that provably cannot carry it: `status` stays `running` on a run parked on an engine
  * limit, on a run whose Workflow died, and on a row nothing will ever close. Measured on one run
- * at one instant, `check_instance_loop` answered `waiting` and `subordinate_status` answered
+ * at one instant, `check_instance_loop` (now `coding_loop_status`) answered `waiting` and `subordinate_status` answered
  * `working` — and a Coder Lead kept waiting on a subordinate that had stopped hours before.
  *
  * ── Why `waiting` and `stalled` are words here rather than folded into `idle` or `working`

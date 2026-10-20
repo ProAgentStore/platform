@@ -61,7 +61,7 @@ export function isOpen(run: Pick<LoopRunLike, "status"> | null | undefined): boo
  *
  * The console was the third of the three surfaces #589 measured disagreeing about one run: it
  * rendered "step 1/40 · started 4h ago" with a live Stop button for a run the platform had already
- * classified as parked, at the same instant `check_instance_loop` reported `waiting`. Nothing was
+ * classified as parked, at the same instant `check_instance_loop` (now `coding_loop_status`) reported `waiting`. Nothing was
  * wrong with the data — the page simply never read the field.
  *
  * `null` means the server sent no verdict (an older response, a cached payload). The caller must

@@ -7,7 +7,7 @@
 // anything, so it had no true remedy to offer and produced a plausible one instead.
 //
 // The capability was already there: `requestCancel` (agent-loop-store.ts), the `cancel_requested`
-// column, `POST /v1/instances/:id/loop/:runId/cancel`, and MCP's `stop_instance_loop`. Only the
+// column, `POST /v1/instances/:id/loop/:runId/cancel`, and MCP's `stop_instance_loop` (now `coding_loop_stop`). Only the
 // agent's own catalog was missing an entry. So this module is deliberately small: it holds the two
 // things that are DECISIONS rather than plumbing — which runs a bare "stop" applies to, and what
 // the agent is entitled to say afterwards — as pure functions with their own tests.
