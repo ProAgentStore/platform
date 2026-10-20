@@ -68,6 +68,14 @@ agent's **Permissions** tab → *Release notes* (or `get_instance_release_notes`
 the `releaseNotes` section of `set_account_preferences`), and which granted channels. *Send test*
 (`send_test_release_note`) posts a test note to one channel.
 
+**Discord for a coder (#1218).** A coder declares no Discord tools, so the ordinary channel grant is
+refused for it. Grant the channel *for release notes* instead — the picker on the Release notes panel, or
+`grant_instance_discord_channel` with `purpose: "release_notes"`. Everything else is still checked (you own
+the agent, your bot is connected, Discord shows the bot the channel); the grant is stored as
+`discord_release_channel`, which the agent's Discord tools refuse and never list, so the agent gets no
+access to the channel. A channel the agent already holds is returned as it is, never downgraded, and a
+later ordinary grant of the same channel (on an agent that declares the tools) upgrades the same grant.
+
 **Slack** is a notification connector only: the platform posts, the agent gets no Slack tools. Connect
 a Slack bot on the same panel — paste your Slack app's bot token (xoxb-, scopes `chat:write`,
 `channels:read`, `groups:read`), or *Add to Slack* where the platform's Slack app is configured — then
