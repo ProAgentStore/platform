@@ -14,6 +14,7 @@
 // A forced start records its reason as a comment on the issue, so the next reader sees why.
 
 import type { Env } from "../types.js";
+import { clipMarked } from "./clip-marked.js";
 import { readIssue, postIssueComment } from "./github-issues.js";
 import { namesOtherRepo } from "./issue-tickets.js";
 import { referencedIssue } from "./objective-dedupe.js";
@@ -61,7 +62,7 @@ export async function checkStartIdempotency(
 
 	const reason = input.forceReason?.trim();
 	if (input.force === true && reason) {
-		if (githubRepo) await postIssueComment(env, input.userId, githubRepo, issue, `Started again on purpose (force): ${reason.slice(0, 500)}`).catch(() => false);
+		if (githubRepo) await postIssueComment(env, input.userId, githubRepo, issue, `Started again on purpose (force): ${clipMarked(reason, 500, { within: true, what: "characters in the force reason" })}`).catch(() => false);
 		return null;
 	}
 
