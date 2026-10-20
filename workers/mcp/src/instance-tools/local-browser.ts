@@ -169,7 +169,7 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 		},
 	);
 
-	// No dry run, on `stop_instance_loop`'s reasoning: the call is fully determined by one run id,
+	// No dry run, on `coding_loop_stop`'s reasoning: the call is fully determined by one run id,
 	// `list_local_browser_runs` answers "which run is that?", and stopping is the safe direction —
 	// research is read-only, and findings already recorded stay on the trace.
 	server.tool(

@@ -8,6 +8,7 @@ import { type InstanceToolsCtx, findInstanceForAgent } from "./shared.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS, OBJECTIVE_CAP_NOTE } from "./composition.js";
 import { loopRunsPage } from "./loop-runs-page.js";
 import { pageText } from "../wire-budget.js";
+import { registerAliasTarget, registerDeprecatedAlias } from "../deprecated-alias.js";
 
 /** One timeline event read whole (#898), its text paged when it would not fit one response. */
 export function pagedTimelineEntry(data: unknown, offset?: number): string {
@@ -32,32 +33,10 @@ const STRIPPED_START = {
 
 export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor, groups } = ctx;
-	// Coding-only: hits /coding/diagnostics, so gate it to coding-surface agents (the same
-	// endpoint coding_diagnostics gates). Otherwise a Repo-Chat/apply-only user sees a
-	// coding tool that can't apply to their agent — the exact leak the registry closes.
+	// Coding-only tools, gated to coding-surface agents. Otherwise a Repo-Chat/apply-only user sees a
+	// coding tool that can't apply to their agent — the exact leak the registry closes. (`system_status`
+	// lived here until #1243; it is now a deprecated alias of coding_diagnostics, in coding-tools.ts.)
 	if (groups.has("coding")) {
-		server.tool(
-			"system_status",
-			"Full diagnostics for a coding instance: runner connectivity, node name, terminal sessions, repos, issues — the same report coding_diagnostics reads (prefer it unless you need what follows), plus `providerAccount`, the owner's own Anthropic account as last observed: `failing` means the newest recorded run death was an empty balance or a rejected key and the key has not succeeded since; `no_failure_recorded` is not an all-clear. Use this to understand why sessions are offline, to check the runner's machine, or when a run stopped with `provider_credit`. For a LIVE credit answer the report names a verify endpoint; it costs one small provider request, so call it when you suspect a problem rather than before every run.",
-			{
-				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-				instance_id: z.string().describe("Instance ID or slug"),
-			},
-			async ({ token, instance_id }) => {
-				const sessionToken = tokenFor(token);
-				if (!sessionToken) return authRequired();
-				const inst = await findInstanceForAgent(env, sessionToken, instance_id);
-				const id = inst?.id || instance_id;
-				const data = await authedCall(
-					`/v1/instances/${id}/coding/diagnostics`,
-					sessionToken,
-					{},
-					env,
-				);
-				return jsonText(data);
-			},
-		);
-
 		// ── The live feed (#581), which is also the finished-run audit (#527) ──
 		//
 		// Thirteen coding tools were registered and none of them read `coding_timeline`, the
@@ -239,7 +218,8 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 	// The return shape changed with it: start-and-poll, not a whole transcript. Holding an MCP
 	// request open across 50 model calls was its own problem.
 
-	server.tool(
+	const loopStart = registerAliasTarget(
+		server,
 		"coding_loop_start",
 		"Give an agent an objective and let it work on it autonomously, on the server. Returns a start receipt and, once provisioned, a run id — poll status with coding_loop_status and live work events with coding_loop_trace; the run keeps going after this call returns and after you disconnect. Durable and budgeted: its spend is drawn from a pool and stop_instance_loop / coding_loop_stop can end it. What it drives depends on the agent — a coding agent's engine, otherwise its chat. Same runs as start_instance_loop. Start states are provisioning (this call was dispatched and is preparing the run), started, queued, not_started (an explicit refusal), or unknown (the response was lost). Use request_id to safely join the same request after a timeout or a LOST response. To collect a lost result, POLL it by request_id alone (#1071): coding_loop_status with instance_id and request_id returns that start's receipt and what it became, or startState not_received (it never arrived — retrying with the same request_id is safe); coding_loop_start with only instance_id and request_id does the same. While this call is still pending in your client, wait for its result: do not call again, and do not add an argument this schema does not list (e.g. _deferred_result_for) — request_id is the only join mechanism there is. With queue_if_busy, a start whose objective is about the same GitHub issue (e.g. 'issue #925') as an entry already queued, or the run already working, on that repo is not queued again: you get that existing entry (`queued:true, entry`) or run (`runId`) back with `duplicate_of` set to its id — so a retry with a new request_id cannot double-queue an issue. Queuing SEVERAL objectives behind one repo (#935): one call per objective, each with its own request_id — there is no batch form, and a start behind a busy repo is answered quickly with `queued:true`; then confirm the whole set with ONE coding_loop_status (no run_id): every request_id appears in its `starts` with its start state (the states above) and the entry or run it produced. coding_loop_queue alone can look empty while starts are still provisioning — it lists those under `inFlightStarts`. Interactive approval belongs to your MCP client, before this handler runs: the server cannot observe approval_pending or a client approval timeout, and no receipt does not prove that another call will not arrive. So: pass your OWN request_id on every start. If your client reports an approval timeout ('approval timed out … not executed'), this server never received the call — poll coding_loop_status (no run_id) and look for your request_id in `starts`: absent means not started, and retrying with the SAME request_id is always safe (it joins or replays, never double-starts); never retry with a new one. A start refused because the repo is busy (`reason: busy`) names what holds it: `activeRun` (with the `requestId` that started it and the `sessionId` it drives — coding_session_capture / coding_timeline read it) and `inFlightStarts` (accepted starts still provisioning). If one of those `requestId`s is yours, your earlier start landed — poll it instead of starting again. Which repo: pass repo_id (from coding_repos_list) to target one repo of a multi-repo instance. With one repo it may be omitted; with more than one and no repo_id the call is refused with the registered repo_ids rather than guessed, and a repo_id that is not on this instance is refused. Per-repo run lock: only one run may work on a repo at a time — starting a second is rejected with an error naming the repo (runs on OTHER repos of the same instance are unaffected); call coding_loop_status (no run_id) or check_instance_loop to see whether one is already running, and coding_loop_stop or stop_instance_loop to clear it first. Do NOT use a run for work a direct connector tool already does: filing or commenting on issues, reading issues or PRs, reading issue comments, and checking workflow-run / deploy status are all one-call operations via github_create_issue, github_comment_issue, github_update_issue, github_list_issues, github_read_issue, github_list_issue_comments, github_list_pulls, github_read_pull, and github_workflow_runs — call list_instance_tools to confirm which are available on this agent, then call_instance_tool to invoke one. An autonomous run is the right path for work that needs the code checkout: writing code, running tests, or any sequence of commands on the owner's machine.",
 		{
@@ -342,7 +322,8 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		},
 	);
 
-	server.tool(
+	const loopStatus = registerAliasTarget(
+		server,
 		"coding_loop_status",
 		// Same caveat as `check_instance_loop`, and for the same measured reason (#580) — the two
 		// tools call the SAME endpoint, so a warning on only one of them is a warning a caller can
@@ -382,7 +363,8 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 	// answered better by `coding_loop_status`, a READ tool. Stopping is also the safe direction:
 	// it is cooperative, the in-flight step settles its own spend, and a mistaken stop ends a run
 	// early rather than committing anything.
-	server.tool(
+	const loopStop = registerAliasTarget(
+		server,
 		"coding_loop_stop",
 		"Ask an autonomous run on an instance to stop. Cooperative: the step in flight finishes and settles its spend. Omit run_id to stop the instance's most recent running run — call coding_loop_status first if you want to see which that is.",
 		{
@@ -420,6 +402,12 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			return jsonText({ ...(data as object), runId: target });
 		},
 	);
+
+	// The three names #1241 found calling these same routes (#1243): deprecated aliases with the
+	// survivors' schema and handler, so an old caller keeps working and the ledger shows who still is.
+	registerDeprecatedAlias(server, "start_instance_loop", loopStart);
+	registerDeprecatedAlias(server, "check_instance_loop", loopStatus);
+	registerDeprecatedAlias(server, "stop_instance_loop", loopStop);
 
 	// ── The queue behind the lock (#788) ──
 	//

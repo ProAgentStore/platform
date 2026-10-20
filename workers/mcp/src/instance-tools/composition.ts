@@ -2,9 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
-import { repoCiSentence, runHealthSentence } from "../state-vocabulary.js";
 import type { InstanceToolsCtx } from "./shared.js";
-import { loopRunsPage } from "./loop-runs-page.js";
 
 /**
  * How agents are wired to each other, and how one is given an objective.
@@ -137,7 +135,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// stuck. Standing an agent down while it is reconfigured is an ordinary operation; making it
 	// cost the owner's epic is not.
 	//
-	// No `dry_run`, on the same reasoning `stop_instance_loop` records. A dry run answers "what
+	// No `dry_run`, on the same reasoning `coding_loop_stop` records. A dry run answers "what
 	// would this call do?", and here the answer is fully determined by one id and one boolean —
 	// there is no config to get wrong and no direction to swap. The question worth asking first is
 	// "which edge is that?", and `list_supervision` / `list_connections` answer it with both ends
@@ -359,51 +357,12 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	);
 
 	server.tool(
-		"start_instance_loop",
-		"Give an agent an objective and let it work autonomously on the server. Prefer coding_loop_start: it starts the same run (same endpoint) and can also queue behind a busy instance (queue_if_busy); this tool is a retirement candidate (#1241). Durable: it survives you closing the browser, and its spend is bounded by a budget. Returns a run id — poll it with check_instance_loop.",
-		{
-			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			objective: z.string().max(MAX_CONFIGURABLE_OBJECTIVE_CHARS).describe(`The outcome you want, in plain language. ${OBJECTIVE_CAP_NOTE}`),
-			max_iterations: z.coerce.number().optional().describe("Cap on steps (default 10, max 50)."),
-			dry_run: z.boolean().optional().describe("Report the objective and the step cap that would be committed, without starting the run."),
-		},
-		async ({ token, instance_id, objective, max_iterations, dry_run }) => {
-			const sessionToken = tokenFor(token);
-			if (!sessionToken) return authRequired();
-			const input = { instance_id, objective, max_iterations };
-			const denied = await requirePermission(safetyFor(token), "write", "start_instance_loop", input);
-			if (denied) return denied;
-			if (dry_run) {
-				// The one tool here that spends money on its own afterwards, so the preview
-				// is about the BUDGET as much as the wiring: a caller that meant 5 steps and
-				// sent 50 has no other way to notice before the spend happens.
-				return dryRun(safetyFor(token), "start_instance_loop", "start an autonomous server-side run", input, {
-					endpoint: `/v1/instances/${instance_id}/loop`,
-					method: "POST",
-					effect: `${instance_id} would work on this objective by itself, for up to ${max_iterations ?? 10} steps (server default 10, hard cap 50).`,
-					objective,
-					spend: "Each step spends the instance's own AI budget. The run is durable — it keeps going after you disconnect, and stop_instance_loop is the only way to end it early.",
-				});
-			}
-			const data = await authedCall(
-				`/v1/instances/${encodeURIComponent(instance_id)}/loop`,
-				sessionToken,
-				{ method: "POST", body: JSON.stringify({ objective, maxIterations: max_iterations }) },
-				env,
-			);
-			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "start_instance_loop", action: "completed", input, result: { ok: true } });
-			return jsonText(data);
-		},
-	);
-
-	server.tool(
 		"continue_instance_run",
-		"Carry a STOPPED run's objective onto a fresh run, briefed on what the stopped one already landed and on the notes its Pilot wrote to itself as it worked. Only for a run that ended WITHOUT a verdict on its objective — `interrupted`, `max_iterations`, `engine_limit`, `provider_credit`, `engine_auth` (sign the coding CLI in first), `turn_lost` (a runner restart cut off a turn that could not be resumed once — check the worktree first) `engine_error` (the coding CLI itself exited with an error — fix what its message names, e.g. the model, first) `constraint_refused` (shorten the owner's rules or directives first) or `decision` (it parked 30 days on a question nobody answered; the answer, once given, is on the question). A run that finished (`done`), failed, was stopped by its owner (`cancelled`), asked a question (`escalated`), repeated itself (`no_progress`) or hit its spend limit (`budget`) is refused, naming what to do instead. It reuses the stopped run's repository and step cap (pass `max_iterations` to grant more), opens its own budget, and reaches further back for its predecessor than an ordinary start, so continuing the next morning still works. Pass `note` to add what you know now that the run did not — a course correction, new information, a ticket update — without retyping the objective. A run that got its answer but could not put its set-aside work back (its `parked.snapshot` in coding_loop_status, #1242) is continuable too: the continue first puts that work back on the machine it will run on — the one it parked on when connected — fetching the copy from origin if needed, and starts nothing if it cannot. Read a run first with check_instance_loop, and what would carry over with preview_instance_run_continue.",
+		"Carry a STOPPED run's objective onto a fresh run, briefed on what the stopped one already landed and on the notes its Pilot wrote to itself as it worked. Only for a run that ended WITHOUT a verdict on its objective — `interrupted`, `max_iterations`, `engine_limit`, `provider_credit`, `engine_auth` (sign the coding CLI in first), `turn_lost` (a runner restart cut off a turn that could not be resumed once — check the worktree first) `engine_error` (the coding CLI itself exited with an error — fix what its message names, e.g. the model, first) `constraint_refused` (shorten the owner's rules or directives first) or `decision` (it parked 30 days on a question nobody answered; the answer, once given, is on the question). A run that finished (`done`), failed, was stopped by its owner (`cancelled`), asked a question (`escalated`), repeated itself (`no_progress`) or hit its spend limit (`budget`) is refused, naming what to do instead. It reuses the stopped run's repository and step cap (pass `max_iterations` to grant more), opens its own budget, and reaches further back for its predecessor than an ordinary start, so continuing the next morning still works. Pass `note` to add what you know now that the run did not — a course correction, new information, a ticket update — without retyping the objective. A run that got its answer but could not put its set-aside work back (its `parked.snapshot` in coding_loop_status, #1242) is continuable too: the continue first puts that work back on the machine it will run on — the one it parked on when connected — fetching the copy from origin if needed, and starts nothing if it cannot. Read a run first with coding_loop_status, and what would carry over with preview_instance_run_continue.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			run_id: z.string().describe("The stopped run to continue, from check_instance_loop."),
+			run_id: z.string().describe("The stopped run to continue, from coding_loop_status."),
 			max_iterations: z.coerce.number().optional().describe("Steps the new run may take. Omit to reuse the stopped run's own cap (max 50)."),
 			note: z.string().optional().describe("Added to the objective as the owner's later instruction, so it holds for the whole run. The objective and the note share 2000 characters; one that does not fit is refused, not cut."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, without starting it."),
@@ -415,7 +374,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 			const denied = await requirePermission(safetyFor(token), "write", "continue_instance_run", input);
 			if (denied) return denied;
 			if (dry_run) {
-				// Same reasoning as `start_instance_loop`'s preview, and one fact more: a continue
+				// Same reasoning as `coding_loop_start`'s preview, and one fact more: a continue
 				// SPENDS AGAIN. A caller that thought it was resuming a paid-for run rather than
 				// starting another one has no other way to find out before the money goes.
 				return dryRun(safetyFor(token), "continue_instance_run", "start a fresh run on a stopped run's objective", input, {
@@ -442,7 +401,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			run_id: z.string().describe("The stopped run to preview, from check_instance_loop."),
+			run_id: z.string().describe("The stopped run to preview, from coding_loop_status."),
 		},
 		async ({ token, instance_id, run_id }) => {
 			const sessionToken = tokenFor(token);
@@ -470,7 +429,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// loop over MCP could not see them and retyped an objective the owner had already written down.
 	server.tool(
 		"get_instance_loop_presets",
-		"Read the saved objectives an instance offers when a loop starts — each `{id, label, objective}`. `source` says whose list it is: `instance` (the owner saved their own), `agent` (inherited from the agent's creator) or `default` (built-in; coding agents get five, chat agents none). `driver` is what this instance's loop drives. To run one, pass its `objective` to start_instance_loop.",
+		"Read the saved objectives an instance offers when a loop starts — each `{id, label, objective}`. `source` says whose list it is: `instance` (the owner saved their own), `agent` (inherited from the agent's creator) or `default` (built-in; coding agents get five, chat agents none). `driver` is what this instance's loop drives. To run one, pass its `objective` to coding_loop_start.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -627,105 +586,6 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				await audit(safetyFor(token), { tool: "set_instance_loop_limits", action: "completed", input, result: { limits: (data as { limits?: unknown }).limits } });
 			}
 			return jsonText(data);
-		},
-	);
-
-	// WHAT THIS TOOL DOES NOT SPEAK FOR (#580 AC3).
-	//
-	// `status:"running"` hid three states, and until migration 0127 the record could not tell them
-	// apart. Measured 2026-08-15: run `70ea298e` reported `running` with a `lastProgressAt` 3.5
-	// minutes old for 4.35 HOURS, on iteration 1 of 30, while its engine had been dead since one
-	// second after it started — because the pause tick refreshed that column on a timer.
-	//
-	// `fd1c323` split the fact into three that cannot contradict each other: `lastAliveAt`
-	// (the orchestrator's heartbeat), `lastProgressAt` (an actual advance, now written only when
-	// the iteration moves), and `waitingReason`/`waitingUntil` (a deliberate park). The route now
-	// also sends `health` and `waitNote`, computed by `runHealth`/`waitClause` — the platform's own
-	// verdict, so this surface quotes it rather than deriving a second one. Two surfaces answering
-	// "is this alright" independently is the defect #580 documents, not the cure.
-	//
-	// WHAT THE DESCRIPTION MUST STILL NOT SAY. `health` reads LIVENESS. A fresh heartbeat with a
-	// stale progress timestamp is ALSO what a healthy long engine turn and a legitimate park look
-	// like, so "liveness fresh + progress stale ⇒ stalled" is an inference this surface must not
-	// re-introduce — `work-report.ts:136-141` records a model making exactly it and telling the
-	// owner there was "nothing I can do" while the engine was mid-edit. Progress is reported as a
-	// fact; it is never a diagnosis.
-	//
-	// And none of the four speaks for the ENGINE. `work-report.ts:146` is the reference — "What it
-	// deliberately does NOT claim: that the ENGINE is working … Asserting 'engine: working' from
-	// this column would replace a false stall with a false all-clear." The engine's own state is
-	// `runState`, behind `/capture`, which is a different tool and is named below.
-	//
-	// The DESCRIPTION rather than a joined `runState` field, deliberately: this tool is generic and
-	// serves apply, pipeline and chat agents, none of which have an engine, so fetching one would
-	// make every caller pay a runner round trip for a field null for most of them.
-	//
-	// THE VERDICT VOCABULARY IS RENDERED, NOT TYPED (#588). This sentence used to be written out
-	// here and said "three values" — and stayed saying it when `RunHealth` gained `ended`, so a
-	// listing with no status filter answered `health:"ended"` about most of its rows in a word its
-	// own description did not define. `runHealthSentence()` builds it from the vocabulary, which
-	// `state-vocabulary.test.ts` derives from `work-report.ts`'s `RunHealth` union: a member added
-	// there fails this build. Do not retype the members back into this string — the test asserts
-	// the rendered sentence is present verbatim, in both tools that publish it.
-	//
-	// A PARK'S DEADLINE IS NOT ONE KIND OF THING (#596). `waitingUntil` is the instant a park's
-	// clock RUNS OUT, and what running out means is read off `waitingReason`: an `engine_limit` park
-	// resumes at it, a `human` handoff GIVES UP at it — the run stops waiting for the reader who is
-	// looking at the number. This description once promised the note said "what for and until when",
-	// which was true of one producer and stayed coherent only because the other published nothing at
-	// all. Do not re-derive a resume time from `waitingUntil` here or in a caller: `waitNote` carries
-	// the verb, and the verb is the half that decides whether anyone has to move. The gloss this
-	// tool publishes comes from `state-vocabulary.ts`'s `RUN_HEALTH_GLOSS`, which mirrors
-	// `work-report.ts`'s `RUN_HEALTH_LEGEND`; those two are the only place to change the wording.
-	server.tool(
-		"check_instance_loop",
-		`Check an autonomous run. coding_loop_status reads the same runs (same endpoint) and is the preferred tool; this one is a retirement candidate (#1241). status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance — most of them will be CLOSED, because this listing has no status filter. Read \`health\` first. ${runHealthSentence()} ${repoCiSentence()} Do not derive your own from the timestamps: \`lastAliveAt\` is the orchestrator's heartbeat and \`lastProgressAt\` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its \`run_state\`, plus the events since your last poll) or coding_session_capture.`,
-		{
-			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			run_id: z.string().optional(),
-			offset: z.coerce.number().int().min(0).optional().describe("Listing only, LEGACY: runs by position; a run started between reads shifts it. Prefer `cursor`."),
-			cursor: z.string().min(1).max(256).optional().describe("Listing only: the previous reply's `page.nextCursor`. Runs come back newest first in pages that fit one response; the cursor continues strictly after the last one returned."),
-		},
-		async ({ token, instance_id, run_id, offset, cursor }) => {
-			const sessionToken = tokenFor(token);
-			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "read", "check_instance_loop", { instance_id, run_id });
-			if (denied) return denied;
-			if (run_id) return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}`, sessionToken, {}, env));
-			// The same paged listing coding_loop_status returns (#898) — one endpoint, one shape.
-			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop?${cursor ? `cursor=${encodeURIComponent(cursor)}` : `offset=${offset ?? 0}`}`, sessionToken, {}, env)));
-		},
-	);
-
-	// NO `dry_run`, on purpose (#328). A dry run answers "what would this call do?", and for a
-	// stop the answer is fully determined by `run_id` — there are no other arguments and no
-	// config to get wrong. The question worth asking first is "which run is that?", and that
-	// is `check_instance_loop`, a READ tool that answers it with the objective, the step count
-	// and the stop reason. A dry run here could only echo the id back with less information
-	// than the read tool already gives, while implying the preview was the safety step.
-	// It is also the one direction that is safe to be wrong in: stopping is cooperative, the
-	// in-flight step settles its own spend, and the failure mode of a mistaken stop is a run
-	// that ends early — not an edge pointed the wrong way or a budget quietly committed.
-	server.tool(
-		"stop_instance_loop",
-		"Ask an autonomous run to stop. coding_loop_stop cancels the same runs (same endpoint) and can also resolve the most recent run without a run_id; prefer it — this tool is a retirement candidate (#1241). Cooperative: the step in flight finishes and settles its spend rather than being killed mid-way. No dry run — call check_instance_loop first to see which run you are about to stop.",
-		{
-			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string(),
-			run_id: z.string(),
-		},
-		async ({ token, instance_id, run_id }) => {
-			const sessionToken = tokenFor(token);
-			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "write", "stop_instance_loop", { instance_id, run_id });
-			if (denied) return denied;
-			return jsonText(await authedCall(
-				`/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}/cancel`,
-				sessionToken,
-				{ method: "POST" },
-				env,
-			));
 		},
 	);
 }

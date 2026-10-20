@@ -509,13 +509,18 @@ const READBACK: Record<string, string | null> = {
 	"create_connection.config": "list_connections",
 
 	// ── loops ──
-	"start_instance_loop.objective": "check_instance_loop",
-	"start_instance_loop.max_iterations": "check_instance_loop",
+	// `start_instance_loop` is a deprecated alias of coding_loop_start (#1243): its arguments, its readers.
+	"start_instance_loop.objective": "coding_loop_status",
+	"start_instance_loop.queue_position": "coding_loop_queue",
+	"start_instance_loop.request_id": "coding_loop_status",
+	"start_instance_loop.max_iterations": "coding_loop_status",
+	"start_instance_loop.repair_checkout": "coding_loop_status",
+	"start_instance_loop.issue": "instance_board",
 	// The NEW run's cap, read back on the run the call returns — not on the stopped one it
 	// continues, whose own row is unchanged by a continue (#806).
-	"continue_instance_run.max_iterations": "check_instance_loop",
-	// Appended to the new run's OBJECTIVE, which is what `check_instance_loop` returns for it.
-	"continue_instance_run.note": "check_instance_loop",
+	"continue_instance_run.max_iterations": "coding_loop_status",
+	// Appended to the new run's OBJECTIVE, which is what `coding_loop_status` returns for it.
+	"continue_instance_run.note": "coding_loop_status",
 	"set_instance_loop_limits.min_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_objective_chars": "get_instance_loop_limits",

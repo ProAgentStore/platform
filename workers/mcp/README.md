@@ -284,7 +284,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `rename_instance` | Set or clear the display name | write | yes | |
 | `set_instance_model` | Pick the instance's brain model — Sonnet or a cheap tool-capable Cloudflare model, with cost hints; refuses a non-tool model or a Cloudflare pick without Cloudflare credentials | write | yes | |
 | `get_instance_state` | Read DO state (identity, guardrails, permissions) — read-only | — | | |
-| `pause_instance` | Temporarily stop an instance without unsubscribing — blocks new runs, asks live ones to stop; everything is kept (#825); lost confirmation returns `outcome: unknown`; poll my_instances including paused instances and check_instance_loop | write | yes | |
+| `pause_instance` | Temporarily stop an instance without unsubscribing — blocks new runs, asks live ones to stop; everything is kept (#825); lost confirmation returns `outcome: unknown`; poll my_instances including paused instances and coding_loop_status | write | yes | |
 | `resume_instance` | Put a paused instance back to work. Does not restart the runs the pause stopped (#825) | write | yes | |
 | `cancel_instance` | Cancel the subscription, deactivating the instance | destructive | yes | `cancel_instance` |
 
@@ -472,7 +472,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
-| `system_status` | Runner connectivity, node, tmux sessions, repos, issues | — | | |
+| `system_status` | **Deprecated alias** of `coding_diagnostics` (#1243) — same schema and result, plus a note; removed after 2027-01-18 | — | | |
 | `coding_diagnostics` | Same picture, for debugging offline/stuck sessions | — | | |
 | `coding_repos_list` | Repos registered on the instance + their sessions | — | | |
 | `coding_engine_get` | Which coding CLI the instance opens sessions with and which model it runs; plus the model the last measured engine turn actually ran (#792) | read | | |
@@ -506,15 +506,15 @@ immediately instead of a whole transcript.
 
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
-| `start_instance_loop` | Give an agent an objective and let it run on the server, budget-bounded | write | yes | |
-| `check_instance_loop` | Status, steps taken, stop reason (omit `run_id` to list runs) | read | | |
+| `start_instance_loop` | **Deprecated alias** of `coding_loop_start` (#1243) — same schema, scope and result, plus a note; removed after 2027-01-18 | runtime | yes | |
+| `check_instance_loop` | **Deprecated alias** of `coding_loop_status` (#1243) — same schema and result, plus a note; removed after 2027-01-18 | read | | |
 | `continue_instance_run` | Carry a STOPPED run's objective onto a fresh run, briefed on what it already landed. Only after an ending with no verdict; reuses its repo and step cap, opens its own budget; `note` adds the owner's later instruction to the objective (#806) | write | yes | |
 | `preview_instance_run_continue` | What a continue would CARRY FORWARD, before spending on it: whether the briefing is this run's, another run's or none at all, the note the new run would get, and the step cap it would be given. A run that cannot be continued still answers, with the refusal (#806) | read | | |
 | `get_instance_loop_limits` | The iteration floor and ceiling every run on this instance is clamped into, plus the account ceiling they sit under (#820), and the objective cap in force (`maxObjectiveChars`, default 8,000, #854) | read | | |
 | `set_instance_loop_limits` | Set that floor and ceiling — they bind whatever `max_iterations` a caller passes; omit everything to clear. An inverted pair is refused, not repaired. `max_objective_chars` sets the instance's objective cap (100–20,000; 0 = default 8,000) and, alone, leaves the iteration bounds as they are | write | yes | |
 | `get_instance_loop_presets` | The saved objectives the loop form offers, and whose list it is (`instance` / `agent` / `default`) (#613) | read | | |
 | `set_instance_loop_presets` | Replace the instance's own presets — the whole list; `[]` goes back to inheriting. An out-of-limit list is refused, not trimmed | write | yes | |
-| `stop_instance_loop` | Cooperative stop — the in-flight step finishes | write | no ([why](#tools-with-no-dry-run)) | |
+| `stop_instance_loop` | **Deprecated alias** of `coding_loop_stop` (#1243) — same schema and result, plus a note; removed after 2027-01-18 | write | no ([why](#tools-with-no-dry-run)) | |
 | `coding_loop_start` | Same run, started for a coding instance — durable `request_id` receipts distinguish provisioning, started, queued, not_started and unknown; reuse the same key after a lost reply, or POLL it by `request_id` alone (#1071): `coding_loop_status` with `request_id`, or this tool with only `instance_id` + `request_id`; a call with no `instance_id` starts nothing and says how to poll. Client approval is outside the server; poll `coding_loop_status` before retrying. `repo_id` (from `coding_repos_list`) targets one repo of a multi-repo instance; omitted there, it is refused with the registered repo_ids (a single-repo instance needs none). The run lock and `queue_if_busy` are per repo | runtime | yes | |
 | `coding_loop_status` | Status of that run from the server's record (`request_id` polls ONE start — its state and what it became, or `not_received` (#1071); omit `run_id` to list runs and start receipts; `cursor` / `starts_cursor` continue each listing stably, `offset` / `starts_offset` are the weaker legacy forms) | read | | |
 | `coding_loop_stop` | Cooperative stop; omit `run_id` to stop the newest running one | write | no ([why](#tools-with-no-dry-run)) | |
@@ -677,7 +677,7 @@ is that a preview here would be *less* informative than something that already e
 | Tool | Why not | Read this instead |
 |---|---|---|
 | `call_instance_tool` | A generic invoker. What the call does is decided by the connector registry in `workers/api`, which this Worker cannot see. Its preview could only echo your own `tool` and `input` back — a safety check that knows nothing about the side effect it is previewing. | `list_instance_tools` — the registry's own verdict (`allowed`, `scope`, `mutates`, `reach`, `disabled`, `reason`, `tier`, `invocableBy`) plus the input schema, as a read. |
-| `stop_instance_loop` | Fully described by `run_id`; there is nothing else to get wrong. Stopping is also the safe direction — cooperative, the in-flight step settles its own spend. | `check_instance_loop` — the objective, steps taken and stop reason for the run you are about to stop. |
+| `stop_instance_loop` | Deprecated alias of `coding_loop_stop` (#1243), so its reasoning: fully described by `run_id`; stopping is the safe direction — cooperative, the in-flight step settles its own spend. | `coding_loop_status` — the objective, steps taken and stop reason for the run you are about to stop. |
 | `coding_loop_stop` | The same cancel through the same route, under the coding name (#502) — so it inherits the same argument. | `coding_loop_status` — the run's step count, stop reason and budget pool. |
 | `apply_to_job` | Its destructive scope is the caller's delegation for an autonomous third-party submission, so it has neither a fill-only branch nor a confirmation string. | `get_profile`, the stored résumé and `agent_trace` — what it will submit from. A fill without submitting is `POST /v1/instances/{id}/apply` with `dryRun: true`. |
 

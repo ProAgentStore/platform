@@ -190,7 +190,7 @@ describe("registerInstanceTools — registration + surface gating", () => {
 		expect(repo.has("apply_to_job")).toBe(false);
 
 		const coding = setup({ groups: ["coding"] }).tools;
-		expect(coding.has("system_status")).toBe(true);
+		expect(coding.has("coding_timeline")).toBe(true); // system_status moved to coding-tools.ts as an alias (#1243)
 		expect(coding.has("apply_to_job")).toBe(false);
 	});
 });

@@ -300,7 +300,8 @@ const TABLE: Record<string, Row> = {
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	chat_with_my_agent: ["agentAuthoring", "destructive", "chat_with_my_agent", "envelope", "agent_id,confirm,dry_run,message,token"],
-	check_instance_loop: ["composition", "read", null, null, "cursor,instance_id,offset,run_id,token"],
+	// #1243: deprecated aliases with their survivors' schema, scope and preview behaviour.
+	check_instance_loop: ["coding", "read", null, null, "cursor,instance_id,offset,request_id,run_id,starts_cursor,starts_offset,token"],
 	get_instance_connector_account: ["connectorAccounts", "read", null, null, "connector,instance_id,token"],
 	get_instance_loop_limits: ["composition", "read", null, null, "instance_id,token"],
 	get_instance_terminal_session: ["runtime", "read", null, null, "instance_id,token"],
@@ -590,7 +591,7 @@ const TABLE: Record<string, Row> = {
 		"envelope",
 		"commands_enabled,disabled_commands,dry_run,instance_id,keep_awake,language,max_dictation_ms,provider,sensitivity,silence_ms,speed,stt_mode,stt_model,token,tts_max_chars,vocabulary",
 	],
-	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
+	start_instance_loop: ["coding", "runtime", null, "envelope", "dry_run,instance_id,issue,max_iterations,objective,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,token"],
 	continue_instance_run: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,note,run_id,token"],
 	preview_instance_run_continue: ["composition", "read", null, null, "instance_id,run_id,token"],
 	my_agent: ["agentAuthoring", "none", null, null, "agent_id,token"],
@@ -598,9 +599,8 @@ const TABLE: Record<string, Row> = {
 	get_agent_state: ["agentAuthoring", "none", null, null, "agent_id,token"],
 	get_agent_memory: ["agentAuthoring", "none", null, null, "agent_id,token"],
 	export_agent: ["agentAuthoring", "none", null, null, "agent_id,token"],
-	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
+	stop_instance_loop: ["coding", "write", null, null, "instance_id,run_id,token"],
 	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,idempotency_key,token"],
-	system_status: ["coding", "none", null, null, "instance_id,token"],
 	ticket_thread: ["board", "none", null, null, "instance_id,task_id,token"],
 	task_action_log: ["board", "read", null, null, "cursor,instance_id,limit,task_id,token"],
 	unregister_instance_runtime: ["runtime", "destructive", "unregister_instance_runtime", "envelope", "confirm,dry_run,instance_id,token"],
@@ -797,10 +797,11 @@ describe("conventions the table has to keep", () => {
 		//                        caller's own arguments back. `list_instance_tools` is the
 		//                        real preview: it reads the verdict and the schema out of
 		//                        the registry, and it is a read tool.
-		//   stop_instance_loop   the call is fully described by `run_id`, and the question
-		//                        worth asking ("which run is that?") is answered better by
-		//                        `check_instance_loop`. Stopping is also the safe direction:
-		//                        cooperative, the in-flight step settles its own spend.
+		//   stop_instance_loop   since #1243 a deprecated alias of coding_loop_stop: its handler,
+		//                        so its reasoning — the call is fully described by `run_id`, and
+		//                        "which run is that?" is answered better by `coding_loop_status`.
+		//                        Stopping is also the safe direction: cooperative, the in-flight
+		//                        step settles its own spend.
 		//   coding_loop_stop     the same tool by another name since #502 — it cancels the same
 		//                        durable run through the same route, so it inherits the same
 		//                        argument for having no preview.

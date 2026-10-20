@@ -219,9 +219,11 @@ describe("the run-health vocabulary is the API's RunHealth union, not a restatem
 		);
 	});
 
-	it("is what BOTH tools publish, verbatim, because they call the same endpoint", async () => {
+	it("is what the run-status tool publishes, verbatim — and its deprecated alias points at it (#1243)", async () => {
 		const tools = await registeredTools();
-		for (const name of ["check_instance_loop", "coding_loop_status"]) {
+		// `check_instance_loop` published a second copy until #1243 made it an alias of coding_loop_status.
+		expect(tools.find((t) => t.name === "check_instance_loop")?.description).toMatch(/^Deprecated alias for coding_loop_status/);
+		for (const name of ["coding_loop_status"]) {
 			const tool = tools.find((t) => t.name === name);
 			expect(tool, `${name} is not registered`).toBeDefined();
 			expect(tool?.description, `${name} does not carry the rendered vocabulary`).toContain(runHealthSentence());

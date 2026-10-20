@@ -154,7 +154,7 @@ export async function probeHealth(opts: ProbeOptions): Promise<HealthReport> {
 
 	// Tool families by name: the runtime/runner group (`register_instance_runtime`,
 	// `instance_runtime_status`, `list_runner_nodes`, …) and the loop group (`coding_loop_*`,
-	// `check_instance_loop`, `continue_instance_run`, `stop_instance_loop`, …).
+	// `coding_loop_status`, `continue_instance_run`, `coding_loop_stop`, …).
 	const runner = fromRing(ring, (n) => n.includes("runtime") || n.includes("runner"), "no live probe — verdict from recent runtime tool calls on this session");
 	const codingLoop = fromRing(ring, (n) => n.startsWith("coding_loop_") || n.includes("instance_loop") || n.includes("instance_run"), "no live probe — verdict from recent coding-loop tool calls on this session");
 

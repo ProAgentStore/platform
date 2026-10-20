@@ -1219,4 +1219,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.159": "sha256:b9bbbcca088c3103db60a58b9bbc28ff979d842aca2f23b0cb591e8605d90675",
 	// #1250: set_machine_policy takes display_name (auto_update optional); runner tools name machines.
 	"0.1.160": "sha256:48a33cc789d9012459fed4e72aeb0c9f4bc00efb3f4b75cd89cea25d72c65d37",
+	// #1243: start/check/stop_instance_loop and system_status become deprecated aliases of coding_loop_start/status/stop and coding_diagnostics — the survivors' input schemas (and scope) under the old names.
+	"0.1.161": "sha256:4c7d77c70319bf8c0f0fbd1d719a41e38034637fe62b662a1e279acb4cde34e7",
 };

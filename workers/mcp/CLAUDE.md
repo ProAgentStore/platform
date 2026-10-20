@@ -83,7 +83,7 @@ src/
 ├── audit-ledger.ts       the audit ledger's time-inverted key layout + page reader (#1016)
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      15 tools — collections, records, agent files, KB search, activity
-├── coding-tools.ts       12 tools — the coding surface: open/capture/message/restart/end a
+├── coding-tools.ts       13 tools — the coding surface: open/capture/message/restart/end a
 │                         repo's conversation, repos, overseer, diagnostics, deploy status (#683)
 ├── coding-engine-tools.ts 2 tools — which coding CLI an instance runs and which model (#792);
 │                         registered from inside coding-tools.ts, so behind the same gate
@@ -114,7 +114,7 @@ src/
     ├── triggers.ts       8 tools — webhook / cron / connector-sync triggers, plus the action
 │                     vocabulary and the draft preview the console's form is built from (#613),
 │                     and the in-place change of one (#980: enable/disable, move a cadence)
-    ├── composition.ts   19 tools — supervision (#183), connections (#182) with the delivery outbox,
+    ├── composition.ts   16 tools — supervision (#183), connections (#182) with the delivery outbox,
 │                     replay and delete that complete them (#613), loops, loop presets
     ├── account.ts        18 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
 │                     notifications, account preferences (#613), creator and subscriber dashboards
@@ -143,17 +143,18 @@ src/
     │   ── surface-gated ──
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
-    └── coding.ts         system_status + coding_timeline + coding_loop_trace + coding_terminal (gated to
+    └── coding.ts         coding_timeline + coding_loop_trace + coding_terminal (gated to
                           surfaces:["coding"]) + 7 loop tools (3 run + 4 objective queue: list, cancel, reorder (#1097), lifecycle)
+                          + 3 deprecated aliases of the run tools: start/check/stop_instance_loop (#1243, src/deprecated-alias.ts)
 ```
 
 **367 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
-`tools/server-info.ts`, 12 in
-`coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all sixteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 314 across `instance-tools/`. 340 are always registered; 27 are
+`tools/server-info.ts`, 13 in
+`coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all seventeen behind the `groups.has("coding")` gate — 14 in
+`storage-tools.ts`, and 313 across `instance-tools/`. 340 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 314 = 367. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 13 + 2 + 1 + 1 + 15 + 313 = 367. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
@@ -226,7 +227,7 @@ tells you exactly what you changed about it.
    `dry_run` the only way to learn what a call would do is to perform it. Two tools are
    exempt, both because a better preview already exists as a READ tool —
    `call_instance_tool` (`list_instance_tools` reads the registry verdict this Worker
-   cannot see) and `stop_instance_loop` (`check_instance_loop` names the run). Every
+   cannot see) and `coding_loop_stop` (`coding_loop_status` names the run; `stop_instance_loop` is its deprecated alias, #1243). Every
    `destructive` tool takes BOTH `dry_run` and `confirm`; `delete_supervision` was the
    last one that took neither, and `contract.test.ts` now asserts the set is empty.
 6. Choose the scope honestly. `write` widens what exists; `runtime` spends or drives

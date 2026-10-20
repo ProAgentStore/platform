@@ -133,7 +133,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
 
 16. **Report a run's state in the platform's words, not your own.** `health` has four
     values — `working`, `waiting`, `stalled`, `ended` — and `ended` is returned for any run
-    that is not `running`, so it is the usual answer from `check_instance_loop`. `ended`
+    that is not `running`, so it is the usual answer from `coding_loop_status`. `ended`
     makes no claim that anything is running. Do not derive a verdict from `status` or from
     timestamps: `lastAliveAt` is a heartbeat and `lastProgressAt` is the last instruction
     advance, and a healthy long step looks stale on the second while fresh on the first —
@@ -145,7 +145,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
 
 | Scope | Covers |
 |---|---|
-| `read` | Explicit read assertions (`mcp_audit_log`, the instance collection reads, trigger reads, `check_instance_loop`, supervision/connection lists). Most other reads are gated only by having a valid session. |
+| `read` | Explicit read assertions (`mcp_audit_log`, the instance collection reads, trigger reads, `coding_loop_status`, supervision/connection lists). Most other reads are gated only by having a valid session. |
 | `write` | Creating and updating agents, knowledge, memory, settings, board config, grants, repos, connections, supervision. |
 | `runtime` | Spending or driving something: instance chat, runtime task create/approve, running a trigger, deploy dispatch, coding session drive, `apply_to_job` without submit. |
 | `destructive` | Deleting, cancelling, overwriting, or committing an irreversible external action. **Not granted by default.** |
@@ -230,7 +230,7 @@ instance. If it is missing from `tools/list`, subscribe first and reconnect.
 
 ```text
 my_instances                                                   → the coding instance_id
-system_status          { instance_id }                         # is a runner connected?
+coding_diagnostics     { instance_id }                         # is a runner connected?
 coding_repo_add        { instance_id, path: "~/dev/my-repo" }  # folder + its GitHub origin, or refused
 coding_sessions_list   { instance_id }                         → session_id
 coding_session_message { instance_id, session_id, message: "run the tests" }
@@ -239,7 +239,7 @@ coding_session_restart { instance_id, session_id }             # if wedged
 coding_session_end     { instance_id, session_id }
 ```
 
-`system_status` first. Everything else needs a machine running `pags up`; with no runner
+`coding_diagnostics` first. Everything else needs a machine running `pags up`; with no runner
 connected the drive tools fail rather than queue. If the CLI is stuck, prefer
 `coding_session_restart` (same session id) over `coding_session_fresh` (clean state, no
 `--resume`), which loses the engine's context.
@@ -284,7 +284,7 @@ work.
 | Preview an agent | `chat_with_agent` (trial, capped) |
 | Author an agent | `create_agent`, `update_agent`, `scaffold_agent`, `set_agent_settings_schema` |
 | Manage an agent's repo | `list_agent_repo_files`, `read_agent_file`, `write_agent_file`, `batch_write_agent_files`, `agent_deploy_status`, `trigger_agent_deploy` |
-| Run an agent for real | `subscribe_agent`, `chat_with_instance`, `start_instance_loop` |
+| Run an agent for real | `subscribe_agent`, `chat_with_instance`, `coding_loop_start` |
 | Feed it knowledge | `add_instance_knowledge`, `upload_agent_file`, `ingest_repo`, connector grants + `sync_connector` triggers |
 | Verify retrieval | `vector_stats`, `search_instance_knowledge`, `list_instance_files` |
 | Shape its behaviour | `set_instance_instructions`, `set_instance_settings`, `write_instance_memory`, `set_instance_model`, `set_instance_tool` |

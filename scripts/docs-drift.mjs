@@ -54,7 +54,7 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -137,7 +137,7 @@ function mcpTools() {
 	for (const full of MCP_SOURCES) {
 		let n = 0;
 		for (const m of read(full).matchAll(
-			/(?:^|[^\w.])(?:this\.)?server\.tool\(\s*"([a-z0-9_]+)"/g,
+			/(?:^|[^\w.])(?:(?:this\.)?server\.tool\(\s*|register(?:AliasTarget|DeprecatedAlias)\(\s*server,\s*)"([a-z0-9_]+)"/g, // the alias helpers register through server.tool too (#1243)
 		)) {
 			names.add(m[1]);
 			n++;
