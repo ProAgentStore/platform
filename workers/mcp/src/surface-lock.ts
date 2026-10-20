@@ -1221,4 +1221,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.160": "sha256:48a33cc789d9012459fed4e72aeb0c9f4bc00efb3f4b75cd89cea25d72c65d37",
 	// #1243: start/check/stop_instance_loop and system_status become deprecated aliases of coding_loop_start/status/stop and coding_diagnostics — the survivors' input schemas (and scope) under the old names.
 	"0.1.161": "sha256:4c7d77c70319bf8c0f0fbd1d719a41e38034637fe62b662a1e279acb4cde34e7",
+	// #1243: SERVER_INSTRUCTIONS gains the common-task sentence pointing at platform_guide's quick start.
+	"0.1.162": "sha256:21778844425116f2c9c30f9849509002f6a9c27cf8058a566f4e19ce80eb8551",
 };

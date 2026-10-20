@@ -44,6 +44,19 @@ export const PLATFORM_GUIDE = `# ProAgentStore Platform Guide
 
 Marketplace for server-powered AI agents. Creators build agent templates, clients subscribe and run them on their own data.
 
+## Quick start — task → tool (#1243)
+- **Which agent?** my_instances (everything you run) or recent_instances (the few you drove last, with live run health). Every id below comes from there; copy it exactly.
+- **Talk to an agent:** chat_with_instance.
+- **Hand an agent work:** coding_loop_start with an objective and your OWN request_id. If its repo may be busy, add queue_if_busy: true — the work queues and starts by itself when the repo frees. The loop drives any agent, a coding agent's engine or another agent's chat.
+- **Check it / collect a lost result:** coding_loop_status (request_id for one start, run_id for one run, neither to list). Stop it: coding_loop_stop. Carry a stopped run on: continue_instance_run.
+- **See what it is doing:** coding_timeline (what it did and is doing), coding_session_capture (the live pane).
+- **The queue behind a busy repo:** coding_loop_queue, coding_loop_queue_reorder, coding_loop_queue_cancel.
+- **It asked a question:** coder_questions, then answer_instance_input with the owner's own answer.
+- **GitHub issues, files, HTTP, search:** list_instance_tools, then call_instance_tool — one call, no run needed.
+- **Runner offline, session stuck:** coding_diagnostics, then force_runner_attach.
+- **What went wrong, and what it cost:** agent_trace, then list_errors; usage_summary for spend.
+- **Before any change:** call it with dry_run first where it offers one.
+
 ## Agent Types: Agents | Workers | Tools
 ## CLI: pags init <name> --template worker|cron|api, pags check, pags publish
 ## Tools: ${MCP_TOOL_COUNT} tools registered — ${MCP_TOOL_ALWAYS_ON} are always on, ${MCP_TOOL_GATED} are gated to the console surfaces of the agents you are subscribed to (apply, repo, coding). Call tools/list for this connection’s actual set; subscription gating and pinned endpoints can legitimately expose fewer tools than the full catalog. A smaller count alone does not prove stale discovery; the groups below name entry points, not the whole surface.

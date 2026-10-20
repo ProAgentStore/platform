@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: every `${...}` here is a FIXTURE: the literal source tokens a guide under test does or does not interpolate.
 import { describe, expect, it } from "vitest";
 import { checkPlatformGuide, extractPlatformGuide, NON_TOOL_TOKENS } from "./platform-guide.mjs";
 
@@ -113,12 +114,12 @@ describe("checkPlatformGuide", () => {
 	});
 
 	it("fails a NON_TOOL_TOKENS entry that matches nothing — dead config in a guard is how it stops being believed", () => {
-		// The exemption list is empty in the repo, so the arm is driven through the module's own
-		// contract rather than by mutating it: an exemption is only legitimate while the token it
-		// names is really in the guide.
-		expect(NON_TOOL_TOKENS).toEqual([]);
-		const res = run(GOOD);
-		expect(res.failures).toEqual([]);
+		// The exemptions are passed in (#1243), so the arm is driven directly: an exemption is only
+		// legitimate while the token it names is really in the guide.
+		const res = checkPlatformGuide({ guideSrc: guideFile(GOOD), toolCountSrc: TOOL_COUNT, registered: REGISTERED, nonToolTokens: ["queue_if_busy"] });
+		expect(res.failures.map((f) => f.message).join("\n")).toMatch(/NON_TOOL_TOKENS lists 1 token\(s\) that do not appear in PLATFORM_GUIDE: queue_if_busy/);
+		// The repo's own list is argument names the real guide uses — held to it by docs-drift.
+		expect(NON_TOOL_TOKENS).toEqual(["dry_run", "queue_if_busy", "request_id", "run_id"]);
 	});
 
 	it("extracts the guide across the shapes the file may take", () => {

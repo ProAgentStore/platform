@@ -68,7 +68,7 @@ import {
 import { SUBSET_CLAIMS, checkClaimShape } from "./lib/claim-shape.mjs";
 import { docFiles as collectDocFiles, requireInputs, servedHtmlFiles as collectServedHtml } from "./lib/doc-files.mjs";
 import { checkMcpSplit } from "./lib/mcp-split.mjs";
-import { checkPlatformGuide } from "./lib/platform-guide.mjs";
+import { checkPlatformGuide, NON_TOOL_TOKENS } from "./lib/platform-guide.mjs";
 import { checkRunLifecycle } from "./lib/run-lifecycle.mjs";
 import { checkWireSurface } from "./lib/wire-surface.mjs";
 
@@ -505,7 +505,7 @@ const { names: registered, perFile: registeredPerFile } = mcpTools();
 	const { failures: guideFailures, notes: guideNotes } = checkPlatformGuide({
 		guideSrc: read(p("workers/mcp/src/platform-guide.ts")),
 		toolCountSrc: read(p("workers/mcp/src/tool-count.ts")),
-		registered,
+		registered, nonToolTokens: NON_TOOL_TOKENS,
 	});
 	for (const f of guideFailures) fail(f.check, f.message);
 	for (const n of guideNotes) ok(n);

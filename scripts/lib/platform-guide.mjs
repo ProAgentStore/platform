@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: every `${...}` in this file is the literal SOURCE token the guard looks for in PLATFORM_GUIDE, never a placeholder.
 /**
  * platform-guide.mjs — the guard over `PLATFORM_GUIDE`, the one MCP document a MODEL reads
  * and the only one nothing compared to anything (#703).
@@ -46,7 +47,7 @@
  * of checks exists to delete. So the rule is the strict one: in THIS document, a snake_case token
  * IS a tool name, wildcards included — a model cannot call `coding_loop_*`, so naming one is a
  * defect rather than a shorthand. It makes the guide's vocabulary checkable without a second
- * inventory. {@link NON_TOOL_TOKENS} is the escape hatch, empty today, and an entry in it that
+ * inventory. {@link NON_TOOL_TOKENS} is the escape hatch (#1243: four argument names), and an entry in it that
  * matches nothing FAILS as dead config, the rule `KNOWN_GAPS`, `PINS` and `UNBACKED_CLAIMS` all
  * carry.
  *
@@ -71,7 +72,15 @@ import { findSplitClaims, findToolCountClaims } from "./doc-claims.mjs";
  * one that matches nothing fails rather than sitting there.
  * @type {string[]}
  */
-export const NON_TOOL_TOKENS = [];
+export const NON_TOOL_TOKENS = [
+	// #1243: the quick start's task map names the ARGUMENTS a task turns on, not only tools — "add
+	// queue_if_busy: true" is the instruction an agent needs. These four are argument names on the tools
+	// beside them (coding_loop_start, coding_loop_status; dry_run on most writes), never tools.
+	"dry_run",
+	"queue_if_busy",
+	"request_id",
+	"run_id",
+];
 
 /** Below this, arm A is passing because the guide names nothing, not because it is correct. */
 const MIN_TOOLS_NAMED = 4;
@@ -114,7 +123,7 @@ function constOf(src, name) {
  * @param {{guideSrc: string, toolCountSrc: string, registered: Set<string>}} input
  * @returns {{failures: {check: string, message: string}[], notes: string[]}}
  */
-export function checkPlatformGuide({ guideSrc, toolCountSrc, registered }) {
+export function checkPlatformGuide({ guideSrc, toolCountSrc, registered, nonToolTokens = [] }) {
 	/** @type {{check: string, message: string}[]} */
 	const failures = [];
 	/** @type {string[]} */
@@ -172,7 +181,7 @@ export function checkPlatformGuide({ guideSrc, toolCountSrc, registered }) {
 
 	// ── A. no phantom tool names ──
 	const tokens = [...new Set(rendered.match(SNAKE_TOKEN) ?? [])];
-	const exempt = new Set(NON_TOOL_TOKENS);
+	const exempt = new Set(nonToolTokens);
 	const named = tokens.filter((t) => registered.has(t));
 	const phantom = tokens.filter((t) => !registered.has(t) && !exempt.has(t));
 	if (phantom.length) {
@@ -183,7 +192,7 @@ export function checkPlatformGuide({ guideSrc, toolCountSrc, registered }) {
 				"  in snake_case here — or add it to NON_TOOL_TOKENS as a decision.",
 		);
 	}
-	const deadExemptions = NON_TOOL_TOKENS.filter((t) => !tokens.includes(t));
+	const deadExemptions = nonToolTokens.filter((t) => !tokens.includes(t));
 	if (deadExemptions.length) {
 		fail(
 			`NON_TOOL_TOKENS lists ${deadExemptions.length} token(s) that do not appear in PLATFORM_GUIDE: ${deadExemptions.join(", ")}.\n` +
@@ -218,7 +227,7 @@ export function checkPlatformGuide({ guideSrc, toolCountSrc, registered }) {
 		notes.push(
 			`MCP platform guide: ${named.length} tool name(s) all registered, ` +
 				`${findToolCountClaims(rendered).length + split.alwaysOn.length + split.gated.length} count claim(s) == ` +
-				`${total}/${alwaysOn}/${gated}, interpolated from tool-count.ts (${NON_TOOL_TOKENS.length} exempt token(s))`,
+				`${total}/${alwaysOn}/${gated}, interpolated from tool-count.ts (${nonToolTokens.length} exempt token(s))`,
 		);
 	}
 	return { failures, notes };
