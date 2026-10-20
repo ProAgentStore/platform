@@ -1,0 +1,239 @@
+<style>
+.ft { display: grid; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); font-variant-numeric: tabular-nums; }
+.ft-head h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+.ft-take { color: var(--color-fg-muted); font-size: var(--cds-font-size-body); margin: var(--cds-gap-xs) 0 0; max-width: 70ch; }
+.ft-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); min-width: 0; }
+.ft-card h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; }
+.ft-note { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); margin: var(--cds-gap-xs) 0 var(--cds-gap-md); }
+.ft-grid { display: grid; gap: var(--cds-gap-md); grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); }
+.ft-tablewrap { overflow-x: auto; }
+.ft table { border-collapse: collapse; width: 100%; font-size: var(--cds-font-size-body); }
+.ft th, .ft td { text-align: right; padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); white-space: nowrap; }
+.ft th { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); }
+.ft th:first-child, .ft td:first-child, .ft th.l, .ft td.l { text-align: left; }
+.ft .pill { display: inline-block; padding: 0 var(--cds-pad-sm); border-radius: 999px; border: 1px solid currentColor; font-size: var(--cds-font-size-caption); }
+.ft .ok { color: var(--color-ok); } .ft .warn { color: var(--color-warn); } .ft .bad { color: var(--color-bad); }
+.ft-chart { position: relative; min-height: 220px; }
+.ft-tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); white-space: nowrap; z-index: 2; }
+.ft-tip .d { color: var(--cds-text-secondary); }
+.ft-tip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.ft-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin-bottom: var(--cds-gap-sm); }
+.ft-legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; background: var(--c); }
+.ft-fail { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 220px; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.ft-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
+[data-dash-source-state=empty] { color: transparent; }
+[data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+</style>
+
+<div class="ft">
+  <header class="ft-head">
+    <h1 id="title">Runner fleet telemetry</h1>
+    <p class="ft-take dash-skeleton" id="takeaway" data-source="fleet_now">—</p>
+  </header>
+
+  <section class="ft-card" id="machines">
+    <h2>Machines now</h2>
+    <p class="ft-note">Disk and sessions are the latest reading. Load is per CPU core over the last 24 hours, where 1.5 is the platform's overload line. Windows reports no load average.</p>
+    <div class="ft-tablewrap">
+      <table data-source="fleet_now" data-row-key="machine">
+        <thead><tr>
+          <th data-field="machine">Machine</th>
+          <th data-field="status" class="l">Status</th>
+          <th data-field="hardware" class="l">Hardware</th>
+          <th data-field="sessions">Sessions / max</th>
+          <th data-field="disk_now">Disk used</th>
+          <th data-field="load_avg">Load / core, avg</th>
+          <th data-field="load_peak">Load / core, peak</th>
+          <th data-field="rtt_median">Relay p50</th>
+          <th data-field="restarts">Runner restarts</th>
+          <th data-field="kept_alive_by" class="l">Kept alive by</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="ft-grid">
+    <section class="ft-card" id="load">
+      <h2>CPU load per core</h2>
+      <p class="ft-note">Worst reading in each 5-minute window, last 24 hours. Log scale. The dashed line is the 1.5 overload mark.</p>
+      <div class="ft-chart dash-skeleton" data-source="telemetry" data-metric="load_per_cpu"></div>
+    </section>
+    <section class="ft-card" id="disk">
+      <h2>Disk used</h2>
+      <p class="ft-note">Checkout volume, last 24 hours. Clones and builds start failing as it fills. The dashed line is 90%.</p>
+      <div class="ft-chart dash-skeleton" data-source="telemetry" data-metric="disk_used_pct"></div>
+    </section>
+    <section class="ft-card" id="rtt">
+      <h2>Relay round trip</h2>
+      <p class="ft-note">Slowest echo to the platform in each 5-minute window. Log scale. An overloaded machine answers late.</p>
+      <div class="ft-chart dash-skeleton" data-source="telemetry" data-metric="relay_rtt_ms"></div>
+    </section>
+    <section class="ft-card" id="restarts">
+      <h2>Runner restarts</h2>
+      <p class="ft-note">Rolling count of runner starts in the past 24 hours. A climbing line is a crash loop.</p>
+      <div class="ft-chart dash-skeleton" data-source="telemetry" data-metric="runner_starts_24h"></div>
+    </section>
+  </div>
+  <p class="ft-note">Memory is left out: macOS counts its file cache as used memory, so every Mac reads close to 100% all the time.</p>
+</div>
+
+<script>
+dash.calc('fleet_now', {
+  title: 'Machine summary',
+  description: 'Latest disk and sessions per machine, with 24-hour load, relay and restart figures from the telemetry.',
+  inputs: ['telemetry', 'machines'],
+  fn: (telemetry, machines) => machines.map(m => {
+    const pts = telemetry.filter(p => p.machine === m.machine).sort((a, b) => a.at < b.at ? -1 : 1);
+    const nums = k => pts.map(p => p[k]).filter(v => v !== '' && v != null).map(Number);
+    const load = nums('load_per_cpu'), rtt = nums('relay_rtt_ms').sort((a, b) => a - b), starts = nums('runner_starts_24h');
+    const last = pts[pts.length - 1] || {};
+    const disk = Number(last.disk_used_pct);
+    const loadAvg = load.length ? load.reduce((a, b) => a + b, 0) / load.length : null;
+    const over = Number(m.active_sessions) > Number(m.recommended_max_sessions);
+    const issues = [];
+    if (disk >= 95) issues.push('disk full'); else if (disk >= 90) issues.push('disk low');
+    if (loadAvg != null && loadAvg >= 1.5) issues.push('overloaded');
+    if (over) issues.push('too many sessions');
+    if (m.connected !== 'yes') issues.push('offline');
+    return {
+      machine: m.machine,
+      status: issues.length ? issues.join(', ') : 'healthy',
+      severity: (disk >= 95 || (loadAvg != null && loadAvg >= 3) || m.connected !== 'yes') ? 'bad' : issues.length ? 'warn' : 'ok',
+      hardware: `${m.platform}, ${m.cpus} cores, ${m.mem_gb} GB`,
+      sessions: `${m.active_sessions} / ${m.recommended_max_sessions}`,
+      disk_now: disk,
+      load_avg: loadAvg,
+      load_peak: load.length ? Math.max(...load) : null,
+      rtt_median: rtt.length ? rtt[Math.floor(rtt.length / 2)] : null,
+      restarts: starts.length ? Math.max(...starts) : null,
+      kept_alive_by: m.kept_alive_by
+    };
+  })
+});
+
+(() => {
+  const fmtPct = v => v == null ? '—' : `${d3.format('.1f')(v)}%`;
+  const fmtLoad = v => v == null ? 'n/a' : d3.format('.2f')(v);
+  const fmtMs = v => v == null ? '—' : `${d3.format(',')(Math.round(v))} ms`;
+  const metrics = {
+    load_per_cpu: { fmt: fmtLoad, log: true, ref: 1.5 },
+    disk_used_pct: { fmt: fmtPct, ref: 90, fixed: [0, 100] },
+    relay_rtt_ms: { fmt: fmtMs, log: true },
+    runner_starts_24h: { fmt: v => d3.format('d')(v), integer: true }
+  };
+
+  function table() {
+    const tb = document.querySelector('#machines tbody');
+    const r = dash.data('fleet_now');
+    tb.textContent = '';
+    if (r.status !== 'ok') return;
+    const order = { bad: 0, warn: 1, ok: 2 };
+    [...r.data].sort((a, b) => order[a.severity] - order[b.severity] || a.machine.localeCompare(b.machine)).forEach(row => {
+      const tr = tb.appendChild(document.createElement('tr'));
+      const cell = (txt, cls) => { const td = tr.appendChild(document.createElement('td')); if (cls) td.className = cls; td.textContent = txt; return td; };
+      cell(row.machine);
+      const pill = cell('', 'l').appendChild(document.createElement('span'));
+      pill.className = `pill ${row.severity}`; pill.textContent = row.status;
+      cell(row.hardware, 'l');
+      cell(row.sessions);
+      cell(fmtPct(row.disk_now), row.disk_now >= 95 ? 'bad' : row.disk_now >= 90 ? 'warn' : '');
+      cell(fmtLoad(row.load_avg), row.load_avg >= 3 ? 'bad' : row.load_avg >= 1.5 ? 'warn' : '');
+      cell(fmtLoad(row.load_peak));
+      cell(fmtMs(row.rtt_median));
+      cell(row.restarts == null ? '—' : String(row.restarts));
+      cell(row.kept_alive_by, 'l');
+    });
+  }
+
+  function takeaway() {
+    const el = document.getElementById('takeaway');
+    const r = dash.data('fleet_now');
+    if (r.status !== 'ok') { el.textContent = '—'; return; }
+    el.classList.remove('dash-skeleton');
+    const bad = r.data.filter(x => x.severity !== 'ok');
+    el.textContent = bad.length
+      ? `${r.data.length - bad.length} of ${r.data.length} machines are healthy. Needs attention: ${bad.map(x => `${x.machine} (${x.status})`).join('; ')}.`
+      : `All ${r.data.length} machines are healthy.`;
+  }
+
+  function chart(box) {
+    const key = box.dataset.metric, cfg = metrics[key];
+    const r = dash.data('telemetry');
+    box.textContent = '';
+    if (r.status === 'error') { box.classList.remove('dash-skeleton'); box.className = 'ft-chart ft-fail'; box.textContent = 'Failed to load'; return; }
+    if (r.status !== 'ok') return;
+    box.className = 'ft-chart';
+    const rows = r.data.filter(d => d[key] !== '' && d[key] != null).map(d => ({ m: d.machine, t: new Date(d.at), v: Number(d[key]) }));
+    const names = [...new Set(r.data.map(d => d.machine))];
+    const color = n => dash.colors[names.indexOf(n) % dash.colors.length];
+    const series = d3.groups(rows, d => d.m).map(([m, pts]) => ({ m, pts: pts.sort((a, b) => a.t - b.t) }));
+
+    const legend = box.appendChild(document.createElement('div'));
+    legend.className = 'ft-legend';
+    series.forEach(s => { const sp = legend.appendChild(document.createElement('span')); sp.style.setProperty('--c', color(s.m)); sp.textContent = s.m; });
+
+    const W = Math.max(280, box.clientWidth), H = 200, m = { t: 8, r: 12, b: 22, l: 44 };
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const x = d3.scaleUtc(d3.extent(rows, d => d.t), [m.l, W - m.r]);
+    const maxV = d3.max(rows, d => d.v) || 1;
+    const y = cfg.log
+      ? d3.scaleSymlog([0, Math.max(maxV, cfg.ref || 0)], [H - m.b, m.t]).constant(key === 'relay_rtt_ms' ? 50 : 0.5).nice()
+      : d3.scaleLinear(cfg.fixed || [0, Math.max(maxV, 1)], [H - m.b, m.t]).nice();
+    const yTicks = cfg.log
+      ? (key === 'relay_rtt_ms' ? [0, 100, 300, 1000, 3000] : [0, 0.5, 1.5, 5, 20, 80]).filter(v => v <= y.domain()[1])
+      : y.ticks(cfg.integer ? Math.min(5, y.domain()[1]) : 5);
+
+    svg.append('g').selectAll('line').data(yTicks).join('line')
+      .attr('x1', m.l).attr('x2', W - m.r).attr('y1', y).attr('y2', y).attr('stroke', 'var(--cds-chart-grid)');
+    const ya = svg.append('g').attr('transform', `translate(${m.l},0)`)
+      .call(d3.axisLeft(y).tickValues(yTicks).tickSize(0).tickPadding(6).tickFormat(v => key === 'disk_used_pct' ? `${v}%` : key === 'relay_rtt_ms' ? d3.format('~s')(v) : d3.format('~g')(v)));
+    ya.attr('font-size', null).attr('font-family', null).select('.domain').remove();
+    ya.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+    const xa = svg.append('g').attr('transform', `translate(0,${H - m.b})`)
+      .call(d3.axisBottom(x).ticks(Math.max(2, Math.floor(W / 110))).tickSize(0).tickPadding(6).tickFormat(d3.utcFormat('%H:%M')));
+    xa.attr('font-size', null).attr('font-family', null).select('.domain').attr('stroke', 'var(--cds-chart-axis)');
+    xa.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+    if (cfg.ref != null) svg.append('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', y(cfg.ref)).attr('y2', y(cfg.ref))
+      .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 4');
+
+    const line = d3.line().x(d => x(d.t)).y(d => y(d.v));
+    if (cfg.integer) line.curve(d3.curveStepAfter);
+    const paths = svg.append('g').selectAll('path').data(series).join('path')
+      .attr('d', s => line(s.pts)).attr('fill', 'none').attr('stroke', s => color(s.m))
+      .attr('stroke-width', 2).attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round');
+
+    const rule = svg.append('line').attr('y1', m.t).attr('y2', H - m.b).attr('stroke', 'var(--cds-chart-axis)').style('display', 'none');
+    const dots = svg.append('g');
+    const tip = d3.select(box).append('div').attr('class', 'ft-tip').style('display', 'none');
+    const fmtT = d3.utcFormat('%b %-d, %H:%M UTC');
+    svg.append('rect').attr('x', m.l).attr('y', m.t).attr('width', W - m.l - m.r).attr('height', H - m.t - m.b).attr('fill', 'transparent')
+      .on('pointerleave', () => { rule.style('display', 'none'); dots.selectAll('*').remove(); tip.style('display', 'none'); paths.attr('opacity', 1); })
+      .on('pointermove', ev => {
+        const [px] = d3.pointer(ev);
+        const t = x.invert(px);
+        const at = series.map(s => { const i = d3.bisector(d => d.t).center(s.pts, t); return { m: s.m, p: s.pts[i] }; }).filter(d => d.p);
+        if (!at.length) return;
+        const tx = x(at[0].p.t);
+        rule.style('display', null).attr('x1', tx).attr('x2', tx);
+        dots.selectAll('circle').data(at).join('circle').attr('r', 3.5).attr('cx', d => x(d.p.t)).attr('cy', d => y(d.p.v)).attr('fill', d => color(d.m));
+        tip.style('display', null).text('');
+        tip.append('div').attr('class', 'd').text(fmtT(at[0].p.t));
+        [...at].sort((a, b) => b.p.v - a.p.v).forEach(d => {
+          const row = tip.append('div');
+          row.append('span').attr('class', 'sw').style('background', color(d.m));
+          row.append('span').text(`${d.m}  ${cfg.fmt(d.p.v)}`);
+        });
+        const tw = tip.node().offsetWidth, scale = box.clientWidth / W;
+        const left = tx * scale + 12 + tw > box.clientWidth ? tx * scale - tw - 12 : tx * scale + 12;
+        tip.style('left', `${Math.max(0, left)}px`).style('top', `${legend.offsetHeight + 4}px`);
+      });
+  }
+
+  dash.onData(() => {
+    takeaway();
+    table();
+    document.querySelectorAll('.ft-chart').forEach(chart);
+  });
+})();
+</script>
