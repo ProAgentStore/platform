@@ -40,7 +40,7 @@ export type GmailLeadProvenance = {
 	received_at: string;
 	source_domain: string;
 };
-export type ScoutCandidate = { url: string; title: string; company?: string; location?: string; source: string; source_domain?: string; posted_date?: string; gmail_message_id: string; gmail_subject: string; gmail_from: string; gmail_date: string; gmail_provenance: GmailLeadProvenance };
+export type ScoutCandidate = { url: string; title: string | null; company?: string; location?: string; source: string; source_domain?: string; posted_date?: string; gmail_message_id: string; gmail_subject: string; gmail_from: string; gmail_date: string; gmail_provenance: GmailLeadProvenance };
 
 const SECURITY_ALERT_RE = /(?:security|verify|verification|password|sign[ -]?in|login|unusual activity|account alert)/i;
 /**
@@ -243,7 +243,8 @@ function anchorText(text: string, end: number): string | null {
 	return titleText(text.slice(end, end + 700).match(/^["']?[^>\n]{0,200}>([\s\S]{0,400}?)<\/a>/i)?.[1]);
 }
 /** The lead a message becomes once its posting URL is known — from the mail itself, or resolved (#1024). */
-function candidateFor(message: GmailMessage, url: string, resolvedCompany?: string, title?: string): ScoutCandidate {
+/** `title: null` = a digest posting nothing names yet (#1248): untitled, never named after the digest's subject. */
+function candidateFor(message: GmailMessage, url: string, resolvedCompany?: string, title?: string | null): ScoutCandidate {
 	const host = new URL(url).hostname.toLowerCase();
 	const subject = clipMarked(message.subject, 300, { within: true });
 	const sender = clipMarked(message.from, 300, { within: true });
@@ -251,7 +252,7 @@ function candidateFor(message: GmailMessage, url: string, resolvedCompany?: stri
 	const metadata = extractVisibleMetadata(message);
 	return {
 		url,
-		title: (title && clipMarked(title.trim(), 300, { within: true })) || clipMarked(message.subject.trim(), 300, { within: true }) || "Job suggestion",
+		title: title === null ? null : (title && clipMarked(title.trim(), 300, { within: true })) || clipMarked(message.subject.trim(), 300, { within: true }) || "Job suggestion",
 		source: "Gmail",
 		source_domain: host,
 		posted_date: message.date || undefined,
@@ -261,8 +262,8 @@ function candidateFor(message: GmailMessage, url: string, resolvedCompany?: stri
 		gmail_date: receivedAt,
 		gmail_provenance: { provider: "gmail", message_id: message.id, subject, sender, received_at: receivedAt, source_domain: host },
 		// A digest posting's employer is the BOARD's (#1248): the email's "company:" line belongs to some other job in it.
-		...(title ? {} : metadata),
-		company: title ? resolvedCompany : (metadata.company ?? resolvedCompany),
+		...(title !== undefined ? {} : metadata),
+		company: title !== undefined ? resolvedCompany : (metadata.company ?? resolvedCompany),
 	};
 }
 function stub(env: Env, id: string) { return env.AGENT.get(env.AGENT.idFromName(id)); }
@@ -494,8 +495,15 @@ export async function ingestGmailCandidates(input: {
 				candidate = candidateFor(message, job.url, undefined, job.title);
 				gap = r && "awaitingBrowser" in r ? r.awaitingBrowser.reason : null;
 				evidence = gap ? `title from the email's link text; the job board's page could not be read here (${gap.replace(/_/g, " ")})` : "title from the email's link text (not a job board the server can check)";
+			} else if (r && "awaitingBrowser" in r) {
+				// A known job board's posting, identified by its id, whose page the server cannot read and whose
+				// link the email leaves unnamed — live, every SEEK digest posting (#1248). Like a URL the owner
+				// pastes (manual intake), it waits for the browser check untitled rather than being dropped.
+				candidate = candidateFor(message, job.url, undefined, null);
+				gap = r.awaitingBrowser.reason;
+				evidence = `a ${safeHost(job.url)} posting identified by its id; the job board's page could not be read here (${gap.replace(/_/g, " ")}), and the email's link text does not name it`;
 			} else {
-				const why = r && "awaitingBrowser" in r ? `its job-board page could not be read here (${r.awaitingBrowser.reason.replace(/_/g, " ")})` : "it is not on a job board the server can check";
+				const why = "it is not on a job board the server can check";
 				notTaken("posting_unverifiable", `Could not identify this job: ${why}, and the email's link text does not name it. Open the posting and add it with job_lead_intake_url if you want it.`, why);
 				continue;
 			}

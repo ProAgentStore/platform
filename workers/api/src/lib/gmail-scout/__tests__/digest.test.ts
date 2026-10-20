@@ -132,19 +132,21 @@ describe("SEEK Recommendations (#1248)", () => {
 Plain-text copy: [ ${seek(91000003)}?tracking=SEEKSECRET9 ]`,
 	});
 
-	it("a posting the board names differently is a mismatch; one the board would not show, with no link text, is unidentified", async () => {
+	it("a posting the board names differently is a mismatch; one the board would not show, with no link text, waits for a browser untitled", async () => {
 		const b = boards({
 			[seek(91000001)]: () => new Response(page("Platform Engineer", "Acme Pty Ltd")),
 			[seek(91000002)]: () => new Response(page("Senior Data Scientist", "Hooli")),
 			[seek(91000003)]: () => new Response("blocked", { status: 403 }),
 		});
 		const { result, stored, row, subs } = await ingest(RECS, b.fetchImpl);
-		expect(result).toMatchObject({ added: 1, rejected: { posting_mismatch: 1, posting_unverifiable: 1 } });
-		expect(stored).toHaveLength(1);
+		expect(result).toMatchObject({ added: 2, rejected: { posting_mismatch: 1 } });
+		// Live (#1248 reprocess): SEEK refuses the server and its canonical links carry no text — the posting
+		// is still one identified job, so like a pasted URL it waits for the browser, never named after the subject.
+		expect(stored[1]).toMatchObject({ url: seek(91000003), title: null, company: undefined, status: "awaiting_browser_verification", from_digest: true });
+		expect(result.awaiting).toEqual([expect.objectContaining({ canonicalUrl: seek(91000003), title: null, reason: "server_fetch_refused" })]);
 		expect(row).toMatchObject({ classification: "digest", decision: "added" });
-		expect(row.evidence).toMatch(/sender is a recommendations feed|Very strong applicant|digest/i);
-		expect(subs.map((s) => s.rejection)).toEqual([null, "posting_mismatch", "posting_unverifiable"]);
-		expect(subs[2].reason).toMatch(/^Could not identify this job: its job-board page could not be read here \(server fetch refused\).*job_lead_intake_url/);
+		expect(subs.map((s) => [s.decision, s.rejection])).toEqual([["added", null], ["rejected", "posting_mismatch"], ["awaiting_browser_verification", null]]);
+		expect(subs[2].evidence).toMatch(/www\.seek\.com\.au posting identified by its id; the job board's page could not be read here \(server fetch refused\)/);
 		expect(subs[2].job).toEqual({ title: null, company: null, url: seek(91000003) });
 	});
 });
