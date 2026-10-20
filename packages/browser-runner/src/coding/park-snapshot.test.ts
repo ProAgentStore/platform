@@ -61,7 +61,7 @@ describe("parkSnapshot / parkRestore", () => {
 	});
 
 	it("a clean tree has nothing to save; a replayed park reports the save it already made", () => {
-		expect(parkSnapshot(dir, RUN)).toEqual({ snapshot: null, files: 0, clean: true, ref: null });
+		expect(parkSnapshot(dir, RUN)).toEqual({ snapshot: null, files: 0, clean: true, ref: null, pushed: null });
 		dirty();
 		const first = parkSnapshot(dir, RUN);
 		expect(parkSnapshot(dir, RUN).snapshot).toBe(first.snapshot);
@@ -105,5 +105,83 @@ describe("parkSnapshot / parkRestore", () => {
 	it("refuses a run id or snapshot id that is not one", () => {
 		expect(() => parkSnapshot(dir, "--all")).toThrow(/unusable run id/);
 		expect(() => parkRestore(dir, RUN, "HEAD")).toThrow(/unusable snapshot id/);
+	});
+});
+
+/**
+ * #1242 — parked work is pushed to origin, and the object (not a ref) decides whether it is here.
+ * Two clones of one bare origin stand in for two machines: X parks, Y has never seen the commit.
+ */
+describe("parked work across machines (#1242)", () => {
+	let root: string;
+	let origin: string;
+	let x: string;
+	let y: string;
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "pags-park-1242-"));
+		origin = join(root, "origin.git");
+		git(root, "init", "-q", "--bare", "-b", "main", origin);
+		x = join(root, "x");
+		git(root, "clone", "-q", origin, x);
+		for (const [k, v] of [["user.email", "t@example.com"], ["user.name", "T"]]) git(x, "config", k, v);
+		writeFileSync(join(x, "a.txt"), "one\n");
+		git(x, "add", "-A");
+		git(x, "commit", "-qm", "first");
+		git(x, "push", "-q", "origin", "main");
+		y = join(root, "y");
+		git(root, "clone", "-q", origin, y);
+		for (const [k, v] of [["user.email", "t@example.com"], ["user.name", "T"]]) git(y, "config", k, v);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	function parkOnX() {
+		writeFileSync(join(x, "a.txt"), "one\ntwo\n");
+		writeFileSync(join(x, "spec.ts"), "test('analytics', () => {});\n");
+		return parkSnapshot(x, RUN);
+	}
+
+	it("pushes the parked ref to origin, so the work outlives the machine", () => {
+		const saved = parkOnX();
+		expect(saved).toMatchObject({ clean: true, pushed: true, ref: parkRef(RUN) });
+		expect(git(origin, "rev-parse", parkRef(RUN)).trim()).toBe(saved.snapshot);
+	});
+
+	it("park on X, resume on Y: refused as MISSING — never 'set aside here' — and nothing changes on Y", () => {
+		const saved = parkOnX();
+		const r = parkRestore(y, RUN, saved.snapshot as string);
+		expect(r).toMatchObject({ restored: false, missing: true });
+		expect(r.refused).toMatch(/is not in this machine's checkout/);
+		expect(existsSync(join(y, "spec.ts"))).toBe(false);
+	});
+
+	it("an owner-asked move fetches the ref from origin first and puts the work back on Y", () => {
+		const saved = parkOnX();
+		expect(parkRestore(y, RUN, saved.snapshot as string, { fetch: true })).toEqual({ restored: true, fetched: true });
+		expect(read(y, "a.txt")).toBe("one\ntwo\n");
+		expect(read(y, "spec.ts")).toContain("analytics");
+	});
+
+	it("a move whose origin never got the ref says so, and changes nothing", () => {
+		writeFileSync(join(x, "a.txt"), "one\ntwo\n");
+		git(x, "remote", "set-url", "origin", join(root, "nowhere.git")); // the push cannot land
+		const saved = parkSnapshot(x, RUN);
+		expect(saved).toMatchObject({ clean: true, pushed: false });
+		expect(saved.pushError).not.toMatch(/\//); // no path or URL — a credential could ride on one
+		const r = parkRestore(y, RUN, saved.snapshot as string, { fetch: true });
+		expect(r).toMatchObject({ restored: false, missing: true });
+		expect(r.refused).toMatch(/fetching refs\/pags\/parked\/.* from origin failed/);
+	});
+
+	it("a runner restart on the parking machine (same checkout, ref still local) restores without asking origin", () => {
+		const saved = parkOnX();
+		git(x, "remote", "set-url", "origin", join(root, "nowhere.git")); // origin unreachable: must not matter
+		expect(parkRestore(x, RUN, saved.snapshot as string)).toEqual({ restored: true });
+		expect(read(x, "spec.ts")).toContain("analytics");
+	});
+
+	it("work whose ref was dropped by hand but whose commit is still here is put back — the object decides", () => {
+		const saved = parkOnX();
+		git(x, "update-ref", "-d", parkRef(RUN));
+		expect(parkRestore(x, RUN, saved.snapshot as string)).toEqual({ restored: true });
 	});
 });

@@ -543,7 +543,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// A parked run's checkout, set aside and put back (#1077, `coding/park-snapshot.ts`). An older runner
 	// 404s these, and the cloud then keeps the checkout held — exactly what happened before them.
 	if (req.method === "POST" && (path === "/coding/park-snapshot" || path === "/coding/park-restore")) {
-		const b = await readJson<{ workDir?: string; repoId?: string; runId: string; snapshot?: string }>(req);
+		const b = await readJson<{ workDir?: string; repoId?: string; runId: string; snapshot?: string; fetch?: boolean }>(req);
 		try {
 			return json(res, 200, path === "/coding/park-snapshot" ? runner.coding.parkSnapshot(b) : runner.coding.parkRestore({ ...b, snapshot: String(b.snapshot ?? "") }));
 		} catch (e: unknown) {

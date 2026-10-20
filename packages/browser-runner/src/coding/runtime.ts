@@ -318,8 +318,8 @@ export class CodingRuntime {
 	}
 
 	/** Put a parked run's work back by its exact id — onto a clean tree, only if it applies cleanly (#1077). */
-	parkRestore(input: { workDir?: string; repoId?: string; runId: string; snapshot: string }) {
-		return parkRestore(this.parkWorkDir(input), input.runId, input.snapshot);
+	parkRestore(input: { workDir?: string; repoId?: string; runId: string; snapshot: string; fetch?: boolean }) {
+		return parkRestore(this.parkWorkDir(input), input.runId, input.snapshot, { fetch: input.fetch === true });
 	}
 
 	/** Read one file inside the session's repo (traversal-guarded, size-capped). */

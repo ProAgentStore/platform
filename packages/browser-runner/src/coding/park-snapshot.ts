@@ -21,7 +21,9 @@ import { InspectError } from "./inspect.js";
  *     commit id is pinned on a ref of its own, `refs/pags/parked/<run>`. Nothing here pops, drops or
  *     clears a stash, so the entry stays in `git stash list` as a second, visible copy, and the ref
  *     keeps the commit reachable even if somebody drops the entry by hand. A ref under `refs/pags/`
- *     is not a branch and is not pushed.
+ *     is not a branch. It IS pushed to `origin` under the same name (#1242), best-effort: the safety
+ *     net when the machine is lost. Nothing ever fetches it back unless the OWNER asks for the run to
+ *     move (`fetch` on restore) — a run resumes on the machine it parked on, nowhere else.
  *   * The restore applies by that exact id, only onto a clean tree, and only after checking it
  *     applies cleanly — tracked changes with `git apply --check`, untracked files by refusing any that
  *     already exist. A restore that would conflict changes NOTHING and says so; the work stays on the
@@ -52,6 +54,10 @@ function changes(workDir: string): string[] {
 export interface ParkSnapshotResult {
 	/** The exact commit id the work was saved as; null when the tree was already clean. */
 	snapshot: string | null;
+	/** Whether the ref reached `origin` (#1242). Null when there was nothing to push. */
+	pushed: boolean | null;
+	/** Why the push failed, credential-free; absent when it did not. */
+	pushError?: string;
 	/** Files that were set aside. */
 	files: number;
 	/** The checkout is clean now — the only state in which the cloud may hand it to another run. */
@@ -72,8 +78,8 @@ export function parkSnapshot(workDir: string, runId: string): ParkSnapshotResult
 	})();
 	const before = changes(workDir);
 	// A replay of a park that already saved: the work is on the ref; report it rather than save a second copy.
-	if (existing) return { snapshot: existing, files: before.length, clean: before.length === 0, ref };
-	if (before.length === 0) return { snapshot: null, files: 0, clean: true, ref: null };
+	if (existing) return { snapshot: existing, files: before.length, clean: before.length === 0, ref, ...pushRef(workDir, ref) };
+	if (before.length === 0) return { snapshot: null, files: 0, clean: true, ref: null, pushed: null };
 	git(workDir, ["stash", "push", "--include-untracked", "-m", parkMessage(runId)]);
 	// The entry git just wrote, found by its message: never assume `stash@{0}` is ours.
 	const list = git(workDir, ["stash", "list", "--format=%H %s"]).split("\n").filter(Boolean);
@@ -81,11 +87,42 @@ export function parkSnapshot(workDir: string, runId: string): ParkSnapshotResult
 	if (!mine) throw new InspectError("the stash entry for this park was not found after saving it; nothing was released");
 	const snapshot = mine.split(" ")[0];
 	git(workDir, ["update-ref", ref, snapshot]);
-	return { snapshot, files: before.length, clean: changes(workDir).length === 0, ref };
+	return { snapshot, files: before.length, clean: changes(workDir).length === 0, ref, ...pushRef(workDir, ref) };
+}
+
+/** A git error, said without anything that could carry a credential: no URL, first line only. */
+function safeGitError(e: unknown): string {
+	const raw = String((e as { stderr?: unknown }).stderr || (e instanceof Error ? e.message : e) || "git failed");
+	const line = raw.split("\n").map((l) => l.trim()).find((l) => l && !/^hint:/i.test(l)) ?? "git failed";
+	return line.replace(/'[^']*'|"[^"]*"/g, "<remote>").replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<remote>").replace(/\S+@\S+:\S+/g, "<remote>").slice(0, 200);
+}
+
+/** Push the parked ref to `origin` under the same name (#1242). Never throws: the local ref is the work; this is the copy. */
+function pushRef(workDir: string, ref: string): { pushed: boolean; pushError?: string } {
+	try {
+		git(workDir, ["push", "--quiet", "origin", `+${ref}:${ref}`]);
+		return { pushed: true };
+	} catch (e) {
+		return { pushed: false, pushError: safeGitError(e) };
+	}
+}
+
+/** Does this commit exist in the checkout's object store? (`rev-parse` of a ref says nothing about an id it does not name.) */
+function hasObject(workDir: string, sha: string): boolean {
+	try {
+		git(workDir, ["cat-file", "-e", `${sha}^{commit}`]);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export interface ParkRestoreResult {
 	restored: boolean;
+	/** The saved commit is not in this checkout at all (#1242) — it was set aside on another machine, or lost. */
+	missing?: boolean;
+	/** It was fetched from `origin` first, because the owner asked for the run to move (#1242). */
+	fetched?: boolean;
 	/** Why nothing was changed, when `restored` is false. */
 	refused?: string;
 	/** The files the saved work collides with on the current checkout (#1078), as git named them. */
@@ -103,17 +140,22 @@ export function applyConflicts(stderr: string): string[] {
 }
 
 /** Put a parked run's work back by its exact id — only onto a clean tree, only if it applies cleanly. */
-export function parkRestore(workDir: string, runId: string, snapshot: string): ParkRestoreResult {
+export function parkRestore(workDir: string, runId: string, snapshot: string, opts: { fetch?: boolean } = {}): ParkRestoreResult {
 	checkout(workDir, runId);
 	if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(snapshot)) throw new InspectError(`unusable snapshot id: ${snapshot}`);
 	const ref = parkRef(runId);
-	let pinned = "";
-	try {
-		pinned = git(workDir, ["rev-parse", "--verify", "--quiet", ref]).trim();
-	} catch {
-		pinned = "";
+	// The OBJECT decides, not the ref (#1242): "still set aside" was said of work this checkout had never had.
+	let fetched = false;
+	if (!hasObject(workDir, snapshot)) {
+		if (!opts.fetch) return { restored: false, missing: true, refused: `the saved work (${snapshot}) is not in this machine's checkout` };
+		try {
+			git(workDir, ["fetch", "--quiet", "origin", `+${ref}:${ref}`]);
+		} catch (e) {
+			return { restored: false, missing: true, refused: `the saved work (${snapshot}) is not in this checkout, and fetching ${ref} from origin failed (${safeGitError(e)})` };
+		}
+		if (!hasObject(workDir, snapshot)) return { restored: false, missing: true, refused: `the saved work (${snapshot}) is not in this checkout, and origin's ${ref} does not hold it` };
+		fetched = true;
 	}
-	if (pinned !== snapshot) return { restored: false, refused: `the saved work is not at ${ref} on this machine (expected ${snapshot})` };
 	const dirty = changes(workDir);
 	if (dirty.length) return { restored: false, refused: `the checkout is not clean (${dirty.length} changed file${dirty.length === 1 ? "" : "s"}), so the saved work was not put back on top of it` };
 	// Tracked changes: the stash's own diff against its base, checked against the current tree.
@@ -136,6 +178,10 @@ export function parkRestore(workDir: string, runId: string, snapshot: string): P
 	const clash = untracked.filter((p) => existsSync(join(workDir, p)));
 	if (clash.length) return { restored: false, refused: `${clash.length} file${clash.length === 1 ? "" : "s"} the saved work would create already exist${clash.length === 1 ? "s" : ""}`, conflicts: clash };
 	git(workDir, ["stash", "apply", snapshot]);
-	git(workDir, ["update-ref", "-d", ref, snapshot]);
-	return { restored: true };
+	try {
+		git(workDir, ["update-ref", "-d", ref]);
+	} catch {
+		/* the work is back; a ref already gone is not a failure */
+	}
+	return { restored: true, ...(fetched ? { fetched } : {}) };
 }
