@@ -35,7 +35,9 @@
 //
 // A row with no `machine_id` (written before this landed, or by an older CLI) yields NO alias.
 // Unknown identity fails closed — never a heal we cannot prove.
-import { normalizeRunnerNode } from "./runtime-nodes.js";
+import { normalizeMachineId, normalizeRunnerNode } from "./runtime-nodes.js";
+
+export { normalizeMachineId };
 
 /** One `instance_runtime_nodes` row, reduced to the identity question. */
 export interface NodeRegistration {
@@ -52,14 +54,6 @@ export interface NodeRegistration {
 /** How many previously-used hostnames a machine may claim in one registration. */
 export const MAX_MACHINE_NAMES = 10;
 
-/**
- * A machine id is opaque to the server — it only ever compares two of them — so the only rules
- * are length and a character set that cannot smuggle anything into a log or a query.
- */
-export function normalizeMachineId(value: unknown): string {
-	const raw = String(value ?? "").trim();
-	return /^[A-Za-z0-9_-]{8,64}$/.test(raw) ? raw : "";
-}
 
 /**
  * The hostnames a machine claims to have used, for the backfill in `claimMachineNames`.

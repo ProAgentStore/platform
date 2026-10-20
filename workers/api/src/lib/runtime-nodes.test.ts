@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeRunnerNode, relayNameForInstance, parseBoundRunnerNode, readInstanceRunnerNode } from "./runtime-nodes.js";
+import { normalizeRunnerNode, relayNameForInstance, parseRunnerPin, pinnedNodeName, readInstanceRunnerNode } from "./runtime-nodes.js";
 
 describe("normalizeRunnerNode", () => {
 	it("trims whitespace and coerces nullish to empty string", () => {
@@ -42,24 +42,42 @@ describe("relayNameForInstance", () => {
 	});
 });
 
-describe("parseBoundRunnerNode", () => {
-	it("extracts config.runnerNode from a JSON config string", () => {
-		expect(parseBoundRunnerNode(JSON.stringify({ runnerNode: "pinned-box" }))).toBe("pinned-box");
+describe("parseRunnerPin (#1250)", () => {
+	const MID = "3901c9c4-004f-435e-bfc5-0b87b7ac5173";
+	it("reads a machine-id pin, and a pre-#1250 hostname pin only while no id is pinned", () => {
+		expect(parseRunnerPin(JSON.stringify({ runnerMachineId: MID }))).toEqual({ machineId: MID, legacyNode: "" });
+		expect(parseRunnerPin(JSON.stringify({ runnerNode: "  pinned-box  " }))).toEqual({ machineId: "", legacyNode: "pinned-box" });
+		// The id wins: a leftover hostname beside it is not the pin.
+		expect(parseRunnerPin(JSON.stringify({ runnerMachineId: MID, runnerNode: "Mac.modem" }))).toEqual({ machineId: MID, legacyNode: "" });
 	});
 
-	it("returns '' (auto) for empty/null/absent config or missing field", () => {
-		expect(parseBoundRunnerNode(null)).toBe("");
-		expect(parseBoundRunnerNode(undefined)).toBe("");
-		expect(parseBoundRunnerNode("{}")).toBe("");
-		expect(parseBoundRunnerNode(JSON.stringify({ other: "x" }))).toBe("");
+	it("reads empty, absent, malformed and invalid ids as automatic", () => {
+		for (const raw of [null, undefined, "{}", JSON.stringify({ other: "x" }), "{not json", JSON.stringify({ runnerMachineId: "x'; DROP" })]) {
+			expect(parseRunnerPin(raw)).toEqual({ machineId: "", legacyNode: "" });
+		}
+	});
+});
+
+describe("pinnedNodeName — a machine pin follows the machine's hostname (#1250)", () => {
+	const MID = "3901c9c4-004f-435e-bfc5-0b87b7ac5173";
+	const pin = { machineId: MID, legacyNode: "" };
+	it("resolves to the hostname of the machine's freshest registration — a hostname change keeps the pin", () => {
+		const rows = [
+			{ runner_node: "RLs-MacBook-Air.local", machine_id: MID, last_seen_at: "2026-10-19 10:00:00" },
+			{ runner_node: "Mac.modem", machine_id: MID, last_seen_at: "2026-10-20 00:40:00" },
+			{ runner_node: "Macmini", machine_id: "other-machine-0001", last_seen_at: "2026-10-20 00:50:00" },
+		];
+		expect(pinnedNodeName(pin, rows)).toBe("Mac.modem");
+		// macOS renames it again: a fresher row under the SAME id moves the pin with it.
+		expect(pinnedNodeName(pin, [...rows, { runner_node: "Mac", machine_id: MID, last_seen_at: "2026-10-20 01:00:00" }])).toBe("Mac");
 	});
 
-	it("returns '' on malformed JSON rather than throwing", () => {
-		expect(parseBoundRunnerNode("{not json")).toBe("");
+	it("a pinned machine with no registration left reads as its id — offline, never automatic", () => {
+		expect(pinnedNodeName(pin, [])).toBe(MID);
 	});
 
-	it("normalizes (trims + caps) the pinned node", () => {
-		expect(parseBoundRunnerNode(JSON.stringify({ runnerNode: "  spaced  " }))).toBe("spaced");
+	it("a legacy hostname pin resolves to itself", () => {
+		expect(pinnedNodeName({ machineId: "", legacyNode: "Macmini" }, [])).toBe("Macmini");
 	});
 });
 

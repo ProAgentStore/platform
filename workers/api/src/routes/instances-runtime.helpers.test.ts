@@ -567,29 +567,30 @@ describe("POST /v1/instances/:id/runner-attach — the remote `pags up --force` 
 });
 
 describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' pin)", () => {
-	it("pins the instance to a node and persists runnerNode into the config", async () => {
-		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+	it("pins the instance to a machine and persists its machine id into the config (#1250)", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], nodes: [mockRow({ runner_node: "laptop-A", instance_id: "inst-1", user_id: "u1", machine_id: "machine-aaaa1111" })] });
 		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "laptop-A" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		// Plus where the agent actually is after the repin (#850) — here no runner is connected anywhere.
-		expect(await res.json()).toMatchObject({ runnerNode: "laptop-A", attachment: { node: "laptop-A", attached: false } });
-		// Targeted json_set on $.runnerNode (#231): pinning a runner must not clobber a
+		expect(await res.json()).toMatchObject({ runnerNode: "laptop-A", machineId: "machine-aaaa1111", attachment: { node: "laptop-A", attached: false } });
+		// Targeted json_set on $.runnerMachineId (#231): pinning a runner must not clobber a
 		// settings or behaviour change saved from another tab between read and write.
-		const update = writes.find((w) => w.sql.includes("json_set(") && w.args[0] === "$.runnerNode");
+		const update = writes.find((w) => w.sql.includes("json_set(") && w.args[0] === "$.runnerMachineId");
 		expect(update).toBeTruthy();
-		expect(JSON.parse(update!.args[1] as string)).toBe("laptop-A");
+		expect(JSON.parse(update!.args[1] as string)).toBe("machine-aaaa1111");
+		expect(writes.some((w) => w.sql.includes("json_remove(") && w.args[0] === "$.runnerNode")).toBe(true);
 	});
 
 	it("clearing the pin (empty value) deletes runnerNode but keeps sibling config", async () => {
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "laptop-A", keepMe: 7 }) });
 		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ runnerNode: null });
-		// json_remove on just $.runnerNode. Siblings are now preserved BY CONSTRUCTION (#231) —
+		expect(await res.json()).toEqual({ runnerNode: null, machineId: null, displayName: null });
+		// json_remove on just the pin keys. Siblings are now preserved BY CONSTRUCTION (#231) —
 		// the UPDATE cannot touch another key — so the assertion is on the statement, not on a
 		// merged blob the route no longer builds.
-		const update = writes.find((w) => w.sql.includes("json_remove(") && w.args[0] === "$.runnerNode");
-		expect(update).toBeTruthy();
+		expect(writes.find((w) => w.sql.includes("json_remove(") && w.args[0] === "$.runnerMachineId")).toBeTruthy();
+		expect(writes.find((w) => w.sql.includes("json_remove(") && w.args[0] === "$.runnerNode")).toBeTruthy();
 		expect(writes.some((w) => /SET config = \?1/.test(w.sql))).toBe(false);
 	});
 
@@ -659,7 +660,7 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 	// because the repin left no trace. The record now goes to the same trace as every other
 	// instance event, so `GET /v1/instances/:id/trace` and MCP `agent_trace` read it.
 	it("records the repin to the trace, carrying the previous and new machine", async () => {
-		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" }) });
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" }), nodes: [mockRow({ runner_node: "Sergeys-Mac-mini.local", instance_id: "inst-1", user_id: "u1", machine_id: "machine-mini0001" })] });
 		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "Sergeys-Mac-mini.local" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 
@@ -668,8 +669,8 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		// logEvent's bind order: id, ts, user_id, instance_id, trace_id, source, level, event, message, context.
 		const [, , userId, instanceId, , source, , event, message, context] = events[0].args;
 		expect({ userId, instanceId, source, event }).toEqual({ userId: "u1", instanceId: "inst-1", source: "runtime", event: "runner_node.changed" });
-		expect(JSON.parse(context as string)).toMatchObject({ from: "RLs-MacBook-Air.local", to: "Sergeys-Mac-mini.local" });
-		expect(message).toBe("Runs on: RLs-MacBook-Air.local → Sergeys-Mac-mini.local");
+		expect(JSON.parse(context as string)).toMatchObject({ from: "RLs-MacBook-Air.local", to: "machine-mini0001", machineId: "machine-mini0001" });
+		expect(message).toBe("Runs on: RLs-MacBook-Air.local → machine-mini0001");
 	});
 
 	// Clearing to Automatic is as consequential as pinning — it is what makes routing start
@@ -685,7 +686,7 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 	// The no-op decision (#533 AC 3), asserted at the route: re-choosing the machine already
 	// pinned is ordinary picker behaviour and writes nothing to the trace.
 	it("writes no trace row when the pin does not actually change", async () => {
-		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "laptop-A" }) });
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerMachineId: "machine-aaaa1111" }), nodes: [mockRow({ runner_node: "laptop-A", instance_id: "inst-1", user_id: "u1", machine_id: "machine-aaaa1111" })] });
 		expect((await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "laptop-A" }, await tokenFor("u1"))).status).toBe(200);
 		expect(writes.filter((w) => w.sql.startsWith("INSERT INTO agent_events"))).toHaveLength(0);
 	});

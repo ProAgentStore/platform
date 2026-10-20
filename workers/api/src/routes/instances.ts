@@ -96,8 +96,9 @@ export {
 	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
-import { freshestVersion, namesOfMachine, normalizeMachineId, pinCandidates, sanitizeMachineNames } from "../lib/machine-identity.js";
-import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
+import { adoptableIdByName, freshestVersion, namesOfMachine, normalizeMachineId, pinCandidates, sanitizeMachineNames } from "../lib/machine-identity.js";
+import { resolveRunnerPin, resolveRunnerPins } from "../lib/runtime-nodes.js";
+import { machineDisplayNames } from "../lib/machine-names.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { healthOfError, healthOfResponse, runnerStatusView } from "../lib/runner-health.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
@@ -395,6 +396,10 @@ instanceRoutes.get("/my/instances", async (c) => {
 	// this very result set, so a retired agent's way out costs no extra query (#979).
 	const resolved = (results ?? []).map((r) => ({ row: r, caps: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: r.config as string }, c.env) }));
 	const roster = resolved.map((e) => ({ id: e.row.id as string, name: (instanceListView(e.row.instance_config as string | null).displayName || e.row.name) as string, runtime: e.caps.runtime }));
+	// The CLI reads `config.runnerNode` and compares it with its own hostnames (`membership.ts`), so a
+	// machine pin (#1250) travels as the hostname that machine answers to NOW — a CLI from before #1250
+	// keeps working — with `runnerMachineId` beside it for the CLIs that compare ids.
+	const pins = await resolveRunnerPins(c.env, session.uid, resolved.map((e) => ({ id: e.row.id as string, config: e.row.instance_config as string | null })));
 	const instances = resolved.map(({ row: r, caps: fullCaps }) => {
 		const { config, instance_config, last_activity_at, ...rest } = r;
 		const view = instanceListView(instance_config as string | null);
@@ -407,7 +412,10 @@ instanceRoutes.get("/my/instances", async (c) => {
 			...(view.displayName ? { name: view.displayName, agentName: r.name } : {}),
 			// Present ONLY when pinned, so an unpinned instance answers with no `config` key at
 			// all and the shipped runner's `inst.config?.runnerNode` reads undefined as before.
-			...(view.runnerNode ? { config: { runnerNode: view.runnerNode } } : {}),
+			...(() => {
+				const pin = pins.get(r.id as string);
+				return pin?.node ? { config: { runnerNode: pin.node, ...(pin.machineId ? { runnerMachineId: pin.machineId } : {}) } } : {};
+			})(),
 			...(view.tags.length ? { tags: view.tags } : {}),
 			lastActivityAt: last_activity_at ?? null,
 			// A RETIRED workflow, with the owner's own replacement instances attached (#979). Present
@@ -610,8 +618,10 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	const cfgRow = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
 		.bind(instanceId, session.uid)
 		.first<{ config: string | null }>();
-	const runnerNode = parseBoundRunnerNode(cfgRow?.config);
-	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
+	// The pin is a machine id (#1250); `runnerNode` is the hostname that machine answers to now.
+	const pin = await resolveRunnerPin(c.env, session.uid, cfgRow?.config);
+	const runnerNode = pin.node;
+	const [nodes, displayNames] = await Promise.all([listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []), machineDisplayNames(c.env, session.uid)]);
 	// Machine-level liveness: which of the user's machines are running a runner AT ALL
 	// (any of their instances holds a live relay socket) — the same node-level truth the
 	// Terminals page shows. This lets the picker distinguish "machine offline" from
@@ -637,6 +647,7 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	// CONNECTED with, which after a rename is not the one this agent registered under.
 	const registrations = userRows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at, version: r.runner_version }));
 	const namesOf = (node: string) => namesOfMachine(node, registrations);
+	const idByName = adoptableIdByName(registrations);
 	// Up for ANY agent: any of its instances holds a socket under any of its names — list_runner_nodes' rule (#1055);
 	// probing only the 25 oldest (instance, name) pairs read machines with later-registered agents as down.
 	const machineOnline = async (names: readonly string[]): Promise<boolean> =>
@@ -660,7 +671,11 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 				}
 			}
 			const stale = staleRegistration(registrations, names);
+			const machineId = idByName.get(node) ?? null;
 			return {
+				// The owner's name for the machine first (#1250); `node` is its current hostname, `aka` the others.
+				displayName: (machineId && displayNames.get(machineId)) || null,
+				machineId,
 				node,
 				...(names.length > 1 ? { aka: names.slice(1) } : {}),
 				connected,
@@ -681,7 +696,17 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	const resolvedNode = runnerNode && pinnedDetail && socketName.get(runnerNode) !== runnerNode
 		? await liveAliasForPin(c.env, instanceId, session.uid, runnerNode).catch(() => null)
 		: null;
-	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail, resolvedNode });
+	return c.json({
+		runnerNode: runnerNode || null,
+		machineId: pin.machineId || null,
+		displayName: (pin.machineId && displayNames.get(pin.machineId)) || null,
+		// A pin set before #1250 that the migration could not tie to a machine id: it still routes by
+		// that hostname. Re-pin by display name or machine id to make it survive a hostname change.
+		...(pin.legacyNode ? { legacy: true } : {}),
+		nodes: available,
+		nodesDetail,
+		resolvedNode,
+	});
 });
 
 registerRunnerPinRoutes(instanceRoutes); // preserve the runner-node route order after extraction (#887)
@@ -1027,7 +1052,7 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		const relayIsConnected = Boolean(liveRuntime);
 		// Only when it is NOT attached, and only to DESCRIBE: which machine is actually up, so the
 		// sentence below can name it instead of prescribing a command the user is already running.
-		const pinnedNode = liveRuntime ? "" : parseBoundRunnerNode(instance.config);
+		const pinnedNode = liveRuntime ? "" : (await resolveRunnerPin(c.env, session.uid, instance.config)).node;
 		const liveNodeExcludedByPin = pinnedNode
 			? await liveNodeIgnoringPin(c.env, instanceId, session.uid).catch(() => null)
 			: null;

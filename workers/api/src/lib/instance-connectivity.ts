@@ -7,7 +7,7 @@
 // is describing: the DB `status` column is never cleared on disconnect (#238), so a machine whose
 // laptop closed still reads `registered` forever.
 import { getBoundRunnerConn, liveNodeIgnoringPin, type RunnerConn } from "./runner-client.js";
-import { parseBoundRunnerNode } from "./runtime-nodes.js";
+import { resolveRunnerPins } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
 export interface RuntimeFacts {
@@ -123,10 +123,7 @@ async function pinnedNodes(env: Env, userId: string, ids: readonly string[]): Pr
 		.bind(userId, ...ids)
 		.all<{ id: string; config: string | null }>()
 		.catch(() => ({ results: [] as { id: string; config: string | null }[] }));
-	for (const r of res.results ?? []) {
-		const node = parseBoundRunnerNode(r.config);
-		if (node) out.set(r.id, node);
-	}
+	for (const [id, pin] of await resolveRunnerPins(env, userId, res.results ?? [])) if (pin.node) out.set(id, pin.node);
 	return out;
 }
 

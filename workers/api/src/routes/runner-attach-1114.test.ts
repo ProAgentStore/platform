@@ -63,9 +63,10 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 't1114-coder', 'Coder', '${JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "local" } })}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('${INTERNS}', 'ag', 'u1', 'active', '{}'), ('${CARRIER}', 'ag', 'u1', 'active', '{}')`);
 	// Macmini: online for the carrier (heartbeat now, 0.4.134). pink-laptop: Interns' old machine, last seen 19 days ago on 0.4.61.
-	d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, last_seen_at, updated_at) VALUES
-		('${CARRIER}', 'u1', 'Macmini', 'relay://', '0.4.134', datetime('now'), datetime('now')),
-		('${INTERNS}', 'u1', 'pink-laptop', 'relay://', '0.4.61', datetime('now', '-19 days'), datetime('now', '-19 days'))`);
+	// Each with its stable machine id (#1250): a pin names a machine, so a machine with no id cannot be pinned.
+	d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, last_seen_at, updated_at, machine_id) VALUES
+		('${CARRIER}', 'u1', 'Macmini', 'relay://', '0.4.134', datetime('now'), datetime('now'), 'machine-macmini01'),
+		('${INTERNS}', 'u1', 'pink-laptop', 'relay://', '0.4.61', datetime('now', '-19 days'), datetime('now', '-19 days'), 'machine-pinklap01')`);
 	live.add(`${CARRIER}@Macmini`);
 });
 afterEach(() => {
@@ -116,7 +117,7 @@ describe("a PAUSED instance is answered before any machine is asked (#1114)", ()
 		expect(r.body.attachment.detail).toMatch(/paused — resume it \(resume_instance\)/);
 		expect(asked).toEqual([]);
 		expect(statusOf().status).toBe("paused");
-		expect(JSON.parse(statusOf().config).runnerNode).toBe("Macmini");
+		expect(JSON.parse(statusOf().config)).toEqual({ runnerMachineId: "machine-macmini01" }); // the machine, not its hostname (#1250)
 		expect(activity).toEqual([{ userId: "u1", data: expect.objectContaining({ node: "Macmini", via: "pin", outcome: "not_attached", cause: "paused" }) }]);
 		expect(errors()).toEqual([]);
 	});

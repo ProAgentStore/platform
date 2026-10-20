@@ -119,6 +119,11 @@ describe("instanceListView", () => {
 			.toBe("RLs-MacBook-Air.local");
 	});
 
+	it("carries a machine-id pin (#1250), and the hostname key only as a pre-#1250 leftover", () => {
+		const mid = "3901c9c4-004f-435e-bfc5-0b87b7ac5173";
+		expect(instanceListView(JSON.stringify({ runnerMachineId: mid, runnerNode: "Mac.modem" }))).toMatchObject({ runnerMachineId: mid, runnerNode: null });
+	});
+
 	it("reports an unpinned instance as null, so the response omits `config` entirely", () => {
 		expect(instanceListView("{}").runnerNode).toBeNull();
 		expect(instanceListView(JSON.stringify({ runnerNode: "  " })).runnerNode).toBeNull();
@@ -135,14 +140,14 @@ describe("instanceListView", () => {
 			specialInstructions: "never say this out loud",
 		}));
 		// `tags` joined at #961: an owner-written label, the field fleet_snapshot filters on.
-		expect(Object.keys(view).sort()).toEqual(["displayName", "runnerNode", "tags"]);
+		expect(Object.keys(view).sort()).toEqual(["displayName", "runnerMachineId", "runnerNode", "tags"]);
 		expect(view.tags).toEqual(["store-coders"]);
 		expect(view.displayName).toBe("My Coder");
 		expect(JSON.stringify(view)).not.toContain("hunter2");
 	});
 
 	it("treats a malformed blob as nothing set rather than throwing", () => {
-		expect(instanceListView("{not json")).toEqual({ displayName: null, runnerNode: null, tags: [] });
+		expect(instanceListView("{not json")).toEqual({ displayName: null, runnerNode: null, runnerMachineId: null, tags: [] });
 	});
 });
 

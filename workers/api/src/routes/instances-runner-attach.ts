@@ -72,15 +72,17 @@ export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
-		const { to } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
-		if (!to) return c.json({ runnerNode: null });
+		// A display name, a machine id or a hostname of exactly one machine; stored as the machine id (#1250).
+		const { to, machineId, displayName } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
+		if (!machineId) return c.json({ runnerNode: null, machineId: null, displayName: null });
+		const pinned = { runnerNode: to, machineId, displayName };
 		const base = { instanceId, userId: session.uid, node: to, via: "pin" as const, forced: false };
 		// No runner would take it — paused, canceled, or no local runtime (#1114): the pin is saved,
 		// nothing is asked to attach, and the answer says why.
 		const blocked = await attachBlocker(c.env, instanceId, session.uid);
 		if (blocked) {
 			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", ...blocked, durationMs: 0 }));
-			return c.json({ runnerNode: to, attachment: { node: to, attached: false, ...blocked } });
+			return c.json({ ...pinned, attachment: { node: to, attached: false, ...blocked } });
 		}
 		const startedAt = Date.now();
 		const progress = newAttachProgress(startedAt);
@@ -92,7 +94,7 @@ export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 				: await windowAnswer(c.env, base, progress, `The pin to ${to} is saved. `),
 			(operation) => c.executionCtx.waitUntil(operation),
 		);
-		return c.json({ runnerNode: to, attachment });
+		return c.json({ ...pinned, attachment });
 	});
 
 }

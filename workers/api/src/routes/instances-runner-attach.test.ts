@@ -20,7 +20,7 @@ vi.mock("../lib/runner-repin.js", () => ({
 }));
 
 beforeEach(() => {
-	setRunnerNodePin.mockReset().mockResolvedValue({ to: "laptop" });
+	setRunnerNodePin.mockReset().mockResolvedValue({ to: "laptop", machineId: "mid-laptop-0001", displayName: null });
 	// A machine that never answers: only the confirmation window can end the request.
 	attachAgentOnNode.mockReset().mockImplementation(() => new Promise(() => {}));
 	attachOnRepin.mockReset().mockImplementation(() => new Promise(() => {}));

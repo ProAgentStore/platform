@@ -1,131 +1,119 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
+import { setMachineDisplayName } from "./machine-names.js";
 import { RUNNER_PIN_EVENT, RUNNER_PIN_EVENT_SOURCE, describePinChange, setRunnerNodePin } from "./runner-node-pin.js";
+import { readInstanceRunnerNode } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
-interface Write { sql: string; args: unknown[] }
-
 /**
- * D1 stub: `SELECT config` answers with the pin already stored, every `.run()` is captured.
- * `changes` is what the UPDATE reports — 0 stands for "no row matched" (not the owner, or gone).
+ * #533 + #1250, on the real migrated schema: the pin is a machine id, written by ONE function that
+ * records every change. Machines are `instance_runtime_nodes` rows; names are `machine_policies`.
  */
-function stubEnv(storedConfig: Record<string, unknown> = {}, changes = 1) {
-	const writes: Write[] = [];
-	const env = {
-		DB: {
-			prepare: (sql: string) => ({
-				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
-				run: async () => ({ meta: { changes: 0 } }),
-				bind: (...args: unknown[]) => ({
-					first: async () => (sql.includes("SELECT config") ? { config: JSON.stringify(storedConfig) } : null),
-					run: async () => {
-						writes.push({ sql, args });
-						return { meta: { changes } };
-					},
-				}),
-			}),
-		},
-	} as unknown as Env;
-	return { env, writes };
+const LAPTOP = "3901c9c4-004f-435e-bfc5-0b87b7ac5173";
+const MINI = "6b8d2f1e-0000-4c1a-9b2e-macmini00001";
+let d1: RealSchemaD1;
+let env: Env;
+
+function register(instanceId: string, node: string, machineId: string | null, lastSeen: string) {
+	d1.sqlite.prepare("INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, machine_id, last_seen_at) VALUES (?, 'u1', ?, 'relay://', ?, ?)").run(instanceId, node, machineId, lastSeen);
 }
+const config = (id = "inst-1") => JSON.parse((d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id = ?").get(id) as { config: string | null }).config || "{}");
+const events = () =>
+	(d1.sqlite.prepare("SELECT user_id, instance_id, source, level, event, message, context, ts FROM agent_events WHERE event = ? ORDER BY ts").all(RUNNER_PIN_EVENT) as Array<{ user_id: string; instance_id: string; source: string; level: string; event: string; message: string; context: string; ts: number }>).map((e) => ({ ...e, context: JSON.parse(e.context) as { from: string | null; to: string | null; via: string; machineId: string | null } }));
 
-const traceWrites = (writes: Write[]) => writes.filter((w) => w.sql.startsWith("INSERT INTO agent_events"));
-/** The `agent_events` column order in `logEvent`: id, ts, user_id, instance_id, trace_id, source, level, event, message, context. */
-const traceRow = (w: Write) => ({
-	ts: w.args[1] as number,
-	userId: w.args[2],
-	instanceId: w.args[3],
-	source: w.args[5],
-	level: w.args[6],
-	event: w.args[7],
-	message: w.args[8] as string,
-	context: JSON.parse((w.args[9] as string) || "null") as { from: string | null; to: string | null; via: string },
+beforeEach(() => {
+	d1 = realSchemaD1();
+	seedTenant(d1, { userId: "u1", instanceIds: ["inst-1", "inst-2"] });
+	seedTenant(d1, { userId: "u2", instanceIds: ["other"] });
+	env = { DB: d1.DB } as unknown as Env;
+	register("inst-1", "RLs-MacBook-Air.local", LAPTOP, "2026-10-19 10:00:00");
+	register("inst-2", "Mac.modem", LAPTOP, "2026-10-20 00:40:00");
+	register("inst-1", "Macmini", MINI, "2026-10-20 00:30:00");
+	register("inst-2", "Sergeys-Mac-mini.local", MINI, "2026-10-19 00:30:00");
+	register("inst-1", "dell-laptop", null, "2026-10-20 00:10:00"); // an old CLI: no machine id
+	register("inst-1", "Mac", LAPTOP, "2026-10-18 00:00:00");
+	register("inst-2", "Mac", "a-second-machine-called-mac", "2026-10-18 00:00:00"); // two machines both called Mac
 });
+afterEach(() => d1.close());
 
-describe("setRunnerNodePin", () => {
-	// AC 1 + 2. The pin decides whether ANY runner call routes; #530 could only INFER what it held
-	// at 07:44:10 because this row did not exist.
-	it("records the previous AND new value, scoped to the instance and the account that changed it", async () => {
-		const { env, writes } = stubEnv({ runnerNode: "RLs-MacBook-Air.local" });
+describe("setRunnerNodePin — the pin is a machine id (#1250)", () => {
+	it("pins by hostname of one machine: stores the machine id, removes the hostname key, routes by the machine's CURRENT hostname", async () => {
+		d1.sqlite.prepare("UPDATE agent_instances SET config = ? WHERE id = 'inst-1'").run(JSON.stringify({ runnerNode: "Sergeys-Mac-mini.local", settings: { keep: 1 } }));
+		const res = await setRunnerNodePin(env, "inst-1", "u1", "RLs-MacBook-Air.local");
+		expect(res).toEqual({ from: "Sergeys-Mac-mini.local", to: "Mac.modem", machineId: LAPTOP, displayName: null, changed: true });
+		expect(config()).toEqual({ runnerMachineId: LAPTOP, settings: { keep: 1 } });
+		expect(await readInstanceRunnerNode(env, "inst-1", "u1")).toBe("Mac.modem");
+	});
+
+	it("pins by display name or by machine id to the same machine", async () => {
+		await setMachineDisplayName(env, "u1", MINI, "mac-mini");
+		expect((await setRunnerNodePin(env, "inst-1", "u1", "MAC-MINI")).machineId).toBe(MINI); // names are case-insensitive
+		expect(config().runnerMachineId).toBe(MINI);
+		expect((await setRunnerNodePin(env, "inst-2", "u1", LAPTOP)).machineId).toBe(LAPTOP);
+	});
+
+	it("a hostname change keeps the pin: the machine registers under a new name and routing follows it", async () => {
+		await setRunnerNodePin(env, "inst-1", "u1", "Mac.modem");
+		register("inst-1", "SergeysRLLaptop", LAPTOP, "2026-10-20 02:00:00");
+		expect(config()).toEqual({ runnerMachineId: LAPTOP });
+		expect(await readInstanceRunnerNode(env, "inst-1", "u1")).toBe("SergeysRLLaptop");
+	});
+
+	it("a rename keeps the pin: the display name changes, the stored machine id does not", async () => {
+		await setMachineDisplayName(env, "u1", LAPTOP, "rl-laptop");
+		await setRunnerNodePin(env, "inst-1", "u1", "rl-laptop");
+		await setMachineDisplayName(env, "u1", LAPTOP, "travel-laptop");
+		expect(config()).toEqual({ runnerMachineId: LAPTOP });
+		expect(await readInstanceRunnerNode(env, "inst-1", "u1")).toBe("Mac.modem");
+		// Re-pinning by the new name is the same machine — no change recorded.
+		expect((await setRunnerNodePin(env, "inst-1", "u1", "travel-laptop")).changed).toBe(false);
+	});
+
+	it("refuses what is not one machine, with the reason — and stores nothing", async () => {
+		await expect(setRunnerNodePin(env, "inst-1", "u1", "Mac")).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/used by 2 different machines/) });
+		await expect(setRunnerNodePin(env, "inst-1", "u1", "dell-laptop")).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/no stable machine id/) });
+		await expect(setRunnerNodePin(env, "inst-1", "u1", "nowhere")).rejects.toMatchObject({ status: 404 });
+		// Another owner's machine id is unknown to this one.
+		d1.sqlite.prepare("INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, machine_id) VALUES ('other', 'u2', 'theirs', 'relay://', 'their-machine-0001')").run();
+		await expect(setRunnerNodePin(env, "inst-1", "u1", "their-machine-0001")).rejects.toMatchObject({ status: 404 });
+		expect(config()).toEqual({});
+	});
+
+	it("records the previous AND new machine, scoped to the instance and the account that changed it", async () => {
+		await setMachineDisplayName(env, "u1", LAPTOP, "rl-laptop");
+		d1.sqlite.prepare("UPDATE agent_instances SET config = ? WHERE id = 'inst-1'").run(JSON.stringify({ runnerNode: "Sergeys-Mac-mini.local" }));
 		const before = Date.now();
-		const res = await setRunnerNodePin(env, "inst-1", "u1", "Sergeys-Mac-mini.local");
-
-		expect(res).toEqual({ from: "RLs-MacBook-Air.local", to: "Sergeys-Mac-mini.local", changed: true });
-		const rows = traceWrites(writes);
-		expect(rows).toHaveLength(1);
-		const row = traceRow(rows[0]);
-		expect(row.context.from).toBe("RLs-MacBook-Air.local");
-		expect(row.context.to).toBe("Sergeys-Mac-mini.local");
-		// WHO and WHEN — the two fields that would have made #530 a measurement.
-		expect(row.userId).toBe("u1");
-		expect(row.instanceId).toBe("inst-1");
+		await setRunnerNodePin(env, "inst-1", "u1", "rl-laptop");
+		const [row] = events();
+		expect(row).toMatchObject({ user_id: "u1", instance_id: "inst-1", source: RUNNER_PIN_EVENT_SOURCE, level: "info", message: `Runs on: Sergeys-Mac-mini.local → rl-laptop (${LAPTOP})` });
+		expect(row.context).toMatchObject({ from: "Sergeys-Mac-mini.local", to: `rl-laptop (${LAPTOP})`, machineId: LAPTOP, via: "api" });
 		expect(row.ts).toBeGreaterThanOrEqual(before);
-		// Readable through the same surfaces as every other instance event: `listEvents` filters on
-		// (user_id, instance_id) and optionally `source`, so both must be set.
-		expect(row.source).toBe(RUNNER_PIN_EVENT_SOURCE);
-		expect(row.event).toBe(RUNNER_PIN_EVENT);
-		expect(row.level).toBe("info");
 	});
 
-	// Clearing is as consequential as setting: routing stops being pinned and starts resolving to
-	// whichever machine holds a live socket. One event name covers both directions.
-	it("records clearing the pin, with the machine it stopped being pinned to", async () => {
-		const { env, writes } = stubEnv({ runnerNode: "laptop-A" });
+	it("records clearing the pin, and removes both keys", async () => {
+		await setRunnerNodePin(env, "inst-1", "u1", LAPTOP);
 		const res = await setRunnerNodePin(env, "inst-1", "u1", "");
-
-		expect(res).toEqual({ from: "laptop-A", to: "", changed: true });
-		expect(writes.some((w) => w.sql.includes("json_remove(") && w.args[0] === "$.runnerNode")).toBe(true);
-		const row = traceRow(traceWrites(writes)[0]);
-		expect(row.context).toMatchObject({ from: "laptop-A", to: null });
-		expect(row.message).toBe("Runs on: laptop-A → automatic");
+		expect(res).toMatchObject({ to: "", machineId: "", changed: true });
+		expect(config()).toEqual({});
+		expect(events().at(-1)?.message).toBe(`Runs on: ${LAPTOP} → automatic`);
 	});
 
-	it("records the first pin on an instance that had none", async () => {
-		const { env, writes } = stubEnv({});
-		const res = await setRunnerNodePin(env, "inst-1", "u1", "laptop-A");
-		expect(res.from).toBe("");
-		expect(traceRow(traceWrites(writes)[0]).context).toMatchObject({ from: null, to: "laptop-A" });
+	it("writes NO event when the pin already names that machine, or clearing an automatic one", async () => {
+		await setRunnerNodePin(env, "inst-1", "u1", "Mac.modem");
+		expect((await setRunnerNodePin(env, "inst-1", "u1", "  RLs-MacBook-Air.local  ")).changed).toBe(false); // another alias of the same machine
+		expect((await setRunnerNodePin(env, "inst-2", "u1", " ")).changed).toBe(false);
+		expect(events()).toHaveLength(1);
 	});
 
-	// AC 3 — the decision, stated: a no-op is silent. The record answers "when did routing change";
-	// a row whose from equals its to answers nothing, and re-picking the machine already chosen is
-	// ordinary picker behaviour, so those rows would outnumber the real ones.
-	it("writes NO event when the pin is set to what it already was", async () => {
-		const { env, writes } = stubEnv({ runnerNode: "laptop-A" });
-		const res = await setRunnerNodePin(env, "inst-1", "u1", "laptop-A");
-		expect(res.changed).toBe(false);
-		expect(traceWrites(writes)).toHaveLength(0);
-		// …but the config UPDATE still runs, so `updated_at` behaves exactly as it did before.
-		expect(writes.some((w) => w.sql.includes("json_set(") && w.args[0] === "$.runnerNode")).toBe(true);
-	});
-
-	it("writes NO event when clearing an already-automatic instance", async () => {
-		const { env, writes } = stubEnv({});
-		expect((await setRunnerNodePin(env, "inst-1", "u1", "  ")).changed).toBe(false);
-		expect(traceWrites(writes)).toHaveLength(0);
-	});
-
-	// A `json_remove` of an absent key still reports changes=1, so "the row was updated" is not
-	// "the value differed" — and changes=0 means the write never landed at all.
 	it("never claims a change the database refused", async () => {
-		const { env, writes } = stubEnv({ runnerNode: "laptop-A" }, 0);
-		const res = await setRunnerNodePin(env, "inst-1", "u1", "laptop-B");
+		const res = await setRunnerNodePin(env, "other", "u1", LAPTOP); // not u1's instance
 		expect(res.changed).toBe(false);
-		expect(traceWrites(writes)).toHaveLength(0);
+		expect(events()).toHaveLength(0);
 	});
 
-	it("normalizes the requested node before comparing, so whitespace is not a change", async () => {
-		const { env, writes } = stubEnv({ runnerNode: "laptop-A" });
-		expect((await setRunnerNodePin(env, "inst-1", "u1", "  laptop-A  ")).changed).toBe(false);
-		expect(traceWrites(writes)).toHaveLength(0);
-	});
-
-	it("names the surface that repinned, so a second writer is distinguishable", async () => {
-		const { env, writes } = stubEnv({});
-		await setRunnerNodePin(env, "inst-1", "u1", "laptop-A", { via: "mcp" });
-		expect(traceRow(traceWrites(writes)[0]).context.via).toBe("mcp");
-		const plain = stubEnv({});
-		await setRunnerNodePin(plain.env, "inst-1", "u1", "laptop-A");
-		expect(traceRow(traceWrites(plain.writes)[0]).context.via).toBe("api");
+	it("names the surface that repinned", async () => {
+		await setRunnerNodePin(env, "inst-1", "u1", LAPTOP, { via: "mcp" });
+		expect(events()[0].context.via).toBe("mcp");
 	});
 });
 
@@ -142,8 +130,8 @@ describe("describePinChange", () => {
 // that lives beside ONE caller is an audit the next caller forgets. There is one writer today; an
 // MCP tool or a CLI command that repins later would otherwise silently reopen the exact gap #533
 // closed, and no reviewer can be expected to catch it by eye.
-describe("no other writer of config.runnerNode", () => {
-	it("no source file patches or removes $.runnerNode directly", async () => {
+describe("no other writer of config.runnerNode / config.runnerMachineId", () => {
+	it("no source file patches or removes $.runnerNode or $.runnerMachineId directly", async () => {
 		const { readdirSync, readFileSync, statSync } = await import("node:fs");
 		const { join } = await import("node:path");
 		const root = new URL("../", import.meta.url).pathname; // workers/api/src
@@ -159,7 +147,7 @@ describe("no other writer of config.runnerNode", () => {
 				if (!p.endsWith(".ts") || p.endsWith(".test.ts")) continue;
 				if (p.endsWith("runner-node-pin.ts")) continue; // the sanctioned writer
 				const src = readFileSync(p, "utf-8");
-				if (/(patchInstanceConfig|removeInstanceConfigKey)\([\s\S]{0,200}?"runnerNode"/.test(src)) {
+				if (/(patchInstanceConfig|removeInstanceConfigKey)\([\s\S]{0,200}?"runner(Node|MachineId)"/.test(src)) {
 					offenders.push(p.slice(root.length));
 				}
 			}

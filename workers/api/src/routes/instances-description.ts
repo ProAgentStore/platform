@@ -9,7 +9,7 @@
 import type { Context, Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
-import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
+import { parseRunnerPin, resolveRunnerPin } from "../lib/runtime-nodes.js";
 import type { Env } from "../types.js";
 import { getRuntime, listRuntimeNodes, requireOwnedInstance, runtimeNodeResponse, runtimeResponse } from "./instances-runtime.js";
 
@@ -145,7 +145,7 @@ export async function describeInstance(env: Env, instanceId: string, userId: str
 		template: { id: instance.agent_id, name: template?.agent_name ?? null, slug: template?.agent_slug ?? null, category: template?.agent_category ?? null },
 		execution: executionView(capabilities.runtime, recentRun),
 		capabilities: { runtime: capabilities.runtime, workflow: capabilities.workflow, surfaces: capabilities.surfaces, declaredTools: capabilities.tools ?? [] },
-		runtime: { boundNode: parseBoundRunnerNode(instance.config) || null, default: runtime ? runtimeResponse(runtime) : null, nodes: nodes.map(runtimeNodeResponse) },
+		runtime: { boundNode: (await resolveRunnerPin(env, userId, instance.config)).node || null, boundMachineId: parseRunnerPin(instance.config).machineId || null, default: runtime ? runtimeResponse(runtime) : null, nodes: nodes.map(runtimeNodeResponse) },
 		credentialPosture: { stored: Number(credentialPosture?.stored ?? 0), protected: Number(credentialPosture?.protected ?? 0) },
 		handoffs,
 		currentRun,

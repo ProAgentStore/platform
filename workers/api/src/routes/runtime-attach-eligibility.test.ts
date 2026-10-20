@@ -106,8 +106,9 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag-local', 'u1', 't1114-local', 'Coder', ${caps("local")}), ('ag-cloud', 'u1', 't1114-cloud', 'Cloud', ${caps(null)})`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES
 		('${CODER}', 'ag-local', 'u1', 'active', '{}'), ('${CARRIER}', 'ag-local', 'u1', 'active', '${JSON.stringify({ runnerNode: MACHINE })}'), ('${CLOUD}', 'ag-cloud', 'u1', 'active', '{}')`);
-	d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, last_seen_at, updated_at) VALUES
-		('${CARRIER}', 'u1', '${MACHINE}', 'relay://', '0.4.134', datetime('now'), datetime('now'))`);
+	// With its stable machine id (#1250): a pin names a machine, never a bare hostname.
+	d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, last_seen_at, updated_at, machine_id) VALUES
+		('${CARRIER}', 'u1', '${MACHINE}', 'relay://', '0.4.134', datetime('now'), datetime('now'), 'machine-office0001')`);
 	live.add(`${CARRIER}@${MACHINE}`);
 });
 afterEach(async () => {

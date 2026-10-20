@@ -5,7 +5,9 @@ import { relayConnected } from "../lib/runner-client.js";
 import { instanceSocketsUnder } from "../lib/machine-sockets.js";
 import { mapWithConcurrency } from "../lib/map-concurrency.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
-import { normalizeRunnerNode, parseBoundRunnerNode } from "../lib/runtime-nodes.js";
+import { normalizeRunnerNode, parseRunnerPin } from "../lib/runtime-nodes.js";
+import { machineDisplayNames, setMachineDisplayName } from "../lib/machine-names.js";
+import { unresolvedPins } from "../lib/runner-node-pin.js";
 import { adoptableIdByName, identityHint, machineNamesFor, normalizeMachineId } from "../lib/machine-identity.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { runnerFeatureGaps } from "../lib/runner-features.js";
@@ -72,9 +74,11 @@ export interface TerminalInstance {
 	 * whether anything of this agent's actually runs here (#531). Pair it with `bound`/`pinnedNode`.
 	 */
 	connected: boolean;
-	/** True when this instance is PINNED to run on this machine (config.runnerNode). A
-	 *  bound instance routes its runner calls here even when another node is also connected. */
+	/** True when this instance is PINNED to run on this machine (`config.runnerMachineId`, #1250 — or a
+	 *  pre-#1250 hostname pin). A bound instance routes here even when another node is also connected. */
 	bound: boolean;
+	/** The machine id this instance is pinned to (#1250), or null when unpinned or still on a legacy hostname pin. */
+	pinnedMachineId: string | null;
 	/**
 	 * The hostname this instance is pinned to, or null when it is unpinned (#531).
 	 *
@@ -108,7 +112,9 @@ export interface TerminalSession {
 }
 
 export interface TerminalNode {
-	/** The machine's CURRENT name — the hostname of its freshest registration. */
+	/** The owner's name for this machine (#1250) — what every surface shows first; null until named. */
+	displayName: string | null;
+	/** The machine's CURRENT hostname — the hostname of its freshest registration. */
 	node: string;
 	/** The stable identity that folded this machine's names together, null when it has none. */
 	machineId: string | null;
@@ -219,7 +225,7 @@ function stampMs(value: string | null | undefined): number {
  * relay socket the route probes. Not an approximation: every heartbeat updates `last_seen_at` for
  * the name the machine is registering under right now, so the freshest name IS the live one.
  */
-export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[]): TerminalNode[] {
+export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[], displayNames: ReadonlyMap<string, string> = new Map()): TerminalNode[] {
 	const byKey = new Map<string, TerminalNode>();
 	/** hostname → group key, so a session (keyed by hostname) reaches its machine. */
 	const keyForName = new Map<string, string>();
@@ -260,6 +266,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		let n = byKey.get(key);
 		if (!n) {
 			n = {
+				displayName: (machineId && displayNames.get(machineId)) || null,
 				node: r.runner_node,
 				machineId: machineId || null,
 				aka: [],
@@ -308,8 +315,10 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 			// Bound = this instance is pinned to THIS MACHINE (not merely served by it) — under ANY
 			// of its names. A pin left on a hostname the machine has stopped using still routes
 			// here (`aliasNodesFor`), so rendering it as unbound would contradict what happens.
-			const pin = parseBoundRunnerNode(r.instance_config);
-			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false, bound: !!pin && pin === r.runner_node, pinnedNode: pin || null, runtime });
+			// A machine pin (#1250) is bound to the machine with that id, whatever hostname it answers to now.
+			const pin = parseRunnerPin(r.instance_config);
+			const bound = pin.machineId ? pin.machineId === machineId : !!pin.legacyNode && pin.legacyNode === r.runner_node;
+			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false, bound, pinnedMachineId: pin.machineId || null, pinnedNode: pin.legacyNode || null, runtime });
 		}
 	}
 
@@ -320,7 +329,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		if (!n) continue;
 		for (const r of nodeRows) {
 			if (r.runner_node !== name) continue;
-			const pin = parseBoundRunnerNode(r.instance_config);
+			const pin = parseRunnerPin(r.instance_config).legacyNode;
 			if (!pin) continue;
 			const target = byKey.get(keyForName.get(pin) ?? "");
 			if (target !== n) continue;
@@ -342,6 +351,8 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length);
 		n.supervisor = n.resources?.runner?.supervisor ?? null;
 		n.identityHint = identityHint(n.machineId, n.runnerVersion);
+		// What a machine pin reads as (#1250): the target machine's name, else its current hostname, else its id.
+		for (const i of n.instances) if (i.pinnedMachineId) { const t = byKey.get(i.pinnedMachineId); i.pinnedNode = t?.displayName ?? t?.node ?? i.pinnedMachineId; }
 		n.runnerBehind = runnerFeatureGaps(n.runnerVersion)?.map((g) => `${g.feature} (needs ${g.minCli})`) ?? null;
 	}
 
@@ -460,7 +471,8 @@ terminalRoutes.get("/nodes", async (c) => {
 		 ORDER BY s.updated_at DESC`,
 	).bind(uid).all<SessionRow>()).results;
 
-	const nodes = groupTerminalNodes(nodeRows, sessionRows);
+	const displayNames = await machineDisplayNames(c.env, uid);
+	const nodes = groupTerminalNodes(nodeRows, sessionRows, displayNames);
 
 	// Live status: a machine is connected if ANY of its (instance,node) relays holds a socket.
 	// One check per instance the node serves (bounded), all in parallel.
@@ -534,8 +546,9 @@ terminalRoutes.get("/nodes", async (c) => {
 	// #1141: a machine silent since an install is stuck with or without the registry — it is usually the disconnected one.
 	for (const [n, p] of policies) if (published !== undefined || silentAfterInstall(p)) n.auto_update_stuck = machineAutoUpdateStuck(n, p, published ?? null);
 
-	return c.json({ nodes });
+	return c.json({ nodes, unresolvedPins: await unresolvedPins(c.env, uid, nodeRows.map((r) => ({ node: r.runner_node, machineId: r.machine_id ?? null }))) });
 });
+
 
 /** Resolve the stable ID to the exact owner-owned machine, never a mutable hostname. */
 export async function machineDetail(env: Env, uid: string, rawMachineId: string) {
@@ -553,7 +566,7 @@ export async function machineDetail(env: Env, uid: string, rawMachineId: string)
 		`SELECT s.id, s.instance_id, s.repo_id, s.runner_node, s.client_type, s.status, s.issue_number, s.issue_title, s.updated_at, r.name AS repo_name
 		 FROM coding_sessions s LEFT JOIN coding_repos r ON r.id = s.repo_id WHERE s.user_id = ?1`,
 	).bind(uid).all<SessionRow>()).results ?? [];
-	const machine = groupTerminalNodes(rows, sessions).find((n) => n.machineId === machineId);
+	const machine = groupTerminalNodes(rows, sessions, await machineDisplayNames(env, uid)).find((n) => n.machineId === machineId);
 	if (!machine) return null;
 	// Detail is deep-linkable, so it must compute the same live connection fact as the fleet rather
 	// than treating a persisted registration as online. Probe all aliases: a reconnect may hold the
@@ -580,9 +593,19 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 	if (!machine?.machineId) return c.json({ error: "No identified machine is registered under this account." }, 404);
 	const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch((): Record<string, unknown> => ({}));
 	const value = body.auto_update ?? body.autoUpdate;
-	if (typeof value !== "boolean") return c.json({ error: "auto_update must be a boolean." }, 400);
-	const policy = await setMachinePolicy(c.env, session.uid, machine.machineId, value);
-	return c.json({ machine: { ...machine, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) } });
+	const name = body.display_name !== undefined ? body.display_name : body.displayName;
+	if (value === undefined && name === undefined) return c.json({ error: "Give auto_update (boolean) and/or display_name (string; blank clears it)." }, 400);
+	if (value !== undefined && typeof value !== "boolean") return c.json({ error: "auto_update must be a boolean." }, 400);
+	// The owner's name for the machine (#1250). Unique per account; refused BEFORE any policy change, so
+	// a duplicate name leaves the call with no partial effect.
+	let displayName = machine.displayName;
+	if (name !== undefined) {
+		const named = await setMachineDisplayName(c.env, session.uid, machine.machineId, name);
+		if (!named.ok) return c.json({ error: named.error }, named.status);
+		displayName = named.displayName;
+	}
+	const policy = typeof value === "boolean" ? await setMachinePolicy(c.env, session.uid, machine.machineId, value) : await getMachinePolicy(c.env, session.uid, machine.machineId);
+	return c.json({ machine: { ...machine, displayName, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) } });
 });
 
 /** The complete, non-mutating answer a caller needs before deleting a machine registration. */
@@ -624,8 +647,10 @@ export async function preflightForgetNode(env: Env, uid: string, rawTarget: stri
 		 WHERE i.user_id = ?1`,
 	).bind(uid).all<{ id: string; config: string | null; agent_name: string | null; agent_slug: string | null }>()).results ?? [];
 	for (const i of instances) {
-		const pin = parseBoundRunnerNode(i.config);
-		if (pin && names.has(pin)) blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: pin });
+		// A machine pin (#1250) points at the machine whatever its hostname; a legacy pin at one of its names.
+		const pin = parseRunnerPin(i.config);
+		const here = pin.machineId ? pin.machineId === resolved.machineId : !!pin.legacyNode && names.has(pin.legacyNode);
+		if (here) blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: pin.legacyNode || target });
 	}
 
 	const openSessions = (await env.DB.prepare(
@@ -863,9 +888,14 @@ terminalRoutes.delete("/nodes/:node/claim", async (c) => {
 			 WHERE i.user_id = ?1`,
 		).bind(uid).all<{ id: string; config: string | null; agent_name: string | null; agent_slug: string | null }>()).results ?? [];
 		for (const i of instances) {
-			const pin = parseBoundRunnerNode(i.config);
-			if (!pin || !allMachineNames.has(pin) || pin === target) continue;
-			blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: pin });
+			// With no row left carrying the id, a machine pin (#1250) resolves to nothing.
+			const pin = parseRunnerPin(i.config);
+			if (pin.machineId === callerMachineId) {
+				blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: target });
+				continue;
+			}
+			if (!pin.legacyNode || !allMachineNames.has(pin.legacyNode) || pin.legacyNode === target) continue;
+			blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: pin.legacyNode });
 		}
 
 		const openSessions = (await c.env.DB.prepare(

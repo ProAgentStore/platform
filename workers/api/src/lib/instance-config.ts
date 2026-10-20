@@ -1,6 +1,6 @@
 import type { Env } from "../types.js";
 import { tagsOf } from "./instance-tags.js";
-import { normalizeRunnerNode } from "./runtime-nodes.js";
+import { parseRunnerPin } from "./runtime-nodes.js";
 import { isValidJsonPathKey, jsonPath } from "./sql.js";
 
 /**
@@ -148,8 +148,10 @@ export function parseConfigBlob(raw: string | null | undefined): Record<string, 
 export interface InstanceListView {
 	/** A user-set (or auto-numbered) per-instance display name — overrides the agent name. */
 	displayName: string | null;
-	/** `config.runnerNode`: the machine this instance is pinned to. Empty (= automatic) is null. */
+	/** A pre-#1250 hostname pin (`config.runnerNode`), only while no machine id is pinned. Null otherwise. */
 	runnerNode: string | null;
+	/** `config.runnerMachineId` (#1250): the machine this instance is pinned to. Empty (= automatic) is null. */
+	runnerMachineId: string | null;
 	/** `config.tags` (#961): the owner's grouping labels. `[]` when none. */
 	tags: string[];
 }
@@ -169,7 +171,8 @@ export function instanceListName(rawInstanceConfig: string | null | undefined, a
 export function instanceListView(raw: string | null | undefined): InstanceListView {
 	const cfg = parseConfigBlob(raw);
 	const displayName = typeof cfg.displayName === "string" ? cfg.displayName.trim() : "";
-	return { displayName: displayName || null, runnerNode: normalizeRunnerNode(cfg.runnerNode) || null, tags: tagsOf(cfg) };
+	const pin = parseRunnerPin(raw);
+	return { displayName: displayName || null, runnerNode: pin.legacyNode || null, runnerMachineId: pin.machineId || null, tags: tagsOf(cfg) };
 }
 
 interface ConfigRow {
