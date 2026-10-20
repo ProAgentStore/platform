@@ -1217,4 +1217,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.158": "sha256:263b9fdd18d8056a7cc422b163b8b6f0fea7a5c40554f37a9a5ed4356c83f8d2",
 	// #1247: gmail_scout_scan_log (one scan's per-email decisions, paged).
 	"0.1.159": "sha256:b9bbbcca088c3103db60a58b9bbc28ff979d842aca2f23b0cb591e8605d90675",
+	// #1250: set_machine_policy takes display_name (auto_update optional); runner tools name machines.
+	"0.1.160": "sha256:48a33cc789d9012459fed4e72aeb0c9f4bc00efb3f4b75cd89cea25d72c65d37",
 };

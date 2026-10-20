@@ -26,7 +26,7 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 	// the caller with the version and lifecycle state needed to understand the setting it changes.
 	server.tool(
 		"get_machine_policy",
-		"Read one physical machine's Auto-update policy and current update detail (#859). `machine_id` is the stable id from the terminals machine detail/list, not a hostname or an agent id, so every hostname alias and every attached agent sees the same owner-scoped policy. Returns the machine detail including `auto_update_policy`, current and latest CLI versions, and `auto_update_status`. Read this before changing the policy; a missing stored policy resolves to Auto-update OFF for existing machines. `auto_update_stuck` (#1034) is set when the policy is ON, the machine is connected, and it has stayed behind a published release for over a day (or its own release check stopped advancing). In that case `auto_update_status`, the runner's own record, may still read `waiting_for_idle`. The remedy is one runner_update for that machine.",
+		"Read one physical machine's name, Auto-update policy and current update detail (#859, #1250). `displayName` is your name for it (null until set with set_machine_policy), `node` its current hostname, `aka` its other hostnames. `machine_id` is the stable id from the terminals machine detail/list, not a hostname or an agent id, so every hostname alias and every attached agent sees the same owner-scoped policy. Returns the machine detail including `auto_update_policy`, current and latest CLI versions, and `auto_update_status`. Read this before changing the policy; a missing stored policy resolves to Auto-update OFF for existing machines. `auto_update_stuck` (#1034) is set when the policy is ON, the machine is connected, and it has stayed behind a published release for over a day (or its own release check stopped advancing). In that case `auto_update_status`, the runner's own record, may still read `waiting_for_idle`. The remedy is one runner_update for that machine.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			machine_id: z.string().describe("Stable physical machine id from the terminals fleet/detail response; do not use a hostname alias."),
@@ -67,28 +67,28 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 
 	server.tool(
 		"set_machine_policy",
-		"Enable or disable Auto-update for one physical machine (#859). The setting is owner-scoped and keyed by stable `machine_id`, so it survives offline periods, runner reconnects, attached-agent changes, and hostname aliases. Existing machines default OFF. Enabling permits an idle runner to check trusted CLI releases and use its safe self-update/restart path; it does not interrupt coding or local application work. Disabling is persisted immediately; a runner rechecks the policy before installation and cancels an update that has not started. Use get_machine_policy to read back the saved policy and lifecycle state.",
+		"Name a machine, and/or enable or disable its Auto-update (#859, #1250). `display_name` is your name for the machine (e.g. \"rl-laptop\") — unique across your machines, case-insensitively (a name another machine has is refused with 409); a blank clears it. Every runner tool then shows it first, with the hostnames as aliases, and set_instance_runner_node accepts it. Renaming never moves a pin: pins hold the machine id. Give display_name, auto_update, or both. Auto-update: the setting is owner-scoped and keyed by stable `machine_id`, so it survives offline periods, runner reconnects, attached-agent changes, and hostname aliases. Existing machines default OFF. Enabling permits an idle runner to check trusted CLI releases and use its safe self-update/restart path; it does not interrupt coding or local application work. Disabling is persisted immediately; a runner rechecks the policy before installation and cancels an update that has not started. Use get_machine_policy to read back the saved policy and lifecycle state.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			machine_id: z.string().describe("Stable physical machine id from the terminals fleet/detail response; do not use a hostname alias."),
-			auto_update: z.boolean().describe("Whether this physical machine may automatically update its PAGS CLI while idle."),
+			auto_update: z.boolean().optional().describe("Whether this physical machine may automatically update its PAGS CLI while idle. Omit to leave it unchanged."),
+			display_name: z.string().optional().describe("Your name for this machine, 1-40 characters (letters, digits, spaces, . _ -), unique across your machines. Empty string clears it. Omit to leave it unchanged."),
 			dry_run: z.boolean().optional().describe("Report the saved policy change without changing it."),
 		},
-		async ({ token, machine_id, auto_update, dry_run }) => {
+		async ({ token, machine_id, auto_update, display_name, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { machine_id, auto_update };
+			if (auto_update === undefined && display_name === undefined) return text("Error: give display_name, auto_update, or both.");
+			const body = { ...(auto_update !== undefined ? { auto_update } : {}), ...(display_name !== undefined ? { display_name } : {}) };
+			const input = { machine_id, ...body };
 			const denied = await requirePermission(safetyFor(token), "write", "set_machine_policy", input);
 			if (denied) return denied;
 			const endpoint = `/v1/terminals/machines/${encodeURIComponent(machine_id)}/policy`;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "set_machine_policy", `${auto_update ? "enable" : "disable"} Auto-update for ${machine_id}`, input, {
-					endpoint,
-					method: "PUT",
-					body: { auto_update },
-				});
+				const what = [display_name !== undefined ? (display_name.trim() ? `name it "${display_name.trim()}"` : "clear its name") : "", auto_update !== undefined ? `${auto_update ? "enable" : "disable"} Auto-update` : ""].filter(Boolean).join(" and ");
+				return dryRun(safetyFor(token), "set_machine_policy", `${what} for ${machine_id}`, input, { endpoint, method: "PUT", body });
 			}
-			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ auto_update }) }, env)) as { error?: string };
+			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (!data.error) await audit(safetyFor(token), { tool: "set_machine_policy", action: "completed", input, result: data });
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},

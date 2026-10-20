@@ -342,6 +342,7 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_tags.tags": "my_instances",
 	"force_runner_attach.runner_node": "instance_runner_node",
 	"set_machine_policy.auto_update": "get_machine_policy",
+	"set_machine_policy.display_name": "get_machine_policy", // #1250: returned as `displayName` (also on list_runner_nodes)
 	"runner_update.runner_node": "list_runner_nodes",
 	// #1209: what is installed is read back by actions_runner_status; the scope and group are on each runner GitHub reports.
 	"actions_runner_setup.action": "actions_runner_status",
