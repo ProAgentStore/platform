@@ -117,6 +117,14 @@ test.describe("agent text is markdown, and options are buttons (#1129)", () => {
 		await expect(page.getByText("[cut: showing the first 60")).toBeVisible();
 	});
 
+	test("a question with nothing to tap shows the ask as written, open — never a bare headline (#1224)", async ({ page }) => {
+		const full = "Two decisions needed before implementing product video:\n1. Where does the video live?\n   - In the product page hero, autoplaying muted with a poster frame\n   - Behind a play button below the gallery";
+		await mockTicket(page, { options: [], data: { field: "Two decisions needed before implementing product video:", fullQuestion: full } });
+		await page.goto("/console/instances/inst-1/tasks/t1");
+		await expect(page.getByText("autoplaying muted with a poster frame")).toBeVisible();
+		await expect(page.getByRole("button", { name: "Show the full question" })).toHaveCount(0);
+	});
+
 	const PARTS = [
 		{ question: "**Notification channel**?", options: ["Email", "Push"] },
 		{ question: "Threshold?", options: ["5 failures", "10 failures"] },

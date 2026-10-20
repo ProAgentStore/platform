@@ -382,6 +382,8 @@ export default function RunDetail() {
 	// decisions, each answered with its own button group and sent together.
 	const fullQuestion = typeof needsInputData?.fullQuestion === "string" && needsInputData.fullQuestion.trim() ? needsInputData.fullQuestion : "";
 	const parts = questionParts(needsInputData);
+	// With nothing to tap, the uncut ask IS the question (#1224) — open by default, not one tap away.
+	const fullOpen = !!fullQuestion && (showFullQuestion || (options.length === 0 && parts.length === 0));
 
 	const sendValue = async (v: string) => {
 		const t = v.trim(); if (!t) return;
@@ -490,10 +492,10 @@ export default function RunDetail() {
 					<div className="text-sm text-muted mt-0.5 mb-3">It won’t guess personal or legal details — answer once and it keeps going.</div>
 					{/* The question is the agent's text: markdown, so bold and numbered decisions read as written (#1129). */}
 					<div id={fieldLabelId}>
-						<MarkdownText text={showFullQuestion && fullQuestion ? fullQuestion : field} className="text-base font-semibold text-ink" />
+						<MarkdownText text={fullOpen ? fullQuestion : field} className="text-base font-semibold text-ink" />
 					</div>
 					{/* The question is cut to phone size where it travels; the whole of it is one tap away here (#1129). */}
-					{fullQuestion && (
+					{fullQuestion && (options.length > 0 || parts.length > 0) && (
 						<button type="button" onClick={() => setShowFullQuestion(!showFullQuestion)} aria-expanded={showFullQuestion} className="text-xs text-accent underline mt-1 min-h-11 sm:min-h-0">
 							{showFullQuestion ? "Show less" : "Show the full question"}
 						</button>
