@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
+import GmailScoutScanLog from "./GmailScoutScanLog";
 import { type GmailScoutScanReceipt, type GmailScoutScanResponse, type LeadVerification, type LeadVerificationListResponse, leadVerificationLine, rejectionSummary, scanNowMessage } from "../../lib/gmailScout";
 
 const GMAIL_SCOUT_MAILBOX = "serge.pro.job@gmail.com";
@@ -25,6 +26,8 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 	const [busy, setBusy] = useState(false);
 	// #1030: the leads the server could not check, verified in this Scout's browser.
 	const [verifications, setVerifications] = useState<LeadVerification[]>([]);
+	// #1247: which receipt is expanded to its per-email log.
+	const [openScan, setOpenScan] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
 		try {
@@ -90,6 +93,12 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 							<span className={r.status === "failed" ? "text-danger" : "text-muted"}>{r.status}</span>
 							{r.status === "completed" ? ` · ${r.added ?? 0} added${r.awaitingBrowserVerification ? ` (${r.awaitingBrowserVerification} awaiting browser verification)` : ""}, ${r.deduped ?? 0} duplicate(s)${rejectionSummary(r.rejected) ? `, skipped: ${rejectionSummary(r.rejected)}` : ""}` : ""}
 							{r.status === "failed" && r.errorMessage ? ` · ${r.errorMessage}` : ""}
+							{r.scanLog && (r.hits ?? 0) > 0 && (
+								<button type="button" className="ml-2 text-accent underline" aria-expanded={openScan === r.id} onClick={() => setOpenScan(openScan === r.id ? null : r.id)}>
+									{openScan === r.id ? "Hide emails" : `Show ${r.hits} email(s)`}
+								</button>
+							)}
+							{openScan === r.id && <GmailScoutScanLog instanceId={instanceId} scanId={r.id} />}
 						</li>
 					))}
 				</ul>

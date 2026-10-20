@@ -19,7 +19,65 @@ export interface GmailScoutScanReceipt {
 	awaitingBrowserVerification?: number | null;
 	errorMessage: string | null;
 	lastMessageId: string | null;
+	/** #1247: the exact Gmail search and window. Absent on an older API. */
+	query?: string | null;
+	window?: Record<string, unknown> | null;
+	/** #1247: where this scan's per-email log is read. Absent on an older API. */
+	scanLog?: { path: string; tool: string; scan_id: string };
 	handoff: "none";
+}
+
+/** One email a scan matched (#1247), or one job inside a digest (`subItems`). */
+export interface GmailScoutScanLogItem {
+	seq: number;
+	messageId: string | null;
+	threadId: string | null;
+	gmailLink: string | null;
+	sender: string | null;
+	subject: string | null;
+	receivedAt: string | null;
+	snippet: string | null;
+	read: { parts: string[]; bodyChars: number; linksFound: number; jobPostingsDetected: number } | null;
+	classification: "single_posting" | "digest" | "non_job" | "duplicate" | "too_old" | "digest_item";
+	evidence: string | null;
+	decision: "added" | "awaiting_browser_verification" | "deduped" | "rejected";
+	rejection: GmailScoutRejection | null;
+	reason: string;
+	leadId: string | null;
+	leadUrl: string | null;
+	job: { title: string | null; company: string | null; url: string | null } | null;
+	subItems?: GmailScoutScanLogItem[];
+}
+
+/** `GET …/gmail-scout/scan-log` — one page of one scan's log. */
+export interface GmailScoutScanLogPage {
+	scan: GmailScoutScanReceipt | null;
+	items: GmailScoutScanLogItem[];
+	total: number;
+	nextCursor: string | null;
+}
+
+const DECISION_WORDS: Record<GmailScoutScanLogItem["decision"], string> = {
+	added: "Added",
+	awaiting_browser_verification: "Added — awaiting browser check",
+	deduped: "Duplicate",
+	rejected: "Not taken",
+};
+const CLASSIFICATION_WORDS: Record<GmailScoutScanLogItem["classification"], string> = {
+	single_posting: "single posting",
+	digest: "digest",
+	non_job: "not a job alert",
+	duplicate: "duplicate",
+	too_old: "too old",
+	digest_item: "job in a digest",
+};
+
+/** "Not taken · digest" — a logged email's decision and what it was taken for, in words. */
+export function scanLogVerdict(item: Pick<GmailScoutScanLogItem, "decision" | "classification">): { text: string; tone: "ok" | "warn" | "muted" } {
+	return {
+		text: `${DECISION_WORDS[item.decision] ?? item.decision} · ${CLASSIFICATION_WORDS[item.classification] ?? item.classification}`,
+		tone: item.decision === "added" ? "ok" : item.decision === "awaiting_browser_verification" ? "warn" : "muted",
+	};
 }
 
 /** One completed Gmail Job Search Scout ingest, returned by its manual scan endpoint. */
