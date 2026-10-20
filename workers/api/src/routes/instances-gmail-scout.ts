@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { getGmailScoutConfig, gmailScoutSourceMode, putGmailScoutConfig } from "../lib/gmail-scout/config.js";
 import { gmailScoutStatus, parseReprocessInput, reprocessGmailScout, scanGmailScout } from "../lib/gmail-scout/scan.js";
 import { listGmailScoutReceipts } from "../lib/gmail-scout/receipts.js";
+import { readScanLog } from "../lib/gmail-scout/scan-log.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -88,4 +89,16 @@ export function registerGmailScoutRoutes(router: Hono<{ Bindings: Env }>): void 
 		}
 	});
 	router.get("/:instanceId/gmail-scout/status", async (c) => c.json(await gmailScoutStatus(c.env, (await owned(c)).instanceId, new URL(c.req.url).searchParams)));
+	/**
+	 * One scan's per-message decision log (#1247): which emails it matched (ids + a link that opens each),
+	 * what it read, what it took each for and why, and a digest's jobs one by one. `scan_id` omitted reads
+	 * the newest scan; `cursor` pages on. Owner-only like every route here; metadata and snippets only.
+	 */
+	router.get("/:instanceId/gmail-scout/scan-log", async (c) => {
+		const { instanceId } = await owned(c);
+		const q = new URL(c.req.url).searchParams;
+		const page = await readScanLog(c.env, instanceId, { scanId: q.get("scan_id"), cursor: q.get("cursor"), limit: q.has("limit") ? Number(q.get("limit")) : undefined });
+		if (!page.scan) throw new HttpError(404, q.get("scan_id") ? "No scan with that id on this Scout." : "This Scout has not scanned yet.");
+		return c.json(page);
+	});
 }

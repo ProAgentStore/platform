@@ -7609,6 +7609,27 @@ paths:
         "200": { $ref: "#/components/responses/OkObject" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/gmail-scout/scan-log:
+    get:
+      summary: One Gmail Scout scan's per-message decision log
+      description: |
+        Every email a scan matched (#1247), in the order it read them: message and thread id, a Gmail link that opens it,
+        sender, subject, date, Gmail's snippet (≤500 chars), what was read (parts and counts), classification with evidence,
+        decision (`added` / `awaiting_browser_verification` / `deduped` / `rejected`) and its plain-language reason, and the
+        lead it became or duplicated. A digest's jobs ride as `subItems`, each with its own decision. `scan` is the receipt,
+        including the exact Gmail `query` and `window`. Metadata and snippets only, never a body; kept 30 days. 404 when the
+        scan is unknown to this Scout, or it has never scanned.
+      operationId: getGmailScoutScanLog
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: scan_id, in: query, required: false, schema: { type: string }, description: "A receipt id from gmail-scout/status. Omit for the newest scan." }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "`nextCursor` from the previous page." }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100 }, description: "Messages per page (default 25)." }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/coder-brain:
     get:
       summary: Coder brain and product-owner triage switch

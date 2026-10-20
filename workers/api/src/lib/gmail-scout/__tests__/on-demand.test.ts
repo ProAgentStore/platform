@@ -257,10 +257,13 @@ describe("#1024: a one-item provider alert, through the same scan", () => {
 			expect(JSON.stringify(lead)).not.toMatch(/SECRET/);
 		}
 		expect(requested.every((u) => u === CANONICAL)).toBe(true);
-		const receipts = JSON.stringify(await listGmailScoutReceipts(env, "scout"));
+		// The receipt's `query` (#1247) is the scan's own static Gmail filter, which names indeed.com as a sender to search — not mail content.
+		const withoutQuery = <T extends { query?: unknown }>(rs: T[]) => rs.map(({ query: _q, ...r }) => r);
+		const receipts = JSON.stringify(withoutQuery(await listGmailScoutReceipts(env, "scout")));
 		for (const leaked of ["SECRET", "indeed.com", "Platform Engineer", "Acme"]) expect(receipts).not.toContain(leaked);
 		// Status (Console + MCP gmail_scout_status) carries counts and receipts, never the alert or its tokens.
-		const status = JSON.stringify(await gmailScoutStatus(env, "scout"));
+		const st = await gmailScoutStatus(env, "scout");
+		const status = JSON.stringify({ ...st, receipts: withoutQuery(st.receipts) });
 		for (const leaked of ["SECRET", "indeed.com", "Platform Engineer", "Acme"]) expect(status).not.toContain(leaked);
 		expect(deliveries()).toBe(0);
 	});

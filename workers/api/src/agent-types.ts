@@ -150,7 +150,7 @@ export interface GmailScoutScanResult {
 	handoff: "none";
 }
 
-/** One Gmail Scout scan receipt (#1023) — counts and rejection categories, never mail content. */
+/** One Gmail Scout scan receipt (#1023) — counts, rejection categories and the search it ran (#1247), never mail content. */
 export interface GmailScoutScanReceiptView {
 	id: string;
 	instanceId: string;
@@ -166,6 +166,9 @@ export interface GmailScoutScanReceiptView {
 	rejected: GmailScoutScanResult["rejected"];
 	errorMessage: string | null;
 	lastMessageId: string | null;
+	/** #1247: the exact Gmail search and the window it covered. */
+	query: string | null;
+	window: Record<string, unknown> | null;
 	handoff: "none";
 }
 

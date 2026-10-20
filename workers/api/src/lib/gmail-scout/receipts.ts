@@ -2,7 +2,9 @@
  * Durable, non-secret receipts for Gmail Scout scans (#1023), scheduled or on demand.
  *
  * Imports nothing from `scan.ts`, so pipeline health can read the latest receipt without a cycle.
- * A receipt carries counts and rejection reasons by category — never mail content, addresses or tokens.
+ * A receipt carries counts, rejection reasons by category, and the exact Gmail query and window the scan
+ * searched (#1247) — never mail content or tokens. What it decided per message is the scan log
+ * (`scan-log.ts`): metadata and short snippets only, no message bodies.
  */
 import type { Env } from "../../types.js";
 
@@ -29,17 +31,32 @@ export interface GmailScoutScanReceipt {
 	awaitingBrowserVerification: number | null;
 	errorMessage: string | null;
 	lastMessageId: string | null;
+	/** The exact Gmail search this scan ran (#1247); null for a reprocess of named messages, or before it searched. */
+	query: string | null;
+	/** The window it covered (#1247): the cursor date and age bound, a reprocess window, or the named message ids. */
+	window: Record<string, unknown> | null;
 	/** A scan never hands anything to the Tailor or Runner; leads wait for an explicit apply. */
 	handoff: "none";
 }
 
 /** A running receipt older than this is treated as abandoned (the Worker died mid-scan), not as in flight. */
 export const RUNNING_RECEIPT_TTL_MS = 5 * 60_000;
-/** Receipts kept per instance; older ones are pruned when a scan finishes. */
+/** Receipts kept per instance however old; older ones are pruned when a scan finishes — but never one
+ *  younger than {@link RECEIPTS_KEPT_DAYS} days, which is as long as its scan log is kept (#1247). */
 export const RECEIPTS_KEPT = 50;
+export const RECEIPTS_KEPT_DAYS = 30;
 
 const utcIso = (v: unknown): string | null => (typeof v === "string" && v ? new Date(v.includes("T") ? v : `${v.replace(" ", "T")}Z`).toISOString() : null);
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+
+function parseWindow(v: unknown): Record<string, unknown> | null {
+	try {
+		const parsed = v ? JSON.parse(String(v)) : null;
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+	} catch {
+		return null;
+	}
+}
 
 function asReceipt(r: Record<string, unknown>): GmailScoutScanReceipt {
 	let rejected: GmailScoutScanReceipt["rejected"] = {};
@@ -53,7 +70,8 @@ function asReceipt(r: Record<string, unknown>): GmailScoutScanReceipt {
 		id: String(r.id), instanceId: String(r.instance_id), trigger: r.scan_trigger as GmailScoutScanTrigger, triggeredBy: r.triggered_by ? String(r.triggered_by) : null,
 		status: r.status as GmailScoutReceiptStatus, startedAt: utcIso(r.started_at) ?? "", completedAt: utcIso(r.completed_at),
 		hits: num(r.hits), candidates: num(r.candidates), added: num(r.added), deduped: num(r.deduped), rejected, awaitingBrowserVerification: num(r.awaiting_browser_verification),
-		errorMessage: r.error_message ? String(r.error_message) : null, lastMessageId: r.last_message_id ? String(r.last_message_id) : null, handoff: "none",
+		errorMessage: r.error_message ? String(r.error_message) : null, lastMessageId: r.last_message_id ? String(r.last_message_id) : null,
+		query: r.search_query ? String(r.search_query) : null, window: parseWindow(r.search_window), handoff: "none",
 	};
 }
 
@@ -105,13 +123,18 @@ export async function failGmailScoutReceipt(env: Pick<Env, "DB">, id: string, er
 	return (await getGmailScoutReceipt(env, id)) as GmailScoutScanReceipt;
 }
 
-/** Keep the newest {@link RECEIPTS_KEPT} per instance. Best-effort: a failed prune loses nothing that matters. */
+/** Record the exact search a scan is about to run (#1247), before it reads — so a scan that fails still says what it asked. */
+export async function recordGmailScoutSearch(env: Pick<Env, "DB">, id: string, query: string | null, window: Record<string, unknown>): Promise<void> {
+	await env.DB.prepare("UPDATE gmail_scout_scan_receipts SET search_query = ?2, search_window = ?3 WHERE id = ?1").bind(id, query, JSON.stringify(window)).run();
+}
+
+/** Keep the newest {@link RECEIPTS_KEPT} per instance, and every one from the last {@link RECEIPTS_KEPT_DAYS} days. Best-effort. */
 export async function pruneGmailScoutReceipts(env: Pick<Env, "DB">, instanceId: string): Promise<void> {
 	await env.DB.prepare(
-		`DELETE FROM gmail_scout_scan_receipts WHERE instance_id = ?1 AND id NOT IN
+		`DELETE FROM gmail_scout_scan_receipts WHERE instance_id = ?1 AND created_at < datetime('now', ?3) AND id NOT IN
 		   (SELECT id FROM gmail_scout_scan_receipts WHERE instance_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2)`,
 	)
-		.bind(instanceId, RECEIPTS_KEPT)
+		.bind(instanceId, RECEIPTS_KEPT, `-${RECEIPTS_KEPT_DAYS} days`)
 		.run()
 		.catch(() => undefined);
 }

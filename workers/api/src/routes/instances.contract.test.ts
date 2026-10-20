@@ -318,6 +318,7 @@ const ROUTES = [
 	"POST /:instanceId/gmail-scout/scan",
 	"POST /:instanceId/gmail-scout/reprocess",
 	"GET /:instanceId/gmail-scout/status",
+	"GET /:instanceId/gmail-scout/scan-log",
 	"GET /:instanceId/coder-brain",
 	"PUT /:instanceId/coder-brain",
 	"GET /:instanceId/auto-pickup",
@@ -573,6 +574,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/gmail-scout/scan",
 		"POST /:instanceId/gmail-scout/reprocess",
 		"GET /:instanceId/gmail-scout/status",
+	"GET /:instanceId/gmail-scout/scan-log",
 	],
 	"instances-coder-brain.ts": ["GET /:instanceId/coder-brain", "PUT /:instanceId/coder-brain", "GET /:instanceId/auto-pickup", "PUT /:instanceId/auto-pickup", "GET /:instanceId/coder-questions", "GET /:instanceId/po-triage/reports"],
 	"instances-description.ts": ["GET /:instanceId/description"],
@@ -915,6 +917,7 @@ const GATES: Record<string, [number, number]> = {
 	"POST /:instanceId/gmail-scout/scan": [401, 404],
 	"POST /:instanceId/gmail-scout/reprocess": [401, 404],
 	"GET /:instanceId/gmail-scout/status": [401, 404],
+	"GET /:instanceId/gmail-scout/scan-log": [401, 404],
 	// #1027: the coder brain switch and triage reports open with the instance-owner check.
 	"GET /:instanceId/coder-brain": [401, 404],
 	"PUT /:instanceId/coder-brain": [401, 404],

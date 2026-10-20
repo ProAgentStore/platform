@@ -36,7 +36,7 @@ describe("Gmail Scout scan", () => {
 			existing,
 			insertLead: async (data) => { scoutLeads.push({ data }); return undefined; },
 		});
-		expect(result).toEqual({ candidates: 1, added: 1, deduped: 0, rejected: {}, awaiting: [] });
+		expect(result).toMatchObject({ candidates: 1, added: 1, deduped: 0, rejected: {}, awaiting: [] });
 		expect(scoutLeads).toHaveLength(1);
 		expect(scoutLeads[0].data).toMatchObject({ status: "unverified", work_key: "url:https://jobs.example.com/job/42", url: "https://jobs.example.com/job/42", company: "Acme", location: "Melbourne", gmail_message_id: "message-1", verification: { state: "unverified", source: "gmail_alert" }, gmail_provenance: { provider: "gmail", message_id: "message-1" } });
 		expect(otherScoutLeads).toEqual([]);

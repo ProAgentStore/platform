@@ -172,10 +172,11 @@ export interface GmailMessageMatch {
 	text: string;
 }
 
-/** A deep-link that opens one specific message in the Gmail web UI. `id` is the
- *  Gmail API message id (the same hex id the web client uses in `#all/<id>`). */
-export function gmailMessageUrl(id: string): string {
-	return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(id)}`;
+/** A deep-link opening one message in Gmail's web UI (`id` = the API message id, as in `#all/<id>`); `account`
+ *  (an address) opens it in THAT signed-in mailbox, where `u/0` is merely the browser's first (#1247). */
+export function gmailMessageUrl(id: string, account?: string | null): string {
+	const user = account && /^[^\s/@#?]+@[^\s/@#?]+$/.test(account) ? account : "0";
+	return `https://mail.google.com/mail/u/${user}/#all/${encodeURIComponent(id)}`;
 }
 
 async function gmailFetch(accessToken: string, path: string): Promise<Response> {

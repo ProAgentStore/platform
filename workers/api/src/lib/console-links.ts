@@ -73,6 +73,11 @@ export function instanceLink(instanceId: string): string {
 	return `${BASE}/instances/${encodeURIComponent(instanceId)}`;
 }
 
+/** The instance's Data tab: its structured collections, e.g. a Scout's job leads (#1247). */
+export function instanceDataLink(instanceId: string): string {
+	return `${instanceLink(instanceId)}/data`;
+}
+
 /** The instance's Board: runtime tasks and application records, including anything needing you. */
 export function instanceBoardLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/board`;
