@@ -247,9 +247,6 @@ export function instancePermissionsLink(instanceId: string, requestId?: string):
 	return `${instanceLink(instanceId)}/permissions?${query}`;
 }
 
-/** Alias for callers whose subject is a connector rather than a tool permission. */
-export const instanceConnectionsLink = instancePermissionsLink;
-
 // ── Notification links (#894) ────────────────────────────────────────────────
 
 /**
