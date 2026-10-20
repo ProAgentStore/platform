@@ -8,7 +8,7 @@ import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage
 import { clipMarked } from "../clip-marked.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 import { appliedWorkKeys, enqueueBrowserVerification } from "../job-lead-queue.js";
-import { jobProviderOf, providerPostingUrl, resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
+import { checkDigestPostings, DIGEST_POSTINGS_MAX, jobProviderOf, providerPostingUrl, resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
 
 /** A lead stored `awaiting_browser_verification` (#1030), to be queued for the Scout's browser. */
 export interface AwaitingBrowserLead {
@@ -20,7 +20,7 @@ export interface AwaitingBrowserLead {
 	reason: ServerCheckGap;
 }
 import { completeGmailScoutReceipt, failGmailScoutReceipt, type GmailScoutRejection, type GmailScoutScanTrigger, listGmailScoutReceipts, openGmailScoutReceipt, pruneGmailScoutReceipts, recordGmailScoutSearch } from "./receipts.js";
-import { DIGEST_ITEMS_MAX, messageFields, pruneScanLog, rejectionClassification, rejectionReason, type ScanLogEntry, type ScanLogRead, writeScanLog } from "./scan-log.js";
+import { messageFields, pruneScanLog, rejectionClassification, rejectionReason, type ScanLogEntry, type ScanLogRead, writeScanLog } from "./scan-log.js";
 
 // A recent alert is an intake clue, not vacancy verification.  We deliberately keep the window
 // short and require the Runner's browser preflight before a lead can be treated as live.
@@ -132,8 +132,9 @@ export function classifyGmailMessage(message: GmailMessage, now = Date.now(), ma
 	// A reprocess (#1052) widens only this age bound; every rule below holds unchanged.
 	if (!recentMessageDate(message.date, now, maxAgeMs)) return { rejected: "stale" };
 	if (SECURITY_ALERT_RE.test(`${message.subject}\n${message.from}`)) return { rejected: "security_alert" };
-	// Concrete-job-only (#1022): a digest, a summary or a recommendation feed is rejected here, before it
-	// can become a lead — never triaged, never handed to the Tailor with a role nobody can verify.
+	// Concrete-job-only (#1022): a digest, a summary or a recommendation feed never becomes ONE lead named
+	// by its subject. Here it is only classified; the scan then takes each posting it names on its own,
+	// titled from the job board (#1248), and rejects it outright only when it names none.
 	if (DIGEST_SUBJECT_RE.test(message.subject) || DIGEST_SENDER_RE.test(message.from)) return { rejected: "digest" };
 	if (specificJobUrls(`${message.text}\n${message.snippet}`).size > 1) return { rejected: "multiple_listings" };
 	const url = specificJobUrl(message.text) ?? specificJobUrl(message.snippet);
@@ -153,7 +154,8 @@ export function gmailLeadIntakeRejection(data: Record<string, unknown>): GmailSc
 	const subject = String(data.gmail_subject ?? data.title ?? "");
 	const from = String(data.gmail_from ?? "");
 	if (SECURITY_ALERT_RE.test(`${subject}\n${from}`)) return "security_alert";
-	if (DIGEST_SUBJECT_RE.test(subject) || DIGEST_SENDER_RE.test(from)) return "digest";
+	// A lead taken from inside a digest (#1248) carries the digest's subject by design; its posting was checked.
+	if (data.from_digest !== true && (DIGEST_SUBJECT_RE.test(subject) || DIGEST_SENDER_RE.test(from))) return "digest";
 	const url = typeof data.url === "string" ? canonicalJobUrl(data.url) : null;
 	return url && isSpecificJobUrl(url) ? null : "no_specific_job_url";
 }
@@ -241,7 +243,7 @@ function anchorText(text: string, end: number): string | null {
 	return titleText(text.slice(end, end + 700).match(/^["']?[^>\n]{0,200}>([\s\S]{0,400}?)<\/a>/i)?.[1]);
 }
 /** The lead a message becomes once its posting URL is known — from the mail itself, or resolved (#1024). */
-function candidateFor(message: GmailMessage, url: string, resolvedCompany?: string): ScoutCandidate {
+function candidateFor(message: GmailMessage, url: string, resolvedCompany?: string, title?: string): ScoutCandidate {
 	const host = new URL(url).hostname.toLowerCase();
 	const subject = clipMarked(message.subject, 300, { within: true });
 	const sender = clipMarked(message.from, 300, { within: true });
@@ -249,7 +251,7 @@ function candidateFor(message: GmailMessage, url: string, resolvedCompany?: stri
 	const metadata = extractVisibleMetadata(message);
 	return {
 		url,
-		title: clipMarked(message.subject.trim(), 300, { within: true }) || "Job suggestion",
+		title: (title && clipMarked(title.trim(), 300, { within: true })) || clipMarked(message.subject.trim(), 300, { within: true }) || "Job suggestion",
 		source: "Gmail",
 		source_domain: host,
 		posted_date: message.date || undefined,
@@ -258,8 +260,9 @@ function candidateFor(message: GmailMessage, url: string, resolvedCompany?: stri
 		gmail_from: sender,
 		gmail_date: receivedAt,
 		gmail_provenance: { provider: "gmail", message_id: message.id, subject, sender, received_at: receivedAt, source_domain: host },
-		...metadata,
-		company: metadata.company ?? resolvedCompany,
+		// A digest posting's employer is the BOARD's (#1248): the email's "company:" line belongs to some other job in it.
+		...(title ? {} : metadata),
+		company: title ? resolvedCompany : (metadata.company ?? resolvedCompany),
 	};
 }
 function stub(env: Env, id: string) { return env.AGENT.get(env.AGENT.idFromName(id)); }
@@ -296,10 +299,13 @@ export function duplicateGmailLead(candidate: Pick<ScoutCandidate, "url" | "gmai
 }
 
 /** The stored lead a candidate duplicates, and on which key (#1247: the log names the lead it was deduped against). */
-export function matchingGmailLead<R extends { id?: string; data?: Record<string, unknown> }>(candidate: Partial<Pick<ScoutCandidate, "gmail_message_id">> & Pick<ScoutCandidate, "url">, existing: readonly R[]): { record: R; on: "gmail_message" | "job" } | null {
+export function matchingGmailLead<R extends { id?: string; data?: Record<string, unknown> }>(candidate: Partial<Pick<ScoutCandidate, "gmail_message_id">> & Pick<ScoutCandidate, "url">, existing: readonly R[], opts: { byMessage?: boolean } = {}): { record: R; on: "gmail_message" | "job" } | null {
 	const identity = jobIdentity({ url: candidate.url });
+	// A digest's postings share one Gmail message (#1248), so for them — and against a lead that came from
+	// one — the message is not a duplicate key: the JOB is.
+	const byMessage = opts.byMessage !== false;
 	for (const record of existing) {
-		if (candidate.gmail_message_id && record.data?.gmail_message_id === candidate.gmail_message_id) return { record, on: "gmail_message" };
+		if (byMessage && candidate.gmail_message_id && record.data?.from_digest !== true && record.data?.gmail_message_id === candidate.gmail_message_id) return { record, on: "gmail_message" };
 		if (identity && jobIdentity(record.data ?? {}) === identity) return { record, on: "job" };
 	}
 	return null;
@@ -358,7 +364,6 @@ export async function ingestGmailCandidates(input: {
 		const reject = (r: GmailScoutRejection, evidence: string | null, job: ScanLogEntry["job"] = null) => {
 			rejected[r] = (rejected[r] ?? 0) + 1;
 			entry({ classification: rejectionClassification(r), evidence, decision: "rejected", rejection: r, reason: rejectionReason(r), leadId: null, job });
-			if (rejectionClassification(r) === "digest") logDigestJobs(log, seq, message, input.existing);
 		};
 		let classified: ReturnType<typeof classifyGmailMessage> = classifyGmailMessage(message, Date.now(), input.maxAgeMs);
 		/** How the posting was found, for the log: in the mail, or behind the provider's link. */
@@ -382,34 +387,45 @@ export async function ingestGmailCandidates(input: {
 				via = "rejected" in resolved ? `provider link checked server-side: ${resolved.rejected.replace(/_/g, " ")}` : `provider link resolved to ${resolved.url}, a live posting matching the email`;
 			}
 		}
+		// #1248: a digest is a CONTAINER, not a verdict. Each posting it names is checked and taken or not on
+		// its own; the digest is rejected outright only when nothing in it can be extracted.
+		if ("rejected" in classified && (classified.rejected === "digest" || classified.rejected === "multiple_listings")) {
+			const taken = await ingestDigest(message, seq, fields, classified.rejected, input.maxAgeMs);
+			if (taken) continue;
+		}
 		if ("rejected" in classified) {
 			reject(classified.rejected, rejectionEvidence(message, classified.rejected, input.maxAgeMs) ?? via);
 			continue;
 		}
 		const candidate = classified.candidate;
 		const job = { title: candidate.title, company: candidate.company ?? null, url: candidate.url };
+		const out = await store(candidate, serverGap);
+		if (out.kind === "rejected") reject(out.rejection, out.evidence, job);
+		else entry({ ...outcomeEntry(out, candidate, serverGap, via), job });
+	}
+	return { candidates, added, deduped, rejected, awaiting, log };
+
+	/**
+	 * Store ONE candidate as a lead — the same rules for a one-job alert and for each posting inside a
+	 * digest (#1248): dedupe, a work key, no replay of a job that has an application, then insert, and
+	 * queue it for browser verification when the server could not check its page (#1030).
+	 */
+	async function store(candidate: ScoutCandidate, serverGap: ServerCheckGap | null, opts: { fromDigest?: boolean } = {}): Promise<StoreOutcome> {
 		candidates++;
-		const dup = matchingGmailLead(candidate, input.existing);
+		const dup = matchingGmailLead(candidate, input.existing, { byMessage: !opts.fromDigest });
 		if (dup) {
 			deduped++;
-			const id = dup.record.id ?? null;
-			entry({ classification: "duplicate", evidence: dup.on === "gmail_message" ? "the same Gmail message is already a lead" : `the same job (${candidate.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""} — ${dup.on === "gmail_message" ? "this email was taken before" : "another email named the same job"}, so it was not added twice.`, leadId: id, job });
-			continue;
+			return { kind: "deduped", leadId: dup.record.id ?? null, on: dup.on };
 		}
 		const workKey = workKeyForLead(candidate);
-		if (!workKey) {
-			reject("no_work_key", candidate.url, job);
-			continue;
-		}
+		if (!workKey) return { kind: "rejected", rejection: "no_work_key", evidence: candidate.url };
 		// An application already exists for this job — attempted, uncertain or otherwise. Its lead may be
 		// gone, but a fresh one must never let the same posting be applied for again (#1052, #1013).
-		if (input.appliedWorkKeys?.has(workKey)) {
-			reject("prior_application", `job ${workKey}`, job);
-			continue;
-		}
+		if (input.appliedWorkKeys?.has(workKey)) return { kind: "rejected", rejection: "prior_application", evidence: `job ${workKey}` };
 		const data = {
 			...input.leadExtras,
 			...candidate,
+			...(opts.fromDigest ? { from_digest: true } : {}),
 			work_key: workKey,
 			status: serverGap ? "awaiting_browser_verification" : "unverified",
 			lifecycle_version: 0,
@@ -422,53 +438,122 @@ export async function ingestGmailCandidates(input: {
 		const leadId = typeof inserted === "object" ? (inserted.id ?? null) : null;
 		if (created === false) {
 			deduped++;
-			entry({ classification: "duplicate", evidence: "the Scout already held this lead when it was saved (a concurrent scan)", decision: "deduped", rejection: null, reason: `Already a lead${leadId ? ` (${leadId})` : ""}, so it was not added twice.`, leadId, job });
-			continue;
+			return { kind: "concurrent", leadId };
 		}
 		input.existing.push({ ...(leadId ? { id: leadId } : {}), data });
 		added++;
-		entry({
-			classification: "single_posting",
-			evidence: via,
-			decision: serverGap ? "awaiting_browser_verification" : "added",
-			rejection: null,
-			reason: serverGap
-				? `Added as a lead waiting for browser verification: the posting was found but the server could not check it (${serverGap.replace(/_/g, " ")}).`
-				: "Added as an unverified lead: one specific job posting. It still needs checking live before any application.",
-			leadId,
-			job,
-		});
-		if (serverGap && typeof inserted === "object" && inserted.id) {
-			awaiting.push({ leadId: inserted.id, workKey, canonicalUrl: candidate.url, title: data.title ?? null, company: data.company ?? null, reason: serverGap });
-		}
+		if (serverGap && leadId) awaiting.push({ leadId, workKey, canonicalUrl: candidate.url, title: data.title ?? null, company: data.company ?? null, reason: serverGap });
+		return { kind: "added", leadId };
 	}
-	return { candidates, added, deduped, rejected, awaiting, log };
+
+	/**
+	 * A digest's postings, each checked against its job board and stored or not with its own logged reason
+	 * (#1248). The title and employer come from the BOARD's structured posting, not the email's layout —
+	 * which proved unreliable (#1251). A posting the board would not show is taken (awaiting a browser) only
+	 * when the email's own link text names it; otherwise it is reported unidentified. Returns false when
+	 * nothing in the digest names a posting, so the caller rejects it outright with that reason.
+	 */
+	async function ingestDigest(message: GmailMessage, seq: number, fields: ReturnType<typeof messageFields>, kind: GmailScoutRejection, maxAgeMs?: number): Promise<boolean> {
+		const { jobs: all, unresolved } = digestJobs(message);
+		if (!all.length) return false;
+		const jobs = all.filter((_, i) => i < DIGEST_POSTINGS_MAX);
+		const known = jobs.map((j) => matchingGmailLead({ url: j.url }, input.existing, { byMessage: false }));
+		const toCheck = jobs.filter((_, i) => !known[i]);
+		const checked = await checkDigestPostings(message, toCheck.map((j) => j.url), input.fetchImpl);
+		const result = new Map(toCheck.map((j, i) => [j.url, checked[i]]));
+		const counts = { added: 0, awaiting: 0, deduped: 0, notTaken: 0 };
+		const subs: ScanLogEntry[] = [];
+		const sub = (i: number, e: Pick<ScanLogEntry, "evidence" | "decision" | "rejection" | "reason" | "leadId" | "job">) =>
+			subs.push({ seq, subIndex: i + 1, messageId: message.id || null, threadId: message.threadId || null, gmailLink: null, sender: null, subject: null, receivedAt: null, snippet: null, read: null, ...e, classification: "digest_item" });
+		for (const [i, job] of jobs.entries()) {
+			const dup = known[i];
+			if (dup) {
+				deduped++;
+				counts.deduped++;
+				const id = dup.record.id ?? null;
+				sub(i, { evidence: `the same job (${job.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""}, so it was not added twice.`, leadId: id, job: { title: job.title, company: null, url: job.url } });
+				continue;
+			}
+			const r = result.get(job.url);
+			const notTaken = (rejection: GmailScoutRejection, reason: string, evidence: string | null, title: string | null = job.title, company: string | null = null) => {
+				rejected[rejection] = (rejected[rejection] ?? 0) + 1;
+				counts.notTaken++;
+				sub(i, { evidence, decision: "rejected", rejection, reason, leadId: null, job: { title, company, url: job.url } });
+			};
+			let candidate: ScoutCandidate | null = null;
+			let gap: ServerCheckGap | null = null;
+			let evidence = "";
+			if (r && "title" in r) {
+				candidate = candidateFor(message, r.url, r.company, r.title);
+				evidence = `the job board's own posting: "${r.title}" at ${r.company}, live, and named in the email`;
+			} else if (r && "rejected" in r) {
+				notTaken(r.rejected, rejectionReason(r.rejected), `checked on the job board: ${r.rejected.replace(/_/g, " ")}`);
+				continue;
+			} else if (job.title) {
+				// The board would not show the page (or it is not a job board): the email's own link text names it.
+				candidate = candidateFor(message, job.url, undefined, job.title);
+				gap = r && "awaitingBrowser" in r ? r.awaitingBrowser.reason : null;
+				evidence = gap ? `title from the email's link text; the job board's page could not be read here (${gap.replace(/_/g, " ")})` : "title from the email's link text (not a job board the server can check)";
+			} else {
+				const why = r && "awaitingBrowser" in r ? `its job-board page could not be read here (${r.awaitingBrowser.reason.replace(/_/g, " ")})` : "it is not on a job board the server can check";
+				notTaken("posting_unverifiable", `Could not identify this job: ${why}, and the email's link text does not name it. Open the posting and add it with job_lead_intake_url if you want it.`, why);
+				continue;
+			}
+			const out = await store(candidate, gap, { fromDigest: true });
+			if (out.kind === "rejected") {
+				notTaken(out.rejection, rejectionReason(out.rejection), out.evidence, candidate.title, candidate.company ?? null);
+				continue;
+			}
+			const e = outcomeEntry(out, candidate, gap, evidence, true);
+			if (e.decision === "added") counts.added++;
+			else if (e.decision === "awaiting_browser_verification") counts.awaiting++;
+			else counts.deduped++;
+			sub(i, { ...e, job: { title: candidate.title, company: candidate.company ?? null, url: candidate.url } });
+		}
+		const more = all.length - jobs.length;
+		const decision: ScanLogEntry["decision"] = counts.added ? "added" : counts.awaiting ? "awaiting_browser_verification" : counts.deduped && !counts.notTaken ? "deduped" : "rejected";
+		const summary = [`${counts.added} added`, counts.awaiting ? `${counts.awaiting} awaiting browser verification` : "", `${counts.deduped} already leads`, `${counts.notTaken} not taken`].filter(Boolean).join(", ");
+		log.push({
+			seq,
+			subIndex: null,
+			...fields,
+			classification: "digest",
+			evidence: [rejectionEvidence(message, kind, maxAgeMs), `${all.length} job${all.length === 1 ? "" : "s"} named in it`, more ? `${more} beyond the first ${DIGEST_POSTINGS_MAX} not checked` : "", unresolved ? `${unresolved} provider tracking link(s) not followed (a digest's redirects are never resolved)` : ""].filter(Boolean).join("; "),
+			decision,
+			rejection: null,
+			reason: `A digest listing ${jobs.length} job${jobs.length === 1 ? "" : "s"}: each was checked on its own (${summary}) — see each job below.`,
+			leadId: null,
+			job: null,
+		});
+		log.push(...subs);
+		return true;
+	}
 }
 
-/** One row per job a digest lists (#1247), each with its own decision: already a lead, or not taken. */
-function logDigestJobs(log: ScanLogEntry[], seq: number, message: GmailMessage, existing: readonly { id?: string; data?: Record<string, unknown> }[]): void {
-	const { jobs, unresolved } = digestJobs(message);
-	const base = { seq, messageId: message.id || null, threadId: message.threadId || null, gmailLink: null, sender: null, subject: null, receivedAt: null, snippet: null, read: null, classification: "digest_item" as const, rejection: null };
-	for (const [i, job] of jobs.entries()) {
-		if (i >= DIGEST_ITEMS_MAX) break;
-		const dup = matchingGmailLead({ url: job.url }, existing);
-		const id = dup?.record.id ?? null;
-		log.push({
-			...base,
-			subIndex: i + 1,
-			evidence: job.title ? "title taken from the link's text in the email" : "no link text in the email names this job — open the posting to see it",
-			job: { title: job.title, company: null, url: job.url },
-			...(dup
-				? { decision: "deduped" as const, leadId: id, reason: `Already a lead${id ? ` (${id})` : ""} from another email.` }
-				: { decision: "rejected" as const, leadId: null, reason: "Listed inside a digest, so not added automatically. To take it, open the posting and add it with job_lead_intake_url." }),
-		});
+type StoreOutcome = { kind: "added"; leadId: string | null } | { kind: "deduped"; leadId: string | null; on: "gmail_message" | "job" } | { kind: "concurrent"; leadId: string | null } | { kind: "rejected"; rejection: GmailScoutRejection; evidence: string };
+
+/** The log row for a stored candidate's outcome (everything but its job). */
+function outcomeEntry(out: Exclude<StoreOutcome, { kind: "rejected" }>, candidate: ScoutCandidate, serverGap: ServerCheckGap | null, via: string, fromDigest = false): Pick<ScanLogEntry, "classification" | "evidence" | "decision" | "rejection" | "reason" | "leadId"> {
+	if (out.kind === "deduped") {
+		const id = out.leadId;
+		return { classification: "duplicate", evidence: out.on === "gmail_message" ? "the same Gmail message is already a lead" : `the same job (${candidate.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""} — ${out.on === "gmail_message" ? "this email was taken before" : "another email named the same job"}, so it was not added twice.`, leadId: id };
 	}
-	const extra = Math.max(jobs.length - DIGEST_ITEMS_MAX, 0);
-	if (extra || unresolved) {
-		const parent = log.find((e) => e.seq === seq && e.subIndex === null);
-		if (parent) parent.evidence = [parent.evidence, extra ? `${extra} more job(s) not logged` : "", unresolved ? `${unresolved} provider tracking link(s) not followed (a digest is never resolved)` : ""].filter(Boolean).join("; ");
+	if (out.kind === "concurrent") {
+		return { classification: "duplicate", evidence: "the Scout already held this lead when it was saved (a concurrent scan)", decision: "deduped", rejection: null, reason: `Already a lead${out.leadId ? ` (${out.leadId})` : ""}, so it was not added twice.`, leadId: out.leadId };
 	}
+	return {
+		classification: "single_posting",
+		evidence: via,
+		decision: serverGap ? "awaiting_browser_verification" : "added",
+		rejection: null,
+		reason: serverGap
+			? `Added as a lead waiting for browser verification: the posting was found but the server could not check it (${serverGap.replace(/_/g, " ")}).`
+			: `Added as an unverified lead: ${fromDigest ? "one job from this digest" : "one specific job posting"}. It still needs checking live before any application.`,
+		leadId: out.leadId,
+	};
 }
+
+
 
 /**
  * The mailbox a scan reads: one search and one read per hit, read-scope only. Injectable so the ONE scan

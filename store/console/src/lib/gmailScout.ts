@@ -102,8 +102,8 @@ const REASON: Record<GmailScoutRejection, string> = {
 	missing_fields: "incomplete",
 	stale: "too old",
 	security_alert: "account/security mail",
-	digest: "digest or summary",
-	multiple_listings: "several jobs in one email",
+	digest: "digest naming no job",
+	multiple_listings: "several jobs, none identifiable",
 	no_specific_job_url: "no specific job link",
 	no_work_key: "unidentifiable job",
 	redirect_unresolved: "job link could not be resolved",
@@ -113,7 +113,7 @@ const REASON: Record<GmailScoutRejection, string> = {
 	prior_application: "already has an application",
 };
 
-/** "3 digest or summary, 1 too old" — what a scan skipped, in plain words; empty when nothing was skipped. */
+/** "3 digest naming no job, 1 too old" — what a scan skipped, in plain words; empty when nothing was skipped. */
 export function rejectionSummary(rejected: GmailScoutScanReceipt["rejected"] | undefined): string {
 	return Object.entries(rejected ?? {})
 		.filter(([, n]) => (n ?? 0) > 0)

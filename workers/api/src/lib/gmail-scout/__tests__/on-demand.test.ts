@@ -102,8 +102,8 @@ describe("Scan now: success, through the scheduler's own path", () => {
 	it("classifies, dedups and stores unverified leads, closes a durable receipt, and hands nothing downstream", async () => {
 		const box = fakeMailbox(INBOX());
 		const result = await scanGmailScout(env, "scout", "u1", { trigger: "on_demand", triggeredBy: "u1", mailbox: box.factory });
-		expect(result).toMatchObject({ candidates: 2, added: 1, deduped: 1, rejected: { digest: 1, stale: 1 }, reused: false, handoff: "none" });
-		expect(result.receipt).toMatchObject({ trigger: "on_demand", triggeredBy: "u1", status: "completed", hits: 4, candidates: 2, added: 1, deduped: 1, rejected: { digest: 1, stale: 1 }, errorMessage: null, handoff: "none" });
+		expect(result).toMatchObject({ candidates: 2, added: 1, deduped: 1, rejected: { posting_unverifiable: 1, stale: 1 }, reused: false, handoff: "none" });
+		expect(result.receipt).toMatchObject({ trigger: "on_demand", triggeredBy: "u1", status: "completed", hits: 4, candidates: 2, added: 1, deduped: 1, rejected: { posting_unverifiable: 1, stale: 1 }, errorMessage: null, handoff: "none" });
 		const [stored] = await listGmailScoutReceipts(env, "scout");
 		expect(stored.id).toBe(result.receipt.id); // durable: it reads back after the call
 		// No default hand-off: the new lead is unverified, no apply was requested, nothing was delivered.

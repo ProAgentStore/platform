@@ -56,8 +56,6 @@ export type ScanLogItem = Omit<ScanLogEntry, "seq" | "subIndex"> & { seq: number
 
 export const SCAN_LOG_RETENTION_DAYS = 30;
 export const SCAN_LOG_SNIPPET_MAX = 500;
-/** Jobs logged from one digest, at most; the message row says how many more were listed. */
-export const DIGEST_ITEMS_MAX = 25;
 const PAGE_DEFAULT = 25, PAGE_MAX = 100;
 
 /** What each rejection means about the message, and in the owner's words, why it is not a lead. */
@@ -65,8 +63,8 @@ const REJECTION: Record<GmailScoutRejection, { classification: ScanLogClassifica
 	missing_fields: { classification: "non_job", reason: "The email has no subject, sender or id to identify it, so it cannot be a lead." },
 	stale: { classification: "too_old", reason: "The email is older than this scan accepts; an old alert is not a reliable sign the job is still open." },
 	security_alert: { classification: "non_job", reason: "This is account or security mail (sign-in, verification, password), not a job alert." },
-	digest: { classification: "digest", reason: "This is a digest or recommendation email listing several jobs. The Scout takes only single-posting alerts (#1022); each listed job is logged below with its own decision." },
-	multiple_listings: { classification: "digest", reason: "The email links to more than one distinct job, so no single posting could be taken from it. Each job found is logged below." },
+	digest: { classification: "digest", reason: "digest: nothing extractable — this digest or recommendation email links to no job posting the Scout can identify (only tracking redirects, search, account or navigation links). A digest that names its jobs has each one checked and logged on its own (#1248)." },
+	multiple_listings: { classification: "digest", reason: "The email links to more than one job, but none of them could be identified as a posting." },
 	no_specific_job_url: { classification: "non_job", reason: "No link in the email points at one specific job posting (only search, listing, account or navigation links)." },
 	no_work_key: { classification: "single_posting", reason: "The posting link could not be reduced to a stable job identity, so it could not be deduplicated or tracked." },
 	redirect_unresolved: { classification: "single_posting", reason: "The job link only works through the provider's tracking redirect, and following it did not reach one posting." },

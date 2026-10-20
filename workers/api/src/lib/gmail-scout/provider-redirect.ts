@@ -234,7 +234,19 @@ export async function resolveProviderJobAlert(message: GmailMessage, fetchImpl: 
 	}
 	if (postings.size > 1) return { rejected: "multiple_listings" };
 	const only = [...postings.values()][0];
-	const canonical = only.provider.canonical(only.host, only.id);
+	const checked = await checkCanonicalPosting(fetchImpl, only.provider.canonical(only.host, only.id), only.provider, message, signal, now);
+	return "title" in checked ? { url: checked.url, company: checked.company } : checked;
+}
+
+/** A posting the job board itself confirmed: its canonical URL, title and employer, as the board publishes them. */
+export type CheckedPosting = { url: string; title: string; company: string };
+
+/**
+ * Check ONE canonical posting against the job board and the email that named it (#1024, #1050, #1248):
+ * still live, exactly one structured posting, and the email visibly names its title and employer. Shared
+ * by a one-job alert and by every posting inside a digest, so both are held to the same rule.
+ */
+async function checkCanonicalPosting(fetchImpl: Fetch, canonical: string, provider: Provider, message: GmailMessage, signal: AbortSignal, now: number): Promise<CheckedPosting | { rejected: ProviderAlertRejection } | { awaitingBrowser: { url: string; reason: ServerCheckGap } }> {
 	let res: Response;
 	try {
 		res = await get(fetchImpl, canonical, signal);
@@ -252,7 +264,7 @@ export async function resolveProviderJobAlert(message: GmailMessage, fetchImpl: 
 		} catch {
 			// an unreadable location proves nothing about a wall
 		}
-		if (to && only.provider.signInWall?.(to)) return { awaitingBrowser: { url: canonical, reason: "server_fetch_refused" } };
+		if (to && provider.signInWall?.(to)) return { awaitingBrowser: { url: canonical, reason: "server_fetch_refused" } };
 		// The canonical posting moving elsewhere (Indeed sends an expired job to search) is not the job.
 		return { rejected: "posting_not_live" };
 	}
@@ -267,5 +279,36 @@ export async function resolveProviderJobAlert(message: GmailMessage, fetchImpl: 
 	const posting = found[0];
 	if (posting.validThrough && Date.parse(posting.validThrough) < now) return { rejected: "posting_not_live" };
 	if (!agrees(message, posting)) return { rejected: "posting_mismatch" };
-	return { url: canonical, company: clipMarked(posting.company.trim(), 160, { within: true }) };
+	return { url: canonical, title: clipMarked(posting.title.trim(), 300, { within: true }), company: clipMarked(posting.company.trim(), 160, { within: true }) };
+}
+
+/** Postings checked per digest, at most, and how many at once; one budget covers them all (#1248). */
+export const DIGEST_POSTINGS_MAX = 25;
+const DIGEST_CHECK_CONCURRENCY = 5;
+const DIGEST_BUDGET_MS = 25_000;
+
+/**
+ * Check every posting a digest names (#1248). Only links that NAME their posting are checked — a digest's
+ * tracking redirects are never followed (one email carried 20-29 of them). Results come back in order,
+ * one per URL; a non-provider URL (a company's careers page) has nothing the server can read, and says so.
+ */
+export async function checkDigestPostings(message: GmailMessage, urls: readonly string[], fetchImpl: Fetch = fetch, now = Date.now()): Promise<Array<CheckedPosting | { rejected: ProviderAlertRejection } | { awaitingBrowser: { url: string; reason: ServerCheckGap } } | { unchecked: { url: string } }>> {
+	const signal = AbortSignal.timeout(DIGEST_BUDGET_MS);
+	const out: Array<CheckedPosting | { rejected: ProviderAlertRejection } | { awaitingBrowser: { url: string; reason: ServerCheckGap } } | { unchecked: { url: string } }> = new Array(urls.length);
+	let next = 0;
+	const worker = async () => {
+		for (let i = next++; i < urls.length; i = next++) {
+			const url = urls[i];
+			let host = "";
+			try {
+				host = new URL(url).hostname.toLowerCase();
+			} catch {
+				host = "";
+			}
+			const provider = providerFor(host);
+			out[i] = provider ? await checkCanonicalPosting(fetchImpl, url, provider, message, signal, now) : { unchecked: { url } };
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(DIGEST_CHECK_CONCURRENCY, urls.length) }, worker));
+	return out;
 }

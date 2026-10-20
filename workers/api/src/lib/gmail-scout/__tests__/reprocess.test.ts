@@ -137,7 +137,7 @@ describe("reprocessing owner-selected historical messages", () => {
 	it("keeps ambiguous, digest and non-canonical mail fail-closed, and refuses mail beyond 30 days", async () => {
 		const box = fakeMailbox([DIGEST, MULTI, SEARCH, ANCIENT]);
 		const result = await reprocessGmailScout(env, "scout", "u1", { messageIds: ["m-digest", "m-multi", "m-search", "m-ancient"] }, { mailbox: box.factory });
-		expect(result).toMatchObject({ added: 0, rejected: { digest: 1, multiple_listings: 1, no_specific_job_url: 1, stale: 1 } });
+		expect(result).toMatchObject({ added: 0, rejected: { posting_unverifiable: 3, no_specific_job_url: 1, stale: 1 } });
 		expect(leads).toHaveLength(0);
 	});
 

@@ -118,11 +118,13 @@ describe("#1024: anything short of exactly one live matching posting is refused,
 		expect(JSON.stringify(result)).not.toMatch(/SECRET|fetch failed/);
 	});
 
-	it("two different postings in one alert: multiple_listings, and nothing is fetched", async () => {
+	// #1248: several postings are checked one by one at their canonical pages — no personal link is requested.
+	it("two different postings in one alert: each is checked on its own canonical page", async () => {
 		const p = live();
 		const second = `https://au.indeed.com/rc/clk/dl?jk=fedcba9876543210&amp;tk=SECRETTK`;
-		expect(await reason(alert({ text: `<a href="${CLICK}">Platform Engineer</a><a href="${second}">Data Engineer</a>` }), p)).toEqual({ multiple_listings: 1 });
-		expect(p.requested).toEqual([]);
+		const { result } = await ingest(alert({ text: `<a href="${CLICK}">Platform Engineer</a><a href="${second}">Data Engineer</a>` }), p.fetchImpl);
+		expect(result).toMatchObject({ added: 1, rejected: { posting_not_live: 1 } });
+		expect(p.requested.sort()).toEqual([CANONICAL, "https://au.indeed.com/viewjob?jk=fedcba9876543210"]);
 	});
 
 	it("a gone posting (404/410), one redirected away, or one past validThrough: posting_not_live", async () => {
@@ -162,9 +164,8 @@ describe("#1024: anything short of exactly one live matching posting is refused,
 		}
 	});
 
-	it("a digest or a security mail is rejected first, and the resolver is never reached", async () => {
+	it("a security mail is rejected first, and the resolver is never reached", async () => {
 		const p = live();
-		expect(await reason(alert({ subject: "Platform Engineer + 5 new jobs" }), p)).toEqual({ digest: 1 });
 		expect(await reason(alert({ subject: "Verify your Indeed account" }), p)).toEqual({ security_alert: 1 });
 		expect(p.requested).toEqual([]);
 	});
@@ -242,11 +243,11 @@ describe("#1050: SEEK alerts", () => {
 		for (const url of ["https://www.seek.com.au/my-activity/saved-searches", "https://www.seek.com.au/jobs?keywords=platform", "https://www.seek.com.au/job/abc"]) expect(providerPostingUrl(url)).toBeNull();
 	});
 
-	it("two different postings in one alert: multiple_listings, and nothing is fetched", async () => {
+	it("two different postings in one alert: each is checked at its canonical page, never through its tracking link", async () => {
 		const p = provider({});
 		const text = `<a href="${seekLink(1)}">Platform Engineer</a><a href="https://www.seek.com.au/job/87654321?tracking=SEEKSECRET">Data Engineer</a>`;
-		expect(await rejectedBy(seekAlert({ text }), p)).toEqual({ multiple_listings: 1 });
-		expect(p.requested).toEqual([]);
+		expect(await rejectedBy(seekAlert({ text }), p)).toEqual({ posting_not_live: 2 });
+		expect(p.requested.sort()).toEqual([SEEK_CANONICAL, "https://www.seek.com.au/job/87654321"]);
 	});
 
 	it("the posting redirected off SEEK (or anywhere) is refused as not live, and the redirect is not followed", async () => {

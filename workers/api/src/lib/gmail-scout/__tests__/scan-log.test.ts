@@ -110,15 +110,15 @@ describe("every decision path is logged with its reason (#1247)", () => {
 		expect(dup.reason).toMatch(/^Already a lead \(existing\)/);
 	});
 
-	it("rejected digest: the evidence quotes what marked it, and each listed job is its own row with its own decision", async () => {
+	it("digest (#1248): the evidence quotes what marked it, and each listed job is its own row with its own decision", async () => {
 		await scan();
 		const digest = (await byId())["m-digest"];
-		expect(digest).toMatchObject({ classification: "digest", decision: "rejected", rejection: "digest", evidence: 'subject contains "20 new jobs"' });
+		expect(digest).toMatchObject({ classification: "digest", decision: "added", rejection: null, evidence: 'subject contains "20 new jobs"; 2 jobs named in it' });
+		expect(digest.reason).toMatch(/1 added, 1 already leads, 0 not taken/);
 		expect(digest.subItems).toEqual([
-			expect.objectContaining({ classification: "digest_item", decision: "rejected", job: { title: "Site Reliability Engineer", company: null, url: "https://jobs.example.com/job/1" } }),
+			expect.objectContaining({ classification: "digest_item", decision: "added", leadId: "lead-2", job: { title: "Site Reliability Engineer", company: null, url: "https://jobs.example.com/job/1" } }),
 			expect.objectContaining({ classification: "digest_item", decision: "deduped", leadId: "existing", job: { title: "Backend Engineer", company: null, url: "https://jobs.example.com/job/7" } }),
 		]);
-		expect(digest.subItems?.[0].reason).toMatch(/job_lead_intake_url/);
 	});
 
 	it("a digest job's title is its link text, or none — never a nearby plain-text line (live, Scout 2: \"[\", a suburb, a salary)", () => {
