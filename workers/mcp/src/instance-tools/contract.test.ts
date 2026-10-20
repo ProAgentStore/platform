@@ -591,7 +591,7 @@ const TABLE: Record<string, Row> = {
 		"envelope",
 		"commands_enabled,disabled_commands,dry_run,instance_id,keep_awake,language,max_dictation_ms,provider,sensitivity,silence_ms,speed,stt_mode,stt_model,token,tts_max_chars,vocabulary",
 	],
-	start_instance_loop: ["coding", "runtime", null, "envelope", "dry_run,instance_id,issue,max_iterations,objective,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,token"],
+	start_instance_loop: ["coding", "runtime", null, "envelope", "dry_run,force,force_reason,instance_id,issue,max_iterations,objective,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,token"],
 	continue_instance_run: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,note,run_id,token"],
 	preview_instance_run_continue: ["composition", "read", null, null, "instance_id,run_id,token"],
 	my_agent: ["agentAuthoring", "none", null, null, "agent_id,token"],

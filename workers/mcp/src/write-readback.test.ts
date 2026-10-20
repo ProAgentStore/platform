@@ -515,6 +515,8 @@ const READBACK: Record<string, string | null> = {
 	"start_instance_loop.request_id": "coding_loop_status",
 	"start_instance_loop.max_iterations": "coding_loop_status",
 	"start_instance_loop.repair_checkout": "coding_loop_status",
+	"start_instance_loop.force": "coding_loop_status",
+	"start_instance_loop.force_reason": "coding_loop_status",
 	"start_instance_loop.issue": "instance_board",
 	// The NEW run's cap, read back on the run the call returns — not on the stopped one it
 	// continues, whose own row is unchanged by a continue (#806).
