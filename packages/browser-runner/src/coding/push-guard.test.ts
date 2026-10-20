@@ -85,7 +85,7 @@ describe("git push over ssh (#1252)", () => {
 	});
 
 	it("a TAG push to an unregistered repository is refused (the runner-router `v1` move)", () => {
-		const other = bare("proagentstore/runner-router");
+		const other = bare("ProAgentStore/runner-router"); // the same case as the URL: CI's filesystem is case-sensitive
 		run(["tag", "v1"]);
 		const r = run(["push", "git@github.com:ProAgentStore/runner-router.git", "v1"]);
 		expect(r.status).not.toBe(0);
@@ -106,7 +106,7 @@ describe("git push over ssh (#1252)", () => {
 	});
 
 	it("a temp-dir clone of another repository can be READ, but not pushed back (the /tmp/rr case)", () => {
-		const other = bare("proagentstore/runner-router");
+		const other = bare("ProAgentStore/runner-router"); // the same case as the URL: CI's filesystem is case-sensitive
 		spawnSync("git", ["push", "-q", other, "main"], { cwd: work, env: BASE_ENV });
 		const before = head(other);
 		const clone = join(dir, "rr");
