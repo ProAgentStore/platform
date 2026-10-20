@@ -59,3 +59,18 @@ describe("migration 0262: hostname pins → machine ids (#1250)", () => {
 		expect(config("a").runnerMachineId).toBe("already-chosen-01");
 	});
 });
+
+const BACKFILL = readFileSync(new URL("../../migrations/0264_backfill_parked_machine.sql", import.meta.url).pathname, "utf-8");
+describe("migration 0264: runs parked before #1242 learn where they parked", () => {
+	it("records a still-parked run's machine from its session's stamped node, and leaves woken or finished runs alone", () => {
+		d1.exec("INSERT INTO coding_repos (id, instance_id, user_id, name, workdir) VALUES ('r1', 'a', 'u1', 'o/r', '~/dev/r')");
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, runner_node) VALUES ('s1', 'a', 'r1', 'u1', 'suspended', 'claude', 'Mac.modem'), ('s2', 'a', 'r1', 'u1', 'ended', 'claude', 'Mac.modem')");
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id, waiting_reason) VALUES
+			('parked', 'u1', 'a', 'x', 'running', 5, 1, 's1', 'decision'), ('working', 'u1', 'a', 'x', 'running', 5, 1, 's1', NULL), ('ended', 'u1', 'a', 'x', 'needs_human', 5, 1, 's2', NULL)`);
+		d1.exec(BACKFILL);
+		const row = (id: string) => d1.sqlite.prepare("SELECT parked_machine_id, parked_node, parked_workdir FROM agent_loop_runs WHERE run_id = ?").get(id);
+		expect(row("parked")).toEqual({ parked_machine_id: LAPTOP, parked_node: "Mac.modem", parked_workdir: "~/dev/r" });
+		expect(row("working")).toEqual({ parked_machine_id: null, parked_node: null, parked_workdir: null });
+		expect(row("ended")).toEqual({ parked_machine_id: null, parked_node: null, parked_workdir: null });
+	});
+});
