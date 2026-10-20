@@ -1227,4 +1227,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.163": "sha256:e12d1fc93f772b0c739037f08cffd896b72c32a101e5542252d7be749eeab6c4",
 	// #1218: grant_instance_discord_channel gains purpose (agent | release_notes) — a release-notes grant needs no Discord tools.
 	"0.1.164": "sha256:05bd61185451a9815fa4305eb9a8243d8b63b0b631f841919ffd2a6c4327615e",
+	// #1253: coding_loop_start gains force + force_reason (closed / recently-done issues are refused without them).
+	"0.1.165": "sha256:58290a13620f5bf8a4ab5e792c0793ee0d551362d66a159506cc5e1142e95e77",
 };

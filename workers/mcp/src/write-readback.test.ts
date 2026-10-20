@@ -535,6 +535,8 @@ const READBACK: Record<string, string | null> = {
 	// A repair run's record carries the platform's fixed objective label, which is what the status
 	// tool reads back (#804).
 	"coding_loop_start.repair_checkout": "coding_loop_status",
+	"coding_loop_start.force": "coding_loop_status",
+	"coding_loop_start.force_reason": "coding_loop_status",
 	"coding_loop_start.issue": "instance_board", // #895: the run on its issue card (`issue`, `run`)
 
 	// ── feedback ──
