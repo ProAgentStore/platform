@@ -173,7 +173,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"email_status",
-		"Gmail connection status for the email-access tool (configured? connected?). Connect/disconnect happens in the console.",
+		"Report whether your Gmail account is connected for the email-access tool. Use it before relying on an agent that reads or sends mail; connecting and disconnecting happen in the console, not here. For a Job Search Scout's mailbox use gmail_scout_status instead; keys_status covers AI provider keys. Takes no arguments besides the optional `token`. Example: {}. Returns `{connected, email, connectedAt, configured, canSend, accounts:[{accountId, label, connectedAt, canSend}]}`; `configured:false` means the platform has no Google OAuth client, so nothing can connect. `email` and `connectedAt` are filled only when exactly one account is connected.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 		},
@@ -187,7 +187,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"update_profile",
-		"Update your structured candidate Profile / Job Preferences (string fields only; used by the apply pipeline). Read get_profile first.",
+		"Update fields of your structured candidate Profile and Job Preferences, which the job-apply pipeline reads when filling forms. Call get_profile first to see the current field names and values; this changes only the fields you send and leaves the rest alone. Required: `fields`, an object of field name to string value; an empty string clears that field. `dry_run: true` previews which fields would change. Example: {\"fields\":{\"phone\":\"+61 400 000 000\",\"city\":\"Sydney\"}}. Returns `{ok:true, profile}` with the full profile after the write.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			fields: z.record(z.string()).describe("Field name → value (e.g. full_name, phone, city; empty string clears a field)"),

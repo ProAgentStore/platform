@@ -52,7 +52,7 @@ export function registerHttpProfileTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"get_http_profile",
-		"Read one HTTP credential profile's metadata and bindings. Never the secret. Read-only.",
+		"Read one HTTP credential profile in full: its metadata and which instances are bound to it. Never returns the secret. Read-only. Use list_http_profiles to find a `profile_id`, test_http_profile to check the stored secret is usable, and list_instance_http_bindings to see bindings from an instance's side. Required: `profile_id`. Example: {\"profile_id\":\"hcp_<id>\"}. Returns `{profile:{id, name, description, strategy, strategyConfig, renders:{headers, query}, allowedOrigins, secret:{set, version, rotatedAt}, bindings:[{instanceId, connector, bindingName}], createdAt, updatedAt}}`; `renders` lists header and query parameter names only.",
 		{ token: tokenArg, profile_id: profileId },
 		async ({ token, profile_id }) => {
 			const session = tokenFor(token);

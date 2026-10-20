@@ -31,7 +31,7 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"get_instance_settings",
-		"Read a subscribed instance's typed agent settings (values + the agent's declared settings schema, e.g. Language Buddy's target language).",
+		"Read a subscribed instance's typed agent settings: the current values and the field definitions the agent declares (for example Language Buddy's target language). Change values with set_instance_settings; the template's schema itself is read with get_agent_settings_schema (creator only), and free-text rules with get_instance_instructions. Required: `instance_id` (from my_instances). Example: {\"instance_id\":\"<id>\"}. Returns `{settings, fields}`: `settings` maps each field id to its resolved value and `fields` is the agent's settings schema.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -176,7 +176,7 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"set_instance_instructions",
-		"Replace a subscribed instance's Special Instructions (max 4000 chars; these override the agent's defaults).",
+		"Replace a subscribed instance's Special Instructions: the free-text rules placed at the top of the agent's prompt, which override its defaults (console Knowledge → Rules & Tips). Read the current text first with get_instance_instructions, because this overwrites it; an empty string clears it. For notes to whoever drives the instance use set_instance_operator_manual, and for typed fields set_instance_settings. Required: `instance_id`, `instructions` (max 4000 characters; longer text is refused). Example: {\"instance_id\":\"<id>\",\"instructions\":\"Always reply in English.\"}. Returns `{ok:true}`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -320,7 +320,7 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"get_translation_config",
-		"Read a subscribed instance's translation display config (translation under messages, transliteration/pinyin, word-tap pronunciation, font size).",
+		"Read the under-message translation display config of a subscribed instance: whether a translation shows under each message, its target language, transliteration (such as pinyin), tap-to-hear words and text size. Change it with set_translation_config; the account-wide default is part of get_account_preferences. Required: `instance_id` (from my_instances). Example: {\"instance_id\":\"<id>\"}. Returns `{translation:{enabled, target, targetTag, transliterate, wordTap, fontSize}, hasOverride, languages}`: `hasOverride` is false when the instance uses the owner's account defaults, and `languages` lists the selectable target languages.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -335,7 +335,7 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"set_translation_config",
-		"Update a subscribed instance's translation display config. Only sent fields change.",
+		"Change the under-message translation display of a subscribed instance. Read the current config first with get_translation_config. Required: `instance_id`; optional `enabled`, `target`, `transliterate`, `word_tap`, `font_size`. A field you omit takes the owner's account default, not this instance's previous value, so send every field you want kept; an unrecognised `target` falls back to the first listed language. Example: {\"instance_id\":\"<id>\",\"enabled\":true,\"target\":\"English\",\"transliterate\":true}. Returns `{translation:{enabled, target, targetTag, transliterate, wordTap, fontSize}, hasOverride:true}`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -429,7 +429,7 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"get_agent_settings_schema",
-		"Read an agent's declared typed settings schema (creator view — the fields subscribers see in Settings → Agent settings).",
+		"Read the typed settings schema an agent template declares (creator view, owner or admin only): the fields subscribers fill in under Settings → Agent settings. Replace it with set_agent_settings_schema; read or change one instance's values with get_instance_settings or set_instance_settings. Required: `agent_id` (id or slug, from my_agents). Example: {\"agent_id\":\"<agent-id>\"}. Returns `{settingsSchema:[...]}`, an empty array when none is declared; each field has `id`, `label` and `type` (select, text, number or toggle) plus optional extras such as `options` and `default`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string(),

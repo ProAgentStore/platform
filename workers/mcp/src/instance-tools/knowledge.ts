@@ -18,7 +18,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 
 	server.tool(
 		"add_instance_knowledge",
-		"Add user-specific knowledge to your private subscribed instance. This does not alter the creator's template agent.",
+		"Add a new knowledge document to your private subscribed instance; the creator's template agent is not changed. Use update_instance_knowledge to edit an existing document in place, ingest_instance_knowledge_url to import a web page, and upload_instance_file for binary files. Required: `instance_id` (from my_instances), `title`, `content` (max 100KB); optional `source` (defaults to \"mcp\") and `source_url`. The instance holds at most 20 documents and refuses more. Example: {\"instance_id\":\"<id>\",\"title\":\"Pricing\",\"content\":\"Plans start at $5/mo.\"}. Returns the text `Added to instance: <title>` or `Error: <reason>`; it does not include the new document id, so call list_instance_knowledge to get it.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -63,7 +63,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 
 	server.tool(
 		"list_instance_knowledge",
-		"List user-specific knowledge documents in your private subscribed instance.",
+		"List the knowledge documents stored on your private subscribed instance (the console's Knowledge → Documents tab). Use it to find a `document_id` for update_instance_knowledge or delete_instance_knowledge; use search_instance_knowledge to test what retrieval finds, list_instance_files for uploaded files, and get_instance_memory for memory entries. Required: `instance_id` (from my_instances). Example: {\"instance_id\":\"<id>\"}. Returns `{documents:[{id, title, content, source, sourceUrl, addedAt, updatedAt}]}`, including each document's full content.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -105,7 +105,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 
 	server.tool(
 		"delete_instance_knowledge",
-		"Delete a knowledge document from your private subscribed instance.",
+		"Delete one knowledge document from your private subscribed instance, removing its search-index entries first. To change a document instead, use update_instance_knowledge; to delete an uploaded file, use delete_instance_file. Required: `instance_id`, `document_id` (the `id` from list_instance_knowledge) and `confirm` set to \"delete_instance_knowledge\"; pass `dry_run: true` to preview. Example: {\"instance_id\":\"<id>\",\"document_id\":\"<doc-id>\",\"confirm\":\"delete_instance_knowledge\"}. Returns `{success:true}`. If the index entries cannot be removed, the document is kept and an error asks you to try again.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -356,7 +356,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 
 	server.tool(
 		"get_instance_memory",
-		"Read a subscribed instance's memory entries (identity, knowledge, preference, skill, context — the console's Knowledge → Memory tab).",
+		"Read all memory entries of a subscribed instance (the console's Knowledge → Memory tab). Call it before write_instance_memory to reuse an existing key, and to find the `key` for delete_instance_memory. Memory holds facts; the instance's standing rules are read with get_instance_instructions. Required: `instance_id` (from my_instances). Example: {\"instance_id\":\"<id>\"}. Returns `{memory:[{key, type, content, updatedAt, source, injected}]}`: `type` is identity, knowledge, preference, skill or context; `source` is agent, user or summary; `injected` says whether the entry is currently included in the agent's prompt.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -405,7 +405,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 
 	server.tool(
 		"delete_instance_memory",
-		"Delete one memory entry (by key) from a subscribed instance.",
+		"Delete one memory entry, by key, from a subscribed instance. To change an entry instead, call write_instance_memory with the same key. Required: `instance_id`, `key` (exactly as returned by get_instance_memory) and `confirm` set to \"delete_instance_memory\"; pass `dry_run: true` to preview. Example: {\"instance_id\":\"<id>\",\"key\":\"tone\",\"confirm\":\"delete_instance_memory\"}. Returns `{success:true}`, also when no entry had that key, so read get_instance_memory if you need to know it existed.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

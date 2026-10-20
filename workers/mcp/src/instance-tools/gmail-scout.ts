@@ -8,7 +8,7 @@ import type { InstanceToolsCtx } from "./shared.js";
 export function registerGmailScoutTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
 	const auth = (token?: string) => tokenFor(token);
-	server.tool("gmail_scout_config_get", "Read this Job Search Scout's read-only Gmail source configuration. No mailbox content is returned.", { token: z.string().optional(), instance_id: z.string() }, async ({ token, instance_id }) => {
+	server.tool("gmail_scout_config_get", "Read a Job Search Scout instance's Gmail source configuration: which mailbox it is pinned to and whether scanning is enabled. Read-only; no mailbox content is returned. Use gmail_scout_status for scan results and counts, gmail_scout_config_set to change the configuration, and email_status for your account-level Gmail connection. Required: `instance_id`. Example: {\"instance_id\":\"<id>\"}. Returns `{config:{id, instanceId, pinnedEmail, enabled, createdAt, updatedAt}}`, or `{config:null}` when the instance has never been configured.", { token: z.string().optional(), instance_id: z.string() }, async ({ token, instance_id }) => {
 		const session = auth(token); if (!session) return authRequired(); const denied = await requirePermission(safetyFor(token), "read", "gmail_scout_config_get", { instance_id }); if (denied) return denied;
 		const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/gmail-scout/config`, session, {}, env) as { error?: string }; return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 	});

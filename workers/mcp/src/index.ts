@@ -404,7 +404,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"get_agent_board_config",
-			"Read the authenticated creator's configurable console kanban board for agents.",
+			"Read the column layout of the creator's own console kanban board, the board that sorts your agent templates by status and visibility. Use update_agent_board_config to change it; an instance's work board is get_instance_board_config. No required arguments. Example: {}. Returns the saved config `{summary, columns:[{id, title, color, empty, statuses, visibilities, excludeStatuses, excludeVisibilities, catchAll}]}`, or `null` when you have never saved one.",
 			{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
 			async ({ token }) => {
 				const sessionToken = this.token(token);
@@ -422,7 +422,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"update_agent_board_config",
-			"Update the authenticated creator's console kanban board. Columns match agent statuses and visibilities in order.",
+			"Replace the column layout of the creator's own console kanban board, which sorts your agent templates into columns by status and visibility, matched in column order. Read the current layout with get_agent_board_config first; an instance's work board is set_instance_board_config. Required: `config` with 1 to 8 `columns`, each needing `id` and `title`. The whole config is replaced. Takes `dry_run`. Example: {\"config\":{\"columns\":[{\"id\":\"live\",\"title\":\"Live\",\"visibilities\":[\"published\"]},{\"id\":\"rest\",\"title\":\"Other\",\"catchAll\":true}]}}. Returns `Updated agent board config.` or an error.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				config: z.object({
@@ -764,7 +764,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"list_agent_repo_files",
-			"List files in an owned agent's GitHub repo. (For an agent's uploaded DO files, use list_agent_files.)",
+			"List the files and folders at one path in the GitHub repo of an agent you own. Use it before read_agent_file or write_agent_file to find paths; for files uploaded into the agent's storage use list_agent_files instead. Required: `agent_id`; optional `path` (a folder, default the repo root). Example: {\"agent_id\":\"my-agent\",\"path\":\"src\"}. Returns one line per entry: `d <path>` for a folder, `f <path> (<size>B)` for a file. It lists one level, not recursively.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string().describe("Agent ID or slug"),
@@ -781,7 +781,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"read_agent_file",
-			"Read a file from an owned agent's GitHub repo.",
+			"Read one file from the GitHub repo of an agent you own. Find paths with list_agent_repo_files; change the file with write_agent_file or batch_write_agent_files. For a file uploaded into the agent's storage, use list_agent_files. Required: `agent_id`, `path` (relative to the repo root). Example: {\"agent_id\":\"my-agent\",\"path\":\"src/index.ts\"}. Returns the file's text content. A folder or a file too large for GitHub's contents API returns an error instead of content.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string().describe("Agent ID or slug"),
@@ -800,7 +800,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"write_agent_file",
-			"Create or overwrite a file in an owned agent's GitHub repo.",
+			"Create or overwrite one file in the GitHub repo of an agent you own, as a commit to it. For several files use batch_write_agent_files; to check the current content first use read_agent_file. Required: `agent_id`, `path`, `content` (the full new file), and `confirm` equal to `write_agent_file`; optional `message` (commit message). Takes `dry_run`. Example: {\"agent_id\":\"my-agent\",\"path\":\"README.md\",\"content\":\"# My agent\\n\",\"confirm\":\"write_agent_file\"}. Returns `Created <path>` or `Updated <path>`, or `outcome: unknown` when GitHub did not answer in time: check with read_agent_file before retrying. A push to main may start the deploy; see agent_deploy_status.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string().describe("Agent ID or slug"),
@@ -837,7 +837,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"batch_write_agent_files",
-			"Create or overwrite multiple files in an owned agent's GitHub repo.",
+			"Create or overwrite several files in the GitHub repo of an agent you own, one commit per file, in the order given. For a single file use write_agent_file. Required: `agent_id`, `files` (array of `{path, content}`), and `confirm` equal to `batch_write_agent_files`; optional `message` (commit message). Takes `dry_run`. Example: {\"agent_id\":\"my-agent\",\"files\":[{\"path\":\"src/index.ts\",\"content\":\"export default {};\\n\"}],\"confirm\":\"batch_write_agent_files\"}. Returns one line per file (`Created`, `Updated`, or `! <path>: <error>`), or `outcome: unknown` with the files already confirmed: check the rest with list_agent_repo_files before retrying.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string().describe("Agent ID or slug"),
@@ -883,7 +883,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"agent_deploy_status",
-			"Check the latest GitHub Actions deploy runs for an agent repo.",
+			"Check the latest GitHub Actions workflow runs for the repo of an agent you own. Use it after write_agent_file, batch_write_agent_files or trigger_agent_deploy to see whether the deploy passed. Required: `agent_id`. Example: {\"agent_id\":\"my-agent\"}. Returns up to the 5 most recent runs, one per line: conclusion or status, workflow name, short commit SHA, last-updated time and the run URL; or `No workflow runs found` when the repo has none.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string().describe("Agent ID or slug"),
@@ -902,7 +902,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"trigger_agent_deploy",
-			"Trigger the GitHub Actions deploy workflow for an owned agent repo.",
+			"Start the `deploy.yml` GitHub Actions workflow on `main` for the repo of an agent you own, without a new commit. A push to main from write_agent_file usually deploys already; use this to redeploy. Required: `agent_id`. Takes `dry_run`. Example: {\"agent_id\":\"my-agent\"}. Returns `Deploy triggered` followed by the latest runs (the same list agent_deploy_status gives), a note that the workflow is still indexing or already queued, or the GitHub error. Poll agent_deploy_status for the result.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string().describe("Agent ID or slug"),
@@ -995,7 +995,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"agent_analytics",
-			"Get usage analytics for an agent",
+			"Get usage analytics for an agent template you own (admins may read any). For your token and cost spend use usage_summary; for the event log use agent_activity. Required: `agent_id` (ID or slug). Example: {\"agent_id\":\"my-agent\"}. Returns `{subscribers, totalExecutions, totalChats, dailyUsage:[{day, count}], recentExecutions:[{id, model, kind, created_at}], funnel:{views, trials, subscribes}}`: `subscribers` counts active instances, `totalExecutions` counts AI model calls, `dailyUsage` covers the last 30 days and `recentExecutions` the last 10 calls.",
 			{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."), agent_id: z.string() },
 			async ({ token, agent_id }) => {
 				const sessionToken = this.token(token);

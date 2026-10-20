@@ -55,7 +55,7 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 
 	server.tool(
 		"clear_instance_messages",
-		"Clear a subscribed instance's chat history (all messages; voice recordings are deleted too). This cannot be undone.",
+		"Delete ALL chat messages of one subscribed instance, with their voice recordings. This cannot be undone. The instance's Durable Object also drops its conversation summaries, extracted facts and message vectors. To remove a single exchange use delete_instance_message; to read the history first use instance_messages. Required: `instance_id` and, for a real clear, `confirm: \"clear_instance_messages\"`; `dry_run: true` previews it without deleting. Needs the destructive scope. Example: {\"instance_id\":\"<id>\",\"confirm\":\"clear_instance_messages\"}. Returns `{deleted, audioKeys}`: the number of messages removed and the recording ids deleted.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

@@ -407,7 +407,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_session_restart",
-		"Restart the coding CLI session on the selected runner node. Use when the CLI is stuck or erroring.",
+		"Restart the coding CLI of one session on its runner machine: the engine is stopped and relaunched under the same session id, keeping its history. Use it when the CLI is stuck or erroring; to stop it for good use coding_session_end, and to replace the session with a new one use coding_session_fresh. Required: `instance_id`; optional `session_id` (from coding_sessions_list, default the first active session). Example: {\"instance_id\":\"<id>\"}. Returns `Session <id> restarted.`, `No active coding session found.`, or an error. Check the result with coding_session_capture.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -619,7 +619,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_sessions_list",
-		"List all coding sessions (active + ended) for an instance.",
+		"List every coding session of a coding instance, active and ended, most recently updated first. Use it to find a `session_id` for coding_session_capture, coding_session_message, coding_session_restart or coding_session_end; for repos use coding_repos_list. Required: `instance_id`. Example: {\"instance_id\":\"<id>\"}. Returns an array of `{id, instanceId, repoId, clientType, status, runnerNode, launchCommand, issueNumber, issueTitle, startedAt, endedAt, updatedAt}`.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),

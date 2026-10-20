@@ -354,7 +354,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"unregister_instance_runtime",
-		"Remove the registered runtime endpoint for one of your private instances.",
+		"Remove every registered runtime endpoint for one private instance: all of its machine (node) registrations and its runtime row. Tasks then have nowhere to run until a runner registers again (running `pags up` re-registers). Use register_instance_runtime to add one and instance_runtime_status to check the current state; forget_runner_node removes one machine across instances. Required: `instance_id` and, for a real unregister, `confirm: \"unregister_instance_runtime\"`; `dry_run: true` previews it. Needs the destructive scope. Example: {\"instance_id\":\"<id>\",\"confirm\":\"unregister_instance_runtime\"}. Returns the text `Runtime unregistered.` or `Error: <reason>`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
@@ -513,7 +513,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"cancel_instance_task",
-		"Cancel a task on the registered local or managed browser runtime for a private instance.",
+		"Cancel one task running on a private instance's live browser runtime. The runtime must be online: an offline runner is reported as an error rather than a cancel that never happened. Use instance_task_events or instance_board to find the task and get_instance_task to inspect it first. Required: `instance_id`, `task_id` and, for a real cancel, `confirm: \"cancel_instance_task\"`; `dry_run: true` previews it without cancelling. Needs the destructive scope. Example: {\"instance_id\":\"<id>\",\"task_id\":\"<task id>\",\"confirm\":\"cancel_instance_task\"}. Returns the runtime's JSON reply for the cancel.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
@@ -548,7 +548,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"instance_task_events",
-		"Read recent events from a private instance's registered browser runtime.",
+		"Read the recent task events of a private instance's browser runtime, newest first. Read-only. Use it to follow what runtime tasks did; get_instance_task reads one task in full and instance_board lists the cards. Required: `instance_id`; optional `limit` (1-500, default 100) and `offset` for paging. Example: {\"instance_id\":\"<id>\",\"limit\":50}. Returns `{events, offset, hasMore, nextOffset}`; pass `nextOffset` as `offset` while `hasMore` is true. With no runner online the events come from the platform's mirrored copy and the reply adds `runtimeUnavailable: true` and `error`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),

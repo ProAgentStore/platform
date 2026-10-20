@@ -533,7 +533,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"cancel_instance",
-		"Cancel your subscription and deactivate one private subscribed instance.",
+		"Cancel your subscription to one private instance and mark the instance canceled. This gives the agent up: it is the irreversible counterpart of pause_instance, which stops it temporarily and resume_instance restores. Required: `instance_id` (ID or slug from my_instances) and, for a real cancel, `confirm: \"cancel_instance\"`; `dry_run: true` previews the call without changing anything. Needs the destructive scope. Example: {\"instance_id\":\"<id>\",\"confirm\":\"cancel_instance\"}. Returns the text `Canceled`, or `Error: <reason>`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

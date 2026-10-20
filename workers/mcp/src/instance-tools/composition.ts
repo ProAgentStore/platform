@@ -28,7 +28,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"list_supervision",
-		"List the agents a supervisor instance oversees (its direct reports). Supervision is how one agent delegates goals to others.",
+		"List the supervision links a supervisor instance holds: the subordinate instances it may delegate goals to (its direct reports). Read-only. Use create_supervision to add a link, set_supervision_enabled to switch one off or on, and delete_supervision to remove one; list_instance_tools shows whether the supervisor's agent can delegate at all. Required: `supervisor_instance_id` (instance ID from my_instances). Example: {\"supervisor_instance_id\":\"<id>\"}. Returns `{supervision:[{id, supervisorInstanceId, subordinateInstanceId, enabled, config, direction, ...}]}`, newest first; `direction` is the standing goal the supervisor holds for that subordinate, or null.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			supervisor_instance_id: z.string(),

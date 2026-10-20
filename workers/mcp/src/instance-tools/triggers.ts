@@ -17,7 +17,7 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"list_instance_triggers",
-		"List webhook, cron, and connector-sync triggers configured on a subscribed private instance.",
+		"List the webhook and cron triggers (including connector syncs) configured on one subscribed instance, newest first. Use it to get a `trigger_id` for set_instance_trigger, run_instance_trigger, list_instance_trigger_events or delete_instance_trigger; add one with create_instance_trigger. Required: `instance_id` (from my_instances); optional `offset` for the next page. Example: {\"instance_id\":\"<id>\"}. Returns `{triggers, offset, hasMore, nextOffset}`, 200 per page; each trigger has id, name, type, action, enabled, schedule, config, lastRunAt, nextRunAt, failureCount, lastError, `unavailable` (why it can never run, or null) and, for webhooks, `webhookUrl`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -119,7 +119,7 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"run_instance_trigger",
-		"Manually run one configured instance trigger now. This can create tasks, add knowledge, or sync a granted connector folder.",
+		"Run one configured trigger now, outside its schedule, doing whatever its action does (create a task, add knowledge, sync a granted connector folder, run a pipeline, and so on). Use preview_instance_trigger to check a trigger without running it, and list_instance_trigger_events afterwards to see the outcome. Required: `trigger_id` (from list_instance_triggers); optional `payload` object for webhook-style actions (defaults to {\"manual\":true}). The instance must be active. Example: {\"trigger_id\":\"<trigger-id>\"}. Returns `{success:true}` once the action has run; a failed action returns an error and is recorded as a failed event.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			trigger_id: z.string(),
@@ -151,7 +151,7 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"list_instance_trigger_events",
-		"Read recent event history for one configured instance trigger, including received/running/succeeded/failed entries.",
+		"Read the recent run history of one trigger, newest first: each received, running, succeeded or failed entry. Use it after run_instance_trigger or a scheduled run to see what happened; list_instance_triggers shows only the latest lastRunAt and lastError, and agent_trace shows the instance's wider timeline. Required: `trigger_id` (from list_instance_triggers); optional `limit` (1-200, default 50). Example: {\"trigger_id\":\"<trigger-id>\",\"limit\":20}. Returns `{events:[{id, trigger_id, instance_id, type, status, message, payload, error, created_at}]}`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			trigger_id: z.string(),
@@ -170,7 +170,7 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"delete_instance_trigger",
-		"Delete a configured instance trigger. This removes its event history and connector sync ledger.",
+		"Delete a configured trigger permanently, together with its event history and connector-sync ledger. To pause a trigger and keep it, use set_instance_trigger with `enabled: false` instead. Required: `trigger_id` (from list_instance_triggers) and `confirm` set to \"delete_instance_trigger\"; pass `dry_run: true` to preview. Example: {\"trigger_id\":\"<trigger-id>\",\"confirm\":\"delete_instance_trigger\"}. Returns `{success:true}`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			trigger_id: z.string(),

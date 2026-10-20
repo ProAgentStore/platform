@@ -150,7 +150,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"list_instance_collections",
-		"List all data collections (tables) for one of your subscribed instances. Shows schema and record counts.",
+		"List the data collections (tables) of one of your subscribed instances, with each one's schema and record count. Use it to find a collection name for query_instance_records or insert_instance_record; for an agent template's collections use list_collections. Required: `instance_id` (from my_instances). Example: {\"instance_id\":\"<id>\"}. Returns `{collections:[{name, fields, recordCount, createdAt, updatedAt}]}`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
@@ -167,7 +167,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"query_instance_records",
-		"Query records from a collection on one of your subscribed instances. Filter by field values, sort, paginate.",
+		"Read records from one collection on one of your subscribed instances, filtered by exact field values, sorted and paged. Find collection names with list_instance_collections; for an agent template use query_records. To change a record use update_instance_record. Required: `instance_id`, `collection`; optional `where` (JSON of field equalities), `order_by`, `limit` (default 50, max 200), `offset`. Example: {\"instance_id\":\"<id>\",\"collection\":\"leads\",\"where\":\"{\\\"status\\\":\\\"new\\\"}\"}. Returns `{records:[{id, collection, data, createdAt, updatedAt}], total}`, where `total` counts every match; page with `offset`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
@@ -196,7 +196,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"insert_instance_record",
-		"Insert a new record into a collection on one of your subscribed instances. Respects the collection's unique/dedup constraints.",
+		"Add one new record to a collection on one of your subscribed instances, checked against the collection's schema and unique/dedup constraints. To change an existing record use update_instance_record; for an agent template use insert_record. Required: `instance_id`, `collection`, `data` (a JSON object string of field values). Example: {\"instance_id\":\"<id>\",\"collection\":\"leads\",\"data\":\"{\\\"name\\\":\\\"Acme\\\",\\\"status\\\":\\\"new\\\"}\"}. Returns the stored record `{id, collection, data, createdAt, updatedAt}`, or `{error}` when it is refused.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
@@ -338,7 +338,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"list_agent_files",
-		"List files stored by an agent (resumes, documents, etc.).",
+		"List the files uploaded into the storage of an agent template you own (resumes, documents and so on). For the agent's GitHub repo files use list_agent_repo_files; for one subscribed instance's files use list_instance_files; to add one use upload_agent_file. Required: `agent_id`; optional `tags` (comma-separated filter). Example: {\"agent_id\":\"my-agent\",\"tags\":\"resume\"}. Returns `{files:[{id, name, path, mimeType, size, tags, ...}]}` with each file's metadata, not its content.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
@@ -393,7 +393,7 @@ export function registerStorageTools(
 
 	server.tool(
 		"search_agent_knowledge",
-		"Semantic search across an agent's knowledge base, conversation history, and files.",
+		"Search an agent template you own by meaning across its knowledge base, conversation history, files and collection records. For one subscribed instance use search_instance_knowledge; to list documents by title use list_knowledge. Required: `agent_id`, `query` (natural language); optional `top_k` (default 5). Example: {\"agent_id\":\"my-agent\",\"query\":\"refund policy\"}. Returns `{results:[{id, score, text, sourceType, sourceId}]}`, best match first, where `sourceType` is knowledge, message, file, collection or repo.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			agent_id: z.string().describe("Agent ID or slug"),
