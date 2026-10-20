@@ -30,17 +30,19 @@ The picker is backed by `GET /v1/instances/:id/runner-node`, which returns the c
 ```json
 {
   "runnerNode": "my-laptop",
+  "machineId": "3901c9c4-004f-435e-bfc5-0b87b7ac5173",
+  "displayName": "rl-laptop",
   "nodes": ["my-laptop", "desktop"],
   "nodesDetail": [
-    { "node": "my-laptop", "connected": true,  "nodeOnline": true },
-    { "node": "desktop",   "connected": false, "nodeOnline": true }
+    { "displayName": "rl-laptop", "machineId": "3901c9c4-…", "node": "my-laptop", "connected": true,  "nodeOnline": true },
+    { "displayName": null,        "machineId": "8de74159-…", "node": "desktop",   "connected": false, "nodeOnline": true }
   ]
 }
 ```
 
 `connected` is *this agent's own* relay socket. `nodeOnline` is machine-level: whether that hostname holds a live socket for **any** of your instances. Reporting both is what lets the console distinguish "the machine is off" from "the machine is on but this agent never attached to it" — two problems with different fixes.
 
-`PUT /v1/instances/:id/runner-node` with `{"runnerNode": "my-laptop"}` pins; `{"runnerNode": null}` clears the pin. The pin is stored as `config.runnerNode` on the instance and written as a single-key patch, so saving it cannot clobber a settings or behaviour change made from another tab.
+`PUT /v1/instances/:id/runner-node` with `{"runnerNode": "rl-laptop"}` pins — the value may be a machine's display name, its machine id, or a hostname exactly one of your machines registered under; `{"runnerNode": null}` clears the pin. The pin is stored as `config.runnerMachineId` (see [Pins name machines](#pins-name-machines-not-hostnames)) and written as a single-key patch, so saving it cannot clobber a settings or behaviour change made from another tab. `runnerNode` in the reply is the hostname that machine answers to now.
 
 ## A Machine Is Not Its Hostname
 
@@ -53,6 +55,16 @@ The hostname keeps its job — it is the routing key and it names the relay Dura
 - **Unknown identity fails closed.** Registrations from before this landed — and from any CLI that does not send an id — carry none, so nothing is merged and nothing heals. Those pins behave exactly as they always have, and the console names the dead pin and the machine that *is* up instead of prescribing `pags up` to someone already running it.
 
 Rows written under an old hostname are adopted the next time that machine registers while remembering that name, which is how a pin stranded by a rename reconnects without you renaming anything.
+
+## Pins Name Machines, Not Hostnames
+
+Since #1250 a pin is the machine's **stable id** (`config.runnerMachineId`), never a hostname. macOS renames a machine per network (`Mac`, `Mac.modem`, `RLs-MacBook-Air.local`…), and before this one laptop's instances were pinned under four of its names.
+
+- **A hostname change never moves a pin.** Routing resolves the pinned id to the hostname of the machine's freshest registration, so when macOS renames the machine, the pin follows it. A pinned machine with no registration left reads as offline, never as automatic.
+- **Owner-set display names.** Name each machine (`rl-laptop`, `mac-mini`, …) on its machine page in the console or with the MCP tool `set_machine_policy` (`display_name`). A name is unique across your machines, case-insensitively — a second machine asking for it is refused with 409 — and a blank clears it. Renaming a machine never touches a pin. Every runner tool and the console show the name first, with hostnames as aliases.
+- **Pinning by name.** `set_instance_runner_node` (and the picker) accept a display name, a machine id, or a hostname of exactly one machine. A hostname two machines have used, one registered only by a CLI older than 0.4.40 (no machine id), or one no machine registered under is refused with the reason, and nothing is saved.
+- **Migrated pins.** Every pin set before #1250 whose hostname named exactly one machine id was rewritten to that id (migration 0262). Any that could not be are listed by `list_runner_nodes` as `unresolvedPins`, and `instance_runner_node` flags one with `legacy: true`; they keep routing by hostname until re-pinned by name.
+- **The CLI.** `/v1/instances/my/instances` still sends `config.runnerNode` — now the hostname the pinned machine answers to — so every CLI keeps working, plus `config.runnerMachineId`, which CLI 0.4.164+ compares with its own id.
 
 ## Routing Follows The Live Socket
 
