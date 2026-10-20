@@ -34,6 +34,7 @@ import type { Env } from "../types.js";
 import { ownerDirectivesBlock } from "./coding-owner-directives.js";
 import { activeConstraints, constraintSources, constraintsBlock, type ScopeConstraint, scopeRefusalNote, screenScopedInstruction } from "./coding-scope-constraints.js";
 import { CompletionEvidence, evidenceNote, finishRefusalNote, judgeCompletion } from "./coding-completion-evidence.js";
+import { describeWriteRefusal } from "./write-scope-refusals.js";
 
 /**
  * The coding orchestrator's brain loop.
@@ -304,6 +305,11 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			if (snap.cancelled) return { outcome: "cancelled", detail: snap.stopReason, steps: step, transcript };
 		}
 		evidence.observe(snap.pane);
+		// A write the scope guard refused (#1252) is told to the Pilot, in its step log, and to the owner.
+		for (const r of evidence.takeRefusals()) {
+			actionLog.push(describeWriteRefusal(r));
+			await deps.onEvent?.("write_refused", describeWriteRefusal(r), r);
+		}
 
 		// THE ENGINE'S OWN VERDICT ON THE LAST TURN (#545), read BEFORE the brain is asked what to
 		// do next — so the note lands in the step log this decision renders, not the one after it.

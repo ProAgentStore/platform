@@ -26,10 +26,11 @@
  *  - `gh-guard-partial+acts-observed-halt` — some live sessions carry the `gh` refusal, some do not.
  *  - `gh-guard+acts-observed-halt` — every live session carries it.
  *
- * Even the strongest value is not "cannot happen", and the note says so. The guard is a `PATH`
- * shim: an absolute `/opt/homebrew/bin/gh` skips it, `git push` is not gated at all because the
- * remotes are SSH and there is no credential to withhold, and `gh api graphql` is not classified.
- * Those gaps arrive from the runner rather than being restated here, so the two cannot drift.
+ * Even the strongest value is not "cannot happen", and the note says so. The `gh` guard is a `PATH`
+ * shim: an absolute `/opt/homebrew/bin/gh` skips it, and `gh api graphql` is not classified. A
+ * runner from CLI 0.4.166 also gates `git push` in git's own transport (#1252); an older one reports
+ * "`git push` is not gated" in its gaps, and the note follows what each machine reported. Those gaps
+ * arrive from the runner rather than being restated here, so the two cannot drift.
  */
 
 /** What one live session's machine said about its guard. Shape vendored from the runner (#679). */
@@ -81,10 +82,12 @@ export function writeEnforcementReport(writeScope: string[], tracked: Array<{ gh
 		};
 	}
 	const scope = guarded.length === sessionsTracked;
+	// A runner without the push guard (#1252) says so in its own gaps; one with it does not.
+	const pushGated = !gaps.some((g) => g.includes("`git push` is not gated"));
 	return {
 		enforcement: scope ? "gh-guard+acts-observed-halt" : "gh-guard-partial+acts-observed-halt",
 		enforcementNote:
-			`A \`gh\` write naming a repository outside its own session's scope is REFUSED before it runs, on ${guarded.length} of ${sessionsTracked} live session(s)` +
+			`A \`gh\` write${pushGated ? " or a `git push`" : ""} naming a repository outside its own session's scope is REFUSED before it runs, on ${guarded.length} of ${sessionsTracked} live session(s)` +
 			(scope ? "" : ` — the rest are unguarded because ${reasons.join("; ")}`) +
 			". A write that gets past that is still detected from the act stream and halts the run, after it has landed. What the guard does not stop: " +
 			(gaps.length ? gaps.join(" ") : "(the machine reported no gap list)"),

@@ -32,6 +32,7 @@
 import { clipMarked } from "./clip-marked.js";
 import { type EngineToolCall, toolCallsForSnapshot } from "./engine-tool-calls.js";
 import { testInvocations, type TestInvocation } from "./coding-scope-constraints.js";
+import { type WriteRefusal, writeRefusalsIn } from "./write-scope-refusals.js";
 
 type Observed =
 	| { kind: "edit"; seq: number; path: string | null }
@@ -58,7 +59,9 @@ type Observed =
 	 * `playwright test --list`). `nav` is the URL a navigate went to, `closes` marks a close, and `page` is
 	 * filled by `observe()`: the page the browser was on when the act happened.
 	 */
-	| { kind: "browser"; seq: number; ok: boolean | null; observes: boolean; nav?: string | null; closes?: boolean; page?: string | null };
+	| { kind: "browser"; seq: number; ok: boolean | null; observes: boolean; nav?: string | null; closes?: boolean; page?: string | null }
+	/** A write the runner's write-scope guard refused before anything was sent (#1252), named by its own line. */
+	| ({ kind: "write_refused"; seq: number } & WriteRefusal);
 
 /** The run's observed record. Held by the workflow across rounds; fed one snapshot pane at a time. */
 export class CompletionEvidence {
@@ -71,6 +74,16 @@ export class CompletionEvidence {
 	gap = false;
 	/** The page the browser is on, as far as this run's own calls show (#1019). Null: none, or unknown. */
 	private page: string | null = null;
+	/** How many write refusals {@link takeRefusals} has already handed out. */
+	private refusalsTaken = 0;
+
+	/** Write-scope refusals (#1252) observed since the last call — so each is reported exactly once. */
+	takeRefusals(): WriteRefusal[] {
+		const all = refusalsOf(this.observed);
+		const fresh = all.slice(this.refusalsTaken);
+		this.refusalsTaken = all.length;
+		return fresh;
+	}
 
 	observe(pane: string | undefined): void {
 		if (!pane) return;
@@ -264,6 +277,8 @@ function classify(call: EngineToolCall, seq: number): Observed[] | null {
 	else if (call.inputCut && !/^From\s/m.test(call.output ?? "") && PUSH_REF_UPDATE.test(call.output ?? "") && pushEffect(call) === "updated") out.push({ kind: "push", seq: at(command.length), ok: call.ok, effect: "updated", commandCut: true });
 	const ci = last(/\bgh\s+(?:run\s+(?:view|watch|list)|pr\s+checks)\b/);
 	if (ci >= 0) out.push({ kind: "ci", seq: at(ci), ok: call.ok, output: call.output });
+	// The guard's own line names what it refused, whatever command reached it — a script, a temp clone (#1252).
+	for (const r of writeRefusalsIn(call.output)) out.push({ kind: "write_refused", seq: at(command.length), ...r });
 	return out;
 }
 
@@ -353,6 +368,12 @@ export interface CompletionJudgement {
 	correctable: ClaimVerdict[];
 	/** The record's own limits, stated once. */
 	recordNote: string | null;
+	/** Writes the write-scope guard refused in this run (#1252) — stated whatever the claim. */
+	refusals: WriteRefusal[];
+}
+
+function refusalsOf(obs: readonly Observed[]): WriteRefusal[] {
+	return obs.filter((o): o is Extract<Observed, { kind: "write_refused" }> => o.kind === "write_refused").map(({ how, repo }) => ({ how, repo }));
 }
 
 /** Judge a `finish(done)` detail against the run's record. Pure. */
@@ -476,7 +497,7 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 
 	const correctable = verdicts.filter((v) => v.status === "contradicted" && (v.claim === "tests_pass" || v.claim === "full_suite" || v.claim === "pushed"));
 	const recordNote = !verdicts.length ? null : !ev.sawCalls ? "the engine's tool calls were not observable" : ev.gap ? "some tool calls scrolled out between snapshots, so the record may be incomplete" : null;
-	return { verdicts, correctable, recordNote };
+	return { verdicts, correctable, recordNote, refusals: refusalsOf(obs) };
 }
 
 /**
@@ -511,10 +532,11 @@ function short(command: string): string {
 
 /** The note appended to a finish detail: each claim and what the record shows. Empty when no claim was made. */
 export function evidenceNote(j: CompletionJudgement): string {
-	if (!j.verdicts.length) return "";
+	if (!j.verdicts.length && !j.refusals.length) return "";
 	const word = { supported: "verified", unverified: "UNVERIFIED", contradicted: "CONTRADICTED" } as const;
 	const label = { tests_pass: "tests pass", full_suite: "full suite", test_count: "test count", pushed: "pushed", external_ci: "CI/deploy", rendered: "rendered in a browser" } as const;
 	const lines = j.verdicts.map((v) => `- ${label[v.claim]}: ${word[v.status]} — ${v.why}`);
+	for (const r of j.refusals) lines.push(`- write scope: REFUSED — \`${r.how}\` to ${r.repo}, not a registered repository; nothing was written`);
 	if (j.recordNote) lines.push(`- note: ${j.recordNote}`);
 	return `Evidence check (the platform's reading of this run's own tool calls):\n${lines.join("\n")}`;
 }

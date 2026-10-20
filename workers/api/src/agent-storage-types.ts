@@ -171,6 +171,7 @@ export interface ActivityEvent {
 		| "summary.generated"
 		| "email.confirmation_link_found"
 		| "runner.attach"
+		| "write.refused"
 		| "error";
 	agentId: string;
 	userId?: string;

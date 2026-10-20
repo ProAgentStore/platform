@@ -54,6 +54,15 @@ describe("writeEnforcementReport", () => {
 		expect(r.enforcementNote).toContain("predates the guard");
 	});
 
+	it("says `git push` is refused only for a machine that does not report it as a gap (#1252)", () => {
+		// A CLI before 0.4.166 lists "`git push` is not gated"; it must not be credited with the push guard.
+		expect(writeEnforcementReport(["o/r"], [guarded]).enforcementNote).toMatch(/^A `gh` write naming/);
+		const pushGuarded = { ghGuard: { installed: true, scope: ["o/r"], gaps: ["A PATH shim is bypassable.", "An https remote with an explicit `remote.<name>.pushurl` skips git's pushInsteadOf rewrite."] } };
+		const r = writeEnforcementReport(["o/r"], [pushGuarded]);
+		expect(r.enforcementNote).toMatch(/^A `gh` write or a `git push` naming a repository outside its own session's scope is REFUSED/);
+		expect(r.enforcementNote).toContain("pushurl");
+	});
+
 	it("carries the runner's OWN gap list rather than restating it", () => {
 		// Two lists of what is still possible, in two repos, is how one of them goes stale while
 		// still being displayed.
