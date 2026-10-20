@@ -17,7 +17,7 @@ env:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned from ubuntu-latest, see #1266 (ubuntu-26.04 broke Playwright/chromium)
     # An overall bound (#1047): a full run takes ~17 minutes, and without one a hung step
     # blocks until GitHub's six-hour default.
     timeout-minutes: 60

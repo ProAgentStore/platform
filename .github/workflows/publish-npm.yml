@@ -14,7 +14,7 @@ env:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned from ubuntu-latest, see #1266 (ubuntu-26.04 broke Playwright/chromium)
     permissions:
       contents: read
       id-token: write
