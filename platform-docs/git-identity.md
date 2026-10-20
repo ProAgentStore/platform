@@ -130,3 +130,38 @@ greeting. The greeting on stderr is the answer, not the exit code.
 *Status: this policy was recorded against issue #684, which reported one machine whose `github.com`
 resolved to a repository deploy key. The diagnostics behaviour described here is implemented; the
 choice of HTTPS-as-default is a project decision and can be amended here.*
+
+## Where an agent may push
+
+Identity decides whether GitHub *can* accept a push. Separately, a coding session may only push to
+the repositories registered with its agent (#1252). From CLI 0.4.166 the runner enforces this inside
+git itself, in the coding engine's environment only. Your git config is not changed.
+
+- **ssh** (including host aliases such as `github-personal`): git runs its ssh through a wrapper.
+  The wrapper refuses to push to any repository that is not registered, and hands everything else
+  (fetches, registered pushes) to your own ssh unchanged.
+- **https** to github.com: pushes go through a helper that checks the repository the same way, then
+  uses git's normal https transport.
+
+This covers tags, `--force`, `--mirror`, `--no-verify`, clones anywhere on disk (a temp clone in
+`/tmp` included), and git called by absolute path. A refused push stops before anything is sent, and
+prints:
+
+```
+pags: refused write-scope: git push to <owner/repo> — this agent session is registered for: …
+```
+
+The refusal is recorded:
+
+- `instance_activity` lists it as `write.refused`.
+- `agent_trace` has a `write.refused` event for it.
+- The run's evidence check lists it.
+
+To let an agent push to a repository, register that repository with the agent. `gh` writes are
+checked against the same list by the `gh` guard.
+
+What it does not stop is reported by `coding_diagnostics`:
+
+- A command that unsets `GIT_SSH_COMMAND` or `GIT_CONFIG_COUNT` for itself.
+- An https remote with an explicit `remote.<name>.pushurl`.
+- Runners older than 0.4.166. Update them with `npm i -g @proagentstore/cli`.
