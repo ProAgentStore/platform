@@ -72,6 +72,27 @@ describe("the gh guard refuses a write outside the session's scope", () => {
 		expect(r.code).toBe(GH_REFUSED_EXIT);
 		expect(r.stderr).toContain("someone/else");
 	});
+
+	it("refuses the IMPLICIT post a body makes: `gh api <path> -f …` with no --method (#1252)", () => {
+		for (const args of [
+			["api", "repos/someone/else/issues", "-f", "title=x"],
+			["api", "-F", "body=@b.md", "repos/someone/else/issues/1/comments"], // a field value is never the endpoint
+			["api", "--input", "tag.json", "/repos/someone/else/git/refs"],
+			["api", "-H", "Accept: application/json", "--raw-field=ref=v1", "repos/someone/else/git/refs"],
+		]) {
+			const r = runGh(SCOPE, args);
+			expect(r.code, args.join(" ")).toBe(GH_REFUSED_EXIT);
+			expect(r.stderr).toContain("someone/else");
+		}
+		// A read with a query parameter stays a read; and the session's own repo is never refused.
+		expect(runGh(SCOPE, ["api", "repos/someone/else/issues", "-X", "GET", "-f", "state=open"]).code).toBe(0);
+		expect(runGh(SCOPE, ["api", "repos/ProAgentStore/platform/issues", "-f", "title=x"]).code).toBe(0);
+	});
+
+	it("`-f` outside `gh api` is a flag with no value: `gh pr create -f --repo <other>` is still refused", () => {
+		const r = runGh(SCOPE, ["pr", "create", "-f", "--repo", "someone/else"]);
+		expect(r.code).toBe(GH_REFUSED_EXIT);
+	});
 });
 
 describe("the gh guard lets everything else through untouched", () => {
@@ -148,7 +169,8 @@ describe("the guard fails OPEN, and says which way it failed", () => {
 	it("reports the gaps it does NOT close, so no surface can overstate it", () => {
 		const report = ghGuardStatus(SCOPE, { PATH: binDir }, root);
 		expect(report).toMatchObject({ installed: true, scope: ["proagentstore/platform"] });
-		expect(report.gaps.join(" ")).toContain("git push");
+		// `git push` is no longer one: the push guard gates it in git's transport (#1252).
+		expect(report.gaps.join(" ")).not.toContain("`git push` is not gated");
 		expect(report.gaps.join(" ")).toContain("bypassable");
 		expect(report.gaps.join(" ")).toContain("graphql");
 		// The fourth is the one a reader would otherwise infer the opposite of, because the guard
@@ -156,7 +178,7 @@ describe("the guard fails OPEN, and says which way it failed", () => {
 		// not checked at all. Every gap the shim leaves has to be in this list, since
 		// `coding_diagnostics` reports it verbatim and nothing downstream re-derives it.
 		expect(report.gaps.join(" ")).toContain("no `--repo`");
-		expect(report.gaps).toHaveLength(4);
+		expect(report.gaps).toHaveLength(3);
 	});
 });
 

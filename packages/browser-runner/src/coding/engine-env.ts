@@ -8,12 +8,13 @@
  *
  *  1. {@link mergeEnv} — the platform's overlay over the machine's, where empty means REMOVE, and
  *     never the platform's own credentials ({@link PLATFORM_CREDENTIAL_ENV}, #1163).
- *  2. {@link engineSpawnEnv} — that, plus the `gh` guard ahead of the real binary on `PATH`, and the
- *     `git` stash guard (#1021) ahead of both.
+ *  2. {@link engineSpawnEnv} — that, plus the `gh` guard ahead of the real binary on `PATH`, the
+ *     `git` stash guard (#1021) ahead of both, and the push guard (#1252) in git's transport.
  */
 
-import { ghGuardEnv } from "./gh-guard.js";
+import { type GhGuardReport, ghGuardEnv, ghGuardStatus } from "./gh-guard.js";
 import { gitGuardEnv } from "./git-guard.js";
+import { PUSH_GUARD_GAPS, pushGuardEnv } from "./push-guard.js";
 
 /**
  * The platform's own credentials, which no engine may inherit (#1163).
@@ -64,7 +65,24 @@ export function mergeEnv(base: NodeJS.ProcessEnv, overlay: Record<string, string
  * `ghGuardEnv` returns its input untouched whenever the guard cannot be installed, so this is safe
  * in front of every spawn: the failure mode is the machine's own `gh`, never a missing one.
  */
-export function engineSpawnEnv(overlay: Record<string, string> | undefined, ghScope: readonly string[] | undefined, ghGuardRoot?: string, gitGuardRoot?: string): NodeJS.ProcessEnv {
+export function engineSpawnEnv(
+	overlay: Record<string, string> | undefined,
+	ghScope: readonly string[] | undefined,
+	ghGuardRoot?: string,
+	gitGuardRoot?: string,
+	pushGuardRoot?: string,
+): NodeJS.ProcessEnv {
 	// The git guard needs no scope: no session may restore or discard the stash by position (#1021).
-	return gitGuardEnv(ghGuardEnv(mergeEnv(process.env, overlay), ghScope, ghGuardRoot), gitGuardRoot);
+	// The push guard takes the same scope as `gh`'s, applied where git writes (#1252).
+	return gitGuardEnv(pushGuardEnv(ghGuardEnv(mergeEnv(process.env, overlay), ghScope, ghGuardRoot), ghScope, pushGuardRoot), gitGuardRoot);
+}
+
+/**
+ * What the write guards did for a session with `scope`: the `gh` guard's report, plus the push guard's
+ * gaps when a scope was guarded — the two share one scope, and `coding_diagnostics` reports the gaps
+ * verbatim, so both lists must reach it (#1252).
+ */
+export function writeGuardReport(scope: readonly string[] | undefined, env: NodeJS.ProcessEnv, ghGuardRoot?: string): GhGuardReport {
+	const report = ghGuardStatus(scope, env, ghGuardRoot);
+	return report.installed ? { ...report, gaps: [...report.gaps, ...PUSH_GUARD_GAPS] } : report;
 }

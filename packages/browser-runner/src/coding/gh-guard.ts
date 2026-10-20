@@ -42,9 +42,8 @@
  *
  * ── What remains open, and is stated rather than hidden
  *
- *  1. **`git push` is not gated at all.** Remotes here are SSH (`git@github-personal:…`), and
- *     `repo.ts` says why in code: *"Only https carries a credential: git ignores userinfo on an
- *     ssh URL"*. There is no token to withhold, so no credential decision can reach it.
+ *  1. **`git push` is gated elsewhere** — in git's own transport, by `push-guard.ts` (#1252), with
+ *     its own gaps (`PUSH_GUARD_GAPS`) reported beside these.
  *  2. **A `PATH` shim is bypassable.** `/opt/homebrew/bin/gh` skips it entirely, and the Engine
  *     has been observed re-exporting its own environment (`export GH_CONFIG_DIR=…`). This raises
  *     the cost of a wrong-repo write; it does not make one impossible.
@@ -52,7 +51,7 @@
  *     deciding that would mean pattern-matching free prose — the judgement this codebase refuses
  *     to make in a gate, because a false positive that halts a run costs more than the finding.
  *     Explicit `gh api --method POST|PATCH|PUT|DELETE` with a `/repos/{owner}/{repo}` path IS
- *     classified.
+ *     classified, and so is the implicit POST a body (`-f`/`-F`/`--input`) makes (#1252).
  *  4. **A write that names no repository is not gated.** `gh` then resolves the target from the
  *     working directory's remote, which the shim cannot see without running git itself. In a
  *     session that is the workdir the platform registered — but the Engine has a shell, so `cd`
@@ -60,7 +59,7 @@
  *     unqualified write was rejected: it is the ordinary shape of `gh pr create` inside the repo
  *     the session owns, so it would break the common case to narrow an uncommon one.
  *
- * All three are reported through {@link ghGuardReport} → `coding_diagnostics`, which is where the
+ * The open ones are reported through {@link ghGuardReport} → `coding_diagnostics`, which is where the
  * `enforcement: "acts-observed-halt"` value they replace used to be. A gate that overstates itself
  * is worse than no gate.
  */
@@ -162,15 +161,25 @@ export function renderGhShim(opts: { realGh: string; scope: readonly string[] })
 REAL=${sq(opts.realGh)}
 SCOPE=${sq(scope)}
 
-cmd=""; sub=""; repo=""; method=""; want=""
+cmd=""; sub=""; repo=""; method=""; want=""; fields=0
 for a in "$@"; do
   if [ "$want" = "repo" ]; then repo="$a"; want=""; continue; fi
   if [ "$want" = "method" ]; then method="$a"; want=""; continue; fi
+  if [ "$want" = "skip" ]; then want=""; continue; fi
   case "$a" in
     --repo=*) repo=\${a#--repo=} ;;
     --method=*) method=\${a#--method=} ;;
     -R|--repo) want="repo" ;;
     -X|--method) want="method" ;;
+    # \`gh api\` sends a request body with these, and a body makes it a POST (#1252). Their value is
+    # never the endpoint, so it is skipped rather than read as one. \`gh api\` only: elsewhere \`-f\`
+    # is a flag with no value (\`gh pr create -f\` is --fill), and skipping would swallow \`--repo\`.
+    -f|-F|--field|--raw-field|--input|-H|--header|-q|--jq|-t|--template|--hostname|--cache|-p|--preview)
+      if [ "$cmd" = "api" ]; then
+        case "$a" in -f|-F|--field|--raw-field|--input) fields=1 ;; esac
+        want="skip"
+      fi ;;
+    --field=*|--raw-field=*|--input=*) fields=1 ;;
     -*) : ;;
     *) if [ -z "$cmd" ]; then cmd="$a"; elif [ -z "$sub" ]; then sub="$a"; fi ;;
   esac
@@ -184,6 +193,7 @@ esac
 # comes out of the /repos/{owner}/{repo} path. \`gh api graphql\` is NOT classified — see the module.
 if [ "$cmd" = "api" ]; then
   m=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
+  if [ -z "$m" ] && [ "$fields" = "1" ]; then m=POST; fi
   case "$m" in POST|PATCH|PUT|DELETE) write=1 ;; esac
   if [ -z "$repo" ]; then
     repo=$(printf '%s' "$sub" | sed -n 's|^/\\{0,1\\}repos/\\([^/]*\\)/\\([^/]*\\).*|\\1/\\2|p')
@@ -226,7 +236,6 @@ export interface GhGuardReport {
 
 /** The gaps, in one place, so the runner and `coding_diagnostics` cannot drift apart. */
 export const GH_GUARD_GAPS: readonly string[] = [
-	"`git push` is not gated — this machine's remotes are SSH, so there is no credential to withhold.",
 	"A PATH shim is bypassable: invoking `/opt/homebrew/bin/gh` by absolute path, or re-exporting PATH, skips it.",
 	"`gh api graphql` is not classified — a mutation can travel inside the query text.",
 	"A write with no `--repo` is not gated: gh resolves the target from the working directory, so a `cd` into another checkout on this machine reaches it.",

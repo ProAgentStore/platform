@@ -7,9 +7,9 @@ import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
 import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
-import { engineSpawnEnv, mergeEnv } from "./engine-env.js";
+import { engineSpawnEnv, mergeEnv, writeGuardReport } from "./engine-env.js";
 import { resolveEngineSpawn } from "./engine-spawn.js";
-import { type GhGuardReport, ghGuardStatus } from "./gh-guard.js";
+import type { GhGuardReport } from "./gh-guard.js";
 
 import { type ClientType, handlerFor } from "./handlers.js";
 import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
@@ -304,9 +304,9 @@ export class HeadlessSession {
 		return engineSpawnEnv(this.config.env, this.config.ghScope, this.config.ghGuardRoot);
 	}
 
-	/** What the `gh` guard actually did on this machine (#679) — reported, never assumed. */
+	/** What the write guards actually did on this machine (#679, #1252) — reported, never assumed. */
 	get ghGuard(): GhGuardReport {
-		return ghGuardStatus(this.config.ghScope, mergeEnv(process.env, this.config.env), this.config.ghGuardRoot);
+		return writeGuardReport(this.config.ghScope, mergeEnv(process.env, this.config.env), this.config.ghGuardRoot);
 	}
 
 	/** Whether this process is running through structured events or plain stdout (#731). */
