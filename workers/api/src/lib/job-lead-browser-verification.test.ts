@@ -730,7 +730,7 @@ describe("naming a lead from the browser's reading (#1257)", () => {
 		expect(planBrowserVerificationOutcome(rec, { outcome: "active", attempt: 1, receiptId: "r", exhausted: false, expectedVersion: 1, verifiedTitle: "Platform Engineer", verifiedCompany: "Acme" })).toMatchObject({ ok: false, stale: true });
 		// through the real route too: a stale request is a 409 and the stored lead keeps its (empty) names
 		unname();
-		const res = await env.AGENT.get("s1").fetch(new Request("https://agent/job-leads/lead-1/browser-verification", { method: "POST", body: JSON.stringify({ outcome: "active", attempt: 1, receipt_id: "r", exhausted: false, expected_version: 5, verified_title: "Platform Engineer", verified_company: "Acme" }) }));
+		const res = await env.AGENT.get(env.AGENT.idFromName("s1")).fetch(new Request("https://agent/job-leads/lead-1/browser-verification", { method: "POST", body: JSON.stringify({ outcome: "active", attempt: 1, receipt_id: "r", exhausted: false, expected_version: 5, verified_title: "Platform Engineer", verified_company: "Acme" }) }));
 		expect(res.status).toBe(409);
 		expect(lead()).toMatchObject({ title: null, company: null, status: "awaiting_browser_verification" });
 	});
