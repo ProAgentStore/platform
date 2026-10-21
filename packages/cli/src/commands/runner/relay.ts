@@ -609,6 +609,19 @@ export interface RelaySocketHandle {
 export const RTT_PROBE_PREFIX = "rtt:";
 export const RTT_ECHO_PREFIX = "rtt-echo:";
 
+/**
+ * Half-open detection (#1168). A socket the network dropped silently (NAT timeout, Wi-Fi change) never fires `onclose`, so
+ * nothing would ever reconnect it while the heartbeat kept the machine looking fresh. Any inbound frame proves the path is
+ * alive; after `idleMs` without one the CLI sends its own echo probe, and no answer within `probeTimeoutMs` means the socket is
+ * dead and is replaced. A quiet-but-healthy socket costs one tiny frame per `idleMs`.
+ */
+export interface RelayLiveness {
+	idleMs: number;
+	probeTimeoutMs: number;
+	checkEveryMs: number;
+}
+export const DEFAULT_RELAY_LIVENESS: RelayLiveness = { idleMs: 60_000, probeTimeoutMs: 10_000, checkEveryMs: 15_000 };
+
 export function openRelaySocket(
 	instanceId: string,
 	wsBase: string,
@@ -640,6 +653,7 @@ export function openRelaySocket(
 	 * capabilities name the routes it needs (`route-policy.ts`). Absent: nothing is refused.
 	 */
 	routeRefusal: (method: string, path: string, body?: unknown) => string | null = () => null,
+	liveness: RelayLiveness = DEFAULT_RELAY_LIVENESS,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -648,6 +662,66 @@ export function openRelaySocket(
 	let socket: WebSocket | null = null;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	const rttWaiters = new Map<string, (echoedAt: number) => void>();
+	let lastInboundAt = Date.now();
+	let watchdog: ReturnType<typeof setInterval> | null = null;
+
+	const stopWatchdog = () => {
+		if (watchdog) { clearInterval(watchdog); watchdog = null; }
+	};
+
+	const scheduleReconnect = (message: string) => {
+		reconnecting = true;
+		writeLine(`${message} — reconnecting in ${Math.round(backoffMs / 1000)}s`);
+		retryTimer = setTimeout(() => {
+			reconnecting = false;
+			connect();
+		}, backoffMs);
+		backoffMs = Math.min(backoffMs * 2, 30_000);
+	};
+
+	/** One echo probe through `ws`: the round trip in ms, or null when it could not be sent or nothing came back in time. */
+	const probe = (ws: WebSocket, timeoutMs: number): Promise<number | null> => {
+		const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		const sentAt = Date.now();
+		return new Promise<number | null>((resolveRtt) => {
+			const timer = setTimeout(() => { rttWaiters.delete(id); resolveRtt(null); }, timeoutMs);
+			timer.unref?.();
+			rttWaiters.set(id, (echoedAt) => { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(echoedAt - sentAt); });
+			try { ws.send(`${RTT_PROBE_PREFIX}${id}`); } catch { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(null); }
+		});
+	};
+
+	/** Drop a socket the network has stopped carrying and open a new one. Its own `onclose` may never fire, so it is detached first. */
+	const recycle = (ws: WebSocket, silentMs: number) => {
+		stopWatchdog();
+		ws.onopen = null;
+		ws.onmessage = null;
+		ws.onclose = null;
+		ws.onerror = null;
+		try { ws.close(); } catch { /* already gone */ }
+		if (socket === ws) socket = null;
+		if (closed || reconnecting) return;
+		scheduleReconnect(`Relay silent: ${instanceId.slice(0, 8)}… sent nothing for ${Math.round(silentMs / 1000)}s and did not answer a probe (half-open socket)`);
+	};
+
+	const startWatchdog = (ws: WebSocket) => {
+		stopWatchdog();
+		let probing = false;
+		watchdog = setInterval(() => {
+			if (closed || socket !== ws || probing) return;
+			const silentMs = Date.now() - lastInboundAt;
+			if (silentMs < liveness.idleMs) return;
+			probing = true;
+			const startedAt = Date.now();
+			void probe(ws, liveness.probeTimeoutMs).then((rtt) => {
+				probing = false;
+				// Anything that arrived while the probe was out is proof of life, whether or not it was the echo.
+				if (closed || socket !== ws || rtt !== null || lastInboundAt >= startedAt) return;
+				recycle(ws, Date.now() - lastInboundAt);
+			});
+		}, liveness.checkEveryMs);
+		watchdog.unref?.();
+	};
 
 	const connect = async () => {
 		if (closed) return;
@@ -681,6 +755,8 @@ export function openRelaySocket(
 			backoffMs = 1000;
 			const reconnect = opened;
 			opened = true;
+			lastInboundAt = Date.now();
+			startWatchdog(ws);
 			writeLine(`Relay connected: ${instanceId.slice(0, 8)}…`);
 			// Fire-and-forget: a failing re-registration must not take the socket down with it —
 			// it is retried on the next reconnect, and reported through the status line meanwhile.
@@ -688,6 +764,7 @@ export function openRelaySocket(
 		};
 
 		ws.onmessage = async (event) => {
+			lastInboundAt = Date.now();
 			const text = typeof event.data === "string" ? event.data : String(event.data);
 			// Server pings to verify liveness — respond with pong
 			if (text === "ping") { try { ws.send("pong"); } catch { /* closed */ } return; }
@@ -746,6 +823,7 @@ export function openRelaySocket(
 		};
 
 		ws.onclose = (ev) => {
+			if (socket === ws) stopWatchdog();
 			if (closed || reconnecting) return;
 			// Another live runner owns this instance. Reconnecting cannot win it, and doing so
 			// every backoff produced an identical line forever; tell the caller so discovery
@@ -756,7 +834,6 @@ export function openRelaySocket(
 				onConflict?.(instanceId);
 				return;
 			}
-			reconnecting = true;
 			// Report what the server actually SAID. The old branch tested for 4401/1008 — codes
 			// nothing in the codebase ever sends — so every real rejection (409 "another runner",
 			// 401 after a key rotation) arrived as a bare 1006 and the message was dropped,
@@ -764,12 +841,7 @@ export function openRelaySocket(
 			const said = (ev.reason || "").trim();
 			const hint = ev.code === 4401 ? " — run `pags login`, then `pags up`" : ev.code === 4409 ? " — run `pags up --force` to take over" : "";
 			const reason = said ? ` (${said}${hint})` : ev.code === 1008 ? " (token expired — run `pags login` then `pags up`)" : "";
-			writeLine(`Relay disconnected: ${instanceId.slice(0, 8)}…${reason} — reconnecting in ${Math.round(backoffMs / 1000)}s`);
-			retryTimer = setTimeout(() => {
-				reconnecting = false;
-				connect();
-			}, backoffMs);
-			backoffMs = Math.min(backoffMs * 2, 30_000);
+			scheduleReconnect(`Relay disconnected: ${instanceId.slice(0, 8)}…${reason}`);
 		};
 
 		ws.onerror = () => {
@@ -782,6 +854,7 @@ export function openRelaySocket(
 	return {
 		close() {
 			closed = true;
+			stopWatchdog();
 			if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
 			try { socket?.close(); } catch { /* already closed */ }
 			socket = null;
@@ -789,14 +862,7 @@ export function openRelaySocket(
 		probeRtt(timeoutMs = 5000) {
 			const ws = socket;
 			if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve(null);
-			const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-			const sentAt = Date.now();
-			return new Promise<number | null>((resolveRtt) => {
-				const timer = setTimeout(() => { rttWaiters.delete(id); resolveRtt(null); }, timeoutMs);
-				timer.unref?.();
-				rttWaiters.set(id, (echoedAt) => { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(echoedAt - sentAt); });
-				try { ws.send(`${RTT_PROBE_PREFIX}${id}`); } catch { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(null); }
-			});
+			return probe(ws, timeoutMs);
 		},
 	};
 }
