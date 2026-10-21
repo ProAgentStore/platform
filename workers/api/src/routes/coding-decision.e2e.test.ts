@@ -250,8 +250,20 @@ describe("a coding run asks, PARKS at zero compute, and resumes with the owner's
 	});
 });
 
-describe("a run at its iteration cap asks the owner instead of failing (#1236)", () => {
+describe("a run at its iteration cap asks the owner instead of failing (#1236, #1261)", () => {
 	const send = (text: string) => toDecision({ name: "send_message", arguments: { text } });
+	// The ONE extra decision `runCodingLoop` asks once it has no steps left (#1261) — a real
+	// `report_cap_status` tool call, not an action; the loop reads it and asks nothing further.
+	const capReport = (overrides: Partial<CodingDecision["capSummary"] & object> = {}): CodingDecision => ({
+		capSummary: {
+			did: "Edited src/api.ts and ran the test suite.",
+			blocker: 'The build fails with: "Cannot find module \'left-pad\'".',
+			plan: "Add the missing dependency to package.json, reinstall, and re-run the suite.",
+			steps: 4,
+			reason: "One install and one retry should clear it, but CI here is flaky so it might take one more.",
+			...overrides,
+		},
+	});
 	const capped = (): CodingSessionParams => ({ ...params(), maxSteps: 2 }) as CodingSessionParams;
 	const loopRow = () => d1.sqlite.prepare("SELECT status, stop_reason, max_iterations, checkout_released_at, waiting_reason FROM agent_loop_runs WHERE run_id = 'run-1'").get() as Record<string, unknown>;
 	const cardQuestion = () => d1.sqlite.prepare("SELECT question, options, state, applied_run_id FROM coder_questions WHERE task_id = 'csess-s1'").get() as { question: string; options: string; state: string; applied_run_id: string | null };
@@ -277,45 +289,71 @@ describe("a run at its iteration cap asks the owner instead of failing (#1236)",
 	}
 
 	it("parks as waiting on the owner — not failed — with the checkout and working tree left exactly as they are", async () => {
-		decisions = [send("step one"), send("step two"), { finish: { status: "done", detail: "unused" } }];
+		decisions = [send("step one"), send("step two"), capReport()];
 		const { whileParked, parkedRun } = await runToCap("timeout");
 		expect(whileParked).toMatchObject({ status: "running", waiting_reason: "decision", checkout_released_at: null });
 		expect(callRunner.mock.calls.some((c) => c[1] === "/coding/park-snapshot")).toBe(false); // nothing set aside, nothing reset
-		expect(parkedRun?.waitingAsk?.question).toMatch(/reached its cap of 2 iterations without finishing\. Approve 2 more/);
-		expect(parkedRun?.waitingAsk?.options).toEqual(["Approve 2 more iterations", "Deny — stop the run here"]);
-		// coding_loop_status and recent_instances both quote this note (#1236).
+		// #1261: the brain's OWN step count (4), not the platform's fixed cap (2).
+		expect(parkedRun?.waitingAsk?.question).toMatch(/reached its cap of 2 iterations without finishing\. Approve 4 more/);
+		expect(parkedRun?.waitingAsk?.options).toEqual(["Approve 4 more iterations", "Deny — stop the run here"]);
+		// The full report — what it did, the exact blocker, its plan, and why it asked for 4 — reaches
+		// the uncut ask whole (#1129's mechanism), which is also what the linked GitHub issue comment quotes.
+		expect(parkedRun?.waitingAsk?.fullQuestion).toContain("What it did: Edited src/api.ts and ran the test suite.");
+		expect(parkedRun?.waitingAsk?.fullQuestion).toContain("Blocker: The build fails with: \"Cannot find module 'left-pad'\".");
+		expect(parkedRun?.waitingAsk?.fullQuestion).toContain("Plan: Add the missing dependency to package.json, reinstall, and re-run the suite.");
+		expect(parkedRun?.waitingAsk?.fullQuestion).toContain("Asking for 4 more steps — One install and one retry");
+		// coding_loop_status and recent_instances both quote this note (#1236) — in full, never the old 600-char clip (#1261).
 		const note = waitClause(parkedRun!, Date.now()) ?? "";
-		expect(note).toMatch(/^WAITING on YOUR APPROVAL, not stalled and not working — it reached its iteration cap without finishing and asks for 2 more iterations\. Its last steps: /);
+		expect(note).toMatch(/^WAITING on YOUR APPROVAL, not stalled and not working — it reached its iteration cap without finishing and asks for 4 more iterations\. What it did: Edited src\/api\.ts/);
+		expect(note).toContain("Cannot find module 'left-pad'");
 		expect(note).toContain('answer_instance_input (task_id csess-s1, value "approve" or a number of iterations)');
 		expect(note).toContain('"deny" to stop it here');
 	});
 
+	it("no concrete plan: the brain says so plainly rather than inventing one (#1261)", async () => {
+		decisions = [send("step one"), send("step two"), capReport({ plan: "", reason: "I don't know what's wrong yet." })];
+		const { parkedRun } = await runToCap("timeout");
+		expect(parkedRun?.waitingAsk?.fullQuestion).toContain("Plan: No concrete plan: it did not state one.");
+	});
+
 	it("approve with N: the SAME run resumes in the same session with N more iterations, and finishes", async () => {
-		decisions = [send("step one"), send("step two"), send("step three"), { finish: { status: "done", detail: "objective complete" } }];
+		decisions = [send("step one"), send("step two"), capReport(), send("step three"), { finish: { status: "done", detail: "objective complete" } }];
 		const { result, reply } = await runToCap("approve 5");
 		expect(reply).toMatchObject({ status: 200, body: { outcome: "delivered", runId: "run-1" } });
 		expect(result).toMatchObject({ outcome: "done" });
 		expect(acts).toEqual(["step one", "step two", "step three"]);
-		expect(decided[2].userHint).toMatch(/^The owner approved 5 more iterations after you reached your cap\. Continue the objective from exactly where you are/);
+		// The owner's own "approve 5" overrides the brain's requested 4 — their call, not the brain's.
+		expect(decided[3].userHint).toMatch(/^The owner approved 5 more iterations after you reached your cap\. Continue the objective from exactly where you are/);
 		expect(loopRow()).toMatchObject({ status: "completed", max_iterations: 15 });
 		expect(cardQuestion()).toMatchObject({ state: "answered_human", applied_run_id: "run-1" });
 	});
 
 	it("deny: the run stops right there and takes no further step", async () => {
-		decisions = [send("step one"), send("step two"), send("NEVER SENT"), { finish: { status: "done", detail: "unused" } }];
+		decisions = [send("step one"), send("step two"), capReport(), send("NEVER SENT"), { finish: { status: "done", detail: "unused" } }];
 		const { result } = await runToCap("Deny — stop the run here");
 		expect(result).toMatchObject({ outcome: "cancelled", detail: expect.stringMatching(/Stopped by you at the iteration cap/) });
-		expect(decided).toHaveLength(2);
+		// The cap-report decision counts as a decision too (#1261): 2 action rounds + the cap report.
+		expect(decided).toHaveLength(3);
 		expect(acts).toEqual(["step one", "step two"]);
 		expect(loopRow()).toMatchObject({ status: "cancelled", stop_reason: "cancelled", max_iterations: 10 });
 	});
 
 	it("no answer: it gives up the way every human wait does — continuable, never failed / max_iterations", async () => {
-		decisions = [send("step one"), send("step two"), { finish: { status: "done", detail: "unused" } }];
+		decisions = [send("step one"), send("step two"), capReport()];
 		await runToCap("timeout");
 		const row = loopRow();
 		expect(row.stop_reason).toBe("decision");
 		expect(row.status).not.toBe("failed");
 		expect(continueRefusal((await getLoopRun(env, "u1", "run-1"))!)).toBeNull(); // the owner can continue it later
+	});
+
+	it("the brain never answered the cap decision: falls back to the previous fixed-cap behaviour (#1261)", async () => {
+		// `decideCodingAction` is fully mocked in this file, so returning a plain action decision for
+		// the cap round stands in for "the model did not call report_cap_status" in production.
+		decisions = [send("step one"), send("step two"), send("ignored at the cap")];
+		const { parkedRun } = await runToCap("timeout");
+		// No capSummary on the result → the platform's fixed cap (2), and the old step-log tail.
+		expect(parkedRun?.waitingAsk?.question).toMatch(/reached its cap of 2 iterations without finishing\. Approve 2 more/);
+		expect(parkedRun?.waitingAsk?.fullQuestion).toContain("Its last steps:");
 	});
 });

@@ -40,7 +40,8 @@ export interface PilotDecideInput {
 	loopRunId?: string | null;
 	budgetId?: string | null;
 	depth?: number;
-	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot };
+	/** `atCap` (#1261): routes to the one-off cap-report decision instead of a normal action round. */
+	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot; atCap?: boolean };
 }
 
 export async function pilotDecide(env: Env, input: PilotDecideInput, opts: { policy?: ControllerAiPolicy; sleep?: (ms: number) => Promise<void> } = {}): Promise<PilotDecideOutcome> {

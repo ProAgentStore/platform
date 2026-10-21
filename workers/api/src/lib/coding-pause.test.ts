@@ -3,14 +3,16 @@ import {
 	HANDOFF_GIVE_UP_MS,
 	HANDOFF_POLL_MS,
 	HANDOFF_WAIT_POLLS,
+	renderCapSummary,
 	resolvePause,
 	runSucceeded,
 	stopReasonFor,
 	type PauseDeps,
 } from "./coding-pause.js";
+import { ASK_QUESTION_FULL_MAX } from "./coding-ask.js";
 import { ENGINE_WAIT_TICK_MS, ENGINE_WAIT_TOTAL_MS, MAX_ENGINE_WAITS } from "./coding-wait.js";
 import { statusFor } from "./agent-loop.js";
-import type { CodingResult } from "./coding-loop.js";
+import type { CapSummary, CodingResult } from "./coding-loop.js";
 
 const NOW = Date.parse("2026-08-12T11:34:00Z");
 
@@ -531,5 +533,34 @@ describe("reading the owner's answer at the iteration cap (#1236)", () => {
 		const { declineBeforeModel } = await import("./coder-brain-decide.js");
 		const q = "This run reached its cap of 30 iterations without finishing. Approve 30 more to let the same run continue in the same session (the working tree is untouched), or deny to stop it here.";
 		expect(declineBeforeModel({ question: q, options: ["Approve 30 more iterations", "Deny — stop the run here"], issue: null }, 0, 3)).toMatch(/iteration budget/);
+	});
+});
+
+describe("renderCapSummary — the iteration-cap report, in full (#1261)", () => {
+	const s = (over: Partial<CapSummary> = {}): CapSummary => ({ did: "edited src/x.ts and ran the suite", blocker: 'the suite fails: "TypeError: x is undefined"', plan: "fix the null check and rerun", steps: 6, reason: "one fix, one rerun, plus margin", ...over });
+
+	it("states what it did, the blocker in full, the plan, and the step count with its reason", () => {
+		const text = renderCapSummary(s());
+		expect(text).toBe(
+			'What it did: edited src/x.ts and ran the suite\n\nBlocker: the suite fails: "TypeError: x is undefined"\n\nPlan: fix the null check and rerun\n\nAsking for 6 more steps — one fix, one rerun, plus margin',
+		);
+	});
+
+	it("says plainly there is no concrete plan, rather than inventing one, when the brain left it empty", () => {
+		expect(renderCapSummary(s({ plan: "" }))).toContain("Plan: No concrete plan: it did not state one.");
+		expect(renderCapSummary(s({ plan: "   " }))).toContain("Plan: No concrete plan: it did not state one.");
+	});
+
+	it("names every unstated field rather than leaving a blank, so a reader never mistakes empty for omitted", () => {
+		const text = renderCapSummary({ did: "", blocker: "", plan: "", steps: 0, reason: "" });
+		expect(text).toContain("What it did: (not stated)");
+		expect(text).toContain("Blocker: (not stated)");
+		expect(text).toContain("Asking for more more steps — (no reason given)");
+	});
+
+	it("never cuts silently: a report over the bound is marked, like any other uncut ask (#1129)", () => {
+		const text = renderCapSummary(s({ blocker: "x".repeat(ASK_QUESTION_FULL_MAX * 2) }));
+		expect(text.length).toBeLessThanOrEqual(ASK_QUESTION_FULL_MAX);
+		expect(text).toMatch(/\[cut: showing the first \d+ of \d+ characters\]$/);
 	});
 });

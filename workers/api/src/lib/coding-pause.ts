@@ -29,8 +29,8 @@ import {
 } from "./coding-wait.js";
 import type { LoopStopReason } from "./agent-loop.js";
 import { clipMarked } from "./clip-marked.js";
-import type { AskPart } from "./coding-ask.js";
-import type { CodingOutcome, CodingResult } from "./coding-loop.js";
+import { ASK_QUESTION_FULL_MAX, type AskPart } from "./coding-ask.js";
+import type { CapSummary, CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
 import { codingCardId } from "./coding-board.js";
 import { DECISION_PARK_MS, MAX_PARK_WAKES } from "./coding-park.js";
@@ -438,22 +438,57 @@ export function readIterationAnswer(value: string | undefined, requested: number
 }
 
 /**
+ * The iteration-cap report, in full (#1261): what the brain did, its exact blocker, its plan — or
+ * that it plainly has none — and the steps it is asking for with its own reason. Bounded like any
+ * other uncut ask rather than invented afresh — see `coding-ask.ts`'s `ASK_QUESTION_FULL_MAX`.
+ */
+export function renderCapSummary(s: CapSummary): string {
+	const plan = s.plan.trim() || "No concrete plan: it did not state one.";
+	const text = [
+		`What it did: ${s.did.trim() || "(not stated)"}`,
+		`Blocker: ${s.blocker.trim() || "(not stated)"}`,
+		`Plan: ${plan}`,
+		`Asking for ${s.steps > 0 ? s.steps : "more"} more steps — ${s.reason.trim() || "(no reason given)"}`,
+	].join("\n\n");
+	return clipMarked(text, ASK_QUESTION_FULL_MAX, { within: true });
+}
+
+/**
  * The run reached its step cap. Before #1236 that ended it `max_iterations` (`failed`), and the work
  * in its session waited for a new run to rediscover it. Now it asks: the question goes on the run's
  * card like any other (answer_instance_input or the card's buttons), parks at zero compute, and —
  * unlike a question — KEEPS its checkout, so the working tree stays exactly as the run left it.
  * Approve resumes the SAME run in the same session with the steps granted; deny stops it with no
  * further steps; no answer ends it the way every human wait ends, continuable, never `failed`.
+ *
+ * #1261: the step count offered is the BRAIN'S OWN, not a platform default — `runCodingLoop` asks it
+ * for one once it has no steps left, and `capSummary` carries what it said. Absent (an older run, or
+ * a cap round the brain did not answer) falls back to the previous fixed-cap behaviour untouched.
  */
 async function waitForIterationApproval(deps: PauseDeps, input: { round: number; result: CodingResult }): Promise<PauseVerdict> {
 	const { result, round } = input;
 	const cap = deps.iterations?.cap ?? result.steps;
 	const ceiling = Math.max(1, deps.iterations?.ceiling ?? cap);
-	const requested = Math.min(Math.max(cap, 1), ceiling);
-	const recent = (result.transcript ?? []).slice(-3).join(" · ");
-	const summary = recent ? `Its last steps: ${clipMarked(recent, 600, { within: true })}` : "";
+	const fallback = Math.min(Math.max(cap, 1), ceiling);
+	const s = result.capSummary;
+	const requested = s && s.steps > 0 ? Math.min(Math.max(Math.round(s.steps), 1), ceiling) : fallback;
+	const report = s
+		? renderCapSummary(s)
+		: (() => {
+				const recent = (result.transcript ?? []).slice(-3).join(" · ");
+				return recent ? `Its last steps: ${clipMarked(recent, ASK_QUESTION_FULL_MAX, { within: true })}` : "";
+			})();
 	const question = `This run reached its cap of ${result.steps} iterations without finishing. Approve ${requested} more to let the same run continue in the same session (the working tree is untouched), or deny to stop it here.`;
-	const asked: CodingResult = { ...result, outcome: "needs_input", fieldNeeded: question, options: [approveIterationsOption(requested), DENY_ITERATIONS], detail: summary || undefined };
+	const asked: CodingResult = {
+		...result,
+		outcome: "needs_input",
+		fieldNeeded: question,
+		options: [approveIterationsOption(requested), DENY_ITERATIONS],
+		detail: report || undefined,
+		// The full report rides as the uncut ask (#1129's mechanism) so the GitHub comment and the
+		// console/MCP `fullQuestion` carry it whole — `question` above stays phone-sized.
+		...(report ? { fullQuestion: `${question}\n\n${report}` } : {}),
+	};
 	const verdict = await waitForHuman(deps, { round, result: asked }, { keepCheckout: true });
 	if (!verdict.resume) return verdict;
 	const read = readIterationAnswer(verdict.answer, requested, ceiling);

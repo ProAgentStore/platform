@@ -213,6 +213,28 @@ export interface CodingDecision {
 	 * the fact is carried rather than re-inferred from the shape of an empty reply.
 	 */
 	truncated?: boolean;
+	/** On the one extra, cap-only decision (#1261) — see {@link CapSummary}. */
+	capSummary?: CapSummary;
+}
+
+/**
+ * What the brain reports when it runs out of steps without finishing (#1261), in place of a bare
+ * "gave up after N steps": what it DID in concrete terms, the EXACT blocker (never summarized or
+ * cut downstream), whatever plan it has for continuing — or that it has none — and how many more
+ * steps it wants and why. The owner was being asked to approve a fixed number nobody had
+ * justified; this is the brain's own case for the number, not the platform's guess.
+ */
+export interface CapSummary {
+	/** Concrete actions taken in the capped steps: files changed, commands run, commits (cite SHAs). */
+	did: string;
+	/** The exact blocker, as the brain stated it — carried verbatim, never clipped further downstream. */
+	blocker: string;
+	/** A concrete plan for the next steps. Empty when the brain said plainly that it has none. */
+	plan: string;
+	/** How many more steps it is asking for. */
+	steps: number;
+	/** Why that many. */
+	reason: string;
 }
 
 export interface CodingResult {
@@ -229,13 +251,16 @@ export interface CodingResult {
 	waitUntil?: string;
 	steps: number;
 	transcript?: string[];
+	/** On `max_steps`, when the brain answered the cap decision (#1261) — absent falls back to the generic ending. */
+	capSummary?: CapSummary;
 }
 
 /** Side-effecting hooks — real ones hit the runner; tests mock them. */
 export interface CodingDeps {
 	snapshot: () => Promise<CodingPaneSnapshot>;
 	act: (action: CodingActionKind) => Promise<CodingPaneSnapshot>;
-	decide: (params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot }) => Promise<CodingDecision>;
+	/** `atCap` (#1261): this is the one extra decision asked at the step cap — report, don't act. */
+	decide: (params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot; atCap?: boolean }) => Promise<CodingDecision>;
 	/** Wait for the CLI to go idle (poll), returning the final snapshot. */
 	waitIdle: () => Promise<CodingPaneSnapshot>;
 	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
@@ -575,6 +600,24 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		if (decision.action.kind === "message") await deps.waitIdle();
 	}
 
+	// #1261: ONE more decision when the brain runs out of steps — not to act, but to report
+	// honestly what it did, the exact blocker, its plan (or that it has none), and how many more
+	// steps it wants and why. Without this the cap ended on a bare "gave up after N steps" and the
+	// owner's approval request (coding-pause.ts) carried a fixed-size ask with a hard-clipped tail
+	// of the step log — the symptom #1261 was filed from.
+	let capSnap = await deps.snapshot();
+	if (capSnap.cancelled) return { outcome: "cancelled", detail: capSnap.stopReason, steps: maxSteps, transcript };
+	if (capSnap.alive) {
+		if (capSnap.runState !== "idle") capSnap = await deps.waitIdle();
+		if (capSnap.cancelled) return { outcome: "cancelled", detail: capSnap.stopReason, steps: maxSteps, transcript };
+		const capDecision = await deps.decide({ goal, actionLog, snapshot: capSnap, atCap: true });
+		if (capDecision.cancelled) return { outcome: "cancelled", detail: capDecision.cancelled.why, steps: maxSteps, transcript };
+		if (capDecision.capSummary) {
+			const s = capDecision.capSummary;
+			transcript.push(`max_steps: ${s.did || "(no actions reported)"} — blocked: ${s.blocker || "(no blocker stated)"}`);
+			return { outcome: "max_steps", detail: `gave up after ${maxSteps} steps`, steps: maxSteps, transcript, capSummary: s };
+		}
+	}
 	return { outcome: "max_steps", detail: `gave up after ${maxSteps} steps`, steps: maxSteps, transcript };
 }
 
@@ -711,6 +754,43 @@ export const CODING_TOOLS = [
 ] as const;
 
 /**
+ * The ONLY tool offered on the one cap decision (#1261) — never mixed into {@link CODING_TOOLS},
+ * so a normal round can never reach for it and the cap round can never send another instruction.
+ */
+export const CAP_SUMMARY_TOOL = {
+	name: "report_cap_status",
+	description:
+		"You have reached your step cap without finishing the objective. Report it honestly instead of sending another instruction: exactly what you did, your exact blocker, your concrete plan, and how many more steps you want and why.",
+	parameters: {
+		type: "object",
+		properties: {
+			did: {
+				type: "string",
+				description: "Concrete actions you took in the capped steps: files changed, commands run, commits you made — cite SHAs when you have them.",
+			},
+			blocker: { type: "string", description: "The exact error or blocker you are stuck on. Quote it in full — never summarize or shorten it." },
+			plan: {
+				type: "string",
+				description:
+					"A specific, concrete plan for what you would do in the next steps. If you genuinely have no concrete plan, say so plainly (e.g. 'No concrete plan: I am stuck repeating X') instead of inventing one.",
+			},
+			steps: { type: "number", description: "How many more steps you are asking for — the number YOU think you need, not a round default." },
+			reason: { type: "string", description: "Why that many: say why you think you can finish in that many, and whether you might still need more." },
+		},
+		required: ["did", "blocker", "plan", "steps", "reason"],
+	},
+} as const;
+
+/** The cap tool call → {@link CapSummary}. `null` when the brain did not call it (falls back to the generic ending). */
+export function toCapSummary(call: { name: string; arguments: Record<string, unknown> } | undefined): CapSummary | null {
+	if (!call || call.name !== CAP_SUMMARY_TOOL.name) return null;
+	const a = call.arguments ?? {};
+	const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+	const n = Number(a.steps);
+	return { did: str(a.did), blocker: str(a.blocker), plan: str(a.plan), steps: Number.isFinite(n) && n > 0 ? Math.round(n) : 0, reason: str(a.reason) };
+}
+
+/**
  * Exported for its test. The two rules below are the Pilot-side half of #505 and they are prose, so
  * the only thing that can hold them is an assertion that they are still in the prompt.
  */
@@ -819,11 +899,14 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 export async function decideCodingAction(
 	env: Env,
 	userId: string,
-	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot },
+	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot; atCap?: boolean },
 	usageCtx?: UsageContext,
 	/** This attempt's stream deadlines from the controller recovery policy (#907). */
 	streamDeadlines?: StreamDeadlines,
 ): Promise<CodingDecision> {
+	// #1261: the cap decision is a different question (report, don't act) with its own single tool —
+	// routed here, not folded into the branches below, so the normal action prompt stays untouched.
+	if (params.atCap) return decideCapSummary(env, userId, params, usageCtx, streamDeadlines);
 	const system = systemPromptBlocks(params.goal);
 	const steps = params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)";
 	const terminal = renderPaneForPilot(params.snapshot.pane, undefined, params.snapshot.paneChars);
@@ -875,6 +958,64 @@ export async function decideCodingAction(
 		return { thought: res.response, stuck: { why }, usage: res.usage, truncated };
 	}
 	return { ...toDecision(call), usage: res.usage, thought: res.response, truncated };
+}
+
+/**
+ * The one cap decision (#1261): same context as a normal round, one tool, and the brain is told
+ * NOT to act. `toCapSummary` returning `null` (no call, or a different one) is read by the loop as
+ * "the brain did not answer" and falls back to the old generic ending — never a crash.
+ */
+async function decideCapSummary(
+	env: Env,
+	userId: string,
+	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot },
+	usageCtx?: UsageContext,
+	streamDeadlines?: StreamDeadlines,
+): Promise<CodingDecision> {
+	const system = systemPromptBlocks(params.goal);
+	const steps = params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)";
+	const terminal = renderPaneForPilot(params.snapshot.pane, undefined, params.snapshot.paneChars);
+	const userBlocks = pilotUserBlocks({ actionLog: params.actionLog, clock: clockLine(Date.now(), params.goal.timeZone), runState: params.snapshot.runState, terminal });
+	// Appended to the LAST block rather than a new one, so the cache breakpoint `pilotUserBlocks`
+	// already placed on the newest step is not pushed one block further out for this one-off call.
+	const ask =
+		"\n\nYou have reached your step cap without finishing. Call report_cap_status — do not send another instruction to the CLI. Report exactly what you did, your exact blocker quoted in full, a concrete plan (or say plainly you have none), and how many more steps you want and why.";
+	userBlocks[userBlocks.length - 1] = { ...userBlocks[userBlocks.length - 1], text: `${userBlocks[userBlocks.length - 1].text}${ask}` };
+
+	const res = (await runUserWorkersAi(
+		env,
+		userId,
+		"claude-sonnet-4-6",
+		{
+			messages: [
+				{ role: "system", content: system },
+				{ role: "user", content: userBlocks },
+			],
+			tools: [CAP_SUMMARY_TOOL],
+			maxTokens: PILOT_MAX_TOKENS,
+			...(streamDeadlines ? { streamDeadlines } : {}),
+		},
+		usageCtx
+			? {
+					...usageCtx,
+					promptSource: "coding",
+					promptPhase: "pilot_cap_summary",
+					promptSections: [
+						...systemPromptSections("pilot.system", system),
+						{ label: "pilot.steps", value: steps },
+						{ label: "pilot.terminal", value: terminal },
+						{ label: "pilot.tools", value: [CAP_SUMMARY_TOOL] },
+					],
+				}
+				: undefined,
+	)) as {
+		response?: string;
+		tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
+		usage?: { input: number; output: number };
+	};
+
+	const capSummary = toCapSummary(res.tool_calls?.[0]);
+	return capSummary ? { capSummary, usage: res.usage, thought: res.response } : { thought: res.response, usage: res.usage };
 }
 
 /**

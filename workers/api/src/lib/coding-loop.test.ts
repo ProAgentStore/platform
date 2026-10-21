@@ -7,6 +7,7 @@ import {
 	LEARNED_MAX,
 	runCodingLoop,
 	systemPrompt,
+	toCapSummary,
 	toDecision,
 	type CodingDecision,
 	type CodingDeps,
@@ -89,6 +90,87 @@ describe("runCodingLoop", () => {
 		const r = await runCodingLoop(deps, GOAL, { maxSteps: 3 });
 		expect(r.outcome).toBe("max_steps");
 		expect(sent.length).toBe(3);
+	});
+
+	describe("the one extra decision at the cap (#1261)", () => {
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+
+		it("asks the brain once more, with atCap set, and carries its capSummary on the result", async () => {
+			const seenAtCap: Array<boolean | undefined> = [];
+			let calls = 0;
+			const deps: CodingDeps = {
+				snapshot: async () => idle,
+				waitIdle: async () => idle,
+				act: async () => idle,
+				decide: async (p) => {
+					seenAtCap.push(p.atCap);
+					calls++;
+					if (calls <= 2) return { action: { kind: "message", text: `step ${calls}` } };
+					return { capSummary: { did: "edited two files", blocker: "tests fail: TypeError on line 12", plan: "fix the type and rerun", steps: 5, reason: "one fix, one rerun, plus margin" } };
+				},
+			};
+			const r = await runCodingLoop(deps, GOAL, { maxSteps: 2 });
+			expect(r.outcome).toBe("max_steps");
+			// Two real rounds (atCap unset/false), then the cap round (atCap: true) — never mixed into a normal round.
+			expect(seenAtCap).toEqual([undefined, undefined, true]);
+			expect(r.capSummary).toEqual({ did: "edited two files", blocker: "tests fail: TypeError on line 12", plan: "fix the type and rerun", steps: 5, reason: "one fix, one rerun, plus margin" });
+			expect(r.transcript?.at(-1)).toMatch(/^max_steps: edited two files — blocked: tests fail: TypeError on line 12$/);
+		});
+
+		it("never acts on the cap decision, even if it names an action instead of reporting", async () => {
+			let calls = 0;
+			const sent: string[] = [];
+			const deps: CodingDeps = {
+				snapshot: async () => idle,
+				waitIdle: async () => idle,
+				act: async (a) => {
+					sent.push(a.kind === "message" ? a.text : a.kind);
+					return idle;
+				},
+				decide: async () => {
+					calls++;
+					return calls <= 2 ? { action: { kind: "message", text: `step ${calls}` } } : { action: { kind: "message", text: "NEVER SENT" } };
+				},
+			};
+			const r = await runCodingLoop(deps, GOAL, { maxSteps: 2 });
+			expect(r.outcome).toBe("max_steps");
+			expect(r.capSummary).toBeUndefined(); // the loop reads only `capSummary`/`cancelled` off this decision
+			expect(sent).toEqual(["step 1", "step 2"]);
+		});
+
+		it("ends the run cancelled when the cap decision itself is cancelled", async () => {
+			let calls = 0;
+			const deps: CodingDeps = {
+				snapshot: async () => idle,
+				waitIdle: async () => idle,
+				act: async () => idle,
+				decide: async () => {
+					calls++;
+					return calls <= 2 ? { action: { kind: "message", text: `step ${calls}` } } : { cancelled: { why: "stopped mid cap-report" } };
+				},
+			};
+			const r = await runCodingLoop(deps, GOAL, { maxSteps: 2 });
+			expect(r.outcome).toBe("cancelled");
+			expect(r.detail).toBe("stopped mid cap-report");
+		});
+
+		it("skips the extra decision when the session died exactly at the cap", async () => {
+			let decideCalls = 0;
+			const dead: CodingPaneSnapshot = { pane: "exited", runState: "idle", ready: false, alive: false };
+			let snapCalls = 0;
+			const deps: CodingDeps = {
+				snapshot: async () => (++snapCalls <= 2 ? idle : dead),
+				waitIdle: async () => idle,
+				act: async () => idle,
+				decide: async () => {
+					decideCalls++;
+					return { action: { kind: "message", text: `step ${decideCalls}` } };
+				},
+			};
+			const r = await runCodingLoop(deps, GOAL, { maxSteps: 2 });
+			expect(r.outcome).toBe("max_steps");
+			expect(decideCalls).toBe(2); // no third call — a dead session has nothing to report
+		});
 	});
 
 	it("waits for the CLI to go idle before deciding", async () => {
@@ -645,6 +727,29 @@ describe("the Engine's own usage limit has a verb of its own (#541)", () => {
 		const p = systemPrompt({ ...GOAL, resumeNote: "PLATFORM NOTE (not from the human): paused 56 minutes." });
 		expect(p).toContain("PLATFORM NOTE (not from the human)");
 		expect(p).not.toMatch(/The user just told you: PLATFORM NOTE/);
+	});
+});
+
+describe("toCapSummary — the cap tool call → CapSummary (#1261)", () => {
+	it("maps a full report_cap_status call, trimming whitespace and rounding steps", () => {
+		const d = toCapSummary({ name: "report_cap_status", arguments: { did: "  edited x.ts  ", blocker: "  TypeError on line 4  ", plan: "  fix the type  ", steps: 7.8, reason: "  one fix, one rerun  " } });
+		expect(d).toEqual({ did: "edited x.ts", blocker: "TypeError on line 4", plan: "fix the type", steps: 8, reason: "one fix, one rerun" });
+	});
+
+	it("carries an empty plan through as-is — the caller renders the no-plan case, not this mapping", () => {
+		const d = toCapSummary({ name: "report_cap_status", arguments: { did: "x", blocker: "y", plan: "", steps: 3, reason: "z" } });
+		expect(d?.plan).toBe("");
+	});
+
+	it("defaults an invalid or missing step count to 0, never NaN or negative", () => {
+		expect(toCapSummary({ name: "report_cap_status", arguments: { did: "x", blocker: "y", plan: "z", steps: "a lot" as unknown as number, reason: "w" } })?.steps).toBe(0);
+		expect(toCapSummary({ name: "report_cap_status", arguments: { did: "x", blocker: "y", plan: "z", steps: -3, reason: "w" } })?.steps).toBe(0);
+		expect(toCapSummary({ name: "report_cap_status", arguments: {} })?.steps).toBe(0);
+	});
+
+	it("is null for any other tool, or no call at all — the loop's fallback signal", () => {
+		expect(toCapSummary(undefined)).toBeNull();
+		expect(toCapSummary({ name: "send_message", arguments: { text: "x" } })).toBeNull();
 	});
 });
 
