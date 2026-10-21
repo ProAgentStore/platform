@@ -6,6 +6,7 @@ import { instanceSocketsUnder } from "../lib/machine-sockets.js";
 import { mapWithConcurrency } from "../lib/map-concurrency.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
 import { normalizeRunnerNode, parseRunnerPin } from "../lib/runtime-nodes.js";
+import { fleetHistory, parseWhen } from "../lib/fleet-resources.js";
 import { machineDisplayNames, setMachineDisplayName } from "../lib/machine-names.js";
 import { unresolvedPins } from "../lib/runner-node-pin.js";
 import { adoptableIdByName, identityHint, machineNamesFor, normalizeMachineId } from "../lib/machine-identity.js";
@@ -803,6 +804,22 @@ terminalRoutes.get("/nodes/:node/forget-preflight", async (c) => {
 	const preflight = await preflightForgetNode(c.env, session.uid, c.req.param("node"));
 	if (!preflight.ok) return c.json({ error: preflight.error, ...(preflight.reason ? { reason: preflight.reason } : {}) }, preflight.status);
 	return c.json(preflight);
+});
+
+/**
+ * The WHOLE fleet's resource history in one call (#1259): every machine this account owns, keyed by machine id, for the console's live
+ * graphs. `?tier=dense` (every heartbeat, ~2h, default) or `coarse` (5-minute worst-of buckets, ~24h); `from`/`to` as on the per-node
+ * route; `since` (epoch ms or ISO) returns only points NEWER than it, which is how the page appends a heartbeat without reloading.
+ * Scoped to the caller and built from an allow-list of numbers — no endpoint, token, path or session id (lib/fleet-resources.ts).
+ */
+terminalRoutes.get("/resources", async (c) => {
+	const session = await requireUser(c);
+	const tier: HistoryTier = c.req.query("tier") === "coarse" ? "coarse" : "dense";
+	const from = parseWhen(c.req.query("from"));
+	const to = parseWhen(c.req.query("to"));
+	const since = parseWhen(c.req.query("since"));
+	if ([from, to, since].some((v) => v !== undefined && Number.isNaN(v))) return c.json({ error: "`from`, `to` and `since` must be epoch milliseconds or ISO timestamps." }, 400);
+	return c.json(await fleetHistory(c.env, session.uid, { tier, from, to, since }));
 });
 
 /**

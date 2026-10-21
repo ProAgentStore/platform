@@ -37,6 +37,7 @@ export const CONSOLE_ROUTES = [
 	"tools",
 	"terminals",
 	"terminals/machines/:machineId",
+	"fleet",
 	"usage",
 	"feedback",
 	"diagnostics",

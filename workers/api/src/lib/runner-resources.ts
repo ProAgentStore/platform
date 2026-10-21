@@ -513,6 +513,8 @@ export interface ResourcePoint {
 	relayRttMs: number | null;
 	uptimeSec: number | null;
 	starts24h: number | null;
+	/** How many sessions the runner measured at this point (#1259); null when it reported none. */
+	sessionCount: number | null;
 	/** The three heaviest sessions by CPU at this point. */
 	topSessions: SessionUsage[] | null;
 	/** Coarse only: how many samples the bucket's worst-of readings cover. */
@@ -534,6 +536,7 @@ export function resourcePoint(raw: unknown): ResourcePoint | null {
 		relayRttMs: view.relayRttMs,
 		uptimeSec: view.runner?.uptimeSec ?? null,
 		starts24h: view.runner?.starts24h ?? null,
+		sessionCount: view.sessions ? view.sessions.length : null,
 		topSessions: view.sessions ? view.sessions.slice(0, TOP_SESSIONS) : null,
 		...(typeof samples === "number" ? { samples } : {}),
 		warnings: view.warnings,

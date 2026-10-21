@@ -13817,6 +13817,55 @@ paths:
                         label: { type: string }
                         node: { type: string, description: Which of the machine's names it points at. }
 
+  /v1/terminals/resources:
+    get:
+      summary: Read the resource history of every machine you own, in one call
+      description: |
+        The console's live fleet graphs (#1259). Every machine on the account, keyed by machine id (`node:<hostname>` for one that never
+        sent an id) with the owner's display name, its latest reading, and a slim point series for the chosen tier. A hostname that
+        changed is one machine. `stale` is true when the machine has no sample or its newest is over 3 minutes old; its series simply
+        ends at its last point. `since` returns only points newer than it, so a page appends a heartbeat without reloading; a full load
+        (no `since`) also carries each machine's 24-hour summary from the coarse tier. Windows machines report `loadPerCpu: null` (#1258).
+        Numbers only: no endpoint, token, path or session id. At most 50 machines, newest first (`truncated` says so).
+      operationId: getTerminalFleetResources
+      tags: [Terminals]
+      parameters:
+        - { name: tier, in: query, required: false, schema: { type: string, enum: [dense, coarse], default: dense } }
+        - { name: from, in: query, required: false, description: Window start — epoch ms or ISO timestamp. Defaults to the tier's whole retention., schema: { type: string } }
+        - { name: to, in: query, required: false, description: Window end — epoch ms or ISO timestamp. Defaults to now., schema: { type: string } }
+        - { name: since, in: query, required: false, description: "Only points newer than this (exclusive) — epoch ms or ISO timestamp; use the previous answer's `cursor`.", schema: { type: string } }
+      responses:
+        "200":
+          description: The fleet's history, each machine's points oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tier: { type: string, enum: [dense, coarse] }
+                  from: { type: string, format: date-time }
+                  to: { type: string, format: date-time }
+                  now: { type: string, format: date-time }
+                  cursor: { type: string, format: date-time, nullable: true, description: The newest point time; hand it back as `since`. }
+                  truncated: { type: boolean }
+                  machines:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        machineId: { type: string, nullable: true }
+                        name: { type: string }
+                        node: { type: string }
+                        aka: { type: array, items: { type: string } }
+                        lastSeenAt: { type: string, nullable: true }
+                        sampledAt: { type: string, nullable: true }
+                        stale: { type: boolean }
+                        sampleAgeSec: { type: integer, nullable: true }
+                        latest: { type: object, nullable: true, additionalProperties: true }
+                        points: { type: array, items: { type: object, additionalProperties: true } }
+                        summary24h: { type: object, nullable: true, additionalProperties: true }
+        "400": { description: "`from`, `to` or `since` is not a timestamp" }
   /v1/terminals/nodes/{node}/resources:
     get:
       summary: Read a machine's resource history
