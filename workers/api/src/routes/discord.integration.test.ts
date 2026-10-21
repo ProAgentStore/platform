@@ -218,6 +218,17 @@ describe("a newly connected bot, through the agent's own tools (#1132)", () => {
 		expect(post).toMatchObject({ path: `/channels/${CH_ALERTS}/messages`, auth: `Bot ${TOKEN_A}` });
 		expect(JSON.parse(post?.body ?? "{}")).toEqual({ content: "on it @everyone", allowed_mentions: { parse: [] } });
 
+		// #1273: a threaded reply goes through the same grant and consent, and the target must be in the granted channel.
+		sent = [];
+		const replied = await tool("discord_send_message", { grantId, content: "welcome!", replyToMessageId: "777777777777777777" });
+		expect(replied.json.success).toBe(true);
+		expect(replied.json.content).toContain("\"repliedTo\": \"777777777777777777\"");
+		expect(JSON.parse(sent.find((s) => s.method === "POST")?.body ?? "{}")).toEqual({
+			content: "welcome!",
+			allowed_mentions: { parse: [], replied_user: false },
+			message_reference: { message_id: "777777777777777777", channel_id: CH_ALERTS, fail_if_not_exists: true },
+		});
+
 		// The private channel is visible to the bot but was never granted: no grant id reaches it.
 		sent = [];
 		for (const id of [CH_PRIVATE, "not-a-grant"]) {

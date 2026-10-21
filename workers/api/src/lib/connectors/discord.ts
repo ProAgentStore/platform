@@ -95,13 +95,21 @@ async function discordRequest(token: string, path: string, init: RequestInit = {
 /**
  * Post one message to a channel with the bot token — the agent's `discord_send_message` and the
  * platform's own release notes (#1216) send through this one path.
+ *
+ * With `replyToMessageId` (#1273) the message is a threaded reply to that message in the same channel (`message_reference`).
+ * The reply never pings: `parse: []` already blocks every mention and `replied_user: false` turns off the reply's own ping to
+ * the author. `fail_if_not_exists` makes a missing or deleted target an error, not a quiet plain channel message.
  */
-export async function postDiscordMessage(token: string, channelId: string, content: string): Promise<{ ok: true; messageId: string | null } | { ok: false; status: number; message: string }> {
+export async function postDiscordMessage(token: string, channelId: string, content: string, replyToMessageId?: string): Promise<{ ok: true; messageId: string | null } | { ok: false; status: number; message: string }> {
 	const result = await discordRequest(token, `/channels/${channelId}/messages`, {
 		method: "POST",
 		// Agents must name mentions deliberately in a later, reviewed capability. A plain send
 		// cannot turn untrusted text into a mass ping.
-		body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+		body: JSON.stringify(
+			replyToMessageId
+				? { content, allowed_mentions: { parse: [], replied_user: false }, message_reference: { message_id: replyToMessageId, channel_id: channelId, fail_if_not_exists: true } }
+				: { content, allowed_mentions: { parse: [] } },
+		),
 	});
 	if (!result.ok) return result;
 	const id = (result.data as { id?: unknown } | null)?.id;
@@ -137,11 +145,15 @@ const sendMessage: ToolDef["handler"] = async (ctx, input) => {
 	const content = String(input.content ?? "").trim();
 	if (!content) return { content: "content is required.", success: false };
 	if (content.length > MAX_MESSAGE_LENGTH) return { content: `Discord messages are limited to ${MAX_MESSAGE_LENGTH} characters.`, success: false };
+	// Optional: reply to one message in this channel. Only a string id counts: a JSON number past 2^53 has already lost digits and would name a different message. A malformed id is refused before the bot token is read.
+	const raw = input.replyToMessageId;
+	const replyTo = raw === undefined || raw === null || raw === "" ? null : typeof raw === "string" ? snowflake(raw) : null;
+	if (raw !== undefined && raw !== null && raw !== "" && !replyTo) return { content: "replyToMessageId must be a Discord message id (a string of 16-22 digits).", success: false };
 	const token = await botToken(ctx);
 	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
-	const result = await postDiscordMessage(token, granted.channelId, content);
+	const result = await postDiscordMessage(token, granted.channelId, content, replyTo ?? undefined);
 	if (!result.ok) return { content: result.message, success: false };
-	return { content: JSON.stringify({ sent: true, channelId: granted.channelId, messageId: result.messageId }, null, 2), success: true };
+	return { content: JSON.stringify({ sent: true, channelId: granted.channelId, messageId: result.messageId, ...(replyTo ? { repliedTo: replyTo } : {}) }, null, 2), success: true };
 };
 
 const addReaction: ToolDef["handler"] = async (ctx, input) => {
@@ -163,7 +175,7 @@ export const DISCORD_CONNECTOR: Connector = {
 	label: "Discord bot",
 	auth: "token",
 	scopes: { read: true, write: true },
-	writeMeaning: "Send messages and add reactions as the Discord bot you connected, but only in the channels you granted to this agent. Messages cannot be unsent through this connector.",
+	writeMeaning: "Send messages (optionally as a threaded reply to a message) and add reactions as the Discord bot you connected, but only in the channels you granted to this agent. Messages cannot be unsent through this connector.",
 	grantModel: "instance-resource",
 	tools: [
 		{
@@ -190,8 +202,8 @@ export const DISCORD_CONNECTOR: Connector = {
 		},
 		{
 			name: "discord_send_message",
-			description: "Send one message as the connected Discord bot to a channel explicitly granted to this agent. Mentions are disabled for safety. WRITE — the message is really sent.",
-			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, content: { type: "string" } }, required: ["grantId", "content"] },
+			description: "Send one message as the connected Discord bot to a channel explicitly granted to this agent. Pass replyToMessageId (a message id from discord_read_messages, in the same channel) to post it as a threaded reply to that message instead of a plain channel message; the reply does not ping its author. Mentions are disabled for safety. WRITE — the message is really sent.",
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, content: { type: "string" }, replyToMessageId: { type: "string", description: "Optional. Id of a message in this channel to reply to." } }, required: ["grantId", "content"] },
 			tier: "connector",
 			connector: "discord",
 			scope: "write",

@@ -51,6 +51,13 @@ Then, on the particular agent's **Permissions** tab, select a server and text ch
 The bot needs its normal Discord permissions in that channel; sending messages or reactions also
 requires that instance's Discord write consent.
 
+**Replying to a message (#1273).** `discord_send_message` takes an optional `replyToMessageId` — a message id
+(a string of 16-22 digits, as `discord_read_messages` returns it) from the *same* granted channel. The message is then posted
+as a threaded reply (Discord `message_reference`) instead of a plain channel message, under the same per-channel grant and
+write consent as any send. A reply never pings: every mention stays off, and so does the reply's own ping to the author
+(`replied_user: false`). If the target message is gone or is not visible to the bot in that channel, the send fails with
+Discord's reason rather than falling back to a plain message. The result carries `repliedTo`.
+
 The same lifecycle is available over MCP (#1132), owner-scoped and never returning the token:
 `connect_discord_bot` (verified with Discord before it is stored; a token for a different bot revokes
 the old grants), `discord_bot_status`, `list_discord_guilds` → `list_discord_channels` →

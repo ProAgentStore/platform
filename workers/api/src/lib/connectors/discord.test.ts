@@ -64,6 +64,47 @@ describe("Discord bot connector", () => {
 		expect(headers.get("Authorization")).toBe("Bot bot-secret");
 	});
 
+	it("replies to a message by id (#1273): a message_reference in the granted channel, no mention and no reply ping", async () => {
+		const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ id: "234567890123456789" }), { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		const result = await tool("discord_send_message").handler(ctx(), { grantId: "grant-1", content: "welcome <@123> @everyone", replyToMessageId: "345678901234567890" });
+		expect(result).toEqual({ content: JSON.stringify({ sent: true, channelId: GRANT.resourceId, messageId: "234567890123456789", repliedTo: "345678901234567890" }, null, 2), success: true });
+		expect(fetch).toHaveBeenCalledWith(
+			`https://discord.com/api/v10/channels/${GRANT.resourceId}/messages`,
+			expect.objectContaining({
+				method: "POST",
+				body: JSON.stringify({
+					content: "welcome <@123> @everyone",
+					allowed_mentions: { parse: [], replied_user: false },
+					message_reference: { message_id: "345678901234567890", channel_id: GRANT.resourceId, fail_if_not_exists: true },
+				}),
+			}),
+		);
+	});
+
+	it("a plain send carries no message_reference, and an empty replyToMessageId is a plain send", async () => {
+		const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ id: "234567890123456789" }), { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		await tool("discord_send_message").handler(ctx(), { grantId: "grant-1", content: "hi", replyToMessageId: "" });
+		expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({ content: "hi", allowed_mentions: { parse: [] } });
+	});
+
+	it("refuses a malformed reply target before it reads the bot token or calls Discord", async () => {
+		const fetch = vi.fn();
+		vi.stubGlobal("fetch", fetch);
+		for (const bad of ["abc", "123", "12345678901234567890123", "../channels/1/messages", Number("345678901234567890")]) {
+			const result = await tool("discord_send_message").handler(ctx(), { grantId: "grant-1", content: "hi", replyToMessageId: bad });
+			expect(result).toMatchObject({ success: false, content: expect.stringMatching(/replyToMessageId must be a Discord message id/) });
+		}
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("a reply whose target is gone fails with Discord's reason, not a quiet plain message", async () => {
+		vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ message: "Unknown message" }), { status: 404 })));
+		const result = await tool("discord_send_message").handler(ctx(), { grantId: "grant-1", content: "hi", replyToMessageId: "345678901234567890" });
+		expect(result).toMatchObject({ success: false, content: expect.stringMatching(/no such server, channel or message.*Unknown message/) });
+	});
+
 	it("refuses an oversized message before it reads the bot token or calls Discord", async () => {
 		const fetch = vi.fn();
 		vi.stubGlobal("fetch", fetch);
