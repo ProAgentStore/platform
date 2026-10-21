@@ -252,12 +252,30 @@ export function runnerIdentityOf(instanceId: string, node: string, raw: unknown)
 }
 
 /**
+ * How much memory is really in use, by the one reading each OS makes meaningful (#1176), or null when none is trustworthy.
+ *
+ *   linux   `os.freemem()` is MemAvailable: cache is already counted as available.
+ *   win32   libuv reports available physical memory, so a high reading is real starvation (the figure is not cache-inflated).
+ *   darwin  raw free pages exclude reclaimable cache, so a healthy Mac reads 95%+ used; only the runner's own `memAvailableBytes`
+ *           (free + inactive + purgeable + speculative, CLI 0.4.168+) is a pressure signal. Without it, no judgement — a Mac is
+ *           never alarmed from the number that cries wolf.
+ */
+export function memoryPressurePct(s: Pick<RunnerResourceSample, "platform" | "memTotalBytes" | "memFreeBytes" | "memAvailableBytes">): number | null {
+	if (!(s.memTotalBytes > 0)) return null;
+	let available: number | null;
+	if (s.platform === "darwin") available = typeof s.memAvailableBytes === "number" ? s.memAvailableBytes : null;
+	else if (s.platform === "linux" || s.platform === "win32") available = s.memFreeBytes;
+	else available = null;
+	return available === null ? null : round(((s.memTotalBytes - available) / s.memTotalBytes) * 100, 1);
+}
+
+/**
  * The reported view of a stored sample, or null when the runner has not reported one.
  *
- * Memory is judged only off Linux. On macOS `os.freemem()` counts only free pages — the kernel
- * keeps "inactive" and file-cache memory that is reclaimable at once, so a healthy Mac reads 95%+
- * used and the warning would cry wolf on every machine. The numbers are still reported there; only
- * the alarm is withheld, and CPU load (which means the same thing everywhere) still warns.
+ * Memory is judged per OS ({@link memoryPressurePct}). On macOS `os.freemem()` counts only free pages — the kernel
+ * keeps "inactive" and file-cache memory that is reclaimable at once, so a healthy Mac reads 95%+ used; it is judged
+ * from the runner's available-memory figure instead, and not at all until a runner reports one. Windows and Linux are
+ * judged from the free figure, which already means available memory.
  */
 export function resourcesView(raw: unknown, activeSessions: number | null, gateState: string = "accepting", maxSessionsOverride: number | null = null): RunnerResourcesView | null {
 	const s = parseResourceSample(raw);
@@ -268,8 +286,12 @@ export function resourcesView(raw: unknown, activeSessions: number | null, gateS
 	if (loadPerCpu >= CPU_HIGH_WATER) {
 		warnings.push(`CPU saturated: 1-minute load ${round(s.loadAvg[0])} on ${s.cpus} cores (${loadPerCpu} per core). A runner this loaded answers its relay late — the "connected but not responding" failure (#913). Move agents to another machine or stop work running beside them.`);
 	}
-	if (s.platform === "linux" && memUsedPct >= MEMORY_HIGH_WATER_PCT) {
-		warnings.push(`Memory nearly exhausted: ${memUsedPct}% in use. Expect slow or failed engine starts, clones and builds on this machine.`);
+	const pressurePct = memoryPressurePct(s);
+	if (pressurePct !== null && pressurePct >= MEMORY_HIGH_WATER_PCT) {
+		// The heaviest session by resident memory (#1176), already collected: it turns "memory is nearly gone" into "this engine is why".
+		const heaviest = s.sessions?.length ? [...s.sessions].sort((a, b) => b.rssBytes - a.rssBytes)[0] : null;
+		const who = heaviest && heaviest.rssBytes > 0 ? ` Heaviest session: ${heaviest.engineLabel || heaviest.sessionId} at ${round(heaviest.rssBytes / 1024 ** 3, 1)} GiB across ${heaviest.processes} process${heaviest.processes === 1 ? "" : "es"}.` : "";
+		warnings.push(`Memory nearly exhausted: ${pressurePct}% in use. Expect slow or failed engine starts, clones and builds on this machine.${who}`);
 	}
 	const disk = s.disk
 		? {

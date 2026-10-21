@@ -3,7 +3,7 @@
  * about it.
  */
 import { describe, expect, it } from "vitest";
-import { CPU_HIGH_WATER, MEMORY_HIGH_WATER_PCT, parseResourceSample, resourcesView } from "./runner-resources.js";
+import { CPU_HIGH_WATER, MEMORY_HIGH_WATER_PCT, memoryPressurePct, parseResourceSample, resourcesView } from "./runner-resources.js";
 
 const GiB = 1024 ** 3;
 const sample = (over: Record<string, unknown> = {}) => ({ loadAvg: [1, 0.8, 0.5], cpus: 8, memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB, platform: "linux", sampledAt: Date.UTC(2026, 9, 5, 6, 0), ...over });
@@ -82,7 +82,7 @@ describe("resourcesView — what list_runner_nodes and coding_diagnostics report
 		expect(resourcesView(nearlyFull, null)?.warnings[0]).toMatch(/^Memory nearly exhausted/);
 	});
 
-	it("reports but never alarms on macOS memory, where cached pages read as used", () => {
+	it("reports but never alarms on macOS memory from raw free pages, where cached pages read as used (a runner that reports no available figure)", () => {
 		const mac = resourcesView(sample({ platform: "darwin", memFreeBytes: 0.2 * GiB }), null);
 		expect(mac?.memUsedPct).toBeGreaterThan(95);
 		expect(mac?.warnings).toEqual([]);
@@ -97,5 +97,49 @@ describe("a Windows runner's sample (#1275)", () => {
 		const v = resourcesView(raw, 0);
 		expect(v?.disk).toMatchObject({ usedPct: 95.3, inodesUsedPct: 0 });
 		expect(v?.warnings.join(" ")).toMatch(/Disk nearly full/);
+	});
+});
+
+describe("memory pressure per OS (#1176)", () => {
+	const mac = (memAvailableBytes: number | undefined, over: Record<string, unknown> = {}) => sample({ platform: "darwin", memTotalBytes: 8 * GiB, memFreeBytes: 0.2 * GiB, ...(memAvailableBytes === undefined ? {} : { memAvailableBytes }), ...over });
+
+	it("macOS: a Mac that is genuinely starved (available memory nearly gone) now warns, even though raw free reads the same as a healthy one", () => {
+		const starved = resourcesView(mac(0.4 * GiB), null);
+		expect(starved?.warnings[0]).toMatch(/^Memory nearly exhausted: 95% in use/);
+		// the same raw free pages, but 3 GiB reclaimable: healthy, silent
+		expect(resourcesView(mac(3 * GiB), null)?.warnings).toEqual([]);
+	});
+
+	it("macOS without an available-memory figure (an older runner) is still not judged, never alarmed from the free-page reading", () => {
+		expect(memoryPressurePct({ platform: "darwin", memTotalBytes: 8 * GiB, memFreeBytes: 0.1 * GiB })).toBeNull();
+		expect(resourcesView(mac(undefined), null)?.warnings).toEqual([]);
+	});
+
+	it("Windows: the free figure is available memory, so a high reading is real starvation and warns", () => {
+		const starved = resourcesView(sample({ platform: "win32", memTotalBytes: 8 * GiB, memFreeBytes: 0.5 * GiB }), null);
+		expect(starved?.warnings[0]).toMatch(/^Memory nearly exhausted: 93\.8% in use/);
+		expect(resourcesView(sample({ platform: "win32", memTotalBytes: 8 * GiB, memFreeBytes: 4 * GiB }), null)?.warnings).toEqual([]);
+	});
+
+	it("an unknown platform is not judged", () => {
+		expect(memoryPressurePct({ platform: "freebsd", memTotalBytes: 8 * GiB, memFreeBytes: 0 })).toBeNull();
+	});
+
+	it("names the heaviest session by resident memory, from what is already collected", () => {
+		const sessions = [
+			{ sessionId: "s-small", engineLabel: "Claude Code", pid: 11, processes: 3, rssBytes: 0.4 * GiB, cpuPct: 5 },
+			{ sessionId: "s-big", engineLabel: "Codex", pid: 22, processes: 1, rssBytes: 2.5 * GiB, cpuPct: 90 },
+		];
+		const v = resourcesView(mac(0.3 * GiB, { sessions }), null);
+		expect(v?.warnings[0]).toMatch(/Heaviest session: Codex at 2\.5 GiB across 1 process\./);
+	});
+
+	it("the heaviest session is only named when memory is actually high", () => {
+		const sessions = [{ sessionId: "s-big", engineLabel: "Codex", pid: 22, processes: 1, rssBytes: 2.5 * GiB, cpuPct: 90 }];
+		expect(resourcesView(mac(5 * GiB, { sessions }), null)?.warnings).toEqual([]);
+	});
+
+	it("Linux is unchanged", () => {
+		expect(memoryPressurePct({ platform: "linux", memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB })).toBe(50);
 	});
 });
