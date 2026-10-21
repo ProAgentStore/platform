@@ -322,7 +322,7 @@ export function consentChip(t: ToolPolicyEntry): string | null {
 		// MCP names its remote system at call time, so the connector row is only the outer gate and
 		// the real reach is per (server, tool). Saying "needs mcp access" would point at a checkbox
 		// that is already ticked.
-		return t.connector === "mcp" ? "granted per server + tool" : `writes need ${t.connector ?? "connector"} access`;
+		return t.connector === "mcp" ? "granted per server" : `writes need ${t.connector ?? "connector"} access`;
 	}
 	return null;
 }

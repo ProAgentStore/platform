@@ -285,12 +285,9 @@ describe("connector registry", () => {
 			for (const c of CONNECTORS.filter((x) => !x.scopes.write)) expect(c.writeMeaning, c.id).toBeUndefined();
 		});
 
-		it("keeps the MCP kill-switch sentence, which is the one that grants no reach on its own", () => {
-			// It lived in a hardcoded `connectors.includes("mcp")` branch in the console until #720.
-			// Moved verbatim: an owner who loses it reads a ticked `mcp` box as a full grant, when
-			// #262 grants reach per server AND per remote tool.
+		it("explains server-wide access and the connector's Off and Ask each time modes", () => {
 			expect(getConnector("mcp")?.writeMeaning).toBe(
-				"MCP write access is a kill switch, not a permission: the agent still can’t call anything until you name a server and tool below.",
+				"Grant read & write access to a server below, or choose individual tools in Advanced permissions. Off blocks every MCP write; Ask each time requires approval for each call.",
 			);
 		});
 

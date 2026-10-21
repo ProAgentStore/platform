@@ -21,6 +21,7 @@ import {
 	type McpSurfaceReport,
 } from "../lib/mcpConnections";
 import Button from "./Button";
+import McpServerAccess from "./McpServerAccess";
 
 /**
  * MCP Connections (#266) — the guided lifecycle for a user-named MCP endpoint:
@@ -344,29 +345,13 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 		setBusyTool(`${endpoint}::${tool}`);
 		try {
 			await api(`/v1/instances/${instanceId}/mcp/consent`, { method: "PUT", body: JSON.stringify({ url: endpoint, tool, enabled }) });
-			const fresh = await reload();
-			// Re-derive callability from the grants we just re-read rather than toggling the
-			// checkbox locally — an optimistic tick that consent later disagreed with is the
-			// "test says allowed, call says denied" gap this whole surface exists to close.
+			await reload();
+			// Granting may also open the connector gate. Re-test both facts from the server,
+			// rather than leaving a stale "write access off" warning after enabling access.
 			if (report && report.endpoint === endpoint) {
-				const mine = fresh.filter((g) => g.endpoint === endpoint);
-				const wildcard = mine.some((g) => g.tool === "*");
-				const tools = report.tools.map((t) => {
-					const granted = mine.some((g) => g.tool === t.name) || (wildcard && !t.destructive);
-					const blockedBy = !report.gates.callToolEnabled
-						? ("tool_disabled" as const)
-						: !report.gates.writeConsent
-							? ("no_write_consent" as const)
-							: granted
-								? undefined
-								: wildcard && t.destructive
-									? ("wildcard_excludes_destructive" as const)
-									: ("no_grant" as const);
-					return { ...t, granted, callable: !blockedBy, blockedBy };
-				});
-				setReport({ ...report, tools, callableCount: tools.filter((t) => t.callable).length });
+				await runTest(endpoint, openAuth ? "none" : "vault");
 			}
-			setMsg(enabled ? `Allowed ${tool}` : `Revoked ${tool}`);
+			setMsg(tool === "*" ? (enabled ? "Server read & write access enabled" : "Server access limited to individual grants") : enabled ? `Allowed ${tool}` : `Revoked ${tool}`);
 			setTimeout(() => setMsg(""), 2500);
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : "Could not change that grant");
@@ -398,8 +383,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 		<div className="mb-3 pb-3 border-b border-line">
 			<div className="text-sm font-semibold mb-0.5">MCP connections</div>
 			<p className="text-2xs text-muted-soft mb-2">
-				Point this agent at a remote MCP server. Testing a URL reads the server’s own tool list — nothing is granted until you tick it. A server is identified by its
-				address, so there is no nickname to keep in sync; add as many as you like.
+				Connect a server and grant read &amp; write access once. New tools on that server are included automatically. Use Advanced permissions when you want individual tool grants.
 			</p>
 
 			{/* The unbound legacy token. Shown until it is bound or discarded, because the alternative
@@ -422,7 +406,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 						<li key={c.endpoint} className="text-xs mb-1.5">
 							<div className="flex items-center gap-2">
 								<code className="font-mono text-muted truncate max-w-[16rem]">{c.endpoint}</code>
-								<span className="text-muted-soft">{c.wildcard ? "all tools" : `${c.grants.length} tool${c.grants.length === 1 ? "" : "s"}`}</span>
+								<span className="text-muted-soft">{c.wildcard ? "read & write" : `${c.grants.length} individual grant${c.grants.length === 1 ? "" : "s"}`}</span>
 								{(() => {
 									const note = credentialNote(creds.credentials, c.endpoint);
 									return <span className={note.tone === "amber" ? "text-warning" : "text-muted-soft"}>· {note.label}</span>;
@@ -456,6 +440,9 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 									Disconnect
 								</button>
 							</div>
+							<McpServerAccess endpoint={c.endpoint} enabled={c.wildcard} busy={busyTool !== ""} onChange={(enabled) => setGrant(c.endpoint, "*", enabled)} />
+							<details>
+								<summary className="text-2xs text-muted-soft cursor-pointer">Advanced permissions · individual grants</summary>
 							<div className="flex flex-wrap gap-1 mt-0.5">
 								{c.grants.map((g) => (
 									<span key={g.tool} className="px-1.5 py-0.5 rounded bg-paper border border-line font-mono text-2xs">
@@ -467,6 +454,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 									</span>
 								))}
 							</div>
+							</details>
 							{/* The account picker (#1267) — only rendered once there is a choice to make.
 							    With one account connected, every instance resolves to it silently. */}
 							{(() => {
@@ -713,23 +701,15 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 
 					{report.tools.length > 0 && (
 						<div className="mt-2">
-							<div className="flex items-center gap-2 mb-1">
-								<span className="text-2xs font-semibold">Tools on this server</span>
-								<button
-									type="button"
-									className="ml-auto text-2xs text-accent hover:underline"
-									disabled={busyTool !== ""}
-									onClick={() => setGrant(report.endpoint, "*", true)}
-								>
-									Allow all non-destructive
-								</button>
-							</div>
+							{!connections.some((c) => c.endpoint === report.endpoint) && <McpServerAccess endpoint={report.endpoint} enabled={false} busy={busyTool !== ""} onChange={(enabled) => setGrant(report.endpoint, "*", enabled)} />}
+							<details>
+								<summary className="text-2xs font-semibold cursor-pointer mb-1">Advanced permissions · tools on this server</summary>
 							{report.tools.map((t) => (
 								<label key={t.name} className="flex items-start gap-2 text-xs mb-1 cursor-pointer">
 									<input
 										type="checkbox"
 										checked={t.granted}
-										disabled={busyTool === `${report.endpoint}::${t.name}`}
+										disabled={busyTool !== "" || (!t.destructive && grants.some((g) => g.endpoint === report.endpoint && g.tool === "*"))}
 										onChange={(e) => setGrant(report.endpoint, t.name, e.target.checked)}
 										className="mt-0.5"
 									/>
@@ -741,6 +721,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 									</span>
 								</label>
 							))}
+							</details>
 						</div>
 					)}
 				</div>

@@ -320,7 +320,7 @@ describe("consentChip", () => {
 
 	it("does not send the owner to a checkbox that is already ticked", () => {
 		// mcp reaches per_call only AFTER the connector row is granted — reach is per server+tool.
-		expect(consentChip(mcpCall)).toBe("granted per server + tool");
+		expect(consentChip(mcpCall)).toBe("granted per server");
 	});
 
 	it("stays silent when nothing is in the way", () => {
