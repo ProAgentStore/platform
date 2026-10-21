@@ -1,0 +1,1663 @@
+{
+  "meta": {
+    "driver": "scripted",
+    "model": null,
+    "revision": "bc9541f6",
+    "sha": "bc9541f6",
+    "dirty": false,
+    "at": "2026-10-21T18:46:29.607Z",
+    "node": "v26.5.1",
+    "tasks": 19
+  },
+  "results": [
+    {
+      "taskId": "github-connector-tool",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "list_instance_tools",
+        "args": {
+          "instance_id": "inst-1",
+          "allowed_only": true,
+          "schemas": true
+        }
+      },
+      "score": {
+        "tool": "list_instance_tools",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/tools",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "github-connector-tool",
+      "variant": "guessed-tool-name",
+      "driver": "scripted",
+      "call": {
+        "name": "call_instance_tool",
+        "args": {
+          "instance_id": "inst-1",
+          "tool": "github_list_open_issues",
+          "input": {}
+        }
+      },
+      "score": {
+        "tool": "call_instance_tool",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"error\":\"\\\"github_list_open_issues\\\" is not one of this agent's tools\"}",
+        "---MCP-RECEIPT---\ntool: call_instance_tool\nrequestId: 3\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/tools/github_list_open_issues",
+          "body": "{}"
+        }
+      ]
+    },
+    {
+      "taskId": "queue-on-busy-instance",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_loop_start",
+        "args": {
+          "instance_id": "inst-1",
+          "objective": "triage the open bugs",
+          "queue_if_busy": true
+        }
+      },
+      "score": {
+        "tool": "coding_loop_start",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: coding_loop_start\nrequestId: 4\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/my/instances",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/loop",
+          "body": "{\"requestId\":\"07ca21cd-72f2-40b4-8317-c9b00150847c\",\"objective\":\"triage the open bugs\",\"maxIterations\":10,\"requireRepoChoice\":true,\"queueIfBusy\":true,\"repairCheckout\":false}"
+        }
+      ]
+    },
+    {
+      "taskId": "queue-on-busy-instance",
+      "variant": "no-queue-flag",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_loop_start",
+        "args": {
+          "instance_id": "inst-1",
+          "objective": "triage the open bugs"
+        }
+      },
+      "score": {
+        "tool": "coding_loop_start",
+        "toolMatches": true,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"error\":\"A run is already active on this instance\",\"activeRun\":\"run-9\"}",
+        "---MCP-RECEIPT---\ntool: coding_loop_start\nrequestId: 5\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/my/instances",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/loop",
+          "body": "{\"requestId\":\"fb3b13c6-2abd-419b-b8c4-48bf7867068c\",\"objective\":\"triage the open bugs\",\"maxIterations\":10,\"requireRepoChoice\":true,\"queueIfBusy\":false,\"repairCheckout\":false}"
+        }
+      ]
+    },
+    {
+      "taskId": "queue-on-busy-instance",
+      "variant": "boolean-as-string",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_loop_start",
+        "args": {
+          "instance_id": "inst-1",
+          "objective": "triage the open bugs",
+          "queue_if_busy": "true"
+        }
+      },
+      "score": {
+        "tool": "coding_loop_start",
+        "toolMatches": true,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": true,
+        "unknownTool": false,
+        "isError": true,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "MCP error -32602: Input validation error: Invalid arguments for tool coding_loop_start: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"boolean\",\n    \"received\": \"string\",\n    \"path\": [\n      \"queue_if_busy\"\n    ],\n    \"message\": \"Expected boolean, received string\"\n  }\n]"
+      ],
+      "requests": []
+    },
+    {
+      "taskId": "queue-on-busy-instance",
+      "variant": "camelcase-key",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_loop_start",
+        "args": {
+          "instanceId": "inst-1",
+          "objective": "triage the open bugs",
+          "queueIfBusy": true
+        }
+      },
+      "score": {
+        "tool": "coding_loop_start",
+        "toolMatches": true,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"error\":\"coding_loop_start was called without instance_id, so nothing was started. If you are collecting the result of an earlier start whose answer was lost, poll it: coding_loop_status with instance_id and that start's request_id (or coding_loop_start with instance_id and request_id only). Re-sending the full start with the SAME request_id is also safe — it joins, never double-starts.\",\"startState\":\"not_started\",\"reason\":\"missing_instance_id\",\"poll\":{\"tool\":\"coding_loop_status\",\"input\":{\"instance_id\":\"<instance>\",\"request_id\":\"<the start's request_id>\"}}}",
+        "---MCP-RECEIPT---\ntool: coding_loop_start\nrequestId: 7\nmcpSessionId: unknown\ntarget: n/a\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "remove-repo",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_repo_remove",
+        "args": {
+          "instance_id": "inst-1",
+          "repo_id": "repo-1",
+          "confirm": "coding_repo_remove"
+        }
+      },
+      "score": {
+        "tool": "coding_repo_remove",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true,\"repoId\":\"repo-1\",\"repoName\":null}",
+        "---MCP-RECEIPT---\ntool: coding_repo_remove\nrequestId: 8\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/instances/inst-1/coding/repos/repo-1",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "remove-repo",
+      "variant": "camelcase-repoId",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_repo_remove",
+        "args": {
+          "instanceId": "inst-1",
+          "repoId": "repo-1",
+          "confirm": "coding_repo_remove"
+        }
+      },
+      "score": {
+        "tool": "coding_repo_remove",
+        "toolMatches": true,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": true,
+        "unknownTool": false,
+        "isError": true,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "MCP error -32602: Input validation error: Invalid arguments for tool coding_repo_remove: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"instance_id\"\n    ],\n    \"message\": \"Required\"\n  }\n]"
+      ],
+      "requests": []
+    },
+    {
+      "taskId": "invalid-input-message",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "rename_instance",
+        "args": {
+          "instance_id": "inst-1",
+          "name": "Alpha"
+        }
+      },
+      "score": {
+        "tool": "rename_instance",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: rename_instance\nrequestId: 10\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "path": "/v1/instances/inst-1/name",
+          "body": "{\"name\":\"Alpha\"}"
+        }
+      ]
+    },
+    {
+      "taskId": "invalid-input-message",
+      "variant": "wrong-type-id",
+      "driver": "scripted",
+      "call": {
+        "name": "rename_instance",
+        "args": {
+          "instance_id": 1,
+          "name": "Alpha"
+        }
+      },
+      "score": {
+        "tool": "rename_instance",
+        "toolMatches": true,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": true,
+        "unknownTool": false,
+        "isError": true,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "MCP error -32602: Input validation error: Invalid arguments for tool rename_instance: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"number\",\n    \"path\": [\n      \"instance_id\"\n    ],\n    \"message\": \"Expected string, received number\"\n  }\n]"
+      ],
+      "requests": []
+    },
+    {
+      "taskId": "unknown-tool-name",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "my_instances",
+        "args": {}
+      },
+      "score": {
+        "tool": "my_instances",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"instances\":[{\"id\":\"inst-1\",\"capabilities\":{\"surfaces\":[\"coding\",\"apply\",\"repo\"]}}]}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/my/instances",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "unknown-tool-name",
+      "variant": "invented-name",
+      "driver": "scripted",
+      "call": {
+        "name": "list_instances",
+        "args": {}
+      },
+      "score": {
+        "tool": "list_instances",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": true,
+        "isError": true,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "MCP error -32602: Tool list_instances not found"
+      ],
+      "requests": []
+    },
+    {
+      "taskId": "unknown-tool-name",
+      "variant": "camelcase-name",
+      "driver": "scripted",
+      "call": {
+        "name": "myInstances",
+        "args": {}
+      },
+      "score": {
+        "tool": "myInstances",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": true,
+        "isError": true,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "MCP error -32602: Tool myInstances not found"
+      ],
+      "requests": []
+    },
+    {
+      "taskId": "start-run",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_loop_start",
+        "args": {
+          "instance_id": "inst-1",
+          "objective": "fix the failing lint step"
+        }
+      },
+      "score": {
+        "tool": "coding_loop_start",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: coding_loop_start\nrequestId: 15\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/my/instances",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/loop",
+          "body": "{\"requestId\":\"bde94924-a1e5-4e89-a112-ef74e2c2bce8\",\"objective\":\"fix the failing lint step\",\"maxIterations\":10,\"requireRepoChoice\":true,\"queueIfBusy\":false,\"repairCheckout\":false}"
+        }
+      ]
+    },
+    {
+      "taskId": "start-run",
+      "variant": "deprecated-alias",
+      "driver": "scripted",
+      "call": {
+        "name": "start_instance_loop",
+        "args": {
+          "instance_id": "inst-1",
+          "objective": "fix the failing lint step"
+        }
+      },
+      "score": {
+        "tool": "start_instance_loop",
+        "toolMatches": false,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: start_instance_loop\nrequestId: 16\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/loop",
+          "body": "{\"objective\":\"fix the failing lint step\"}"
+        }
+      ]
+    },
+    {
+      "taskId": "check-run",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_loop_status",
+        "args": {
+          "instance_id": "inst-1",
+          "run_id": "run-1"
+        }
+      },
+      "score": {
+        "tool": "coding_loop_status",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/my/instances",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/loop/run-1",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "check-run",
+      "variant": "deprecated-alias",
+      "driver": "scripted",
+      "call": {
+        "name": "check_instance_loop",
+        "args": {
+          "instance_id": "inst-1",
+          "run_id": "run-1"
+        }
+      },
+      "score": {
+        "tool": "check_instance_loop",
+        "toolMatches": false,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/loop/run-1",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "stop-run",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_loop_stop",
+        "args": {
+          "instance_id": "inst-1",
+          "run_id": "run-1"
+        }
+      },
+      "score": {
+        "tool": "coding_loop_stop",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true,\"runId\":\"run-1\"}",
+        "---MCP-RECEIPT---\ntool: coding_loop_stop\nrequestId: 19\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/my/instances",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/loop/run-1/cancel",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "stop-run",
+      "variant": "deprecated-alias",
+      "driver": "scripted",
+      "call": {
+        "name": "stop_instance_loop",
+        "args": {
+          "instance_id": "inst-1",
+          "run_id": "run-1"
+        }
+      },
+      "score": {
+        "tool": "stop_instance_loop",
+        "toolMatches": false,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: stop_instance_loop\nrequestId: 20\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/loop/run-1/cancel",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "read-diagnostics",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "coding_diagnostics",
+        "args": {
+          "instance_id": "inst-1"
+        }
+      },
+      "score": {
+        "tool": "coding_diagnostics",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/coding/diagnostics",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "read-diagnostics",
+      "variant": "deprecated-alias",
+      "driver": "scripted",
+      "call": {
+        "name": "system_status",
+        "args": {
+          "instance_id": "inst-1"
+        }
+      },
+      "score": {
+        "tool": "system_status",
+        "toolMatches": false,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/my/instances",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/coding/diagnostics",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "platform-quick-start",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "platform_guide",
+        "args": {}
+      },
+      "score": {
+        "tool": "platform_guide",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "# ProAgentStore Platform Guide\n\nMarketplace for server-powered AI agents. Creators build agent templates, clients subscribe and run them on their own data.\n\n## Agent Types: Agents | Workers | Tools\n## CLI: pags init <name> --template worker|cron|api, pags check, pags publish\n## Tools: 366 tools registered — 339 are always on, 27 are gated to the console surfaces of the agents you are subscribed to (apply, repo, coding). Call tools/list for this connection’s actual set; subscription gating and pinned endpoints can legitimately expose fewer tools than the full catalog. A smaller count alone does not prove stale discovery; the groups below name entry points, not the whole surface.\n## Server identity: ProAgentStore version 0.1.157; schema revision sha256:3d3cd7c3fa753c13fd7cd8edcdc3cc6fc4c0b683adfcbae70be8a2f25cfcfa53. These are served live by this guide, even when a host’s discovered catalog lacks newer tools.\n## Discovery diagnostics: mcp_server_info is available on every endpoint. coding_engine_reauth is published on the platform endpoint only when your subscribed agents include the coding console surface; runtime permission is checked when called. If an expected tool is absent, compare the endpoint, account and tools/list with this live identity. Explicitly refresh the host connection’s tool metadata and confirm the advertised tools before testing in a new chat; reconnecting or starting a new chat alone does not establish that discovery refreshed.\n## Creator: scaffold an agent from a template, read and write the files in its repo, configure its board, publish it and watch the deploy.\n## Subscriber runtime: subscribe_agent then my_instances for what you own, or recent_instances for the few you drove last and how their latest runs stand; chat_with_instance to talk to one; add documents, settings, triggers and connector tools per instance; register a local machine and queue work on it.\n## Instance tools — an agent's OWN tools are one level down from this surface, and are usually the DIRECT path: list_instance_tools names what one instance may actually run (its GitHub, HTTP and search connectors as well as its own memory, files and knowledge) with a per-tool verdict, and call_instance_tool invokes one. Check there BEFORE reaching for coding_session_message: making a terminal shell out for something an instance tool already does returns a truncated pane instead of structured data, and is the fallback rather than the first path. To call one, first run list_instance_tools with schemas:true, then pass call_instance_tool the exact tool name and an input object whose field names are the ones that schema declares — never guessed from memory or from a similar tool — and only for a tool whose invocableBy lists call_instance_tool. Something that needs no code change — reading, filing or commenting on a GitHub issue (github_create_issue), reading a file (repo_read_file) — is one such call, not a coding run: keep coding_loop_start for work that must change the repository.\n## Coding — watching and driving a run on your own machine: coding_timeline is what a run is DOING and what a finished one did (objective, every instruction, tool calls, outcome). coding_session_capture reads the live pane; a session that has ENDED answers it empty, and coding_terminal returns that run's stored pane text in full instead. coding_loop_start gives an agent an objective and returns immediately — supervise it with coding_loop_status and end it with coding_loop_stop.\n## Observability — what an agent actually did, and what it cost: agent_trace first (chat turns, run steps and failures interleaved on one timeline, filterable by trace or source), then instance_activity for an instance's own record, list_errors for the durable error log, instance_board for the work it is tracking, and usage_summary for tokens and spend.\n## Public trial: chat_with_agent calls /v1/public/agents/:id/try and is for previews, not the main user runtime\n## URLs: Store proagentstore.online, API api.proagentstore.online, MCP mcp.proagentstore.online/mcp\n## Key endpoints: GET /v1/agents, POST /v1/public/agents/:id/try, POST /v1/instances/:id/subscribe, POST /v1/instances/:instanceId/chat"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "platform-quick-start",
+      "variant": "wrong-tool-server-info",
+      "driver": "scripted",
+      "call": {
+        "name": "mcp_server_info",
+        "args": {}
+      },
+      "score": {
+        "tool": "mcp_server_info",
+        "toolMatches": false,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"server_name\":\"ProAgentStore\",\"server_version\":\"0.1.157\",\"mcp_protocol_version\":\"2025-11-25\",\"tool_count\":366,\"build_commit\":\"unknown\",\"schema_revision\":\"sha256:3d3cd7c3fa753c13fd7cd8edcdc3cc6fc4c0b683adfcbae70be8a2f25cfcfa53\",\"deployed_at\":\"unknown\"}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "sdk-reference",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "sdk_reference",
+        "args": {}
+      },
+      "score": {
+        "tool": "sdk_reference",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "# SDK: import { initPro } from '@proagentstore/sdk'\nconst agent = initPro({ agentId: '...', token: '...' })\nawait agent.chat('Hello!')\nawait agent.memory.set('key', 'type', 'content')\nawait agent.tasks.create('title', 'description')\n# Widget: <script src=\"https://proagentstore.online/widget.js\" data-agent=\"slug\"></script>\n# Webhook: POST /v1/public/webhook/INSTANCE_ID/ingest with {title, content}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "sdk-reference",
+      "variant": "wrong-tool-guide",
+      "driver": "scripted",
+      "call": {
+        "name": "platform_guide",
+        "args": {}
+      },
+      "score": {
+        "tool": "platform_guide",
+        "toolMatches": false,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "# ProAgentStore Platform Guide\n\nMarketplace for server-powered AI agents. Creators build agent templates, clients subscribe and run them on their own data.\n\n## Agent Types: Agents | Workers | Tools\n## CLI: pags init <name> --template worker|cron|api, pags check, pags publish\n## Tools: 366 tools registered — 339 are always on, 27 are gated to the console surfaces of the agents you are subscribed to (apply, repo, coding). Call tools/list for this connection’s actual set; subscription gating and pinned endpoints can legitimately expose fewer tools than the full catalog. A smaller count alone does not prove stale discovery; the groups below name entry points, not the whole surface.\n## Server identity: ProAgentStore version 0.1.157; schema revision sha256:3d3cd7c3fa753c13fd7cd8edcdc3cc6fc4c0b683adfcbae70be8a2f25cfcfa53. These are served live by this guide, even when a host’s discovered catalog lacks newer tools.\n## Discovery diagnostics: mcp_server_info is available on every endpoint. coding_engine_reauth is published on the platform endpoint only when your subscribed agents include the coding console surface; runtime permission is checked when called. If an expected tool is absent, compare the endpoint, account and tools/list with this live identity. Explicitly refresh the host connection’s tool metadata and confirm the advertised tools before testing in a new chat; reconnecting or starting a new chat alone does not establish that discovery refreshed.\n## Creator: scaffold an agent from a template, read and write the files in its repo, configure its board, publish it and watch the deploy.\n## Subscriber runtime: subscribe_agent then my_instances for what you own, or recent_instances for the few you drove last and how their latest runs stand; chat_with_instance to talk to one; add documents, settings, triggers and connector tools per instance; register a local machine and queue work on it.\n## Instance tools — an agent's OWN tools are one level down from this surface, and are usually the DIRECT path: list_instance_tools names what one instance may actually run (its GitHub, HTTP and search connectors as well as its own memory, files and knowledge) with a per-tool verdict, and call_instance_tool invokes one. Check there BEFORE reaching for coding_session_message: making a terminal shell out for something an instance tool already does returns a truncated pane instead of structured data, and is the fallback rather than the first path. To call one, first run list_instance_tools with schemas:true, then pass call_instance_tool the exact tool name and an input object whose field names are the ones that schema declares — never guessed from memory or from a similar tool — and only for a tool whose invocableBy lists call_instance_tool. Something that needs no code change — reading, filing or commenting on a GitHub issue (github_create_issue), reading a file (repo_read_file) — is one such call, not a coding run: keep coding_loop_start for work that must change the repository.\n## Coding — watching and driving a run on your own machine: coding_timeline is what a run is DOING and what a finished one did (objective, every instruction, tool calls, outcome). coding_session_capture reads the live pane; a session that has ENDED answers it empty, and coding_terminal returns that run's stored pane text in full instead. coding_loop_start gives an agent an objective and returns immediately — supervise it with coding_loop_status and end it with coding_loop_stop.\n## Observability — what an agent actually did, and what it cost: agent_trace first (chat turns, run steps and failures interleaved on one timeline, filterable by trace or source), then instance_activity for an instance's own record, list_errors for the durable error log, instance_board for the work it is tracking, and usage_summary for tokens and spend.\n## Public trial: chat_with_agent calls /v1/public/agents/:id/try and is for previews, not the main user runtime\n## URLs: Store proagentstore.online, API api.proagentstore.online, MCP mcp.proagentstore.online/mcp\n## Key endpoints: GET /v1/agents, POST /v1/public/agents/:id/try, POST /v1/instances/:id/subscribe, POST /v1/instances/:instanceId/chat"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "try-public-agent",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "chat_with_agent",
+        "args": {
+          "agent_id": "ag-1",
+          "message": "What can you do?"
+        }
+      },
+      "score": {
+        "tool": "chat_with_agent",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "No response\n\nSession: none",
+        "---MCP-RECEIPT---\ntool: chat_with_agent\nrequestId: 27\nmcpSessionId: unknown\ntarget: agent_id=ag-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/public/agents/ag-1/try",
+          "body": "{\"message\":\"What can you do?\"}"
+        }
+      ]
+    },
+    {
+      "taskId": "try-public-agent",
+      "variant": "instance-chat-with-agent-id",
+      "driver": "scripted",
+      "call": {
+        "name": "chat_with_instance",
+        "args": {
+          "instance_id": "ag-1",
+          "message": "What can you do?"
+        }
+      },
+      "score": {
+        "tool": "chat_with_instance",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "No response",
+        "---MCP-RECEIPT---\ntool: chat_with_instance\nrequestId: 28\nmcpSessionId: unknown\ntarget: instance_id=ag-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/ag-1/chat",
+          "body": "{\"message\":\"What can you do?\",\"origin\":\"mcp\"}"
+        }
+      ]
+    },
+    {
+      "taskId": "add-instance-knowledge",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "add_instance_knowledge",
+        "args": {
+          "instance_id": "inst-1",
+          "title": "Refund policy",
+          "content": "Refunds within 30 days."
+        }
+      },
+      "score": {
+        "tool": "add_instance_knowledge",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "Added to instance: Refund policy",
+        "---MCP-RECEIPT---\ntool: add_instance_knowledge\nrequestId: 29\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/knowledge",
+          "body": "{\"title\":\"Refund policy\",\"content\":\"Refunds within 30 days.\",\"source\":\"mcp\"}"
+        }
+      ]
+    },
+    {
+      "taskId": "add-instance-knowledge",
+      "variant": "template-tool",
+      "driver": "scripted",
+      "call": {
+        "name": "add_knowledge",
+        "args": {
+          "agent_id": "inst-1",
+          "title": "Refund policy",
+          "content": "Refunds within 30 days."
+        }
+      },
+      "score": {
+        "tool": "add_knowledge",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "Added: Refund policy",
+        "---MCP-RECEIPT---\ntool: add_knowledge\nrequestId: 30\nmcpSessionId: unknown\ntarget: agent_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/agents/inst-1/knowledge",
+          "body": "{\"title\":\"Refund policy\",\"content\":\"Refunds within 30 days.\",\"source\":\"paste\"}"
+        }
+      ]
+    },
+    {
+      "taskId": "list-instance-knowledge",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "list_instance_knowledge",
+        "args": {
+          "instance_id": "inst-1"
+        }
+      },
+      "score": {
+        "tool": "list_instance_knowledge",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/knowledge",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "list-instance-knowledge",
+      "variant": "template-tool",
+      "driver": "scripted",
+      "call": {
+        "name": "list_knowledge",
+        "args": {
+          "agent_id": "inst-1"
+        }
+      },
+      "score": {
+        "tool": "list_knowledge",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "[]"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/agents/inst-1/knowledge",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "query-instance-records",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "query_instance_records",
+        "args": {
+          "instance_id": "inst-1",
+          "collection": "leads",
+          "limit": 5
+        }
+      },
+      "score": {
+        "tool": "query_instance_records",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/collections/leads/records",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "query-instance-records",
+      "variant": "template-tool",
+      "driver": "scripted",
+      "call": {
+        "name": "query_records",
+        "args": {
+          "agent_id": "inst-1",
+          "collection": "leads",
+          "limit": 5
+        }
+      },
+      "score": {
+        "tool": "query_records",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/agents/inst-1/collections/leads/records",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "query-instance-records",
+      "variant": "number-as-string",
+      "driver": "scripted",
+      "call": {
+        "name": "query_instance_records",
+        "args": {
+          "instance_id": "inst-1",
+          "collection": "leads",
+          "limit": "5"
+        }
+      },
+      "score": {
+        "tool": "query_instance_records",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/collections/leads/records",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "insert-instance-record",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "insert_instance_record",
+        "args": {
+          "instance_id": "inst-1",
+          "collection": "leads",
+          "data": "{\"name\":\"Acme\",\"status\":\"new\"}"
+        }
+      },
+      "score": {
+        "tool": "insert_instance_record",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: insert_instance_record\nrequestId: 36\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/collections/leads/records",
+          "body": "{\"data\":{\"name\":\"Acme\",\"status\":\"new\"}}"
+        }
+      ]
+    },
+    {
+      "taskId": "insert-instance-record",
+      "variant": "template-tool",
+      "driver": "scripted",
+      "call": {
+        "name": "insert_record",
+        "args": {
+          "agent_id": "inst-1",
+          "collection": "leads",
+          "data": "{\"name\":\"Acme\",\"status\":\"new\"}"
+        }
+      },
+      "score": {
+        "tool": "insert_record",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: insert_record\nrequestId: 37\nmcpSessionId: unknown\ntarget: agent_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/agents/inst-1/collections/leads/records",
+          "body": "{\"data\":{\"name\":\"Acme\",\"status\":\"new\"}}"
+        }
+      ]
+    },
+    {
+      "taskId": "insert-instance-record",
+      "variant": "object-for-json-string",
+      "driver": "scripted",
+      "call": {
+        "name": "insert_instance_record",
+        "args": {
+          "instance_id": "inst-1",
+          "collection": "leads",
+          "data": {
+            "name": "Acme",
+            "status": "new"
+          }
+        }
+      },
+      "score": {
+        "tool": "insert_instance_record",
+        "toolMatches": true,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": true,
+        "unknownTool": false,
+        "isError": true,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "MCP error -32602: Input validation error: Invalid arguments for tool insert_instance_record: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"object\",\n    \"path\": [\n      \"data\"\n    ],\n    \"message\": \"Expected string, received object\"\n  }\n]"
+      ],
+      "requests": []
+    },
+    {
+      "taskId": "instance-activity",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "instance_activity",
+        "args": {
+          "instance_id": "inst-1",
+          "limit": 10
+        }
+      },
+      "score": {
+        "tool": "instance_activity",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/activity",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "instance-activity",
+      "variant": "agent-activity",
+      "driver": "scripted",
+      "call": {
+        "name": "agent_activity",
+        "args": {
+          "agent_id": "inst-1",
+          "limit": 10
+        }
+      },
+      "score": {
+        "tool": "agent_activity",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/agents/inst-1/activity",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "answer-handoff",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "answer_instance_input",
+        "args": {
+          "instance_id": "inst-1",
+          "task_id": "task-7",
+          "value": "yes, proceed"
+        }
+      },
+      "score": {
+        "tool": "answer_instance_input",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}",
+        "---MCP-RECEIPT---\ntool: answer_instance_input\nrequestId: 41\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/input",
+          "body": "{\"taskId\":\"task-7\",\"value\":\"yes, proceed\"}"
+        }
+      ]
+    },
+    {
+      "taskId": "answer-handoff",
+      "variant": "camelcase-task-id",
+      "driver": "scripted",
+      "call": {
+        "name": "answer_instance_input",
+        "args": {
+          "instanceId": "inst-1",
+          "taskId": "task-7",
+          "value": "yes, proceed"
+        }
+      },
+      "score": {
+        "tool": "answer_instance_input",
+        "toolMatches": true,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": true,
+        "unknownTool": false,
+        "isError": true,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "MCP error -32602: Input validation error: Invalid arguments for tool answer_instance_input: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"instance_id\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"task_id\"\n    ],\n    \"message\": \"Required\"\n  }\n]"
+      ],
+      "requests": []
+    },
+    {
+      "taskId": "approve-application",
+      "variant": "clean",
+      "driver": "scripted",
+      "call": {
+        "name": "describe_instance",
+        "args": {
+          "instance_id": "inst-1"
+        }
+      },
+      "score": {
+        "tool": "describe_instance",
+        "toolMatches": true,
+        "effective": true,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": true,
+        "noteText": []
+      },
+      "texts": [
+        "{\"success\":true}"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/instances/inst-1/description",
+          "body": null
+        }
+      ]
+    },
+    {
+      "taskId": "approve-application",
+      "variant": "decision-tool-on-wrong-instance",
+      "driver": "scripted",
+      "call": {
+        "name": "approve_application",
+        "args": {
+          "instance_id": "inst-1",
+          "application_id": "app-1",
+          "expected_status": "ready",
+          "confirm": "approve_application"
+        }
+      },
+      "score": {
+        "tool": "approve_application",
+        "toolMatches": false,
+        "effective": false,
+        "notes": 0,
+        "deprecated": false,
+        "invalidInput": false,
+        "unknownTool": false,
+        "isError": false,
+        "firstCallSuccess": false,
+        "noteText": []
+      },
+      "texts": [
+        "Error: not part of an application pipeline",
+        "---MCP-RECEIPT---\ntool: approve_application\nrequestId: 44\nmcpSessionId: unknown\ntarget: instance_id=inst-1\n---END-RECEIPT---"
+      ],
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/auth/me",
+          "body": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/instances/inst-1/application-queue/actions",
+          "body": "{\"action\":\"approve_and_proceed\",\"application_id\":\"app-1\",\"expected_status\":\"ready\"}"
+        }
+      ]
+    }
+  ],
+  "clean": {
+    "calls": 19,
+    "firstCallSuccess": 19,
+    "effective": 19,
+    "noted": 0,
+    "deprecated": 0,
+    "invalidInput": 0,
+    "unknownTool": 0,
+    "wrongTool": 0
+  },
+  "sloppy": {
+    "calls": 24,
+    "firstCallSuccess": 1,
+    "effective": 7,
+    "noted": 0,
+    "deprecated": 0,
+    "invalidInput": 5,
+    "unknownTool": 2,
+    "wrongTool": 16
+  },
+  "all": {
+    "calls": 43,
+    "firstCallSuccess": 20,
+    "effective": 26,
+    "noted": 0,
+    "deprecated": 0,
+    "invalidInput": 5,
+    "unknownTool": 2,
+    "wrongTool": 16
+  }
+}

@@ -606,9 +606,10 @@ Filed against #1241:
   - **Descriptions:** the 40 remaining short ones follow the conventions template (`e6f39ced`).
   - **Found on the way:** `coding_session_restart` reports success with no runner connected
     (#1262).
-- **Agent eval (#1244)**: a model is given owner-shaped tasks drawn from §6, calls tools through a
-  real client, and is scored on first-call success, with a baseline. That is the acceptance measure
-  this document's proxies stand in for.
+- **Agent eval (#1244), harness and server-side baseline done; the live model score is open.** The
+  harness, the 19 tasks covering every §6 row, the scorer and the before/after run of the server's
+  handling of each offender shape are in §9. What is not yet measured is how often a MODEL makes
+  those mistakes (the live run needs a model API key; §9.5).
 - **Label guidance (#1245)**: surface the label vocabulary in the tools that set labels.
 - **commit-close-watch noise (#1246)**: about 40k of 46k error-log rows in 30 days (§3.3).
 
@@ -620,3 +621,84 @@ Filed against #1241:
   recorded decision.
 - The actionable-error, alias and coercion behaviour is pinned by `argument-normalize.test.ts`,
   through a real server and client.
+
+## 9. Agent eval (#1244)
+
+### 9.1 What it is
+
+`workers/mcp/src/eval/` holds a harness that runs owner-shaped tasks against a real `PagsMcp` over a real
+MCP client (the same construction as `argument-normalize.test.ts`), with the platform API stubbed per task and
+every API request recorded.
+
+- **Tasks** (`tasks.ts`): 19, covering every row of §6. Each is what an owner would say (never naming the
+  tool), the one tool that does it, the API request that proves it was done, the careful call, and the
+  recorded mistakes — each taken from the ledger or error log (§3) or the direct shape of an offender row.
+  Instance ids are exact in the prompts, so a miss is the tool's or its description's.
+- **Scorer** (`scorer.ts`): per call, **first-call success** = the right tool, valid as sent, no #1241
+  alias/coercion note, no deprecated-alias reply, and the API request made. Also counted: calls answered with a
+  note, `invalid_input`, unknown-tool, deprecated-alias and wrong-tool replies. `effective` is the lenient
+  companion — the task got done, notes or not. The gap between the two is what the server's tolerance hides.
+- **Drivers** (`driver.ts`): `ScriptedDriver` replays fixed calls; `anthropicDriver` asks a real model (Messages
+  API, one forced tool call, temperature 0) from the owner's words and the server's real `tools/list`.
+
+### 9.2 Running it
+
+```
+node scripts/mcp-agent-eval.mjs                    # scripted corpus, this checkout (deterministic, no network)
+node scripts/mcp-agent-eval.mjs --ref bc9541f6     # the same corpus against an older revision (temporary worktree)
+ANTHROPIC_API_KEY=… node scripts/mcp-agent-eval.mjs --driver live [--model <id>]
+```
+
+Each run prints a per-call table and stores `docs/mcp-eval/results-<driver>-<ref>-<sha>-<time>.json`
+(`baseline-pre-eb57ef71.json` and `baseline-current.json` are the two stored below).
+
+### 9.3 Execution model
+
+- **CI: the scripted corpus.** It is deterministic and free, so `workers/mcp/src/eval/eval.test.ts` runs in the
+  unit suite: the scorer, the drivers, task integrity (every §6 row covered, no prompt names its tool, every
+  expected tool registered), every careful call a first-call success, every recorded mistake classified as
+  expected, and the corpus totals pinned. A surface change that moves a total is a decision, not drift.
+- **On demand, with stored results: the live model run.** A model call per task (each carrying all 380+ tool
+  definitions) costs money, and a model answers differently on a different day, so it is never a CI gate. Run it
+  when the tool surface or descriptions change and commit the result file beside the date and model.
+
+### 9.4 Baseline: the server's handling of the offender shapes
+
+The revision before `eb57ef71` is `bc9541f6`. The same 19 tasks (19 careful calls, 24 recorded mistakes) were
+replayed against it and against current `main` with the scripted driver, by the commands above.
+
+| | before (`bc9541f6`) | now (`main`) |
+|---|---:|---:|
+| careful calls that are a first-call success | 19 / 19 | 19 / 19 |
+| mistakes that still got the task done (`effective`) | 7 / 24 | 11 / 24 |
+| mistakes answered with a #1241 note (the schema misled the caller) | 0 | 5 |
+| deprecated-alias replies (#1243) | 0 | 4 |
+| `invalid_input` replies | 5 | 2 |
+| unknown-tool replies | 2 | 2 |
+| mistakes that chose a different tool than the right one | 16 | 16 |
+
+What moved: four mistakes that **failed** before now succeed with a note naming the fix — `queue_if_busy: "true"`
+(`boolean-as-string`), `instanceId` + `queueIfBusy` on `coding_loop_start`, `repoId` on `coding_repo_remove` (§6 #3,
+the ledger's own case) and `taskId` on `answer_instance_input`. The two that remain `invalid_input` are the
+ones nothing can guess (`instance_id: 1`, an object for a JSON-string `data`), and now carry the corrected example
+(§6 #4). Unknown tools now suggest the nearest real names (§6 #6); the four duplicate pairs say they are deprecated.
+
+What did not move, and cannot from the server side: **choosing the wrong tool** (16 of 24 mistakes — the template
+tools instead of the instance ones, an alias, `agent_activity` for an instance). Those either still reach the API
+or fail with no hint, because the call is valid for the tool it names. Only the descriptions and the quick start
+(§6 #11–#18, #1243) can help, and only a model run measures whether they do.
+
+**Reading the numbers.** The corpus replays chosen mistakes; it is not a sample of what models do, so
+the rows above say what the server does with a mistake, not how often one is made. The strict first-call figure
+for the mistakes is 1 / 24 before and 0 / 24 now, and that is an artefact, not a regression: before, the one
+success was `limit: "5"` coerced silently (the old server gave no note, so it scored as clean); now the same call
+is correctly counted as the caller being misled. Compare `effective`, `invalidInput` and the note counts across
+revisions, not strict first-call success of the mistake rows.
+
+### 9.5 Not yet measured
+
+The live score — how often a model chooses the right tool with valid arguments on the first call — has not been
+run: this environment has no model API key, and the harness refuses to start a live run without one rather than
+guess. To close #1244: run `ANTHROPIC_API_KEY=… node scripts/mcp-agent-eval.mjs --driver live` on the current
+revision and on `--ref bc9541f6 --driver live` with the same `--model`, commit both result files, and add the two
+first-call rates here beside the table above.

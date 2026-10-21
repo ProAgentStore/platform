@@ -4,6 +4,8 @@
  * integrity) and what the SERVER does with each of the audit's offender shapes today. How often a MODEL makes a mistake is the live run
  * (`node scripts/mcp-agent-eval.mjs --driver live`, on demand — docs/mcp-tool-audit.md §9).
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@cloudflare/workers-oauth-provider", () => ({ OAuthProvider: class {} }));
@@ -215,5 +217,30 @@ describe("against the real server, over a real client", () => {
 		expect(live.all.firstCallSuccess).toBe(TASKS.length);
 		expect(live.sloppy.calls).toBe(0);
 		expect(live.results[0]).toMatchObject({ variant: "live", driver: "fake-model" });
+	});
+});
+
+describe("the stored baselines (docs/mcp-eval)", () => {
+	const load = (name: string) => JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../docs/mcp-eval", name), "utf8")) as { meta: { revision: string; sha: string; driver: string }; clean: { calls: number; firstCallSuccess: number }; sloppy: Record<string, number>; results: Array<{ taskId: string; variant: string }> };
+
+	it("the pre-eb57ef71 baseline is the parent revision, the same tasks and variants as now, and a scripted run", () => {
+		const before = load("baseline-pre-eb57ef71.json");
+		const now = load("baseline-current.json");
+		expect(before.meta).toMatchObject({ revision: "bc9541f6", driver: "scripted" });
+		expect(now.meta.driver).toBe("scripted");
+		expect(before.results.map((r) => `${r.taskId}/${r.variant}`)).toEqual(now.results.map((r) => `${r.taskId}/${r.variant}`));
+		expect(now.results.length).toBe(TASKS.reduce((n, t) => n + 1 + t.sloppy.length, 0));
+	});
+
+	it("the numbers in docs/mcp-tool-audit.md section 9.4 are the stored ones", () => {
+		const before = load("baseline-pre-eb57ef71.json");
+		const now = load("baseline-current.json");
+		expect([before.clean.firstCallSuccess, now.clean.firstCallSuccess]).toEqual([19, 19]);
+		expect([before.sloppy.effective, now.sloppy.effective]).toEqual([7, 11]);
+		expect([before.sloppy.noted, now.sloppy.noted]).toEqual([0, 5]);
+		expect([before.sloppy.deprecated, now.sloppy.deprecated]).toEqual([0, 4]);
+		expect([before.sloppy.invalidInput, now.sloppy.invalidInput]).toEqual([5, 2]);
+		expect([before.sloppy.unknownTool, now.sloppy.unknownTool]).toEqual([2, 2]);
+		expect([before.sloppy.wrongTool, now.sloppy.wrongTool]).toEqual([16, 16]);
 	});
 });
