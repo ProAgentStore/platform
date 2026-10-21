@@ -425,7 +425,7 @@ describe("outbound idempotency", () => {
 		await run("email_worker_send", w.ctx(), SEND);
 		const row = w.receipts()[0];
 		expect(() =>
-			w.d1.sqlite.prepare("INSERT INTO email_worker_receipts (id, user_id, endpoint, account_id, kind, outcome, idempotency_key) VALUES ('dup', 'u1', ?, '', 'send', 'sent', ?)").run(row.endpoint, row.idempotency_key),
+			w.d1.sqlite.prepare("INSERT INTO email_worker_receipts (id, user_id, endpoint, account_id, kind, outcome, idempotency_key) VALUES ('dup', 'u1', ?, '', 'send', 'sent', ?)").run(row.endpoint as string, row.idempotency_key as string),
 		).toThrow(/UNIQUE/);
 	});
 });
