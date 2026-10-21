@@ -385,11 +385,33 @@ export class RelayMutationAdmission {
 		};
 	}
 
-	async drain(): Promise<void> {
+	/**
+	 * Stop admitting and wait for the admitted mutations to settle. With `maxMs`, the wait is BOUNDED (#1169): one wedged
+	 * request must not hold the machine in "draining" forever. Resolves true when drained, false when `maxMs` passed with
+	 * work still running — the gate stays closed until the caller decides (`resume()`), and `pending()` says how much.
+	 */
+	async drain(maxMs?: number): Promise<boolean> {
 		this.draining = true;
-		if (this.inFlight === 0) return;
-		await new Promise<void>((resolve) => this.waiters.push(resolve));
+		if (this.inFlight === 0) return true;
+		return new Promise<boolean>((resolve) => {
+			let timer: ReturnType<typeof setTimeout> | null = null;
+			const wake = () => {
+				if (timer) clearTimeout(timer);
+				resolve(true);
+			};
+			this.waiters.push(wake);
+			if (maxMs !== undefined) {
+				timer = setTimeout(() => {
+					this.waiters = this.waiters.filter((w) => w !== wake);
+					resolve(false);
+				}, maxMs);
+				timer.unref?.();
+			}
+		});
 	}
+
+	/** Mutations admitted and not yet settled. */
+	pending(): number { return this.inFlight; }
 
 	resume() { this.draining = false; }
 }

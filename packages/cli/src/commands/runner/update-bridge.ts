@@ -132,7 +132,12 @@ export interface InstallBridgeDeps {
 	/** The short pause that lets a request admitted just before the drain show up in /health. */
 	settle?: () => Promise<void>;
 	bound?: Bound;
+	/** How long the mutation drain may wait for admitted requests to settle (#1169). */
+	drainMs?: number;
 }
+
+/** A request the local runtime has not answered after this long no longer holds an update hostage. */
+export const DEFAULT_DRAIN_MS = 120_000;
 
 /**
  * Install the release, then report that the process may leave to restart (#860, #1008). EVERY wait is bounded
@@ -182,7 +187,13 @@ export function createInstallBridge(deps: InstallBridgeDeps) {
 		}
 		// Npm may run for minutes. Block new work, then re-admit restart after it finishes, rather than trusting the
 		// idle snapshot that admitted installation; a run that began during npm must survive.
-		await deps.admission.drain();
+		const drainMs = deps.drainMs ?? DEFAULT_DRAIN_MS;
+		if ((await deps.admission.drain(drainMs)) === false) {
+			// The install is kept (a retry does not run npm again); the gate reopens so the machine accepts work again.
+			const stuck = deps.admission.pending();
+			release(true);
+			throw new BoundExpired(`${stuck} local request${stuck === 1 ? " is" : "s are"} still running after ${Math.round(drainMs / 1000)}s, so the restart waited no longer; nothing restarted and it will be retried. A forced runner_restart restarts now.`);
+		}
 		await (deps.settle ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 500))))();
 		if (lease && !deps.leaseActive(lease)) {
 			release(true);

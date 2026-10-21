@@ -238,3 +238,12 @@ export async function installVersion(version: string, current: string | null = n
 	}
 	logUpdateStep(`install: ${version} installed`);
 }
+
+/**
+ * Whether an in-flight install/restart refuses a `runner_restart` (#1169). Only an UNFORCED one: the forced restart is the
+ * recovery tool for a wedged machine, so it must work exactly when something is stuck.
+ */
+export function restartBlockedByInstall(installInFlight: boolean, force: boolean): string | null {
+	if (!installInFlight || force) return null;
+	return "A runner update is installing or restarting; nothing else restarted. Pass force to restart anyway.";
+}

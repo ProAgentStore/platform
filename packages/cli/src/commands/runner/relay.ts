@@ -7,7 +7,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, restartBlockedByInstall, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
@@ -286,14 +286,16 @@ export async function connectViaRelay(
 		const request = body as { dryRun?: unknown; force?: unknown } | undefined;
 		const dryRun = request?.dryRun === true;
 		const force = request?.force === true;
-		if (bridge.inFlight()) return { status: 409, result: { error: "A runner update is installing or restarting; nothing else restarted." } };
+		// A forced restart goes past an in-flight install (#1169): the recovery tool must work exactly when something is wedged.
+		const blocked = restartBlockedByInstall(bridge.inFlight(), force);
+		if (blocked) return { status: 409, result: { error: blocked } };
 		const look = force ? null : await boundedWork((signal) => workLook(signal));
 		const plan = planRunnerRestart({ current: CLI_VERSION, restarter: restarterFrom(process.env), busy: force ? [] : (look?.busy ?? null), force });
 		if (dryRun || plan.action === "refused") return { status: 200, result: { ...plan, dryRun } };
 		// Answered before leaving, like an update: the relay sends this reply before timers run.
 		setTimeout(() => leaveForRestart(plan.restarter), 25).unref();
 		const supervisor = supervisorNote(plan.restarter);
-		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.current, restartedBy: plan.restarter, forced: force, ...(supervisor ? { supervisor } : {}) } };
+		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.current, restartedBy: plan.restarter, forced: force, ...(force && bridge.inFlight() ? { interruptedInstall: true } : {}), ...(supervisor ? { supervisor } : {}) } };
 	};
 
 	const answerControl = async (path: string, body?: unknown): Promise<{ status: number; result: unknown }> => {
@@ -605,6 +607,10 @@ export interface RelaySocketHandle {
 	probeRtt(timeoutMs?: number): Promise<number | null>;
 }
 
+/** How long a relayed command may wait on the local runtime (#1169). Without it one wedged request held a mutation slot — and
+ *  so the update drain — forever. Mutable so a test need not wait ten minutes. */
+export const relayLimits = { forwardMs: 600_000 };
+
 /** The relay echo protocol (#924): the runner sends `rtt:<id>`, the RelayDO answers `rtt-echo:<id>`. */
 export const RTT_PROBE_PREFIX = "rtt:";
 export const RTT_ECHO_PREFIX = "rtt-echo:";
@@ -811,6 +817,7 @@ export function openRelaySocket(
 					method,
 					headers,
 					body: hasBody ? JSON.stringify(cmd.body) : undefined,
+					signal: AbortSignal.timeout(relayLimits.forwardMs),
 				});
 				const text = await res.text().catch(() => "");
 				let result: unknown;
@@ -818,7 +825,9 @@ export function openRelaySocket(
 				try { result = text ? JSON.parse(text) : {}; } catch { result = text.length > 500 ? { raw: text.slice(0, 500), rawChars: text.length, truncated: true } : { raw: text }; }
 				try { ws.send(JSON.stringify({ id: cmd.id, status: res.status, result })); } catch { /* WS closed mid-flight */ }
 			} catch (err) {
-				try { ws.send(JSON.stringify({ id: cmd.id, status: 500, error: err instanceof Error ? err.message : String(err) })); } catch { /* WS closed */ }
+				const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+				const error = timedOut ? `The local runtime did not answer within ${Math.round(relayLimits.forwardMs / 1000)}s.` : err instanceof Error ? err.message : String(err);
+				try { ws.send(JSON.stringify({ id: cmd.id, status: timedOut ? 504 : 500, error })); } catch { /* WS closed */ }
 			} finally { releaseMutation?.(); }
 		};
 
