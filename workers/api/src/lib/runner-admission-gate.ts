@@ -18,11 +18,11 @@
  *
  * This is deliberately NOT a change to the runner binary (`packages/cli`, `packages/browser-runner`):
  * it ships today, on every existing CLI, because it only reads data every CLI already sends. The one
- * piece of the proposal this cannot do YET is macOS "available" memory (free + inactive + purgeable) —
- * no shipped CLI reports it, so {@link GateSample.memAvailableBytes} falls back to raw `memFreeBytes`,
- * which undercounts on macOS exactly as `runner-resources.ts`'s own memory WARNING already documents.
- * The `memUsedPct` check still catches the motivating Mac Mini case (96.3% used); a macOS-only false
- * accept near the "available" line is the known gap a CLI release closes later.
+ * piece of the proposal this cannot do YET is macOS "available" memory (free + inactive + purgeable).
+ * No shipped CLI reports it, and raw `memFreeBytes` undercounts there exactly as
+ * `runner-resources.ts`'s own memory WARNING already documents. Therefore the gate deliberately
+ * does not judge memory on macOS until a runner supplies `memAvailableBytes`; a false admission is
+ * preferable to falsely wedging a healthy Mac. Linux keeps both memory checks unchanged.
  *
  * ── Hysteresis
  *
@@ -93,6 +93,10 @@ interface GateReading {
 	cpuLoad5PerCpu: number;
 	memUsedPct: number;
 	memAvailableBytes: number;
+	/** macOS raw free memory excludes reclaimable cache, so it is not an admission signal. */
+	memoryMeasurable: boolean;
+	/** macOS raw used-percent has the same cache problem even when available memory is reported. */
+	memoryUsedPctMeasurable: boolean;
 	diskUsedPct: number | null;
 	diskFreeBytes: number | null;
 	activeSessions: number | null;
@@ -100,12 +104,21 @@ interface GateReading {
 }
 
 function readingOf(sample: RunnerResourceSample, activeSessions: number | null): GateReading {
-	const memAvailableBytes = typeof (sample as { memAvailableBytes?: unknown }).memAvailableBytes === "number" ? (sample as { memAvailableBytes: number }).memAvailableBytes : sample.memFreeBytes;
+	const reportedAvailableMemory = sample.memAvailableBytes;
+	const hasAvailableMemory = typeof reportedAvailableMemory === "number";
+	const memAvailableBytes = reportedAvailableMemory ?? sample.memFreeBytes;
+	// `os.freemem()` on Darwin is only genuinely free pages, not the reclaimable pages a new
+	// process can use. Keep this decision consistent with `resourcesView`, which reports but does
+	// not warn on the same sample. A future runner reports memAvailableBytes and re-enables it.
+	const memoryUsedPctMeasurable = sample.platform.toLowerCase() !== "darwin";
+	const memoryMeasurable = memoryUsedPctMeasurable || hasAvailableMemory;
 	return {
 		cpuLoad1PerCpu: sample.loadAvg[0] / sample.cpus,
 		cpuLoad5PerCpu: sample.loadAvg[1] / sample.cpus,
 		memUsedPct: ((sample.memTotalBytes - sample.memFreeBytes) / sample.memTotalBytes) * 100,
 		memAvailableBytes,
+		memoryMeasurable,
+		memoryUsedPctMeasurable,
 		diskUsedPct: sample.disk ? ((sample.disk.totalBytes - sample.disk.freeBytes) / sample.disk.totalBytes) * 100 : null,
 		diskFreeBytes: sample.disk?.freeBytes ?? null,
 		activeSessions,
@@ -121,8 +134,8 @@ function breaches(r: GateReading, t: GateThresholds): GateBreach[] {
 	const out: GateBreach[] = [];
 	if (r.cpuLoad1PerCpu > t.cpuLoad1PerCpu) out.push({ metric: "cpu", value: r.cpuLoad1PerCpu, threshold: t.cpuLoad1PerCpu });
 	else if (r.cpuLoad5PerCpu > t.cpuLoad5PerCpu) out.push({ metric: "cpu", value: r.cpuLoad5PerCpu, threshold: t.cpuLoad5PerCpu });
-	if (r.memUsedPct > t.memUsedPctMax) out.push({ metric: "memory", value: r.memUsedPct, threshold: t.memUsedPctMax });
-	else if (r.memAvailableBytes < t.memAvailableMinBytes) out.push({ metric: "memory", value: r.memAvailableBytes, threshold: t.memAvailableMinBytes });
+	if (r.memoryUsedPctMeasurable && r.memUsedPct > t.memUsedPctMax) out.push({ metric: "memory", value: r.memUsedPct, threshold: t.memUsedPctMax });
+	else if (r.memoryMeasurable && r.memAvailableBytes < t.memAvailableMinBytes) out.push({ metric: "memory", value: r.memAvailableBytes, threshold: t.memAvailableMinBytes });
 	if (r.diskUsedPct !== null && r.diskUsedPct > t.diskUsedPctMax) out.push({ metric: "disk", value: r.diskUsedPct, threshold: t.diskUsedPctMax });
 	else if (r.diskFreeBytes !== null && r.diskFreeBytes < t.diskFreeMinBytes) out.push({ metric: "disk", value: r.diskFreeBytes, threshold: t.diskFreeMinBytes });
 	if (r.activeSessions !== null && r.activeSessions >= r.recommendedMaxSessions) out.push({ metric: "sessions", value: r.activeSessions, threshold: r.recommendedMaxSessions });
@@ -138,8 +151,8 @@ export function worstBreach(sample: RunnerResourceSample, activeSessions: number
 function withinRecoveryBand(r: GateReading, t: GateThresholds): boolean {
 	if (r.cpuLoad1PerCpu >= t.cpuLoad1PerCpu * RECOVERY_BAND) return false;
 	if (r.cpuLoad5PerCpu >= t.cpuLoad5PerCpu * RECOVERY_BAND) return false;
-	if (r.memUsedPct >= t.memUsedPctMax * RECOVERY_BAND) return false;
-	if (r.memAvailableBytes <= t.memAvailableMinBytes / RECOVERY_BAND) return false;
+	if (r.memoryUsedPctMeasurable && r.memUsedPct >= t.memUsedPctMax * RECOVERY_BAND) return false;
+	if (r.memoryMeasurable && r.memAvailableBytes <= t.memAvailableMinBytes / RECOVERY_BAND) return false;
 	if (r.diskUsedPct !== null && r.diskUsedPct >= t.diskUsedPctMax * RECOVERY_BAND) return false;
 	if (r.diskFreeBytes !== null && r.diskFreeBytes <= t.diskFreeMinBytes / RECOVERY_BAND) return false;
 	if (r.activeSessions !== null && r.activeSessions >= r.recommendedMaxSessions * RECOVERY_BAND) return false;

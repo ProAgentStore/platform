@@ -54,6 +54,21 @@ describe("worstBreach — each metric, with the issue's own live examples", () =
 		expect(b?.threshold).toBe(92);
 	});
 
+	it("does not reject macOS from raw free memory, which excludes reclaimable cache", () => {
+		// This is the same Darwin semantics resourcesView already treats as a report-only reading.
+		// A healthy 4 GiB Mac can show 97.7% used from os.freemem() while having plenty of cache to
+		// reclaim; using it here would defer every queued job forever.
+		const total = 4 * 1024 ** 3;
+		const b = worstBreach(sample({ platform: "darwin", memTotalBytes: total, memFreeBytes: 99 * 1024 ** 2, cpus: 4, loadAvg: [1, 1, 1] }), 0);
+		expect(b).toBeNull();
+	});
+
+	it("still rejects macOS when a runner reports true available memory", () => {
+		const total = 4 * 1024 ** 3;
+		const s = { ...sample({ platform: "darwin", memTotalBytes: total, memFreeBytes: 99 * 1024 ** 2, cpus: 4, loadAvg: [1, 1, 1] }), memAvailableBytes: 0.5 * 1024 ** 3 };
+		expect(worstBreach(s, 0)).toEqual({ metric: "memory", value: 0.5 * 1024 ** 3, threshold: DEFAULT_GATE_THRESHOLDS.memAvailableMinBytes });
+	});
+
 	it("memory: available < 1 GiB rejects even under the used% line (falls back to memFreeBytes with no memAvailableBytes reported)", () => {
 		const total = 64 * 1024 ** 3; // used% only ~98.4%... make it comfortably under 92% used but short on absolute free
 		const b = worstBreach(sample({ memTotalBytes: total, memFreeBytes: 0.5 * 1024 ** 3, cpus: 16, loadAvg: [1, 1, 1] }), 0);
