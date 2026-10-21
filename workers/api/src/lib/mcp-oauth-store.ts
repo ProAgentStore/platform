@@ -19,7 +19,7 @@ import {
 	type TokenResponse,
 	FLOW_TTL_SECONDS,
 } from "./mcp-oauth.js";
-import { readMcpRefreshMaterial, resolveMcpCredential, saveMcpCredential, updateMcpAccessToken, type McpCredentialResolution } from "./mcp-credentials.js";
+import { DEFAULT_MCP_ACCOUNT_ID, readMcpRefreshMaterial, resolveMcpCredential, saveMcpCredential, updateMcpAccessToken, type McpCredentialResolution } from "./mcp-credentials.js";
 import { sqlTime } from "./sql-time.js";
 
 // ─── Client registrations, cached per (user, authorization server) ───────────────────────────
@@ -106,6 +106,8 @@ export interface McpOauthFlow {
 	id: string;
 	userId: string;
 	endpoint: string;
+	/** Which of the owner's accounts this flow is authorizing (#1267). '' = the unnamed default. */
+	accountId: string;
 	issuer: string;
 	tokenEndpoint: string;
 	clientId: string;
@@ -120,13 +122,14 @@ export async function saveFlow(env: Env, flow: McpOauthFlow, ttlSeconds: number 
 	if (!env.KEY_ENCRYPTION_KEY) throw new Error("Key encryption not configured");
 	const { ciphertext, dekWrapped, iv } = await encryptKey(flow.verifier, env.KEY_ENCRYPTION_KEY);
 	await env.DB.prepare(
-		`INSERT INTO mcp_oauth_flows (id, user_id, endpoint, issuer, token_endpoint, client_id, redirect_uri, scope, verifier_ciphertext, verifier_dek_wrapped, verifier_iv, created_at, expires_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'), ?12)`,
+		`INSERT INTO mcp_oauth_flows (id, user_id, endpoint, account_id, issuer, token_endpoint, client_id, redirect_uri, scope, verifier_ciphertext, verifier_dek_wrapped, verifier_iv, created_at, expires_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'), ?13)`,
 	)
 		.bind(
 			flow.id,
 			flow.userId,
 			flow.endpoint,
+			flow.accountId ?? DEFAULT_MCP_ACCOUNT_ID,
 			flow.issuer,
 			flow.tokenEndpoint,
 			flow.clientId,
@@ -156,13 +159,14 @@ export async function claimFlow(env: Env, flowId: string, userId: string): Promi
 	if (!env.KEY_ENCRYPTION_KEY) return null;
 	const row = await env.DB.prepare(
 		`DELETE FROM mcp_oauth_flows WHERE id = ?1 AND user_id = ?2 AND expires_at > datetime('now')
-		 RETURNING id, user_id, endpoint, issuer, token_endpoint, client_id, redirect_uri, scope, verifier_ciphertext, verifier_dek_wrapped, verifier_iv`,
+		 RETURNING id, user_id, endpoint, account_id, issuer, token_endpoint, client_id, redirect_uri, scope, verifier_ciphertext, verifier_dek_wrapped, verifier_iv`,
 	)
 		.bind(flowId, userId)
 		.first<{
 			id: string;
 			user_id: string;
 			endpoint: string;
+			account_id: string;
 			issuer: string;
 			token_endpoint: string;
 			client_id: string;
@@ -184,6 +188,7 @@ export async function claimFlow(env: Env, flowId: string, userId: string): Promi
 		id: row.id,
 		userId: row.user_id,
 		endpoint: row.endpoint,
+		accountId: row.account_id ?? DEFAULT_MCP_ACCOUNT_ID,
 		issuer: row.issuer,
 		tokenEndpoint: row.token_endpoint,
 		clientId: row.client_id,
@@ -225,6 +230,7 @@ export async function completeFlow(env: Env, flow: McpOauthFlow, code: string, f
 	await saveMcpCredential(env, {
 		userId: flow.userId,
 		endpoint: flow.endpoint,
+		accountId: flow.accountId,
 		token: tok.accessToken,
 		authMode: "oauth",
 		issuer: flow.issuer,
@@ -258,9 +264,10 @@ export async function ensureMcpAccessToken(
 	env: Env | undefined,
 	userId: string | undefined,
 	endpoint: string | null,
+	accountId: string = DEFAULT_MCP_ACCOUNT_ID,
 	fetchImpl?: TokenFetch,
 ): Promise<McpCredentialResolution> {
-	const current = await resolveMcpCredential(env, userId, endpoint);
+	const current = await resolveMcpCredential(env, userId, endpoint, accountId);
 	if (!env?.DB || !userId || !endpoint) return current;
 	if (current.status === "missing") return current;
 	// Renew when it has expired, and also when it is about to: a token that passes our check and
@@ -268,7 +275,7 @@ export async function ensureMcpAccessToken(
 	const stillFresh = current.status === "ok" && !needsRefresh(current.expiresAt);
 	if (stillFresh) return current;
 
-	const material = await readMcpRefreshMaterial(env, userId, endpoint);
+	const material = await readMcpRefreshMaterial(env, userId, endpoint, accountId);
 	if (!material) return current; // a pasted bearer, or an OAuth grant with no refresh token
 	const client = material.issuer ? await readClientRegistration(env, userId, material.issuer).catch(() => null) : null;
 	if (!client) return current; // no client id to present — nothing can renew this
@@ -278,9 +285,12 @@ export async function ensureMcpAccessToken(
 			{ tokenEndpoint: material.tokenEndpoint, clientId: client.clientId, clientSecret: client.clientSecret, resource: endpoint },
 			fetchImpl,
 		);
+		// Scoped to THIS account's row (#1267) — a refresh for one account must never touch another
+		// account's credential on the same endpoint, which is exactly the isolation AC5 asks for.
 		await updateMcpAccessToken(env, {
 			userId,
 			endpoint,
+			accountId,
 			token: tok.accessToken,
 			expiresAt: tok.expiresAt,
 			scopes: tok.scope,

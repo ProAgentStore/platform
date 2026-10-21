@@ -593,6 +593,9 @@ const READBACK: Record<string, string | null> = {
 	// #736: the pin set_instance_connector_account saves is the `pinned` get_instance_connector_account returns.
 	"set_instance_connector_account.connector": "get_instance_connector_account",
 	"set_instance_connector_account.account_id": "get_instance_connector_account",
+	// #1267: the endpoint and pin set_instance_mcp_account saves are the `endpoint`/`pinned` list_instance_mcp_accounts returns.
+	"set_instance_mcp_account.url": "list_instance_mcp_accounts",
+	"set_instance_mcp_account.account_id": "list_instance_mcp_accounts",
 
 	// ── stats ──
 	"set_agent_stats_schema.cards": "get_agent_stats_schema",

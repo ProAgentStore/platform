@@ -27,7 +27,11 @@ import {
 	deleteMcpCredential,
 	discardLegacyMcpCredential,
 	hasLegacyMcpCredential,
+	listMcpAccounts,
+	renameMcpAccount,
 	listMcpCredentials,
+	pinnedMcpAccountsFrom,
+	resolveMcpAccount,
 	saveMcpCredential,
 	type McpAuthMode,
 } from "../lib/mcp-credentials.js";
@@ -744,6 +748,11 @@ toolRoutes.put("/:id/mcp/credentials", async (c) => {
 		scopes?: string;
 		expiresAt?: string;
 		accountLabel?: string;
+		accountId?: string;
+		/** Rename an EXISTING account's label without touching its credential (#1267). Explicit
+		 *  rather than inferred from an absent token, so a caller cannot rename by accident on a
+		 *  request that meant to paste a token and dropped it. */
+		rename?: boolean;
 	};
 
 	// Normalize FIRST, and refuse anything that isn't an https MCP endpoint. Storing under an
@@ -751,13 +760,23 @@ toolRoutes.put("/:id/mcp/credentials", async (c) => {
 	// normalized form) — a silent no-op that looks like a successful save.
 	const endpoint = normalizeMcpEndpoint(String(body.url ?? ""));
 	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
+	// '' (default, unset) = the unnamed account; a caller connecting a SECOND account on the same
+	// endpoint names one (#1267). Not re-derived from `accountLabel` — a label is a display hint
+	// and may be renamed later without the identifier it was stored under moving too.
+	const accountId = body.accountId ? String(body.accountId).trim().slice(0, 120) : "";
+
+	if (body.rename) {
+		const renamed = await renameMcpAccount(c.env, session.uid, endpoint, accountId, body.accountLabel ? String(body.accountLabel).slice(0, 120) : null);
+		if (!renamed) throw new HttpError(404, `No account "${accountId || "(default)"}" on ${endpoint} to rename.`);
+		return c.json({ ok: true, endpoint, accountId });
+	}
 
 	if (body.adoptLegacy) {
 		// Bind the old account-wide token to this one server without the user re-typing it. The
 		// ciphertext is copied verbatim, so no plaintext is produced to perform the move.
-		const adopted = await adoptLegacyMcpCredential(c.env, session.uid, endpoint);
+		const adopted = await adoptLegacyMcpCredential(c.env, session.uid, endpoint, accountId);
 		if (!adopted) throw new HttpError(404, "There is no account-wide MCP token to bind.");
-		return c.json({ ok: true, endpoint, adoptedLegacy: true });
+		return c.json({ ok: true, endpoint, accountId, adoptedLegacy: true });
 	}
 
 	const token = String(body.token ?? "").trim();
@@ -771,6 +790,7 @@ toolRoutes.put("/:id/mcp/credentials", async (c) => {
 	await saveMcpCredential(c.env, {
 		userId: session.uid,
 		endpoint,
+		accountId,
 		token,
 		authMode,
 		issuer: body.issuer ? String(body.issuer).slice(0, 300) : null,
@@ -781,7 +801,7 @@ toolRoutes.put("/:id/mcp/credentials", async (c) => {
 	// Deliberately echoes the endpoint and NOTHING derived from the token — not a prefix, not a
 	// length. A "saved ••••abcd" confirmation is a credential fragment in a response body, a log
 	// and a browser history entry, for no diagnostic value the endpoint doesn't already carry.
-	return c.json({ ok: true, endpoint, authMode });
+	return c.json({ ok: true, endpoint, accountId, authMode });
 });
 
 toolRoutes.delete("/:id/mcp/credentials", async (c) => {
@@ -793,9 +813,66 @@ toolRoutes.delete("/:id/mcp/credentials", async (c) => {
 	}
 	const endpoint = normalizeMcpEndpoint(String(c.req.query("url") ?? ""));
 	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
-	// Removing one endpoint's credential touches no other endpoint — that isolation is the point
-	// of keying on the endpoint, and is the acceptance criterion this route exists to satisfy.
-	return c.json({ ok: true, endpoint, removed: await deleteMcpCredential(c.env, session.uid, endpoint) });
+	const accountId = c.req.query("accountId") ? String(c.req.query("accountId")).trim().slice(0, 120) : "";
+	// Removing one endpoint's credential touches no other endpoint, and now no other ACCOUNT on
+	// that endpoint either (#1267) — that isolation is the point of keying on (endpoint, account),
+	// and is the acceptance criterion this route exists to satisfy.
+	return c.json({ ok: true, endpoint, accountId, removed: await deleteMcpCredential(c.env, session.uid, endpoint, accountId) });
+});
+
+/**
+ * Per-instance MCP account pinning (#1267) — `set_instance_connector_account` /
+ * `get_instance_connector_account`'s shape, one dimension over: those pin an instance to one of
+ * the owner's accounts on a FIXED connector id, while an MCP endpoint is itself user-supplied
+ * config, so the pin is keyed on the normalized endpoint rather than on a connector id.
+ *
+ * GET /v1/instances/:id/mcp/accounts?url=…  → accounts on that endpoint + pinned + resolves + blocked
+ * PUT /v1/instances/:id/mcp/accounts { url, accountId }  → pin this instance to one, or clear with ""
+ */
+toolRoutes.get("/:id/mcp/accounts", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
+	const endpoint = normalizeMcpEndpoint(String(c.req.query("url") ?? ""));
+	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
+
+	const accounts = await listMcpAccounts(c.env, session.uid, endpoint);
+	const pinned = pinnedMcpAccountsFrom(instance.config ? JSON.parse(instance.config) : {})[endpoint];
+	const resolved = await resolveMcpAccount(c.env, session.uid, endpoint, instanceId);
+	return c.json({
+		endpoint,
+		accounts: accounts.map((a) => ({ accountId: a.accountId, label: a.label, connectedAt: a.connectedAt })),
+		pinned: pinned ?? null,
+		// What a real call would do right now, without making one — same contract as
+		// GET /v1/instances/:id/connector-accounts.
+		resolves: resolved.ok ? resolved.account.accountId : null,
+		blocked: resolved.ok ? null : { reason: resolved.reason, message: resolved.message },
+	});
+});
+
+toolRoutes.put("/:id/mcp/accounts", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { url?: string; accountId?: string | null };
+	const endpoint = normalizeMcpEndpoint(String(body.url ?? ""));
+	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
+
+	const requested = (body.accountId ?? "").trim();
+	if (requested) {
+		const accounts = await listMcpAccounts(c.env, session.uid, endpoint);
+		if (!accounts.some((a) => a.accountId === requested)) {
+			// Refused at write time, not stored and discovered at run time — a pin to an account
+			// that does not exist is the stale-pin failure, created deliberately.
+			throw new HttpError(400, `You have no account "${requested}" connected on ${endpoint}.`);
+		}
+	}
+
+	const pins = { ...pinnedMcpAccountsFrom(instance.config ? JSON.parse(instance.config) : {}) };
+	if (requested) pins[endpoint] = requested;
+	else delete pins[endpoint];
+	await patchInstanceConfig(c.env, instance.id, session.uid, "mcpAccounts", pins);
+	return c.json({ success: true, endpoint, pinned: requested || null });
 });
 
 /**
@@ -929,7 +1006,7 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("id");
 	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { url?: string; auth?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { url?: string; auth?: string; accountId?: string };
 
 	// Normalize FIRST and refuse anything that isn't an https MCP endpoint, so the URL the panel
 	// echoes back is the one consent and the trace log key on — a test that reported success for
@@ -938,6 +1015,10 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 	const endpoint = normalizeMcpEndpoint(String(body.url ?? ""));
 	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
 	const useAuth = body.auth !== "none";
+	// Pin ONE account for this probe without touching the instance's standing pin (#1267) — the
+	// console offers this to test a second account before deciding to pin the instance to it.
+	// Omitted entirely when not given, so the normal auto-resolve/ambiguous/pinned-gone path runs.
+	const accountId = typeof body.accountId === "string" ? body.accountId.trim().slice(0, 120) : undefined;
 
 	// The three gates, read once, before any network call.
 	const policy = await instanceToolPolicy(c.env, instanceId, session.uid, instance.config);
@@ -950,7 +1031,7 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 	// One context for every probe on this route, so the tool probe and the read-surface probes
 	// resolve the same credential, share the era cache, and log under the same identity.
 	const probeCtx = { env: c.env, userId: session.uid, instanceId, connectorClient: (provider: string) => connectorClient(c.env, provider, { userId: session.uid, instanceId }) };
-	const probe = await probeMcpEndpoint(probeCtx, endpoint, useAuth);
+	const probe = await probeMcpEndpoint(probeCtx, endpoint, useAuth, accountId);
 
 	// The connector only asks a server about its auth model when a credential is REJECTED (a 401/403
 	// is the moment that question matters to it). The panel needs the answer one step earlier: the
@@ -1012,6 +1093,8 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 		protocolVersion: probe.version,
 		httpStatus: probe.status,
 		durationMs: probe.durationMs,
+		accountId: probe.accountId,
+		accountLabel: probe.accountLabel,
 		tools,
 		toolCount: tools.length,
 		callableCount: tools.filter((t) => t.callable).length,

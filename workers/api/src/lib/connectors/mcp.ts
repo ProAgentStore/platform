@@ -99,7 +99,7 @@ import { safeFetch, SsrfError } from "../ssrf.js";
 import { authFailureGuidance, discoverAuthServer, type DiscoveryResult } from "./discovery.js";
 import { consentInstanceOf } from "../execution-authority.js";
 import { hasMcpConsent, mcpConsentDenial, normalizeMcpEndpoint } from "../mcp-consent.js";
-import { mcpCredentialRefusal } from "../mcp-credentials.js";
+import { hasLegacyMcpCredential, listMcpAccounts, mcpCredentialRefusal, resolveMcpAccount } from "../mcp-credentials.js";
 import { MAX_ROUNDS, parseElicitation, pausedForInputNotice } from "../mcp-elicitation.js";
 import { openMcpInputRequest } from "../mcp-input-requests.js";
 import { ensureMcpAccessToken } from "../mcp-oauth-store.js";
@@ -448,6 +448,12 @@ export type McpFailureClass =
 	 *  `no_credential` (reconnect, not paste), and different from `auth` (we know, rather than
 	 *  inferring from a 401 that says nothing about why). */
 	| "credential_expired"
+	/** Two or more accounts are connected on this endpoint and this instance is not pinned to one
+	 *  (#1267). Never resolved by convention — see `resolveConnectorAccount`'s header. */
+	| "ambiguous"
+	/** This instance is pinned to an account that has since been disconnected (#1267). Does not
+	 *  fall back to another account: that would be the wrong-identity bug arriving on a schedule. */
+	| "pinned_account_gone"
 	| "denied"
 	| "auth"
 	| "unsupported_version"
@@ -471,6 +477,11 @@ interface McpEventFields {
 	endpoint: string;
 	method: string;
 	tool?: string;
+	/** Which of the owner's accounts on this endpoint the call used, when one was resolved (#1267).
+	 *  '' means the unnamed default account; omitted when auth was not used at all. Never the
+	 *  credential — an account id/label is a non-secret identifier the owner chose. */
+	accountId?: string;
+	accountLabel?: string | null;
 	era?: McpEra;
 	protocolVersion?: string;
 	status?: number;
@@ -506,6 +517,8 @@ async function recordMcp(ctx: RegistryToolCtx, f: McpEventFields): Promise<void>
 			endpoint: f.endpoint,
 			method: f.method,
 			tool: f.tool,
+			accountId: f.accountId,
+			accountLabel: f.accountLabel,
 			era: f.era,
 			protocolVersion: f.protocolVersion,
 			status: f.status,
@@ -549,6 +562,14 @@ interface CallOutcome {
 	 * second, weaker copy of `serverRequestIn`.
 	 */
 	ask?: { method: string; params?: unknown };
+	/**
+	 * Which of the owner's accounts on this endpoint was used, when auth was attempted (#1267).
+	 * '' is the unnamed default account; `undefined` means auth was not attempted at all (e.g.
+	 * `auth:"none"`, or the call failed before any account was resolved). Carried structurally so
+	 * `test_instance_mcp_server` and the trace can say which account without re-deriving it.
+	 */
+	accountId?: string;
+	accountLabel?: string | null;
 }
 
 /** Shared 401/403 handling: ask the server what auth model it wants instead of guessing (#180). */
@@ -687,20 +708,50 @@ async function mcpCall(
 	// the grants checked for it, and the row logged about it are all bound to one identity — and a
 	// credential for one endpoint can neither authorize nor be leaked to another.
 	let token: string | null = null;
+	let account: { accountId: string; accountLabel: string | null } | undefined;
 	if (endpoint.useAuth) {
+		// WHICH account first (#1267), before touching any credential: an endpoint with several
+		// connected accounts must refuse rather than guess, exactly as `resolveConnectorAccount`
+		// already refuses for every other multi-account connector. `explicitAccountId` lets a
+		// diagnostic caller (the connection-test route) pin one account for ONE probe without
+		// touching the instance's standing pin — never read from model-supplied tool arguments.
+		const explicitAccountId = typeof input.accountId === "string" ? input.accountId.trim() : undefined;
+		const resolved =
+			explicitAccountId !== undefined
+				? await listMcpAccounts(ctx.env as Env, ctx.userId ?? "", key).then((accounts) => {
+						const match = accounts.find((a) => a.accountId === explicitAccountId);
+						return match
+							? ({ ok: true, account: match } as const)
+							: ({ ok: false, reason: "not_connected", message: `You have no account "${explicitAccountId}" connected on ${key}.` } as const);
+					})
+				: await resolveMcpAccount(ctx.env, ctx.userId, key, ctx.instanceId);
+		if (!resolved.ok) {
+			if (resolved.reason === "not_connected") {
+				// No account at all on this endpoint — the original #286 refusal, legacy-token hint
+				// and auth-advice probe all still apply, so fall through to that path unchanged.
+				const cred = await mcpCredentialRefusal(endpoint.url, key, { status: "missing", legacy: await hasLegacyMcpCredential(ctx.env as Env, ctx.userId ?? "") });
+				await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure: "no_credential", reason: `auth-advice:${cred.advice}` });
+				return { content: cred.content, success: false, failure: "no_credential", durationMs: Date.now() - started };
+			}
+			const failure: McpFailureClass = resolved.reason;
+			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure, reason: resolved.reason });
+			return { content: resolved.message, success: false, failure, durationMs: Date.now() - started };
+		}
+		account = { accountId: resolved.account.accountId, accountLabel: resolved.account.label };
+
 		// `ensureMcpAccessToken`, not the bare resolver: an OAuth credential (#180/#258) is renewed
 		// here, with nobody present, using the refresh token stored beside it. Without that a 24h
 		// access token turns every cron-fired chain into a daily outage — the run dead-letters and
 		// only a human at a browser can restart it. A pasted bearer is unaffected: nothing to renew.
-		const cred = await ensureMcpAccessToken(ctx.env, ctx.userId, key);
+		const cred = await ensureMcpAccessToken(ctx.env, ctx.userId, key, account.accountId);
 		if (cred.status !== "ok") {
 			// Fail CLOSED, both ways: no silent fallback to the old provider-wide token (that is the
 			// vulnerability), and no silent unauthenticated retry (which turns "your token is gone"
 			// into an opaque 401 from the server and teaches the user to blame the server).
 			const failure: McpFailureClass = cred.status === "expired" ? "credential_expired" : "no_credential";
 			const denial = await mcpCredentialRefusal(endpoint.url, key, cred);
-			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure, reason: `auth-advice:${denial.advice}` });
-			return { content: denial.content, success: false, failure, durationMs: Date.now() - started };
+			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, accountId: account.accountId, accountLabel: account.accountLabel, ok: false, failure, reason: `auth-advice:${denial.advice}` });
+			return { content: denial.content, success: false, failure, durationMs: Date.now() - started, ...account };
 		}
 		token = cred.token;
 	}
@@ -746,6 +797,8 @@ async function mcpCall(
 		endpoint: key,
 		method,
 		tool: log.tool,
+		accountId: account?.accountId,
+		accountLabel: account?.accountLabel,
 		era: outcome.era,
 		protocolVersion: outcome.version,
 		status: outcome.status,
@@ -756,7 +809,7 @@ async function mcpCall(
 		argBytes: log.argBytes,
 		resultBytes: outcome.success ? outcome.content.length : undefined,
 	});
-	return { ...outcome, durationMs };
+	return { ...outcome, ...account, durationMs };
 }
 
 // ─── Pausing for user input (#264) ──────────────────────────────────────────────────────
@@ -850,8 +903,10 @@ export interface McpProbeOutcome extends CallOutcome {
  * (#262) approachable — and it proves the protocol negotiation end to end rather than only that
  * a socket opened.
  */
-export async function probeMcpEndpoint(ctx: RegistryToolCtx, url: string, useAuth: boolean): Promise<McpProbeOutcome> {
-	const out = (await mcpCall(ctx, { url, auth: useAuth ? "vault" : "none" }, "tools/list", {}, {})) as CallOutcome & { durationMs?: number };
+export async function probeMcpEndpoint(ctx: RegistryToolCtx, url: string, useAuth: boolean, accountId?: string): Promise<McpProbeOutcome> {
+	const out = (await mcpCall(ctx, { url, auth: useAuth ? "vault" : "none", ...(accountId !== undefined ? { accountId } : {}) }, "tools/list", {}, {})) as CallOutcome & {
+		durationMs?: number;
+	};
 	return { ...out, endpoint: normalizeMcpEndpoint(url) ?? url, durationMs: out.durationMs ?? 0 };
 }
 

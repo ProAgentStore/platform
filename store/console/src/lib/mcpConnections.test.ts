@@ -5,11 +5,15 @@ import {
 	connectionsFromGrants,
 	credentialNote,
 	hasMcpCapability,
+	mcpAccountNotice,
+	mcpAccountRows,
+	mcpNeedsAccountChoice,
 	normalizeEndpoint,
 	presetFor,
 	statusBadge,
 	summarizeSmoke,
 	surfaceLine,
+	type McpAccountsState,
 	type McpCredential,
 	type McpStatus,
 } from "./mcpConnections";
@@ -91,6 +95,7 @@ describe("hasMcpCapability", () => {
 describe("credentialNote (#286)", () => {
 	const cred = (endpoint: string, over: Partial<McpCredential> = {}): McpCredential => ({
 		endpoint,
+		accountId: "",
 		authMode: "bearer",
 		issuer: null,
 		scopes: null,
@@ -206,5 +211,56 @@ describe("presetFor", () => {
 		const presets = [{ id: "p", label: "P", url: "https://mcp.example/mcp", scope: "read", smokeTool: "list_agents", description: "" }];
 		expect(presetFor(presets, "https://mcp.example/mcp")?.id).toBe("p");
 		expect(presetFor(presets, "https://mcp.example/mcp-admin")).toBeUndefined();
+	});
+});
+
+describe("per-endpoint account pinning (#1267)", () => {
+	const state = (over: Partial<McpAccountsState> = {}): McpAccountsState => ({
+		endpoint: "https://mcp.example/mcp",
+		accounts: [{ accountId: "work", label: "Work", connectedAt: null }],
+		pinned: null,
+		resolves: "work",
+		blocked: null,
+		...over,
+	});
+
+	it("needs no choice with a single account", () => {
+		expect(mcpNeedsAccountChoice(state())).toBe(false);
+	});
+
+	it("needs a choice with two or more accounts", () => {
+		expect(
+			mcpNeedsAccountChoice(state({ accounts: [{ accountId: "work", label: "Work", connectedAt: null }, { accountId: "personal", label: "Personal", connectedAt: null }] })),
+		).toBe(true);
+	});
+
+	it("names the account a call would use, when one resolves", () => {
+		expect(mcpAccountNotice(state())).toEqual({ blocked: false, message: "This instance uses Work." });
+	});
+
+	it("falls back to the accountId when the row carries no label", () => {
+		expect(mcpAccountNotice(state({ accounts: [{ accountId: "work", label: null, connectedAt: null }] }))).toEqual({ blocked: false, message: "This instance uses work." });
+	});
+
+	it("renders the server's own refusal message verbatim when resolves is null", () => {
+		const s = state({ resolves: null, blocked: { reason: "ambiguous", message: "You have 2 accounts connected and this agent is not set to use one of them." } });
+		expect(mcpAccountNotice(s)).toEqual({ blocked: true, message: "You have 2 accounts connected and this agent is not set to use one of them." });
+	});
+
+	it("falls back to a generic sentence if resolves is null with no message", () => {
+		expect(mcpAccountNotice(state({ resolves: null, blocked: null })).blocked).toBe(true);
+	});
+
+	it("names an unlabelled account by its id, never blank", () => {
+		expect(mcpAccountRows(state({ accounts: [{ accountId: "", label: null, connectedAt: null }] }))).toEqual([{ accountId: "", name: "unnamed connection" }]);
+	});
+});
+
+describe("statusBadge — the two multi-account verdicts (#1267)", () => {
+	it("colours account_ambiguous and pinned_account_gone amber, not red", () => {
+		// The server is reachable and the remedy is a pin away — colouring it like an outage
+		// would send someone to check a host that is fine.
+		expect(statusBadge("account_ambiguous" as McpStatus).tone).toBe("amber");
+		expect(statusBadge("pinned_account_gone" as McpStatus).tone).toBe("amber");
 	});
 });

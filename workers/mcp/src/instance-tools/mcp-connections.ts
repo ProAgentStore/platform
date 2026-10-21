@@ -189,4 +189,78 @@ export function registerMcpConnectionTools(server: McpServer, ctx: InstanceTools
 			return jsonText(data);
 		},
 	);
+
+	/**
+	 * Per-instance MCP account pinning (#1267) — `get_instance_connector_account` /
+	 * `set_instance_connector_account`'s shape, one dimension over. Those pin an instance to one of
+	 * the owner's accounts on a FIXED connector id (Gmail, Drive); the generic MCP connector's
+	 * "provider" is itself a user-supplied URL, so the pin is keyed on the normalized endpoint
+	 * rather than on a connector id, and lives at its own route rather than the generic one.
+	 */
+	server.tool(
+		"list_instance_mcp_accounts",
+		"Which of your accounts on ONE MCP endpoint this instance uses. Returns the `accounts` connected on that server, the one this instance is `pinned` to, the account a call would use right now (`resolves`), and `blocked` — the server's own reason when it would use none. `resolves: null` means every call to that endpoint refuses: with two or more accounts and no pin the reason is `ambiguous`, and a pin to an account since disconnected is `pinned_account_gone` — neither falls back to another account. Fix either with set_instance_mcp_account. Accounts are connected/removed in the console's MCP connections panel, never here.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			url: z.string().describe("The MCP endpoint, e.g. https://example.com/mcp. Must be https."),
+		},
+		async ({ token, instance_id, url }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "list_instance_mcp_accounts", { instance_id, url });
+			if (denied) return denied;
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/mcp/accounts?url=${encodeURIComponent(url)}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_mcp_account",
+		"Pin an instance to ONE of your accounts on an MCP endpoint, so its calls to that endpoint stop refusing with `ambiguous` (or `pinned_account_gone`). `account_id` must be an `accountId` from list_instance_mcp_accounts — the server refuses an account you have not connected there. This only CHOOSES among accounts already connected; it cannot connect, disconnect or add one (that is the console's MCP connections panel). An empty `account_id` CLEARS the pin — with two or more accounts connected, an unpinned instance then refuses every call to that endpoint. Returns the endpoint's row read back after saving, so `resolves` and `blocked` show whether calls will now succeed. WRITE.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			url: z.string().describe("The MCP endpoint, e.g. https://example.com/mcp. Must be https."),
+			account_id: z.string().describe("The `accountId` to pin, copied exactly from list_instance_mcp_accounts' `accounts`. Empty string clears the pin."),
+			dry_run: z.boolean().optional().describe("Report the pin that would be saved, without saving it."),
+		},
+		async ({ token, instance_id, url, account_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const accountId = account_id.trim();
+			const input = { instance_id, url, account_id: accountId };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_mcp_account", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/mcp/accounts`;
+			const body = { url, accountId };
+			if (dry_run) {
+				return dryRun(
+					safetyFor(token),
+					"set_instance_mcp_account",
+					accountId ? `pin this instance to the "${accountId}" account on ${url}` : `clear this instance's account pin on ${url}`,
+					input,
+					{
+						endpoint,
+						method: "PUT",
+						body,
+						effect: accountId
+							? `Calls to ${url} on this instance would use "${accountId}". Refused at save time if that account is not connected.`
+							: `Calls to ${url} on this instance would resolve automatically — fine with one account connected, refused as ambiguous with several.`,
+					},
+				);
+			}
+			const saved = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env);
+			// Only a SUCCESS is audited as completed — `apiCall` returns `{error}` rather than throwing (#325).
+			if ((saved as { error?: string }).error) return jsonText(saved);
+			await audit(safetyFor(token), { tool: "set_instance_mcp_account", action: "completed", input, result: saved });
+			// The PUT answers `{success, endpoint, pinned}` and nothing about what a call now does.
+			// The read-back is what shows `resolves`/`blocked`, which is what the caller needs to know.
+			const after = await authedCall(`${endpoint}?url=${encodeURIComponent(url)}`, sessionToken, {}, env);
+			if ((after as { error?: string }).error) {
+				return jsonText({ ...(saved as Record<string, unknown>), note: `Saved, but reading it back failed (${(after as { error: string }).error}). Check with list_instance_mcp_accounts.` });
+			}
+			return jsonText(after);
+		},
+	);
 }

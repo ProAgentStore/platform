@@ -26,6 +26,9 @@ function fakeDb() {
 	const flows = new Map<string, Record<string, unknown>>();
 	const creds = new Map<string, Record<string, unknown>>();
 	const k = (a: unknown, b: unknown) => `${String(a)} ${String(b)}`;
+	// `mcp_credentials` is keyed on (user, endpoint, account) since #1267 — a distinct map key per
+	// account is what makes the "renews only the matching account" test possible to fail honestly.
+	const kCred = (a: unknown, b: unknown, c: unknown) => `${String(a)} ${String(b)} ${String(c ?? "")}`;
 
 	const prepare = (sql: string) => {
 		let a: unknown[] = [];
@@ -42,15 +45,16 @@ function fakeDb() {
 						id: a[0],
 						user_id: a[1],
 						endpoint: a[2],
-						issuer: a[3],
-						token_endpoint: a[4],
-						client_id: a[5],
-						redirect_uri: a[6],
-						scope: a[7],
-						verifier_ciphertext: a[8],
-						verifier_dek_wrapped: a[9],
-						verifier_iv: a[10],
-						expires_at: a[11],
+						account_id: a[3],
+						issuer: a[4],
+						token_endpoint: a[5],
+						client_id: a[6],
+						redirect_uri: a[7],
+						scope: a[8],
+						verifier_ciphertext: a[9],
+						verifier_dek_wrapped: a[10],
+						verifier_iv: a[11],
+						expires_at: a[12],
 					});
 				} else if (sql.includes("DELETE FROM mcp_oauth_flows")) {
 										// `sqlTimeMs`, not `Date.parse`: `expires_at` is stored in `datetime('now')`'s shape
@@ -58,37 +62,38 @@ function fakeDb() {
 					// disagree with SQLite by the machine's UTC offset.
 					for (const [id, f] of flows) if (sqlTimeMs(String(f.expires_at)) <= Date.now()) flows.delete(id);
 				} else if (sql.includes("INSERT INTO mcp_credentials")) {
-					creds.set(k(a[0], a[1]), {
+					creds.set(kCred(a[0], a[1], a[2]), {
 						user_id: a[0],
 						endpoint: a[1],
-						auth_mode: a[2],
-						issuer: a[3],
-						scopes: a[4],
-						expires_at: a[5],
-						key_ciphertext: a[6],
-						dek_wrapped: a[7],
-						iv: a[8],
-						account_label: a[9],
-						token_endpoint: a[10],
-						refresh_ciphertext: a[11],
-						refresh_dek_wrapped: a[12],
-						refresh_iv: a[13],
+						account_id: a[2],
+						auth_mode: a[3],
+						issuer: a[4],
+						scopes: a[5],
+						expires_at: a[6],
+						key_ciphertext: a[7],
+						dek_wrapped: a[8],
+						iv: a[9],
+						account_label: a[10],
+						token_endpoint: a[11],
+						refresh_ciphertext: a[12],
+						refresh_dek_wrapped: a[13],
+						refresh_iv: a[14],
 						created_at: "now",
 						updated_at: "now",
 					});
 				} else if (sql.includes("UPDATE mcp_credentials")) {
-					const row = creds.get(k(a[0], a[1]));
+					const row = creds.get(kCred(a[0], a[1], a[2]));
 					if (row) {
-						row.key_ciphertext = a[2];
-						row.dek_wrapped = a[3];
-						row.iv = a[4];
-						row.expires_at = a[5];
+						row.key_ciphertext = a[3];
+						row.dek_wrapped = a[4];
+						row.iv = a[5];
+						row.expires_at = a[6];
 						// Mirrors the COALESCE in the statement: only overwrite when a new value came back.
-						if (a[6] != null) row.scopes = a[6];
-						if (a[7] != null) {
-							row.refresh_ciphertext = a[7];
-							row.refresh_dek_wrapped = a[8];
-							row.refresh_iv = a[9];
+						if (a[7] != null) row.scopes = a[7];
+						if (a[8] != null) {
+							row.refresh_ciphertext = a[8];
+							row.refresh_dek_wrapped = a[9];
+							row.refresh_iv = a[10];
 						}
 					}
 				}
@@ -102,7 +107,7 @@ function fakeDb() {
 					flows.delete(String(a[0]));
 					return f as T;
 				}
-				if (sql.includes("FROM mcp_credentials")) return (creds.get(k(a[0], a[1])) ?? null) as T | null;
+				if (sql.includes("FROM mcp_credentials")) return (creds.get(kCred(a[0], a[1], a[2])) ?? null) as T | null;
 				if (sql.includes("FROM user_api_keys")) return null;
 				return null;
 			},
@@ -163,6 +168,7 @@ describe("in-flight authorizations", () => {
 		id: "f1",
 		userId: "u1",
 		endpoint: ENDPOINT,
+		accountId: "",
 		issuer: ISSUER,
 		tokenEndpoint: "https://as.example/token",
 		clientId: "cid",
@@ -206,7 +212,7 @@ describe("in-flight authorizations", () => {
 		const claimed = await claimFlow(envFor(db), "f1", "u1");
 		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "at-1", refresh_token: "rt-1", expires_in: 3600, scope: "read" }));
 		await completeFlow(envFor(db), claimed!, "the-code", fetchImpl);
-		const row = creds.get(`u1 ${ENDPOINT}`);
+		const row = creds.get(`u1 ${ENDPOINT} `);
 		expect(row?.auth_mode).toBe("oauth");
 		expect(row?.token_endpoint).toBe("https://as.example/token");
 		expect(row?.refresh_ciphertext).toBeTruthy();
@@ -239,7 +245,7 @@ describe("unattended renewal", () => {
 		const { db } = fakeDb();
 		await seedOauth(db, new Date(Date.now() - 60_000).toISOString());
 		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "at-new", expires_in: 3600 }));
-		const r = await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, fetchImpl);
+		const r = await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "", fetchImpl);
 		expect(r).toMatchObject({ status: "ok", token: "at-new", authMode: "oauth" });
 		expect(String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)).toContain("grant_type=refresh_token");
 	});
@@ -248,7 +254,7 @@ describe("unattended renewal", () => {
 		const { db } = fakeDb();
 		await seedOauth(db, new Date(Date.now() + 20_000).toISOString());
 		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "at-new", expires_in: 3600 }));
-		expect(await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, fetchImpl)).toMatchObject({ token: "at-new" });
+		expect(await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "", fetchImpl)).toMatchObject({ token: "at-new" });
 	});
 
 	it("does not touch a credential that is still comfortably valid", async () => {
@@ -257,7 +263,7 @@ describe("unattended renewal", () => {
 		const { db } = fakeDb();
 		await seedOauth(db, new Date(Date.now() + 3_600_000).toISOString());
 		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "at-new" }));
-		expect(await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, fetchImpl)).toMatchObject({ token: "at-old" });
+		expect(await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "", fetchImpl)).toMatchObject({ token: "at-old" });
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 
@@ -267,9 +273,9 @@ describe("unattended renewal", () => {
 		// looks like the refresh never worked at all.
 		const { db, creds } = fakeDb();
 		await seedOauth(db, new Date(Date.now() - 60_000).toISOString());
-		const before = creds.get(`u1 ${ENDPOINT}`)?.refresh_ciphertext;
-		await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, async () => tokenRes({ access_token: "at-new", expires_in: 3600 }));
-		expect(creds.get(`u1 ${ENDPOINT}`)?.refresh_ciphertext).toBe(before);
+		const before = creds.get(`u1 ${ENDPOINT} `)?.refresh_ciphertext;
+		await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "", async () => tokenRes({ access_token: "at-new", expires_in: 3600 }));
+		expect(creds.get(`u1 ${ENDPOINT} `)?.refresh_ciphertext).toBe(before);
 	});
 
 	it("reports the original expiry when renewal fails, rather than a new error class", async () => {
@@ -278,7 +284,7 @@ describe("unattended renewal", () => {
 		// whose denial text already says how to reconnect.
 		const { db } = fakeDb();
 		await seedOauth(db, new Date(Date.now() - 60_000).toISOString());
-		const r = await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, async () => tokenRes({ error: "invalid_grant" }, 400));
+		const r = await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "", async () => tokenRes({ error: "invalid_grant" }, 400));
 		expect(r.status).toBe("expired");
 	});
 
@@ -288,8 +294,47 @@ describe("unattended renewal", () => {
 		const { db } = fakeDb();
 		await saveMcpCredential(envFor(db), { userId: "u1", endpoint: ENDPOINT, token: "pasted", authMode: "bearer" });
 		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "nope" }));
-		expect(await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, fetchImpl)).toMatchObject({ status: "ok", token: "pasted", authMode: "bearer" });
+		expect(await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "", fetchImpl)).toMatchObject({ status: "ok", token: "pasted", authMode: "bearer" });
 		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	it("renews only the matching account's row, leaving a sibling account on the same endpoint untouched (#1267)", async () => {
+		const { db, creds } = fakeDb();
+		await saveMcpCredential(envFor(db), {
+			userId: "u1",
+			endpoint: ENDPOINT,
+			accountId: "work",
+			token: "at-work-old",
+			authMode: "oauth",
+			issuer: ISSUER,
+			expiresAt: new Date(Date.now() - 60_000).toISOString(),
+			refreshToken: "rt-work",
+			tokenEndpoint: "https://as.example/token",
+		});
+		await saveMcpCredential(envFor(db), {
+			userId: "u1",
+			endpoint: ENDPOINT,
+			accountId: "personal",
+			token: "at-personal-old",
+			authMode: "oauth",
+			issuer: ISSUER,
+			// Still comfortably valid — must NOT be touched by refreshing the other account.
+			expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+			refreshToken: "rt-personal",
+			tokenEndpoint: "https://as.example/token",
+		});
+		await getOrRegisterClient(envFor(db), "u1", ISSUER, "https://as.example/register", REDIRECT);
+		const personalBefore = { ...creds.get("u1 " + ENDPOINT + " personal") };
+
+		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "at-work-new", expires_in: 3600 }));
+		const r = await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "work", fetchImpl);
+		expect(r).toMatchObject({ status: "ok", token: "at-work-new" });
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+		// The sibling account's row — ciphertext included — is byte-for-byte what it was before.
+		expect(creds.get("u1 " + ENDPOINT + " personal")).toEqual(personalBefore);
+		const personalStillOld = await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "personal", async () => tokenRes({ access_token: "should-not-be-called" }));
+		expect(personalStillOld).toMatchObject({ status: "ok", token: "at-personal-old" });
 	});
 
 	it("cannot renew an oauth credential whose client registration is gone", async () => {
@@ -307,7 +352,7 @@ describe("unattended renewal", () => {
 			tokenEndpoint: "https://as.example/token",
 		});
 		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "at-new" }));
-		expect((await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, fetchImpl)).status).toBe("expired");
+		expect((await ensureMcpAccessToken(envFor(db), "u1", ENDPOINT, "", fetchImpl)).status).toBe("expired");
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 });

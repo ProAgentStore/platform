@@ -125,8 +125,9 @@ src/
 │                     (#736), the catalogue, this agent's verdict, write consent (#613), and the GitHub App
 │                     installation sync with a reason for every org it could not bind (#1081)
     ├── stats.ts          5 tools — declarative stats cards (creator schema + subscriber override) and source vocabulary
-    ├── mcp-connections.ts 6 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
-│                     the connection test, and the paused-elicitation inbox (#613)
+    ├── mcp-connections.ts 8 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
+│                     the connection test, the paused-elicitation inbox (#613), and per-instance
+│                     account pinning on a multi-account endpoint (#1267)
 ├── guide.ts          1 tool — the per-instance connection guide (#772)
 ├── http-profiles.ts  10 tools — named HTTP credential profiles (create/update/rotate/delete/test; metadata only, never a secret) + per-instance bindings (#1123)
 ├── discord.ts        8 tools — the native Discord bot: status, connect/rotate (verified with Discord, never returned), disconnect, guilds, channels, and per-instance channel grants list/grant/revoke (#1132)
@@ -150,13 +151,13 @@ src/
                           + 3 deprecated aliases of the run tools: start/check/stop_instance_loop (#1243, src/deprecated-alias.ts)
 ```
 
-**367 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**369 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 13 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all seventeen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 313 across `instance-tools/`. 340 are always registered; 27 are
+`storage-tools.ts`, and 315 across `instance-tools/`. 342 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 13 + 2 + 1 + 1 + 15 + 313 = 367. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 13 + 2 + 1 + 1 + 15 + 315 = 369. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
@@ -173,7 +174,9 @@ added `get_instance_loop_presets` + `set_instance_loop_presets` to `instance-too
 21 + 13 + 14 + 116 = 164 until #613's product-feedback group added `record_instance_feedback` +
 `delete_feedback` to `instance-tools/observability.ts`; and said 21 + 13 + 14 + 118 = 166 until #736
 added `get_instance_connector_account` + `set_instance_connector_account` to
-`instance-tools/connectors.ts`. The per-file rows in the tree above are
+`instance-tools/connectors.ts`; and said 21 + 1 + 13 + 2 + 1 + 1 + 15 + 313 = 367 until #1267
+added `list_instance_mcp_accounts` + `set_instance_mcp_account` to
+`instance-tools/mcp-connections.ts`. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the

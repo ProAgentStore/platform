@@ -10730,6 +10730,94 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/mcp/accounts:
+    get:
+      summary: Which of the owner's accounts on one MCP endpoint this instance uses
+      description: |
+        The generic MCP connector's counterpart to `/connector-accounts` (#1267) — the owner can
+        connect the SAME MCP endpoint several times under different accounts (bearer or OAuth),
+        so this is keyed on the normalized endpoint (a `url` query param) rather than on a fixed
+        connector id.
+
+        Same contract as `/connector-accounts`: `resolves` is what a call would use RIGHT NOW,
+        `null` with `blocked` naming why when it can't. Two accounts connected and no pin refuses
+        as `ambiguous`; a pin to an account since disconnected refuses as `pinned_account_gone` —
+        neither falls back to another account.
+      operationId: listInstanceMcpAccounts
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: url
+          in: query
+          required: true
+          schema: { type: string }
+          description: The MCP endpoint, e.g. `https://example.com/mcp`. Must be https.
+      responses:
+        "200":
+          description: Accounts on that endpoint and this instance's choice
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoint: { type: string, description: "The normalized endpoint." }
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        accountId: { type: string, description: "Empty string is the unnamed default account." }
+                        label: { type: string, nullable: true }
+                        connectedAt: { type: string, nullable: true }
+                  pinned: { type: string, nullable: true, description: "The account this instance is set to use, or null for 'resolve automatically'." }
+                  resolves: { type: string, nullable: true, description: "The accountId a call would use now. Null when blocked." }
+                  blocked:
+                    type: object
+                    nullable: true
+                    properties:
+                      reason: { type: string, enum: [not_connected, ambiguous, pinned_account_gone] }
+                      message: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Pin this instance to one of the owner's accounts on an MCP endpoint
+      description: |
+        Chooses among accounts the owner has ALREADY connected on that endpoint (bearer paste or
+        OAuth); it can never establish one — connecting is the console's MCP connections panel.
+
+        An empty or omitted `accountId` clears the pin, returning the instance to "resolve
+        automatically": fine with one account connected, a refusal with several. An `accountId`
+        the owner does not hold on that endpoint is refused here, at write time.
+      operationId: setInstanceMcpAccount
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, description: "The MCP endpoint, e.g. `https://example.com/mcp`. Must be https." }
+                accountId: { type: string, nullable: true, description: "The account to use. Empty or null clears the pin." }
+      responses:
+        "200":
+          description: The pin as stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  endpoint: { type: string }
+                  pinned: { type: string, nullable: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/mcp/consent:
     get:
       summary: This instance's outbound-MCP grants, per server and per remote tool
@@ -10958,6 +11046,7 @@ paths:
                       type: object
                       properties:
                         endpoint: { type: string, description: Normalized https MCP endpoint this credential is bound to. }
+                        accountId: { type: string, description: "'' = the unnamed default account (#1267). One endpoint may hold several, each under a distinct accountId the owner chose." }
                         authMode: { type: string, enum: [bearer, oauth], description: How the credential was obtained. }
                         issuer: { type: string, nullable: true, description: Authorization server, when the endpoint published one. }
                         scopes: { type: string, nullable: true, description: Space-delimited, when the issuer stated them. }
@@ -10983,6 +11072,12 @@ paths:
         to this server without re-typing it. The ciphertext is copied verbatim under the same KEK,
         so no plaintext is produced to perform the move.
 
+        Pass `accountId` to target a SPECIFIC account on this endpoint (#1267) — '' (default,
+        omitted) is the unnamed account; a non-empty, owner-chosen id stores a SECOND account on
+        the same endpoint rather than overwriting the first. Pass `rename: true` with `accountId`
+        and `accountLabel` to rename an EXISTING account's display label without touching its
+        credential — `token` is not required (and ignored) on a rename.
+
         The token is envelope-encrypted at rest (per-row AES-256-GCM DEK wrapped with AES-KW under
         `KEY_ENCRYPTION_KEY`), and the response echoes only the endpoint — not a token prefix, not
         a length — because a confirmation string is a credential fragment in a response body, a log
@@ -11000,8 +11095,10 @@ paths:
               required: [url]
               properties:
                 url: { type: string, description: An https MCP endpoint, e.g. `https://example.com/mcp`. Normalized before storage, so it matches what the connector resolves on. }
-                token: { type: string, maxLength: 8192, description: The access token this server issued. Required unless `adoptLegacy` is set. }
+                accountId: { type: string, description: "'' (default, omitted) = the unnamed account. Non-empty names a SECOND (or later) account on this same endpoint (#1267)." }
+                token: { type: string, maxLength: 8192, description: The access token this server issued. Required unless `adoptLegacy` or `rename` is set. }
                 adoptLegacy: { type: boolean, description: Bind the account's unbound legacy MCP token to this endpoint instead of supplying a new one. }
+                rename: { type: boolean, description: Rename the EXISTING account named by `accountId` to `accountLabel`, without touching its credential. Requires the account to already exist. }
                 authMode: { type: string, enum: [bearer, oauth], default: bearer }
                 issuer: { type: string, description: Authorization server, when known. }
                 scopes: { type: string, description: Space-delimited scopes, when known. }
@@ -11017,6 +11114,7 @@ paths:
                 properties:
                   ok: { type: boolean }
                   endpoint: { type: string }
+                  accountId: { type: string }
                   authMode: { type: string }
                   adoptedLegacy: { type: boolean }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -11026,7 +11124,9 @@ paths:
       summary: Forget one MCP server's credential, or discard the unbound legacy token
       description: |
         Pass `url` to remove the credential for that endpoint; every other endpoint's credential is
-        untouched. Pass `legacy=1` to discard the account's old provider-wide token, so the
+        untouched. Pass `accountId` to remove one SPECIFIC account on that endpoint (#1267) — '' is
+        the unnamed default account, and removing one account leaves a sibling account on the same
+        endpoint untouched. Pass `legacy=1` to discard the account's old provider-wide token, so the
         "bound to no server" notice is clearable rather than permanent.
 
         `removed` reports whether anything was actually deleted, so the console can tell
@@ -11036,6 +11136,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/InstanceId" }
         - { name: url, in: query, schema: { type: string }, description: An https MCP endpoint. Required unless `legacy` is set. }
+        - { name: accountId, in: query, schema: { type: string }, description: "Which account on that endpoint to remove. Omitted/'' = the unnamed default account." }
         - { name: legacy, in: query, schema: { type: string }, description: Any value discards the account's unbound legacy MCP token instead. }
       responses:
         "200":
@@ -11047,6 +11148,7 @@ paths:
                 properties:
                   ok: { type: boolean }
                   endpoint: { type: string }
+                  accountId: { type: string }
                   legacy: { type: boolean }
                   removed: { type: boolean }
         "400": { $ref: "#/components/responses/BadRequest" }

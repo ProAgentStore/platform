@@ -39,10 +39,10 @@ function fakeDb() {
 				if (sql.includes("INSERT INTO mcp_oauth_clients")) tables.clients.set(k(a[0], a[1]), { user_id: a[0], issuer: a[1], client_id: a[2], redirect_uri: a[3], secret_ciphertext: null, secret_dek_wrapped: null, secret_iv: null });
 				else if (sql.includes("INSERT INTO mcp_oauth_flows"))
 					tables.flows.set(String(a[0]), {
-						id: a[0], user_id: a[1], endpoint: a[2], issuer: a[3], token_endpoint: a[4], client_id: a[5], redirect_uri: a[6], scope: a[7],
-						verifier_ciphertext: a[8], verifier_dek_wrapped: a[9], verifier_iv: a[10], expires_at: a[11],
+						id: a[0], user_id: a[1], endpoint: a[2], account_id: a[3], issuer: a[4], token_endpoint: a[5], client_id: a[6], redirect_uri: a[7], scope: a[8],
+						verifier_ciphertext: a[9], verifier_dek_wrapped: a[10], verifier_iv: a[11], expires_at: a[12],
 					});
-				else if (sql.includes("INSERT INTO mcp_credentials")) tables.creds.set(k(a[0], a[1]), { user_id: a[0], endpoint: a[1], auth_mode: a[2], issuer: a[3] });
+				else if (sql.includes("INSERT INTO mcp_credentials")) tables.creds.set(k(a[0], a[1]), { user_id: a[0], endpoint: a[1], account_id: a[2], auth_mode: a[3], issuer: a[4] });
 				return {};
 			},
 			async first<T>(): Promise<T | null> {

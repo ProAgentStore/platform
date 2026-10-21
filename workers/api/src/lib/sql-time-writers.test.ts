@@ -245,6 +245,7 @@ describe("#657 — an expiring secret's TTL fires on the clock, not on the date"
 			id: "flow-1",
 			userId: "u1",
 			endpoint: "https://mcp.example/mcp",
+			accountId: "",
 			issuer: "https://as.example",
 			tokenEndpoint: "https://as.example/token",
 			clientId: "client-1",

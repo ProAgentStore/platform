@@ -20,6 +20,8 @@ export type McpStatus =
 	| "connected"
 	| "credential_missing"
 	| "credential_expired"
+	| "account_ambiguous"
+	| "pinned_account_gone"
 	| "auth_required"
 	| "unsupported_protocol"
 	| "unreachable"
@@ -99,6 +101,9 @@ export interface McpConnection {
  */
 export interface McpCredential {
 	endpoint: string;
+	/** '' = the unnamed default account (#1267) — a server held one credential per endpoint
+	 *  until an owner could connect it twice under different accounts. */
+	accountId: string;
 	authMode: "bearer" | "oauth";
 	issuer: string | null;
 	scopes: string | null;
@@ -107,6 +112,45 @@ export interface McpCredential {
 	accountLabel: string | null;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** One connected account on an endpoint — mirrors ConnectorAccount, keyed on endpoint not connector id. */
+export interface McpAccountRow {
+	accountId: string;
+	label: string | null;
+	connectedAt: string | null;
+}
+
+/** `GET /v1/instances/:id/mcp/accounts?url=…` (#1267) — this instance's verdict for ONE endpoint,
+ *  the same shape `InstanceConnectorAccounts` carries for a fixed-id connector. */
+export interface McpAccountsState {
+	endpoint: string;
+	accounts: McpAccountRow[];
+	/** The account this instance is pinned to. `null` is "no choice made". */
+	pinned: string | null;
+	/** What a call would resolve to right now. `null` = it refuses. */
+	resolves: string | null;
+	blocked: { reason: "not_connected" | "ambiguous" | "pinned_account_gone"; message: string } | null;
+}
+
+/** Does this endpoint hold more than one account — does the owner have to be told which to use? */
+export function mcpNeedsAccountChoice(state: Pick<McpAccountsState, "accounts">): boolean {
+	return state.accounts.length > 1;
+}
+
+/** The rows to render under an endpoint's account picker — same naming rule as `accountRows`. */
+export function mcpAccountRows(state: Pick<McpAccountsState, "accounts">): Array<{ accountId: string; name: string }> {
+	return state.accounts.map((a) => ({ accountId: a.accountId, name: a.label?.trim() || a.accountId || "unnamed connection" }));
+}
+
+/** What the picker says about the current state — mirrors `agentAccountNotice`, `blocked.message`
+ *  rendered VERBATIM since the server already computes the exact sentence. */
+export function mcpAccountNotice(state: McpAccountsState): { blocked: boolean; message: string } {
+	if (state.resolves === null) {
+		return { blocked: true, message: state.blocked?.message ?? "This instance is not set to use one of the connected accounts, so every call to this server refuses." };
+	}
+	const name = mcpAccountRows(state).find((a) => a.accountId === state.resolves)?.name ?? state.resolves;
+	return { blocked: false, message: `This instance uses ${name}.` };
 }
 
 export interface McpCredentialState {
@@ -175,6 +219,10 @@ export function statusBadge(status: McpStatus): { label: string; tone: "green" |
 			return { label: "Token needed", tone: "amber" };
 		case "credential_expired":
 			return { label: "Token expired", tone: "amber" };
+		case "account_ambiguous":
+			return { label: "Account not chosen", tone: "amber" };
+		case "pinned_account_gone":
+			return { label: "Pinned account gone", tone: "amber" };
 		case "auth_required":
 			return { label: "Credential rejected", tone: "amber" };
 		case "permission_denied":

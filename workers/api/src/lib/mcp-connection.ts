@@ -47,6 +47,12 @@ export type McpConnectionStatus =
 	| "connected"
 	| "credential_missing"
 	| "credential_expired"
+	/** Two or more accounts are connected on this endpoint and this instance is not pinned to one
+	 *  (#1267). The remedy is `set_instance_mcp_account` / the console's account pin, not a token. */
+	| "account_ambiguous"
+	/** This instance is pinned to an account that has since been disconnected (#1267). Does not
+	 *  fall back to another account — same reasoning as `resolveConnectorAccount`'s header. */
+	| "pinned_account_gone"
 	| "auth_required"
 	| "unsupported_protocol"
 	| "unreachable"
@@ -117,6 +123,10 @@ export interface McpConnectionReport {
 	protocolVersion?: string;
 	httpStatus?: number;
 	durationMs: number;
+	/** Which of the owner's accounts on this endpoint the test used, when auth was attempted and
+	 *  one was resolved (#1267). '' is the unnamed default account. */
+	accountId?: string;
+	accountLabel?: string | null;
 	tools: McpToolSummary[];
 	/** How many tools the server published (before any gate). */
 	toolCount: number;
@@ -161,6 +171,10 @@ export function connectionStatusFor(failure: McpFailureClass | undefined, ok: bo
 			return "credential_missing";
 		case "credential_expired":
 			return "credential_expired";
+		case "ambiguous":
+			return "account_ambiguous";
+		case "pinned_account_gone":
+			return "pinned_account_gone";
 		case "auth":
 			return "auth_required";
 		case "denied":

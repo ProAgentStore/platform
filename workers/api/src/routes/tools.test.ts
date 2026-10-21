@@ -67,6 +67,9 @@ function testApp(
 		emailPermission?: boolean | "unreadable";
 		/** `coding_repos` rows carrying a stored CI verdict (#903) — read by the loop routes' `repoCi`. */
 		ciRepos?: Array<{ id: string; name: string; github_repo: string; ci_health: string | null }>;
+		/** `mcp_credentials` accounts on the endpoint a test queries (#1267) — what `listMcpAccounts`'s
+		 *  `.all()` returns, regardless of which endpoint was bound (this fixture is single-endpoint). */
+		mcpAccounts?: Array<{ account_id: string; account_label: string | null; created_at: string | null; scopes: string | null }>;
 	} = { owned: true },
 ) {
 	const app = new Hono();
@@ -141,6 +144,7 @@ function testApp(
 									};
 								}
 								if (sql.includes("instance_mcp_consent")) return { results: opts.mcpGrants ?? [] };
+								if (sql.includes("mcp_credentials")) return { results: opts.mcpAccounts ?? [] };
 								return { results: [] };
 							},
 						};
@@ -1175,6 +1179,72 @@ describe("PUT /v1/instances/:id/connectors/:connector/consent", () => {
 			const res = await req(app, env, `/v1/instances/i1/connectors/${conn}/consent`, { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
 			expect(res.status).toBe(200);
 		}
+	});
+});
+
+/**
+ * GET/PUT /v1/instances/:id/mcp/accounts — per-instance MCP account pinning (#1267), the same
+ * shape as GET/PUT /v1/instances/:id/connector-accounts one dimension over: pinned on the
+ * normalized endpoint rather than on a fixed connector id.
+ */
+describe("GET/PUT /v1/instances/:id/mcp/accounts", () => {
+	const URL = "https://example.com/mcp";
+
+	it("one connected account resolves automatically, with no pin needed", async () => {
+		const { app, env } = testApp({ mcpAccounts: [{ account_id: "", account_label: null, created_at: "2024-01-01", scopes: null }] });
+		const res = await req(app, env, `/v1/instances/i1/mcp/accounts?url=${encodeURIComponent(URL)}`, { method: "GET" }, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = await jsonBody(res);
+		expect(body.pinned).toBeNull();
+		expect(body.resolves).toBe("");
+		expect(body.blocked).toBeNull();
+	});
+
+	it("two connected accounts and no pin refuse as ambiguous, not a guess", async () => {
+		const { app, env } = testApp({
+			mcpAccounts: [
+				{ account_id: "work", account_label: "Work", created_at: "2024-01-02", scopes: null },
+				{ account_id: "personal", account_label: "Personal", created_at: "2024-01-01", scopes: null },
+			],
+		});
+		const res = await req(app, env, `/v1/instances/i1/mcp/accounts?url=${encodeURIComponent(URL)}`, { method: "GET" }, await tok("u1"));
+		const body = await jsonBody(res);
+		expect(body.resolves).toBeNull();
+		expect(rec(body.blocked).reason).toBe("ambiguous");
+		expect(rows(body.accounts).map((a) => a.accountId).sort()).toEqual(["personal", "work"]);
+	});
+
+	it("refuses a non-https url before touching storage", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/mcp/accounts?url=http://internal.local/mcp", { method: "GET" }, await tok("u1"));
+		expect(res.status).toBe(400);
+	});
+
+	it("404s when the caller does not own the instance", async () => {
+		const { app, env } = testApp({ owned: false });
+		const res = await req(app, env, `/v1/instances/i1/mcp/accounts?url=${encodeURIComponent(URL)}`, { method: "GET" }, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	it("PUT refuses to pin an account the owner has not connected", async () => {
+		const { app, env } = testApp({ mcpAccounts: [{ account_id: "work", account_label: "Work", created_at: "2024-01-01", scopes: null }] });
+		const res = await req(app, env, "/v1/instances/i1/mcp/accounts", { method: "PUT", body: JSON.stringify({ url: URL, accountId: "ghost" }) }, await tok("u1"));
+		expect(res.status).toBe(400);
+	});
+
+	it("PUT pins an account that IS connected", async () => {
+		const { app, env } = testApp({ mcpAccounts: [{ account_id: "work", account_label: "Work", created_at: "2024-01-01", scopes: null }] });
+		const res = await req(app, env, "/v1/instances/i1/mcp/accounts", { method: "PUT", body: JSON.stringify({ url: URL, accountId: "work" }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = await jsonBody(res);
+		expect(body).toMatchObject({ success: true, endpoint: URL, pinned: "work" });
+	});
+
+	it("PUT with an empty accountId clears the pin", async () => {
+		const { app, env } = testApp({ mcpAccounts: [{ account_id: "work", account_label: "Work", created_at: "2024-01-01", scopes: null }] });
+		const res = await req(app, env, "/v1/instances/i1/mcp/accounts", { method: "PUT", body: JSON.stringify({ url: URL, accountId: "" }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+		expect(await jsonBody(res)).toMatchObject({ success: true, pinned: null });
 	});
 });
 

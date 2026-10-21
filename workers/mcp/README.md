@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**367 tool registrations.** 340 are always registered; 27 are gated to the console
+**369 tool registrations.** 342 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -559,6 +559,8 @@ immediately instead of a whole transcript.
 | `test_instance_mcp_server` | Contact a remote MCP endpoint and report what this agent could actually call | runtime | yes | |
 | `list_instance_mcp_input_requests` | Outbound MCP calls paused because the server asked the person for more | — | | |
 | `answer_instance_mcp_input_request` | Answer (retrying the remote call) or cancel a paused ask | runtime | yes | |
+| `list_instance_mcp_accounts` | Which of your accounts on one MCP endpoint this instance uses: `pinned`, what a call `resolves` to, and `blocked` when it would use none | — | | |
+| `set_instance_mcp_account` | Pin the instance to one connected account on an endpoint, or clear the pin with an empty `account_id`; answers with the row read back | write | yes | |
 | `grant_instance_connector_folder` | Grant a folder (folders only; files refused server-side) | write | yes | |
 | `delete_instance_connector_grant` | Revoke a grant | destructive | yes | `delete_instance_connector_grant` |
 | `list_http_profiles` | List your named HTTP credential profiles — metadata, origins, secret version, bindings; never a secret (#1123) | read | | |

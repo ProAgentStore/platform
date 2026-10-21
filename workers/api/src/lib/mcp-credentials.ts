@@ -34,9 +34,17 @@ import { decryptKey, encryptKey } from "./crypto.js";
 import { HttpError } from "./auth.js";
 import { discoverAuthServer, type DiscoveryResult } from "./connectors/discovery.js";
 import { safeFetch } from "./ssrf.js";
+import { type AccountResolution, type ConnectorAccount, resolveConnectorAccount } from "./connector-accounts.js";
 
 /** The legacy provider-wide vault slot this replaces. Read only to REPORT it, never to send it. */
 export const LEGACY_MCP_PROVIDER = "mcp";
+
+/**
+ * '' = the unnamed default account (#1267, migration 0267) — the id every caller that predates
+ * multiple accounts per endpoint still asks for. Non-empty = an id the owner chose when
+ * connecting a second (or later) account on the same endpoint.
+ */
+export const DEFAULT_MCP_ACCOUNT_ID = "";
 
 /** How a credential was obtained. Recorded so a later OAuth flow (#258/#180) writes rows here
  *  rather than inventing a parallel store, and so the resolver never has to guess. */
@@ -45,6 +53,8 @@ export type McpAuthMode = "bearer" | "oauth";
 /** Non-secret metadata about a stored credential — the shape a route may return. */
 export interface McpCredentialInfo {
 	endpoint: string;
+	/** '' = the unnamed default account. See {@link DEFAULT_MCP_ACCOUNT_ID}. */
+	accountId: string;
 	authMode: McpAuthMode;
 	issuer: string | null;
 	scopes: string | null;
@@ -71,6 +81,7 @@ export type McpCredentialResolution =
 
 interface CredRow {
 	endpoint: string;
+	account_id: string;
 	auth_mode: string;
 	issuer: string | null;
 	scopes: string | null;
@@ -102,6 +113,7 @@ export function isExpired(expiresAt: string | null | undefined, now: number = Da
 function toInfo(r: CredRow, now = Date.now()): McpCredentialInfo {
 	return {
 		endpoint: r.endpoint,
+		accountId: r.account_id ?? DEFAULT_MCP_ACCOUNT_ID,
 		authMode: authModeOf(r.auth_mode),
 		issuer: r.issuer,
 		scopes: r.scopes,
@@ -135,13 +147,18 @@ export async function hasLegacyMcpCredential(env: Env, userId: string): Promise<
  * and sending it anyway is the disclosure. The legacy token is reported (so the user can bind it
  * in one click, without re-typing it) and never sent.
  */
-export async function resolveMcpCredential(env: Env | undefined, userId: string | undefined, endpoint: string | null): Promise<McpCredentialResolution> {
+export async function resolveMcpCredential(
+	env: Env | undefined,
+	userId: string | undefined,
+	endpoint: string | null,
+	accountId: string = DEFAULT_MCP_ACCOUNT_ID,
+): Promise<McpCredentialResolution> {
 	if (!env?.DB || !userId || !endpoint) return { status: "missing", legacy: false };
 	try {
 		const row = await env.DB.prepare(
-			"SELECT auth_mode, expires_at, key_ciphertext, dek_wrapped, iv FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2",
+			"SELECT auth_mode, expires_at, key_ciphertext, dek_wrapped, iv FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3",
 		)
-			.bind(userId, endpoint)
+			.bind(userId, endpoint, accountId)
 			.first<CipherRow & { auth_mode: string; expires_at: string | null }>();
 
 		if (!row) return { status: "missing", legacy: await hasLegacyMcpCredential(env, userId) };
@@ -160,10 +177,11 @@ export async function resolveMcpCredential(env: Env | undefined, userId: string 
 	}
 }
 
-/** The credentials this account holds, metadata only — never the token. */
+/** The credentials this account holds, metadata only — never the token. One row per (endpoint,
+ *  account) since #1267: an endpoint with two connected accounts lists two rows. */
 export async function listMcpCredentials(env: Env, userId: string): Promise<McpCredentialInfo[]> {
 	const res = await env.DB.prepare(
-		"SELECT endpoint, auth_mode, issuer, scopes, expires_at, account_label, created_at, updated_at FROM mcp_credentials WHERE user_id = ?1 ORDER BY endpoint",
+		"SELECT endpoint, account_id, auth_mode, issuer, scopes, expires_at, account_label, created_at, updated_at FROM mcp_credentials WHERE user_id = ?1 ORDER BY endpoint, account_id",
 	)
 		.bind(userId)
 		.all<CredRow>();
@@ -171,10 +189,77 @@ export async function listMcpCredentials(env: Env, userId: string): Promise<McpC
 	return (res.results ?? []).map((r) => toInfo(r, now));
 }
 
+/**
+ * The owner's connected accounts on ONE endpoint (#1267) — credential-free, the same
+ * {@link ConnectorAccount} shape `listConnectorAccounts` returns for a vault-backed connector, so
+ * {@link resolveConnectorAccount} and the console's rendering are shared rather than duplicated
+ * for the one connector whose "provider" dimension is a user-supplied URL instead of a fixed id.
+ */
+export async function listMcpAccounts(env: Env, userId: string, endpoint: string): Promise<ConnectorAccount[]> {
+	const res = await env.DB.prepare(
+		"SELECT account_id, account_label, created_at, scopes FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2 ORDER BY created_at DESC, account_id ASC",
+	)
+		.bind(userId, endpoint)
+		.all<{ account_id: string; account_label: string | null; created_at: string | null; scopes: string | null }>();
+	return (res.results ?? []).map((r) => ({
+		accountId: r.account_id ?? DEFAULT_MCP_ACCOUNT_ID,
+		label: r.account_label,
+		connectedAt: r.created_at,
+		grantedScopes: r.scopes,
+	}));
+}
+
+/** An instance's recorded MCP account pins, keyed on the NORMALIZED endpoint rather than on a
+ *  fixed connector id — the dimension that makes this connector different from every other one
+ *  `connectorAccounts` already covers. Shape: `{ "https://host/mcp": "work" }`. */
+export function pinnedMcpAccountsFrom(config: unknown): Record<string, string> {
+	if (typeof config !== "object" || config === null) return {};
+	const raw = (config as { mcpAccounts?: unknown }).mcpAccounts;
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+	const out: Record<string, string> = {};
+	for (const [endpoint, value] of Object.entries(raw as Record<string, unknown>)) {
+		if (typeof value === "string" && value.trim()) out[endpoint] = value.trim();
+	}
+	return out;
+}
+
+/** Read an instance's pinned account for one endpoint straight from D1. */
+export async function pinnedMcpAccountFor(env: Env, instanceId: string | undefined, endpoint: string): Promise<string | undefined> {
+	if (!instanceId) return undefined;
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1").bind(instanceId).first<{ config: string | null }>();
+	if (!row?.config) return undefined;
+	try {
+		return pinnedMcpAccountsFrom(JSON.parse(row.config))[endpoint];
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Which account a call to `endpoint` should use, for this instance. PURE decision delegated to
+ * {@link resolveConnectorAccount} — the generic rule (refuse rather than pick, a stale pin refuses
+ * rather than falls back, one account always resolves) applies identically here; only the lookup
+ * of "what's connected" and "what's pinned" differs because the key is an endpoint, not a fixed
+ * connector id.
+ */
+export async function resolveMcpAccount(
+	env: Env | undefined,
+	userId: string | undefined,
+	endpoint: string,
+	instanceId: string | undefined,
+): Promise<AccountResolution> {
+	if (!env?.DB || !userId) return { ok: false, reason: "not_connected", message: `No credential stored for ${endpoint}.` };
+	const [accounts, pinned] = await Promise.all([listMcpAccounts(env, userId, endpoint), pinnedMcpAccountFor(env, instanceId, endpoint)]);
+	return resolveConnectorAccount(accounts, pinned, `the MCP server ${endpoint}`);
+}
+
 export interface SaveMcpCredentialInput {
 	userId: string;
 	/** Already normalized by the caller — this module never re-derives it, so there is one parser. */
 	endpoint: string;
+	/** '' (default) = the unnamed account. Non-empty when the owner is connecting a SECOND account
+	 *  on this endpoint — see {@link DEFAULT_MCP_ACCOUNT_ID}. */
+	accountId?: string;
 	token: string;
 	authMode?: McpAuthMode;
 	issuer?: string | null;
@@ -185,6 +270,22 @@ export interface SaveMcpCredentialInput {
 	refreshToken?: string | null;
 	/** Where to renew it, recorded so a 3am refresh is one POST, not the whole discovery chain. */
 	tokenEndpoint?: string | null;
+}
+
+/**
+ * Rename one account's display label, without touching its credential material (#1267).
+ *
+ * The account's IDENTITY is `accountId`, chosen once when it was connected and never renamed —
+ * same reasoning as a mailbox address under #715. `accountLabel` is the one field that is purely
+ * a display hint, so it is the one a rename can change without re-pasting a token nobody has to
+ * hand a second time. Returns false when there is no such account, so the caller can 404 rather
+ * than silently writing a label for a credential that does not exist.
+ */
+export async function renameMcpAccount(env: Env, userId: string, endpoint: string, accountId: string, label: string | null): Promise<boolean> {
+	const res = await env.DB.prepare("UPDATE mcp_credentials SET account_label = ?4, updated_at = datetime('now') WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3")
+		.bind(userId, endpoint, accountId, label)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 /**
@@ -204,9 +305,9 @@ export async function saveMcpCredential(env: Env, input: SaveMcpCredentialInput)
 	// key even though they share a row.
 	const refresh = input.refreshToken ? await encryptKey(input.refreshToken, env.KEY_ENCRYPTION_KEY) : null;
 	await env.DB.prepare(
-		`INSERT INTO mcp_credentials (user_id, endpoint, auth_mode, issuer, scopes, expires_at, key_ciphertext, dek_wrapped, iv, account_label, token_endpoint, refresh_ciphertext, refresh_dek_wrapped, refresh_iv, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'), datetime('now'))
-		 ON CONFLICT(user_id, endpoint) DO UPDATE SET
+		`INSERT INTO mcp_credentials (user_id, endpoint, account_id, auth_mode, issuer, scopes, expires_at, key_ciphertext, dek_wrapped, iv, account_label, token_endpoint, refresh_ciphertext, refresh_dek_wrapped, refresh_iv, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'), datetime('now'))
+		 ON CONFLICT(user_id, endpoint, account_id) DO UPDATE SET
 		   auth_mode = excluded.auth_mode,
 		   issuer = excluded.issuer,
 		   scopes = excluded.scopes,
@@ -224,6 +325,7 @@ export async function saveMcpCredential(env: Env, input: SaveMcpCredentialInput)
 		.bind(
 			input.userId,
 			input.endpoint,
+			input.accountId ?? DEFAULT_MCP_ACCOUNT_ID,
 			input.authMode ?? "bearer",
 			input.issuer ?? null,
 			input.scopes ?? null,
@@ -256,13 +358,18 @@ export interface McpRefreshMaterial {
  * sendable to the resource at all, so returning it there would put a credential the MCP server
  * must never see one field away from the header we build.
  */
-export async function readMcpRefreshMaterial(env: Env, userId: string, endpoint: string): Promise<McpRefreshMaterial | null> {
+export async function readMcpRefreshMaterial(
+	env: Env,
+	userId: string,
+	endpoint: string,
+	accountId: string = DEFAULT_MCP_ACCOUNT_ID,
+): Promise<McpRefreshMaterial | null> {
 	if (!env.KEY_ENCRYPTION_KEY) return null;
 	try {
 		const row = await env.DB.prepare(
-			"SELECT auth_mode, issuer, token_endpoint, expires_at, refresh_ciphertext, refresh_dek_wrapped, refresh_iv FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2",
+			"SELECT auth_mode, issuer, token_endpoint, expires_at, refresh_ciphertext, refresh_dek_wrapped, refresh_iv FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3",
 		)
-			.bind(userId, endpoint)
+			.bind(userId, endpoint, accountId)
 			.first<{
 				auth_mode: string;
 				issuer: string | null;
@@ -297,27 +404,36 @@ export async function readMcpRefreshMaterial(env: Env, userId: string, endpoint:
  */
 export async function updateMcpAccessToken(
 	env: Env,
-	input: { userId: string; endpoint: string; token: string; expiresAt: string | null; scopes?: string | null; refreshToken?: string | null },
+	input: {
+		userId: string;
+		endpoint: string;
+		accountId?: string;
+		token: string;
+		expiresAt: string | null;
+		scopes?: string | null;
+		refreshToken?: string | null;
+	},
 ): Promise<void> {
 	if (!env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
 	const { ciphertext, dekWrapped, iv } = await encryptKey(input.token, env.KEY_ENCRYPTION_KEY);
 	const refresh = input.refreshToken ? await encryptKey(input.refreshToken, env.KEY_ENCRYPTION_KEY) : null;
 	await env.DB.prepare(
 		`UPDATE mcp_credentials SET
-		   key_ciphertext = ?3,
-		   dek_wrapped = ?4,
-		   iv = ?5,
-		   expires_at = ?6,
-		   scopes = COALESCE(?7, scopes),
-		   refresh_ciphertext = COALESCE(?8, refresh_ciphertext),
-		   refresh_dek_wrapped = COALESCE(?9, refresh_dek_wrapped),
-		   refresh_iv = COALESCE(?10, refresh_iv),
+		   key_ciphertext = ?4,
+		   dek_wrapped = ?5,
+		   iv = ?6,
+		   expires_at = ?7,
+		   scopes = COALESCE(?8, scopes),
+		   refresh_ciphertext = COALESCE(?9, refresh_ciphertext),
+		   refresh_dek_wrapped = COALESCE(?10, refresh_dek_wrapped),
+		   refresh_iv = COALESCE(?11, refresh_iv),
 		   updated_at = datetime('now')
-		 WHERE user_id = ?1 AND endpoint = ?2`,
+		 WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3`,
 	)
 		.bind(
 			input.userId,
 			input.endpoint,
+			input.accountId ?? DEFAULT_MCP_ACCOUNT_ID,
 			ciphertext,
 			dekWrapped,
 			iv,
@@ -332,8 +448,8 @@ export async function updateMcpAccessToken(
 
 /** Forget one endpoint's credential. Returns false when there was nothing to forget, so the
  *  console can distinguish "disconnected" from "there was never a credential here". */
-export async function deleteMcpCredential(env: Env, userId: string, endpoint: string): Promise<boolean> {
-	const res = await env.DB.prepare("DELETE FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2").bind(userId, endpoint).run();
+export async function deleteMcpCredential(env: Env, userId: string, endpoint: string, accountId: string = DEFAULT_MCP_ACCOUNT_ID): Promise<boolean> {
+	const res = await env.DB.prepare("DELETE FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3").bind(userId, endpoint, accountId).run();
 	return (res.meta?.changes ?? 0) > 0;
 }
 
@@ -354,15 +470,15 @@ export async function discardLegacyMcpCredential(env: Env, userId: string): Prom
  * Returns false when there is no legacy token — the caller reports that rather than writing a
  * row with no material behind it.
  */
-export async function adoptLegacyMcpCredential(env: Env, userId: string, endpoint: string): Promise<boolean> {
+export async function adoptLegacyMcpCredential(env: Env, userId: string, endpoint: string, accountId: string = DEFAULT_MCP_ACCOUNT_ID): Promise<boolean> {
 	const row = await env.DB.prepare("SELECT key_ciphertext, dek_wrapped, iv, account_label FROM user_api_keys WHERE user_id = ?1 AND provider = ?2")
 		.bind(userId, LEGACY_MCP_PROVIDER)
 		.first<CipherRow & { account_label: string | null }>();
 	if (!row) return false;
 	await env.DB.prepare(
-		`INSERT INTO mcp_credentials (user_id, endpoint, auth_mode, key_ciphertext, dek_wrapped, iv, account_label, created_at, updated_at)
-		 VALUES (?1, ?2, 'bearer', ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
-		 ON CONFLICT(user_id, endpoint) DO UPDATE SET
+		`INSERT INTO mcp_credentials (user_id, endpoint, account_id, auth_mode, key_ciphertext, dek_wrapped, iv, account_label, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, 'bearer', ?4, ?5, ?6, ?7, datetime('now'), datetime('now'))
+		 ON CONFLICT(user_id, endpoint, account_id) DO UPDATE SET
 		   auth_mode = 'bearer',
 		   key_ciphertext = excluded.key_ciphertext,
 		   dek_wrapped = excluded.dek_wrapped,
@@ -371,7 +487,7 @@ export async function adoptLegacyMcpCredential(env: Env, userId: string, endpoin
 		   expires_at = NULL,
 		   updated_at = datetime('now')`,
 	)
-		.bind(userId, endpoint, row.key_ciphertext, row.dek_wrapped, row.iv, row.account_label ?? null)
+		.bind(userId, endpoint, accountId, row.key_ciphertext, row.dek_wrapped, row.iv, row.account_label ?? null)
 		.run();
 	return true;
 }

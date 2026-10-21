@@ -17,6 +17,7 @@ import {
 	MODERN_VERSION,
 	negotiateVersion,
 	parseRpcBody,
+	probeMcpEndpoint,
 	probeMcpSurface,
 	recallEra,
 	resetEraCache,
@@ -72,6 +73,17 @@ function makeCtx(
 					if (sql.includes("instance_mcp_consent")) {
 						const [, , tool, wildcard] = args as string[];
 						return { results: grants.filter((g) => g === tool || g === wildcard).map((g) => ({ tool: g })) };
+					}
+					if (sql.includes("mcp_credentials")) {
+						// #1267: `resolveMcpAccount` lists accounts on the endpoint before resolving a
+						// credential. Mirror `.first()`'s shape below — exactly one, the unnamed default
+						// account — whenever this ctx is configured to hold a credential for it, so every
+						// transport test here (written before multiple accounts existed) keeps resolving
+						// to the one account it always had.
+						const [, endpoint] = args as string[];
+						if (!token) return { results: [] };
+						if (opts.credentialFor && !opts.credentialFor.includes(endpoint)) return { results: [] };
+						return { results: [{ account_id: "", account_label: null, created_at: "2024-01-01T00:00:00.000Z", scopes: null }] };
 					}
 					return { results: [] };
 				},
@@ -1218,5 +1230,79 @@ describe("serverRequestIn (pure)", () => {
 
 	it("returns null for an HTML error page", () => {
 		expect(serverRequestIn("text/html", "<html>502</html>", null)).toBeNull();
+	});
+});
+
+describe("multiple accounts per endpoint (#1267)", () => {
+	const ENDPOINT = "https://example.com/mcp";
+
+	/** A ctx whose D1 holds TWO distinct accounts on the same endpoint, each with its own token
+	 *  and, optionally, an instance pinned to one of them — unlike `makeCtx`, which models the
+	 *  pre-#1267 world of exactly one credential per endpoint. */
+	function makeMultiAccountCtx(opts: { pin?: Record<string, string> } = {}) {
+		const tokens: Record<string, string> = { work: "tok-work", personal: "tok-personal" };
+		const DB = {
+			prepare: (sql: string) => ({
+				bind: (...args: unknown[]) => ({
+					all: async () => {
+						if (sql.includes("mcp_credentials")) {
+							return { results: Object.keys(tokens).map((accountId) => ({ account_id: accountId, account_label: null, created_at: "2024-01-01T00:00:00.000Z", scopes: null })) };
+						}
+						return { results: [] };
+					},
+					first: async () => {
+						if (sql.includes("mcp_credentials")) {
+							const [, , accountId] = args as string[];
+							const token = tokens[accountId as string];
+							if (!token) return null;
+							const { ciphertext, dekWrapped, iv } = await encryptKey(token, TEST_KEK);
+							return { auth_mode: "bearer", expires_at: null, key_ciphertext: ciphertext, dek_wrapped: dekWrapped, iv };
+						}
+						if (sql.includes("agent_instances")) {
+							return opts.pin ? { config: JSON.stringify({ mcpAccounts: opts.pin }) } : null;
+						}
+						return null;
+					},
+					run: async () => ({ success: true }),
+				}),
+				run: async () => ({ success: true }),
+			}),
+		};
+		return { env: { DB, KEY_ENCRYPTION_KEY: TEST_KEK } as never, userId: "user-1", instanceId: "inst-1" } as unknown as RegistryToolCtx;
+	}
+
+	it("sends the EXPLICITLY requested account's own token, never the other account's", async () => {
+		const ctx = makeMultiAccountCtx();
+		const calls = mockRpc({ "tools/list": { body: { jsonrpc: "2.0", id: 1, result: { tools: [] } } } });
+		await probeMcpEndpoint(ctx, ENDPOINT, true, "work");
+		expect(calls.at(-1)?.headers.get("Authorization")).toBe("Bearer tok-work");
+
+		await probeMcpEndpoint(ctx, ENDPOINT, true, "personal");
+		expect(calls.at(-1)?.headers.get("Authorization")).toBe("Bearer tok-personal");
+	});
+
+	it("refuses as ambiguous when several accounts are connected and this instance is not pinned", async () => {
+		const ctx = makeMultiAccountCtx();
+		const r = await probeMcpEndpoint(ctx, ENDPOINT, true);
+		expect(r.success).toBe(false);
+		expect(r.failure).toBe("ambiguous");
+		expect(r.content).toMatch(/not set to use one of them/);
+	});
+
+	it("resolves to the pinned account automatically, with no accountId override needed", async () => {
+		const ctx = makeMultiAccountCtx({ pin: { [ENDPOINT]: "personal" } });
+		const calls = mockRpc({ "tools/list": { body: { jsonrpc: "2.0", id: 1, result: { tools: [] } } } });
+		const r = await probeMcpEndpoint(ctx, ENDPOINT, true);
+		expect(r.success).toBe(true);
+		expect(r.accountId).toBe("personal");
+		expect(calls.at(-1)?.headers.get("Authorization")).toBe("Bearer tok-personal");
+	});
+
+	it("refuses as pinned_account_gone rather than falling back when the pin is stale", async () => {
+		const ctx = makeMultiAccountCtx({ pin: { [ENDPOINT]: "deleted-account" } });
+		const r = await probeMcpEndpoint(ctx, ENDPOINT, true);
+		expect(r.success).toBe(false);
+		expect(r.failure).toBe("pinned_account_gone");
+		expect(r.content).toMatch(/no longer connected/);
 	});
 });

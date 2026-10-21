@@ -115,6 +115,13 @@ function testEnv(opts: { grants?: string[]; writeConsent?: boolean; credential?:
 							if (sql.includes("FROM mcp_input_requests")) {
 								return { results: rows.filter((r) => r.instance_id === a[0] && r.user_id === a[1]).map((r) => ({ ...r })).reverse() };
 							}
+							// #1267: `resolveMcpAccount` lists the accounts on the endpoint before resolving
+							// a credential. Mirror `.first()`'s shape above — exactly one, the unnamed
+							// default account — whenever this env is configured to hold one, so the
+							// existing single-credential scenarios here keep resolving as they did.
+							if (sql.includes("FROM mcp_credentials")) {
+								return hasCredential ? { results: [{ account_id: "", account_label: null, created_at: "2024-01-01T00:00:00.000Z", scopes: null }] } : { results: [] };
+							}
 							return { results: [] };
 						},
 						async run() {

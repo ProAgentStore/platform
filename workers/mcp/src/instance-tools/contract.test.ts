@@ -413,6 +413,7 @@ const TABLE: Record<string, Row> = {
 	list_instance_connector_consents: ["connectors", "none", null, null, "instance_id,token"],
 	list_instance_mcp_grants: ["mcpConnections", "none", null, null, "instance_id,token"],
 	list_instance_mcp_input_requests: ["mcpConnections", "none", null, null, "instance_id,token"],
+	list_instance_mcp_accounts: ["mcpConnections", "read", null, null, "instance_id,token,url"],
 	list_mcp_presets: ["mcpConnections", "none", null, null, "token"],
 	list_trigger_actions: ["triggers", "none", null, null, "instance_id,token"],
 	preview_instance_trigger: [
@@ -567,6 +568,7 @@ const TABLE: Record<string, Row> = {
 	set_instance_tool: ["base", "write", null, "text", "dry_run,enabled,instance_id,token,tool"],
 	set_instance_connector_consent: ["connectors", "write", null, "envelope", "connector,dry_run,enabled,instance_id,mode,token"],
 	set_instance_mcp_grant: ["mcpConnections", "write", null, "envelope", "dry_run,enabled,instance_id,token,tool,url"],
+	set_instance_mcp_account: ["mcpConnections", "write", null, "envelope", "account_id,dry_run,instance_id,token,url"],
 	set_supervision_enabled: ["composition", "write", null, null, "enabled,supervision_id,supervisor_instance_id,token"],
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],

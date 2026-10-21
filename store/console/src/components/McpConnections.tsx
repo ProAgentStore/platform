@@ -5,11 +5,15 @@ import {
 	canAuthorize,
 	connectionsFromGrants,
 	credentialNote,
+	mcpAccountNotice,
+	mcpAccountRows,
+	mcpNeedsAccountChoice,
 	normalizeEndpoint,
 	presetFor,
 	statusBadge,
 	summarizeSmoke,
 	surfaceLine,
+	type McpAccountsState,
 	type McpCredentialState,
 	type McpGrant,
 	type McpPreset,
@@ -71,6 +75,16 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 	const [presets, setPresets] = useState<McpPreset[]>([]);
 	const [authorizing, setAuthorizing] = useState("");
 	const [smoke, setSmoke] = useState<{ endpoint: string; ok: boolean; text: string } | null>(null);
+	/** Per-endpoint account state (#1267) — fetched lazily, only for endpoints that hold a
+	 *  connection, so an agent with no multi-account server pays no extra request. */
+	const [accountsByEndpoint, setAccountsByEndpoint] = useState<Record<string, McpAccountsState>>({});
+	const [savingPin, setSavingPin] = useState("");
+	/** The "connect another account" form: which endpoint it is open for, and its two fields. A
+	 *  second account on the same endpoint needs an id the owner chooses (#1267) — unlike Gmail's
+	 *  mailbox address, a generic MCP server states no identity of its own to promote. */
+	const [newAccountFor, setNewAccountFor] = useState("");
+	const [newAccountId, setNewAccountId] = useState("");
+	const [newAccountToken, setNewAccountToken] = useState("");
 
 	const connections = connectionsFromGrants(grants);
 
@@ -89,6 +103,53 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 		void loadCreds();
 	}, [loadCreds]);
 
+	const loadAccounts = useCallback(
+		async (endpoint: string) => {
+			try {
+				const next = await api<McpAccountsState>(`/v1/instances/${instanceId}/mcp/accounts?url=${encodeURIComponent(endpoint)}`);
+				setAccountsByEndpoint((prev) => ({ ...prev, [endpoint]: next }));
+			} catch {
+				/* account state is an enhancement over the grant list, which must keep rendering */
+			}
+		},
+		[instanceId],
+	);
+
+	// One request per connected endpoint. Endpoints are the unit the whole panel keys on, so this
+	// re-runs exactly when the connection list itself changes, not on every render.
+	const connectionEndpoints = connections.map((c) => c.endpoint).join("\n");
+	useEffect(() => {
+		for (const endpoint of connectionEndpoints ? connectionEndpoints.split("\n") : []) void loadAccounts(endpoint);
+	}, [connectionEndpoints, loadAccounts]);
+
+	/** Rename an existing account's display label — the id it was connected under never moves. */
+	const renameAccount = async (endpoint: string, accountId: string, currentName: string) => {
+		const label = window.prompt("New name for this account:", currentName)?.trim();
+		if (!label) return;
+		setSavingPin(endpoint);
+		try {
+			await api(`/v1/instances/${instanceId}/mcp/credentials`, { method: "PUT", body: JSON.stringify({ url: endpoint, accountId, rename: true, accountLabel: label }) });
+			await loadAccounts(endpoint);
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : "Could not rename that account");
+		} finally {
+			setSavingPin("");
+		}
+	};
+
+	/** Pin this instance to one connected account on an endpoint, or clear the pin with "". */
+	const pinAccount = async (endpoint: string, accountId: string) => {
+		setSavingPin(endpoint);
+		try {
+			await api(`/v1/instances/${instanceId}/mcp/accounts`, { method: "PUT", body: JSON.stringify({ url: endpoint, accountId }) });
+			await loadAccounts(endpoint);
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : "Could not save that account choice");
+		} finally {
+			setSavingPin("");
+		}
+	};
+
 	useEffect(() => {
 		// Presets are deployment config, so a build that names no MCP server simply shows none —
 		// which is why this failing is silent rather than an error the user cannot act on.
@@ -97,14 +158,18 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 			.catch(() => setPresets([]));
 	}, []);
 
-	/** Store a token for ONE endpoint, or bind the unbound legacy token to it. */
-	const saveCredential = async (endpoint: string, opts: { token?: string; adoptLegacy?: boolean }) => {
+	/** Store a token for ONE endpoint (and, past the default account, one the owner names), or
+	 *  bind the unbound legacy token to it. */
+	const saveCredential = async (endpoint: string, opts: { token?: string; adoptLegacy?: boolean; accountId?: string }) => {
 		setBusyTool(`cred::${endpoint}`);
 		try {
 			await api(`/v1/instances/${instanceId}/mcp/credentials`, { method: "PUT", body: JSON.stringify({ url: endpoint, ...opts }) });
-			await loadCreds();
+			await Promise.all([loadCreds(), loadAccounts(endpoint)]);
 			setTokenFor("");
 			setTokenValue("");
+			setNewAccountFor("");
+			setNewAccountId("");
+			setNewAccountToken("");
 			setMsg(opts.adoptLegacy ? "Bound your existing token to this server" : "Token saved for this server");
 			setTimeout(() => setMsg(""), 2500);
 		} catch (e) {
@@ -114,11 +179,11 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 		}
 	};
 
-	const removeCredential = async (endpoint: string) => {
+	const removeCredential = async (endpoint: string, accountId = "") => {
 		setBusyTool(`cred::${endpoint}`);
 		try {
-			await api(`/v1/instances/${instanceId}/mcp/credentials?url=${encodeURIComponent(endpoint)}`, { method: "DELETE" });
-			await loadCreds();
+			await api(`/v1/instances/${instanceId}/mcp/credentials?url=${encodeURIComponent(endpoint)}&accountId=${encodeURIComponent(accountId)}`, { method: "DELETE" });
+			await Promise.all([loadCreds(), loadAccounts(endpoint)]);
 			setMsg("Token removed for this server");
 			setTimeout(() => setMsg(""), 2500);
 		} finally {
@@ -402,6 +467,89 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 									</span>
 								))}
 							</div>
+							{/* The account picker (#1267) — only rendered once there is a choice to make.
+							    With one account connected, every instance resolves to it silently. */}
+							{(() => {
+								const acctState = accountsByEndpoint[c.endpoint];
+								if (!acctState || !mcpNeedsAccountChoice(acctState)) return null;
+								const notice = mcpAccountNotice(acctState);
+								return (
+									<div className="flex flex-wrap items-center gap-1.5 mt-1">
+										<span className={notice.blocked ? "text-warning text-2xs" : "text-muted-soft text-2xs"}>{notice.message}</span>
+										<select
+											aria-label={`Account to use on ${c.endpoint}`}
+											className="text-2xs bg-paper border border-line rounded px-1 py-0.5"
+											disabled={savingPin === c.endpoint}
+											value={acctState.pinned ?? ""}
+											onChange={(e) => pinAccount(c.endpoint, e.target.value)}
+										>
+											<option value="">Not chosen — every call refuses</option>
+											{mcpAccountRows(acctState).map((a) => (
+												<option key={a.accountId} value={a.accountId}>
+													{a.name}
+												</option>
+											))}
+										</select>
+										{mcpAccountRows(acctState).map((a) => (
+											<span key={a.accountId} className="inline-flex gap-1">
+												<button type="button" className="text-2xs text-accent hover:underline" disabled={savingPin === c.endpoint} onClick={() => renameAccount(c.endpoint, a.accountId, a.name)}>
+													Rename “{a.name}”
+												</button>
+												<button
+													type="button"
+													className="text-2xs text-muted-soft hover:text-danger"
+													disabled={busyTool === `cred::${c.endpoint}`}
+													onClick={() => removeCredential(c.endpoint, a.accountId)}
+												>
+													Remove
+												</button>
+											</span>
+										))}
+									</div>
+								);
+							})()}
+							{/* Connecting a SECOND account needs an id the owner chooses: a generic MCP
+							    server states no identity of its own to promote, unlike Gmail's address. */}
+							{newAccountFor === c.endpoint ? (
+								<div className="flex flex-wrap gap-1.5 items-center mt-1">
+									<input
+										type="text"
+										value={newAccountId}
+										onChange={(e) => setNewAccountId(e.target.value)}
+										aria-label={`Account name for the new account on ${c.endpoint}`}
+										placeholder="Account name, e.g. work"
+										className="w-36 px-2 py-1 text-xs bg-paper border border-line rounded"
+									/>
+									<input
+										type="password"
+										autoComplete="off"
+										value={newAccountToken}
+										onChange={(e) => setNewAccountToken(e.target.value)}
+										aria-label={`Access token for the new account on ${c.endpoint}`}
+										placeholder="Access token"
+										className="flex-1 min-w-[10rem] px-2 py-1 text-xs bg-paper border border-line rounded font-mono"
+									/>
+									<Button
+										size="sm"
+										variant="primary"
+										disabled={!newAccountId.trim() || !newAccountToken.trim() || busyTool === `cred::${c.endpoint}`}
+										onClick={() => saveCredential(c.endpoint, { token: newAccountToken.trim(), accountId: newAccountId.trim() })}
+									>
+										Save
+									</Button>
+									<button type="button" className="text-xs text-muted-soft hover:underline" onClick={() => { setNewAccountFor(""); setNewAccountId(""); setNewAccountToken(""); }}>
+										Cancel
+									</button>
+								</div>
+							) : (
+								<button
+									type="button"
+									className="text-2xs text-accent hover:underline mt-1"
+									onClick={() => { setNewAccountFor(c.endpoint); setNewAccountId(""); setNewAccountToken(""); }}
+								>
+									+ Connect another account
+								</button>
+							)}
 							{tokenField(c.endpoint)}
 						</li>
 					))}

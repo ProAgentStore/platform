@@ -76,13 +76,17 @@ mcpRoutes.get("/presets", async (c) => {
 mcpRoutes.post("/oauth/start", async (c) => {
 	const session = await requireUser(c);
 	if (!c.env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
-	const body = (await c.req.json().catch(() => ({}))) as { url?: string; scope?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { url?: string; scope?: string; accountId?: string };
 
 	// Normalize FIRST: the credential must land under the same key consent, the trace and the
 	// connector all use, or the flow would succeed and the agent would still report "no credential".
 	const endpoint = normalizeMcpEndpoint(String(body.url ?? ""));
 	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
 	const scope = body.scope ? String(body.scope).trim().slice(0, 200) : null;
+	// Which account this flow is FOR (#1267) — '' (default) when the caller does not name one, so
+	// authorizing a fresh endpoint behaves exactly as it did before accounts existed. Chosen by the
+	// owner up front: a generic MCP server states no identity of its own to promote later.
+	const accountId = body.accountId ? String(body.accountId).trim().slice(0, 120) : "";
 
 	const discovery = await discoverAuthServer(endpoint);
 	if (!discovery.protected) {
@@ -116,6 +120,7 @@ mcpRoutes.post("/oauth/start", async (c) => {
 		id: flowId,
 		userId: session.uid,
 		endpoint,
+		accountId,
 		issuer: discovery.authorizationServer,
 		tokenEndpoint: metadata.tokenEndpoint,
 		clientId: client.clientId,
@@ -149,6 +154,7 @@ mcpRoutes.post("/oauth/start", async (c) => {
 			resource: endpoint,
 		}),
 		endpoint,
+		accountId,
 		issuer: discovery.authorizationServer,
 		// #181's verdict, surfaced at the moment the user decides to wire this server into a chain:
 		// "interactive-only" means the credential dies and cannot be renewed with nobody present.
