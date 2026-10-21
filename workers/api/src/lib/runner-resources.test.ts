@@ -3,7 +3,9 @@
  * about it.
  */
 import { describe, expect, it } from "vitest";
-import { CPU_HIGH_WATER, MEMORY_HIGH_WATER_PCT, memoryPressurePct, parseResourceSample, resourcesView } from "./runner-resources.js";
+import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
+import { heartbeatContext } from "./runner-attach-report.js";
+import { CPU_HIGH_WATER, MEMORY_HIGH_WATER_PCT, memoryPressurePct, mergeCoarse, parseResourceSample, resourcePoint, resourcesView, saveResourceSample } from "./runner-resources.js";
 
 const GiB = 1024 ** 3;
 const sample = (over: Record<string, unknown> = {}) => ({ loadAvg: [1, 0.8, 0.5], cpus: 8, memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB, platform: "linux", sampledAt: Date.UTC(2026, 9, 5, 6, 0), ...over });
@@ -141,5 +143,73 @@ describe("memory pressure per OS (#1176)", () => {
 
 	it("Linux is unchanged", () => {
 		expect(memoryPressurePct({ platform: "linux", memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB })).toBe(50);
+	});
+});
+
+describe("a Windows sample reports no load, not zero (#1258)", () => {
+	const win = (over: Record<string, unknown> = {}) => sample({ platform: "win32", cpus: 8, ...over });
+
+	it("current CLI: loadAvg null is accepted for win32 and stays null", () => {
+		expect(parseResourceSample(win({ loadAvg: null }))?.loadAvg).toBeNull();
+	});
+
+	it("an OLDER CLI's [0,0,0] (and any other numbers) is dropped at the boundary: the stored sample has null load", () => {
+		for (const loadAvg of [[0, 0, 0], [3, 2, 1], undefined, "n/a"]) expect(parseResourceSample(win({ loadAvg }))?.loadAvg, JSON.stringify(loadAvg)).toBeNull();
+		expect(JSON.parse(JSON.stringify(parseResourceSample(win({ loadAvg: [0, 0, 0] })))).loadAvg).toBeNull(); // what is stored
+	});
+
+	it("only Windows may omit load: every other platform still needs three real numbers", () => {
+		for (const platform of ["linux", "darwin", "unknown"]) {
+			expect(parseResourceSample(sample({ platform, loadAvg: null })), platform).toBeNull();
+			expect(parseResourceSample(sample({ platform, loadAvg: [0, 0, 0] }))?.loadAvg, `${platform} genuine 0`).toEqual([0, 0, 0]);
+		}
+	});
+
+	it("the view: load1/5/15 and loadPerCpu are null, never 0, and the saturated warning cannot fire on a made-up number", () => {
+		const v = resourcesView(win({ loadAvg: [0, 0, 0] }), null);
+		expect(v).toMatchObject({ load1: null, load5: null, load15: null, loadPerCpu: null, platform: "win32", cpus: 8 });
+		expect(v?.warnings).toEqual([]);
+		expect(JSON.parse(JSON.stringify(v))).toMatchObject({ load1: null, loadPerCpu: null }); // the API and MCP serialise exactly this
+	});
+
+	it("a genuine 0 on a real platform is still 0 (a quiet Linux box is not 'not reported')", () => {
+		expect(resourcesView(sample({ loadAvg: [0, 0, 0] }), null)).toMatchObject({ load1: 0, loadPerCpu: 0 });
+	});
+
+	it("a history point carries null load for a Windows machine", () => {
+		expect(resourcePoint(win({ loadAvg: [0, 0, 0] }))).toMatchObject({ load1: null, loadPerCpu: null });
+		expect(resourcePoint(sample())).toMatchObject({ load1: 1 });
+	});
+
+	it("a coarse bucket keeps a real reading when one side has none, and stays null when neither has one", () => {
+		const w = parseResourceSample(win({ loadAvg: null }));
+		const l = parseResourceSample(sample({ loadAvg: [4, 3, 2] }));
+		if (!w || !l) throw new Error("fixtures must parse");
+		expect(mergeCoarse(w, w).loadAvg).toBeNull();
+		expect(mergeCoarse(l, w).loadAvg).toEqual([4, 3, 2]);
+		expect(mergeCoarse(w, l).loadAvg).toEqual([4, 3, 2]);
+		expect(mergeCoarse(l, parseResourceSample(sample({ loadAvg: [6, 1, 1] })) as NonNullable<ReturnType<typeof parseResourceSample>>).loadAvg).toEqual([6, 3, 2]);
+	});
+});
+
+describe("a Windows machine through the store (#1258)", () => {
+	it("saveResourceSample stores null load, and the next read is null in the view, the heartbeat context and the history point", async () => {
+		const d1 = realSchemaD1();
+		try {
+			seedTenant(d1, { userId: "u1", instanceIds: ["inst-1"] });
+			d1.sqlite.prepare("INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, status) VALUES ('inst-1', 'u1', 'dell-laptop', 'relay://', 'registered')").run();
+			const env = { DB: d1.DB } as unknown as Parameters<typeof saveResourceSample>[0];
+			await saveResourceSample(env, "inst-1", "u1", "dell-laptop", { loadAvg: [0, 0, 0], cpus: 8, memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB, platform: "win32", sampledAt: Date.now() });
+			const stored = d1.sqlite.prepare("SELECT resources FROM instance_runtime_nodes WHERE runner_node = 'dell-laptop'").get() as { resources: string };
+			expect(JSON.parse(stored.resources).loadAvg).toBeNull();
+			const hist = d1.sqlite.prepare("SELECT sample FROM runner_resource_samples").all() as Array<{ sample: string }>;
+			expect(hist.length).toBeGreaterThan(0);
+			for (const h of hist) expect(JSON.parse(h.sample).loadAvg).toBeNull();
+			expect(resourcesView(stored.resources, 0)).toMatchObject({ load1: null, loadPerCpu: null });
+			const ctx = await heartbeatContext(env, "u1", ["dell-laptop"]);
+			expect(ctx).toMatchObject({ load1: null, load5: null, load15: null });
+		} finally {
+			d1.close();
+		}
 	});
 });

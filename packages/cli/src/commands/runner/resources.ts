@@ -12,7 +12,8 @@ import { dirname, join } from "node:path";
  * validates, stores (two-tier history) and interprets it (`workers/api/src/lib/runner-resources.ts`).
  */
 export interface ResourceSample {
-	loadAvg: [number, number, number];
+	/** null on Windows (#1258): `os.loadavg()` returns [0,0,0] there, which is "no load average", not an idle machine. */
+	loadAvg: [number, number, number] | null;
 	cpus: number;
 	memTotalBytes: number;
 	memFreeBytes: number;
@@ -176,15 +177,17 @@ export function sampleResources(
 	now: number = Date.now(),
 	extra: Pick<ResourceSample, "disk" | "runner" | "relayRttMs" | "sessions" | "memAvailableBytes" | "runtime"> = {},
 ): ResourceSample {
-	const [l1 = 0, l5 = 0, l15 = 0] = read.loadavg();
+	const platform = read.platform();
+	// Windows has no load average: report that, rather than the [0,0,0] Node returns, which reads as a quiet machine (#1258).
+	const [l1 = 0, l5 = 0, l15 = 0] = platform === "win32" ? [] : read.loadavg();
 	return {
 		...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)),
-		loadAvg: [l1, l5, l15],
+		loadAvg: platform === "win32" ? null : [l1, l5, l15],
 		// `availableParallelism` would be better, but `cpus()` is what every supported Node has.
 		cpus: Math.max(1, read.cpus().length),
 		memTotalBytes: read.totalmem(),
 		memFreeBytes: read.freemem(),
-		platform: read.platform(),
+		platform,
 		sampledAt: now,
 	};
 }

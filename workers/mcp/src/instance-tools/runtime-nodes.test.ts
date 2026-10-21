@@ -25,6 +25,13 @@ describe("runnerNodesPage", () => {
 		expect(out.endedSessionsNote).toMatch(/coding_sessions_list/);
 	});
 
+	it("keeps a null load as null — a Windows machine's 'not reported' is never turned into 0 on the wire (#1258)", () => {
+		const windows = { ...machine("dell-laptop"), resources: { load1: null, load5: null, load15: null, loadPerCpu: null, cpus: 8, platform: "win32", memUsedPct: 40, warnings: [] } };
+		const out = JSON.parse(runnerNodesPage({ nodes: [windows] })) as { nodes: Array<{ resources: Record<string, unknown> }> };
+		expect(out.nodes[0].resources).toMatchObject({ load1: null, load5: null, load15: null, loadPerCpu: null, platform: "win32" });
+		expect("load1" in out.nodes[0].resources).toBe(true);
+	});
+
 	it("reaches every machine by paging", () => {
 		const seen: string[] = [];
 		let offset: number | undefined;

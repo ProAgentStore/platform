@@ -24,7 +24,11 @@ export const RESOURCE_DETAIL_MIN_CLI = "0.4.76";
 
 /** What the runner sends, validated — it is a system boundary, so nothing is trusted unread. */
 export interface RunnerResourceSample {
-	loadAvg: [number, number, number];
+	/**
+	 * 1/5/15-minute load, or null when the platform has none (#1258): Node's `os.loadavg()` returns [0,0,0] on Windows, which is "not
+	 * reported", not an idle machine. Only a win32 sample may carry null.
+	 */
+	loadAvg: [number, number, number] | null;
 	cpus: number;
 	memTotalBytes: number;
 	memFreeBytes: number;
@@ -101,14 +105,17 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 	}
 	if (!o || typeof o !== "object") return null;
 	const r = o as Record<string, unknown>;
-	const load = Array.isArray(r.loadAvg) ? r.loadAvg.map((v) => finite(v, 10_000)) : [];
+	const platform = typeof r.platform === "string" ? r.platform.slice(0, 32) : "unknown";
+	// Windows has no load average (#1258). Whatever an older CLI sent — Node's [0,0,0] — is not a reading, so it is dropped here, at
+	// the boundary, and every consumer sees "not reported". The current CLI sends null for the same reason.
+	const noLoad = platform === "win32";
+	const load = noLoad ? null : Array.isArray(r.loadAvg) ? r.loadAvg.map((v) => finite(v, 10_000)) : [];
 	const cpus = finite(r.cpus, 4096);
 	const memTotalBytes = finite(r.memTotalBytes, 2 ** 53);
 	const memFreeBytes = finite(r.memFreeBytes, 2 ** 53);
 	const sampledAt = finite(r.sampledAt, 2 ** 53);
-	if (load.length !== 3 || load.some((v) => v === null) || !cpus || !memTotalBytes || memFreeBytes === null || memFreeBytes > memTotalBytes || !sampledAt) return null;
-	const platform = typeof r.platform === "string" ? r.platform.slice(0, 32) : "unknown";
-	const sample: RunnerResourceSample = { loadAvg: load as [number, number, number], cpus, memTotalBytes, memFreeBytes, platform, sampledAt };
+	if ((load !== null && (load.length !== 3 || load.some((v) => v === null))) || !cpus || !memTotalBytes || memFreeBytes === null || memFreeBytes > memTotalBytes || !sampledAt) return null;
+	const sample: RunnerResourceSample = { loadAvg: load as [number, number, number] | null, cpus, memTotalBytes, memFreeBytes, platform, sampledAt };
 	// #1264: optional, and never above the total — same shape as every other field here, absent means "not reported".
 	const memAvailableBytes = finite(r.memAvailableBytes, 2 ** 53);
 	if (memAvailableBytes !== null && memAvailableBytes <= memTotalBytes) sample.memAvailableBytes = memAvailableBytes;
@@ -186,12 +193,12 @@ export function runtimeHealthOf(resources: { runtime: { state: "responsive" | "u
 
 /** What list_runner_nodes and coding_diagnostics report for a machine. */
 export interface RunnerResourcesView {
-	/** 1/5/15-minute load averages, and the 1-minute one per core. */
-	load1: number;
-	load5: number;
-	load15: number;
+	/** 1/5/15-minute load averages, and the 1-minute one per core. null = not reported (Windows has none, #1258) — never 0. */
+	load1: number | null;
+	load5: number | null;
+	load15: number | null;
 	cpus: number;
-	loadPerCpu: number;
+	loadPerCpu: number | null;
 	memTotalBytes: number;
 	memFreeBytes: number;
 	memUsedPct: number;
@@ -280,10 +287,10 @@ export function memoryPressurePct(s: Pick<RunnerResourceSample, "platform" | "me
 export function resourcesView(raw: unknown, activeSessions: number | null, gateState: string = "accepting", maxSessionsOverride: number | null = null): RunnerResourcesView | null {
 	const s = parseResourceSample(raw);
 	if (!s) return null;
-	const loadPerCpu = round(s.loadAvg[0] / s.cpus);
+	const loadPerCpu = s.loadAvg ? round(s.loadAvg[0] / s.cpus) : null;
 	const memUsedPct = round(((s.memTotalBytes - s.memFreeBytes) / s.memTotalBytes) * 100, 1);
 	const warnings: string[] = [];
-	if (loadPerCpu >= CPU_HIGH_WATER) {
+	if (s.loadAvg && loadPerCpu !== null && loadPerCpu >= CPU_HIGH_WATER) {
 		warnings.push(`CPU saturated: 1-minute load ${round(s.loadAvg[0])} on ${s.cpus} cores (${loadPerCpu} per core). A runner this loaded answers its relay late — the "connected but not responding" failure (#913). Move agents to another machine or stop work running beside them.`);
 	}
 	const pressurePct = memoryPressurePct(s);
@@ -327,9 +334,9 @@ export function resourcesView(raw: unknown, activeSessions: number | null, gateS
 		);
 	}
 	return {
-		load1: round(s.loadAvg[0]),
-		load5: round(s.loadAvg[1]),
-		load15: round(s.loadAvg[2]),
+		load1: s.loadAvg ? round(s.loadAvg[0]) : null,
+		load5: s.loadAvg ? round(s.loadAvg[1]) : null,
+		load15: s.loadAvg ? round(s.loadAvg[2]) : null,
 		cpus: s.cpus,
 		loadPerCpu,
 		memTotalBytes: s.memTotalBytes,
@@ -452,7 +459,8 @@ export function mergeCoarse(prev: RunnerResourceSample | null, next: RunnerResou
 	const heavier = (prev.sessions ?? []).reduce((a, x) => a + x.cpuPct, 0) > (next.sessions ?? []).reduce((a, x) => a + x.cpuPct, 0) ? prev.sessions : next.sessions;
 	return {
 		...next,
-		loadAvg: [max(prev.loadAvg[0], next.loadAvg[0]), max(prev.loadAvg[1], next.loadAvg[1]), max(prev.loadAvg[2], next.loadAvg[2])],
+		// A bucket's worst-of load: null only when neither sample had one (Windows); one real reading is not erased by a missing one.
+		loadAvg: prev.loadAvg && next.loadAvg ? [max(prev.loadAvg[0], next.loadAvg[0]), max(prev.loadAvg[1], next.loadAvg[1]), max(prev.loadAvg[2], next.loadAvg[2])] : (next.loadAvg ?? prev.loadAvg),
 		memFreeBytes: Math.min(prev.memFreeBytes, next.memFreeBytes),
 		...(disk ? { disk } : {}),
 		...(runner ? { runner } : {}),
@@ -497,8 +505,8 @@ const TOP_SESSIONS = 3;
 /** One point of a machine's history — the compact shape a postmortem reads in a series. */
 export interface ResourcePoint {
 	at: string;
-	load1: number;
-	loadPerCpu: number;
+	load1: number | null;
+	loadPerCpu: number | null;
 	memUsedPct: number;
 	diskUsedPct: number | null;
 	inodesUsedPct: number | null;

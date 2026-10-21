@@ -103,8 +103,9 @@ export const DEFAULT_GATE_STATE: GateState = { state: "accepting", streak: 0 };
 
 /** A sample's reading on the four metrics the gate judges, at one cores/memory-total resolution. */
 interface GateReading {
-	cpuLoad1PerCpu: number;
-	cpuLoad5PerCpu: number;
+	/** null = the machine reports no load (Windows, #1258): CPU is simply not judged, as it never effectively was at 0. */
+	cpuLoad1PerCpu: number | null;
+	cpuLoad5PerCpu: number | null;
 	memUsedPct: number;
 	memAvailableBytes: number;
 	/** macOS raw free memory excludes reclaimable cache, so it is not an admission signal. */
@@ -127,8 +128,8 @@ function readingOf(sample: RunnerResourceSample, activeSessions: number | null, 
 	const memoryUsedPctMeasurable = sample.platform.toLowerCase() !== "darwin";
 	const memoryMeasurable = memoryUsedPctMeasurable || hasAvailableMemory;
 	return {
-		cpuLoad1PerCpu: sample.loadAvg[0] / sample.cpus,
-		cpuLoad5PerCpu: sample.loadAvg[1] / sample.cpus,
+		cpuLoad1PerCpu: sample.loadAvg ? sample.loadAvg[0] / sample.cpus : null,
+		cpuLoad5PerCpu: sample.loadAvg ? sample.loadAvg[1] / sample.cpus : null,
 		memUsedPct: ((sample.memTotalBytes - sample.memFreeBytes) / sample.memTotalBytes) * 100,
 		memAvailableBytes,
 		memoryMeasurable,
@@ -146,8 +147,8 @@ function readingOf(sample: RunnerResourceSample, activeSessions: number | null, 
  */
 function breaches(r: GateReading, t: GateThresholds): GateBreach[] {
 	const out: GateBreach[] = [];
-	if (r.cpuLoad1PerCpu > t.cpuLoad1PerCpu) out.push({ metric: "cpu", value: r.cpuLoad1PerCpu, threshold: t.cpuLoad1PerCpu });
-	else if (r.cpuLoad5PerCpu > t.cpuLoad5PerCpu) out.push({ metric: "cpu", value: r.cpuLoad5PerCpu, threshold: t.cpuLoad5PerCpu });
+	if (r.cpuLoad1PerCpu !== null && r.cpuLoad1PerCpu > t.cpuLoad1PerCpu) out.push({ metric: "cpu", value: r.cpuLoad1PerCpu, threshold: t.cpuLoad1PerCpu });
+	else if (r.cpuLoad5PerCpu !== null && r.cpuLoad5PerCpu > t.cpuLoad5PerCpu) out.push({ metric: "cpu", value: r.cpuLoad5PerCpu, threshold: t.cpuLoad5PerCpu });
 	if (r.memoryUsedPctMeasurable && r.memUsedPct > t.memUsedPctMax) out.push({ metric: "memory", value: r.memUsedPct, threshold: t.memUsedPctMax });
 	else if (r.memoryMeasurable && r.memAvailableBytes < t.memAvailableMinBytes) out.push({ metric: "memory", value: r.memAvailableBytes, threshold: t.memAvailableMinBytes });
 	if (r.diskUsedPct !== null && r.diskUsedPct > t.diskUsedPctMax) out.push({ metric: "disk", value: r.diskUsedPct, threshold: t.diskUsedPctMax });
@@ -163,8 +164,8 @@ export function worstBreach(sample: RunnerResourceSample, activeSessions: number
 
 /** True only when EVERY metric sits inside the recovery band — the gate reopens on ALL of them, never on one. */
 function withinRecoveryBand(r: GateReading, t: GateThresholds): boolean {
-	if (r.cpuLoad1PerCpu >= t.cpuLoad1PerCpu * t.recoveryBand) return false;
-	if (r.cpuLoad5PerCpu >= t.cpuLoad5PerCpu * t.recoveryBand) return false;
+	if (r.cpuLoad1PerCpu !== null && r.cpuLoad1PerCpu >= t.cpuLoad1PerCpu * t.recoveryBand) return false;
+	if (r.cpuLoad5PerCpu !== null && r.cpuLoad5PerCpu >= t.cpuLoad5PerCpu * t.recoveryBand) return false;
 	if (r.memoryUsedPctMeasurable && r.memUsedPct >= t.memUsedPctMax * t.recoveryBand) return false;
 	if (r.memoryMeasurable && r.memAvailableBytes <= t.memAvailableMinBytes / t.recoveryBand) return false;
 	if (r.diskUsedPct !== null && r.diskUsedPct >= t.diskUsedPctMax * t.recoveryBand) return false;

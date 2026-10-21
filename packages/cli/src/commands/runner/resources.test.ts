@@ -2,7 +2,7 @@
  * The resource sample the runner heartbeat carries (#924) — in-process `os` reads, shaped the way the
  * platform validates them (`workers/api/src/lib/runner-resources.ts`).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -162,5 +162,26 @@ describe("the runtime's own health (#1167)", () => {
 		const runtime = { ok: false, latencyMs: null, error: "no answer in 4s", checkedAt: 1 };
 		expect(sampleResources(fakeOs(), 1, { runtime }).runtime).toEqual(runtime);
 		expect("runtime" in sampleResources(fakeOs(), 1)).toBe(false);
+	});
+});
+
+describe("sampleResources on Windows (#1258)", () => {
+	it("reports load as null — Node's [0,0,0] there is 'no load average', not an idle machine", () => {
+		const s = sampleResources(fakeOs({ platform: () => "win32", loadavg: () => [0, 0, 0] }), 1_700_000_000_000);
+		expect(s.loadAvg).toBeNull();
+		expect(s.platform).toBe("win32");
+		expect(s.cpus).toBe(10);
+		expect(JSON.parse(JSON.stringify(s)).loadAvg).toBeNull(); // null survives the heartbeat's JSON
+	});
+
+	it("does not even read the load average there", () => {
+		const loadavg = vi.fn(() => [0, 0, 0]);
+		sampleResources(fakeOs({ platform: () => "win32", loadavg }));
+		expect(loadavg).not.toHaveBeenCalled();
+	});
+
+	it("macOS and Linux keep their real readings — including a genuine 0", () => {
+		expect(sampleResources(fakeOs({ platform: () => "darwin" })).loadAvg).toEqual([2.5, 1.5, 0.5]);
+		expect(sampleResources(fakeOs({ platform: () => "linux", loadavg: () => [0, 0, 0] })).loadAvg).toEqual([0, 0, 0]);
 	});
 });

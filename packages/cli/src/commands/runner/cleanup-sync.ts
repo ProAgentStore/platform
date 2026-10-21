@@ -58,7 +58,7 @@ export function createCleanupSync(localUrl: string, token: string, fetchImpl: ty
 	return {
 		async collect(resources) {
 			const sessionsCpu = resources.sessions ? resources.sessions.reduce((n, s) => n + s.cpuPct, 0) : null;
-			const body = await post("/coding/cleanup/observe", { load1: resources.loadAvg[0], cpus: resources.cpus, sessionsCpuPct: sessionsCpu, diskPath: resources.disk?.path ?? "" }, 15_000);
+			const body = await post("/coding/cleanup/observe", { load1: resources.loadAvg ? resources.loadAvg[0] : null, cpus: resources.cpus, sessionsCpuPct: sessionsCpu, diskPath: resources.disk?.path ?? "" }, 15_000);
 			const status = body && typeof body === "object" && "mode" in body ? (body as CleanupStatusWire) : null;
 			return { status, ...(doneNowAt ? { doneAt: doneNowAt } : {}) };
 		},

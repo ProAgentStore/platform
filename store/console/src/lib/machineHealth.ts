@@ -8,9 +8,10 @@
  */
 /** A machine's `resources`, as `/v1/terminals/nodes` reports it (worker: `RunnerResourcesView`). */
 export interface MachineResources {
-	load1: number;
+	/** null = the machine reports no load (Windows has no load average, #1258) — shown as "n/a", never as 0. */
+	load1: number | null;
 	cpus: number;
-	loadPerCpu: number;
+	loadPerCpu: number | null;
 	memUsedPct: number;
 	platform: string;
 	/** ISO time of the sample. A stale one means the heartbeat stopped, not that the machine is idle. */
@@ -22,6 +23,12 @@ export interface MachineResources {
 	relayRttMs: number | null;
 	/** High-water marks crossed, each a sentence. `[]` when the machine looks fine. */
 	warnings: string[];
+}
+
+/** The load, said honestly: "load 0.4/core", or "load n/a (Windows)" when the machine has none to report — a 0 would read as idle (#1258). */
+export function loadText(r: Pick<MachineResources, "loadPerCpu" | "platform">): string {
+	if (r.loadPerCpu !== null && r.loadPerCpu !== undefined) return `load ${r.loadPerCpu}/core`;
+	return r.platform === "win32" ? "load n/a (Windows)" : "load n/a";
 }
 
 /** Older than this, the numbers are the last thing the machine said — not what it is doing now. */
@@ -39,7 +46,7 @@ function duration(sec: number): string {
  * reason, and the console must not raise it by printing a bare number.
  */
 export function resourceFacts(r: MachineResources): string[] {
-	const facts = [`load ${r.loadPerCpu}/core (${r.cpus} cores)`, `memory ${r.memUsedPct}%${r.platform === "linux" ? "" : " incl. cache"}`];
+	const facts = [`${loadText(r)} (${r.cpus} cores)`, `memory ${r.memUsedPct}%${r.platform === "linux" ? "" : " incl. cache"}`];
 	if (r.disk) facts.push(`disk ${r.disk.usedPct}%`);
 	if (r.activeSessions !== null) facts.push(`${r.activeSessions} of ~${r.recommendedMaxSessions} sessions`);
 	if (r.relayRttMs !== null) facts.push(`relay ${r.relayRttMs} ms`);
@@ -63,7 +70,7 @@ export function warningHead(w: string): string {
 /** The one-line summary a "Runs on" tile has room for, or "" when the machine reported nothing. */
 export function tileHealth(r: MachineResources | null | undefined): string {
 	if (!r) return "";
-	return [`load ${r.loadPerCpu}/core`, r.activeSessions !== null ? `${r.activeSessions} of ~${r.recommendedMaxSessions} sessions` : ""].filter(Boolean).join(" · ");
+	return [loadText(r), r.activeSessions !== null ? `${r.activeSessions} of ~${r.recommendedMaxSessions} sessions` : ""].filter(Boolean).join(" · ");
 }
 
 /** Why the CLI should be updated, or null when it is current (or reported no version). */

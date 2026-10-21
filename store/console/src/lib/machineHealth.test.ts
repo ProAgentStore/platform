@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behindLine, type MachineResources, resourceFacts, staleSample, tileHealth, warningHead } from "./machineHealth";
+import { behindLine, loadText, type MachineResources, resourceFacts, staleSample, tileHealth, warningHead } from "./machineHealth";
 import { machineTile, updateOutcome } from "./runnerPanel";
 
 const NOW = Date.parse("2026-10-07T10:00:00Z");
@@ -75,5 +75,25 @@ describe("runner version gaps and the remote update (#929 finding 13)", () => {
 		expect(failed.tone).toBe("warn");
 		expect(failed.text).not.toMatch(/list_runner_nodes|coding_diagnostics|force_runner_attach/);
 		expect(updateOutcome({ action: "restarted", detail: "Updated." }).tone).toBe("ok");
+	});
+});
+
+describe("a machine that reports no load (#1258)", () => {
+	const windows = (over: Partial<MachineResources> = {}) => res({ platform: "win32", load1: null, loadPerCpu: null, ...over });
+
+	it("says 'load n/a (Windows)' on the card and the tile — never 0", () => {
+		expect(resourceFacts(windows())[0]).toBe("load n/a (Windows) (8 cores)");
+		expect(tileHealth(windows())).toBe("load n/a (Windows) · 2 of ~4 sessions");
+		expect(loadText(windows())).toBe("load n/a (Windows)");
+		for (const line of [...resourceFacts(windows()), tileHealth(windows())]) expect(line).not.toMatch(/load 0\b/);
+	});
+
+	it("a non-Windows machine with no reading is 'n/a' without naming Windows", () => {
+		expect(loadText(res({ platform: "linux", loadPerCpu: null }))).toBe("load n/a");
+	});
+
+	it("a real reading — including a genuine 0 on a Mac — is still shown as a number", () => {
+		expect(loadText(res({ platform: "darwin", loadPerCpu: 0 }))).toBe("load 0/core");
+		expect(loadText(res())).toBe("load 0.4/core");
 	});
 });

@@ -3934,7 +3934,7 @@ paths:
                   type: object
                   description: In-process `os` readings, once per heartbeat.
                   properties:
-                    loadAvg: { type: array, items: { type: number }, minItems: 3, maxItems: 3 }
+                    loadAvg: { type: array, nullable: true, items: { type: number }, minItems: 3, maxItems: 3, description: "1/5/15-minute load. null on Windows, which has no load average (#1258): the server stores and returns null for a win32 sample whatever was sent, and list_runner_nodes / runner_resource_history report load1, load5, load15 and loadPerCpu as null — not reported, never 0." }
                     cpus: { type: integer }
                     memTotalBytes: { type: number }
                     memFreeBytes: { type: number }

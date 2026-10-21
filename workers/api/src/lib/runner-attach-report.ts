@@ -104,9 +104,10 @@ export async function machineRegistrations(env: Pick<Env, "DB">, userId: string,
 
 /** The machine's last heartbeat, as context for a timeout — labelled so it is never read as the cause. */
 export interface HeartbeatContext {
-	load1: number;
-	load5: number;
-	load15: number;
+	/** null = the machine reports no load (Windows, #1258). */
+	load1: number | null;
+	load5: number | null;
+	load15: number | null;
 	cpus: number;
 	memUsedPct: number;
 	sampledAt: string;
