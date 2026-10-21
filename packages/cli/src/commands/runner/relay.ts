@@ -8,7 +8,7 @@ import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
 import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, restartBlockedByInstall, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
-import { diffMembership, eligibleIds, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
+import { diffMembership, eligibleIds, relayStatusPath, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAutoUpdatePolicy } from "./auto-update.js";
@@ -510,7 +510,7 @@ export async function connectViaRelay(
 		for (const id of [...blocked]) {
 			const free = await requestPags<{ connected?: boolean }>(
 				"GET",
-				`/v1/relay/${apiPathSegment(id)}/status`,
+				relayStatusPath(apiPathSegment(id), runnerNode),
 				{ ...opts, pagsToken: pagsToken() },
 			).then((r) => r.connected === false).catch(() => false);
 			if (!free) continue;

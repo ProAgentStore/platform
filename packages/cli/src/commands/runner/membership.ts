@@ -57,6 +57,15 @@ export function eligibleIds(eligible: readonly DiscoverableInstance[], thisNode:
 	return new Set(eligible.filter((i) => isEligible(i, thisNode, alsoKnownAs)).map((i) => i.id));
 }
 
+/**
+ * The status path that asks the relay slot THIS runner connects to (#1171). The CLI always connects with `node`, and the API names
+ * the slot by it; a status read without `node` opens the node-less legacy slot, which nothing connects to and is always empty — so
+ * every conflict read as "cleared". A 4409 is raised inside this machine's own slot, which is therefore the one to ask.
+ */
+export function relayStatusPath(instancePathSegment: string, runnerNode: string): string {
+	return `/v1/relay/${instancePathSegment}/status?node=${encodeURIComponent(runnerNode)}`;
+}
+
 export function diffMembership(
 	attached: Iterable<string>,
 	eligible: DiscoverableInstance[],

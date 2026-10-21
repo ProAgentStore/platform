@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffMembership, eligibleIds, instanceLabel, isEligible, partitionByPin, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, eligibleIds, relayStatusPath, instanceLabel, isEligible, partitionByPin, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 
 const NODE = "my-laptop";
 const inst = (over: Partial<DiscoverableInstance> & { id: string }): DiscoverableInstance => ({
@@ -315,5 +315,15 @@ describe("eligibleIds (#1170)", () => {
 			NODE,
 		);
 		expect([...ids]).toEqual(["here"]);
+	});
+});
+
+describe("relayStatusPath (#1171)", () => {
+	it("names this machine's relay slot, so a conflict is judged where the runner connects", () => {
+		expect(relayStatusPath("inst-1", "my-laptop")).toBe("/v1/relay/inst-1/status?node=my-laptop");
+	});
+	it("encodes a hostname that is not URL-safe", () => {
+		expect(relayStatusPath("inst-1", "Serge's Mac.local")).toBe("/v1/relay/inst-1/status?node=Serge's%20Mac.local");
+		expect(relayStatusPath("inst-1", "a&node=other")).toBe("/v1/relay/inst-1/status?node=a%26node%3Dother");
 	});
 });
