@@ -208,6 +208,10 @@ export async function audit(
 	ctx: SafetyContext,
 	event: Record<string, unknown>,
 ): Promise<AuditWrite> {
+	// A change the account approval gate HELD did not complete (#1268): the ledger must not say it did.
+	if (event.action === "completed" && (event.result as { status?: unknown } | undefined)?.status === "approval_pending") {
+		event = { ...event, action: "held_for_approval" };
+	}
 	const call = ctx.callAudit?.();
 	if (call && !call.finished) {
 		call.handlerEvents.push(event);

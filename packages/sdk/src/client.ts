@@ -235,6 +235,11 @@ export async function api<T = Record<string, unknown>>(
 		}
 		throw markReported(new ApiError((data as Record<string, string>)?.error || `HTTP ${res.status}`, res.status, data));
 	}
+	// A change the account's approval gate is holding (#1268): the API answered 202 `approval_pending` and nothing has
+	// changed. Announced once, here, so every caller's "saved" state is not the only thing the owner sees.
+	if (res.status === 202 && typeof window !== "undefined" && (data as { status?: unknown } | null)?.status === "approval_pending") {
+		window.dispatchEvent(new CustomEvent("pags:approval-pending", { detail: data }));
+	}
 	return data as T;
 }
 

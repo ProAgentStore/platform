@@ -40,6 +40,14 @@ export function preferencesLink(): string {
 	return `${BASE}/preferences`;
 }
 
+/**
+ * One held account change (#1268), focused on the Preferences page's Approval gate section — where the owner reads the
+ * exact change and approves or denies it. The request outlives the push, so the link works until it is decided or expires.
+ */
+export function accountApprovalLink(requestId: string): string {
+	return `${preferencesLink()}?approval=${encodeURIComponent(requestId)}`;
+}
+
 /** The notification feed — every row readable, each with its own link (#897). */
 export function notificationsLink(): string {
 	return `${BASE}/notifications`;
@@ -297,6 +305,8 @@ export type NotificationSubject =
 	| { kind: "secure-input"; instanceId: string; requestId: string }
 	/** An exact owner-scoped permission request, focused inside Permissions & Connections (#1009). */
 	| { kind: "permission-request"; instanceId: string; requestId: string }
+	/** One account change held for the owner's approval (#1268): Preferences → Approval gate. */
+	| { kind: "account-approval"; requestId: string }
 	/** An agent template — notifications to its creator (#622). */
 	| { kind: "agent"; agentId: string }
 	/** Several instances at once (#897): the instance list. */
@@ -346,6 +356,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
 			case "permission-request":
 				return instancePermissionsLink(subject.instanceId, subject.requestId);
+			case "account-approval":
+				return accountApprovalLink(subject.requestId);
 			case "agent":
 				return agentLink(subject.agentId);
 			case "instances":

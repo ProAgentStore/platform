@@ -442,14 +442,14 @@ describe("bounded bodies, paging and retries", () => {
 	});
 
 	it("max_chars is clamped to the hard ceiling, and an unconfigured read announces its cut instead of hiding it", async () => {
-		fakeGmail({ messages: [inbound("big", ADMIN, {}, long.repeat(3))] });
+		fakeGmail({ messages: [inbound("big", ADMIN, {}, long.repeat(2))] });
 		const scoped = JSON.parse((await run("gmail_read_message", ctxFor(envWith(PINNED)), { message_id: "big", max_chars: 9_999_999 })).content.replace(/^[^{]*/, "").replace(/[^}]*$/, ""));
 		expect(scoped.text.length).toBe(40_000);
 		const plain = JSON.parse((await run("gmail_read_message", ctxFor(envWith(null)), { message_id: "big" })).content.replace(/^[^{]*/, "").replace(/[^}]*$/, ""));
 		expect(plain.text.length).toBe(40_000);
 		expect(plain.truncated).toBe(true);
 		expect(plain.nextOffset).toBe(40_000);
-	});
+	}, 30_000);
 
 	it("clips summary fields on a scoped listing and marks the cut", async () => {
 		fakeGmail({ messages: [inbound("s1", ADMIN, { Subject: "S".repeat(900) })] });

@@ -80,6 +80,11 @@ const END = "<!-- END generated: mcp-exclusions -->";
 // ─────────────────────────────────────────────────────────────────────────────
 const EXCLUSIONS = [
 	{
+		label: "Deciding or withdrawing an account approval (#1268)",
+		why: "Approving or denying a change the account approval gate is holding is the OWNER's act, at the console or from the push link. An MCP tool for it would let the agent that asked for a change approve its own request with the owner's token, which is exactly what the gate exists to prevent; the API also refuses an approve or deny that arrives with MCP's client marker. MCP follows a held change with `approval_status` and changes the gate's settings with `set_approval_gate` (weakening an enabled gate is itself held).",
+		match: /^POST \/v1\/approvals\/\{\}\/\{\}$/,
+	},
+	{
 		label: "The fleet telemetry feed (#1259)",
 		why: "A live chart feed for the console's Fleet page: every machine's points in one response, polled about every 30 seconds. MCP keeps the same data per machine and in an agent-sized shape (`list_runner_nodes` for the fleet's latest readings, `runner_resource_history` for one machine's series, paged to the wire budget); a 12,000-point multi-machine payload is not something to hand a model.",
 		match: /^GET \/v1\/terminals\/resources$/,

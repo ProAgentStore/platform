@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import ApprovalPendingNotice from "./ApprovalPendingNotice";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
@@ -206,6 +207,7 @@ export default function Layout() {
 				)}
 			</header>
 			{user && <PushPrompt />}
+			{user && <ApprovalPendingNotice />}
 			<main className={`flex-1 min-h-0 flex flex-col ${navHidden ? "overflow-hidden" : "overflow-auto"}`}>
 				<ErrorBoundary resetKey={location.pathname}>
 						<Outlet />

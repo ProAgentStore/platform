@@ -16853,6 +16853,111 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: "No connection (and no secret given) to test." }
 
+  /v1/approvals:
+    get:
+      summary: Account changes held by the approval gate, pending and recent (#1268)
+      description: |
+        Each item carries `status` (`pending`, `approved`, `applied`, `denied`, `cancelled`, `expired`, `failed`), the redacted
+        `diff` the owner is asked to approve, `expiresAt` and the `poll` URL. Never returns the stored request body.
+      operationId: listApprovals
+      tags: [Tools]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        "200": { description: The requests and how many are pending }
+
+  /v1/approvals/{approvalId}:
+    get:
+      summary: Poll one held account change (#1268)
+      description: Status, the diff, the audit `events` (request, notification, decision with device, apply) and, once it ran, `result`. A request past its expiry reads `expired`.
+      operationId: getApproval
+      tags: [Tools]
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The request }
+        "404": { description: No such request on this account }
+
+  /v1/approvals/{approvalId}/approve:
+    post:
+      summary: Approve a held account change - the owner's act, refused over MCP (#1268)
+      description: |
+        Applies the stored change exactly once. `410` `expired` if it ran out of time; `409` `drift_detected` if what it would
+        change has moved since it was requested (nothing applied); an already-decided request answers 200 with `duplicate: true`
+        and applies nothing. A call carrying `X-PAGS-Client: mcp` is refused with 403.
+      operationId: approveApproval
+      tags: [Tools]
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device: { type: string, description: Label of the device the owner decided on, kept in the audit }
+      responses:
+        "200": { description: Applied, failed (with the target's answer), or a no-op duplicate }
+        "403": { description: Decided through MCP }
+        "404": { description: No such request }
+        "409": { description: Drift detected - nothing applied }
+        "410": { description: Expired - nothing applied }
+
+  /v1/approvals/{approvalId}/deny:
+    post:
+      summary: Deny a held account change (#1268)
+      operationId: denyApproval
+      tags: [Tools]
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Denied (or already denied) }
+        "403": { description: Decided through MCP }
+        "404": { description: No such request }
+        "409": { description: Already decided another way }
+
+  /v1/approvals/{approvalId}/cancel:
+    post:
+      summary: Withdraw a pending held account change (#1268)
+      operationId: cancelApproval
+      tags: [Tools]
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Cancelled (or already cancelled) }
+        "404": { description: No such request }
+        "409": { description: Already decided another way }
+
+  /v1/approval-gate:
+    get:
+      summary: The account approval gate - enabled, gated actions, expiry, pending count (#1268)
+      operationId: getApprovalGate
+      tags: [Tools]
+      responses:
+        "200": { description: The gate and the actions available to gate }
+    put:
+      summary: Change the account approval gate (#1268)
+      description: |
+        Partial update. Stricter settings apply at once; turning the gate off or removing an action while it is on is itself
+        held and answers 202 `approval_pending` (decided by the owner like any other held change).
+      operationId: setApprovalGate
+      tags: [Tools]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                actions: { type: array, items: { type: string } }
+                expirySeconds: { type: integer, minimum: 60, maximum: 604800 }
+      responses:
+        "200": { description: Saved }
+        "202": { description: Held for approval (a weakening of an enabled gate) }
+        "400": { description: Unknown action, bad expiry, or nothing gated while on }
+
   /v1/instances/{instanceId}/gmail/identity:
     get:
       summary: An instance's Gmail identity — pinned verified sender, inbound scope, live aliases and blockers (#1279)

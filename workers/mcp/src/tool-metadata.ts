@@ -501,6 +501,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_email_worker_account: "write",
 	set_email_worker_identities: "write",
 	// #1279: a Gmail identity is reversible owner configuration (which verified sender, which recipient scope). Reading it is a read; neither tool sends or reads mail, holds a credential, or changes write consent.
+	// #1268: the account approval gate. Reading it and where a held change stands are reads; changing the gate is reversible owner
+	// configuration, and weakening an enabled gate is itself held for the owner. Nothing here can approve or deny.
+	approval_status: "read",
+	get_approval_gate: "read",
+	set_approval_gate: "write",
 	get_instance_gmail_identity: "read",
 	set_instance_gmail_identity: "write",
 	coding_session_end: "runtime",

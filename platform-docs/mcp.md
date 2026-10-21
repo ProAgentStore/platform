@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.172`
+- `serverInfo.version`: `0.1.173`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -284,7 +284,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 380 tools under two different scope sets and reads the required scope out
+which drives all 383 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -527,7 +527,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **380 tools**. 353 are always present. The remaining 27 are gated to
+The server registers **383 tools**. 356 are always present. The remaining 27 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -586,6 +586,7 @@ looking and tells the user which console screen to use instead.
 
 | Not available via MCP | Why | Enforced by |
 |---|---|---|
+| Deciding or withdrawing an account approval (#1268) | Approving or denying a change the account approval gate is holding is the OWNER's act, at the console or from the push link. An MCP tool for it would let the agent that asked for a change approve its own request with the owner's token, which is exactly what the gate exists to prevent; the API also refuses an approve or deny that arrives with MCP's client marker. MCP follows a held change with `approval_status` and changes the gate's settings with `set_approval_gate` (weakening an enabled gate is itself held). | `check-mcp-parity.mjs` |
 | The fleet telemetry feed (#1259) | A live chart feed for the console's Fleet page: every machine's points in one response, polled about every 30 seconds. MCP keeps the same data per machine and in an agent-sized shape (`list_runner_nodes` for the fleet's latest readings, `runner_resource_history` for one machine's series, paged to the wire budget); a 12,000-point multi-machine payload is not something to hand a model. | `check-mcp-parity.mjs` |
 | Browser-run replay screenshots (#1063) | Binary routes: MCP results are text, and a screenshot of the owner's own pages is evidence for the owner in the console, not something to stream into an agent's transcript. | `check-mcp-parity.mjs` |
 | The live takeover frame | A JPEG of the owner's own page, ~2 per second, for the person driving the takeover in the console (#1100, #1105) — the same reason as the replay screenshots above: MCP results are text, and a live picture of the owner's pages is not something to stream into an agent's transcript. MCP keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`). The route was always console-only; it was counted once the console named its shape (#1105). | `check-mcp-parity.mjs` |
@@ -796,3 +797,17 @@ operation continues.
 Do not change clone arguments or automatically repeat updates after a lost reply.
 A complete loss of the MCP connection can prevent even this response arriving;
 the same polling guidance applies.
+
+## Held changes: `approval_pending` (#1268)
+
+When the account's [approval gate](approval-gate.md) is on, a mutating tool call for a gated action is **not applied**. The tool
+returns the API's answer unchanged:
+
+```json
+{ "status": "approval_pending", "approval_id": "…", "action": "repo_add", "expires_at": "…", "poll": "/v1/approvals/…", "message": "Nothing has changed. …" }
+```
+
+Do not retry it — an identical retry returns the same `approval_id`. Follow it with `approval_status` (`pending`, `approved`,
+`applied`, `denied`, `cancelled`, `expired`, `failed`; a `failed` one says why, for example that the target changed since the
+request). The tool audit records such a call as `held_for_approval`, not `completed`. There is deliberately no MCP tool to approve
+or deny: the owner decides in the console or from the push link.

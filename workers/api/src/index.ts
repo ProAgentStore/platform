@@ -24,6 +24,8 @@ import { emailRoutes } from "./routes/email.js";
 import { pruneStaleRuntimeNodes } from "./lib/runtime-nodes.js";
 import { emailWorkerManageRoutes } from "./routes/email-worker-manage.js";
 import { gmailIdentityRoutes } from "./routes/gmail-identity.js";
+import { accountApprovalRoutes, setGateReplay } from "./routes/account-approvals.js";
+import { approvalGate } from "./lib/approval-gate-middleware.js";
 import { emailWorkerInboundRoutes, emailWorkerInstanceRoutes, emailWorkerRoutes } from "./routes/email-worker.js";
 import { driveRoutes } from "./routes/drive.js";
 import { discordRoutes } from "./routes/discord.js";
@@ -123,6 +125,8 @@ export { RunnerUpdateWorkflow } from "./lib/runner-update-workflow.js";
 export { RelayDO } from "./relay-do.js";
 
 const app = new Hono<{ Bindings: Env }>();
+/** The assembled app, exported for the route-table guards (`approval-gate.test.ts` walks `app.routes`). */
+export const apiApp = app;
 
 // ── Middleware ──────────────────────────────────────────────────────────────
 
@@ -172,6 +176,8 @@ app.use("*", async (c, next) => {
 
 // Rate limiting: 60 req/min default, 10 req/min for expensive routes
 app.use("/v1/*", rateLimitDefault());
+// The account approval gate (#1268): a configuration change the owner chose to gate is held, not applied, until they approve it from their phone. One decision point for the console, REST and every MCP tool.
+app.use("/v1/*", approvalGate());
 app.use("/v1/agents/*/chat", rateLimitStrict());
 app.use("/v1/agents/*/run", rateLimitStrict());
 app.use("/v1/instances/*/chat", rateLimitStrict());
@@ -242,6 +248,7 @@ app.route("/v1/instances", instanceReleaseNotesRoutes); // /v1/instances/:id/rel
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
 app.route("/v1/instances", emailWorkerInstanceRoutes); // /v1/instances/:id/email-worker/account — pin this instance to one worker-backed mail connection (#1269)
 app.route("/v1/instances", emailWorkerManageRoutes); // /v1/instances/:id/email-worker/{status,enrollments,test} — MCP management of worker-backed mail; the owner enters the secret in the console (#1277)
+app.route("/v1", accountApprovalRoutes); // /v1/approvals, /v1/approval-gate — held account changes, their decision and the gate settings (#1268)
 app.route("/v1/instances", gmailIdentityRoutes); // /v1/instances/:id/gmail/identity — the verified send-as sender and inbound-recipient scope an instance is pinned to; read and set by MCP (#1279)
 app.route("/v1/instances", ticketRoutes); // /v1/instances/:id/board/items/:jobKey/ticket, /tickets/:ticketId (#757)
 app.route("/v1/instances", runEventRoutes); // /v1/instances/:id/run-events?since= (#579)
@@ -316,6 +323,8 @@ async function uidFromRequest(c: { req: { header: (n: string) => string | undefi
 	const session = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY).catch(() => null);
 	return session?.uid ?? null;
 }
+
+setGateReplay((request, env, ctx) => Promise.resolve(app.fetch(request, env, ctx)));
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 

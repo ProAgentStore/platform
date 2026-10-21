@@ -149,6 +149,13 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: false,
 	},
 	{
+		// #1268: a configuration change held until the owner approves it from their phone.
+		id: "account_approval",
+		label: "Approval gate",
+		description: "A configuration change on your account waiting for your approval (#1268). Muting this means held changes sit until you open Preferences — they never apply on their own.",
+		alerts: true,
+	},
+	{
 		id: "subscribe",
 		label: "New subscribers",
 		description: "Someone subscribing to an agent you publish.",

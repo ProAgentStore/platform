@@ -13,6 +13,7 @@ nav = [
   { "Cloudflare Email Bridge" = "cloudflare-email-bridge.md" },
   { "Runner Cleanup" = "runner-cleanup.md" },
   { "Machine Thresholds" = "machine-thresholds.md" },
+  { "Approval Gate" = "approval-gate.md" },
   { "Agent Behaviour" = "agent-behaviour.md" },
   { "Triggers" = "triggers.md" },
   { "MCP" = "mcp.md" },

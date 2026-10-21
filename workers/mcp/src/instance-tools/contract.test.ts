@@ -30,6 +30,7 @@ import { registerRepoTools } from "./repo.js";
 import { registerRuntimeTools } from "./runtime.js";
 import { registerEmailWorkerTools } from "./email-worker.js";
 import { registerGmailIdentityTools } from "./gmail-identity.js";
+import { registerApprovalTools } from "./approvals.js";
 import { registerMachineControlTools } from "./machine-control.js";
 import { registerSecureInputTools } from "./secure-input.js";
 import { registerSettingsTools } from "./settings.js";
@@ -574,6 +575,10 @@ const TABLE: Record<string, Row> = {
 	test_email_worker_connection: ["emailWorker", "write", null, "envelope", "account_id,dry_run,endpoint,instance_id,token"],
 	set_instance_email_worker_account: ["emailWorker", "write", null, "envelope", "account_id,dry_run,endpoint,instance_id,token"],
 	// #1279: no tool here takes or returns a credential - the mailbox is connected by the owner (OAuth), the token stays in the API.
+	// #1268: no tool here can approve or deny a held change - that is the owner's act at the console or the push link.
+	approval_status: ["approvals", "read", null, null, "approval_id,token"],
+	get_approval_gate: ["approvals", "read", null, null, "token"],
+	set_approval_gate: ["approvals", "write", null, "envelope", "actions,dry_run,enabled,expiry_seconds,token"],
 	get_instance_gmail_identity: ["gmailIdentity", "read", null, null, "instance_id,token"],
 	set_instance_gmail_identity: ["gmailIdentity", "write", null, "envelope", "clear,dry_run,inbound_scope,instance_id,preview_chars,send_as,token"],
 	set_email_worker_identities: ["emailWorker", "write", null, "envelope", "account_id,approved_senders,dry_run,endpoint,instance_id,reply_identity,token"],
@@ -696,6 +701,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	machineControl: registerMachineControlTools as any,
 	emailWorker: registerEmailWorkerTools as any,
 	gmailIdentity: registerGmailIdentityTools as any,
+	approvals: registerApprovalTools as any,
 	mcpConnections: registerMcpConnectionTools as any,
 	observability: registerObservabilityTools as any,
 	recent: registerRecentTools as any,

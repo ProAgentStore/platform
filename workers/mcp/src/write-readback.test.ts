@@ -623,6 +623,10 @@ const READBACK: Record<string, string | null> = {
 	"set_email_worker_identities.approved_senders": "get_instance_email_worker",
 	"set_email_worker_identities.reply_identity": "get_instance_email_worker",
 	// #1279: the saved identity is the `pin` (sendAs, inboundScope, previewChars) get_instance_gmail_identity returns; clear empties it (state none).
+	// #1268: the saved gate is the `enabled` / `actions` / `expirySeconds` get_approval_gate returns.
+	"set_approval_gate.enabled": "get_approval_gate",
+	"set_approval_gate.actions": "get_approval_gate",
+	"set_approval_gate.expiry_seconds": "get_approval_gate",
 	"set_instance_gmail_identity.send_as": "get_instance_gmail_identity",
 	"set_instance_gmail_identity.inbound_scope": "get_instance_gmail_identity",
 	"set_instance_gmail_identity.preview_chars": "get_instance_gmail_identity",

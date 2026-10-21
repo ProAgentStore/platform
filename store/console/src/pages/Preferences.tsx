@@ -6,6 +6,7 @@ import TranslationFields from "../components/TranslationFields";
 import AccountConnections from "../components/AccountConnections";
 import NotificationPreferences from "../components/NotificationPreferences";
 import NotificationPolicySection from "../tabs/settings/NotificationPolicySection";
+import ApprovalGateSection from "../tabs/settings/ApprovalGateSection";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 import Card from "../components/Card";
 import Button from "../components/Button";
@@ -237,6 +238,7 @@ export default function Preferences() {
 
 			{/* #992: the per-event, per-channel rules under the switches above. Same component as an
 			    agent's own editor, so the two levels cannot describe the same choice differently. */}
+			<ApprovalGateSection />
 			<NotificationPolicySection />
 
 			<Card className="mb-3 sm:mb-4">
