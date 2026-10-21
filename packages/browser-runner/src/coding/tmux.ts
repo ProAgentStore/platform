@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { RunnerInputError } from "../errors.js";
 
 /**
  * Low-level tmux primitives for the coding runtime.
@@ -12,9 +13,56 @@ import { execFileSync } from "node:child_process";
  * is never shell-interpolated.
  */
 
+/**
+ * The marker the cloud matches on (#461). A runner without tmux used to answer `spawnSync tmux
+ * ENOENT` as a bare 500, which the sign-in relay surfaced as "Internal server error" with nothing
+ * to act on. It is now a 424 that names the missing prerequisite and how to install it.
+ */
+export const TMUX_MISSING = "tmux_not_installed";
+
+/** How to install tmux on this machine, by platform; the cloud shows this verbatim. */
+export function tmuxInstallHint(platform: string = process.platform): string {
+	if (platform === "darwin") return "Install it with `brew install tmux`";
+	if (platform === "linux") return "Install it with your package manager (`sudo apt install tmux`, `sudo dnf install tmux` or `sudo pacman -S tmux`)";
+	return "tmux is not supported natively on this platform — run the runner inside WSL or another Linux/macOS environment";
+}
+
+/** Raised when a terminal operation needs tmux and it is not on the runner's PATH. */
+export class TmuxMissingError extends RunnerInputError {
+	constructor(platform: string = process.platform) {
+		super(`${TMUX_MISSING}: tmux is not installed on this runner. ${tmuxInstallHint(platform)}, then try again.`, 424);
+		this.name = "TmuxMissingError";
+	}
+}
+
+function isMissingBinary(e: unknown): boolean {
+	return (e as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
+/** Run a tmux invocation, turning "tmux is not installed" into {@link TmuxMissingError}. */
+function viaTmux<T>(run: () => T): T {
+	try {
+		return run();
+	} catch (e) {
+		if (isMissingBinary(e)) throw new TmuxMissingError();
+		throw e;
+	}
+}
+
+/** True when a `tmux` binary can be started. */
+export function tmuxAvailable(): boolean {
+	try {
+		execFileSync("tmux", ["-V"], { stdio: "ignore" });
+		return true;
+	} catch (e) {
+		// A tmux that exists but fails `-V` is still installed; only a missing binary is "absent".
+		return !isMissingBinary(e);
+	}
+}
+
 /** Run tmux with an args array. Throws on non-zero exit. */
 export function tmuxExec(args: string[], timeoutMs = 5000): string {
-	return execFileSync("tmux", args, { encoding: "utf8", timeout: timeoutMs });
+	return viaTmux(() => execFileSync("tmux", args, { encoding: "utf8", timeout: timeoutMs }));
 }
 
 /**
@@ -50,7 +98,7 @@ export function sessionExists(sessionName: string): boolean {
 export function createSession(sessionName: string, workDir: string, command?: string): void {
 	const args = ["new-session", "-d", "-s", sessionName, "-c", workDir, "-x", "200", "-y", "50"];
 	if (command) args.push(command);
-	execFileSync("tmux", args, { stdio: "ignore" });
+	viaTmux(() => execFileSync("tmux", args, { stdio: "ignore" }));
 }
 
 /** Kill a session. Returns false if it did not exist. */

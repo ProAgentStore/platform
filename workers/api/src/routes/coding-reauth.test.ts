@@ -218,6 +218,57 @@ describe("the re-auth relay (#881)", () => {
 		expect(String(body.error)).toContain("runner_update");
 	});
 
+	// #461: on a clean runner (no tmux) the start used to fail as "Internal server error" and leave no state.
+	it.each([
+		["a current runner (424 tmux_not_installed)", 'Runner /tmux/session → 424: {"error":"tmux_not_installed: tmux is not installed on this runner. Install it with `brew install tmux`, then try again."}'],
+		["an older runner (a bare 500 spawn error)", 'Runner /tmux/session → 500: {"error":"spawnSync tmux ENOENT"}'],
+	])("start on a runner without tmux: %s is a 409 that says how to fix it, not Internal server error", async (_label, failure) => {
+		callRunner.mockImplementation(async (_c: unknown, path: string, body: Record<string, unknown>) => {
+			calls.push({ path, body });
+			if (path === "/tmux/session" && body.action !== "kill") throw new Error(failure);
+			return {};
+		});
+		const { status, body } = await call("POST", "", {});
+		expect(status).toBe(409);
+		expect(String(body.error)).toContain("tmux is not installed");
+		expect(String(body.error)).toContain("brew install tmux");
+		expect(String(body.error)).not.toMatch(/Internal server error|ENOENT/);
+		// Nothing was recorded as in progress, so a retry after installing tmux starts clean.
+		expect(store.state).toBeNull();
+		expect(calls.some((c) => c.path === "/tmux/run")).toBe(false);
+	});
+
+	it("start with Claude installed but signed out (no stored token) still plans the login and hits the same clear error", async () => {
+		hasUserProviderKey.mockResolvedValue(false);
+		callRunner.mockImplementation(async (_c: unknown, path: string, body: Record<string, unknown>) => {
+			if (path === "/tmux/session" && body.action !== "kill") throw new Error('Runner /tmux/session → 500: {"error":"spawnSync tmux ENOENT"}');
+			return {};
+		});
+		const { status, body } = await call("POST", "", { clientType: "claude" });
+		expect(status).toBe(409);
+		expect(String(body.error)).toContain("tmux is not installed");
+	});
+
+	it("any other runner failure on a sign-in step is a 502 with the runner's words, never a bare 500", async () => {
+		callRunner.mockImplementation(async (_c: unknown, path: string, body: Record<string, unknown>) => {
+			if (path === "/tmux/session" && body.action !== "kill") throw new Error('Runner /tmux/session → 500: {"error":"fork failed"}');
+			return {};
+		});
+		const { status, body } = await call("POST", "", {});
+		expect(status).toBe(502);
+		expect(String(body.error)).toContain("fork failed");
+	});
+
+	it("an unreachable runner stays its own typed error (not remapped)", async () => {
+		const { RunnerUnreachableError } = await import("../lib/runner-unreachable.js");
+		callRunner.mockImplementation(async (_c: unknown, path: string, body: Record<string, unknown>) => {
+			if (path === "/tmux/session" && body.action !== "kill") throw new RunnerUnreachableError("No runner connected", { dispatched: false });
+			return {};
+		});
+		const { status } = await call("POST", "", {});
+		expect(status).toBe(500); // this harness maps non-HttpError to 500; the production handler owns the unreachable mapping
+	});
+
 	it("cancel closes the terminal and marks the relay cancelled", async () => {
 		pane = `${CLAUDE_URL}\nPaste code here`;
 		await call("POST", "", {});

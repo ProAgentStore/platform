@@ -41,6 +41,7 @@ import { type EngineReauthState, readReauthState, signInSessionId, writeReauthSt
 import type { EngineAuthResolved } from "../lib/usage-payer.js";
 import { logEvent } from "../lib/events.js";
 import { READ_TIMEOUT_MS, type RunnerConn, callRunner, getBoundRunnerConn } from "../lib/runner-client.js";
+import { RunnerUnreachableError } from "../lib/runner-unreachable.js";
 import { hasUserProviderKey, upsertUserProviderKey } from "../lib/user-api-key-store.js";
 import { notifyUser } from "./push.js";
 import { requireOwned } from "./coding-shared.js";
@@ -60,16 +61,27 @@ async function requireConn(c: Ctx, instanceId: string, uid: string): Promise<Run
 	return conn;
 }
 
-/** Runner call that names an old runner instead of failing with a bare 404. */
+/** A runner without tmux: the sign-in drives a terminal, so it cannot start (#461). */
+const TMUX_MISSING_MESSAGE =
+	"tmux is not installed on this runner, and the sign-in drives a terminal. Install it (macOS: `brew install tmux`; Linux: `sudo apt install tmux`), then start the sign-in again. Run `pags runner status` on the machine to check.";
+
+/**
+ * Runner call that names what went wrong instead of failing with a bare 404 or an "Internal server
+ * error" (#461). Old runners answer a missing tmux as a 500 carrying `spawnSync tmux ENOENT`; current
+ * ones as a 424 `tmux_not_installed`. Both become the same actionable 409.
+ */
 async function tmux<T>(conn: RunnerConn, path: string, body: unknown): Promise<T> {
 	try {
 		return await callRunner<T>(conn, path, body, { timeoutMs: 20_000 });
 	} catch (e) {
+		if (e instanceof HttpError || e instanceof RunnerUnreachableError) throw e;
 		const msg = e instanceof Error ? e.message : String(e);
 		if (msg.includes(`${path} → 404`) && msg.includes("Not found")) {
 			throw new HttpError(409, "This runner predates the terminal connector the sign-in relay drives. Update the runner (runner_update), then try again.");
 		}
-		throw e;
+		if (msg.includes("tmux_not_installed") || /\btmux ENOENT\b/.test(msg)) throw new HttpError(409, TMUX_MISSING_MESSAGE);
+		// Anything else the runner refused: say so, with the runner's own words, rather than a 500.
+		throw new HttpError(502, `The runner could not run the sign-in step (${path}): ${msg.replace(/^Runner \S+ → \d+:\s*/, "").slice(0, 200)}`);
 	}
 }
 
