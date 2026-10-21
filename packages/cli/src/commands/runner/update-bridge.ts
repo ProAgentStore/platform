@@ -106,7 +106,10 @@ export function createPolicyChannel(deps: PolicyChannelDeps) {
 		deps.cell.authoritative = false;
 		deps.cell.refreshing = true;
 		try {
-			return (await register(id, deps.force, signal)) && deps.cell.authoritative;
+			// Never `force` (#1172): force SUSPENDS coding sessions owned by other machines, which is what the startup claim of
+			// `pags up --force` is for — not something every unattended policy check may repeat. The reconnect path refreshes
+			// without it for the same reason; a refresh only needs the owner's current decision.
+			return (await register(id, false, signal)) && deps.cell.authoritative;
 		} finally {
 			deps.cell.refreshing = false;
 		}

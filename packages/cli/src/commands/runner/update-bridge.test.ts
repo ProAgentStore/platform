@@ -647,3 +647,44 @@ describe("an open cycle owns the update until it resolves; a verified one stays 
 		expect(m.disk()?.status).toBe("restarting");
 	});
 });
+
+describe("a policy refresh never re-claims with --force (#1172)", () => {
+	function channelWith(force: boolean) {
+		const bodies: Array<{ id: string; force: boolean }> = [];
+		const cell = new PolicyCell({ autoUpdate: true }, () => undefined);
+		const channel = createPolicyChannel({
+			cell,
+			post: async () => ({ autoUpdatePolicy: { autoUpdate: true } }),
+			body: (id, forceClaim) => {
+				bodies.push({ id, force: forceClaim });
+				return { force: forceClaim };
+			},
+			force,
+			held: () => ["i1"],
+			onError: () => undefined,
+			onAction: () => undefined,
+		});
+		return { channel, bodies };
+	}
+
+	it("a machine started with --force claims with force at startup, and every later refresh (before/after an install) does not", async () => {
+		const { channel, bodies } = channelWith(true);
+		expect(await channel.register("i1")).toBe(true); // the startup claim keeps the process's flag
+		await channel.refresh();
+		await channel.refresh();
+		expect(bodies.map((b) => b.force)).toEqual([true, false, false]);
+	});
+
+	it("a refresh through a held id (nothing registered yet) is also without force", async () => {
+		const { channel, bodies } = channelWith(true);
+		await channel.refresh();
+		expect(bodies).toEqual([{ id: "i1", force: false }]);
+	});
+
+	it("without --force nothing changes: startup and refresh both send false", async () => {
+		const { channel, bodies } = channelWith(false);
+		await channel.register("i1");
+		await channel.refresh();
+		expect(bodies.map((b) => b.force)).toEqual([false, false]);
+	});
+});
