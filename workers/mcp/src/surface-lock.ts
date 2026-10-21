@@ -1237,4 +1237,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.168": "sha256:ff7a608fa4dba213c814e29cfea661717a0d87112f23d2c12a6e34d66d0e63d8",
 	// #1277: get_instance_email_worker, begin/complete_email_worker_enrollment, test_email_worker_connection, set_instance_email_worker_account, set_email_worker_identities (worker-backed mail management; no tool carries a secret). 0.1.169 is reserved by the concurrent #1279 connector-oauth work.
 	"0.1.170": "sha256:e4ffa62293e5bc1f3aa2e84e4df0a32651326ecc1efe71748cc5063c8acaa061",
+	// #1279: get_instance_gmail_identity, set_instance_gmail_identity (the verified Gmail send-as sender and inbound recipient scope; no tool carries a credential). 0.1.171 is left for the Gmail OAuth-handoff work owned elsewhere.
+	"0.1.172": "sha256:23d9ec63628418f394fd4b32d156307c4d07fdc9a93d42d36216b088175aa94b",
 };

@@ -35,9 +35,13 @@ const dispatched = async (name: string, ...args: Parameters<ReturnType<typeof to
 	return { ...r, content: renderToolContent(t, r) };
 };
 
+/** An instance row with no pinned Gmail identity (#1279) — what every pre-existing test is about: unconfigured behaviour is unchanged. */
+const NO_IDENTITY_DB = { prepare: () => ({ bind: () => ({ first: async () => ({ config: null }) }) }) };
+
 /** An env whose instance DO reports the given `permissions.email`, or fails outright. */
 function envWithPermission(email: boolean | "unreachable" | "not-ok"): Env {
 	return {
+		DB: NO_IDENTITY_DB,
 		AGENT: {
 			idFromName: (n: string) => n,
 			get: () => ({
@@ -184,6 +188,7 @@ describe("gmail_download_attachment", () => {
 			return new Response(JSON.stringify(MESSAGE), { status: 200 });
 		});
 		const env = {
+			DB: NO_IDENTITY_DB,
 			AGENT: {
 				idFromName: (n: string) => n,
 				get: () => ({
@@ -254,6 +259,7 @@ describe("gmail_download_attachment", () => {
 			return new Response(JSON.stringify(MESSAGE), { status: 200 });
 		});
 		const env = {
+			DB: NO_IDENTITY_DB,
 			AGENT: {
 				idFromName: (n: string) => n,
 				get: () => ({
@@ -289,6 +295,7 @@ describe("gmail_download_attachment", () => {
 			String(url).includes("/attachments/") ? Response.json({ data: b64url, size: bytes.length }) : Response.json(docMessage),
 		);
 		const env = {
+			DB: NO_IDENTITY_DB,
 			AGENT: {
 				idFromName: (n: string) => n,
 				get: () => ({
@@ -317,6 +324,7 @@ describe("gmail_download_attachment", () => {
 			return Response.json(MESSAGE);
 		});
 		const env = {
+			DB: NO_IDENTITY_DB,
 			AGENT: {
 				idFromName: (n: string) => n,
 				get: () => ({

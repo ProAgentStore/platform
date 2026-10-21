@@ -7,6 +7,8 @@
  * can search and read messages it is permitted to, nothing more.
  */
 
+import { normalizeAddress, type RecipientHeaders, type SendAsAlias, textWindow } from "./gmail-identity.js";
+
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
@@ -180,10 +182,20 @@ export function gmailMessageUrl(id: string, account?: string | null): string {
 }
 
 async function gmailFetch(accessToken: string, path: string): Promise<Response> {
-	return fetch(`${GMAIL_API}${path}`, {
-		headers: { Authorization: `Bearer ${accessToken}` },
-	});
+	// Reads are idempotent, so a rate limit or a momentary 503 is retried a bounded number of times (#1279) — a paged
+	// listing otherwise dies half-way on one blip and the caller restarts from the first page.
+	const attempt = () => fetch(`${GMAIL_API}${path}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+	let res = await attempt();
+	for (const waitMs of RETRY_WAITS_MS) {
+		if (res.status !== 429 && res.status !== 503) break;
+		await new Promise((r) => setTimeout(r, waitMs));
+		res = await attempt();
+	}
+	return res;
 }
+
+/** Waits before each retry of a rate-limited read; the length is the retry budget. */
+const RETRY_WAITS_MS = [200, 600];
 
 /** Pull Google's actual error reason out of a failed Gmail API response — so a 403
  *  says "insufficient scopes" vs "Gmail API not enabled" instead of a bare status. */
@@ -321,6 +333,20 @@ export interface GmailMessage {
 	attachments: GmailAttachment[];
 }
 
+/** A message as `getMessage` returns it: the reply fields, the recipient headers a scope check reads, and the body WINDOW (#1279). */
+export interface GmailMessageWindow extends GmailMessage {
+	/** The Reply-To header, raw — a reply for a scoped instance may honour it (#1279). */
+	replyTo: string;
+	/** The topmost Delivered-To (added by the receiving server) and X-Original-To — what an inbound-scope check reads. */
+	deliveredTo: string;
+	xOriginalTo: string;
+	/** `text` is the window requested. `textLength` is the whole body; `nextOffset` continues it when `truncated`. */
+	textOffset: number;
+	textLength: number;
+	truncated: boolean;
+	nextOffset: number | null;
+}
+
 interface RawGmailMessage {
 	id: string;
 	threadId?: string;
@@ -333,14 +359,18 @@ function headerReader(msg: RawGmailMessage): (name: string) => string {
 	return (name: string) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 }
 
-function toGmailMessage(msg: RawGmailMessage, maxChars: number): GmailMessage {
+function toGmailMessage(msg: RawGmailMessage, maxChars: number, offset = 0): GmailMessageWindow {
 	const header = headerReader(msg);
+	const window = textWindow(collectText(msg.payload), offset, maxChars);
 	return {
 		id: msg.id,
 		threadId: msg.threadId ?? msg.id,
 		from: header("from"),
 		to: header("to"),
 		cc: header("cc"),
+		replyTo: header("reply-to"),
+		deliveredTo: header("delivered-to"),
+		xOriginalTo: header("x-original-to"),
 		subject: header("subject"),
 		date: header("date"),
 		messageId: header("message-id"),
@@ -351,7 +381,11 @@ function toGmailMessage(msg: RawGmailMessage, maxChars: number): GmailMessage {
 		// text is the large, lossy field — it already has its own maxChars cut above — so it belongs
 		// at the tail where a second cut is announced rather than silent. (#755)
 		attachments: collectAttachments(msg.payload),
-		text: collectText(msg.payload).slice(0, maxChars),
+		text: window.text,
+		textOffset: window.offset,
+		textLength: window.length,
+		truncated: window.truncated,
+		nextOffset: window.nextOffset,
 	};
 }
 
@@ -365,6 +399,16 @@ export interface GmailSearchHit {
 	snippet: string;
 	/** Attachment filenames only. The manifest with ids comes from `getMessage`. */
 	attachmentNames: string[];
+	/** Recipient headers, present only when the caller asked for them (an inbound-scope check). Not part of a listing. */
+	recipients?: RecipientHeaders;
+}
+
+export interface GmailSearchPage {
+	hits: GmailSearchHit[];
+	/** Pass back as `pageToken` for the next page; absent on the last. */
+	nextPageToken: string | null;
+	/** Messages Gmail listed that could not be read this time — the page is short by this many. */
+	unreadable: number;
 }
 
 /**
@@ -375,28 +419,38 @@ export interface GmailSearchHit {
  * `metadataHeaders` cannot filter the payload structure though, so attachment names still come
  * from the part tree Gmail returns — which it does at metadata level, without the body data.
  */
-export async function listMessages(
+export async function listMessages(accessToken: string, query: string, max = 10): Promise<GmailSearchHit[]> {
+	return (await searchMessages(accessToken, query, { max })).hits;
+}
+
+/** One page of a search, with Gmail's own continuation token (#1279). Same per-hit shape as `listMessages`. */
+export async function searchMessages(
 	accessToken: string,
 	query: string,
-	max = 10,
-): Promise<GmailSearchHit[]> {
-	const capped = Math.max(1, Math.min(25, Math.floor(max)));
+	opts: { max?: number; pageToken?: string; recipients?: boolean } = {},
+): Promise<GmailSearchPage> {
+	const capped = Math.max(1, Math.min(25, Math.floor(opts.max ?? 10)));
 	const listRes = await gmailFetch(
 		accessToken,
-		`/messages?q=${encodeURIComponent(query)}&maxResults=${capped}`,
+		`/messages?q=${encodeURIComponent(query)}&maxResults=${capped}${opts.pageToken ? `&pageToken=${encodeURIComponent(opts.pageToken)}` : ""}`,
 	);
 	if (!listRes.ok) {
 		throw new GmailError(`Gmail search failed (${listRes.status}): ${await gmailErrorReason(listRes)}`);
 	}
-	const list = (await listRes.json()) as { messages?: { id: string }[] };
+	const list = (await listRes.json()) as { messages?: { id: string }[]; nextPageToken?: string };
 	const ids = (list.messages ?? []).map((m) => m.id);
-	if (ids.length === 0) return [];
+	const nextPageToken = list.nextPageToken || null;
+	if (ids.length === 0) return { hits: [], nextPageToken, unreadable: 0 };
 
 	const hits: GmailSearchHit[] = [];
+	let unreadable = 0;
 	for (const id of ids) {
 		const res = await gmailFetch(accessToken, `/messages/${encodeURIComponent(id)}?format=metadata`);
-		// One unreadable message must not fail the whole search — the others are still useful.
-		if (!res.ok) continue;
+		// One unreadable message must not fail the whole search — the others are still useful. It is COUNTED, so a short page is not mistaken for a complete one.
+		if (!res.ok) {
+			unreadable++;
+			continue;
+		}
 		const msg = (await res.json()) as RawGmailMessage;
 		const header = headerReader(msg);
 		hits.push({
@@ -407,9 +461,56 @@ export async function listMessages(
 			date: header("date"),
 			snippet: msg.snippet ?? "",
 			attachmentNames: collectAttachments(msg.payload).map((a) => a.filename),
+			...(opts.recipients ? { recipients: recipientsOf(header) } : {}),
 		});
 	}
-	return hits;
+	return { hits, nextPageToken, unreadable };
+}
+
+function recipientsOf(header: (name: string) => string): RecipientHeaders {
+	return { to: header("to"), cc: header("cc"), deliveredTo: header("delivered-to"), xOriginalTo: header("x-original-to") };
+}
+
+/** Recipient headers of one message, from a metadata-only fetch — what archive / mark-read need for a scope check. */
+export async function getMessageRecipients(accessToken: string, id: string): Promise<RecipientHeaders> {
+	const res = await gmailFetch(accessToken, `/messages/${encodeURIComponent(id)}?format=metadata`);
+	if (!res.ok) throw new GmailError(`Gmail message fetch failed (${res.status}): ${await gmailErrorReason(res)}`);
+	return recipientsOf(headerReader((await res.json()) as RawGmailMessage));
+}
+
+/** The From header of an existing draft — so a draft is not sent as a sender it was not written as. */
+export async function getDraftFrom(accessToken: string, draftId: string): Promise<string> {
+	const res = await gmailFetch(accessToken, `/drafts/${encodeURIComponent(draftId)}?format=metadata`);
+	if (!res.ok) throw new GmailError(`Gmail draft fetch failed (${res.status}): ${await gmailErrorReason(res)}`);
+	const draft = (await res.json()) as { message?: RawGmailMessage };
+	return draft.message ? headerReader(draft.message)("from") : "";
+}
+
+/**
+ * The send-as aliases of the connected account (`users.settings.sendAs.list`). READ-ONLY: it works with gmail.readonly,
+ * so discovering which addresses an owner could write as needs no send or settings scope.
+ */
+export async function listSendAs(accessToken: string): Promise<SendAsAlias[]> {
+	const res = await gmailFetch(accessToken, "/settings/sendAs");
+	if (!res.ok) throw new GmailError(`Gmail send-as lookup failed (${res.status}): ${await gmailErrorReason(res)}`);
+	const body = (await res.json()) as { sendAs?: Array<Record<string, unknown>> };
+	const out: SendAsAlias[] = [];
+	for (const a of body.sendAs ?? []) {
+		const email = normalizeAddress(a.sendAsEmail);
+		if (!email) continue;
+		const isPrimary = a.isPrimary === true;
+		const verificationStatus = typeof a.verificationStatus === "string" ? a.verificationStatus : "";
+		out.push({
+			email,
+			displayName: typeof a.displayName === "string" ? a.displayName : "",
+			replyToAddress: normalizeAddress(a.replyToAddress) ?? "",
+			isPrimary,
+			isDefault: a.isDefault === true,
+			verificationStatus,
+			verified: isPrimary || verificationStatus === "accepted",
+		});
+	}
+	return out;
 }
 
 /** Fetch one message in full — body, threading headers, and the attachment manifest. */
@@ -417,12 +518,13 @@ export async function getMessage(
 	accessToken: string,
 	id: string,
 	maxChars = 40000,
-): Promise<GmailMessage> {
+	offset = 0,
+): Promise<GmailMessageWindow> {
 	const res = await gmailFetch(accessToken, `/messages/${encodeURIComponent(id)}?format=full`);
 	if (!res.ok) {
 		throw new GmailError(`Gmail message fetch failed (${res.status}): ${await gmailErrorReason(res)}`);
 	}
-	return toGmailMessage((await res.json()) as RawGmailMessage, maxChars);
+	return toGmailMessage((await res.json()) as RawGmailMessage, maxChars, offset);
 }
 
 /**
@@ -482,7 +584,29 @@ export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
  * fix it. The body is unaffected — it lives in the MIME part, where newlines are data.
  */
 export function sanitizeHeaderValue(value: string): string {
-	return value.replace(/[\r\n]+/g, " ").trim();
+	// Line breaks and tabs become a space; every other control, line-separator and invisible bidi/format character is
+	// dropped (#1279) — none belongs in a header, and a bidi override in a display name can reorder what a reader sees.
+	return value
+		.replace(/[\r\n\t]+/g, " ")
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters from a header is the point
+		.replace(/[\u0000-\u001f\u007f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
+		.trim();
+}
+
+/**
+ * `Name <address>` for a From header, or the bare address. The address must be a plain mailbox (anything else throws —
+ * a sender is never "cleaned up" into a different one); the display name is sanitised, stripped of the characters that
+ * could close the quote or the angle brackets, and RFC 2047 encoded when it is not ASCII.
+ */
+export function formatMailbox(address: string, displayName = ""): string {
+	const a = address.trim();
+	if (!/^[A-Za-z0-9._%+'-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(a) || a.length > 254) {
+		throw new GmailError("The sender address is not a valid mailbox, so nothing was sent.");
+	}
+	const name = sanitizeHeaderValue(displayName).replace(/[<>"\\]/g, "").trim();
+	if (name.length > 200) throw new GmailError("The sender's display name is over 200 characters, so nothing was sent.");
+	if (!name) return a;
+	return /[^\x20-\x7E]/.test(name) ? `${encodeHeaderValue(name)} <${a}>` : `"${name}" <${a}>`;
 }
 
 /** RFC 2047 encode a header value when it is not plain ASCII (subjects, display names).
@@ -509,6 +633,10 @@ export interface OutgoingAttachment {
 }
 
 export interface OutgoingMessage {
+	/** An explicit, ALREADY-VERIFIED sender (`formatMailbox` output). Absent = Gmail's default for the account. */
+	from?: string;
+	/** An explicit Reply-To mailbox (`formatMailbox` output). Absent = none emitted. */
+	replyTo?: string;
 	to: string;
 	cc?: string;
 	subject: string;
@@ -533,6 +661,8 @@ export function buildMimeMessage(msg: OutgoingMessage): string {
 	// RFC 5322 recommends, and an over-long unfolded header is exactly what a strict MTA rewrites.
 	const boundary = `----pags-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 	const headers: string[] = [
+		...(msg.from ? [`From: ${sanitizeHeaderValue(msg.from)}`] : []),
+		...(msg.replyTo ? [`Reply-To: ${sanitizeHeaderValue(msg.replyTo)}`] : []),
 		`To: ${sanitizeHeaderValue(msg.to)}`,
 		...(msg.cc ? [`Cc: ${sanitizeHeaderValue(msg.cc)}`] : []),
 		`Subject: ${encodeHeaderValue(msg.subject)}`,

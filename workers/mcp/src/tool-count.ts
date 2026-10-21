@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 378;
+export const MCP_TOOL_COUNT = 380;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 351;
+export const MCP_TOOL_ALWAYS_ON = 353;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -44,4 +44,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 369, issue: "#1267", date: "2026-10-21", reason: "list_instance_mcp_accounts / set_instance_mcp_account: per-instance account pinning for the generic MCP connector, now that an endpoint can hold several labelled accounts." },
 	{ count: 372, issue: "#1275", date: "2026-10-21", reason: "get/set/reset_machine_thresholds: a machine's admission thresholds and session limit are the machine's own and had no tool at all (setGateThresholds was never called). Not siblings of set_machine_policy: that one is auto-update, naming and cleanup; these read and write the gate's lines, with partial updates and a reset." },
 	{ count: 378, issue: "#1277", date: "2026-10-21", reason: "Six tools to manage a worker-backed (Cloudflare) mail connection over MCP: get_instance_email_worker (state + named blockers), begin/complete_email_worker_enrollment (secure secret handoff through the console, since no tool may carry the bridge secret), test_email_worker_connection, set_instance_email_worker_account and set_email_worker_identities. Not siblings of the generic connector tools: its secret is a per-endpoint bridge credential the model must never hold, and sender/reply identity is Cloudflare-specific." },
+	{ count: 380, issue: "#1279", date: "2026-10-22", reason: "get/set_instance_gmail_identity: the verified send-as sender and inbound recipient scope an instance's Gmail is pinned to. Not siblings of set_instance_connector_account (which picks WHICH connected mailbox): this decides which address that mailbox writes as and which recipient address it may read, and is read back with the live alias list and named blockers." },
 ];

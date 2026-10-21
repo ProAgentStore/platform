@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**378 tool registrations.** 351 are always registered; 27 are gated to the console
+**380 tool registrations.** 353 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -471,6 +471,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `complete_email_worker_enrollment` | Server consumes the owner-entered secret, tests the bridge and stores the connection (#1277); `not_entered`, `probe_failed` (auth, protocol, bridge_unavailable) are distinct | write | yes | |
 | `test_email_worker_connection` | Test a stored connection with its stored credential; refreshes contract version, identities and health (#1277) | write | yes | |
 | `set_instance_email_worker_account` | Pin an instance to one worker-backed mail connection, or clear the pin (#1277) | write | yes | |
+| `get_instance_gmail_identity` | An instance's Gmail identity (#1279): the pinned verified send-as sender, inbound recipient scope, the account's live aliases with Google's verification status, write-consent mode and named blockers. No credential | read | | |
+| `set_instance_gmail_identity` | Pin the verified sender and inbound scope an instance's Gmail uses (an unverified alias is refused; a missing one refuses to send), or clear it (#1279). Takes and returns no credential | write | yes | |
 | `set_email_worker_identities` | Approve sender identities and the reply identity on a connection; a routed-only alias is refused (#1277) | write | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |

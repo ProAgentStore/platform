@@ -16853,6 +16853,52 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: "No connection (and no secret given) to test." }
 
+  /v1/instances/{instanceId}/gmail/identity:
+    get:
+      summary: An instance's Gmail identity — pinned verified sender, inbound scope, live aliases and blockers (#1279)
+      description: |
+        One read of what the MCP `get_instance_gmail_identity` tool returns: `state` (`none` = never configured, so the
+        instance uses the connected account's default sender and reads its whole mailbox; `configured`; `invalid`), the
+        `pin` (`sendAs`, `inboundScope`, `previewChars`), the connected account's send-as `aliases` with Google's
+        verification status (read with gmail.readonly), the instance's Gmail write-consent mode, and `blockers[]` —
+        `email_permission_off`, `no_gmail_connection`, `send_scope_missing`, `aliases_unreadable`, `identity_invalid`,
+        `no_sender_pinned`, `alias_missing`, `alias_unverified`, `no_inbound_scope`, `write_consent_off`,
+        `write_consent_ask`. Contains no credential.
+      operationId: getInstanceGmailIdentity
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { description: The identity and its blockers }
+        "404": { description: Instance not found }
+    put:
+      summary: Pin the verified sender and inbound scope an instance's Gmail uses (#1279)
+      description: |
+        REPLACES the stored identity. `sendAs` must be an address the connected account can write as that Google reports
+        verified (refused with 409 otherwise, or when the alias list cannot be read). `inboundScope` addresses limit which
+        mail the instance can search, read, reply to or change — enforced on the query and on every message by id.
+        `{"clear": true}` removes the identity. A body carrying a token, secret or password is refused.
+      operationId: setInstanceGmailIdentity
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sendAs: { type: string, nullable: true, description: A verified send-as address of the connected account }
+                inboundScope: { type: array, maxItems: 10, items: { type: string }, description: Recipient addresses this instance's mail is scoped to }
+                previewChars: { type: integer, minimum: 500, maximum: 40000, description: Body characters one read returns before it must continue with an offset }
+                clear: { type: boolean, description: Remove the identity }
+      responses:
+        "200": { description: Saved; the identity read back }
+        "400": { description: Malformed address, list or preview size, nothing to set, or a credential in the body }
+        "404": { description: Instance not found }
+        "409": { description: The sender is not a verified send-as address of the connected account }
+
   /v1/instances/{instanceId}/email-worker/status:
     get:
       summary: Readiness of this instance's worker-backed email, with every blocker named (#1277)

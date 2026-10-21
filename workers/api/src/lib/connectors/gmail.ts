@@ -34,6 +34,9 @@
  * declaration and the owner's switch would quietly stop being load-bearing. So the switch stays
  * the authority, and the declaration only narrows it further.
  */
+import { clipMarked } from "../clip-marked.js";
+import { addressesIn, MAX_READ_CHARS, replyRecipient, scopedQuery, SUMMARY_FIELD_CHARS, validPageToken } from "../gmail-identity.js";
+import { identityFor, NOT_IN_SCOPE, outsideScope, replyAllCc, resolvePinnedSender } from "./gmail-identity-guard.js";
 import type { Connector, RegistryToolCtx, RegistryToolResult, ToolDef } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Env } from "../../types.js";
@@ -143,7 +146,12 @@ async function gmailToken(ctx: RegistryToolCtx): Promise<{ token: string } | { r
 const searchHandler: ToolDef["handler"] = async (ctx, input) => {
 	const resolved = await gmailToken(ctx);
 	if ("refusal" in resolved) return resolved.refusal;
-	const { listMessages, buildQuery, GmailError } = await import("../gmail.js");
+	const { searchMessages, buildQuery, GmailError } = await import("../gmail.js");
+	const identity = await identityFor(ctx.env, ctx.instanceId);
+	if ("refusal" in identity) return fail(identity.refusal);
+	const pin = identity.pin;
+	const pageToken = input.page_token === undefined || input.page_token === "" ? undefined : validPageToken(input.page_token);
+	if (pageToken === null) return fail("page_token must be the next_page_token a previous gmail_search returned, copied exactly.");
 
 	// A raw `query` wins when given — Gmail's search syntax is far more expressive than the three
 	// structured hints, and an agent that knows it should not be forced to round-trip through them.
@@ -154,15 +162,40 @@ const searchHandler: ToolDef["handler"] = async (ctx, input) => {
 		withinDays: typeof input.within_days === "number" ? input.within_days : undefined,
 	});
 	try {
-		const hits = await listMessages(resolved.token, query, typeof input.max === "number" ? input.max : 10);
+		// A scoped instance's query is the owner's scope AND the agent's query — the agent can narrow it, never widen it.
+		const scoped = pin && pin.inboundScope.length > 0;
+		const page = await searchMessages(resolved.token, pin ? scopedQuery(pin.inboundScope, query) : query, {
+			max: typeof input.max === "number" ? input.max : 10,
+			pageToken,
+			recipients: !!scoped,
+		});
+		// The query filter is a convenience; the header check is the enforcement, so a hit Gmail matched loosely is still dropped.
+		const inScope = page.hits.filter((h) => !h.recipients || !outsideScope(pin, h.recipients));
+		const omitted = page.hits.length - inScope.length;
+		const hits = inScope.map(({ recipients: _recipients, ...h }) =>
+			pin
+				? {
+						...h,
+						from: clipMarked(h.from, SUMMARY_FIELD_CHARS),
+						subject: clipMarked(h.subject, SUMMARY_FIELD_CHARS),
+						snippet: clipMarked(h.snippet, SUMMARY_FIELD_CHARS),
+					}
+				: h,
+		);
+		const paging = {
+			...(page.nextPageToken ? { next_page_token: page.nextPageToken } : {}),
+			...(page.unreadable > 0 ? { unreadable: page.unreadable } : {}),
+			...(omitted > 0 ? { out_of_scope_omitted: omitted } : {}),
+		};
+
 		// "No matches" is OUR sentence about an empty result — nothing in it came from a stranger,
 		// so it goes in `head` with an empty body and the dispatcher fences nothing (#752). The
 		// declaration is per TOOL and fail-safe; this is the one branch where the per-RESULT fact
 		// differs, and F2 says a platform sentence must not end up inside a block.
-		if (hits.length === 0) return { head: `No messages matched: ${query}`, content: "", success: true };
+		if (hits.length === 0 && Object.keys(paging).length === 0) return { head: `No messages matched: ${query}`, content: "", success: true };
 		// Every field here is written by whoever sent the mail: the sender name, the subject, the
 		// snippet, and the attachment filenames.
-		return okUntrusted({ query, count: hits.length, messages: hits }, "the owner's Gmail inbox");
+		return okUntrusted({ query, count: hits.length, messages: hits, ...paging }, "the owner's Gmail inbox");
 	} catch (e) {
 		return fail(e instanceof GmailError ? e.message : `Gmail search failed: ${e instanceof Error ? e.message : String(e)}`);
 	}
@@ -174,8 +207,16 @@ const readHandler: ToolDef["handler"] = async (ctx, input) => {
 	const resolved = await gmailToken(ctx);
 	if ("refusal" in resolved) return resolved.refusal;
 	const { getMessage, GmailError } = await import("../gmail.js");
+	const identity = await identityFor(ctx.env, ctx.instanceId);
+	if ("refusal" in identity) return fail(identity.refusal);
+	const pin = identity.pin;
+	// A scoped instance reads a bounded preview and continues with `offset`; an unconfigured one keeps the 40000-char read, now announced when it cuts.
+	const wanted = typeof input.max_chars === "number" && Number.isFinite(input.max_chars) ? Math.floor(input.max_chars) : pin ? pin.previewChars : MAX_READ_CHARS;
+	const maxChars = Math.max(1, Math.min(MAX_READ_CHARS, wanted));
+	const offset = typeof input.offset === "number" && Number.isFinite(input.offset) ? Math.max(0, Math.floor(input.offset)) : 0;
 	try {
-		const msg = await getMessage(resolved.token, id);
+		const { deliveredTo, xOriginalTo, ...msg } = await getMessage(resolved.token, id, maxChars, offset);
+		if (outsideScope(pin, { to: msg.to, cc: msg.cc, deliveredTo, xOriginalTo })) return fail(NOT_IN_SCOPE);
 		return okUntrusted(msg, `an email from ${msg.from || "an unknown sender"}`);
 	} catch (e) {
 		return fail(e instanceof GmailError ? e.message : `Gmail message fetch failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -215,6 +256,9 @@ const downloadHandler: ToolDef["handler"] = async (ctx, input) => {
 		// token. That preserves the property the re-fetch exists to protect (filename → R2 key comes
 		// from Gmail, not from the model) while removing the fragile round-trip of a long opaque token.
 		const msg = await getMessage(resolved.token, messageId, 1);
+		const identity = await identityFor(env, ctx.instanceId);
+		if ("refusal" in identity) return fail(identity.refusal);
+		if (outsideScope(identity.pin, msg)) return fail(NOT_IN_SCOPE);
 		// Prefer exact attachmentId match; fall back to filename match.
 		let att = msg.attachments.find((a) => a.attachmentId === attachmentRef);
 		if (!att) {
@@ -480,18 +524,25 @@ const replyHandler: ToolDef["handler"] = async (ctx, input) => {
 	if (!(await canSend(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_SEND);
 
 	const { getMessage, replyHeaders, replySubject, buildMimeMessage, sendMessage, GmailError } = await import("../gmail.js");
+	const identity = await identityFor(env, ctx.instanceId);
+	if ("refusal" in identity) return fail(identity.refusal);
+	const sender = identity.pin ? await resolvePinnedSender(resolved.token, identity.pin) : null;
+	if (sender && "refusal" in sender) return fail(sender.refusal);
 	try {
 		const parent = await getMessage(resolved.token, messageId, 1);
+		if (outsideScope(identity.pin, parent)) return fail(NOT_IN_SCOPE);
 		const gathered = await collectOutgoingAttachments(env, ctx.instanceId, input);
 		if ("refusal" in gathered) return gathered.refusal;
 
-		// Reply to the sender. `reply_all` adds the original To/Cc, minus nothing — Gmail dedupes
-		// the owner's own address on delivery, and guessing which of several aliases is "me" here
-		// would drop a legitimate recipient more often than it would avoid a self-copy.
-		const to = parent.from;
-		const cc = input.reply_all === true ? [parent.to, parent.cc].filter(Boolean).join(", ") : undefined;
+		// Reply to the sender. Unconfigured: `reply_all` adds the original To/Cc, minus nothing — Gmail dedupes
+		// the owner's own address on delivery. A pinned instance knows which addresses are "me" (its sender and
+		// its scope), so those are dropped, and it honours a single valid Reply-To on the parent (#1279).
+		const target = sender ? replyRecipient(parent, sender.sender.own) : { to: parent.from, viaReplyTo: false };
+		const to = target.to;
+		const cc = input.reply_all !== true ? undefined : sender ? replyAllCc(parent, [...sender.sender.own, ...addressesIn(to)]) : [parent.to, parent.cc].filter(Boolean).join(", ");
 
 		const mime = buildMimeMessage({
+			...(sender ? { from: sender.sender.from, replyTo: sender.sender.replyTo } : {}),
 			to,
 			...(cc ? { cc } : {}),
 			subject: replySubject(parent.subject),
@@ -502,6 +553,7 @@ const replyHandler: ToolDef["handler"] = async (ctx, input) => {
 		const sent = await sendMessage(resolved.token, mime, parent.threadId);
 		return ok({
 			sent: true,
+			...(sender ? { from: sender.sender.alias.email, reply_to_honoured: target.viaReplyTo } : {}),
 			to,
 			...(cc ? { cc } : {}),
 			subject: replySubject(parent.subject),
@@ -530,14 +582,19 @@ const sendHandler: ToolDef["handler"] = async (ctx, input) => {
 	if (!(await canSend(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_SEND);
 
 	const { buildMimeMessage, sendMessage, GmailError } = await import("../gmail.js");
+	const identity = await identityFor(env, ctx.instanceId);
+	if ("refusal" in identity) return fail(identity.refusal);
+	const sender = identity.pin ? await resolvePinnedSender(resolved.token, identity.pin) : null;
+	if (sender && "refusal" in sender) return fail(sender.refusal);
 	try {
 		const gathered = await collectOutgoingAttachments(env, ctx.instanceId, input);
 		if ("refusal" in gathered) return gathered.refusal;
 		const cc = typeof input.cc === "string" && input.cc.trim() ? input.cc.trim() : undefined;
-		const mime = buildMimeMessage({ to, ...(cc ? { cc } : {}), subject, body, attachments: gathered.attachments });
+		const mime = buildMimeMessage({ ...(sender ? { from: sender.sender.from, replyTo: sender.sender.replyTo } : {}), to, ...(cc ? { cc } : {}), subject, body, attachments: gathered.attachments });
 		const sent = await sendMessage(resolved.token, mime);
 		return ok({
 			sent: true,
+			...(sender ? { from: sender.sender.alias.email } : {}),
 			to,
 			...(cc ? { cc } : {}),
 			subject,
@@ -580,15 +637,22 @@ const draftReplyHandler: ToolDef["handler"] = async (ctx, input) => {
 	if (!(await canModify(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_MODIFY);
 
 	const { getMessage, replyHeaders, replySubject, buildMimeMessage, createDraft, GmailError } = await import("../gmail.js");
+	const identity = await identityFor(env, ctx.instanceId);
+	if ("refusal" in identity) return fail(identity.refusal);
+	const sender = identity.pin ? await resolvePinnedSender(resolved.token, identity.pin) : null;
+	if (sender && "refusal" in sender) return fail(sender.refusal);
 	try {
 		const parent = await getMessage(resolved.token, messageId, 1);
+		if (outsideScope(identity.pin, parent)) return fail(NOT_IN_SCOPE);
 		const gathered = await collectOutgoingAttachments(env, ctx.instanceId, input);
 		if ("refusal" in gathered) return gathered.refusal;
 
-		const to = parent.from;
-		const cc = input.reply_all === true ? [parent.to, parent.cc].filter(Boolean).join(", ") : undefined;
+		const target = sender ? replyRecipient(parent, sender.sender.own) : { to: parent.from, viaReplyTo: false };
+		const to = target.to;
+		const cc = input.reply_all !== true ? undefined : sender ? replyAllCc(parent, [...sender.sender.own, ...addressesIn(to)]) : [parent.to, parent.cc].filter(Boolean).join(", ");
 
 		const mime = buildMimeMessage({
+			...(sender ? { from: sender.sender.from, replyTo: sender.sender.replyTo } : {}),
 			to,
 			...(cc ? { cc } : {}),
 			subject: replySubject(parent.subject),
@@ -599,6 +663,7 @@ const draftReplyHandler: ToolDef["handler"] = async (ctx, input) => {
 		const draft = await createDraft(resolved.token, mime, parent.threadId);
 		return ok({
 			drafted: true,
+			...(sender ? { from: sender.sender.alias.email, reply_to_honoured: target.viaReplyTo } : {}),
 			to,
 			...(cc ? { cc } : {}),
 			subject: replySubject(parent.subject),
@@ -629,8 +694,18 @@ const draftSendHandler: ToolDef["handler"] = async (ctx, input) => {
 	const env = ctx.env;
 	if (!(await canSend(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_SEND);
 
-	const { sendDraft, GmailError } = await import("../gmail.js");
+	const { sendDraft, getDraftFrom, GmailError } = await import("../gmail.js");
+	const identity = await identityFor(env, ctx.instanceId);
+	if ("refusal" in identity) return fail(identity.refusal);
 	try {
+		// A pinned instance sends a draft only if it was written as the pinned, still-verified sender.
+		if (identity.pin) {
+			const sender = await resolvePinnedSender(resolved.token, identity.pin);
+			if ("refusal" in sender) return fail(sender.refusal);
+			if (addressesIn(await getDraftFrom(resolved.token, draftId))[0] !== sender.sender.alias.email) {
+				return fail(`That draft is not from ${sender.sender.alias.email}, this agent's sender, so it was not sent.`);
+			}
+		}
 		const sent = await sendDraft(resolved.token, draftId);
 		return ok({
 			sent: true,
@@ -663,8 +738,11 @@ function labelChangeHandler(
 		const env = ctx.env;
 		if (!(await canModify(env, ctx.userId ?? "", ctx.instanceId))) return fail(RECONNECT_TO_MODIFY);
 
-		const { modifyMessageLabels, INBOX_LABEL, UNREAD_LABEL, GmailError } = await import("../gmail.js");
+		const { modifyMessageLabels, getMessageRecipients, INBOX_LABEL, UNREAD_LABEL, GmailError } = await import("../gmail.js");
+		const identity = await identityFor(env, ctx.instanceId);
+		if ("refusal" in identity) return fail(identity.refusal);
 		try {
+			if (identity.pin && identity.pin.inboundScope.length > 0 && outsideScope(identity.pin, await getMessageRecipients(resolved.token, messageId))) return fail(NOT_IN_SCOPE);
 			const remove = action === "archive" ? [INBOX_LABEL] : [UNREAD_LABEL];
 			const out = await modifyMessageLabels(resolved.token, messageId, { removeLabelIds: remove });
 			return ok({
@@ -728,6 +806,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 				subject: { type: "string", description: "Words expected in the subject.", maxLength: 200 },
 				within_days: { type: "number", description: "How many days back to search." },
 				max: { type: "number", description: "How many messages to return (1-25, default 10)." },
+				page_token: { type: "string", description: "The next_page_token from a previous gmail_search, to get the following page of the same query.", maxLength: 512 },
 			},
 		},
 		{
@@ -739,6 +818,8 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			handler: "gmail_read_message",
 			params: {
 				message_id: { type: "string", required: true, description: "Message id from gmail_search.", maxLength: 100 },
+				max_chars: { type: "number", description: "How many body characters to return (1-40000). Defaults to a bounded preview for an agent with a pinned Gmail identity, else 40000." },
+				offset: { type: "number", description: "Where in the body to start — pass nextOffset from a previous read to continue a truncated body." },
 			},
 		},
 		{

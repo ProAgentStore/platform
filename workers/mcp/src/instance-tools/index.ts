@@ -21,6 +21,7 @@ import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerDiscordTools } from "./discord.js";
 import { registerEmailWorkerTools } from "./email-worker.js";
+import { registerGmailIdentityTools } from "./gmail-identity.js";
 import { registerReleaseNotesTools } from "./release-notes.js";
 import { registerGuideTools } from "./guide.js";
 import { registerHttpProfileTools } from "./http-profiles.js";
@@ -96,6 +97,7 @@ export function registerInstanceTools(
 	registerSecureInputTools(server, ctx);
 	// Named HTTP credential profiles + per-instance bindings (#1123) — ungated: metadata out, secrets never.
 	registerHttpProfileTools(server, ctx);
+	registerGmailIdentityTools(server, ctx); // verified per-instance Gmail send-as sender + inbound recipient scope, owner-configured (#1279)
 	registerEmailWorkerTools(server, ctx); // manage worker-backed (Cloudflare) mail connections: secure enrollment, pin, identities (#1277)
 	registerDiscordTools(server, ctx); // native Discord bot connect + per-instance channel grants (#1132)
 	registerReleaseNotesTools(server, ctx); // release-notes setting + test send, and the Slack bot + per-instance channel grants (#1217)

@@ -23,6 +23,7 @@ import { keysRoutes } from "./routes/keys.js";
 import { emailRoutes } from "./routes/email.js";
 import { pruneStaleRuntimeNodes } from "./lib/runtime-nodes.js";
 import { emailWorkerManageRoutes } from "./routes/email-worker-manage.js";
+import { gmailIdentityRoutes } from "./routes/gmail-identity.js";
 import { emailWorkerInboundRoutes, emailWorkerInstanceRoutes, emailWorkerRoutes } from "./routes/email-worker.js";
 import { driveRoutes } from "./routes/drive.js";
 import { discordRoutes } from "./routes/discord.js";
@@ -241,6 +242,7 @@ app.route("/v1/instances", instanceReleaseNotesRoutes); // /v1/instances/:id/rel
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
 app.route("/v1/instances", emailWorkerInstanceRoutes); // /v1/instances/:id/email-worker/account — pin this instance to one worker-backed mail connection (#1269)
 app.route("/v1/instances", emailWorkerManageRoutes); // /v1/instances/:id/email-worker/{status,enrollments,test} — MCP management of worker-backed mail; the owner enters the secret in the console (#1277)
+app.route("/v1/instances", gmailIdentityRoutes); // /v1/instances/:id/gmail/identity — the verified send-as sender and inbound-recipient scope an instance is pinned to; read and set by MCP (#1279)
 app.route("/v1/instances", ticketRoutes); // /v1/instances/:id/board/items/:jobKey/ticket, /tickets/:ticketId (#757)
 app.route("/v1/instances", runEventRoutes); // /v1/instances/:id/run-events?since= (#579)
 app.route("/v1/connectors", connectorRoutes); // generic OAuth2 authorize/callback for manifest oauth connectors (#147)

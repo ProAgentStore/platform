@@ -500,6 +500,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	test_email_worker_connection: "write",
 	set_instance_email_worker_account: "write",
 	set_email_worker_identities: "write",
+	// #1279: a Gmail identity is reversible owner configuration (which verified sender, which recipient scope). Reading it is a read; neither tool sends or reads mail, holds a credential, or changes write consent.
+	get_instance_gmail_identity: "read",
+	set_instance_gmail_identity: "write",
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
 	coding_session_message: "runtime",
