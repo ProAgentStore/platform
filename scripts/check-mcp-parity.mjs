@@ -80,6 +80,11 @@ const END = "<!-- END generated: mcp-exclusions -->";
 // ─────────────────────────────────────────────────────────────────────────────
 const EXCLUSIONS = [
 	{
+		label: "The fleet telemetry feed (#1259)",
+		why: "A live chart feed for the console's Fleet page: every machine's points in one response, polled about every 30 seconds. MCP keeps the same data per machine and in an agent-sized shape (`list_runner_nodes` for the fleet's latest readings, `runner_resource_history` for one machine's series, paged to the wire budget); a 12,000-point multi-machine payload is not something to hand a model.",
+		match: /^GET \/v1\/terminals\/resources$/,
+	},
+	{
 		label: "Browser-run replay screenshots (#1063)",
 		why: "Binary routes: MCP results are text, and a screenshot of the owner's own pages is evidence for the owner in the console, not something to stream into an agent's transcript.",
 		match: /^GET \/v1\/instances\/\{\}\/browser-artifacts/,
