@@ -167,13 +167,25 @@ export async function getBoundRunnerConn(env: Env, instanceId: string, userId: s
  * Only reached when the pinned name is already known to be dead, so the happy path pays nothing.
  */
 async function sameMachineNodes(env: Env, instanceId: string, userId: string, pinned: string): Promise<string[]> {
+	// By machine id, not a capped scan (#1174): a "newest 200 rows" read let rows under an abandoned spelling — which heartbeats
+	// no longer refresh, so they sort last — fall off the end, and a pin on "Macmini" became unreachable on a live Mac mini. The
+	// pinned name's own rows say which machine(s) it is; only those machines' rows are read, however many other rows exist.
+	const ids = await env.DB.prepare(
+		"SELECT DISTINCT machine_id AS id FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2 AND machine_id IS NOT NULL AND machine_id != ''",
+	)
+		.bind(userId, pinned)
+		.all<{ id: string }>()
+		.then((r) => (r.results ?? []).map((x) => x.id))
+		.catch(() => [] as string[]);
+	if (!ids.length) return [];
+	const marks = ids.map((_, i) => `?${i + 2}`).join(",");
 	const { results } = await env.DB.prepare(
 		`SELECT runner_node AS node, machine_id AS machineId, instance_id AS instanceId, last_seen_at AS lastSeenAt
 		 FROM instance_runtime_nodes
-		 WHERE user_id = ?1 AND runner_node IS NOT NULL AND runner_node != ''
-		 ORDER BY updated_at DESC LIMIT 200`,
+		 WHERE user_id = ?1 AND machine_id IN (${marks}) AND runner_node IS NOT NULL AND runner_node != ''
+		 ORDER BY updated_at DESC`,
 	)
-		.bind(userId)
+		.bind(userId, ...ids)
 		.all<NodeRegistration>()
 		.catch(() => ({ results: [] as NodeRegistration[] }));
 	return aliasNodesFor(pinned, results ?? [], instanceId);

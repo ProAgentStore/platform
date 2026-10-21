@@ -227,6 +227,11 @@ function buildEnv(opts: {
 						},
 						async all() {
 							if (sql.includes("SELECT DISTINCT runner_node")) return { results: (opts.nodes ?? []).map((n) => ({ runner_node: n })) };
+							// The pinned name's machine ids (#1174): which machine(s) that name is, before reading only their rows.
+							if (sql.includes("SELECT DISTINCT machine_id AS id")) {
+								const id = opts.machines?.[String(args[1])];
+								return { results: id ? [{ id }] : [] };
+							}
 							// The machine-identity read (#379) — every node the USER has, with its id.
 							if (sql.includes("machine_id AS machineId")) {
 								return { results: (opts.nodes ?? []).map((n) => ({ node: n, machineId: opts.machines?.[n] ?? null, instanceId: INST, lastSeenAt: null })) };

@@ -21,6 +21,7 @@ import { profileRoutes } from "./routes/profile.js";
 import { preferenceRoutes } from "./routes/preferences.js";
 import { keysRoutes } from "./routes/keys.js";
 import { emailRoutes } from "./routes/email.js";
+import { pruneStaleRuntimeNodes } from "./lib/runtime-nodes.js";
 import { emailWorkerManageRoutes } from "./routes/email-worker-manage.js";
 import { emailWorkerInboundRoutes, emailWorkerInstanceRoutes, emailWorkerRoutes } from "./routes/email-worker.js";
 import { driveRoutes } from "./routes/drive.js";
@@ -416,6 +417,8 @@ export default {
 		ctx.waitUntil(failSilentUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-auto-updates", method: "CRON" })));
 		// #1162: and the OWNER is told — once per silence, mid-update or not — instead of finding a grey dot by looking.
 		ctx.waitUntil(notifySilentMachines(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-machines", method: "CRON" })));
+		// #1174: machine registrations unseen for 30 days are expired, so lookups stop probing abandoned hostnames.
+		ctx.waitUntil(pruneStaleRuntimeNodes(env).catch((err) => logUnhandled(env, err, { path: "scheduled:prune-runtime-nodes", method: "CRON" })));
 		// #1031: a takeover nobody answered before its expiry becomes `expired`, not open forever.
 		ctx.waitUntil(expireStaleTakeovers(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-takeovers", method: "CRON" })));
 		// #1030: settle finished browser verifications of Gmail leads, then dispatch the ones due.

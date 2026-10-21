@@ -1,3 +1,4 @@
+import type { Env } from "../types.js";
 /**
  * One row of `instance_runtimes` (the legacy default registration) or of
  * `instance_runtime_nodes` (one per machine). Both tables carry the same columns, which is why one
@@ -124,4 +125,20 @@ export async function readInstanceRunnerNode(
 		.bind(instanceId, userId)
 		.first<{ config: string | null }>();
 	return (await resolveRunnerPin(env, userId, row?.config)).node;
+}
+
+/** How long a machine registration may go unseen before it is expired (#1174). */
+export const NODE_ROW_EXPIRY_DAYS = 30;
+
+/**
+ * Expire per-machine registrations nobody has heard from in {@link NODE_ROW_EXPIRY_DAYS} days (#1174). Rows were flagged stale
+ * after 7 days and then lived forever, so every unpinned lookup probed every abandoned hostname. "Heard from" is `last_seen_at`,
+ * falling back to `updated_at` for a row that never recorded one. The default `instance_runtimes` row is not touched, and a live
+ * runner re-creates its row on its next registration, so an expired row for a machine that comes back costs one heartbeat.
+ */
+export async function pruneStaleRuntimeNodes(env: Env, days: number = NODE_ROW_EXPIRY_DAYS): Promise<number> {
+	const res = await env.DB.prepare("DELETE FROM instance_runtime_nodes WHERE COALESCE(last_seen_at, updated_at) < datetime('now', ?1)")
+		.bind(`-${Math.max(1, Math.floor(days))} days`)
+		.run();
+	return res.meta?.changes ?? 0;
 }
