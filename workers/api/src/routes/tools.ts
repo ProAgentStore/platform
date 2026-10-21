@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { instanceGateView } from "../lib/machine-thresholds.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -1479,8 +1480,8 @@ toolRoutes.get("/:id/loop", async (c) => {
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
 	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset")), startsAfter) : {};
-	const [pending, autoPickup] = await Promise.all([answersPendingFor(c.env, runs.map((r) => r.runId)), autoPickupStatus(c.env, instanceId, session.uid)]); // #1231, #1233
-	return c.json({ runs: runs.map((run) => withHealth(run, now, pending)), autoPickup, total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
+	const [pending, autoPickup, runnerGate] = await Promise.all([answersPendingFor(c.env, runs.map((r) => r.runId)), autoPickupStatus(c.env, instanceId, session.uid), instanceGateView(c.env, instanceId, session.uid)]); // #1231, #1233, #1275
+	return c.json({ runs: runs.map((run) => withHealth(run, now, pending)), autoPickup, runnerGate, total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
 });
 
 /**

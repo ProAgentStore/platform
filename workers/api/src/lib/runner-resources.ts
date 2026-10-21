@@ -227,7 +227,7 @@ export function runnerIdentityOf(instanceId: string, node: string, raw: unknown)
  * used and the warning would cry wolf on every machine. The numbers are still reported there; only
  * the alarm is withheld, and CPU load (which means the same thing everywhere) still warns.
  */
-export function resourcesView(raw: unknown, activeSessions: number | null, gateState: string = "accepting"): RunnerResourcesView | null {
+export function resourcesView(raw: unknown, activeSessions: number | null, gateState: string = "accepting", maxSessionsOverride: number | null = null): RunnerResourcesView | null {
 	const s = parseResourceSample(raw);
 	if (!s) return null;
 	const loadPerCpu = round(s.loadAvg[0] / s.cpus);
@@ -259,8 +259,15 @@ export function resourcesView(raw: unknown, activeSessions: number | null, gateS
 	}
 	if (s.runner && s.runner.starts24h >= RESTARTS_HIGH_WATER) warnings.push(`The runner has started ${s.runner.starts24h} times on this machine in 24 hours — it may be crash-looping, which reads as a machine flickering between online and offline.`);
 	if (typeof s.relayRttMs === "number" && s.relayRttMs >= RELAY_RTT_HIGH_WATER_MS) warnings.push(`Relay round trip ${Math.round(s.relayRttMs)} ms — at or over the ${RELAY_RTT_HIGH_WATER_MS} ms a ping is given, so commands to this machine can fail as "not responding" (#913).`);
-	const capacity = recommendedMaxSessions(s.cpus, s.memTotalBytes);
-	if (activeSessions !== null && activeSessions > capacity) warnings.push(`${activeSessions} coding sessions active against a suggested ${capacity} for ${s.cpus} cores and ${round(s.memTotalBytes / 1024 ** 3, 0)} GiB (a heuristic). Move agents to another machine before relays start dropping.`);
+	// #1275: an owner-set limit replaces the formula; the warning then says it is the owner's number, not a heuristic.
+	const capacity = maxSessionsOverride ?? recommendedMaxSessions(s.cpus, s.memTotalBytes);
+	if (activeSessions !== null && activeSessions > capacity) {
+		warnings.push(
+			maxSessionsOverride !== null
+				? `${activeSessions} coding sessions active against this machine's limit of ${capacity} (set by the owner). Move agents to another machine or raise the limit with set_machine_thresholds.`
+				: `${activeSessions} coding sessions active against a suggested ${capacity} for ${s.cpus} cores and ${round(s.memTotalBytes / 1024 ** 3, 0)} GiB (a heuristic). Move agents to another machine before relays start dropping.`,
+		);
+	}
 	return {
 		load1: round(s.loadAvg[0]),
 		load5: round(s.loadAvg[1]),
@@ -314,6 +321,27 @@ export async function activeSessionsOn(env: Pick<Env, "DB">, userId: string, nod
 	if (!names.length) return null;
 	const marks = names.map((_, i) => `?${i + 2}`).join(", ");
 	const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM coding_sessions WHERE user_id = ?1 AND status = 'active' AND runner_node IN (${marks})`)
+		.bind(userId, ...names)
+		.first<{ n: number }>()
+		.catch(() => null);
+	return row ? Number(row.n) : null;
+}
+
+/**
+ * Everything running on these machine names, of EVERY runtime kind (#1175, #1275): coding sessions, local browser
+ * runs, application-tailor artifacts and application-runner runs. A session limit that counted only coding
+ * sessions let a machine take on browser and apply work the limit was meant to cover.
+ */
+export async function activeWorkOn(env: Pick<Env, "DB">, userId: string, nodes: readonly string[]): Promise<number | null> {
+	const names = nodes.filter(Boolean).slice(0, 20);
+	if (!names.length) return null;
+	const marks = names.map((_, i) => `?${i + 2}`).join(", ");
+	const row = await env.DB.prepare(
+		`SELECT (SELECT COUNT(*) FROM coding_sessions WHERE user_id = ?1 AND status = 'active' AND runner_node IN (${marks}))
+		      + (SELECT COUNT(*) FROM local_browser_runs WHERE user_id = ?1 AND status = 'running' AND runner_node IN (${marks}))
+		      + (SELECT COUNT(*) FROM local_artifact_runs WHERE user_id = ?1 AND status = 'running' AND runner_node IN (${marks}))
+		      + (SELECT COUNT(*) FROM local_apply_runs WHERE user_id = ?1 AND status = 'running' AND runner_node IN (${marks})) AS n`,
+	)
 		.bind(userId, ...names)
 		.first<{ n: number }>()
 		.catch(() => null);

@@ -13543,6 +13543,150 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No identified machine belongs to the caller }
 
+  /v1/terminals/machines/{machineId}/thresholds:
+    get:
+      summary: A machine's admission thresholds and the gate's verdict
+      description: |
+        The session limit and the CPU, memory and disk lines the runner admission gate judges this machine
+        against (#1275), where each came from (`machine` = the owner set it, `default`, or the cores/memory
+        `formula` for the session limit), and the gate's verdict now. One policy and one gate state per
+        machine, shared by every agent that runs there. Works while the runner is offline.
+      operationId: getTerminalMachineThresholds
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      responses:
+        "200":
+          description: Effective thresholds and verdict
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machineId: { type: string }
+                  maxSessions:
+                    type: object
+                    properties:
+                      value: { type: integer, nullable: true, description: The session limit in force. }
+                      source: { type: string, enum: [machine, default, formula] }
+                      formula: { type: integer, nullable: true, description: What the cores/memory formula gives this machine. }
+                  thresholds: { type: object, additionalProperties: { type: number }, description: Every threshold in force. }
+                  source: { type: object, additionalProperties: { type: string, enum: [machine, default] } }
+                  overrides: { type: object, additionalProperties: { type: number }, description: Only what this machine overrides. }
+                  verdict:
+                    type: object
+                    properties:
+                      gate: { type: string, description: accepting, or rejecting:<metric> }
+                      metric: { type: string }
+                      value: { type: number }
+                      threshold: { type: number }
+                      since: { type: string, format: date-time, nullable: true }
+                      recoveryStreak: { type: integer }
+                  fields: { type: object, additionalProperties: { type: string }, description: What each threshold means. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No identified machine belongs to the caller }
+    put:
+      summary: Change a machine's admission thresholds (partial update)
+      description: |
+        Give only the fields to change: a number sets it, `null` puts it back to the default, a field left out
+        is unchanged. `maxSessions` is an explicit session limit that replaces the formula; the others are the
+        lines at which a new session is rejected, and `recoveryBand` / `recoveryStreak` the rule that reopens
+        the gate. Takes effect at the machine's next heartbeat and never touches a session already running.
+        The answer carries the thresholds now in force, `changed` and `before`.
+      operationId: setTerminalMachineThresholds
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                maxSessions: { type: integer, minimum: 1, maximum: 64, nullable: true, description: Reject a new session once this many are running on the machine (every runtime kind). Replaces the cores/memory formula. }
+                cpuLoad1PerCpu: { type: number, minimum: 0.1, maximum: 64, nullable: true }
+                cpuLoad5PerCpu: { type: number, minimum: 0.1, maximum: 64, nullable: true }
+                memUsedPctMax: { type: number, minimum: 1, maximum: 100, nullable: true }
+                memAvailableMinBytes: { type: integer, minimum: 0, nullable: true }
+                diskUsedPctMax: { type: number, minimum: 1, maximum: 100, nullable: true }
+                diskFreeMinBytes: { type: integer, minimum: 0, nullable: true }
+                recoveryBand: { type: number, minimum: 0.5, maximum: 0.99, nullable: true }
+                recoveryStreak: { type: integer, minimum: 1, maximum: 20, nullable: true }
+      responses:
+        "200":
+          description: Thresholds now in force
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machineId: { type: string }
+                  maxSessions:
+                    type: object
+                    properties:
+                      value: { type: integer, nullable: true, description: The session limit in force. }
+                      source: { type: string, enum: [machine, default, formula] }
+                      formula: { type: integer, nullable: true, description: What the cores/memory formula gives this machine. }
+                  thresholds: { type: object, additionalProperties: { type: number }, description: Every threshold in force. }
+                  source: { type: object, additionalProperties: { type: string, enum: [machine, default] } }
+                  overrides: { type: object, additionalProperties: { type: number }, description: Only what this machine overrides. }
+                  verdict:
+                    type: object
+                    properties:
+                      gate: { type: string, description: accepting, or rejecting:<metric> }
+                      metric: { type: string }
+                      value: { type: number }
+                      threshold: { type: number }
+                      since: { type: string, format: date-time, nullable: true }
+                      recoveryStreak: { type: integer }
+                  fields: { type: object, additionalProperties: { type: string }, description: What each threshold means. }
+                  changed: { type: object, additionalProperties: { type: number, nullable: true } }
+                  before: { type: object, additionalProperties: { type: number } }
+        "400": { description: An unknown field, a value out of range, or nothing to change }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No identified machine belongs to the caller }
+    delete:
+      summary: Remove every threshold override on a machine
+      description: Back to the defaults and the cores/memory session formula. Returns the thresholds now in force and `before`, the overrides removed.
+      operationId: resetTerminalMachineThresholds
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      responses:
+        "200":
+          description: Thresholds now in force
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machineId: { type: string }
+                  maxSessions:
+                    type: object
+                    properties:
+                      value: { type: integer, nullable: true, description: The session limit in force. }
+                      source: { type: string, enum: [machine, default, formula] }
+                      formula: { type: integer, nullable: true, description: What the cores/memory formula gives this machine. }
+                  thresholds: { type: object, additionalProperties: { type: number }, description: Every threshold in force. }
+                  source: { type: object, additionalProperties: { type: string, enum: [machine, default] } }
+                  overrides: { type: object, additionalProperties: { type: number }, description: Only what this machine overrides. }
+                  verdict:
+                    type: object
+                    properties:
+                      gate: { type: string, description: accepting, or rejecting:<metric> }
+                      metric: { type: string }
+                      value: { type: number }
+                      threshold: { type: number }
+                      since: { type: string, format: date-time, nullable: true }
+                      recoveryStreak: { type: integer }
+                  fields: { type: object, additionalProperties: { type: string }, description: What each threshold means. }
+                  reset: { type: boolean }
+                  before: { type: object, additionalProperties: { type: number } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No identified machine belongs to the caller }
+
   /v1/terminals/nodes:
     get:
       summary: The user's connected CLIs

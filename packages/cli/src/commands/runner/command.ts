@@ -17,6 +17,7 @@ import {
 	waitForLocalRunner,
 } from "./process.js";
 import { connectViaRelay } from "./relay.js";
+import { thresholdsCommand } from "./thresholds.js";
 import { acquireLock, configDir, holderMessage, releaseLock } from "../../runner-lock.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { CLI_VERSION } from "./process.js";
@@ -43,6 +44,7 @@ export function createRunnerCommand(): Command {
 	const command = new Command("runner").description(
 		"Manage the local ProAgentStore browser runtime for ProAgentStore agents",
 	);
+	command.addCommand(thresholdsCommand()); // #1275: this machine's admission thresholds
 
 	command
 		.command("start")

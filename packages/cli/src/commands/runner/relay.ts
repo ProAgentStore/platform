@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { type ResourceSample, recordRunnerStart, sampleDisk, sampleResources } from "./resources.js";
+import { type ResourceSample, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
 import { createCleanupSync } from "./cleanup-sync.js";
 import { sessionToken } from "./session-token.js";
 import { AgentRoutePolicy } from "./route-policy.js";
@@ -433,6 +433,7 @@ export async function connectViaRelay(
 			const [relayRttMs, sessions] = await Promise.all([first ? first.probeRtt() : Promise.resolve(null), readSessionResources(localUrl, runnerToken)]);
 			const resources = sampleResources(undefined, undefined, {
 				disk: sampleDisk() ?? undefined,
+				memAvailableBytes: sampleMemAvailable() ?? undefined, // #1275: macOS available memory (free + inactive + purgeable)
 				runner: {
 					startedAt: processStartedAt,
 					uptimeSec: Math.round(process.uptime()),

@@ -88,3 +88,14 @@ describe("resourcesView — what list_runner_nodes and coding_diagnostics report
 		expect(mac?.warnings).toEqual([]);
 	});
 });
+
+describe("a Windows runner's sample (#1275)", () => {
+	it("is accepted: real disk bytes with zero inode counts keep the disk, and the gate judges it", () => {
+		const raw = { loadAvg: [1, 1, 1], cpus: 4, memTotalBytes: 8 * 1024 ** 3, memFreeBytes: 3 * 1024 ** 3, platform: "win32", sampledAt: 1_760_000_000_000, disk: { path: "C:\repos", totalBytes: 254_000_000_000, freeBytes: 12_000_000_000, inodesTotal: 0, inodesFree: 0 } };
+		const s = parseResourceSample(raw);
+		expect(s?.disk).toMatchObject({ totalBytes: 254_000_000_000, freeBytes: 12_000_000_000, inodesTotal: 0 });
+		const v = resourcesView(raw, 0);
+		expect(v?.disk).toMatchObject({ usedPct: 95.3, inodesUsedPct: 0 });
+		expect(v?.warnings.join(" ")).toMatch(/Disk nearly full/);
+	});
+});

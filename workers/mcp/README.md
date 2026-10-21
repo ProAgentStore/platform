@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**369 tool registrations.** 342 are always registered; 27 are gated to the console
+**372 tool registrations.** 345 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -463,6 +463,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `native_preflight` | Is the machine running this instance's runner ready for native desktop / Maestro control (#1057)? Permissions, Maestro, devices, stable error codes. Refused with NATIVE_NOT_ENABLED until the owner opts the machine in; drives and installs nothing | read | | |
 | `get_machine_policy` | One stable physical machine's display name, owner-scoped Auto-update policy, versions and lifecycle state; existing machines resolve to OFF when no policy was saved | read | | |
 | `set_machine_policy` | Name a machine (`display_name`, unique per account) and/or enable or disable its Auto-update; policy survives aliases and reconnects, and an idle runner rechecks it before installing | write | yes | |
+| `get_machine_thresholds` | One machine's admission thresholds (#1275): the session limit and the CPU, memory and disk lines the runner admission gate judges it against, where each came from, and the gate's verdict now | read | | |
+| `set_machine_thresholds` | Change a machine's admission thresholds (partial: a number sets, null returns a field to its default) — `maxSessions` replaces the cores/memory formula; shared by every agent on the machine | write | yes | |
+| `reset_machine_thresholds` | Remove every threshold override on a machine (back to the defaults and the session formula) | write | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |
 | `runner_node_forget_preflight` | Every alias and blocker before a machine registration is forgotten | read | | |

@@ -6,6 +6,7 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import MachineCleanupCard from "../components/MachineCleanupCard";
+import MachineThresholdsCard from "../components/MachineThresholdsCard";
 import Page from "../components/Page";
 import {
 	machineAutoUpdateEnabled,
@@ -172,6 +173,9 @@ export default function MachinePage() {
 
 					{/* #1265: the runner's post-run cleanup mode and its six switches. */}
 					<MachineCleanupCard machineId={machine.machineId || machineId} machine={machine} onChange={setMachine} />
+
+					{/* #1275: the machine's session limit and CPU / memory / disk admission lines. */}
+					<MachineThresholdsCard machineId={machine.machineId || machineId} />
 
 					<Card className="p-4" data-testid="machine-auto-update-status">
 						<h2 className="font-semibold text-sm mb-3">Automatic update status</h2>

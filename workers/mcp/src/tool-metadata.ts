@@ -488,6 +488,10 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	runner_update_status: "read",
 	// Saves a reversible platform policy; the runner applies it later when it is safe and idle (#859).
 	set_machine_policy: "write",
+	// #1275: a machine's admission thresholds - reading is a read; changing or resetting them is a reversible platform setting.
+	get_machine_thresholds: "read",
+	set_machine_thresholds: "write",
+	reset_machine_thresholds: "write",
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
 	coding_session_message: "runtime",

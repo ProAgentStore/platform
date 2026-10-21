@@ -345,6 +345,15 @@ const READBACK: Record<string, string | null> = {
 	"set_machine_policy.display_name": "get_machine_policy", // #1250: returned as `displayName` (also on list_runner_nodes)
 	"set_machine_policy.cleanup_mode": "get_machine_policy", // #1265: returned as `cleanup.mode` (also `cleanup_mode` on list_runner_nodes)
 	"set_machine_policy.cleanup_overrides": "get_machine_policy", // #1265: returned as `cleanup.overrides`, with the resolved `cleanup.behaviours`
+	"set_machine_thresholds.maxSessions": "get_machine_thresholds", // #1275: returned as `thresholds.maxSessions` (effective) and `overrides.maxSessions` (what the machine sets)
+	"set_machine_thresholds.cpuLoad1PerCpu": "get_machine_thresholds", // #1275: returned as `thresholds.cpuLoad1PerCpu` (effective) and `overrides.cpuLoad1PerCpu` (what the machine sets)
+	"set_machine_thresholds.cpuLoad5PerCpu": "get_machine_thresholds", // #1275: returned as `thresholds.cpuLoad5PerCpu` (effective) and `overrides.cpuLoad5PerCpu` (what the machine sets)
+	"set_machine_thresholds.memUsedPctMax": "get_machine_thresholds", // #1275: returned as `thresholds.memUsedPctMax` (effective) and `overrides.memUsedPctMax` (what the machine sets)
+	"set_machine_thresholds.memAvailableMinBytes": "get_machine_thresholds", // #1275: returned as `thresholds.memAvailableMinBytes` (effective) and `overrides.memAvailableMinBytes` (what the machine sets)
+	"set_machine_thresholds.diskUsedPctMax": "get_machine_thresholds", // #1275: returned as `thresholds.diskUsedPctMax` (effective) and `overrides.diskUsedPctMax` (what the machine sets)
+	"set_machine_thresholds.diskFreeMinBytes": "get_machine_thresholds", // #1275: returned as `thresholds.diskFreeMinBytes` (effective) and `overrides.diskFreeMinBytes` (what the machine sets)
+	"set_machine_thresholds.recoveryBand": "get_machine_thresholds", // #1275: returned as `thresholds.recoveryBand` (effective) and `overrides.recoveryBand` (what the machine sets)
+	"set_machine_thresholds.recoveryStreak": "get_machine_thresholds", // #1275: returned as `thresholds.recoveryStreak` (effective) and `overrides.recoveryStreak` (what the machine sets)
 	"set_machine_policy.cleanup_now": "get_machine_policy", // #1265: a request, read back as `cleanup.now_requested_at` / `now_done_at`
 	"runner_update.runner_node": "list_runner_nodes",
 	// #1209: what is installed is read back by actions_runner_status; the scope and group are on each runner GitHub reports.

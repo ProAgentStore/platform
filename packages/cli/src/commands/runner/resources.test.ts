@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { recordRunnerStart, sampleDisk, sampleResources } from "./resources.js";
+import { parseVmStat, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
 
 const fakeOs = (over: Partial<Record<"loadavg" | "cpus" | "totalmem" | "freemem" | "platform", () => unknown>> = {}) =>
 	({
@@ -72,5 +72,47 @@ describe("the rest of the machine (#924 follow-up)", () => {
 		expect(recordRunnerStart(2_000, file)).toBe(2);
 		expect(recordRunnerStart(3_000, file)).toBe(3);
 		expect(recordRunnerStart(2_000 + day + 1, file)).toBe(2);
+	});
+});
+
+const VM_STAT = [
+	"Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+	"Pages free:                               11022.",
+	"Pages active:                            220000.",
+	"Pages inactive:                          150000.",
+	"Pages speculative:                         4000.",
+	"Pages purgeable:                          30000.",
+].join("\n");
+
+describe("available memory on macOS (#1275)", () => {
+	it("is free + inactive + purgeable + speculative pages, times the page size the header states", () => {
+		expect(parseVmStat(VM_STAT)).toBe((11022 + 150000 + 30000 + 4000) * 16384);
+	});
+
+	it("reads as not measured, never as zero, when the output is not vm_stat's", () => {
+		expect(parseVmStat("")).toBeNull();
+		expect(parseVmStat("Pages free: 5.")).toBeNull(); // no page size
+		expect(parseVmStat("Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages free: 5.")).toBeNull(); // no inactive line
+	});
+
+	it("is measured only on darwin, and a failing vm_stat is simply absent", () => {
+		const ran: string[] = [];
+		expect(sampleMemAvailable("linux", () => { ran.push("x"); return VM_STAT; })).toBeNull();
+		expect(sampleMemAvailable("win32", () => { ran.push("x"); return VM_STAT; })).toBeNull();
+		expect(ran).toEqual([]);
+		expect(sampleMemAvailable("darwin", () => VM_STAT)).toBe(195022 * 16384);
+		expect(sampleMemAvailable("darwin", () => { throw new Error("vm_stat: not found"); })).toBeNull();
+	});
+
+	it("rides the sample when given, and is left out when not", () => {
+		expect(sampleResources(fakeOs(), 1, { memAvailableBytes: 9e9 }).memAvailableBytes).toBe(9e9);
+		expect("memAvailableBytes" in sampleResources(fakeOs(), 1)).toBe(false);
+	});
+});
+
+describe("disk on a platform that reports no inodes (Windows) (#1275)", () => {
+	it("is still a sample: bytes are real, inode counts are zero", () => {
+		const windows = (() => ({ blocks: 61_941_075, bsize: 4096, bavail: 43_981_076, files: 0, ffree: 0 })) as unknown as Parameters<typeof sampleDisk>[1];
+		expect(sampleDisk("C:/Users/admin/repos", windows)).toEqual({ path: "C:/Users/admin/repos", totalBytes: 61_941_075 * 4096, freeBytes: 43_981_076 * 4096, inodesTotal: 0, inodesFree: 0 });
 	});
 });

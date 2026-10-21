@@ -1233,4 +1233,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.166": "sha256:a1e098dc9a82d90ffd9818e27cdd924ca24087465f296a48d6590ce4963d06ee",
 	// #1265: set_machine_policy gains cleanup_mode, cleanup_overrides and cleanup_now (per-machine runner post-run cleanup: gentle | harsh).
 	"0.1.167": "sha256:18a52264db674e5eb0cb66146eeccdde27e811ffab09c07afcad516d84dbf048",
+	// #1275: get_machine_thresholds, set_machine_thresholds, reset_machine_thresholds (per-machine admission thresholds and session limit).
+	"0.1.168": "sha256:ff7a608fa4dba213c814e29cfea661717a0d87112f23d2c12a6e34d66d0e63d8",
 };

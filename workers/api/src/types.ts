@@ -134,6 +134,8 @@ export interface Env {
 	/** MCP worker's audit KV (read-only from the API worker) — powers the admin MCP-audit
 	 *  page. Same namespace the MCP worker writes to; optional so it's inert if unbound. */
 	OAUTH_KV?: KVNamespace;
+	/** JSON object overriding the runner admission gate defaults for this deploy (#1275) — same keys as a machine override. */
+	RUNNER_GATE_DEFAULTS?: string;
 	/** Web-search connector (issue #99): the Google Custom Search engine id (cx). NOT a
 	 *  secret — it identifies the search engine, not the account (non-secret wrangler [vars]).
 	 *  The API KEY is vault-stored (user_api_keys, provider "web-search"), never here.

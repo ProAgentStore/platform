@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
@@ -15,6 +16,12 @@ export interface ResourceSample {
 	cpus: number;
 	memTotalBytes: number;
 	memFreeBytes: number;
+	/**
+	 * Memory a new process could actually use (#1275). On macOS `memFreeBytes` is only never-used pages — the kernel keeps
+	 * inactive, purgeable and speculative pages that it hands over at once — so a healthy Mac reads 95%+ used; this is free +
+	 * inactive + purgeable + speculative from `vm_stat`. Absent where it is not measured (the platform then judges `memFreeBytes`).
+	 */
+	memAvailableBytes?: number;
 	platform: string;
 	sampledAt: number;
 	/** The volume holding the checkouts (#924) — a full disk or inode table fails clones and writes. */
@@ -78,6 +85,36 @@ export function sampleDisk(path: string = CHECKOUT_ROOT, statfs: typeof statfsSy
 	return null;
 }
 
+/**
+ * Available memory from `vm_stat` output (#1275): the pages a new process can have without the machine swapping —
+ * free, inactive, purgeable and speculative — times the page size the header states. Null when the output is not
+ * `vm_stat`'s, so a changed format reads as "not measured" rather than as zero.
+ */
+export function parseVmStat(text: string): number | null {
+	const size = /page size of (\d+) bytes/.exec(text);
+	const pageSize = size ? Number(size[1]) : 0;
+	if (!Number.isFinite(pageSize) || pageSize <= 0) return null;
+	const pages = (label: string): number | null => {
+		const m = new RegExp(`^Pages ${label}:\\s+(\\d+)`, "m").exec(text);
+		return m ? Number(m[1]) : null;
+	};
+	const free = pages("free");
+	const inactive = pages("inactive");
+	if (free === null || inactive === null) return null;
+	return (free + inactive + (pages("purgeable") ?? 0) + (pages("speculative") ?? 0)) * pageSize;
+}
+
+/** Available memory on macOS, or null on any other platform or when `vm_stat` cannot be read. Takes the command as a parameter so it is tested without a Mac. */
+export function sampleMemAvailable(platform: string = os.platform(), run: (file: string, args: string[]) => string = (file, args) => execFileSync(file, args, { encoding: "utf-8", timeout: 2000 })): number | null {
+	if (platform !== "darwin") return null;
+	try {
+		const bytes = parseVmStat(run("vm_stat", []));
+		return bytes !== null && Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+	} catch {
+		return null;
+	}
+}
+
 /** The file that remembers this machine's recent runner starts. */
 export const STARTS_FILE = join(os.homedir(), ".config", "proagentstore", "runner-starts.json");
 
@@ -107,7 +144,7 @@ export function recordRunnerStart(now: number = Date.now(), file: string = START
 export function sampleResources(
 	read: Pick<typeof os, "loadavg" | "cpus" | "totalmem" | "freemem" | "platform"> = os,
 	now: number = Date.now(),
-	extra: Pick<ResourceSample, "disk" | "runner" | "relayRttMs" | "sessions"> = {},
+	extra: Pick<ResourceSample, "disk" | "runner" | "relayRttMs" | "sessions" | "memAvailableBytes"> = {},
 ): ResourceSample {
 	const [l1 = 0, l5 = 0, l15 = 0] = read.loadavg();
 	return {

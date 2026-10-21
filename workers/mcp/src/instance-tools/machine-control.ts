@@ -103,6 +103,82 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 		},
 	);
 
+	// ── Per-machine admission thresholds (#1275) ─────────────────────────────────
+	//
+	// The runner admission gate (#1264) refuses a NEW coding session on an overloaded machine. Its lines used to be one
+	// formula and a few constants; these are the machine's own, shared by every agent that runs there.
+	server.tool(
+		"get_machine_thresholds",
+		"Read one machine's admission thresholds (#1275): the session limit and the CPU, memory and disk lines the runner admission gate judges it against, where each came from (`machine` = you set it, `default`), the gate's verdict now (`accepting` or `rejecting:<metric>`, with the reading, the line and how many clear samples it has toward reopening), and what every field means. `maxSessions.value` is the limit in force — your override, else the cores/memory formula (`maxSessions.formula`) — and counts every kind of work on the machine (coding sessions, browser, application tailor and apply runs). The same view is on list_runner_nodes (`thresholds`) and coding_loop_status (`runnerGate`). Read-only. Change it with set_machine_thresholds.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			machine_id: z.string().describe("Stable physical machine id from list_runner_nodes; do not use a hostname alias."),
+		},
+		async ({ token, machine_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_machine_thresholds", { machine_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/terminals/machines/${encodeURIComponent(machine_id)}/thresholds`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_machine_thresholds",
+		"Change one machine's admission thresholds (#1275) — a PARTIAL update: give only the fields to change; a number sets it, null puts it back to the default, a field you omit is left alone. Fields: maxSessions, cpuLoad1PerCpu, cpuLoad5PerCpu, memUsedPctMax, memAvailableMinBytes, diskUsedPctMax, diskFreeMinBytes, recoveryBand, recoveryStreak. `maxSessions` (1-64) is an explicit session limit that replaces the cores/memory formula (e.g. 2 for a small laptop the formula caps at 1); the rest are the lines at which the gate REJECTS a new session — load per core (1 and 5 minute), memory in use %, available memory bytes, checkout-disk in use % and free bytes (0 turns a byte floor off) — and the recovery rule that REOPENS it: `recoveryBand` (every metric must be under this fraction of its line, default 0.9) held for `recoveryStreak` consecutive ~30s samples (default 2). The setting belongs to the machine, so it applies to every agent that runs there; it takes effect at the machine's next heartbeat and never touches a session already running. Returns the thresholds now in force and the verdict. Call with dry_run first; undo with reset_machine_thresholds.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			machine_id: z.string().describe("Stable physical machine id from list_runner_nodes; do not use a hostname alias."),
+			maxSessions: z.coerce.number().int().min(1).max(64).nullable().optional().describe("Reject a new session once this many are running on the machine. null = the cores/memory formula."),
+			cpuLoad1PerCpu: z.coerce.number().min(0.1).max(64).nullable().optional().describe("Reject when the 1-minute load per core exceeds this (default 1.5)."),
+			cpuLoad5PerCpu: z.coerce.number().min(0.1).max(64).nullable().optional().describe("Reject when the 5-minute load per core exceeds this (default 1.2)."),
+			memUsedPctMax: z.coerce.number().min(1).max(100).nullable().optional().describe("Reject when memory in use exceeds this percent (default 92; not judged on macOS until the runner reports available memory)."),
+			memAvailableMinBytes: z.coerce.number().int().min(0).nullable().optional().describe("Reject when available memory falls under this many bytes (default 1 GiB). 0 never rejects on it."),
+			diskUsedPctMax: z.coerce.number().min(1).max(100).nullable().optional().describe("Reject when the checkout volume in use exceeds this percent (default 95)."),
+			diskFreeMinBytes: z.coerce.number().int().min(0).nullable().optional().describe("Reject when the checkout volume has less than this many bytes free (default 10 GiB). 0 never rejects on it."),
+			recoveryBand: z.coerce.number().min(0.5).max(0.99).nullable().optional().describe("The gate reopens only when every metric is under this fraction of its reject line (default 0.9)."),
+			recoveryStreak: z.coerce.number().int().min(1).max(20).nullable().optional().describe("Consecutive clear samples required before a rejecting gate reopens (default 2)."),
+			dry_run: z.boolean().optional().describe("Report the change without saving it."),
+		},
+		async ({ token, machine_id, dry_run, ...fields }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const body = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
+			if (!Object.keys(body).length) return text("Error: give at least one threshold to change (maxSessions, cpuLoad1PerCpu, cpuLoad5PerCpu, memUsedPctMax, memAvailableMinBytes, diskUsedPctMax, diskFreeMinBytes, recoveryBand, recoveryStreak).");
+			const input = { machine_id, ...body };
+			const denied = await requirePermission(safetyFor(token), "write", "set_machine_thresholds", input);
+			if (denied) return denied;
+			const endpoint = `/v1/terminals/machines/${encodeURIComponent(machine_id)}/thresholds`;
+			if (dry_run) return dryRun(safetyFor(token), "set_machine_thresholds", `change ${Object.keys(body).join(", ")} for ${machine_id}`, input, { endpoint, method: "PUT", body });
+			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "set_machine_thresholds", action: "completed", input, result: data });
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"reset_machine_thresholds",
+		"Remove every threshold override on one machine (#1275): it goes back to the defaults and the cores/memory session formula. Returns the thresholds now in force and `before`, the overrides that were removed. Does not touch a session already running. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			machine_id: z.string().describe("Stable physical machine id from list_runner_nodes; do not use a hostname alias."),
+			dry_run: z.boolean().optional().describe("Report the reset without doing it."),
+		},
+		async ({ token, machine_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { machine_id };
+			const denied = await requirePermission(safetyFor(token), "write", "reset_machine_thresholds", input);
+			if (denied) return denied;
+			const endpoint = `/v1/terminals/machines/${encodeURIComponent(machine_id)}/thresholds`;
+			if (dry_run) return dryRun(safetyFor(token), "reset_machine_thresholds", `remove every threshold override for ${machine_id}`, input, { endpoint, method: "DELETE" });
+			const data = (await authedCall(endpoint, sessionToken, { method: "DELETE" }, env)) as { error?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "reset_machine_thresholds", action: "completed", input, result: data });
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
 	// ── Remote force-reattach (#856) ────────────────────────────────────────────
 	//
 	// An agent whose socket went stale — a frozen or duplicate runner holding its relay slot, or a

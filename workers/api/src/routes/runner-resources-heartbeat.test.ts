@@ -97,7 +97,8 @@ describe("the admission gate re-judges every heartbeat (#1264)", () => {
 		await heartbeat("i-a", { runnerNode: "Macmini", resources: overloaded });
 		const node = await machine();
 		expect(node.resources).toMatchObject({ gateState: "rejecting:cpu" });
-		const row = await d1.DB.prepare("SELECT gate_state FROM instance_runtime_nodes WHERE instance_id = 'i-a' AND runner_node = 'Macmini'").first<{ gate_state: string }>();
+		// #1275: a machine with an id has ONE gate state, on its policy row; the per-row column is only for a runner that sends no id.
+		const row = await d1.DB.prepare("SELECT gate_state FROM machine_policies WHERE user_id = 'u1'").first<{ gate_state: string }>();
 		expect(JSON.parse(row!.gate_state)).toMatchObject({ state: "rejecting", metric: "cpu" });
 	});
 

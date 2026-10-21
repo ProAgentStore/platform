@@ -18,6 +18,8 @@ import { runnerIdentityOf } from "../lib/runner-resources.js";
 import { cleanupNodeView, getMachinePolicy, machinePolicyWire, setMachineCleanup, setMachinePolicy, silentAfterInstall, type MachinePolicy } from "../lib/machine-policy.js";
 import { parseCleanupChange } from "../lib/runner-cleanup-policy.js";
 import { gateStateLabel, parseGateState } from "../lib/runner-admission-gate.js";
+import { storedOverrides, thresholdsView } from "../lib/machine-thresholds.js";
+import { registerMachineThresholdRoutes } from "./terminals-thresholds.js";
 import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
 import type { Env } from "../types.js";
 
@@ -184,6 +186,11 @@ export interface TerminalNode {
 	 * leftovers it found, load and disk warnings, its last pass. `gentle` until the owner sets otherwise.
 	 */
 	cleanup_mode?: "gentle" | "harsh";
+	/**
+	 * Admission thresholds (#1275): the session limit and the CPU / memory / disk lines in force on this MACHINE (shared by every
+	 * agent that runs there), where each came from, and the gate's current verdict.
+	 */
+	thresholds?: ReturnType<typeof thresholdsView>;
 	cleanup?: {
 		mode: "gentle" | "harsh";
 		behaviours: Record<string, boolean>;
@@ -243,7 +250,18 @@ function stampMs(value: string | null | undefined): number {
  * relay socket the route probes. Not an approximation: every heartbeat updates `last_seen_at` for
  * the name the machine is registering under right now, so the freshest name IS the live one.
  */
-export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[], displayNames: ReadonlyMap<string, string> = new Map()): TerminalNode[] {
+/** A machine's stored admission thresholds and shared gate state (#1275), by machine id. */
+export type MachineGateRows = ReadonlyMap<string, { gate_thresholds: string | null; gate_state: string | null }>;
+
+export async function machineGateRows(env: Pick<Env, "DB">, uid: string): Promise<MachineGateRows> {
+	const { results } = await env.DB.prepare("SELECT machine_id, gate_thresholds, gate_state FROM machine_policies WHERE user_id = ?1 AND (gate_thresholds IS NOT NULL OR gate_state IS NOT NULL)")
+		.bind(uid)
+		.all<{ machine_id: string; gate_thresholds: string | null; gate_state: string | null }>()
+		.catch(() => ({ results: [] as { machine_id: string; gate_thresholds: string | null; gate_state: string | null }[] }));
+	return new Map((results ?? []).map((r) => [r.machine_id, { gate_thresholds: r.gate_thresholds, gate_state: r.gate_state }] as const));
+}
+
+export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[], displayNames: ReadonlyMap<string, string> = new Map(), machineGate: MachineGateRows = new Map(), defaultsEnv: { RUNNER_GATE_DEFAULTS?: string } = {}): TerminalNode[] {
 	const byKey = new Map<string, TerminalNode>();
 	/** hostname → group key, so a session (keyed by hostname) reaches its machine. */
 	const keyForName = new Map<string, string>();
@@ -371,7 +389,11 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	// FRESHEST registration, which is the version actually running there — an old row left behind
 	// by a CLI the machine has since upgraded past must not keep prescribing an upgrade.
 	for (const [key, n] of byKey) {
-		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length, gateStateLabel(parseGateState(gateStateFor.get(key) ?? null)));
+		// #1275: a machine with an id has ONE gate state and ONE set of thresholds, on its policy row; an id-less runner keeps the per-row state.
+		const policyRow = n.machineId ? machineGate.get(n.machineId) : undefined;
+		const overrides = storedOverrides(policyRow?.gate_thresholds ?? null);
+		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length, gateStateLabel(parseGateState(policyRow ? policyRow.gate_state : gateStateFor.get(key) ?? null)), overrides.maxSessions ?? null);
+		if (n.machineId) n.thresholds = thresholdsView(defaultsEnv, overrides, policyRow?.gate_state ?? null, n.resources ? { cpus: n.resources.cpus, memTotalBytes: n.resources.memTotalBytes } : null);
 		n.supervisor = n.resources?.runner?.supervisor ?? null;
 		n.identityHint = identityHint(n.machineId, n.runnerVersion);
 		// What a machine pin reads as (#1250): the target machine's name, else its current hostname, else its id.
@@ -495,7 +517,7 @@ terminalRoutes.get("/nodes", async (c) => {
 	).bind(uid).all<SessionRow>()).results;
 
 	const displayNames = await machineDisplayNames(c.env, uid);
-	const nodes = groupTerminalNodes(nodeRows, sessionRows, displayNames);
+	const nodes = groupTerminalNodes(nodeRows, sessionRows, displayNames, await machineGateRows(c.env, uid), c.env);
 
 	// Live status: a machine is connected if ANY of its (instance,node) relays holds a socket.
 	// One check per instance the node serves (bounded), all in parallel.
@@ -591,7 +613,7 @@ export async function machineDetail(env: Env, uid: string, rawMachineId: string)
 		`SELECT s.id, s.instance_id, s.repo_id, s.runner_node, s.client_type, s.status, s.issue_number, s.issue_title, s.updated_at, r.name AS repo_name
 		 FROM coding_sessions s LEFT JOIN coding_repos r ON r.id = s.repo_id WHERE s.user_id = ?1`,
 	).bind(uid).all<SessionRow>()).results ?? [];
-	const machine = groupTerminalNodes(rows, sessions, await machineDisplayNames(env, uid)).find((n) => n.machineId === machineId);
+	const machine = groupTerminalNodes(rows, sessions, await machineDisplayNames(env, uid), await machineGateRows(env, uid), env).find((n) => n.machineId === machineId);
 	if (!machine) return null;
 	// Detail is deep-linkable, so it must compute the same live connection fact as the fleet rather
 	// than treating a persisted registration as online. Probe all aliases: a reconnect may hold the
@@ -635,6 +657,8 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 	if (cleanupChange) policy = await setMachineCleanup(c.env, session.uid, machine.machineId, cleanupChange);
 	return c.json({ machine: { ...machine, displayName, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) } });
 });
+
+registerMachineThresholdRoutes(terminalRoutes); // GET/PUT/DELETE /machines/:machineId/thresholds (#1275)
 
 /** The complete, non-mutating answer a caller needs before deleting a machine registration. */
 export type ForgetNodePreflight =
