@@ -253,10 +253,8 @@ const TOOLING = new Set(["node", "vite", "next", "jest", "vitest", "esbuild", "w
 const NEVER = /(\bpags(\.m?js)?\s+(up|runner)\b|PAGS_RUNNER_|proagentstore[\\/]cli[\\/])/;
 
 function toolingName(command: string): boolean {
-	return command
-		.split(/\s+/)
-		.slice(0, 3)
-		.some((t) => TOOLING.has(basename(t).replace(/\.(m?js|cjs|ts)$/, "")));
+	const [first = "", second = "", third = ""] = command.split(/\s+/); // the launcher, its script, one more — a position, not a cut
+	return [first, second, third].some((t) => TOOLING.has(basename(t).replace(/\.(m?js|cjs|ts)$/, "")));
 }
 
 /**
