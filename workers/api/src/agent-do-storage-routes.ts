@@ -218,6 +218,8 @@ export async function applyJobLeadBrowserVerification(engine: Pick<AgentStorageE
 		exhausted: b.exhausted === true,
 		...(typeof b.expected_version === "number" ? { expectedVersion: b.expected_version } : {}),
 		...(typeof b.detail === "string" ? { detail: b.detail } : {}),
+		...(typeof b.verified_title === "string" ? { verifiedTitle: b.verified_title } : {}),
+		...(typeof b.verified_company === "string" ? { verifiedCompany: b.verified_company } : {}),
 	});
 	if (!plan.ok) return json({ error: plan.error, stale: true }, 409);
 	const updated = plan.patch ? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch) : record;

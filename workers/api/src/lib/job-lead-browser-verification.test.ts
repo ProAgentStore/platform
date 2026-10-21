@@ -40,9 +40,9 @@ vi.mock("./local-browser/store.js", async (importOriginal) => ({
 }));
 
 const { applyJobLeadBrowserVerification } = await import("../agent-do-storage-routes.js");
-const { MAX_ATTEMPTS, RETRY_BACKOFF_MS, listLeadVerifications, outcomeFromRun, runLeadBrowserVerification, verificationObjective, verifyLeadNow } = await import("./job-lead-browser-verification.js");
+const { MAX_ATTEMPTS, RETRY_BACKOFF_MS, listLeadVerifications, namesFromRun, outcomeFromRun, runLeadBrowserVerification, verificationObjective, verifyLeadNow } = await import("./job-lead-browser-verification.js");
 const { enqueueBrowserVerification } = await import("./job-lead-queue.js");
-const { planJobLeadTriage, planBrowserVerificationOutcome } = await import("./job-lead-triage.js");
+const { planJobLeadTriage, planBrowserVerificationOutcome, cleanVerifiedName, nameGroundedIn } = await import("./job-lead-triage.js");
 const { ingestGmailCandidates } = await import("./gmail-scout/scan.js");
 
 const CANONICAL = "https://au.indeed.com/viewjob?jk=0123456789abcdef";
@@ -586,5 +586,169 @@ describe("migration 0266 marks the leads already closed only for consent (#1235)
 		d1.exec(backfill);
 		const marked = d1.sqlite.prepare("SELECT lead_id FROM job_lead_browser_verifications WHERE closed_reason = 'consent_expired' ORDER BY lead_id").all();
 		expect(marked).toEqual([{ lead_id: "coles" }]);
+	});
+});
+
+// ── #1257: a verified lead is named by what the browser read ──────────────────────────────────────────
+
+describe("naming a lead from the browser's reading (#1257)", () => {
+	const UNNAMED = { title: null, company: null, source: "manual_url" };
+	const unname = () => leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...leads.get("lead-1")!.data, ...UNNAMED } } as CollectionRecord);
+	const finding = (fields: Record<string, unknown>, evidence = "Senior Platform Engineer at Acme Pty Ltd — Sydney") => ({ title: "page", url: CANONICAL, evidence, fields });
+	const finishWith = (id: string, findings: unknown[]) => runs.set(id, { id, status: "completed", result: { findings, summary: "read the page" } });
+	const settleActive = async (findings: unknown[]) => {
+		await runLeadBrowserVerification(env, 2_000);
+		finishWith("run-1", findings);
+		await runLeadBrowserVerification(env, 3_000);
+	};
+	const ACTIVE = { verification_outcome: "active" };
+
+	it("asks the browser for the job's own title and employer when it is open", () => {
+		const o = verificationObjective({ canonicalUrl: CANONICAL, expectedTitle: null, expectedCompany: null });
+		expect(o).toContain("fields.job_title");
+		expect(o).toContain("fields.job_company");
+		expect(o).toMatch(/exactly as the page states them/);
+	});
+
+	it("a PASTED URL (no title, no employer) is named by the verified page, and says who named it", async () => {
+		unname();
+		await settleActive([finding({ ...ACTIVE, job_title: "Senior Platform Engineer", job_company: "Acme Pty Ltd" })]);
+		expect(lead()).toMatchObject({ status: "new", title: "Senior Platform Engineer", company: "Acme Pty Ltd", lifecycle_version: 1, verification: { state: "live", named_by_browser: ["title", "company"] } });
+	});
+
+	it("an UNNAMED DIGEST lead from another board is named the same way — one field at a time when only one is read", async () => {
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...leads.get("lead-1")!.data, title: null, company: null, source: "gmail_digest", gmail_provenance: { kind: "digest" } } } as CollectionRecord);
+		await settleActive([finding({ ...ACTIVE, job_title: "Senior Platform Engineer" })]);
+		expect(lead()).toMatchObject({ title: "Senior Platform Engineer", company: null, verification: { named_by_browser: ["title"] } });
+	});
+
+	it("a lead that already has a name is NEVER overwritten by the browser — not even by a different one", async () => {
+		await settleActive([finding({ ...ACTIVE, job_title: "Totally Different Role", job_company: "Other Co" }, "Totally Different Role at Other Co")]);
+		expect(lead()).toMatchObject({ title: "Platform Engineer", company: "Acme", status: "new" });
+		expect((lead().verification as Record<string, unknown>).named_by_browser).toBeUndefined();
+	});
+
+	it("only the EMPTY field is filled: a named title keeps its name while a missing employer is added", async () => {
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...leads.get("lead-1")!.data, company: null } } as CollectionRecord);
+		await settleActive([finding({ ...ACTIVE, job_title: "Other Title", job_company: "Acme Pty Ltd" })]);
+		expect(lead()).toMatchObject({ title: "Platform Engineer", company: "Acme Pty Ltd", verification: { named_by_browser: ["company"] } });
+	});
+
+	it("malformed names are ignored and the lead is still verified: non-string, empty, whitespace, over 200 characters, punctuation only", async () => {
+		for (const bad of [42, true, null, {}, ["x"], "", "   ", "x".repeat(201), "!!! ---"]) {
+			unname();
+			leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...leads.get("lead-1")!.data, status: "awaiting_browser_verification", lifecycle_version: 0 } } as CollectionRecord);
+			expect(namesFromRun({ id: "r", status: "completed", result: { findings: [finding({ ...ACTIVE, job_title: bad, job_company: bad }, "")], summary: "" } } as never), JSON.stringify(bad)).toEqual({});
+		}
+		unname();
+		await settleActive([finding({ ...ACTIVE, job_title: "x".repeat(201), job_company: 7 })]);
+		expect(lead()).toMatchObject({ status: "new", title: null, company: null });
+	});
+
+	it("control characters are stripped and spaces collapsed before a name is stored", async () => {
+		unname();
+		await settleActive([finding({ ...ACTIVE, job_title: "Senior\u0000 Platform\n\tEngineer\u202e", job_company: "Acme\u0007  Pty   Ltd" }, "")]);
+		expect(lead().title).toBe("Senior Platform Engineer"); // the bidi override (U+202E) is removed, not kept
+		expect(lead().company).toBe("Acme Pty Ltd");
+		expect(cleanVerifiedName("a\u0000b")).toBe("a b");
+	});
+
+	it("a name that is NOT in the finding's evidence is ignored (the page is untrusted); a lenient match ignores case and punctuation", async () => {
+		unname();
+		await settleActive([finding({ ...ACTIVE, job_title: "Chief Executive Officer", job_company: "Evil Corp" }, "Senior Platform Engineer at Acme Pty Ltd")]);
+		expect(lead()).toMatchObject({ status: "new", title: null, company: null });
+		expect(nameGroundedIn("sr. platform  engineer", "Hiring: SR PLATFORM ENGINEER (contract)")).toBe(true);
+		expect(nameGroundedIn("Platform", "Senior Platformer")).toBe(false); // whole words, not a substring
+	});
+
+	it("NO evidence at all: the name goes through (a page that renders dynamically captures none)", async () => {
+		unname();
+		await settleActive([finding({ ...ACTIVE, job_title: "Platform Engineer", job_company: "Acme" }, "")]);
+		expect(lead()).toMatchObject({ title: "Platform Engineer", company: "Acme" });
+		expect(nameGroundedIn("anything", undefined)).toBe(true);
+		expect(nameGroundedIn("anything", "   ")).toBe(true);
+	});
+
+	it("several active findings that disagree name nothing; ones that agree (however spelled) do; an unusable one does not veto", async () => {
+		unname();
+		const two = (a: string, b: string) => namesFromRun({ id: "r", status: "completed", result: { findings: [finding({ ...ACTIVE, job_title: a }, ""), finding({ ...ACTIVE, job_title: b }, "")], summary: "" } } as never);
+		expect(two("Platform Engineer", "Backend Engineer")).toEqual({});
+		expect(two("Platform Engineer", "platform  engineer.").title).toMatch(/^platform\s+engineer\.?$/i);
+		expect(two("Platform Engineer", "").title).toBe("Platform Engineer");
+		await settleActive([finding({ ...ACTIVE, job_title: "Platform Engineer" }, ""), finding({ ...ACTIVE, job_title: "Backend Engineer" }, "")]);
+		expect(lead()).toMatchObject({ status: "new", title: null });
+	});
+
+	it("a name reported alongside a non-active outcome is not read at all", () => {
+		for (const outcome of ["expired", "mismatch", "temporarily_unverifiable"]) {
+			expect(namesFromRun({ id: "r", status: "completed", result: { findings: [finding({ verification_outcome: outcome, job_title: "Platform Engineer", job_company: "Acme" }, "")], summary: "" } } as never), outcome).toEqual({});
+		}
+		expect(namesFromRun({ id: "r", status: "failed", result: { findings: [finding({ ...ACTIVE, job_title: "Platform Engineer" }, "")] } } as never)).toEqual({});
+		expect(namesFromRun(null)).toEqual({});
+	});
+
+	it("MISMATCH and EXPIRED outcomes write no names even if the plan is handed some; a transient outcome writes none either", () => {
+		const rec = { id: "l", data: { status: "awaiting_browser_verification", lifecycle_version: 0, title: null, company: null, url: CANONICAL } } as unknown as CollectionRecord;
+		for (const outcome of ["mismatch", "expired", "temporarily_unverifiable"] as const) {
+			const plan = planBrowserVerificationOutcome(rec, { outcome, attempt: 1, receiptId: "r", exhausted: false, verifiedTitle: "Platform Engineer", verifiedCompany: "Acme" });
+			expect((plan as { patch: Record<string, unknown> }).patch, outcome).not.toHaveProperty("title");
+			expect((plan as { patch: Record<string, unknown> }).patch, outcome).not.toHaveProperty("company");
+		}
+	});
+
+	it("the TRUSTED writer re-cleans: a malformed name sent straight to the plan is not stored", () => {
+		const rec = { id: "l", data: { status: "awaiting_browser_verification", lifecycle_version: 0, title: null, company: null, url: CANONICAL } } as unknown as CollectionRecord;
+		const plan = planBrowserVerificationOutcome(rec, { outcome: "active", attempt: 1, receiptId: "r", exhausted: false, verifiedTitle: "x".repeat(500), verifiedCompany: "  \u0000  " });
+		expect((plan as { patch: Record<string, unknown> }).patch).not.toHaveProperty("title");
+		expect((plan as { patch: Record<string, unknown> }).patch).not.toHaveProperty("company");
+		expect((plan as { patch: Record<string, unknown> }).patch).toMatchObject({ status: "new" });
+	});
+
+	it("a transient attempt writes no names; the retry that finally reads the page does, once", async () => {
+		unname();
+		await runLeadBrowserVerification(env, 2_000);
+		finishWith("run-1", [finding({ verification_outcome: "temporarily_unverifiable", job_title: "Platform Engineer" }, "")]);
+		await runLeadBrowserVerification(env, 3_000);
+		expect(lead()).toMatchObject({ status: "awaiting_browser_verification", title: null });
+		await runLeadBrowserVerification(env, 3_000 + RETRY_BACKOFF_MS[0]);
+		finishWith("run-2", [finding({ ...ACTIVE, job_title: "Platform Engineer", job_company: "Acme" }, "Platform Engineer, Acme")]);
+		await runLeadBrowserVerification(env, 9_000_000);
+		expect(lead()).toMatchObject({ status: "new", title: "Platform Engineer", company: "Acme", lifecycle_version: 1 });
+	});
+
+	it("idempotent: a second application of the same outcome is a no-op that changes neither the names nor the version", () => {
+		const rec = { id: "l", data: { status: "awaiting_browser_verification", lifecycle_version: 0, title: null, company: null, url: CANONICAL } } as unknown as CollectionRecord;
+		const input = { outcome: "active" as const, attempt: 1, receiptId: "r", exhausted: false, verifiedTitle: "Platform Engineer", verifiedCompany: "Acme" };
+		const first = planBrowserVerificationOutcome(rec, input) as { ok: true; patch: Record<string, unknown> };
+		expect(first.patch).toMatchObject({ title: "Platform Engineer", company: "Acme", lifecycle_version: 1 });
+		const after = { id: "l", data: { ...rec.data, ...first.patch } } as unknown as CollectionRecord;
+		expect(planBrowserVerificationOutcome(after, { ...input, verifiedTitle: "Another Title" })).toEqual({ ok: true, transitioned: false, to: "new", patch: null });
+	});
+
+	it("a VERSION CONFLICT refuses and writes nothing — the names do not slip past the compare-and-set", async () => {
+		const rec = { id: "l", data: { status: "awaiting_browser_verification", lifecycle_version: 2, title: null, company: null, url: CANONICAL } } as unknown as CollectionRecord;
+		expect(planBrowserVerificationOutcome(rec, { outcome: "active", attempt: 1, receiptId: "r", exhausted: false, expectedVersion: 1, verifiedTitle: "Platform Engineer", verifiedCompany: "Acme" })).toMatchObject({ ok: false, stale: true });
+		// through the real route too: a stale request is a 409 and the stored lead keeps its (empty) names
+		unname();
+		const res = await env.AGENT.get("s1").fetch(new Request("https://agent/job-leads/lead-1/browser-verification", { method: "POST", body: JSON.stringify({ outcome: "active", attempt: 1, receipt_id: "r", exhausted: false, expected_version: 5, verified_title: "Platform Engineer", verified_company: "Acme" }) }));
+		expect(res.status).toBe(409);
+		expect(lead()).toMatchObject({ title: null, company: null, status: "awaiting_browser_verification" });
+	});
+
+	it("a lead the owner moved on is not named by a late verification", async () => {
+		unname();
+		await runLeadBrowserVerification(env, 2_000);
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...leads.get("lead-1")!.data, status: "archived" } } as CollectionRecord);
+		finishWith("run-1", [finding({ ...ACTIVE, job_title: "Platform Engineer", job_company: "Acme" }, "")]);
+		await runLeadBrowserVerification(env, 3_000);
+		expect(lead()).toMatchObject({ status: "archived", title: null, company: null });
+	});
+
+	it("the work key does not change when a lead is named (it comes from the URL, not the title)", async () => {
+		const { workKeyForLead } = await import("./job-lead-triage.js");
+		unname();
+		const before = workKeyForLead(lead());
+		await settleActive([finding({ ...ACTIVE, job_title: "Platform Engineer", job_company: "Acme" }, "")]);
+		expect(workKeyForLead(lead())).toBe(before);
 	});
 });

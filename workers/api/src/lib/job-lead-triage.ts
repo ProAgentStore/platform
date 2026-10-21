@@ -317,6 +317,39 @@ export function planApplicationWriteback(record: CollectionRecord, w: JobLeadApp
 export const BROWSER_VERIFICATION_OUTCOMES = ["active", "expired", "mismatch", "temporarily_unverifiable"] as const;
 export type BrowserVerificationOutcome = (typeof BROWSER_VERIFICATION_OUTCOMES)[number];
 
+/** The longest job title or employer a browser reading may name a lead with. Longer is not a name; it is page text. */
+export const VERIFIED_NAME_MAX = 200;
+
+/**
+ * A name the browser read off a posting, made safe to store — or null (#1257). A string only; control characters removed and
+ * whitespace collapsed; empty, longer than {@link VERIFIED_NAME_MAX} (a clipped name would be half a name) or nothing but punctuation
+ * is not a name. Pure; the trusted writer ({@link planBrowserVerificationOutcome}) applies it again, whatever the dispatcher sent.
+ */
+export function cleanVerifiedName(raw: unknown): string | null {
+	if (typeof raw !== "string") return null;
+	// Control characters become spaces; invisible FORMAT characters (zero-width, and the bidi overrides that can make a name read backwards
+	// in the console) are removed outright — "Platform\u202e" must not be stored as a different-looking string.
+	const name = raw.replace(/\p{Cc}+/gu, " ").replace(/\p{Cf}+/gu, "").replace(/\s+/g, " ").trim();
+	if (!name || name.length > VERIFIED_NAME_MAX || !squashName(name)) return null;
+	return name;
+}
+
+/** A name for comparison: lowercase, punctuation and spacing flattened — "Sr. Engineer" and "sr engineer" are the same words. */
+export function squashName(s: string): string {
+	return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * Is this name on the page the browser says it read it from? The page is untrusted and the model reading it can be wrong or steered, so
+ * a name that does not appear in the finding's own evidence is not written. With NO evidence there is nothing to check it against — some
+ * pages render their text dynamically and the runner captures none — and the name is let through (a deliberate leniency, #1257).
+ */
+export function nameGroundedIn(name: string, evidence: unknown): boolean {
+	const text = typeof evidence === "string" ? squashName(evidence) : "";
+	if (!text) return true;
+	return ` ${text} `.includes(` ${squashName(name)} `);
+}
+
 export type BrowserVerificationPlan =
 	| { ok: true; transitioned: boolean; to: JobLeadStatus; patch: Record<string, unknown> | null }
 	| { ok: false; stale: true; error: string };
@@ -336,7 +369,7 @@ export type BrowserVerificationPlan =
  */
 export function planBrowserVerificationOutcome(
 	record: CollectionRecord,
-	input: { outcome: BrowserVerificationOutcome; attempt: number; receiptId: string; exhausted: boolean; expectedVersion?: number; detail?: string },
+	input: { outcome: BrowserVerificationOutcome; attempt: number; receiptId: string; exhausted: boolean; expectedVersion?: number; detail?: string; verifiedTitle?: string; verifiedCompany?: string },
 	deps: { now?: string } = {},
 ): BrowserVerificationPlan {
 	const current = jobLeadStatus(record.data);
@@ -361,6 +394,20 @@ export function planBrowserVerificationOutcome(
 		: input.exhausted ? { ...base, state: "unverifiable", reason: "temporarily_unverifiable_exhausted" }
 		: { ...prior, ...base, state: "awaiting_browser_verification", reason: "temporarily_unverifiable" };
 	if (!target) return { ok: true, transitioned: false, to: current, patch: { verification } };
+	// Name the lead from what the browser read (#1257) — ONLY on an `active` verdict (a mismatch's page is another job), ONLY into a field that
+	// is empty (an email's or a digest's name is never replaced by a page reading), and only a name that survives cleaning. Written in the same
+	// patch as the transition, so it rides the same compare-and-set on the lifecycle version: a stale outcome writes nothing, and a lead the
+	// owner moved on was returned above untouched.
+	const empty = (v: unknown) => typeof v !== "string" || !v.trim();
+	const named: Record<string, string> = {};
+	if (input.outcome === "active") {
+		const title = cleanVerifiedName(input.verifiedTitle);
+		const company = cleanVerifiedName(input.verifiedCompany);
+		if (title && empty(record.data.title)) named.title = title;
+		if (company && empty(record.data.company)) named.company = company;
+	}
+	const namedFields = Object.keys(named);
+	const verifiedWithNames = namedFields.length ? { ...verification, named_by_browser: namedFields } : verification;
 	const nextVersion = version + 1;
 	const history = Array.isArray(record.data.lifecycle) ? record.data.lifecycle : [];
 	const entry: JobLeadLifecycleEntry = { from: current, to: target, action: "browser_verification", version: nextVersion, at: now, note: input.detail?.slice(0, 200) || `browser verification: ${input.outcome}` };
@@ -372,7 +419,8 @@ export function planBrowserVerificationOutcome(
 			status: target,
 			lifecycle_version: nextVersion,
 			lifecycle: [...history, entry],
-			verification,
+			verification: verifiedWithNames,
+			...named,
 			...(target === "archived" ? { archive_reason: input.outcome === "expired" ? "job_expired" : "job_mismatch", archived_at: now } : {}),
 		},
 	};

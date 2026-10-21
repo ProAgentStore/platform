@@ -21,7 +21,7 @@
 import { type BrowserVerificationSettings, readBrowserVerification } from "./browser-verification.js";
 import { closeLiveTakeoverFor, requestTakeover } from "./browser-takeovers.js";
 import { deepLinkFor } from "./console-links.js";
-import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome } from "./job-lead-triage.js";
+import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome, cleanVerifiedName, nameGroundedIn, squashName } from "./job-lead-triage.js";
 import { getLocalBrowserRun, listDomainConsent, type LocalBrowserRun, readLocalBrowserSettings } from "./local-browser/store.js";
 import { localBrowserCapability, startLocalBrowserRun } from "./local-browser/start.js";
 import { domainWithin, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./local-browser/policy.js";
@@ -111,9 +111,30 @@ export function verificationObjective(v: { canonicalUrl: string; expectedTitle: 
 	return [
 		`Verify one job posting, read-only. Open ${v.canonicalUrl} and decide whether it is ${job}, and whether it is still open.`,
 		`Report exactly one finding with url ${v.canonicalUrl} and fields.${OUTCOME_FIELD} set to one of:`,
-		`active (the posting is this job and is open), expired (it is closed, removed or redirects away), mismatch (it is a different job), temporarily_unverifiable (the page could not be read now).`,
+		`active (the posting is this job and is open — then ALSO set fields.job_title and fields.job_company to the job's title and employer exactly as the page states them; leave out one you cannot read), expired (it is closed, removed or redirects away), mismatch (it is a different job), temporarily_unverifiable (the page could not be read now).`,
 		`Do not apply, sign up, sign in or submit anything.`,
 	].join(" ");
+}
+
+/**
+ * The job's own title and employer, as a finished run read them off an ACTIVE posting (#1257) — or nothing. Page text is untrusted, so:
+ * only the findings that reported `active` count, each name is cleaned (`cleanVerifiedName`), must appear in that finding's evidence when it
+ * has any, and findings that name the job differently cancel each other out — one name is written only when every usable reading agrees.
+ */
+export function namesFromRun(run: LocalBrowserRun | null): { title?: string; company?: string } {
+	if (run?.status !== "completed") return {};
+	const active = (run.result?.findings ?? []).filter((f) => f.fields?.[OUTCOME_FIELD] === "active");
+	const pick = (field: "job_title" | "job_company"): string | undefined => {
+		const seen = new Map<string, string>();
+		for (const f of active) {
+			const name = cleanVerifiedName(f.fields?.[field]);
+			if (name && nameGroundedIn(name, f.evidence)) seen.set(squashName(name), name);
+		}
+		return seen.size === 1 ? [...seen.values()][0] : undefined;
+	};
+	const title = pick("job_title");
+	const company = pick("job_company");
+	return { ...(title ? { title } : {}), ...(company ? { company } : {}) };
 }
 
 /** The typed outcome a finished run reported — anything unreadable is temporarily_unverifiable, never a guess. */
@@ -163,7 +184,7 @@ async function recordAttempt(env: DB, row: LeadRow, a: { attempt: number; state:
 }
 
 /** Apply an outcome to the lead in the Scout's DO. `status` is where the lead is now, applied or not. */
-async function applyToLead(env: Env, row: LeadRow, body: { outcome: BrowserVerificationOutcome; attempt: number; receipt_id: string; exhausted: boolean; detail: string }): Promise<{ transitioned: boolean; status: string } | null> {
+async function applyToLead(env: Env, row: LeadRow, body: { outcome: BrowserVerificationOutcome; attempt: number; receipt_id: string; exhausted: boolean; detail: string; verified_title?: string; verified_company?: string }): Promise<{ transitioned: boolean; status: string } | null> {
 	const stub = env.AGENT.get(env.AGENT.idFromName(row.instance_id));
 	const res = await stub.fetch(
 		new Request(`https://agent/job-leads/${encodeURIComponent(row.lead_id)}/browser-verification`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
@@ -203,8 +224,16 @@ async function notifyVerdict(env: Env, row: LeadRow, state: VerificationState, w
 }
 
 /** Close a lead's verification with a final outcome, applied to the lead. */
-async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcome, opts: { attempt: number; receiptId: string; exhausted: boolean; detail: string; why?: string }, now: number): Promise<VerificationState> {
-	const applied = await applyToLead(env, row, { outcome, attempt: opts.attempt, receipt_id: opts.receiptId, exhausted: opts.exhausted, detail: opts.detail });
+async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcome, opts: { attempt: number; receiptId: string; exhausted: boolean; detail: string; why?: string; names?: { title?: string; company?: string } }, now: number): Promise<VerificationState> {
+	const applied = await applyToLead(env, row, {
+		outcome,
+		attempt: opts.attempt,
+		receipt_id: opts.receiptId,
+		exhausted: opts.exhausted,
+		detail: opts.detail,
+		...(opts.names?.title ? { verified_title: opts.names.title } : {}),
+		...(opts.names?.company ? { verified_company: opts.names.company } : {}),
+	});
 	// The owner moved the lead on first: recorded on the attempt, never applied to the lead.
 	if (applied && !applied.transitioned && applied.status !== "awaiting_browser_verification") {
 		await setLead(env, row, { state: "superseded", attempts: opts.attempt, lastOutcome: outcome, lastDetail: `The lead is ${applied.status} now; this outcome was recorded but not applied.` }, now);
@@ -378,7 +407,7 @@ export async function reconcileVerificationAttempts(env: Env, now = Date.now(), 
 			.run();
 		// Single writer: another tick that already claimed this attempt applies it, not this one.
 		if ((claimed.meta?.changes ?? 0) === 0) continue;
-		await settle(env, row, outcome, { attempt: a.attempt, receiptId: a.id, exhausted: outcome === "temporarily_unverifiable" && a.attempt >= MAX_ATTEMPTS, detail }, now);
+		await settle(env, row, outcome, { attempt: a.attempt, receiptId: a.id, exhausted: outcome === "temporarily_unverifiable" && a.attempt >= MAX_ATTEMPTS, detail, ...(outcome === "active" ? { names: namesFromRun(run) } : {}) }, now);
 		settled++;
 	}
 	return settled;
