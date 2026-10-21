@@ -265,9 +265,10 @@ describe("gates: nothing new is queued (#1027)", () => {
 		expect(log.listed).toBe(1);
 	});
 
-	it("for an account over its daily budget", async () => {
+	it("for an account over its daily budget, when enforcement is on and the tokens were paid for (#1276)", async () => {
+		(env as { BUDGET_ENFORCE?: string }).BUDGET_ENFORCE = "1";
 		d1.exec("INSERT INTO account_budget_limits (user_id, token_ceiling) VALUES ('u1', 10)");
-		d1.exec("INSERT INTO ai_usage (user_id, provider, model, kind, input_tokens, output_tokens) VALUES ('u1', 'anthropic', 'm', 'coding', 50, 50)");
+		d1.exec("INSERT INTO ai_usage (user_id, provider, model, kind, input_tokens, output_tokens, payer) VALUES ('u1', 'anthropic', 'm', 'coding', 50, 50, 'byok-api')");
 		expect((await wake()) as { gate: string }).toMatchObject({ gate: expect.stringMatching(/budget/) });
 		expect(queued()).toHaveLength(0);
 	});

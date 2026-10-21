@@ -16,7 +16,7 @@ interface AutoPickupView {
 	recent: Array<{ repo: string | null; issue: number | null; outcome: string; detail: string | null; at: number }>;
 }
 
-const OUTCOME: Record<string, string> = { started: "Started", none_eligible: "Nothing eligible", skipped_failed: "Skipped (failed twice)", capped: "Daily cap reached" };
+const OUTCOME: Record<string, string> = { started: "Started", none_eligible: "Nothing eligible", skipped_failed: "Skipped (failed twice)", capped: "Daily cap reached", skipped_gate: "Held back (gate or budget)", skipped_busy: "Coder busy", error: "Error" };
 const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
 
 /**

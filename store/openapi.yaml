@@ -7680,7 +7680,7 @@ paths:
         The instance's auto-pickup settings (#1233: `enabled`, `priorityLabels`, `excludeLabels`, `maxPerDay`,
         `maxIterations`), the built-in exclude labels, which picker an empty queue wakes (`triage` when the coder brain's
         product-owner triage is on, else `auto_pickup`), and its ten most recent decisions (started, none_eligible,
-        skipped_failed, capped).
+        skipped_failed, capped, and every refusal: skipped_gate with its reason, skipped_busy, error).
       operationId: getAutoPickup
       tags: [Instances]
       parameters:

@@ -23,6 +23,7 @@
  * qualifies, the owner is told once — not on every empty queue.
  */
 import type { Env } from "../types.js";
+import { clipMarked } from "./clip-marked.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
 import { listIssuesPage, postIssueComment, type IssueSummary } from "./github-issues.js";
@@ -177,10 +178,32 @@ export interface AutoPickupDeps {
 
 export type AutoPickupResult = { started: false; reason: string } | { started: true; repo: string; issue: number; entryId: string };
 
-async function log(env: Env, iid: string, uid: string, outcome: "started" | "none_eligible" | "skipped_failed" | "capped", detail: string, repo: string | null = null, issue: number | null = null, now = Date.now()): Promise<void> {
+type PickupOutcome = "started" | "none_eligible" | "skipped_failed" | "capped" | "skipped_gate" | "skipped_busy" | "error";
+
+/** A skip repeated with the same reason is written once an hour, so a blocked coder leaves a row to read, not one per sweep (#1276). */
+export const SKIP_LOG_DEBOUNCE_MS = 60 * 60_000;
+
+async function log(env: Env, iid: string, uid: string, outcome: PickupOutcome, detail: string, repo: string | null = null, issue: number | null = null, now = Date.now()): Promise<void> {
 	await env.DB.prepare("INSERT INTO auto_pickup_log (id, instance_id, user_id, repo, issue_number, outcome, detail, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
 		.bind(crypto.randomUUID(), iid, uid, repo, issue, outcome, detail, now)
 		.run();
+}
+
+/** Record a refusal with its reason (#1276), unless the same one was written within {@link SKIP_LOG_DEBOUNCE_MS}. Never throws. */
+async function logSkip(env: Env, iid: string, uid: string, outcome: "skipped_gate" | "skipped_busy" | "capped" | "error", reason: string, now: number): Promise<void> {
+	try {
+		const detail = clipMarked(reason, 300);
+		const seen = await env.DB.prepare("SELECT 1 AS x FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = ?2 AND detail = ?3 AND created_at > ?4 LIMIT 1").bind(iid, outcome, detail, now - SKIP_LOG_DEBOUNCE_MS).first<{ x: number }>();
+		if (!seen) await log(env, iid, uid, outcome, detail, null, null, now);
+	} catch {
+		// The log is a trace of the decision; failing to write it must not change the decision.
+	}
+}
+
+/** A wake that threw outside `runAutoPickup` (the sweeper's drain): written to the log when auto-pickup is on for the coder. */
+export async function recordWakeError(env: Env, iid: string, uid: string, e: unknown, now = Date.now()): Promise<void> {
+	const settings = await readAutoPickup(env, iid, uid).catch(() => null);
+	if (settings?.enabled) await logSkip(env, iid, uid, "error", `the wake failed: ${e instanceof Error ? e.message : String(e)}`, now);
 }
 
 /** Issue numbers already queued or worked on this repo, read from the objectives the queue and the open runs carry. */
@@ -218,13 +241,21 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 	try {
 		const settings = await readAutoPickup(env, iid, uid);
 		if (!settings?.enabled) return { started: false, reason: "auto-pickup is off for this instance" };
-		if (!(await coderIsIdle(env, iid))) return { started: false, reason: "the coder still has queued or running work" };
-		const gate = await queueGate(env, iid, uid);
-		if (gate) return { started: false, reason: gate };
+		if (!(await coderIsIdle(env, iid))) {
+			const reason = "the coder still has queued or running work";
+			await logSkip(env, iid, uid, "skipped_busy", reason, now);
+			return { started: false, reason };
+		}
+		const warn: { note?: string } = {};
+		const gate = await queueGate(env, iid, uid, warn);
+		if (gate) {
+			await logSkip(env, iid, uid, "skipped_gate", gate, now);
+			return { started: false, reason: gate };
+		}
 		const today = await env.DB.prepare("SELECT COUNT(*) AS n FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'started' AND created_at > ?2").bind(iid, now - 86_400_000).first<{ n: number }>();
 		if ((today?.n ?? 0) >= settings.maxPerDay) {
 			const reason = `the daily cap of ${settings.maxPerDay} auto-picked run(s) is reached`;
-			await log(env, iid, uid, "capped", reason, null, null, now);
+			await logSkip(env, iid, uid, "capped", reason, now);
 			return { started: false, reason };
 		}
 
@@ -261,11 +292,13 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 
 		const { repo, repoId, issue } = verdict.pick;
 		const entry = await enqueueObjective(env, { instanceId: iid, repoId, userId: uid, objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations, metadata: JSON.stringify({ autoPickup: { repo, issue: issue.number } }) });
-		await log(env, iid, uid, "started", `issue #${issue.number}: ${issue.title}`, repo, issue.number, now);
+		await log(env, iid, uid, "started", `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}`, repo, issue.number, now);
 		await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(repoId);
 		return { started: true, repo, issue: issue.number, entryId: entry.id };
 	} catch (e) {
-		return { started: false, reason: `auto-pickup failed: ${e instanceof Error ? e.message : String(e)}` };
+		const reason = `auto-pickup failed: ${e instanceof Error ? e.message : String(e)}`;
+		await logSkip(env, iid, uid, "error", reason, now);
+		return { started: false, reason };
 	}
 }
 
@@ -296,6 +329,44 @@ export async function wakeIdleCoder(env: Env, iid: string, uid: string): Promise
 	if (triage.woke || triage.reason !== PO_TRIAGE_OFF) return triage.woke ? "triage" : `triage: ${triage.reason}`;
 	const picked = await runAutoPickup(env, iid, uid);
 	return picked.started ? `auto-pickup: started #${picked.issue} in ${picked.repo}` : `auto-pickup: ${picked.reason}`;
+}
+
+/** Coders woken per timer sweep: a bound on GitHub reads, and the rest are reached on the next sweep. */
+export const AUTO_PICKUP_SWEEP_LIMIT = 25;
+/** A coder that found nothing to start is not asked again for this long. */
+export const AUTO_PICKUP_IDLE_RECHECK_MS = 30 * 60_000;
+
+/**
+ * The timer behind auto-pickup (#1276). Waking on a run's end alone left a coder idle forever when
+ * the wake was refused once (a gate, an error) and no run ever ended again. This looks, every few
+ * minutes, for coders with auto-pickup on and nothing to do, and wakes each the same way a run's end
+ * does — so every guard and every log row is the same. A coder whose last wake found nothing
+ * eligible is left alone for {@link AUTO_PICKUP_IDLE_RECHECK_MS}. Never throws.
+ */
+export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof wakeIdleCoder = wakeIdleCoder): Promise<{ woken: number }> {
+	let woken = 0;
+	try {
+		const { results } = await env.DB.prepare(
+			`SELECT i.id, i.user_id FROM agent_instances i
+			  WHERE i.status = 'active' AND json_extract(i.config, '$.autoPickup.enabled') = 1
+			    AND NOT EXISTS (SELECT 1 FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'none_eligible' AND l.created_at > ?1)
+			  ORDER BY i.id LIMIT ?2`,
+		)
+			.bind(now - AUTO_PICKUP_IDLE_RECHECK_MS, AUTO_PICKUP_SWEEP_LIMIT)
+			.all<{ id: string; user_id: string }>();
+		for (const r of results ?? []) {
+			try {
+				if (!(await coderIsIdle(env, r.id))) continue;
+				await wake(env, r.id, r.user_id);
+				woken++;
+			} catch (e) {
+				await recordWakeError(env, r.id, r.user_id, e, now);
+			}
+		}
+	} catch {
+		// The next sweep reads again; a failed read must not fail the cron.
+	}
+	return { woken };
 }
 
 /** What coding_loop_status says about auto-pickup (#1233): its settings, which picker an empty queue wakes, and its last decision. */

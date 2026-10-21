@@ -96,6 +96,7 @@ import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runCiHealthWatch } from "./lib/repo-ci-health.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
+import { sweepAutoPickup } from "./lib/auto-pickup.js";
 import { runCodingSessionSweep } from "./lib/coding-session-sweeper.js";
 import { runReauthExpiryWatch } from "./lib/engine-reauth-expiry.js";
 import { runStatsRollup } from "./lib/stats-rollup.js";
@@ -437,6 +438,8 @@ export default {
 		// decided or consumed request. Approve and resume re-check expiry themselves; this is what
 		// makes an unattended request read `expired` instead of `pending` forever.
 		if (new Date(_event.scheduledTime).getUTCMinutes() % 5 === 0) {
+			// #1276: wake idle coders with auto-pickup on, so a refused wake is retried without a run having to end.
+			ctx.waitUntil(sweepAutoPickup(env).catch((err) => logUnhandled(env, err, { path: "scheduled:auto-pickup", method: "CRON" })));
 			ctx.waitUntil(sweepExpiredPermissionRequests(env).catch((err) => logUnhandled(env, err, { path: "scheduled:permission-request-expiry", method: "CRON" })));
 		}
 		// Copy legacy MCP audit keys into the time-ordered ledger (#1016): one bounded, resumable,

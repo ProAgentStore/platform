@@ -26,7 +26,7 @@ import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
 import { recordRunEvent } from "./run-events.js";
 import { tryDequeueAndStart } from "./objective-queue-start.js";
-import { wakeIdleCoder } from "./auto-pickup.js";
+import { recordWakeError, wakeIdleCoder } from "./auto-pickup.js";
 
 /**
  * How long a run may be silent before it is presumed dead.
@@ -241,8 +241,9 @@ async function drainQueues(env: Env, rows: SweptRunRow[]): Promise<void> {
 			seen.add(key);
 			const drained = await tryDequeueAndStart(env, r.instance_id, repo.repo_id, r.user_id);
 			if (!drained.drained) await wakeIdleCoder(env, r.instance_id, r.user_id); // #1232, #1233
-		} catch {
-			// The repo's next drain (a run ending, a resume, the next sweep) will start it.
+		} catch (e) {
+			// The repo's next drain (a run ending, a resume, the timer sweep) will start it; the reason is left in the auto-pickup log (#1276).
+			await recordWakeError(env, r.instance_id, r.user_id, e);
 		}
 	}
 }

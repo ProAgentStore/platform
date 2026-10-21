@@ -27,14 +27,14 @@ import { clipMarked } from "./clip-marked.js";
 import { readCoderBrain } from "./coder-brain.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
-import { DAILY_CEILING_MICROS, DAILY_TOKEN_CEILING, resolveAccountCeilings } from "./delegation-budget-store.js";
+import { DAILY_CEILING_MICROS, DAILY_TOKEN_CEILING, isBudgetEnforced, resolveAccountCeilings } from "./delegation-budget-store.js";
 import { listIssueComments, listIssuesPage, postIssueComment, readIssue } from "./github-issues.js";
 import { loopDriverFor } from "./loop-drivers.js";
 import { findDuplicateObjective } from "./objective-dedupe.js";
 import { enqueueObjective } from "./objective-queue.js";
 import { tryDequeueAndStart } from "./objective-queue-start.js";
 import { type PoClassification, type PoCounts, type PoIssue, classifyPoIssue, detailComment, digestLine, digestWorthSending, hasDetailComment, issueVersion, orderReady, poObjective } from "./po-triage.js";
-import { accountUsageSince } from "./usage.js";
+import { accountUsageSince, paidTokensSince } from "./usage.js";
 import { notifyUser } from "../routes/push.js";
 
 export const MAX_QUEUE_PER_WAKE = 3;
@@ -217,8 +217,11 @@ async function repoHasRunningCoder(env: Env, iid: string, uid: string, repoId: s
 	return !!row;
 }
 
-/** Why nothing may be queued right now, or null. Checked once per wake, before anything is queued. */
-export async function queueGate(env: Env, iid: string, uid: string): Promise<string | null> {
+/**
+ * Why nothing may be queued right now, or null. Checked once per wake, before anything is queued.
+ * An exceeded ceiling blocks only while budget enforcement is on; when it is off, `warn.note` says so.
+ */
+export async function queueGate(env: Env, iid: string, uid: string, warn?: { note?: string }): Promise<string | null> {
 	const inst = await env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(iid, uid).first<{ status: string }>();
 	if (inst?.status !== "active") return `The instance is ${inst?.status ?? "missing"}, so nothing is queued.`;
 	const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM mcp_input_requests WHERE instance_id = ?1 AND user_id = ?2 AND status = 'pending' AND expires_at > datetime('now')")
@@ -231,11 +234,17 @@ export async function queueGate(env: Env, iid: string, uid: string): Promise<str
 		const refusal = await codingRunRefusal(env, uid);
 		if (refusal) return refusal;
 	}
-	const [usage, ceilings] = await Promise.all([
+	const [usage, paidTokens, ceilings] = await Promise.all([
 		accountUsageSince(env, uid, 24).catch(() => ({ chargedMicros: 0, tokens: 0 })),
+		paidTokensSince(env, uid, 24),
 		resolveAccountCeilings(env, uid).catch(() => ({ chargedMicrosCeiling: DAILY_CEILING_MICROS, tokenCeiling: DAILY_TOKEN_CEILING })),
 	]);
-	if (usage.chargedMicros >= ceilings.chargedMicrosCeiling || usage.tokens >= ceilings.tokenCeiling) return "The account's daily budget is spent, so nothing new is queued.";
+	// Money charged, and tokens actually paid for: subscription work and cache reads are not what the ceilings guard (#1276).
+	const over = usage.chargedMicros >= ceilings.chargedMicrosCeiling ? "the daily charged-spend ceiling" : paidTokens >= ceilings.tokenCeiling ? "the daily paid-token ceiling" : null;
+	if (!over) return null;
+	// Enforcement is off by default (#485): the delegation budget already only measures, and this gate said "spent" regardless.
+	if (isBudgetEnforced(env)) return `The account's daily budget is spent (${over}), so nothing new is queued.`;
+	if (warn) warn.note = `over ${over}, which is not enforced`;
 	return null;
 }
 

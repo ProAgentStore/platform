@@ -693,6 +693,32 @@ export async function accountUsageSince(env: Env, userId: string, hours = 24): P
 	}
 }
 
+/**
+ * Tokens that were actually paid for over a rolling window (#1276): rows whose payer is a metered
+ * API key or the platform, input + output + cache writes. Cache READS are left out: a provider
+ * prices them at a tenth or less of input, and a coding run re-reads its whole context on every
+ * turn, so counting them at full weight read 1.9 billion tokens against a $7.47 bill.
+ *
+ * This is the unit a token ceiling on automatic work should compare against. `accountUsageSince(...).tokens`
+ * stays the all-in consumption figure (subscription and unattributed work included) that the
+ * usage views report. Failing open on a read error, like it.
+ */
+export async function paidTokensSince(env: Env, userId: string, hours = 24): Promise<number> {
+	const h = Math.max(1, Math.min(24 * 30, Math.floor(hours)));
+	try {
+		const row = await env.DB.prepare(
+			`SELECT COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_write_tokens, 0)), 0) AS tokens
+			 FROM ai_usage
+			  WHERE user_id = ?1 AND ${CHARGED_SQL} AND created_at >= datetime('now', ?2)`,
+		)
+			.bind(userId, `-${h} hours`)
+			.first<{ tokens: number }>();
+		return Math.max(0, Number(row?.tokens ?? 0));
+	} catch {
+		return 0;
+	}
+}
+
 /** Tool calls a Workers AI reply requested, whichever shape it came back in (#1040). */
 export function workersAiToolCallCount(data: unknown): number {
 	const r = (data && typeof data === "object" && "result" in data ? (data as { result: unknown }).result : data) as { tool_calls?: unknown; choices?: Array<{ message?: { tool_calls?: unknown } }> } | null;

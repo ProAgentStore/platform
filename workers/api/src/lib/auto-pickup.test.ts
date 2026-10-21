@@ -5,7 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { AUTO_PICKUP_DEFAULTS, type AutoPickupDeps, type PickCandidate, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, runAutoPickup, setAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
+import { AUTO_PICKUP_DEFAULTS, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
+import { paidTokensSince } from "./usage.js";
 import { setCoderBrain } from "./coder-brain.js";
 import type { IssueSummary } from "./github-issues.js";
 import type { Env } from "../types.js";
@@ -166,5 +167,121 @@ describe("the wake, on the real schema (#1233)", () => {
 		expect(await autoPickupStatus(env, "coder", "u1")).toMatchObject({ enabled: true, picker: "triage" });
 		expect(await wakeIdleCoder(env, "coder", "u1")).toMatch(/^triage/);
 		expect(queued().some((q) => q.metadata?.includes("autoPickup"))).toBe(false);
+	});
+});
+
+describe("the token ceiling, skips and the timer (#1276)", () => {
+	let d1: RealSchemaD1;
+	let env: Env;
+	const deps = (): AutoPickupDeps => ({ listOpenIssues: async () => ({ issues: [issue(9, ["P1"])], unreadable: false }), postComment: async () => true, notify: async () => undefined, startQueued: async () => undefined });
+	const rows = () => d1.sqlite.prepare("SELECT outcome, detail FROM auto_pickup_log ORDER BY created_at, rowid").all() as Array<{ outcome: string; detail: string }>;
+	const usage = (payer: string | null, input: number, output: number, cacheRead: number, cacheWrite = 0) =>
+		d1.sqlite.prepare("INSERT INTO ai_usage (user_id, provider, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, payer) VALUES ('u1', 'anthropic', 'm', 'coding', ?, ?, ?, ?, ?)").run(input, output, cacheRead, cacheWrite, payer);
+	const busyRun = () => d1.exec("INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at) VALUES ('busy', 'u1', 'coder', 'x', 'running', 10, 1)");
+
+	beforeEach(async () => {
+		d1 = realSchemaD1();
+		seedTenant(d1, { userId: "u1", instanceIds: ["coder"] });
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo) VALUES ('r1', 'coder', 'u1', 'app', 'acme/app')`);
+		d1.exec("INSERT INTO account_budget_limits (user_id, token_ceiling) VALUES ('u1', 1000)");
+		env = { DB: d1.DB } as unknown as Env;
+		await setAutoPickup(env, "coder", "u1", { enabled: true });
+	});
+	afterEach(() => d1.close());
+
+	it("counts only paid tokens, and cache reads not at all", async () => {
+		usage("subscription", 5_000, 5_000, 1_000_000);
+		usage(null, 5_000, 5_000, 1_000_000);
+		usage("byok-api", 100, 50, 900_000, 25);
+		usage("platform", 10, 5, 0);
+		expect(await paidTokensSince(env, "u1")).toBe(190);
+	});
+
+	it("an account showing billions of subscription tokens is NOT blocked when enforcement is off (the reported bug)", async () => {
+		usage("subscription", 1_000_000, 1_000_000, 1_900_000_000);
+		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
+	});
+
+	it("even paid tokens over the ceiling only warn while enforcement is off, and the log says so", async () => {
+		usage("byok-api", 2_000, 2_000, 0);
+		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true });
+		expect(rows().at(-1)?.detail).toMatch(/issue #9.*over the daily paid-token ceiling, which is not enforced/);
+	});
+
+	it("with enforcement ON, paid tokens over the ceiling block and the skip is logged with its reason; subscription tokens never block", async () => {
+		(env as { BUDGET_ENFORCE?: string }).BUDGET_ENFORCE = "1";
+		usage("byok-api", 2_000, 2_000, 0);
+		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: false, reason: expect.stringMatching(/daily budget is spent \(the daily paid-token ceiling\)/) });
+		expect(rows()).toEqual([{ outcome: "skipped_gate", detail: expect.stringMatching(/paid-token ceiling/) }]);
+		d1.exec("DELETE FROM ai_usage");
+		usage("subscription", 9_000_000, 9_000_000, 9_000_000);
+		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true });
+	});
+
+	it("every skip leaves a row: not idle, the gate, the daily cap, an error", async () => {
+		busyRun();
+		await runAutoPickup(env, "coder", "u1", deps());
+		d1.exec("DELETE FROM agent_loop_runs");
+		d1.exec("UPDATE agent_instances SET status = 'paused' WHERE id = 'coder'");
+		await runAutoPickup(env, "coder", "u1", deps());
+		d1.exec("UPDATE agent_instances SET status = 'active' WHERE id = 'coder'");
+		await setAutoPickup(env, "coder", "u1", { maxPerDay: 1 });
+		await runAutoPickup(env, "coder", "u1", deps()); // starts #9
+		d1.exec("UPDATE instance_objective_queue SET status = 'cancelled'");
+		await runAutoPickup(env, "coder", "u1", deps()); // the cap
+		await setAutoPickup(env, "coder", "u1", { maxPerDay: 10 });
+		const boom: AutoPickupDeps = {
+			...deps(),
+			listOpenIssues: async () => {
+				throw new Error("GitHub is down");
+			},
+		};
+		await runAutoPickup(env, "coder", "u1", boom);
+		expect(rows().map((r) => r.outcome)).toEqual(["skipped_busy", "skipped_gate", "started", "capped", "error"]);
+		expect(rows().at(-1)?.detail).toMatch(/GitHub is down/);
+		expect(await autoPickupStatus(env, "coder", "u1")).toMatchObject({ last: { outcome: "error" } });
+	});
+
+	it("a repeated skip is written once an hour, not on every sweep", async () => {
+		busyRun();
+		const t0 = Date.now();
+		await runAutoPickup(env, "coder", "u1", deps(), t0);
+		await runAutoPickup(env, "coder", "u1", deps(), t0 + 60_000);
+		expect(rows()).toHaveLength(1);
+		await runAutoPickup(env, "coder", "u1", deps(), t0 + SKIP_LOG_DEBOUNCE_MS + 1);
+		expect(rows()).toHaveLength(2);
+	});
+
+	it("auto-pickup off writes nothing; the sweeper's error is logged only for a coder with it on", async () => {
+		await setAutoPickup(env, "coder", "u1", { enabled: false });
+		await runAutoPickup(env, "coder", "u1", deps());
+		await recordWakeError(env, "coder", "u1", new Error("drain failed"));
+		expect(rows()).toEqual([]);
+		await setAutoPickup(env, "coder", "u1", { enabled: true });
+		await recordWakeError(env, "coder", "u1", new Error("drain failed"));
+		expect(rows()).toEqual([{ outcome: "error", detail: "the wake failed: drain failed" }]);
+	});
+
+	it("the timer wakes idle coders with auto-pickup on, skips busy ones and ones that just found nothing, and survives a throwing wake", async () => {
+		seedTenant(d1, { userId: "u1", instanceIds: ["busy", "quiet", "off"] });
+		for (const id of ["busy", "quiet"]) await setAutoPickup(env, id, "u1", { enabled: true });
+		d1.exec("INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at) VALUES ('b', 'u1', 'busy', 'x', 'running', 10, 1)");
+		const now = Date.now();
+		d1.sqlite.prepare("INSERT INTO auto_pickup_log (id, instance_id, user_id, outcome, detail, created_at) VALUES ('n', 'quiet', 'u1', 'none_eligible', 'nothing', ?)").run(now - 60_000);
+		const woken: string[] = [];
+		const wake = async (_e: Env, iid: string) => {
+			woken.push(iid);
+			if (iid === "coder") throw new Error("kaboom");
+			return "ok";
+		};
+		expect(await sweepAutoPickup(env, now, wake)).toEqual({ woken: 0 });
+		expect(woken).toEqual(["coder"]);
+		expect(rows().at(-1)).toMatchObject({ outcome: "error", detail: "the wake failed: kaboom" });
+		// Once the recheck window has passed, the quiet coder is asked again.
+		woken.length = 0;
+		await sweepAutoPickup(env, now + 31 * 60_000, wake);
+		expect(woken).toContain("quiet");
+		expect(woken).not.toContain("busy");
+		expect(woken).not.toContain("off");
 	});
 });
