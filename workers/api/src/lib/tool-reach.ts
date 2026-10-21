@@ -105,6 +105,10 @@ export const CONNECTOR_REACH: Readonly<Record<string, ToolReach>> = {
 	google_drive: "internet",
 	zoho_workdrive: "internet",
 	gmail: "internet",
+	// #1269. A customer-owned HTTPS Worker, reached over the public internet exactly like any
+	// other connector's API — the fact that the owner runs the Worker themselves doesn't make the
+	// call internal.
+	"email-worker": "internet",
 };
 
 /**

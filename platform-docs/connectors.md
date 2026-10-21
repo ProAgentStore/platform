@@ -7,8 +7,9 @@ ProAgentStore has two connector layers, for two different jobs.
    agent instance's knowledge, narrowed by per-folder grants.
 2. **Registry connectors** (the tool framework, issues #84–#90): a declared registry of
    integrations an agent drives as **tools** — GitHub, HTTP/REST, Web Search, Meta, Terminal,
-   legacy tmux, local repo inspection, supervision, outbound MCP, Google Sheets, **Gmail**, and
-   the experimental browser. See [Registry connectors](#registry-connectors) below.
+   legacy tmux, local repo inspection, supervision, outbound MCP, Google Sheets, **Gmail**,
+   **worker-backed email**, and the experimental browser. See
+   [Registry connectors](#registry-connectors) below.
 
 ## Registry connectors
 
@@ -42,6 +43,7 @@ resolved before the run and is refused at dispatch instead.
 | `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write), `transfer_conversation` (write) |
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
+| `email-worker` | bearer token **per connection** (owner-pasted, endpoint-keyed like `mcp`) | read + write | `email_worker_list_messages`, `email_worker_read_message`, `email_worker_send` (write), `email_worker_reply` (write) against a customer-owned Worker implementing the [adapter contract](email-worker-adapter.md) — see [Worker-backed email](#worker-backed-email) |
 | `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_send_message`, `discord_add_reaction` |
 
 To connect Discord, store a **Discord bot token** in **Profile → API Keys & connector credentials**.
@@ -629,6 +631,64 @@ rather than discovering it mid-task:
 
 Allowing a power re-prompts Google for consent (`prompt=consent`), so the new scope is actually
 granted rather than the old grant being silently returned.
+
+## Worker-backed email
+
+For an owner with no Google mailbox to OAuth against — FreeAppStore's mail is Cloudflare Email
+Routing behind a Worker, not Gmail — `email-worker` (#1269) is the same shape Gmail gives a
+private agent (read, search, send, reply, pinned to one mailbox) over a **customer-owned HTTPS
+Worker** instead. Full wire contract: [email-worker-adapter.md](email-worker-adapter.md).
+
+**Connecting.** `POST /v1/email-worker/connections { endpoint, secret, accountId?, label? }` tests
+the secret against the Worker's `/v1/email-worker/identity` before storing it — a Worker that
+cannot identify itself is never saved. `POST .../connections/test` re-probes an existing
+connection (or a value not yet saved) without the owner re-pasting the secret each time; that is
+the connector-test view's action. `DELETE .../connections?endpoint=&account=` revokes. Replacing a
+connection (same `endpoint`+`accountId`) keeps its `webhookUrl`, so a credential rotation does not
+require updating the Worker's own config.
+
+**Credentials are keyed on the endpoint**, like `mcp` and for the same reason: more than one Worker
+can be connected, so a single vault slot per owner would let a secret meant for one Worker reach
+whichever Worker a later call happened to name (migration 0270, mirroring 0267's shape one column
+simpler — bearer-only, no OAuth columns, since the contract names exactly one credential shape).
+
+**Pinning.** A private agent's tools (`email_worker_list_messages`, `email_worker_read_message`,
+`email_worker_send`, `email_worker_reply`) take **no endpoint or secret argument** — unlike the
+generic `mcp` connector, where the server is a tool input, a mailbox is "pin ONE to this instance",
+the same shape Gmail already has. `GET`/`PUT /v1/instances/{id}/email-worker/account` resolve and
+set the pin; the same refusal discipline as `/mcp/accounts` applies — more than one connection with
+no pin refuses as `ambiguous`, a pin to a connection since revoked refuses as `pinned_account_gone`,
+neither ever falls back to another connection silently.
+
+**Grants, consent, write-gating** are the SAME generic mechanism every connector gets from its
+registry declaration (`grantModel: "user"`, `scopes: {read:true, write:true}`) — nothing
+email-worker-specific. `email_worker_send`/`email_worker_reply` need the owner's per-instance write
+consent on `email-worker` (#90) and the agent must declare the tool in `capabilities.tools`
+(#381); a call refused for either reason never reaches the Worker, which is what keeps "denied
+grant", "missing write consent", "wrong instance pin" and "an actual Worker-side failure"
+distinguishable (#1269 AC3) — the first three are refused before any wire call, and only the last
+one is a reported adapter error.
+
+**Audit receipts (#1269 AC4).** Every list/read/send/reply writes one `agent_events` row
+(`source:"email-worker"`) naming the connection's endpoint + account, message/thread ids, and an
+`outcome` (`ok` / `adapter_error`) with a `failureClass` (`auth` / `transient` / `protocol`) on
+failure — never a message body, never the secret. The same audit trail covers inbound delivery
+events the Worker reports (below), tagged `email.inbound` / `email.delivery`.
+
+**Inbound delivery events (#1269 AC2/AC5).** Each connection has its own `webhookUrl` —
+`POST /v1/email-worker/inbound/{token}` — an unauthenticated capability URL exactly like
+`POST /v1/triggers/webhook/{token}`: the high-entropy token in the path IS the credential. The
+owner's Worker calls it with `{ type, eventId, messageId?, threadId? }` for a new inbound message
+or a delivery outcome; `eventId` dedupes a retried delivery so the receipt is written **at most
+once** however many times the Worker resends it.
+
+**Idempotent sends (#1269 AC5).** `email_worker_send`/`email_worker_reply` mint one
+`idempotencyKey` per logical call and reuse it across PAGS's own bounded retry (exactly once, on a
+network failure or a 5xx — never on a 4xx, which is the Worker's own considered refusal). The
+contract requires a Worker to treat a repeated key as "return the first result", never a second
+send — see the adapter spec and its reference fixture
+(`workers/api/src/lib/connectors/email-worker.fixture.ts`) for a minimal, correct implementation a
+customer can read end to end with no dependency on a PAGS-hosted mailbox.
 
 ## Google Docs Through Google Drive
 

@@ -7,6 +7,7 @@ import type { Connector, EnvTokenKey, ToolDef } from "./types.js";
 import { BROWSER_TOOLS } from "./browser.js";
 import { GOOGLE_DRIVE_CONNECTOR, ZOHO_WORKDRIVE_CONNECTOR } from "./connected-accounts.js";
 import { GMAIL_CONNECTOR } from "./gmail.js";
+import { EMAIL_WORKER_CONNECTOR } from "./email-worker.js";
 import { DISCORD_CONNECTOR } from "./discord.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
@@ -199,6 +200,10 @@ export const CONNECTORS: Connector[] = [
 	ZOHO_WORKDRIVE_CONNECTOR,
 	// Gmail (#711) — the same stored connection, now with declared read tools of its own.
 	GMAIL_CONNECTOR,
+	// Worker-backed email (#1269) — a customer-owned HTTPS Worker standing in for a mailbox a
+	// private agent could otherwise never reach (no Google account to OAuth against). Endpoint-
+	// keyed credentials, like `mcp`, not provider-wide like Gmail's `user_api_keys` row.
+	EMAIL_WORKER_CONNECTOR,
 ];
 
 const BY_ID: ReadonlyMap<string, Connector> = new Map(CONNECTORS.map((c) => [c.id, c] as const));

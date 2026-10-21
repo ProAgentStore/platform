@@ -730,6 +730,18 @@ components:
           type: boolean
           example: true
 
+    EmailWorkerConnection:
+      type: object
+      description: One worker-backed email connection (#1269). Credential-free by construction — there is no field for the secret.
+      properties:
+        endpoint: { type: string }
+        accountId: { type: string, description: "Empty string is the unnamed default account on this endpoint." }
+        accountLabel: { type: string, nullable: true }
+        contractVersion: { type: string, nullable: true, description: "What the Worker reported at its last successful identity probe." }
+        webhookUrl: { type: string, description: "The capability URL to paste into the owner's own Worker as its inbound delivery callback." }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+
     ConnectorReach:
       type: object
       description: >
@@ -16504,6 +16516,232 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Success" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Worker-backed email (#1269) ─────────────────────────────────────────────
+  #
+  # A customer-owned HTTPS Worker standing in for a mailbox when there is no Google account to
+  # OAuth against (FreeAppStore mail is Cloudflare Email Routing + a Worker, not Gmail). The
+  # adapter contract is published at platform-docs/email-worker-adapter.md; connection
+  # management mirrors Gmail's add/test/revoke, keyed on the owner-chosen endpoint like `mcp`
+  # (#1267) rather than on a fixed provider id, because more than one Worker can be connected.
+
+  /v1/email-worker/connections:
+    get:
+      summary: List the owner's worker-backed email connections
+      description: Credential-free — no secret is ever returned. `webhookUrl` is the capability URL to paste into the owner's own Worker as its inbound delivery callback.
+      operationId: listEmailWorkerConnections
+      tags: [Connectors]
+      responses:
+        "200":
+          description: Connections
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connections:
+                    type: array
+                    items: { $ref: "#/components/schemas/EmailWorkerConnection" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      summary: Add or REPLACE a worker-backed email connection (AC1)
+      description: |
+        Tests the secret against the Worker's `/v1/email-worker/identity` BEFORE storing it — a
+        connection that cannot identify itself is never saved. Replacing an existing connection
+        (same `endpoint`+`accountId`) keeps the same `webhookUrl`, so the owner's Worker config
+        does not need updating after a credential rotation.
+      operationId: addEmailWorkerConnection
+      tags: [Connectors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, secret]
+              properties:
+                endpoint: { type: string, description: "The Worker's https base URL." }
+                secret: { type: string, description: "The bearer secret this connection sends on every call." }
+                accountId: { type: string, description: "Only needed when connecting a SECOND account on the same endpoint. Default the unnamed account." }
+                label: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  contractVersion: { type: string }
+                  address: { type: string, nullable: true }
+                  connection: { $ref: "#/components/schemas/EmailWorkerConnection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { description: "The Worker could not be identified with the given secret — nothing was stored." }
+    delete:
+      summary: Revoke a worker-backed email connection (AC1)
+      operationId: deleteEmailWorkerConnection
+      tags: [Connectors]
+      parameters:
+        - { name: endpoint, in: query, required: true, schema: { type: string } }
+        - { name: account, in: query, schema: { type: string }, description: "Defaults to the unnamed account." }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema: { type: object, properties: { success: { type: boolean }, removed: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/email-worker/connections/test:
+    post:
+      summary: Test a worker-backed email connection — the connector-test view's action
+      description: |
+        Re-probes identity for an EXISTING connection (omit `secret`), or tests a value before
+        saving it. A successful probe of an existing connection updates its recorded
+        `contractVersion`. Never stores or returns a secret.
+      operationId: testEmailWorkerConnection
+      tags: [Connectors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint: { type: string }
+                accountId: { type: string }
+                secret: { type: string, description: "Test this value instead of the stored secret." }
+      responses:
+        "200":
+          description: Probe result — `ok` is always present; a failed probe is a 200, not an error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  contractVersion: { type: string }
+                  address: { type: string, nullable: true }
+                  error: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "No connection (and no secret given) to test." }
+
+  /v1/instances/{instanceId}/email-worker/account:
+    get:
+      summary: This instance's worker-backed email connection pin
+      description: |
+        Mirrors `/connector-accounts` and `/mcp/accounts`: `resolved` is what a call would use
+        right now, `null` with `blocked` naming why when it can't. More than one connection and
+        no pin refuses as `ambiguous`; a pin to a connection since revoked refuses as
+        `pinned_account_gone` — neither falls back to another connection.
+      operationId: getInstanceEmailWorkerAccount
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Connections, the pin, and what it resolves to
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connections:
+                    type: array
+                    items: { $ref: "#/components/schemas/EmailWorkerConnection" }
+                  pinned:
+                    type: object
+                    nullable: true
+                    properties:
+                      endpoint: { type: string }
+                      accountId: { type: string }
+                  resolved:
+                    type: object
+                    nullable: true
+                    properties:
+                      endpoint: { type: string }
+                      accountId: { type: string }
+                      label: { type: string }
+                  blocked:
+                    type: object
+                    nullable: true
+                    properties:
+                      reason: { type: string, enum: [not_connected, ambiguous, pinned_account_gone] }
+                      message: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Pin this instance to one worker-backed email connection
+      description: An `endpoint` the owner does not hold (that `accountId` combination) is refused here, at write time — not discovered the next time the agent tries to read its mail. Omit `endpoint` to clear the pin.
+      operationId: setInstanceEmailWorkerAccount
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                endpoint: { type: string }
+                accountId: { type: string }
+      responses:
+        "200":
+          description: The pin as stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  pinned:
+                    type: object
+                    nullable: true
+                    properties:
+                      endpoint: { type: string }
+                      accountId: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/email-worker/inbound/{token}:
+    post:
+      summary: Inbound delivery event from the owner's Worker (AC2/AC5)
+      description: |
+        **Unauthenticated by design**, exactly like `POST /v1/triggers/webhook/{token}` — the
+        high-entropy `token` IS the credential, so treat the URL as a secret. `eventId` dedupes a
+        retried delivery: the audit receipt is written at most once per `eventId`, however many
+        times the Worker resends it. An unrecognised token is a 404.
+      operationId: emailWorkerInbound
+      security: []
+      tags: [Connectors]
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId]
+              properties:
+                type: { type: string, enum: [message.received, message.delivered, message.bounced] }
+                eventId: { type: string }
+                messageId: { type: string }
+                threadId: { type: string }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean }, deduped: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { description: "Unknown inbound delivery token." }
 
   # ── Google Drive ──────────────────────────────────────────────────────────
 

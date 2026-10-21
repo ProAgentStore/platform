@@ -103,6 +103,17 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 		"The google_sheets connector is inert until the Sheets OAuth scope lands on the Google client; " +
 		"until then every call fails at consent, not at the tool.",
 	sheets_append: "Same as sheets_read — inert until the Sheets OAuth scope lands.",
+	// #1269. Not inert, same as the Gmail note below: a private agent's creator can declare these
+	// four right now via capabilities.tools (they're in CREATOR_SELECTABLE_TOOLS through the
+	// auto-built `connector:email-worker` group) and they run against any worker the owner has
+	// connected. What's missing is a first-party CATALOG agent that declares them by default —
+	// deliberately not seeded, because this connector exists for creators who bring their OWN
+	// Worker, not for a platform-authored mailbox agent. Reachable the moment one does, or the
+	// moment a creator declares it on their own agent.
+	email_worker_list_messages: "Worker-backed email (#1269) — functional via declaration, no seeded catalog agent yet.",
+	email_worker_read_message: "Worker-backed email (#1269) — functional via declaration, no seeded catalog agent yet.",
+	email_worker_send: "Worker-backed email (#1269) — functional via declaration, no seeded catalog agent yet.",
+	email_worker_reply: "Worker-backed email (#1269) — functional via declaration, no seeded catalog agent yet.",
 	// #711. Unlike the meta/sheets entries above, these are NOT inert: they run today against any
 	// already-connected mailbox, because gmail.readonly was always the granted scope and it covers
 	// attachment download. A subscriber can declare them on their own agent right now — they are in

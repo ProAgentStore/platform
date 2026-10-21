@@ -21,6 +21,7 @@ import { profileRoutes } from "./routes/profile.js";
 import { preferenceRoutes } from "./routes/preferences.js";
 import { keysRoutes } from "./routes/keys.js";
 import { emailRoutes } from "./routes/email.js";
+import { emailWorkerInboundRoutes, emailWorkerInstanceRoutes, emailWorkerRoutes } from "./routes/email-worker.js";
 import { driveRoutes } from "./routes/drive.js";
 import { discordRoutes } from "./routes/discord.js";
 import { slackRoutes } from "./routes/slack.js";
@@ -235,6 +236,7 @@ app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /se
 app.route("/v1/instances", instanceActionsRunnerRoutes); // /v1/instances/:id/actions-runner — the Actions runner on the pinned machine (#1208, #1209)
 app.route("/v1/instances", instanceReleaseNotesRoutes); // /v1/instances/:id/release-notes (+ /test) (#1217)
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
+app.route("/v1/instances", emailWorkerInstanceRoutes); // /v1/instances/:id/email-worker/account — pin this instance to one worker-backed mail connection (#1269)
 app.route("/v1/instances", ticketRoutes); // /v1/instances/:id/board/items/:jobKey/ticket, /tickets/:ticketId (#757)
 app.route("/v1/instances", runEventRoutes); // /v1/instances/:id/run-events?since= (#579)
 app.route("/v1/connectors", connectorRoutes); // generic OAuth2 authorize/callback for manifest oauth connectors (#147)
@@ -253,6 +255,8 @@ app.route("/v1", mcpAuditRoutes); // platform: /v1/mcp-audit — the caller's OW
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google
+app.route("/v1/email-worker", emailWorkerRoutes); // /v1/email-worker/connections (add/test/revoke), /connections/test (#1269)
+app.route("/v1/email-worker/inbound", emailWorkerInboundRoutes); // POST /v1/email-worker/inbound/:token — public, Worker-called-back delivery events (#1269)
 app.route("/v1/drive", driveRoutes); // /v1/drive/google/start, /callback, /status, /files, /instances/:id/import
 app.route("/v1/workdrive", workdriveRoutes); // /v1/workdrive/zoho/start, /callback, /status, /folder, /instances/:id/import
 app.route("/v1/triggers", triggerRoutes); // instance webhook + cron triggers

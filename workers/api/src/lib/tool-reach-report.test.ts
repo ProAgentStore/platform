@@ -145,6 +145,11 @@ const INTERNET = new Set<string>([
 	"gmail_archive", // changes labels in the owner's mailbox — Google's servers
 	"gmail_mark_read",
 	"gmail_create_filter", // #719: writes a filter into the owner's Gmail settings — Google's servers
+	// ── email-worker (#1269): a customer-owned Worker, reached over the public internet ──
+	"email_worker_list_messages",
+	"email_worker_read_message",
+	"email_worker_send",
+	"email_worker_reply",
 ]);
 
 describe("the listing reports what a tool can reach (#584)", () => {

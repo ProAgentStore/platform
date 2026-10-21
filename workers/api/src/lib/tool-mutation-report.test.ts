@@ -111,6 +111,10 @@ const MUTATING = new Set<string>([
 	// #719. Creates a standing rule in the owner's mailbox — the most lasting change any Gmail tool
 	// makes, which is why it only ever runs from an approved card.
 	"gmail_create_filter",
+	// #1269. Mail leaves under the owner's worker-backed mailbox and cannot be recalled — same
+	// reasoning as gmail_reply/gmail_send, same write-consent gate.
+	"email_worker_send",
+	"email_worker_reply",
 	// #712. Neither touches the SOURCE pdf — both write a NEW file into the instance's store,
 	// which is a change to this agent's own data and so a mutation. inspect_pdf_form only reads.
 	"fill_pdf_form",

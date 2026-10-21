@@ -5,7 +5,7 @@ describe("connector registry", () => {
 	it("declares every connector the platform has, including the three tool-less accounts", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
 		expect(ids).toEqual([
-			"browser", "discord", "github", "gmail", "google_drive", "google_sheets", "http", "mcp",
+			"browser", "discord", "email-worker", "github", "gmail", "google_drive", "google_sheets", "http", "mcp",
 			"meta", "native", "repo-local", "supervision", "terminal", "tmux", "web-search", "zoho_workdrive",
 		]);
 	});
@@ -126,6 +126,37 @@ describe("connector registry", () => {
 		expect(http?.scopes).toEqual({ read: true, write: true });
 		expect(http?.grantModel).toBe("user");
 		expect(http?.tools.map((t) => t.name)).toEqual(["http_request"]);
+	});
+
+	it("email-worker is a token-auth, read+write, user-grant connector with no tokenEnv (endpoint-keyed, like mcp)", () => {
+		const ew = getConnector("email-worker");
+		expect(ew?.auth).toBe("token");
+		expect(ew?.tokenEnv).toBeUndefined();
+		expect(ew?.scopes).toEqual({ read: true, write: true });
+		expect(ew?.grantModel).toBe("user");
+		expect(ew?.tools.map((t) => t.name).sort()).toEqual([
+			"email_worker_list_messages",
+			"email_worker_read_message",
+			"email_worker_reply",
+			"email_worker_send",
+		]);
+		const byName = new Map((ew?.tools ?? []).map((t) => [t.name, t]));
+		for (const name of ["email_worker_list_messages", "email_worker_read_message"]) {
+			expect(byName.get(name)?.scope, name).toBe("read");
+			expect(byName.get(name)?.mutates, name).toBe(false);
+		}
+		for (const name of ["email_worker_send", "email_worker_reply"]) {
+			expect(byName.get(name)?.scope, name).toBe("write");
+			expect(byName.get(name)?.mutates, name).toBe(true);
+		}
+	});
+
+	it("email-worker takes no endpoint/account argument on its tools — the pin is resolved server-side, never shown to the model", () => {
+		const ew = getConnector("email-worker");
+		for (const t of ew?.tools ?? []) {
+			expect(Object.keys(t.jsonSchema.properties), t.name).not.toContain("endpoint");
+			expect(Object.keys(t.jsonSchema.properties), t.name).not.toContain("account_id");
+		}
 	});
 
 	it("mcp is a token-auth, read+write, user-grant connector with no tokenEnv (vault-backed)", () => {
