@@ -52,6 +52,11 @@ export function isEligible(inst: DiscoverableInstance, thisNode: string, alsoKno
  * endless reconnect log. They are NOT dropped from the eligible set, so clearing the block
  * (the other machine disconnects, or the user runs --force) lets the next pass attach.
  */
+/** The ids this machine should hold per a membership pass: active, runtime-capable, and not pinned to another machine. */
+export function eligibleIds(eligible: readonly DiscoverableInstance[], thisNode: string, alsoKnownAs: readonly string[] = []): Set<string> {
+	return new Set(eligible.filter((i) => isEligible(i, thisNode, alsoKnownAs)).map((i) => i.id));
+}
+
 export function diffMembership(
 	attached: Iterable<string>,
 	eligible: DiscoverableInstance[],

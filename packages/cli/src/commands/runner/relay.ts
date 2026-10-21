@@ -8,7 +8,7 @@ import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
 import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, restartBlockedByInstall, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
-import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
+import { diffMembership, eligibleIds, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAutoUpdatePolicy } from "./auto-update.js";
@@ -114,6 +114,7 @@ export async function connectViaRelay(
 	// The live membership set. A captured array is what made a newly subscribed agent
 	// unreachable until restart (#229); sockets are now added and removed while running.
 	const attached = new Map<string, RelaySocketHandle>();
+	let shouldHoldNow: ReadonlySet<string> | null = null;
 	// What the heartbeat reports about THIS process (#924): when it started, how often the machine has
 	// started a runner lately (a crash loop restarts uptime but not this count), and socket reconnects.
 	const processStartedAt = Date.now();
@@ -247,6 +248,8 @@ export async function connectViaRelay(
 		status: (status, extra) => cell.record(status, extra),
 		// The agents held now: attached AND registered — recorded with an install, required back after it.
 		attachments: () => [...attached.keys()].filter((id) => registered.has(id)),
+		// What the latest membership pass says this machine should hold — an agent repinned or paused since the install is excused (#1170).
+		shouldHold: () => shouldHoldNow,
 	});
 	autoUpdateDiagnostics = () => automaticUpdateController.diagnostics();
 	// Startup registration ran before this controller existed; from here every policy transition drives it.
@@ -530,6 +533,7 @@ export async function connectViaRelay(
 				{ ...opts, pagsToken: pagsToken() },
 			);
 			routes.learn(res.instances);
+			shouldHoldNow = eligibleIds(res.instances ?? [], runnerNode, [...machine.names, machine.id]);
 			const { attach: toAttach, detach: toDetach } = diffMembership(
 				attached.keys(),
 				res.instances ?? [],

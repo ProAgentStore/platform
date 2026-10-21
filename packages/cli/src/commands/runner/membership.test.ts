@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffMembership, instanceLabel, isEligible, partitionByPin, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, eligibleIds, instanceLabel, isEligible, partitionByPin, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 
 const NODE = "my-laptop";
 const inst = (over: Partial<DiscoverableInstance> & { id: string }): DiscoverableInstance => ({
@@ -305,5 +305,15 @@ describe("a scoped run lets go of an agent the pin moved away (#853 finding 13)"
 		expect(control).toMatch(/if \(plan\.release\)/);
 		expect(control).toContain("pinnedAway(attached.keys()");
 		expect(control).toMatch(/detach\(id/);
+	});
+});
+
+describe("eligibleIds (#1170)", () => {
+	it("is the set the machine should hold now: active, runtime-capable, and not pinned to another machine", () => {
+		const ids = eligibleIds(
+			[inst({ id: "here" }), inst({ id: "paused", status: "paused" }), inst({ id: "elsewhere", config: { runnerNode: "other-box" } }), inst({ id: "cancelled", status: "cancelled" }), inst({ id: "cloud-only", capabilities: {} })],
+			NODE,
+		);
+		expect([...ids]).toEqual(["here"]);
 	});
 });

@@ -23,6 +23,12 @@ export interface AutomaticUpdateControllerDeps {
 	boundTimer?: (fn: () => void, ms: number) => Timer;
 	/** The agents this machine holds right now — attached AND registered. Recorded at install, required back after it (#1020). */
 	attachments?: () => readonly string[];
+	/**
+	 * The agents this machine SHOULD hold right now, per the latest membership pass; null before one has run (#1170). An agent
+	 * the owner repinned, paused or unsubscribed since the install is no longer expected back, so it cannot keep a cycle
+	 * "N of M" forever.
+	 */
+	shouldHold?: () => ReadonlySet<string> | null;
 }
 
 /** Why an enabled controller is not installing yet — a normalized class, never raw session data (#1020). */
@@ -85,7 +91,7 @@ export async function boundedWork<T>(work: (signal: AbortSignal) => Promise<T>, 
  * answered, neither malformed), and EVERY original agent attached again. An attempt status with no recovery record
  * comes from an older runner's cache: `unknown`, never verified and never an ordinary no-attempt check.
  */
-export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts, attachedNow: readonly string[] = []): { kind: "verified" | "current" | "completed" } | { kind: "unverified" | "unknown"; reason: string } {
+export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts, attachedNow: readonly string[] = [], shouldHold: ReadonlySet<string> | null = null): { kind: "verified" | "current" | "completed" } | { kind: "unverified" | "unknown"; reason: string } {
 	if (!isVersion(facts.current) || !isVersion(facts.latest)) return { kind: "unverified", reason: `the running (${facts.current}) or published (${facts.latest}) version could not be read` };
 	const cycle = attempt.recovery;
 	// A resolved cycle is terminal evidence (#1020): it was verified once and is never re-judged by a later check.
@@ -108,8 +114,10 @@ export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts, att
 		return { kind: "unverified", reason: `the runner is on ${facts.current}, but its local work look was not readable (sessions ${sessions}, health ${health})` };
 	}
 	const back = new Set(attachedNow);
-	const missing = cycle.attachments.filter((id) => !back.has(id));
-	if (missing.length) return { kind: "unverified", reason: `the runner is on ${facts.current}, but only ${cycle.attachments.length - missing.length} of its ${cycle.attachments.length} original agents are attached again` };
+	// Judged against the agents the machine should hold NOW (#1170): one repinned, paused or unsubscribed since the install is excused.
+	const required = shouldHold ? cycle.attachments.filter((id) => shouldHold.has(id)) : cycle.attachments;
+	const missing = required.filter((id) => !back.has(id));
+	if (missing.length) return { kind: "unverified", reason: `the runner is on ${facts.current}, but only ${required.length - missing.length} of its ${required.length} original agents are attached again` };
 	return { kind: "verified" };
 }
 
@@ -262,12 +270,16 @@ export class AutomaticUpdateController {
 		// An OPEN cycle (installed, not yet verified) owns this machine's update until it resolves (#1020). Once its version
 		// is reached it is settled first — whatever the registry now says — and it is never redefined below.
 		const policy = this.deps.policy().value;
-		const open = policy.recovery && !policy.recovery.verifiedAt ? policy.recovery : undefined;
+		let open = policy.recovery && !policy.recovery.verifiedAt ? policy.recovery : undefined;
 		const reached = !!open && isVersion(open.target) && isVersion(facts.current) && !olderThan(facts.current, open.target);
-		if (plan.action === "up-to-date" || reached) {
-			// Current is not the same claim as a verified update cycle (#1020): only an attempted install that came
-			// back on its target with a healthy runtime is `verified-success`.
-			const verdict = updateVerdict(policy, facts, this.deps.attachments?.() ?? []);
+		// Current is not the same claim as a verified update cycle (#1020): only an attempted install that came
+		// back on its target with a healthy runtime is `verified-success`.
+		const verdict = plan.action === "up-to-date" || reached ? updateVerdict(policy, facts, this.deps.attachments?.() ?? [], this.deps.shouldHold?.() ?? null) : null;
+		// A newer release SUPERSEDES a cycle that cannot verify (#1170): its target is behind the registry, so keeping it
+		// recorded would pin the machine to "N of M" forever. The new install begins its own cycle with the agents held then.
+		const superseded = verdict?.kind === "unverified" && (plan.action === "update" || plan.action === "wait");
+		if (superseded) open = undefined;
+		if (verdict && !superseded) {
 			if (verdict.kind === "unverified") {
 				// The cycle stays recorded: the retry still knows its target and the agents it must bring back.
 				this.failures++;
@@ -285,6 +297,8 @@ export class AutomaticUpdateController {
 			this.schedule();
 			return;
 		}
+		// (An up-to-date plan always has a verdict and cannot be superseded, so it returned above; this narrows the type.)
+		if (plan.action === "up-to-date") return;
 		if (plan.action === "refused") {
 			// A release check that could not run (npm unreachable, or unstartable as on Windows before #1020) is a FAILURE,
 			// retried with backoff and visible to the stuck check — not `unsupported`, which says this install can never update.

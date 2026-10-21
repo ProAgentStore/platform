@@ -139,7 +139,7 @@ function machine() {
 	return { env, key, file: env.PAGS_AUTO_UPDATE_POLICY_FILE as string, process, disk: () => loadAutoUpdatePolicy(key, env) };
 }
 
-function controllerOn(cell: PolicyCell, o: { facts: () => Promise<UpdateFacts>; attached: () => string[]; refresh?: () => Promise<boolean>; install?: (plan: Extract<UpdatePlan, { action: "update" }>, automatic: boolean) => Promise<boolean> }) {
+function controllerOn(cell: PolicyCell, o: { facts: () => Promise<UpdateFacts>; attached: () => string[]; shouldHold?: () => ReadonlySet<string> | null; refresh?: () => Promise<boolean>; install?: (plan: Extract<UpdatePlan, { action: "update" }>, automatic: boolean) => Promise<boolean> }) {
 	const timers: Array<{ fn: () => void; ms: number }> = [];
 	const clock = { t: 5_000_000 };
 	const controller = new AutomaticUpdateController({
@@ -150,6 +150,7 @@ function controllerOn(cell: PolicyCell, o: { facts: () => Promise<UpdateFacts>; 
 		installAndRestart: o.install ?? (async () => true),
 		status: (s: AutoUpdateStatus, e?: Partial<AutoUpdatePolicy>) => cell.record(s, e),
 		attachments: o.attached,
+		shouldHold: o.shouldHold,
 		setTimer: (fn, ms) => {
 			const t = { fn, ms, unref() {} };
 			timers.push(t);
@@ -556,16 +557,60 @@ describe("an open cycle owns the update until it resolves; a verified one stays 
 		expect(m.disk()?.recovery).toEqual(cycle("0.4.91", ids(14)));
 	});
 
-	it("B2: an open cycle at its version with 13 of 14 back, and a NEWER release published — not verified, no install, cycle unchanged", async () => {
+	it("B2: an open cycle at its version that cannot verify (13 of 14 back) is SUPERSEDED by a newer release — it installs, with a new cycle (#1170)", async () => {
 		const m = machine();
 		const cell = m.process();
 		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
 		const install = vi.fn(async () => true);
 		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.92"), attached: () => ids(13), install });
 		await controller.runNow();
+		expect(install).toHaveBeenCalledTimes(1);
+		expect(install.mock.calls[0]?.[0]).toMatchObject({ latest: "0.4.92" });
+		// the frozen 14-agent list is gone: the new cycle holds the agents held now, at a new start
+		expect(m.disk()?.recovery).toMatchObject({ target: "0.4.92", attachments: ids(13) });
+		expect(m.disk()?.recovery?.verifiedAt).toBeUndefined();
+	});
+
+	it("B2 (unchanged control): with NO newer release the unverified cycle stays recorded and nothing installs", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
+		const install = vi.fn(async () => true);
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.91"), attached: () => ids(13), install });
+		await controller.runNow();
 		expect(install).not.toHaveBeenCalled();
 		expect(cell.policy).toMatchObject({ status: "failure", reason: expect.stringContaining("only 13 of its 14 original agents") });
 		expect(m.disk()?.recovery).toEqual(cycle("0.4.91", ids(14)));
+	});
+
+	it("#1170: an agent repinned, paused or unsubscribed since the install is no longer required back — the cycle verifies on the agents it should hold", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
+		const shouldHold = new Set(ids(14).slice(0, 12)); // two were repinned elsewhere meanwhile
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.91"), attached: () => ids(12), shouldHold: () => shouldHold });
+		await controller.runNow();
+		expect(m.disk()).toMatchObject({ status: "verified-success" });
+		expect(m.disk()?.recovery?.verifiedAt).toEqual(expect.any(String));
+	});
+
+	it("#1170: an agent the machine STILL should hold, and that is missing, still blocks verification (the excuse is not blanket)", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
+		const shouldHold = new Set(ids(14).slice(0, 13));
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.91"), attached: () => ids(12), shouldHold: () => shouldHold });
+		await controller.runNow();
+		expect(cell.policy).toMatchObject({ status: "failure", reason: expect.stringContaining("only 12 of its 13 original agents") });
+	});
+
+	it("#1170: before any membership pass has run (shouldHold null) nothing is excused", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.91"), attached: () => ids(13), shouldHold: () => null });
+		await controller.runNow();
+		expect(cell.policy).toMatchObject({ status: "failure", reason: expect.stringContaining("only 13 of its 14 original agents") });
 	});
 
 	const resolved = { ...cycle("0.4.91", ids(14)), verifiedAt: "2026-10-12T01:00:00.000Z" };
