@@ -1,0 +1,232 @@
+/**
+ * The eval's tasks (#1244): owner-shaped requests drawn from the audit's top-20 usability offenders (docs/mcp-tool-audit.md §6).
+ *
+ * Each task is what an owner would SAY, the one tool that does it, the request the stubbed API must receive for it to count as done,
+ * the careful call, and the mistakes the audit found, replayed (`sloppy`). Every mistake here was observed in the audit ledger or
+ * error log, or is the direct shape of an offender row; `notes` says which.
+ *
+ * Instance ids are exact in the prompt (`inst-1`), as an owner pasting from the console would give them, so a miss is the tool's or
+ * the description's fault and not a guess at an id.
+ */
+import type { EvalTask } from "./harness.js";
+
+const I = "inst-1";
+const bodyOf = (b: unknown): Record<string, unknown> => {
+	try {
+		return typeof b === "string" ? (JSON.parse(b) as Record<string, unknown>) : {};
+	} catch {
+		return {};
+	}
+};
+
+export const TASKS: readonly EvalTask[] = [
+	{
+		id: "github-connector-tool",
+		offenders: [1],
+		prompt: `On my coder instance ${I}, list the open issues of its repo using the instance's own GitHub connector. Work out what the instance is allowed to run first.`,
+		expectedTool: "list_instance_tools",
+		effect: { method: "GET", path: /^\/v1\/instances\/inst-1\/tools$/ },
+		clean: { name: "list_instance_tools", args: { instance_id: I, allowed_only: true, schemas: true } },
+		sloppy: [{ label: "guessed-tool-name", call: { name: "call_instance_tool", args: { instance_id: I, tool: "github_list_open_issues", input: {} } }, expect: "wrong_tool" }],
+		stubs: [{ when: (r) => r.method === "POST" && /\/tools\/github_list_open_issues/.test(r.path), status: 403, body: { error: '"github_list_open_issues" is not one of this agent\'s tools' } }],
+		notes: "#1: the recurring 403 `\"X\" is not one of this agent's tools` (§3.3) — call_instance_tool with a name from memory instead of list_instance_tools first.",
+	},
+	{
+		id: "queue-on-busy-instance",
+		offenders: [2, 5],
+		prompt: `Instance ${I} is busy with another run. Queue "triage the open bugs" behind it rather than interrupting.`,
+		expectedTool: "coding_loop_start",
+		effect: { method: "POST", path: /^\/v1\/instances\/inst-1\/loop$/, body: { queueIfBusy: true } },
+		clean: { name: "coding_loop_start", args: { instance_id: I, objective: "triage the open bugs", queue_if_busy: true } },
+		sloppy: [
+			{ label: "no-queue-flag", call: { name: "coding_loop_start", args: { instance_id: I, objective: "triage the open bugs" } }, expect: "refused" },
+			{ label: "boolean-as-string", call: { name: "coding_loop_start", args: { instance_id: I, objective: "triage the open bugs", queue_if_busy: "true" } }, expect: "recovered" },
+			{ label: "camelcase-key", call: { name: "coding_loop_start", args: { instanceId: I, objective: "triage the open bugs", queueIfBusy: true } }, expect: "recovered" },
+		],
+		stubs: [{ when: (r) => r.method === "POST" && /\/loop$/.test(r.path) && bodyOf(r.body).queueIfBusy !== true, status: 409, body: { error: "A run is already active on this instance", activeRun: "run-9" } }],
+		notes: "#2: a busy start 409s unless queue_if_busy is set (§3.1). #5: `\"true\"` for a boolean (§3.2). The camelCase variant is #3's shape on the same tool.",
+	},
+	{
+		id: "remove-repo",
+		offenders: [3],
+		prompt: `Detach the repo with id repo-1 from my coder instance ${I}. I confirm removing it.`,
+		expectedTool: "coding_repo_remove",
+		effect: { method: "DELETE", path: /^\/v1\/instances\/inst-1\/coding\/repos\/repo-1$/ },
+		clean: { name: "coding_repo_remove", args: { instance_id: I, repo_id: "repo-1", confirm: "coding_repo_remove" } },
+		sloppy: [{ label: "camelcase-repoId", call: { name: "coding_repo_remove", args: { instanceId: I, repoId: "repo-1", confirm: "coding_repo_remove" } }, expect: "recovered" }],
+		stubs: [{ when: (r) => r.method === "GET" && /\/coding\/repos$/.test(r.path), body: { repos: [{ id: "repo-1", name: "acme/app" }] } }],
+		notes: "#3: `repoId` sent beside `repo_id` in the ledger; zod stripped it silently.",
+	},
+	{
+		id: "invalid-input-message",
+		offenders: [4],
+		prompt: `Rename my instance ${I} to Alpha.`,
+		expectedTool: "rename_instance",
+		effect: { method: "PUT", path: /^\/v1\/instances\/inst-1\/name$/, body: { name: "Alpha" } },
+		clean: { name: "rename_instance", args: { instance_id: I, name: "Alpha" } },
+		sloppy: [{ label: "wrong-type-id", call: { name: "rename_instance", args: { instance_id: 1, name: "Alpha" } }, expect: "invalid_input" }],
+		notes: "#4: a bare zod message on invalid_input; the error should name the bad argument and show a corrected call.",
+	},
+	{
+		id: "unknown-tool-name",
+		offenders: [6],
+		prompt: "Show me the instances I run.",
+		expectedTool: "my_instances",
+		effect: { method: "GET", path: /^\/v1\/instances\/my\/instances/ },
+		clean: { name: "my_instances", args: {} },
+		sloppy: [
+			{ label: "invented-name", call: { name: "list_instances", args: {} }, expect: "unknown_tool" },
+			{ label: "camelcase-name", call: { name: "myInstances", args: {} }, expect: "unknown_tool" },
+		],
+		notes: "#6: `unknown_tool` events (§3.2) — the reply should suggest the nearest real names.",
+	},
+	{
+		id: "start-run",
+		offenders: [7],
+		prompt: `Start a run on ${I}: "fix the failing lint step".`,
+		expectedTool: "coding_loop_start",
+		effect: { method: "POST", path: /^\/v1\/instances\/inst-1\/loop$/, body: { objective: "fix the failing lint step" } },
+		clean: { name: "coding_loop_start", args: { instance_id: I, objective: "fix the failing lint step" } },
+		sloppy: [{ label: "deprecated-alias", call: { name: "start_instance_loop", args: { instance_id: I, objective: "fix the failing lint step" } }, expect: "deprecated" }],
+		notes: "#7: start_instance_loop duplicates coding_loop_start (§4); since #1243 it is a deprecated alias that says so.",
+	},
+	{
+		id: "check-run",
+		offenders: [8],
+		prompt: `How is run run-1 on instance ${I} going?`,
+		expectedTool: "coding_loop_status",
+		effect: { method: "GET", path: /^\/v1\/instances\/inst-1\/loop\/run-1$/ },
+		clean: { name: "coding_loop_status", args: { instance_id: I, run_id: "run-1" } },
+		sloppy: [{ label: "deprecated-alias", call: { name: "check_instance_loop", args: { instance_id: I, run_id: "run-1" } }, expect: "deprecated" }],
+		notes: "#8: check_instance_loop duplicates coding_loop_status.",
+	},
+	{
+		id: "stop-run",
+		offenders: [9],
+		prompt: `Stop run run-1 on instance ${I}.`,
+		expectedTool: "coding_loop_stop",
+		effect: { method: "POST", path: /^\/v1\/instances\/inst-1\/loop\/run-1\/cancel$/ },
+		clean: { name: "coding_loop_stop", args: { instance_id: I, run_id: "run-1" } },
+		sloppy: [{ label: "deprecated-alias", call: { name: "stop_instance_loop", args: { instance_id: I, run_id: "run-1" } }, expect: "deprecated" }],
+		notes: "#9: stop_instance_loop duplicates coding_loop_stop.",
+	},
+	{
+		id: "read-diagnostics",
+		offenders: [10],
+		prompt: `Something looks wrong with the coder on ${I}. Read its diagnostics.`,
+		expectedTool: "coding_diagnostics",
+		effect: { method: "GET", path: /^\/v1\/instances\/inst-1\/coding\/diagnostics$/ },
+		clean: { name: "coding_diagnostics", args: { instance_id: I } },
+		sloppy: [{ label: "deprecated-alias", call: { name: "system_status", args: { instance_id: I } }, expect: "deprecated" }],
+		notes: "#10: system_status duplicates coding_diagnostics and described itself as \"tmux sessions\".",
+	},
+	{
+		id: "platform-quick-start",
+		offenders: [11],
+		prompt: "I'm new here. Give me the platform's quick start: which tool to use for which task.",
+		expectedTool: "platform_guide",
+		effect: null,
+		clean: { name: "platform_guide", args: {} },
+		sloppy: [{ label: "wrong-tool-server-info", call: { name: "mcp_server_info", args: {} }, expect: "wrong_tool" }],
+		notes: "#11: platform_guide had a five-word description; since #1243 it opens with the task-to-tool quick start.",
+	},
+	{
+		id: "sdk-reference",
+		offenders: [12],
+		prompt: "I'm writing code for a new agent and need the SDK reference.",
+		expectedTool: "sdk_reference",
+		effect: null,
+		clean: { name: "sdk_reference", args: {} },
+		sloppy: [{ label: "wrong-tool-guide", call: { name: "platform_guide", args: {} }, expect: "wrong_tool" }],
+		notes: "#12: sdk_reference is for writing agent code, not for driving instances; five-word description.",
+	},
+	{
+		id: "try-public-agent",
+		offenders: [13],
+		prompt: "Try the public agent ag-1 for me without subscribing: ask it what it can do.",
+		expectedTool: "chat_with_agent",
+		effect: { method: "POST", path: /^\/v1\/public\/agents\/ag-1\/try$/ },
+		stubs: [{ when: (r) => /\/try$/.test(r.path), body: { response: "I can answer questions about résumés." } }],
+		clean: { name: "chat_with_agent", args: { agent_id: "ag-1", message: "What can you do?" } },
+		sloppy: [{ label: "instance-chat-with-agent-id", call: { name: "chat_with_instance", args: { instance_id: "ag-1", message: "What can you do?" } }, expect: "wrong_tool" }],
+		notes: "#13: one of three chat tools; the trial mode (no subscription) is chat_with_agent.",
+	},
+	{
+		id: "add-instance-knowledge",
+		offenders: [14],
+		prompt: `Add this document to my instance ${I}'s knowledge, titled "Refund policy": "Refunds within 30 days."`,
+		expectedTool: "add_instance_knowledge",
+		effect: { method: "POST", path: /^\/v1\/instances\/inst-1\/knowledge/ },
+		stubs: [{ when: (r) => r.method === "POST" && /\/knowledge/.test(r.path), body: { id: "k-1" } }],
+		clean: { name: "add_instance_knowledge", args: { instance_id: I, title: "Refund policy", content: "Refunds within 30 days." } },
+		sloppy: [{ label: "template-tool", call: { name: "add_knowledge", args: { agent_id: I, title: "Refund policy", content: "Refunds within 30 days." } }, expect: "wrong_tool" }],
+		notes: "#14: add_knowledge changes the TEMPLATE for every future subscriber; the instance form is add_instance_knowledge.",
+	},
+	{
+		id: "list-instance-knowledge",
+		offenders: [15],
+		prompt: `What knowledge documents does my instance ${I} have?`,
+		expectedTool: "list_instance_knowledge",
+		effect: { method: "GET", path: /^\/v1\/instances\/inst-1\/knowledge/ },
+		clean: { name: "list_instance_knowledge", args: { instance_id: I } },
+		sloppy: [{ label: "template-tool", call: { name: "list_knowledge", args: { agent_id: I } }, expect: "wrong_tool" }],
+		notes: "#15: list_knowledge reads the template's knowledge, not the instance's.",
+	},
+	{
+		id: "query-instance-records",
+		offenders: [16],
+		prompt: `From instance ${I}, show the first 5 rows of its "leads" collection.`,
+		expectedTool: "query_instance_records",
+		effect: { method: "GET", path: /^\/v1\/instances\/inst-1\/collections\/leads/ },
+		clean: { name: "query_instance_records", args: { instance_id: I, collection: "leads", limit: 5 } },
+		sloppy: [
+			{ label: "template-tool", call: { name: "query_records", args: { agent_id: I, collection: "leads", limit: 5 } }, expect: "wrong_tool" },
+			{ label: "number-as-string", call: { name: "query_instance_records", args: { instance_id: I, collection: "leads", limit: "5" } }, expect: "recovered" },
+		],
+		notes: "#16: query_records is the template's; no filter example in the old description.",
+	},
+	{
+		id: "insert-instance-record",
+		offenders: [17],
+		prompt: `Add a row to ${I}'s "leads" collection: name Acme, status new.`,
+		expectedTool: "insert_instance_record",
+		effect: { method: "POST", path: /^\/v1\/instances\/inst-1\/collections\/leads/ },
+		clean: { name: "insert_instance_record", args: { instance_id: I, collection: "leads", data: '{"name":"Acme","status":"new"}' } },
+		sloppy: [
+			{ label: "template-tool", call: { name: "insert_record", args: { agent_id: I, collection: "leads", data: '{"name":"Acme","status":"new"}' } }, expect: "wrong_tool" },
+			{ label: "object-for-json-string", call: { name: "insert_instance_record", args: { instance_id: I, collection: "leads", data: { name: "Acme", status: "new" } } }, expect: "invalid_input" },
+		],
+		notes: "#17: insert_record is the template's; `data` is a JSON string and a model sends an object.",
+	},
+	{
+		id: "instance-activity",
+		offenders: [18],
+		prompt: `What has my instance ${I} been doing lately? Show its recent activity.`,
+		expectedTool: "instance_activity",
+		effect: { method: "GET", path: /^\/v1\/instances\/inst-1\/activity/ },
+		clean: { name: "instance_activity", args: { instance_id: I, limit: 10 } },
+		sloppy: [{ label: "agent-activity", call: { name: "agent_activity", args: { agent_id: I, limit: 10 } }, expect: "wrong_tool" }],
+		notes: "#18: three activity tools; agent_activity is the template's.",
+	},
+	{
+		id: "answer-handoff",
+		offenders: [19],
+		prompt: `Instance ${I} is waiting on me at task task-7. Answer its question with: yes, proceed.`,
+		expectedTool: "answer_instance_input",
+		effect: { method: "POST", path: /^\/v1\/instances\/inst-1\/input$/, body: { taskId: "task-7" } },
+		clean: { name: "answer_instance_input", args: { instance_id: I, task_id: "task-7", value: "yes, proceed" } },
+		sloppy: [{ label: "camelcase-task-id", call: { name: "answer_instance_input", args: { instanceId: I, taskId: "task-7", value: "yes, proceed" } }, expect: "recovered" }],
+		notes: "#19: answer_instance_input's handoff 409/503 (§3.3); the refusal should say whether to retry or re-read (a2fe9a8b).",
+	},
+	{
+		id: "approve-application",
+		offenders: [20],
+		prompt: `Approve the application app-1 on instance ${I}. First find out what kind of instance it is.`,
+		expectedTool: "describe_instance",
+		effect: { method: "GET", path: /^\/v1\/instances\/inst-1\/description$/ },
+		clean: { name: "describe_instance", args: { instance_id: I } },
+		sloppy: [{ label: "decision-tool-on-wrong-instance", call: { name: "approve_application", args: { instance_id: I, application_id: "app-1", expected_status: "ready", confirm: "approve_application" } }, expect: "wrong_tool" }],
+		stubs: [{ when: (r) => /application-queue/.test(r.path), status: 409, body: { error: "not part of an application pipeline" } }],
+		notes: "#20: the decision tools 409 \"not part of an application pipeline\" on a non-Scout/Tailor/Runner instance; describe_instance first.",
+	},
+];
