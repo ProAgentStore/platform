@@ -11,7 +11,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { describeIdentities, probeEmailWorkerIdentity } from "../lib/connectors/email-worker.js";
-import { loadProfile, normalizeAddress, recordProbeFailure, recordProbeSuccess, routeDecision, saveApproval, validateApproval } from "../lib/email-worker-identities.js";
+import { loadProfile, normalizeAddress, routeDecision, validateApproval } from "../lib/email-worker-identities.js";
 import { listReceipts, recordReceipt } from "../lib/email-worker-receipts.js";
 import {
 	connectionForWebhookToken,
@@ -19,9 +19,12 @@ import {
 	listEmailWorkerConnections,
 	normalizeEmailWorkerEndpoint,
 	pinnedEmailWorkerConnectionFrom,
+	recordProbeFailure,
+	recordProbeSuccess,
 	recordInboundEventOnce,
 	resolveEmailWorkerConnectionFrom,
 	resolveEmailWorkerSecret,
+	saveApproval,
 	saveEmailWorkerConnection,
 	updateEmailWorkerContractVersion,
 } from "../lib/email-worker-connections.js";

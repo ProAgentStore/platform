@@ -16,9 +16,9 @@ import { emailWorkerInboundRoutes, emailWorkerRoutes } from "../../routes/email-
 import type { Env } from "../../types.js";
 import { HttpError } from "../auth.js";
 import { type RealSchemaD1, realSchemaD1, seedTenant } from "../d1-sqlite.js";
-import { saveEmailWorkerConnection } from "../email-worker-connections.js";
+import { recordProbeSuccess, saveApproval, saveEmailWorkerConnection } from "../email-worker-connections.js";
 import { describeIdentities, probeEmailWorkerIdentity, EMAIL_WORKER_CONNECTOR } from "./email-worker.js";
-import { loadProfile, normalizeAddress, parseIdentity, recordProbeSuccess, routeDecision, saveApproval, senderDecision, validateApproval } from "../email-worker-identities.js";
+import { loadProfile, normalizeAddress, parseIdentity, routeDecision, senderDecision, validateApproval } from "../email-worker-identities.js";
 import { listReceipts } from "../email-worker-receipts.js";
 import { renderToolContent, runRegistryTool } from "../tool-registry.js";
 import type { RegistryToolCtx } from "./types.js";

@@ -19,6 +19,7 @@
 // a stale pin refuses rather than falls back, and one connection resolves with no configuration.
 import type { Env } from "../types.js";
 import { decryptKey, encryptKey } from "./crypto.js";
+import { type IdentitySnapshot, loadProfile } from "./email-worker-identities.js";
 
 /** The contract version this build of the platform speaks against. Recorded on a connection only
  *  as a fact the Worker reported — never asserted by the owner — so a console can show a Worker
@@ -274,4 +275,48 @@ export async function recordInboundEventOnce(env: Env, userId: string, endpoint:
 		.bind(userId, endpoint, accountId, providerEventId)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
+}
+
+// ── Identity snapshot, approvals and health (#1270) ───────────────────────────────────────────
+//
+// These write ONLY the non-secret columns added in migration 0271 (provider, identity_snapshot, approved_senders,
+// reply_identity, last_probe_*). They live here, beside the credential writes, because this is the one module
+// allowed to write `email_worker_connections` (security-invariants: every writer of a table with envelope columns
+// imports lib/crypto.ts), and the pure policy in email-worker-identities.ts must stay free of storage.
+
+/**
+ * Record a successful identity probe: the bridge's own report, and health. When the SET OF SENDERS
+ * the bridge reports shrinks, owner approvals for addresses it no longer reports are dropped — an
+ * approval must never outlive the bridge's own statement that the address can send.
+ */
+export async function recordProbeSuccess(env: Env, userId: string, endpoint: string, accountId: string, snap: IdentitySnapshot): Promise<void> {
+	const current = await loadProfile(env, userId, endpoint, accountId);
+	const approved = current.approvedSenders.filter((a) => snap.senders.includes(a));
+	const reply = current.replyIdentity && approved.includes(current.replyIdentity) ? current.replyIdentity : null;
+	await env.DB.prepare(
+		`UPDATE email_worker_connections SET provider = ?4, identity_snapshot = ?5, approved_senders = ?6, reply_identity = ?7,
+		   last_probe_at = datetime('now'), last_probe_ok = 1, last_failure_class = NULL, updated_at = datetime('now')
+		 WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3`,
+	)
+		.bind(userId, endpoint, accountId, snap.provider, JSON.stringify(snap), JSON.stringify(approved), reply)
+		.run();
+}
+
+/** Record that the bridge could not be reached / refused. Health only — the last good snapshot stays. */
+export async function recordProbeFailure(env: Env, userId: string, endpoint: string, accountId: string, failureClass: string): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE email_worker_connections SET last_probe_at = datetime('now'), last_probe_ok = 0, last_failure_class = ?4
+		 WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3`,
+	)
+		.bind(userId, endpoint, accountId, failureClass)
+		.run()
+		.catch(() => undefined);
+}
+
+export async function saveApproval(env: Env, userId: string, endpoint: string, accountId: string, approvedSenders: string[], replyIdentity: string | null): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE email_worker_connections SET approved_senders = ?4, reply_identity = ?5, updated_at = datetime('now') WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3`,
+	)
+		.bind(userId, endpoint, accountId, JSON.stringify(approvedSenders), replyIdentity)
+		.run();
 }

@@ -38,8 +38,8 @@ import type { Connector, RegistryToolCtx, RegistryToolResult, ToolDef } from "./
 import { safeFetch, SsrfError } from "../ssrf.js";
 import { clipMarked } from "../clip-marked.js";
 import { logEvent } from "../events.js";
-import { resolveEmailWorkerConnection, resolveEmailWorkerSecret } from "../email-worker-connections.js";
-import { type ConnectionProfile, type IdentitySnapshot, loadProfile, parseIdentity, recordProbeFailure, replyDecision, senderDecision, type SenderDecision } from "../email-worker-identities.js";
+import { recordProbeFailure, resolveEmailWorkerConnection, resolveEmailWorkerSecret } from "../email-worker-connections.js";
+import { type ConnectionProfile, type IdentitySnapshot, loadProfile, parseIdentity, replyDecision, senderDecision, type SenderDecision } from "../email-worker-identities.js";
 import { findSentReceipt, insertReceipt, isDuplicateSend, listReceipts, recordReceipt, type ReceiptKind } from "../email-worker-receipts.js";
 
 function fail(message: string): RegistryToolResult {
