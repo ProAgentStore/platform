@@ -40,7 +40,9 @@ export interface OperatorGuidanceInput {
 }
 
 /** The ceiling on the generated text. An agent declaring the whole catalogue fits under it (tested). */
-export const OPERATOR_GUIDANCE_MAX_CHARS = 45_000;
+// 45_000 -> 50_000 at #1270: the worker-email tools (four in #1269, two more here) took the every-tool shape to the old ceiling.
+// The ceiling only clips this generated text; nothing else reads it, and the test still fails on a cut.
+export const OPERATOR_GUIDANCE_MAX_CHARS = 50_000;
 /** A tool's purpose: its description's first sentence, at most this long. */
 export const PURPOSE_MAX_CHARS = 200;
 

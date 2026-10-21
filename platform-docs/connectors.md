@@ -43,7 +43,7 @@ resolved before the run and is refused at dispatch instead.
 | `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write), `transfer_conversation` (write) |
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
-| `email-worker` | bearer token **per connection** (owner-pasted, endpoint-keyed like `mcp`) | read + write | `email_worker_list_messages`, `email_worker_read_message`, `email_worker_send` (write), `email_worker_reply` (write) against a customer-owned Worker implementing the [adapter contract](email-worker-adapter.md) — see [Worker-backed email](#worker-backed-email) |
+| `email-worker` | bearer token **per connection** (owner-pasted, endpoint-keyed like `mcp`) | read + write | `email_worker_list_messages`, `email_worker_read_message`, `email_worker_send` (write), `email_worker_reply` (write), `email_worker_identities`, `email_worker_list_events` against a customer-owned Worker implementing the [adapter contract](email-worker-adapter.md) — see [Worker-backed email](#worker-backed-email) |
 | `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_send_message`, `discord_add_reaction` |
 
 To connect Discord, store a **Discord bot token** in **Profile → API Keys & connector credentials**.
@@ -638,6 +638,16 @@ For an owner with no Google mailbox to OAuth against — FreeAppStore's mail is 
 Routing behind a Worker, not Gmail — `email-worker` (#1269) is the same shape Gmail gives a
 private agent (read, search, send, reply, pinned to one mailbox) over a **customer-owned HTTPS
 Worker** instead. Full wire contract: [email-worker-adapter.md](email-worker-adapter.md).
+
+**Cloudflare Email Sending and Email Routing (#1270).** A routed Cloudflare alias such as
+`admin@freeappstore.online` is not a mailbox and not necessarily send-capable. A customer-account
+**bridge Worker** (`templates/cloudflare-email-bridge/`) holds the account-scoped Cloudflare bindings
+and speaks this contract; its identity report adds the domains, the **senders**, the **routes** and the
+**reply identity**. PAGS sends only as an address that the bridge reports as a sender **and** the owner
+approved — a routed-only alias is refused — records every send, reply, inbound message, delivery outcome
+and routing or bridge failure as an append-only receipt, and preserves the original sender and recipient
+of inbound mail. Setup, the rules and the receipts:
+[Cloudflare Email Sending and Email Routing](cloudflare-email-bridge.md).
 
 **Connecting.** `POST /v1/email-worker/connections { endpoint, secret, accountId?, label? }` tests
 the secret against the Worker's `/v1/email-worker/identity` before storing it — a Worker that

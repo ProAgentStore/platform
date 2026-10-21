@@ -17656,3 +17656,62 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Cloudflare Email Sending + Routing (#1270) ────────────────────────────
+
+  /v1/email-worker/connections/identities:
+    put:
+      summary: Approve the sender identities and reply identity a Cloudflare connection may use
+      description: |
+        The owner can only NARROW what the bridge itself reports. An address the bridge does not list as a
+        send-capable sender — in particular an Email Routing alias that only receives — is refused with the
+        reason. A send is allowed only for an address that is both reported by the bridge and approved here.
+      operationId: approveEmailWorkerIdentities
+      tags: [Connectors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, approvedSenders]
+              properties:
+                endpoint: { type: string, format: uri }
+                accountId: { type: string }
+                approvedSenders: { type: array, items: { type: string } }
+                replyIdentity: { type: string, description: One of the approved senders. }
+      responses:
+        "200":
+          description: The connection's identities, approvals and bridge health
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/email-worker/receipts:
+    get:
+      summary: The caller's append-only worker-email audit receipts
+      description: |
+        Sends, replies, inbound messages (with the original sender and recipient), delivery outcomes and
+        routing or bridge failures: ids, addresses, outcome and failure class. Never a message body or a
+        credential. The feed for a downstream application audit trail.
+      operationId: listEmailWorkerReceipts
+      tags: [Connectors]
+      parameters:
+        - { name: endpoint, in: query, schema: { type: string } }
+        - { name: account, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string, enum: [list, read, identities, send, reply, inbound, delivery, routing_failure, bridge_failure, refusal] } }
+        - { name: outcome, in: query, schema: { type: string, enum: [ok, sent, failed, refused, deduped] } }
+        - { name: since, in: query, schema: { type: string } }
+        - { name: until, in: query, schema: { type: string } }
+        - { name: before, in: query, schema: { type: string }, description: The previous page's `nextBefore`. }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200":
+          description: Receipts, newest first, with a `nextBefore` cursor
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }

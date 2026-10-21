@@ -114,6 +114,8 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 	email_worker_read_message: "Worker-backed email (#1269) — functional via declaration, no seeded catalog agent yet.",
 	email_worker_send: "Worker-backed email (#1269) — functional via declaration, no seeded catalog agent yet.",
 	email_worker_reply: "Worker-backed email (#1269) — functional via declaration, no seeded catalog agent yet.",
+	email_worker_identities: "Worker-backed email (#1270) — shows a Cloudflare connection's senders, routes and bridge health; functional via declaration, no seeded catalog agent.",
+	email_worker_list_events: "Worker-backed email (#1270) — the connection's audit events; functional via declaration, no seeded catalog agent.",
 	// #711. Unlike the meta/sheets entries above, these are NOT inert: they run today against any
 	// already-connected mailbox, because gmail.readonly was always the granted scope and it covers
 	// attachment download. A subscriber can declare them on their own agent right now — they are in

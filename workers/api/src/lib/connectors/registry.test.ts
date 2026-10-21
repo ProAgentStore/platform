@@ -135,13 +135,15 @@ describe("connector registry", () => {
 		expect(ew?.scopes).toEqual({ read: true, write: true });
 		expect(ew?.grantModel).toBe("user");
 		expect(ew?.tools.map((t) => t.name).sort()).toEqual([
+			"email_worker_identities",
+			"email_worker_list_events",
 			"email_worker_list_messages",
 			"email_worker_read_message",
 			"email_worker_reply",
 			"email_worker_send",
 		]);
 		const byName = new Map((ew?.tools ?? []).map((t) => [t.name, t]));
-		for (const name of ["email_worker_list_messages", "email_worker_read_message"]) {
+		for (const name of ["email_worker_list_messages", "email_worker_read_message", "email_worker_identities", "email_worker_list_events"]) {
 			expect(byName.get(name)?.scope, name).toBe("read");
 			expect(byName.get(name)?.mutates, name).toBe(false);
 		}

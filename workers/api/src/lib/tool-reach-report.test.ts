@@ -150,6 +150,8 @@ const INTERNET = new Set<string>([
 	"email_worker_read_message",
 	"email_worker_send",
 	"email_worker_reply",
+	"email_worker_identities", // #1270: reads the bridge's own report of the customer's Cloudflare identities
+	"email_worker_list_events", // #1270: the connection's receipts — addresses that strangers wrote
 ]);
 
 describe("the listing reports what a tool can reach (#584)", () => {

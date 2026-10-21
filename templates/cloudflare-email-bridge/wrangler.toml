@@ -1,0 +1,30 @@
+# Cloudflare Email bridge for ProAgentStore (#1270). Deploy this in YOUR Cloudflare account — the
+# account that owns the domain — because Email Sending and Email Routing bindings are account-scoped.
+name = "pags-email-bridge"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# The send binding. Restrict it to the identities you want PAGS to be able to send as; the Worker also
+# refuses any `from` that is not in SENDERS, so the binding is the second lock, not the only one.
+[[send_email]]
+name = "EMAIL"
+
+[[kv_namespaces]]
+binding = "MAIL"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[vars]
+# Domains onboarded to Email Sending / Email Routing in this account.
+DOMAINS = "example.com"
+# Send-capable identities. ONLY these can be sent from.
+SENDERS = "admin@example.com"
+# The identity replies go out from (must be one of SENDERS).
+REPLY_IDENTITIES = "admin@example.com"
+# Routed addresses: address=destination. Inbound only — a routed address is NOT a sender unless it is also in SENDERS.
+ROUTES = "admin@example.com=you@your-verified-destination.example,info@example.com=you@your-verified-destination.example"
+
+# Secrets (never put these in [vars]):
+#   wrangler secret put BRIDGE_SECRET        # the bearer you paste into PAGS
+#   wrangler secret put PAGS_INBOUND_URL     # the inbound URL PAGS shows once when you connect
+#
+# Then in the Cloudflare dashboard: Email → Email Routing → Routing rules → send the address to this Worker.

@@ -42,6 +42,34 @@ Response:
 notion of "its own address"). This is the ONLY call PAGS makes before a connection is stored — a
 Worker that cannot answer this is never saved as a connection.
 
+#### Optional identity fields — the Cloudflare profile (#1270)
+
+A Worker bridging **Cloudflare Email Sending and Email Routing** adds these to the identity reply.
+They are optional: a generic Worker omits them and PAGS applies no sender policy to it.
+
+```json
+{
+  "contractVersion": "email-worker/v1",
+  "provider": "cloudflare",
+  "account": { "address": "admin@example.com" },
+  "domains": ["example.com"],
+  "senders": ["admin@example.com"],
+  "replyIdentities": ["admin@example.com"],
+  "routes": [{ "address": "info@example.com", "destination": "you@verified.example" }]
+}
+```
+
+* `senders` are addresses the Worker will send **as**; `routes` are addresses it only **receives** for.
+  A routed address is **not** send-capable unless it is also listed in `senders`. PAGS refuses a send
+  from a routed-only address, and the Worker MUST too (`403 sender_not_allowed`).
+* Every address must sit on one of `domains`; PAGS drops any that does not.
+* `send` / `reply` requests then carry `from`. On a reply, `from` is the configured reply identity and
+  the Worker derives the recipient from the parent message — it MUST NOT accept a `to`.
+* A `send` / `reply` response SHOULD include `providerReceiptId` (the provider's own id, e.g. Email
+  Sending's message id). PAGS records it on the audit receipt.
+* Inbound events from a Cloudflare Worker carry the **original** `from` and `to`; see
+  [Cloudflare Email Sending and Email Routing](cloudflare-email-bridge.md).
+
 ### `POST /v1/email-worker/messages/list`
 
 Request:
