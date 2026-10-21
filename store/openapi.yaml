@@ -13699,7 +13699,10 @@ paths:
         is not cleared on disconnect). `lastSeenAt` is the machine's last heartbeat, not a socket.
         `resources` (#924) is the machine's own state from its freshest heartbeat sample — CPU load
         (1/5/15-min and per core), memory, its active coding sessions, and `warnings` past a
-        high-water mark — or null for a CLI before 0.4.71.
+        high-water mark — or null for a CLI before 0.4.71. `runtime_health` (#1167) is whether the runtime that
+        executes commands answered its own health check at the last heartbeat (`responsive`, `unresponsive`, or
+        `unknown` for an older CLI or a stale sample); `connected` is the CLI's relay socket and can stay true while a
+        wedged runtime behind it times out every command.
       operationId: listTerminalNodes
       tags: [Terminals]
       responses:

@@ -18,6 +18,7 @@ import { runnerIdentityOf } from "../lib/runner-resources.js";
 import { cleanupNodeView, getMachinePolicy, machinePolicyWire, setMachineCleanup, setMachinePolicy, silentAfterInstall, type MachinePolicy } from "../lib/machine-policy.js";
 import { parseCleanupChange } from "../lib/runner-cleanup-policy.js";
 import { gateStateLabel, parseGateState } from "../lib/runner-admission-gate.js";
+import { runtimeHealthOf } from "../lib/runner-resources.js";
 import { storedOverrides, thresholdsView } from "../lib/machine-thresholds.js";
 import { registerMachineThresholdRoutes } from "./terminals-thresholds.js";
 import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
@@ -191,6 +192,11 @@ export interface TerminalNode {
 	 * agent that runs there), where each came from, and the gate's current verdict.
 	 */
 	thresholds?: ReturnType<typeof thresholdsView>;
+	/**
+	 * Whether the runtime that EXECUTES commands answered its own health check at the last heartbeat (#1167). `connected` is a relay
+	 * socket, answered by the CLI; this is the runtime behind it. `unknown`: an older CLI, or a sample too old to say.
+	 */
+	runtime_health?: "responsive" | "unresponsive" | "unknown";
 	cleanup?: {
 		mode: "gentle" | "harsh";
 		behaviours: Record<string, boolean>;
@@ -395,6 +401,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length, gateStateLabel(parseGateState(policyRow ? policyRow.gate_state : gateStateFor.get(key) ?? null)), overrides.maxSessions ?? null);
 		if (n.machineId) n.thresholds = thresholdsView(defaultsEnv, overrides, policyRow?.gate_state ?? null, n.resources ? { cpus: n.resources.cpus, memTotalBytes: n.resources.memTotalBytes } : null);
 		n.supervisor = n.resources?.runner?.supervisor ?? null;
+		n.runtime_health = runtimeHealthOf(n.resources);
 		n.identityHint = identityHint(n.machineId, n.runnerVersion);
 		// What a machine pin reads as (#1250): the target machine's name, else its current hostname, else its id.
 		for (const i of n.instances) if (i.pinnedMachineId) { const t = byKey.get(i.pinnedMachineId); i.pinnedNode = t?.displayName ?? t?.node ?? i.pinnedMachineId; }

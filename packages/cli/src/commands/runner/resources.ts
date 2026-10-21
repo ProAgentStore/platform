@@ -30,8 +30,38 @@ export interface ResourceSample {
 	runner?: RunnerProcessSample;
 	/** Round trip of one relay probe, ms — slow vs stuck. Null when this beat's probe got no echo. */
 	relayRttMs?: number | null;
+	/** What the local runtime's own `/health` answered this beat (#1167) — the pong and the heartbeat are the CLI's, not the runtime's. */
+	runtime?: RuntimeHealthSample;
 	/** Per-session CPU and memory, engine plus descendants. Absent when it could not be read. */
 	sessions?: Array<{ sessionId: string; engineLabel: string; pid: number; processes: number; rssBytes: number; cpuPct: number }>;
+}
+
+export interface RuntimeHealthSample {
+	ok: boolean;
+	/** Round trip of the probe, ms; null when it never got an answer. */
+	latencyMs: number | null;
+	/** Why not, in a few words — a timeout, a refused connection or the HTTP status. */
+	error?: string;
+	checkedAt: number;
+}
+
+/** How long the runtime gets to answer `/health` before it reads as wedged. A healthy one answers in milliseconds. */
+export const RUNTIME_HEALTH_TIMEOUT_MS = 4000;
+
+/**
+ * Ask the local runtime — the child that executes commands — whether it is alive (#1167). `fetch` and `now` are parameters so the
+ * three answers (healthy, a bad status, no answer) are tested without a server. Never throws: failing to answer IS the reading.
+ */
+export async function probeRuntimeHealth(localUrl: string, token: string, doFetch: typeof fetch = fetch, now: () => number = Date.now): Promise<RuntimeHealthSample> {
+	const started = now();
+	try {
+		const res = await doFetch(`${localUrl.replace(/\/$/, "")}/health`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(RUNTIME_HEALTH_TIMEOUT_MS) });
+		const latencyMs = now() - started;
+		return res.ok ? { ok: true, latencyMs, checkedAt: started } : { ok: false, latencyMs, error: `HTTP ${res.status}`, checkedAt: started };
+	} catch (e) {
+		const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+		return { ok: false, latencyMs: null, error: timedOut ? `no answer in ${RUNTIME_HEALTH_TIMEOUT_MS / 1000}s` : e instanceof Error ? e.message.split("\n")[0] : "unreachable", checkedAt: started };
+	}
 }
 
 export interface DiskSample {
@@ -144,7 +174,7 @@ export function recordRunnerStart(now: number = Date.now(), file: string = START
 export function sampleResources(
 	read: Pick<typeof os, "loadavg" | "cpus" | "totalmem" | "freemem" | "platform"> = os,
 	now: number = Date.now(),
-	extra: Pick<ResourceSample, "disk" | "runner" | "relayRttMs" | "sessions" | "memAvailableBytes"> = {},
+	extra: Pick<ResourceSample, "disk" | "runner" | "relayRttMs" | "sessions" | "memAvailableBytes" | "runtime"> = {},
 ): ResourceSample {
 	const [l1 = 0, l5 = 0, l15 = 0] = read.loadavg();
 	return {

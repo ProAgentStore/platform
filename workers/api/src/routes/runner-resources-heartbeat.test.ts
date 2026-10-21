@@ -122,3 +122,29 @@ describe("the admission gate re-judges every heartbeat (#1264)", () => {
 		expect(row?.gate_state).toBeNull();
 	});
 });
+
+describe("the runtime's own health on the heartbeat (#1167)", () => {
+	const at = () => Date.now();
+	const withRuntime = (runtime: unknown) => ({ ...sample(1, at()), runtime });
+
+	it("a CLI that sends no runtime verdict reads `unknown` — never unhealthy, never assumed healthy", async () => {
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(1, at()) });
+		const node = (await machine()) as unknown as { runtime_health: string; resources: { runtime: unknown } };
+		expect(node.runtime_health).toBe("unknown");
+		expect(node.resources.runtime).toBeNull();
+	});
+
+	it("a connected CLI whose runtime did not answer reads `unresponsive`, with the reason and a warning", async () => {
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: withRuntime({ ok: false, latencyMs: null, error: "no answer in 4s", checkedAt: at() }) });
+		const node = (await machine()) as unknown as { runtime_health: string; resources: { runtime: { state: string; error: string }; warnings: string[] } };
+		expect(node.runtime_health).toBe("unresponsive");
+		expect(node.resources.runtime).toMatchObject({ state: "unresponsive", error: "no answer in 4s" });
+		expect(node.resources.warnings.join(" ")).toMatch(/runtime did not answer its own health check/);
+	});
+
+	it("a healthy runtime reads `responsive`, and the next heartbeat's verdict replaces the last", async () => {
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: withRuntime({ ok: false, latencyMs: null, error: "no answer in 4s", checkedAt: at() }) });
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: withRuntime({ ok: true, latencyMs: 7, checkedAt: at() + 1000 }) });
+		expect(((await machine()) as unknown as { runtime_health: string }).runtime_health).toBe("responsive");
+	});
+});

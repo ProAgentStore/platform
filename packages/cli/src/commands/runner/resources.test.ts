@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseVmStat, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
+import { parseVmStat, probeRuntimeHealth, RUNTIME_HEALTH_TIMEOUT_MS, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
 
 const fakeOs = (over: Partial<Record<"loadavg" | "cpus" | "totalmem" | "freemem" | "platform", () => unknown>> = {}) =>
 	({
@@ -114,5 +114,53 @@ describe("disk on a platform that reports no inodes (Windows) (#1275)", () => {
 	it("is still a sample: bytes are real, inode counts are zero", () => {
 		const windows = (() => ({ blocks: 61_941_075, bsize: 4096, bavail: 43_981_076, files: 0, ffree: 0 })) as unknown as Parameters<typeof sampleDisk>[1];
 		expect(sampleDisk("C:/Users/admin/repos", windows)).toEqual({ path: "C:/Users/admin/repos", totalBytes: 61_941_075 * 4096, freeBytes: 43_981_076 * 4096, inodesTotal: 0, inodesFree: 0 });
+	});
+});
+
+describe("the runtime's own health (#1167)", () => {
+	const clock = (...ticks: number[]) => {
+		let i = 0;
+		return () => ticks[Math.min(i++, ticks.length - 1)];
+	};
+
+	it("reads a runtime that answers /health as ok, with the round trip", async () => {
+		const seen: Array<{ url: string; auth: string | null }> = [];
+		const doFetch = (async (url: string, init?: RequestInit) => {
+			seen.push({ url, auth: new Headers(init?.headers).get("Authorization") });
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		expect(await probeRuntimeHealth("http://127.0.0.1:49171/", "tok", doFetch, clock(1000, 1012))).toEqual({ ok: true, latencyMs: 12, checkedAt: 1000 });
+		expect(seen).toEqual([{ url: "http://127.0.0.1:49171/health", auth: "Bearer tok" }]);
+	});
+
+	it("reads a bad status as not ok, naming it", async () => {
+		const doFetch = (async () => new Response("no", { status: 503 })) as unknown as typeof fetch;
+		expect(await probeRuntimeHealth("http://x", "t", doFetch, clock(5, 9))).toEqual({ ok: false, latencyMs: 4, error: "HTTP 503", checkedAt: 5 });
+	});
+
+	it("reads a refused connection as not ok, with the reason's first line", async () => {
+		const doFetch = (async () => {
+			throw new Error("connect ECONNREFUSED 127.0.0.1:49171\n    at stack");
+		}) as unknown as typeof fetch;
+		expect(await probeRuntimeHealth("http://x", "t", doFetch, clock(1))).toEqual({ ok: false, latencyMs: null, error: "connect ECONNREFUSED 127.0.0.1:49171", checkedAt: 1 });
+	});
+
+	it("reads no answer in time as not ok — the wedged case — and never throws", async () => {
+		const doFetch = ((_url: string, init?: RequestInit) =>
+			new Promise((_resolve, reject) => {
+				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+			})) as unknown as typeof fetch;
+		const started = Date.now();
+		// Real timer, shortened: the probe's own bound is RUNTIME_HEALTH_TIMEOUT_MS, so assert on it and on the shape of the answer.
+		expect(RUNTIME_HEALTH_TIMEOUT_MS).toBeLessThanOrEqual(5000);
+		const result = await probeRuntimeHealth("http://x", "t", doFetch);
+		expect(result).toMatchObject({ ok: false, latencyMs: null, error: `no answer in ${RUNTIME_HEALTH_TIMEOUT_MS / 1000}s` });
+		expect(Date.now() - started).toBeLessThan(RUNTIME_HEALTH_TIMEOUT_MS + 2000);
+	}, RUNTIME_HEALTH_TIMEOUT_MS + 4000);
+
+	it("rides the heartbeat sample when given, and is left out when not", () => {
+		const runtime = { ok: false, latencyMs: null, error: "no answer in 4s", checkedAt: 1 };
+		expect(sampleResources(fakeOs(), 1, { runtime }).runtime).toEqual(runtime);
+		expect("runtime" in sampleResources(fakeOs(), 1)).toBe(false);
 	});
 });

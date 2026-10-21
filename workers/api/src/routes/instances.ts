@@ -60,6 +60,7 @@ import { instanceSocketsUnder } from "../lib/machine-sockets.js";
 import type { Env } from "../types.js";
 import {
 	callRuntime,
+	RUNTIME_PROBE_TIMEOUT_MS,
 	claimMachineNames,
 	encodeRuntimeToken,
 	expireOrphanedRuntimeTasks,
@@ -1054,8 +1055,8 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 
 	try {
 		const [healthRes, capabilitiesRes] = await Promise.all([
-			callRuntime(c.env, runtime, "/health"),
-			callRuntime(c.env, runtime, "/capabilities"),
+			callRuntime(c.env, runtime, "/health", {}, { timeoutMs: RUNTIME_PROBE_TIMEOUT_MS }), // #1167: bounded — a wedged runtime must not hold this call for the relay's 120s
+			callRuntime(c.env, runtime, "/capabilities", {}, { timeoutMs: RUNTIME_PROBE_TIMEOUT_MS }),
 		]);
 		const health = await healthRes.json().catch(() => ({}));
 		const capabilities = await capabilitiesRes.json().catch(() => ({}));

@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { type ResourceSample, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
+import { probeRuntimeHealth, type ResourceSample, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
 import { createCleanupSync } from "./cleanup-sync.js";
 import { sessionToken } from "./session-token.js";
 import { AgentRoutePolicy } from "./route-policy.js";
@@ -430,7 +430,7 @@ export async function connectViaRelay(
 			// One machine reading per beat, sent with every agent's heartbeat (#924): the machine, its
 			// checkout volume, this process, one relay round trip, and which session is using what.
 			const first = attached.values().next().value as RelaySocketHandle | undefined;
-			const [relayRttMs, sessions] = await Promise.all([first ? first.probeRtt() : Promise.resolve(null), readSessionResources(localUrl, runnerToken)]);
+			const [relayRttMs, sessions, runtime] = await Promise.all([first ? first.probeRtt() : Promise.resolve(null), readSessionResources(localUrl, runnerToken), probeRuntimeHealth(localUrl, runnerToken)]);
 			const resources = sampleResources(undefined, undefined, {
 				disk: sampleDisk() ?? undefined,
 				memAvailableBytes: sampleMemAvailable() ?? undefined, // #1275: macOS available memory (free + inactive + purgeable)
@@ -448,6 +448,7 @@ export async function connectViaRelay(
 				},
 				relayRttMs,
 				sessions: sessions ?? undefined,
+				runtime, // #1167: the runtime's own /health, so a wedged runtime no longer reads online off the CLI's heartbeat
 			});
 			const cleanup = await cleanupSync.collect(resources);
 			for (const id of [...attached.keys()]) {

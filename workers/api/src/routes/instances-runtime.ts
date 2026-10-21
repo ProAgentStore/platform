@@ -860,11 +860,20 @@ export async function decodeRuntimeToken(env: Env, row: RuntimeRow): Promise<str
 	);
 }
 
+/**
+ * How long a liveness probe (`/health`, `/capabilities`) may wait on the relay (#1167). A healthy runtime answers in well under a
+ * second; without a bound a wedged one held the caller for the relay's whole 120s command deadline — long enough that the status
+ * call itself looked like the outage.
+ */
+export const RUNTIME_PROBE_TIMEOUT_MS = 5_000;
+
 export async function callRuntime(
 	env: Env,
 	row: RuntimeRow,
 	path: string,
 	init: RequestInit = {},
+	/** `timeoutMs` bounds the wait on the relay (it is capped at the relay's own deadline). Omit for a command that may take long. */
+	opts: { timeoutMs?: number } = {},
 ): Promise<Response> {
 	if (!env.RELAY) throw new Error("RELAY binding not configured");
 	const stub = env.RELAY.get(env.RELAY.idFromName(relayNameForInstance(row.instance_id, row.runner_node)));
@@ -875,7 +884,7 @@ export async function callRuntime(
 	return stub.fetch(new Request("https://relay/command", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ method, path, body: relayBody }),
+		body: JSON.stringify({ method, path, body: relayBody, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) }),
 	}));
 }
 

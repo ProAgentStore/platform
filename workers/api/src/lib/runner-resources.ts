@@ -15,6 +15,7 @@
  * NULL, and every reader answers `resources: null` — "not reported", never a zero reading.
  */
 import type { Env } from "../types.js";
+import { clipMarked } from "./clip-marked.js";
 
 /** The first CLI whose heartbeat carries a resource sample. */
 export const RESOURCES_MIN_CLI = "0.4.71";
@@ -47,6 +48,12 @@ export interface RunnerResourceSample {
 	relayRttMs?: number | null;
 	/** Per-session CPU/memory, engine plus descendants. */
 	sessions?: SessionUsage[];
+	/**
+	 * The runtime's OWN health (#1167): what `GET /health` on the local runtime child answered this beat. The relay pong and the
+	 * heartbeat are answered by the `runner connect` process, so a wedged runtime — the process that actually executes commands —
+	 * still read online; this is the only reading that comes from it. Absent from a CLI before 0.4.168 (unknown, not unhealthy).
+	 */
+	runtime?: { ok: boolean; latencyMs: number | null; error?: string; checkedAt: number };
 }
 
 export interface SessionUsage {
@@ -154,7 +161,27 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 			return [{ sessionId: e.sessionId, engineLabel: typeof e.engineLabel === "string" && e.engineLabel.length <= 100 ? e.engineLabel : "", pid, processes, rssBytes, cpuPct }];
 		});
 	}
+	// #1167: the runtime's own health. Each part is validated on its own; a malformed block is dropped whole, never read as healthy.
+	const rt = r.runtime as Record<string, unknown> | undefined;
+	if (rt && typeof rt === "object" && typeof rt.ok === "boolean") {
+		const checkedAt = finite(rt.checkedAt, 2 ** 53);
+		if (checkedAt) {
+			const latency = finite(rt.latencyMs, 600_000);
+			sample.runtime = { ok: rt.ok, latencyMs: latency, checkedAt, ...(typeof rt.error === "string" && rt.error.trim() ? { error: clipMarked(rt.error.trim(), 200) } : {}) };
+		}
+	}
 	return sample;
+}
+
+/** A runtime verdict older than this is not a verdict: the heartbeat that carried it has stopped. */
+export const RUNTIME_HEALTH_FRESH_MS = 3 * 60_000;
+
+/** `responsive` / `unresponsive` from the freshest sample's runtime block; `unknown` when it is absent or stale. */
+export function runtimeHealthOf(resources: { runtime: { state: "responsive" | "unresponsive"; checkedAt: string } | null } | null, now = Date.now()): "responsive" | "unresponsive" | "unknown" {
+	const r = resources?.runtime;
+	if (!r) return "unknown";
+	const at = Date.parse(r.checkedAt);
+	return Number.isFinite(at) && now - at <= RUNTIME_HEALTH_FRESH_MS ? r.state : "unknown";
 }
 
 /** What list_runner_nodes and coding_diagnostics report for a machine. */
@@ -183,6 +210,11 @@ export interface RunnerResourcesView {
 	relayRttMs: number | null;
 	/** Per-session usage, heaviest CPU first; null when not reported. */
 	sessions: SessionUsage[] | null;
+	/**
+	 * The runtime's own `/health` answer at the sample (#1167): `responsive`, or `unresponsive` — the CLI is connected but the
+	 * process that runs commands is not answering, so commands to this machine will time out. null: not reported (an older CLI).
+	 */
+	runtime: { state: "responsive" | "unresponsive"; latencyMs: number | null; error?: string; checkedAt: string } | null;
 	/** High-water marks crossed, each a sentence. `[]` when the machine looks fine. */
 	warnings: string[];
 	/**
@@ -250,6 +282,10 @@ export function resourcesView(raw: unknown, activeSessions: number | null, gateS
 		: null;
 	if (disk && disk.usedPct >= DISK_HIGH_WATER_PCT) warnings.push(`Disk nearly full: ${disk.usedPct}% of the checkout volume in use. Clones, builds and git writes fail when it fills.`);
 	if (disk && disk.inodesUsedPct >= DISK_HIGH_WATER_PCT) warnings.push(`Inodes nearly exhausted: ${disk.inodesUsedPct}% in use on the checkout volume — many small files (node_modules, build caches) can fill it with space to spare.`);
+	// #1167: the pong and the heartbeat come from the CLI, not the runtime — so say so when the runtime itself did not answer.
+	if (s.runtime && !s.runtime.ok) {
+		warnings.push(`The runner is connected but its runtime did not answer its own health check${s.runtime.error ? ` (${s.runtime.error})` : ""}. Commands to this machine will time out until it is restarted — try runner_restart.`);
+	}
 	// #1157: a runner refreshes its sign-in in its last 7 days, so one this close to expiry could not — and signs out at the date.
 	if (s.runner?.sessionExpiresAt && s.runner.sessionExpiresAt - s.sampledAt <= SESSION_WARN_MS) {
 		const left = s.runner.sessionExpiresAt - s.sampledAt;
@@ -297,6 +333,7 @@ export function resourcesView(raw: unknown, activeSessions: number | null, gateS
 			: null,
 		relayRttMs: typeof s.relayRttMs === "number" ? Math.round(s.relayRttMs) : null,
 		sessions: s.sessions ? [...s.sessions].sort((a, b) => b.cpuPct - a.cpuPct) : null,
+		runtime: s.runtime ? { state: s.runtime.ok ? "responsive" : "unresponsive", latencyMs: s.runtime.latencyMs, ...(s.runtime.error ? { error: s.runtime.error } : {}), checkedAt: new Date(s.runtime.checkedAt).toISOString() } : null,
 		warnings,
 		gateState,
 	};
