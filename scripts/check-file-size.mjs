@@ -1014,7 +1014,7 @@ const PINS = {
 	// one surface, which is the same as no gate.
 	// +6 at #847: artifact forwarding is part of this dispatch result envelope, beside transfer and render; a second wrapper would only hide that propagation.
 	// New entry at #878: 797 → 808 for the repo-less terminal path in coding_session_capture/_message — an import, a bound caller and one branch in each; the logic is src/terminal-fallback.ts, not here.
-	"workers/mcp/src/coding-tools.ts": 816, // +5 at #1243: system_status became a deprecated alias registered beside coding_diagnostics, which now resolves a slug as system_status did. // +3 at #881: import + registration of `coding_engine_reauth`, whose body lives in its own coding-reauth-tools.ts.
+	"workers/mcp/src/coding-tools.ts": 825, // +9 at #1262: coding_session_restart succeeds only on ok:true and says what to do when no runner is connected. +5 at #1243: system_status became a deprecated alias registered beside coding_diagnostics, which now resolves a slug as system_status did. // +3 at #881: import + registration of `coding_engine_reauth`, whose body lives in its own coding-reauth-tools.ts.
 	// Pinned at #878 at its size on main: #874 (2b0ca68) grew it past the 800-line default without an entry, which left this ratchet failing for every commit after it. Recorded as it stands — not grown here.
 	// +3 at #893: `runCloudflareAi` redacts Cloudflare's error body before it becomes `details` — an import and one call with its two-line why. The redaction is lib/cloudflare-redact.ts.
 	// +11 at #914: a system block may ask for the 1-hour cache, and the longer-TTL-first rule is

@@ -407,7 +407,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_session_restart",
-		"Restart the coding CLI of one session on its runner machine: the engine is stopped and relaunched under the same session id, keeping its history. Use it when the CLI is stuck or erroring; to stop it for good use coding_session_end, and to replace the session with a new one use coding_session_fresh. Required: `instance_id`; optional `session_id` (from coding_sessions_list, default the first active session). Example: {\"instance_id\":\"<id>\"}. Returns `Session <id> restarted.`, `No active coding session found.`, or an error. Check the result with coding_session_capture.",
+		"Restart the coding CLI of one session on its runner machine: the engine is stopped and relaunched under the same session id, keeping its history. Use it when the CLI is stuck or erroring; to stop it for good use coding_session_end, and to replace the session with a new one use coding_session_fresh. Required: `instance_id`; optional `session_id` (from coding_sessions_list, default the first active session). Example: {\"instance_id\":\"<id>\"}. Returns `Session <id> restarted.` only when the runner relaunched the engine; `No active coding session found.`; or an error — including `Session <id> was NOT restarted: …` when no runner is connected (start `pags up` on the session's machine, then retry) or the relaunch failed. Confirm with coding_session_capture.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -423,8 +423,17 @@ export function registerCodingSessionTools(
 			const sessions = r.sessions || [];
 			const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 			if (!sid) return text("No active coding session found.");
-			const restarted = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/restart`, sessionToken, { method: "POST" }, env)) as { error?: string };
+			const restarted = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/restart`, sessionToken, { method: "POST" }, env)) as { error?: string; ok?: boolean; runnerConnected?: boolean };
 			if (restarted?.error) return text(`Error restarting session ${sid}: ${restarted.error}`);
+			// Success is `ok === true` and nothing else (#1262). An API that answers 200 with `ok:false` / `runnerConnected:false` (the route
+			// did, before it refused with a 409) restarted nothing: no `completed` audit, and a reply that says what to do.
+			if (restarted?.ok !== true) {
+				return text(
+					restarted?.runnerConnected === false
+						? `Session ${sid} was NOT restarted: no runner is connected. Start \`pags up\` on the machine that holds this session, then retry (coding_diagnostics shows which machine).`
+						: `Session ${sid} was NOT restarted: the runner did not confirm a relaunch. Check coding_session_capture, then retry or use coding_session_fresh.`,
+				);
+			}
 			await audit(safetyFor(token), { tool: "coding_session_restart", action: "completed", input: { instance_id, session_id: sid } });
 			return text(`Session ${sid} restarted.`);
 		},

@@ -346,9 +346,6 @@ describe("every response that carries a session says what the engine came up wit
 		expect(body).not.toMatch(/\(await startSessionOnRunner\([^)]*\)\)\.conn != null/);
 	});
 
-	it("POST /sessions/:id/restart reports it — a restart always launches a new engine", () => {
-		const body = routeSrc('coding/sessions/:sessionId/restart"');
-		expect(body).toContain("seeded: started.seeded");
-		expect(body).toContain("resumed: started.resumed");
-	});
+	// POST /sessions/:id/restart (a restart always launches a new engine, so it reports what it came up holding) is driven for real,
+	// not read as source, in coding-session-restart.test.ts (#1262): success, no runner, failed stop and failed relaunch.
 });

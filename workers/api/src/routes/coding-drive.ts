@@ -12,6 +12,7 @@ import { appendTimeline } from "../lib/coding-timeline.js";
 import { openBudget } from "../lib/delegation-budget-store.js";
 import { noteUnmeteredHeadlessDrive } from "../lib/engine-metering.js";
 import { logError } from "../lib/error-log.js";
+import { sessionAttachment } from "../lib/session-attachment.js";
 import { resolveCloneCredential } from "../lib/git-credentials.js";
 import { callRunner } from "../lib/runner-client.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
@@ -278,7 +279,14 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		const repo = await getRepo(c.env, instanceId, uid, session.repoId);
 		if (!repo) throw new HttpError(404, "Repo not found");
 		const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
-		if (!conn) return c.json({ ok: false, runnerConnected: false });
+		if (!conn) {
+			// Nothing was restarted, so this is a refusal, not a success with a flag (#1262): a caller that reads only the status or
+			// `error` — the MCP tool did — reported "restarted" and audited a completed restart. WHY the session's machine is
+			// unreachable and what to do about it (lib/session-attachment.ts, #537): best-effort, never a 500 from a diagnosis.
+			const attachment = await sessionAttachment(c.env, instanceId, uid, session.runnerNode).catch(() => null);
+			const why = attachment ? `${attachment.message}${attachment.remedy ? ` Run \`${attachment.remedy}\`.` : ""}` : "No runner is connected — start it with: pags up";
+			return c.json({ ok: false, runnerConnected: false, error: `Session not restarted: ${why} Nothing was stopped or relaunched.`, ...(attachment ? { attachment } : {}) }, 409);
+		}
 		await touchSessionActivity(c.env, instanceId, uid, session.id);
 		// Restart is kill-then-relaunch under the SAME session id. Swallowing the kill meant a failed
 		// stop still fell through to the relaunch, putting TWO engine processes on one working tree —
@@ -309,7 +317,8 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		if (!started.conn) {
 			// Re-read the repo to get the clone error
 			const freshRepo = await getRepo(c.env, instanceId, uid, session.repoId);
-			return c.json({ ok: false, runnerConnected: true, error: freshRepo?.cloneError || "Failed to start session on runner" });
+			// 502, not a 200 carrying `ok:false` (#1262): the old engine was stopped and no new one came up, which is a failure.
+			return c.json({ ok: false, runnerConnected: true, error: freshRepo?.cloneError || "Failed to start session on runner" }, 502);
 		}
 		// A restart always launches a NEW engine, so what it came up holding is never rhetorical (#738).
 		return c.json({ ok: true, runnerConnected: true, resumed: started.resumed, seeded: started.seeded });
