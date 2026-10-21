@@ -13478,11 +13478,20 @@ paths:
         "404": { description: No identified machine is registered under this account }
   /v1/terminals/machines/{machineId}/policy:
     put:
-      summary: Set Auto-update for one physical machine
+      summary: Set Auto-update, name, and post-run cleanup for one physical machine
       description: |
         Owner-scoped durable policy. It can be changed while the runner is offline and is delivered
         on its next registration/heartbeat. Existing machines default to off; the setting is never
         attached to a hostname or an individual agent.
+
+        **Post-run cleanup (#1265).** `cleanup_mode` is `gentle` (the default: the runner touches only what
+        it can prove it started and only reports other leftovers) or `harsh` (a dedicated runner: also
+        kills the process group, sweeps orphaned build tooling, reaps stale temp and browser profiles, and
+        prunes caches above 90% disk). Changing the mode resets the six switches to its defaults;
+        `cleanup_overrides` sets any of them for this machine (`null` returns one to the default).
+        `cleanup_now` asks the machine to run one cleanup pass on its next heartbeat. The response's
+        `machine.cleanup` carries the mode, the resolved switches, and the runner's own last report.
+        Give at least one of `auto_update`, `display_name`, `cleanup_mode`, `cleanup_overrides`, `cleanup_now`.
       operationId: setTerminalMachinePolicy
       tags: [Terminals]
       parameters:
@@ -13493,9 +13502,15 @@ paths:
           application/json:
             schema:
               type: object
-              required: [auto_update]
               properties:
                 auto_update: { type: boolean }
+                display_name: { type: string }
+                cleanup_mode: { type: string, enum: [gentle, harsh] }
+                cleanup_overrides:
+                  type: object
+                  description: Behaviour → true | false | null. Keys are processGroupKill, leftoverSweep, browserCleanup, tempCleanup, loadWarning, cachePruning.
+                  additionalProperties: { type: boolean, nullable: true }
+                cleanup_now: { type: boolean, enum: [true] }
       responses:
         "200":
           description: Saved policy and fresh machine detail
@@ -13513,7 +13528,18 @@ paths:
                       last_attempt_at: { type: string, nullable: true, format: date-time }
                       auto_update_diagnostics: { $ref: "#/components/schemas/AutoUpdateDiagnostics" }
                       auto_update_stuck: { $ref: "#/components/schemas/AutoUpdateStuck" }
-        "400": { description: auto_update was not a boolean }
+                      cleanup:
+                        type: object
+                        description: Post-run cleanup (#1265).
+                        properties:
+                          mode: { type: string, enum: [gentle, harsh] }
+                          behaviours: { type: object, additionalProperties: { type: boolean } }
+                          overrides: { type: object, additionalProperties: { type: boolean } }
+                          report: { type: object, nullable: true, additionalProperties: true }
+                          report_at: { type: string, nullable: true, format: date-time }
+                          now_requested_at: { type: string, nullable: true, format: date-time }
+                          now_done_at: { type: string, nullable: true, format: date-time }
+        "400": { description: Nothing to change, auto_update was not a boolean, or a cleanup field was invalid }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No identified machine belongs to the caller }
 

@@ -18,6 +18,7 @@ import { checkWorkdir, cloneIntoWorkdir, ensureRepo, sanitizeSessionName } from 
 import { type CloneProtocol, CloneJobs } from "./repo-clone-job.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 import type { GhGuardReport } from "./gh-guard.js";
+import { CleanupManager } from "./cleanup.js";
 
 /**
  * The coding runtime: the local "hands" that hold live coding-engine sessions — CLI child
@@ -267,6 +268,29 @@ export class CodingRuntime {
 	/** Base directory under which repos are cloned (one subdir per repo). */
 	constructor(private readonly reposBaseDir: string = join(homedir(), ".config", "proagentstore", "repos")) {}
 
+	/**
+	 * Post-run cleanup (#1265): the mode the platform set for this machine, the per-run TMPDIR and the
+	 * sweeps. Built lazily so a test that never starts a session creates no exit hook; gentle until the
+	 * platform says otherwise.
+	 */
+	private cleanupManager: CleanupManager | null = null;
+	get cleanup(): CleanupManager {
+		this.cleanupManager ??= new CleanupManager({ baseDir: join(this.reposBaseDir, ".."), reposBaseDir: this.reposBaseDir });
+		return this.cleanupManager;
+	}
+
+	/** Session ids with a live engine, and their engine pids — what a sweep must never touch. */
+	private liveSessions(): { ids: Set<string>; roots: number[] } {
+		const live = this.enginePids();
+		return { ids: new Set(live.map((l) => l.sessionId)), roots: live.map((l) => l.pid) };
+	}
+
+	/** A cleanup pass on demand (the platform's "clean now"): reports what it ended and the bytes freed. */
+	async cleanupNow(reason: string) {
+		const live = this.liveSessions();
+		return this.cleanup.runPass(reason, live.ids, live.roots);
+	}
+
 	/** Capabilities advertised to PAGS at registration. `coding.inspect` signals the
 	 *  read-only code-inspection endpoints exist, so the cloud offers the grounding tools
 	 *  (older runners omit it → the cloud degrades to terminal-only). */
@@ -441,6 +465,7 @@ export class CodingRuntime {
 				seed: input.seed,
 				ghScope: input.ghScope,
 				bin: input.bin,
+				cleanup: this.cleanup,
 			});
 			this.sessions.set(input.sessionId, session);
 		}
@@ -573,6 +598,10 @@ export class CodingRuntime {
 		if (session) {
 			session.stop();
 			this.sessions.delete(sessionId);
+			// What the run left behind: its leftovers, browsers, temp folder and worktrees (#1265).
+			// After the delete, so this session is no longer "live" to its own sweep. Never blocks the answer.
+			const live = this.liveSessions();
+			void this.cleanup.endSession(sessionId, live.ids, live.roots).catch(() => undefined);
 		}
 		this.takeovers.delete(sessionId);
 		return { ok: true, usage, acts, authResolved };

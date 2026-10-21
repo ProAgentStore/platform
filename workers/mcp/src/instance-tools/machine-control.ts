@@ -67,25 +67,34 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 
 	server.tool(
 		"set_machine_policy",
-		"Name a machine, and/or enable or disable its Auto-update (#859, #1250). `display_name` is your name for the machine (e.g. \"rl-laptop\") — unique across your machines, case-insensitively (a name another machine has is refused with 409); a blank clears it. Every runner tool then shows it first, with the hostnames as aliases, and set_instance_runner_node accepts it. Renaming never moves a pin: pins hold the machine id. Give display_name, auto_update, or both. Auto-update: the setting is owner-scoped and keyed by stable `machine_id`, so it survives offline periods, runner reconnects, attached-agent changes, and hostname aliases. Existing machines default OFF. Enabling permits an idle runner to check trusted CLI releases and use its safe self-update/restart path; it does not interrupt coding or local application work. Disabling is persisted immediately; a runner rechecks the policy before installation and cancels an update that has not started. Use get_machine_policy to read back the saved policy and lifecycle state.",
+		"Name a machine, and/or enable or disable its Auto-update (#859, #1250). `display_name` is your name for the machine (e.g. \"rl-laptop\") — unique across your machines, case-insensitively (a name another machine has is refused with 409); a blank clears it. Every runner tool then shows it first, with the hostnames as aliases, and set_instance_runner_node accepts it. Renaming never moves a pin: pins hold the machine id. Give display_name, auto_update, or both. Auto-update: the setting is owner-scoped and keyed by stable `machine_id`, so it survives offline periods, runner reconnects, attached-agent changes, and hostname aliases. Existing machines default OFF. Enabling permits an idle runner to check trusted CLI releases and use its safe self-update/restart path; it does not interrupt coding or local application work. Disabling is persisted immediately; a runner rechecks the policy before installation and cancels an update that has not started. Use get_machine_policy to read back the saved policy and lifecycle state. Post-run cleanup (#1265): `cleanup_mode` is \"gentle\" (the default; the runner touches only processes and files it can prove it started — descendants of a session's engine, processes carrying its session marker, Playwright's own browser profiles, the run's temp folder and worktrees — and only REPORTS other leftovers) or \"harsh\" (for a dedicated runner: it also kills the whole process group, sweeps orphaned node/vite/jest/esbuild/wrangler processes running out of runner workdirs, reaps stale temp and browser profiles every 15 minutes, and prunes package caches and git-ignored build outputs when the disk is over 90%). Neither mode touches a live session, a person's own browser, or uncommitted work. Changing the mode resets the six switches to its defaults; `cleanup_overrides` sets any of processGroupKill, leftoverSweep, browserCleanup, tempCleanup, loadWarning, cachePruning to true/false (null returns one to the default). `cleanup_now` asks the machine to run one cleanup pass on its next heartbeat; get_machine_policy / list_runner_nodes then show the runner's report (leftovers found, bytes freed).",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			machine_id: z.string().describe("Stable physical machine id from the terminals fleet/detail response; do not use a hostname alias."),
 			auto_update: z.boolean().optional().describe("Whether this physical machine may automatically update its PAGS CLI while idle. Omit to leave it unchanged."),
 			display_name: z.string().optional().describe("Your name for this machine, 1-40 characters (letters, digits, spaces, . _ -), unique across your machines. Empty string clears it. Omit to leave it unchanged."),
+			cleanup_mode: z.enum(["gentle", "harsh"]).optional().describe("Post-run cleanup mode for this machine (#1265). gentle (default) touches only what the runner provably started; harsh is for a dedicated runner. Changing it resets the switches to the mode's defaults. Omit to leave it unchanged."),
+			cleanup_overrides: z.record(z.enum(["processGroupKill", "leftoverSweep", "browserCleanup", "tempCleanup", "loadWarning", "cachePruning"]), z.boolean().nullable()).optional().describe("Per-behaviour switches overriding the mode's defaults for this machine: true/false, or null to return one to the default. Omit to leave them unchanged."),
+			cleanup_now: z.literal(true).optional().describe("Ask this machine to run one cleanup pass now (picked up on its next heartbeat, even if it is idle). Read the result with get_machine_policy."),
 			dry_run: z.boolean().optional().describe("Report the saved policy change without changing it."),
 		},
-		async ({ token, machine_id, auto_update, display_name, dry_run }) => {
+		async ({ token, machine_id, auto_update, display_name, cleanup_mode, cleanup_overrides, cleanup_now, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			if (auto_update === undefined && display_name === undefined) return text("Error: give display_name, auto_update, or both.");
-			const body = { ...(auto_update !== undefined ? { auto_update } : {}), ...(display_name !== undefined ? { display_name } : {}) };
+			if (auto_update === undefined && display_name === undefined && cleanup_mode === undefined && cleanup_overrides === undefined && cleanup_now === undefined) return text("Error: give display_name, auto_update, cleanup_mode, cleanup_overrides, cleanup_now, or a combination.");
+			const body = {
+				...(auto_update !== undefined ? { auto_update } : {}),
+				...(display_name !== undefined ? { display_name } : {}),
+				...(cleanup_mode !== undefined ? { cleanup_mode } : {}),
+				...(cleanup_overrides !== undefined ? { cleanup_overrides } : {}),
+				...(cleanup_now !== undefined ? { cleanup_now } : {}),
+			};
 			const input = { machine_id, ...body };
 			const denied = await requirePermission(safetyFor(token), "write", "set_machine_policy", input);
 			if (denied) return denied;
 			const endpoint = `/v1/terminals/machines/${encodeURIComponent(machine_id)}/policy`;
 			if (dry_run) {
-				const what = [display_name !== undefined ? (display_name.trim() ? `name it "${display_name.trim()}"` : "clear its name") : "", auto_update !== undefined ? `${auto_update ? "enable" : "disable"} Auto-update` : ""].filter(Boolean).join(" and ");
+				const what = [display_name !== undefined ? (display_name.trim() ? `name it "${display_name.trim()}"` : "clear its name") : "", auto_update !== undefined ? `${auto_update ? "enable" : "disable"} Auto-update` : "", cleanup_mode !== undefined ? `set post-run cleanup to ${cleanup_mode}` : "", cleanup_overrides !== undefined ? "change its cleanup switches" : "", cleanup_now ? "run a cleanup pass now" : ""].filter(Boolean).join(" and ");
 				return dryRun(safetyFor(token), "set_machine_policy", `${what} for ${machine_id}`, input, { endpoint, method: "PUT", body });
 			}
 			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };

@@ -343,6 +343,9 @@ const READBACK: Record<string, string | null> = {
 	"force_runner_attach.runner_node": "instance_runner_node",
 	"set_machine_policy.auto_update": "get_machine_policy",
 	"set_machine_policy.display_name": "get_machine_policy", // #1250: returned as `displayName` (also on list_runner_nodes)
+	"set_machine_policy.cleanup_mode": "get_machine_policy", // #1265: returned as `cleanup.mode` (also `cleanup_mode` on list_runner_nodes)
+	"set_machine_policy.cleanup_overrides": "get_machine_policy", // #1265: returned as `cleanup.overrides`, with the resolved `cleanup.behaviours`
+	"set_machine_policy.cleanup_now": "get_machine_policy", // #1265: a request, read back as `cleanup.now_requested_at` / `now_done_at`
 	"runner_update.runner_node": "list_runner_nodes",
 	// #1209: what is installed is read back by actions_runner_status; the scope and group are on each runner GitHub reports.
 	"actions_runner_setup.action": "actions_runner_status",

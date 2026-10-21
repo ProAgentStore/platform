@@ -1,4 +1,5 @@
 import { InputLedger } from "./input-ledger.js";
+import type { CleanupManager } from "./cleanup.js";
 import { spawnTarget, unwrapLauncher } from "./launcher-wrapper.js";
 import { type ObjectiveOrigin, runObjectiveBlock } from "./run-objective.js";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -44,6 +45,12 @@ export { defaultStatePath } from "./headless-state.js";
 export interface HeadlessSessionConfig {
 	/** Stable id (the coding_sessions row id). */
 	id: string;
+	/**
+	 * Post-run cleanup (#1265): the engine is started in its own process group with a per-run TMPDIR and a
+	 * session marker, and everything it started is ended with it. Absent (tests, an older host), the
+	 * session behaves as it did before — the engine alone is signalled.
+	 */
+	cleanup?: CleanupManager;
 	/** Working directory the CLI runs in (the repo). */
 	workDir: string;
 	clientType: ClientType;
@@ -304,6 +311,21 @@ export class HeadlessSession {
 		return engineSpawnEnv(this.config.env, this.config.ghScope, this.config.ghGuardRoot);
 	}
 
+	/** The env an engine is SPAWNED with (#1265): the credential env plus the session marker and a per-run TMPDIR. Apart from {@link spawnEnv}, which `authResolved` reads. */
+	private get engineEnv(): NodeJS.ProcessEnv {
+		return this.config.cleanup?.engineEnv(this.spawnEnv, this.config.id, this.config.workDir) ?? this.spawnEnv;
+	}
+
+	/** End an engine process and what it started (#1265); the plain signal when no cleanup is attached. */
+	private endProcess(proc: ChildProcess): void {
+		try {
+			if (this.config.cleanup) this.config.cleanup.killProcess(this.config.id, proc);
+			else proc.kill();
+		} catch {
+			/* already gone */
+		}
+	}
+
 	/** What the write guards actually did on this machine (#679, #1252) — reported, never assumed. */
 	get ghGuard(): GhGuardReport {
 		return writeGuardReport(this.config.ghScope, mergeEnv(process.env, this.config.env), this.config.ghGuardRoot);
@@ -552,7 +574,7 @@ export class HeadlessSession {
 		this.buf = "";
 		const args = this.adapter.buildLaunchArgs(this.cmdArgs, this.claudeSessionId);
 
-		const env = this.spawnEnv;
+		const env = this.engineEnv;
 		const target = spawnTarget(this.cmdPrefix, this.cmdBin, args);
 		const launch = resolveEngineSpawn(target.command, target.args, { env });
 		const proc = spawn(launch.command, launch.args, {
@@ -560,7 +582,9 @@ export class HeadlessSession {
 			env,
 			stdio: ["pipe", "pipe", "pipe"],
 			windowsVerbatimArguments: launch.windowsVerbatimArguments,
+			...this.config.cleanup?.spawnOptions(),
 		});
+		this.config.cleanup?.noteProcess(this.config.id, proc.pid);
 		this.proc = proc;
 		this.run = "idle";
 		this.lastOutputAt = Date.now();
@@ -708,7 +732,7 @@ export class HeadlessSession {
 			: grokConversation
 				? grokTurnArgs(presetArgs, text, grokConversation)
 				: this.adapter.buildTurnArgs(presetArgs, text);
-		const env = this.spawnEnv;
+		const env = this.engineEnv;
 		const target = spawnTarget(this.cmdPrefix, this.cmdBin, turnArgs);
 		const launch = resolveEngineSpawn(target.command, target.args, { env });
 		const proc = spawn(launch.command, launch.args, {
@@ -716,7 +740,9 @@ export class HeadlessSession {
 			env,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsVerbatimArguments: launch.windowsVerbatimArguments,
+			...this.config.cleanup?.spawnOptions(),
 		});
+		this.config.cleanup?.noteProcess(this.config.id, proc.pid);
 		// A turn already running is aborted before its replacement starts: `input()` accepts a turn
 		// at any time — a human typing in the console, a takeover, a Loop that stopped waiting —
 		// so without this TWO engine processes edit the same repo at once. Still needed after #391
@@ -728,11 +754,7 @@ export class HeadlessSession {
 		// ends up reasoning about a turn that never finished, with nothing to explain the gap.
 		if (this.procAlive) {
 			this.push(`[${this.config.clientType} turn aborted — a new instruction arrived while the previous one was still running]`);
-			try {
-				this.proc?.kill();
-			} catch {
-				/* already gone */
-			}
+			if (this.proc) this.endProcess(this.proc);
 		}
 		this.proc = proc;
 		this.buf = ""; // the replaced turn's half-written line is not this turn's (#1019)
@@ -761,11 +783,7 @@ export class HeadlessSession {
 		const ceiling = setTimeout(() => {
 			if (this.proc !== proc) return; // a newer turn owns the session; this one is already gone
 			this.push(`[${this.config.clientType} turn ended after ${Math.round(maxTurnMs / 60000)}m — the engine never exited, so the session was unwedged]`);
-			try {
-				proc.kill();
-			} catch {
-				/* already gone */
-			}
+			this.endProcess(proc);
 		}, maxTurnMs);
 		ceiling.unref();
 		proc.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
@@ -853,11 +871,7 @@ export class HeadlessSession {
 
 	/** Tear the process down. For a one-shot engine this is the ONLY thing that ends the session. */
 	stop(): void {
-		try {
-			this.proc?.kill();
-		} catch {
-			/* ignore */
-		}
+		if (this.proc) this.endProcess(this.proc);
 		this.proc = null;
 		this.run = "idle";
 		this.stopped = true;

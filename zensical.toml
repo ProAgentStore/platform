@@ -11,6 +11,7 @@ nav = [
   { "Connectors" = "connectors.md" },
   { "Email Worker Adapter" = "email-worker-adapter.md" },
   { "Cloudflare Email Bridge" = "cloudflare-email-bridge.md" },
+  { "Runner Cleanup" = "runner-cleanup.md" },
   { "Agent Behaviour" = "agent-behaviour.md" },
   { "Triggers" = "triggers.md" },
   { "MCP" = "mcp.md" },

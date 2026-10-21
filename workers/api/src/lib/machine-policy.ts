@@ -1,5 +1,6 @@
 import { logError } from "./error-log.js";
 import { normalizeMachineId } from "./machine-identity.js";
+import { applyChange, resolveBehaviours, type CleanupChange, type CleanupConfig, normalizeMode, parseOverrides, sanitizeReport, type CleanupReportView } from "./runner-cleanup-policy.js";
 import type { Env } from "../types.js";
 
 export type AutoUpdateStatus = "disabled" | "enabled" | "checking" | "waiting_for_idle" | "installing" | "restarting" | "verified_success" | "offline" | "unsupported" | "failed";
@@ -73,6 +74,17 @@ export interface MachinePolicy {
 	observations: UpdateObservation[];
 	/** The runner's own step-by-step update log, as its last restart uploaded it (#1151). */
 	updateLog: string | null;
+	/** Post-run cleanup (#1265): the mode and overrides the owner set, and what the runner last reported. */
+	cleanup: MachineCleanup;
+}
+
+export interface MachineCleanup extends CleanupConfig {
+	/** The runner's last status, as it reported it (sanitized). Telemetry, never an instruction. */
+	report: CleanupReportView | null;
+	reportAt: string | null;
+	/** An owner's "clean now": when it was asked for, and when the machine reported finishing it. */
+	nowRequestedAt: number | null;
+	nowDoneAt: number | null;
 }
 
 interface Row {
@@ -88,6 +100,12 @@ interface Row {
 	blocker_class?: string | null;
 	observations?: string | null;
 	update_log?: string | null;
+	cleanup_mode?: string | null;
+	cleanup_overrides?: string | null;
+	cleanup_report?: string | null;
+	cleanup_report_at?: number | null;
+	cleanup_now_requested_at?: number | null;
+	cleanup_now_done_at?: number | null;
 }
 const iso = (ms: number | null | undefined) => (ms ? new Date(ms).toISOString() : null);
 const present = (row: Row | null, enabled = false): MachinePolicy => ({
@@ -103,6 +121,14 @@ const present = (row: Row | null, enabled = false): MachinePolicy => ({
 	blockerClass: row?.blocker_class && BLOCKERS.has(row.blocker_class as BlockerClass) ? (row.blocker_class as BlockerClass) : null,
 	observations: parseObservations(row?.observations ? safeJson(row.observations) : null, (ms) => new Date(ms).toISOString()),
 	updateLog: row?.update_log ?? null,
+	cleanup: {
+		mode: normalizeMode(row?.cleanup_mode),
+		overrides: parseOverrides(row?.cleanup_overrides),
+		report: row?.cleanup_report ? sanitizeReport(safeJson(row.cleanup_report)) : null,
+		reportAt: iso(row?.cleanup_report_at),
+		nowRequestedAt: row?.cleanup_now_requested_at ?? null,
+		nowDoneAt: row?.cleanup_now_done_at ?? null,
+	},
 });
 
 function safeJson(text: string): unknown {
@@ -150,6 +176,16 @@ export function machinePolicyWire(policy: MachinePolicy) {
 		last_attempt_at: policy.lastAttemptAt,
 		last_error: policy.lastError,
 		update_log: policy.updateLog,
+		// #1265: the mode, the six resolved switches and any per-machine overrides, and the runner's own last report.
+		cleanup: {
+			mode: policy.cleanup.mode,
+			behaviours: resolveBehaviours(policy.cleanup),
+			overrides: policy.cleanup.overrides,
+			report: policy.cleanup.report,
+			report_at: policy.cleanup.reportAt,
+			now_requested_at: policy.cleanup.nowRequestedAt ? new Date(policy.cleanup.nowRequestedAt).toISOString() : null,
+			now_done_at: policy.cleanup.nowDoneAt ? new Date(policy.cleanup.nowDoneAt).toISOString() : null,
+		},
 		auto_update_diagnostics: {
 			last_heartbeat_at: policy.lastHeartbeatAt,
 			last_check_at: policy.lastCheckAt,
@@ -172,7 +208,8 @@ export async function getMachinePolicy(env: Pick<Env, "DB">, userId: string, raw
 	const machineId = normalizeMachineId(rawMachineId);
 	if (!machineId) return present(null);
 	const row = await env.DB.prepare(`SELECT auto_update, status, latest_version, last_attempt_at, last_error, last_heartbeat_at, last_check_at, last_decision_at,
-		next_retry_due_at, blocker_class, observations, update_log FROM machine_policies WHERE user_id = ?1 AND machine_id = ?2`)
+		next_retry_due_at, blocker_class, observations, update_log, cleanup_mode, cleanup_overrides, cleanup_report, cleanup_report_at,
+		cleanup_now_requested_at, cleanup_now_done_at FROM machine_policies WHERE user_id = ?1 AND machine_id = ?2`)
 		.bind(userId, machineId).first<Row>().catch(() => null);
 	return present(row);
 }
@@ -189,6 +226,72 @@ export async function setMachinePolicy(env: Pick<Env, "DB">, userId: string, raw
 		.bind(userId, machineId, autoUpdate ? 1 : 0, autoUpdate ? "enabled" : "disabled", now).run();
 	return getMachinePolicy(env, userId, machineId);
 }
+
+/**
+ * Set a machine's cleanup mode and/or per-behaviour overrides (#1265), and optionally ask it to run a pass now.
+ * An upsert that never touches Auto-update: a machine with no policy row gets one with Auto-update OFF, which is
+ * exactly what absence already meant. Durable, so it works while the runner is offline — the machine picks it
+ * up on its next heartbeat.
+ */
+export async function setMachineCleanup(env: Pick<Env, "DB">, userId: string, rawMachineId: string, change: CleanupChange, now = Date.now()): Promise<MachinePolicy> {
+	const machineId = normalizeMachineId(rawMachineId);
+	if (!machineId) throw new Error("A stable machine id is required for machine settings.");
+	const current = await getMachinePolicy(env, userId, machineId);
+	const next = applyChange({ mode: current.cleanup.mode, overrides: current.cleanup.overrides }, change);
+	await env.DB.prepare(`INSERT INTO machine_policies (user_id, machine_id, auto_update, status, updated_at, cleanup_mode, cleanup_overrides, cleanup_now_requested_at)
+		VALUES (?1, ?2, 0, 'disabled', ?3, ?4, ?5, ?6)
+		ON CONFLICT(user_id, machine_id) DO UPDATE SET cleanup_mode = excluded.cleanup_mode, cleanup_overrides = excluded.cleanup_overrides,
+		cleanup_now_requested_at = COALESCE(?6, machine_policies.cleanup_now_requested_at), updated_at = excluded.updated_at`)
+		.bind(userId, machineId, now, next.mode, JSON.stringify(next.overrides), change.now ? now : null).run();
+	return getMachinePolicy(env, userId, machineId);
+}
+
+/** How long an unchanged runner report is trusted before it is written again — the heartbeat is every 30s. */
+export const CLEANUP_REPORT_REFRESH_MS = 5 * 60_000;
+
+/**
+ * Store what the runner says about its own cleanup (#1265): the status it reports and, when a "clean now" has
+ * finished, the request time it finished. Written only when the report changed or the stored one is stale, so a
+ * 30-second heartbeat per agent does not become a D1 write per beat. A report is TELEMETRY: it is sanitized to
+ * bounded fields and can never change the mode — only the owner can.
+ */
+export async function reportMachineCleanup(env: Pick<Env, "DB">, userId: string, rawMachineId: string | null | undefined, current: MachinePolicy, rawStatus: unknown, rawDoneAt: unknown, now = Date.now()): Promise<void> {
+	const machineId = normalizeMachineId(rawMachineId);
+	if (!machineId) return;
+	const view = sanitizeReport(rawStatus);
+	const doneAt = typeof rawDoneAt === "number" && Number.isFinite(rawDoneAt) && rawDoneAt > (current.cleanup.nowDoneAt ?? 0) && rawDoneAt <= now + 60_000 ? Math.round(rawDoneAt) : null;
+	const changed = view !== null && JSON.stringify(view) !== JSON.stringify(current.cleanup.report);
+	const stale = view !== null && (!current.cleanup.reportAt || now - Date.parse(current.cleanup.reportAt) >= CLEANUP_REPORT_REFRESH_MS);
+	if (!changed && !stale && doneAt === null) return;
+	await env.DB.prepare(`INSERT INTO machine_policies (user_id, machine_id, auto_update, status, updated_at, cleanup_report, cleanup_report_at, cleanup_now_done_at)
+		VALUES (?1, ?2, 0, 'disabled', ?3, ?4, ?5, ?6)
+		ON CONFLICT(user_id, machine_id) DO UPDATE SET cleanup_report = COALESCE(?4, machine_policies.cleanup_report),
+		cleanup_report_at = CASE WHEN ?4 IS NOT NULL THEN ?5 ELSE machine_policies.cleanup_report_at END,
+		cleanup_now_done_at = COALESCE(?6, machine_policies.cleanup_now_done_at)`)
+		.bind(userId, machineId, now, view ? JSON.stringify(view) : null, view ? now : null, doneAt).run().catch(() => undefined);
+}
+
+/** The compact cleanup view a node in `list_runner_nodes` carries (#1265). */
+export function cleanupNodeView(policy: MachinePolicy) {
+	const c = policy.cleanup;
+	return {
+		mode: c.mode,
+		behaviours: resolveBehaviours(c),
+		orphaned_processes: c.report?.orphanedProcesses ?? null,
+		warnings: c.report?.warnings ?? [],
+		last_pass: c.report?.lastPass ?? null,
+		reported_at: c.reportAt,
+		now_pending: c.nowRequestedAt !== null && (c.nowDoneAt ?? 0) < c.nowRequestedAt,
+	};
+}
+
+/** What the heartbeat answer tells the runner about cleanup: the resolved policy, and a pending "clean now". */
+export function cleanupAnswer(policy: MachinePolicy) {
+	const c = policy.cleanup;
+	const pending = c.nowRequestedAt !== null && (c.nowDoneAt ?? 0) < c.nowRequestedAt;
+	return { cleanupPolicy: { mode: c.mode, behaviours: resolveBehaviours(c) }, cleanupNow: pending ? { requestedAt: c.nowRequestedAt } : null };
+}
+
 
 /** Runner observations are accepted only for a policy that already belongs to this owner/id. */
 export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: string, rawMachineId: string | null | undefined, raw: unknown): Promise<void> {

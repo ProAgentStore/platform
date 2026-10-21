@@ -1,3 +1,4 @@
+import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
 import { codingSessionRefusal, instanceOf, readJson } from "./request-instance.js";
 import {
@@ -352,6 +353,9 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		// Each agent sees its own sessions (#1164); a local caller (the update controller) sees them all.
 		return json(res, 200, { sessions: runner.coding.list().filter((s) => runner.coding.visibleTo(s.sessionId, caller)) });
 	}
+	// Post-run cleanup (#1265): the CLI relays the platform's per-machine policy here and reads the status back.
+	const cleanup = await handleCleanupRoute(req.method ?? "GET", path, runner.coding, () => readJson<Record<string, unknown>>(req));
+	if (cleanup) return json(res, 200, cleanup.body);
 	// Per-session CPU and memory, for the heartbeat (#924): which agent is loading this machine.
 	if (req.method === "GET" && path === "/coding/resources") {
 		const { readSessionResources } = await import("./coding/session-resources.js");

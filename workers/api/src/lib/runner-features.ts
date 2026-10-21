@@ -17,6 +17,7 @@ import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
 import { FAST_FORWARD_MIN_CLI } from "./repo-sync-gate.js";
 import { RESOURCE_DETAIL_MIN_CLI, RESOURCES_MIN_CLI } from "./runner-resources.js";
 import { cliAtLeast } from "./runner-upgrade.js";
+import { CLEANUP_MIN_CLI } from "./runner-cleanup-policy.js";
 import { LOCAL_BROWSER_CODEX_MIN_CLI } from "./local-browser/policy.js";
 import { LOCAL_APPLY_CONTRACT_MIN_CLI } from "./local-apply/contract.js";
 import { LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI } from "./local-artifact/contract.js";
@@ -60,6 +61,7 @@ export const RUNNER_FEATURES: readonly RunnerFeature[] = [
 	{ feature: "machine identity across renames", minCli: MACHINE_ID_MIN_CLI },
 	{ feature: "application live-page preflight and bounded owner login/CAPTCHA handoff", minCli: LOCAL_APPLY_CONTRACT_MIN_CLI },
 	{ feature: "Application Tailor uploaded résumé/profile sources", minCli: LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI },
+	{ feature: "post-run cleanup: process-group kill, leftover sweep, per-run temp folders, gentle/harsh mode (#1265)", minCli: CLEANUP_MIN_CLI },
 ];
 
 /**

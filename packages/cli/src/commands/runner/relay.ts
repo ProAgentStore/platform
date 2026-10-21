@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
 import { type ResourceSample, recordRunnerStart, sampleDisk, sampleResources } from "./resources.js";
+import { createCleanupSync } from "./cleanup-sync.js";
 import { sessionToken } from "./session-token.js";
 import { AgentRoutePolicy } from "./route-policy.js";
 import { loadMachineIdentity } from "../../machine.js";
@@ -418,6 +419,9 @@ export async function connectViaRelay(
 	// so the silence steered the user toward a destructive action. Once per state change keeps
 	// a 30s loop from becoming a log spammer.
 	let heartbeatFailing = false;
+	// Post-run cleanup (#1265): the platform's per-machine mode goes down to the local runner on the heartbeat
+	// answer; the runner's status (mode, leftovers found, last pass) comes back up on the next heartbeat.
+	const cleanupSync = createCleanupSync(localUrl, runnerToken, fetch, writeLine);
 	const heartbeat = () => {
 		const timer = setTimeout(async () => {
 			// The live set, not the startup array — a heartbeat for a detached instance would
@@ -444,6 +448,7 @@ export async function connectViaRelay(
 				relayRttMs,
 				sessions: sessions ?? undefined,
 			});
+			const cleanup = await cleanupSync.collect(resources);
 			for (const id of [...attached.keys()]) {
 				try {
 					const sent = cell.next();
@@ -452,8 +457,11 @@ export async function connectViaRelay(
 						machineId: machine.id,
 						resources,
 						autoUpdateStatus: autoUpdateStatusBody(),
+						...(cleanup.status ? { cleanup: cleanup.status } : {}),
+						...(cleanup.doneAt ? { cleanupNowDoneAt: cleanup.doneAt } : {}),
 					});
 					channel.accept(response, sent);
+					await cleanupSync.accept(response);
 				} catch (e) {
 					failure = e instanceof Error ? e.message : String(e);
 				}

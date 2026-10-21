@@ -13,6 +13,8 @@ export interface AutoUpdateStatus {
 	updated_at?: string | null;
 }
 
+import type { MachineCleanup } from "./machineCleanup";
+
 export interface MachineDetail {
 	machineId: string;
 	/** The owner's name for the machine (#1250); null until named. */
@@ -35,6 +37,8 @@ export interface MachineDetail {
 	autoUpdateStatus?: AutoUpdateStatus | string | null;
 	auto_update_diagnostics?: AutoUpdateDiagnostics | null;
 	auto_update_stuck?: AutoUpdateStuck | null;
+	/** Post-run cleanup (#1265): the mode, the six resolved switches, and the runner's own last report. */
+	cleanup?: MachineCleanup;
 }
 
 /**

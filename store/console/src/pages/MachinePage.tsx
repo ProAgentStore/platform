@@ -5,6 +5,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import Card from "../components/Card";
+import MachineCleanupCard from "../components/MachineCleanupCard";
 import Page from "../components/Page";
 import {
 	machineAutoUpdateEnabled,
@@ -168,6 +169,9 @@ export default function MachinePage() {
 							This runner must first be safely updated to CLI 0.4.92 or later. This toggle stores the policy, but an older running CLI will not install updates from it.
 						</p>}
 					</Card>
+
+					{/* #1265: the runner's post-run cleanup mode and its six switches. */}
+					<MachineCleanupCard machineId={machine.machineId || machineId} machine={machine} onChange={setMachine} />
 
 					<Card className="p-4" data-testid="machine-auto-update-status">
 						<h2 className="font-semibold text-sm mb-3">Automatic update status</h2>

@@ -54,7 +54,7 @@ describe("the physical-machine auto-update policy over MCP (#859)", () => {
 	it("registers an owner-scoped reader and a dry-runnable writer keyed by stable machine id", () => {
 		const { tools } = setup();
 		expect(Object.keys(tools.get("get_machine_policy")?.schema ?? {}).sort()).toEqual(["machine_id", "token"]);
-		expect(Object.keys(tools.get("set_machine_policy")?.schema ?? {}).sort()).toEqual(["auto_update", "display_name", "dry_run", "machine_id", "token"]);
+		expect(Object.keys(tools.get("set_machine_policy")?.schema ?? {}).sort()).toEqual(["auto_update", "cleanup_mode", "cleanup_now", "cleanup_overrides", "display_name", "dry_run", "machine_id", "token"]);
 	});
 
 	it("names a machine with display_name alone (#1250), and refuses a call that changes nothing", async () => {
@@ -62,7 +62,7 @@ describe("the physical-machine auto-update policy over MCP (#859)", () => {
 		await run("set_machine_policy", { machine_id: "machine-1", display_name: "rl-laptop" });
 		expect(calls).toEqual([{ url: "https://api.test/v1/terminals/machines/machine-1/policy", method: "PUT", body: JSON.stringify({ display_name: "rl-laptop" }) }]);
 		const empty = await run("set_machine_policy", { machine_id: "machine-1" });
-		expect(empty.content[0].text).toMatch(/give display_name, auto_update, or both/);
+		expect(empty.content[0].text).toMatch(/give display_name, auto_update, cleanup_mode, cleanup_overrides, cleanup_now, or a combination/);
 		expect(calls).toHaveLength(1);
 	});
 

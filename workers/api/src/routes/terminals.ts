@@ -15,7 +15,8 @@ import { startRunnerUpdate, updateRunnerNode } from "../lib/runner-update.js";
 import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/runner-update-ops.js";
 import { detectDuplicateRunners, type DuplicateVerdict, type RunnerProcessIdentity } from "../lib/runner-duplicates.js";
 import { runnerIdentityOf } from "../lib/runner-resources.js";
-import { getMachinePolicy, machinePolicyWire, setMachinePolicy, silentAfterInstall, type MachinePolicy } from "../lib/machine-policy.js";
+import { cleanupNodeView, getMachinePolicy, machinePolicyWire, setMachineCleanup, setMachinePolicy, silentAfterInstall, type MachinePolicy } from "../lib/machine-policy.js";
+import { parseCleanupChange } from "../lib/runner-cleanup-policy.js";
 import { gateStateLabel, parseGateState } from "../lib/runner-admission-gate.js";
 import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
 import type { Env } from "../types.js";
@@ -178,6 +179,20 @@ export interface TerminalNode {
 	update?: RunnerUpdateOp;
 	/** Owner-scoped persisted policy; absent legacy identity is explicitly unsupported. */
 	auto_update_policy?: boolean;
+	/**
+	 * Post-run cleanup (#1265): the mode in force on this machine and the runner's own last word about it —
+	 * leftovers it found, load and disk warnings, its last pass. `gentle` until the owner sets otherwise.
+	 */
+	cleanup_mode?: "gentle" | "harsh";
+	cleanup?: {
+		mode: "gentle" | "harsh";
+		behaviours: Record<string, boolean>;
+		orphaned_processes: number | null;
+		warnings: string[];
+		last_pass: Record<string, unknown> | null;
+		reported_at: string | null;
+		now_pending: boolean;
+	};
 	/** Last trusted release lookup observed by this runner, null until it has checked. */
 	latest_version?: string | null;
 	auto_update_status?: string;
@@ -543,6 +558,8 @@ terminalRoutes.get("/nodes", async (c) => {
 		}
 		const policy = await getMachinePolicy(c.env, uid, n.machineId);
 		n.auto_update_policy = policy.autoUpdate;
+		n.cleanup_mode = policy.cleanup.mode;
+		n.cleanup = cleanupNodeView(policy);
 		n.latest_version = policy.latestVersion;
 		n.auto_update_status = policy.status;
 		n.last_error = policy.lastError;
@@ -602,7 +619,9 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 	const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch((): Record<string, unknown> => ({}));
 	const value = body.auto_update ?? body.autoUpdate;
 	const name = body.display_name !== undefined ? body.display_name : body.displayName;
-	if (value === undefined && name === undefined) return c.json({ error: "Give auto_update (boolean) and/or display_name (string; blank clears it)." }, 400);
+	// #1265: cleanup mode, per-behaviour overrides and "clean now" ride the same durable per-machine policy.
+	const cleanupChange = parseCleanupChange(body);
+	if (value === undefined && name === undefined && !cleanupChange) return c.json({ error: "Give auto_update (boolean), display_name (string; blank clears it), and/or cleanup_mode (gentle | harsh), cleanup_overrides, cleanup_now." }, 400);
 	if (value !== undefined && typeof value !== "boolean") return c.json({ error: "auto_update must be a boolean." }, 400);
 	// The owner's name for the machine (#1250). Unique per account; refused BEFORE any policy change, so
 	// a duplicate name leaves the call with no partial effect.
@@ -612,7 +631,8 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 		if (!named.ok) return c.json({ error: named.error }, named.status);
 		displayName = named.displayName;
 	}
-	const policy = typeof value === "boolean" ? await setMachinePolicy(c.env, session.uid, machine.machineId, value) : await getMachinePolicy(c.env, session.uid, machine.machineId);
+	let policy = typeof value === "boolean" ? await setMachinePolicy(c.env, session.uid, machine.machineId, value) : await getMachinePolicy(c.env, session.uid, machine.machineId);
+	if (cleanupChange) policy = await setMachineCleanup(c.env, session.uid, machine.machineId, cleanupChange);
 	return c.json({ machine: { ...machine, displayName, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) } });
 });
 

@@ -106,7 +106,7 @@ import { saveResourceSample } from "../lib/runner-resources.js";
 import { describeRejection, rejectionFor, updateGateState } from "../lib/runner-admission-gate.js";
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
-import { fleetUpdatingFor, getMachinePolicy, reportMachinePolicyStatus } from "../lib/machine-policy.js";
+import { cleanupAnswer, fleetUpdatingFor, getMachinePolicy, reportMachineCleanup, reportMachinePolicyStatus } from "../lib/machine-policy.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -591,11 +591,15 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
 	const nodes = runnerNode ? await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []) : [];
 		// #1141: with the policy, how many of this owner's other machines are mid-update — the runner waits while any are.
-		const autoUpdatePolicy = { ...(await getMachinePolicy(c.env, session.uid, machineId)), fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) };
+		// #1265: the cleanup settings ride beside it, not inside it — the update channel reads `autoUpdatePolicy` and
+		// must not receive (or be confused by) the runner's cleanup report.
+		const { cleanup: _cleanup, ...updatePolicy } = await getMachinePolicy(c.env, session.uid, machineId);
+		const autoUpdatePolicy = { ...updatePolicy, fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) };
 		return c.json({
 			runtime: runtime ? runtimeResponse(runtime) : { instanceId, endpointUrl, placement, status: "registered" },
 			nodes: nodes.map(runtimeNodeResponse),
 			autoUpdatePolicy,
+			...cleanupAnswer(await getMachinePolicy(c.env, session.uid, machineId)),
 		}, 201);
 });
 
@@ -748,7 +752,7 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	await requireRuntime(c.env, instanceId, session.uid);
-		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown; machineId?: unknown; autoUpdateStatus?: unknown; latestVersion?: unknown; lastAttemptAt?: unknown };
+		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown; machineId?: unknown; autoUpdateStatus?: unknown; latestVersion?: unknown; lastAttemptAt?: unknown; cleanup?: unknown; cleanupNowDoneAt?: unknown };
 	const node = normalizeRunnerNode(body.runnerNode);
 	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", node);
 		await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
@@ -776,7 +780,12 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 		await reportMachinePolicyStatus(c.env, session.uid, machineId, typeof body.autoUpdateStatus === "object" && body.autoUpdateStatus !== null
 			? body.autoUpdateStatus
 			: { status: body.autoUpdateStatus, latestVersion: body.latestVersion, lastAttemptAt: body.lastAttemptAt });
-		return c.json({ success: true, status: "online", autoUpdatePolicy: { ...(await getMachinePolicy(c.env, session.uid, machineId)), fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) } });
+		// #1265: store what the runner says about its own cleanup (bounded telemetry — it can never change the mode), then
+		// answer with the mode and switches the OWNER set, and a pending "clean now". Best-effort: never fails a heartbeat.
+		const policy = await getMachinePolicy(c.env, session.uid, machineId);
+		await reportMachineCleanup(c.env, session.uid, machineId, policy, body.cleanup, body.cleanupNowDoneAt).catch(() => undefined);
+		const { cleanup: _cleanup, ...updatePolicy } = policy;
+		return c.json({ success: true, status: "online", autoUpdatePolicy: { ...updatePolicy, fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) }, ...cleanupAnswer(await getMachinePolicy(c.env, session.uid, machineId)) });
 });
 
 /** R2 key for a voice turn's saved audio (owner-scoped path). */
