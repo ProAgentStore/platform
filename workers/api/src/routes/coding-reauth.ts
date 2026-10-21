@@ -21,6 +21,7 @@
  */
 import type { Context, Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
+import { clipMarked } from "../lib/clip-marked.js";
 import { deriveClientType } from "../lib/coding-command.js";
 import { engineAuthFor, readEngines } from "../lib/coding-engines.js";
 import type { CodingClientType } from "../lib/coding-types.js";
@@ -81,7 +82,7 @@ async function tmux<T>(conn: RunnerConn, path: string, body: unknown): Promise<T
 		}
 		if (msg.includes("tmux_not_installed") || /\btmux ENOENT\b/.test(msg)) throw new HttpError(409, TMUX_MISSING_MESSAGE);
 		// Anything else the runner refused: say so, with the runner's own words, rather than a 500.
-		throw new HttpError(502, `The runner could not run the sign-in step (${path}): ${msg.replace(/^Runner \S+ → \d+:\s*/, "").slice(0, 200)}`);
+		throw new HttpError(502, `The runner could not run the sign-in step (${path}): ${clipMarked(msg.replace(/^Runner \S+ → \d+:\s*/, ""), 200)}`);
 	}
 }
 
