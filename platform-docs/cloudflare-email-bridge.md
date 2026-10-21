@@ -149,3 +149,25 @@ accepts or returns the bridge secret.
    cannot change it.
 
 Every writer takes `dry_run`; read the result back with `get_instance_email_worker`.
+
+## Recipient scope, bounded reads and the checkpoint (#1278)
+
+- **One mailbox.** Set `MAILBOX` (e.g. `admin@example.com`) to confine the bridge to the mail PAGS's agent is meant to process.
+  Mail Email Routing delivers for any other address is neither stored nor forwarded (PAGS records it as a routing failure,
+  never as mail received); listing, reading and replying are confined to the mailbox, and a direct message id for anything else
+  is a `404` indistinguishable from an unknown id. Unset keeps the #1270 behaviour (every routed address). PAGS also checks the
+  bridge's reported `mailboxes` on every list, read, reply and inbound event, so a bridge that has not been upgraded cannot
+  widen an agent's reach.
+- **Pagination.** The bridge indexes mail by arrival time per mailbox; `nextCursor` resumes at any depth (230 messages are 10
+  pages of 25), and a new arrival never shifts or repeats the pages after it. Mail stored before the index existed is not listed.
+- **Bounds, enforced in code.** At most 25 summaries per list; subject 200 and snippet 120 characters; a stored body is kept to
+  50,000 characters (the raw message is read to 256 KiB at most); a read returns 6,000 characters by default and 20,000 at most,
+  says `truncated` and gives `nextOffset`; a send or reply body over 20,000 characters is refused.
+- **Per-run budget** (counted at PAGS, so it holds across the separate tool calls of a run): 60 summaries, 6 body reads, 60,000
+  body characters. A refusal says what was used and fetches nothing.
+- **Checkpoint.** Reading a message to its end, or replying to it, marks it *handled* for that agent instance. A list skips
+  handled mail and reports `skippedHandled`, `scanned`, `more` and `nextCursor` — a scan that ran out of allowance among handled
+  mail says `scan_budget` and hands back a cursor instead of claiming the mailbox is empty. `include_handled: true` shows
+  everything. The checkpoint holds ids and times only, per instance and connection.
+- **Replies** go out only from a configured reply identity (the bridge refuses any other, even another sender), to the original
+  sender, and only for a parent that is in the mailbox; PAGS checks the parent before anything is sent.

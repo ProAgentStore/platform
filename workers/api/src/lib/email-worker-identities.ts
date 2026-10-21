@@ -40,6 +40,11 @@ export interface IdentitySnapshot {
 	senders: string[];
 	replyIdentities: string[];
 	routes: EmailRoute[];
+	/**
+	 * The mailbox(es) the bridge serves this connection (#1278). Mail addressed to anything else is out of scope: not
+	 * listed, not read, not replied to, not recorded as received. Empty = a bridge from before #1278, which reports none.
+	 */
+	mailboxes?: string[];
 	reportedAt: string;
 }
 
@@ -127,6 +132,7 @@ export function parseIdentity(res: Record<string, unknown>, now = new Date().toI
 		senders: addressList(res.senders).filter(inDomains),
 		replyIdentities: addressList(res.replyIdentities).filter(inDomains),
 		routes,
+		mailboxes: addressList(res.mailboxes).filter(inDomains),
 		reportedAt: now,
 	};
 }
@@ -186,7 +192,19 @@ export function replyDecision(profile: ConnectionProfile): SenderDecision {
 	return senderDecision(profile, profile.replyIdentity);
 }
 
-export type RouteDecision = { ok: true; route: EmailRoute } | { ok: false; reason: "no_snapshot" | "unknown_domain" | "unrouted_recipient" };
+/**
+ * Is mail addressed to `recipient` mail this connection is for (#1278)? A Cloudflare bridge that reports its mailboxes is
+ * authoritative: anything else — another route of the same account, another domain — is out of scope. A bridge that reports
+ * none (pre-#1278) or a generic worker has no scope PAGS can judge, so nothing is dropped on its account.
+ */
+export function inMailboxScope(profile: ConnectionProfile, recipient: unknown): boolean {
+	const boxes = profile.provider === "cloudflare" ? profile.snapshot?.mailboxes ?? [] : [];
+	if (!boxes.length) return true;
+	const to = normalizeAddress(recipient);
+	return !!to && boxes.includes(to);
+}
+
+export type RouteDecision = { ok: true; route: EmailRoute } | { ok: false; reason: "no_snapshot" | "unknown_domain" | "unrouted_recipient" | "out_of_scope" };
 
 /**
  * Correlate an inbound message's ORIGINAL recipient to a configured route of THIS connection. A
@@ -199,7 +217,8 @@ export function routeDecision(profile: ConnectionProfile, recipient: unknown): R
 	const to = normalizeAddress(recipient);
 	if (!to || !snap.domains.includes(domainOf(to))) return { ok: false, reason: "unknown_domain" };
 	const route = snap.routes.find((r) => r.address === to);
-	return route ? { ok: true, route } : { ok: false, reason: "unrouted_recipient" };
+	if (!route) return { ok: false, reason: "unrouted_recipient" };
+	return inMailboxScope(profile, to) ? { ok: true, route } : { ok: false, reason: "out_of_scope" };
 }
 
 /**

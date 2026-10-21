@@ -40,7 +40,14 @@ const kv = (): StoreBinding & { data: Map<string, string> } => {
 		data,
 		get: async (k) => data.get(k) ?? null,
 		put: async (k, v) => void data.set(k, v),
-		list: async ({ prefix }) => ({ keys: [...data.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })) }),
+		// Workers KV semantics: lexicographic keys, `limit` per page, an opaque cursor, `list_complete` on the last page.
+		list: async ({ prefix, limit = 1000, cursor }) => {
+			const names = [...data.keys()].filter((k) => k.startsWith(prefix)).sort();
+			const start = cursor ? Number(cursor) : 0;
+			const page = names.slice(start, start + limit);
+			const done = start + limit >= names.length;
+			return { keys: page.map((name) => ({ name })), list_complete: done, ...(done ? {} : { cursor: String(start + limit) }) };
+		},
 	};
 };
 

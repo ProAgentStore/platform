@@ -95,6 +95,12 @@ reply to a message later, and the issue's AC1 ("preserve stable provider message
 is specifically about this pair. `nextCursor` is opaque; return it as given to `messages/list` to
 continue, `null` to say "no more."
 
+**Bounds and scope (#1278).** A Worker SHOULD cap `limit` (the Cloudflare bridge: 25), list newest first in an order that is
+stable while new mail arrives (the bridge indexes by arrival time, one index prefix per mailbox), and make `nextCursor`
+resumable at any depth — not just the first page. A `folder` it does not have is a `400`, not ignored; a cursor it did not
+issue is a `400`. A Worker that serves one mailbox among several routed addresses MUST list, return and reply to only that
+mailbox's mail, and SHOULD report it as `mailboxes` in its `identity` reply — PAGS then drops anything addressed elsewhere.
+
 ### `POST /v1/email-worker/messages/get`
 
 Request: `{ "id": "m1" }`. Response: the message in full —
@@ -106,6 +112,10 @@ Request: `{ "id": "m1" }`. Response: the message in full —
   "attachments": [ { "filename": "invoice.pdf", "mimeType": "application/pdf", "size": 10240 } ]
 }
 ```
+
+Optional request fields `offset` and `maxChars` bound the body: the Worker returns at most `maxChars` characters (the
+Cloudflare bridge caps it at 20,000, default 6,000) from `offset`, with `bodyChars` (full length), `truncated` and, when more
+remains, `nextOffset`. A message outside the Worker's mailbox is answered exactly as an unknown `id`:
 
 `404` with the standard error body when `id` is unknown.
 

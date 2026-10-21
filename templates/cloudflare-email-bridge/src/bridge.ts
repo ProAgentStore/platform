@@ -30,7 +30,8 @@ export interface SendBinding {
 export interface StoreBinding {
 	get(key: string): Promise<string | null>;
 	put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>;
-	list(opts: { prefix: string; limit?: number }): Promise<{ keys: Array<{ name: string }> }>;
+	/** Workers KV `list`: keys come back in lexicographic order; `cursor` continues a page. */
+	list(opts: { prefix: string; limit?: number; cursor?: string }): Promise<{ keys: Array<{ name: string }>; list_complete?: boolean; cursor?: string }>;
 }
 
 export interface BridgeEnv {
@@ -46,9 +47,33 @@ export interface BridgeEnv {
 	REPLY_IDENTITIES?: string;
 	/** Routed addresses, `address=destination` pairs (comma-separated). A destination is a verified address. */
 	ROUTES?: string;
+	/**
+	 * The mailbox(es) this bridge serves PAGS (comma-separated, #1278). Mail addressed to anything else is never stored, listed,
+	 * read or replied to, whatever else this account routes to the Worker. Unset = every routed address (the #1270 behaviour);
+	 * a dedicated single-mailbox bridge sets exactly one.
+	 */
+	MAILBOX?: string;
 	EMAIL: SendBinding;
 	MAIL: StoreBinding;
 }
+
+/** Hard bounds, enforced here whatever the caller asks for (#1278). */
+export const LIMITS = {
+	/** Most summaries one list call returns. */
+	listMax: 25,
+	listDefault: 10,
+	/** Characters of body one get call returns, and the default. */
+	bodyMax: 20_000,
+	bodyDefault: 6_000,
+	/** Characters of one message body kept at all. */
+	storedBody: 50_000,
+	/** Bytes of a raw inbound message read off the stream. */
+	rawBytes: 262_144,
+	snippet: 120,
+	subject: 200,
+	/** Characters of a body a send or reply may carry. */
+	sendBody: 20_000,
+} as const;
 
 export interface InboundMessage {
 	/** The Message-ID header, or a generated id. Stable: the same mail always yields the same id. */
@@ -61,6 +86,8 @@ export interface InboundMessage {
 	date: string;
 	threadId: string;
 	inReplyTo?: string;
+	/** Length of the full body before the stored copy was bounded; absent = nothing was cut. */
+	bodyChars?: number;
 }
 
 const csv = (v: string | undefined): string[] => (v ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
@@ -73,6 +100,7 @@ export function routesOf(env: BridgeEnv): Array<{ address: string; destination: 
 	});
 }
 
+const clip = (v: string, max: number): string => (v.length > max ? `${v.slice(0, max)}…` : v);
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const error = (status: number, code: string, message: string): Response => json({ error: { code, message } }, status);
 
@@ -86,6 +114,39 @@ function sameSecret(a: string, b: string): boolean {
 
 const MESSAGE_PREFIX = "msg:";
 const IDEM_PREFIX = "idem:";
+/** `idx:<mailbox>:<inverted time>:<id>` — one listing prefix per mailbox, newest first, stable under new arrivals. */
+const INDEX_PREFIX = "idx:";
+
+/** The mailboxes this bridge serves: MAILBOX, else (legacy) every routed address. */
+export function mailboxesOf(env: BridgeEnv): string[] {
+	const set = csv(env.MAILBOX);
+	return set.length ? set : routesOf(env).map((r) => r.address);
+}
+
+const inScope = (env: BridgeEnv, address: string | undefined): boolean => !!address && mailboxesOf(env).includes(address.trim().toLowerCase());
+
+const INVERT = 9_000_000_000_000_000;
+function indexKey(mailbox: string, date: string, id: string): string {
+	return `${INDEX_PREFIX}${mailbox}:${String(INVERT - Date.parse(date)).padStart(16, "0")}:${id}`;
+}
+
+interface Cursor {
+	/** Index into the mailbox list. */
+	a: number;
+	/** Workers KV's own cursor within that mailbox. */
+	c?: string;
+}
+const encodeCursor = (c: Cursor): string => btoa(JSON.stringify(c)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function decodeCursor(raw: unknown, mailboxes: number): Cursor | null {
+	if (raw === undefined || raw === null || raw === "") return { a: 0 };
+	if (typeof raw !== "string" || raw.length > 600) return null;
+	try {
+		const c = JSON.parse(atob(raw.replace(/-/g, "+").replace(/_/g, "/"))) as Cursor;
+		return Number.isInteger(c.a) && c.a >= 0 && c.a < mailboxes && (c.c === undefined || typeof c.c === "string") ? c : null;
+	} catch {
+		return null;
+	}
+}
 
 async function loadMessage(env: BridgeEnv, id: string): Promise<InboundMessage | null> {
 	const raw = await env.MAIL.get(MESSAGE_PREFIX + id);
@@ -114,23 +175,63 @@ export async function handleRequest(req: Request, env: BridgeEnv): Promise<Respo
 			senders,
 			replyIdentities,
 			routes: routesOf(env),
+			mailboxes: mailboxesOf(env),
 		});
 	}
 
 	if (path === "/v1/email-worker/messages/list") {
-		const limit = Math.max(1, Math.min(50, typeof body.limit === "number" ? body.limit : 10));
-		const { keys } = await env.MAIL.list({ prefix: MESSAGE_PREFIX, limit: 200 });
-		const all = (await Promise.all(keys.map((k) => loadMessage(env, k.name.slice(MESSAGE_PREFIX.length))))).filter((m): m is InboundMessage => m !== null);
-		all.sort((a, b) => b.date.localeCompare(a.date));
-		return json({
-			messages: all.slice(0, limit).map((m) => ({ id: m.messageId, threadId: m.threadId, from: m.from, to: m.to, subject: m.subject, date: m.date, snippet: m.text.slice(0, 120), hasAttachments: false })),
-			nextCursor: null,
-		});
+		// Only the inbox exists: a folder this bridge does not have is refused, not silently ignored (#1278).
+		if (body.folder !== undefined && body.folder !== null && body.folder !== "" && String(body.folder).toLowerCase() !== "inbox") return error(400, "unsupported_folder", "This bridge has one folder, inbox.");
+		const limit = Math.max(1, Math.min(LIMITS.listMax, Math.floor(typeof body.limit === "number" && Number.isFinite(body.limit) ? body.limit : LIMITS.listDefault)));
+		const boxes = mailboxesOf(env);
+		const cursor = decodeCursor(body.cursor, Math.max(1, boxes.length));
+		if (!cursor) return error(400, "invalid_cursor", "That cursor was not issued by this bridge.");
+		const messages: Array<Record<string, unknown>> = [];
+		let a = cursor.a;
+		let kvCursor = cursor.c;
+		let next: Cursor | null = null;
+		// Each KV page is requested with exactly the room left, so a page boundary is always a place a cursor can resume from.
+		while (a < boxes.length && messages.length < limit) {
+			const page = await env.MAIL.list({ prefix: `${INDEX_PREFIX}${boxes[a]}:`, limit: limit - messages.length, ...(kvCursor ? { cursor: kvCursor } : {}) });
+			for (const k of page.keys) {
+				const raw = await env.MAIL.get(k.name);
+				if (raw) messages.push(JSON.parse(raw) as Record<string, unknown>);
+			}
+			if (page.list_complete === false && page.cursor) {
+				next = { a, c: page.cursor };
+				break;
+			}
+			a++;
+			kvCursor = undefined;
+		}
+		if (!next && a < boxes.length) next = { a };
+		return json({ messages, nextCursor: next ? encodeCursor(next) : null });
 	}
 
 	if (path === "/v1/email-worker/messages/get") {
 		const m = typeof body.id === "string" ? await loadMessage(env, body.id) : null;
-		return m ? json({ id: m.messageId, threadId: m.threadId, from: m.from, to: m.to, subject: m.subject, date: m.date, body: m.text, attachments: [] }) : error(404, "not_found", "No such message.");
+		// A message outside this bridge's mailbox is indistinguishable from one that does not exist (#1278: no direct-ID bypass).
+		const readable = m && (inScope(env, m.to) || (m.messageId.startsWith("out_") && inScope(env, m.from)));
+		if (!m || !readable) return error(404, "not_found", "No such message.");
+		const max = Math.max(1, Math.min(LIMITS.bodyMax, Math.floor(typeof body.maxChars === "number" && Number.isFinite(body.maxChars) ? body.maxChars : LIMITS.bodyDefault)));
+		const offset = Math.max(0, Math.floor(typeof body.offset === "number" && Number.isFinite(body.offset) ? body.offset : 0));
+		const end = Math.min(m.text.length, offset + max);
+		const total = m.bodyChars ?? m.text.length;
+		return json({
+			id: m.messageId,
+			threadId: m.threadId,
+			from: m.from,
+			to: m.to,
+			subject: clip(m.subject, LIMITS.subject),
+			date: m.date,
+			body: m.text.slice(offset, end),
+			bodyChars: total,
+			offset,
+			// Truncated = more of the body exists than this response carries (continue from nextOffset), or the stored copy itself was bounded.
+			truncated: end < m.text.length || total > m.text.length,
+			...(end < m.text.length ? { nextOffset: end } : {}),
+			attachments: [],
+		});
 	}
 
 	if (path === "/v1/email-worker/messages/send" || path === "/v1/email-worker/messages/reply") {
@@ -149,13 +250,18 @@ export async function handleRequest(req: Request, env: BridgeEnv): Promise<Respo
 		}
 		if (!domains.includes(domainOf(from))) return error(403, "sender_not_allowed", "That address is on a domain this bridge does not send for.");
 
+		const text = typeof body.body === "string" ? body.body : "";
+		if (text.length > LIMITS.sendBody) return error(413, "body_too_large", `A message body may carry at most ${LIMITS.sendBody} characters.`);
+		if (isReply && !replyIdentities.includes(from)) return error(403, "reply_identity_not_allowed", "Replies go out only from a configured reply identity.");
 		let to: string;
 		let subject: string;
 		let threadId: string;
 		let inReplyTo: string | undefined;
 		if (isReply) {
 			const parent = typeof body.messageId === "string" ? await loadMessage(env, body.messageId) : null;
-			if (!parent) return error(404, "not_found", "No such message to reply to.");
+			// The parent must be mail this bridge serves: another recipient's message cannot be replied to by id (#1278).
+			if (!parent || !inScope(env, parent.to) || parent.messageId.startsWith("out_")) return error(404, "not_found", "No such message to reply to.");
+			if (!/^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(parent.from)) return error(400, "invalid_parent_sender", "The original sender is not a plain address, so there is nobody safe to reply to.");
 			// The recipient comes from the PARENT message — the caller cannot name one.
 			if (typeof body.to === "string") return error(400, "recipient_not_allowed", "A reply goes to the original sender.");
 			to = parent.from;
@@ -168,7 +274,6 @@ export async function handleRequest(req: Request, env: BridgeEnv): Promise<Respo
 			if (!to || !subject) return error(400, "invalid_request", "to and subject are required.");
 			threadId = `t_${key.slice(0, 24)}`;
 		}
-		const text = typeof body.body === "string" ? body.body : "";
 		let sent: { messageId?: string } | undefined;
 		try {
 			sent = await env.EMAIL.send({ from, to, subject, text, ...(typeof body.cc === "string" && body.cc ? { cc: body.cc } : {}), ...(inReplyTo ? { headers: { "In-Reply-To": inReplyTo } } : {}) });
@@ -193,11 +298,29 @@ export interface RoutedEmail {
 	forward(destination: string): Promise<void>;
 }
 
-async function readText(raw: ReadableStream | null, max = 200_000): Promise<string> {
-	if (!raw) return "";
-	const text = await new Response(raw).text();
+/** Read at most `LIMITS.rawBytes` of the raw message, then the body part of it. The stream is cancelled, not drained. */
+async function readText(raw: ReadableStream | null): Promise<{ text: string; chars: number }> {
+	if (!raw) return { text: "", chars: 0 };
+	const reader = raw.getReader();
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	while (bytes < LIMITS.rawBytes) {
+		const { done, value } = await reader.read();
+		if (done || !value) break;
+		chunks.push(value);
+		bytes += value.length;
+	}
+	await reader.cancel().catch(() => undefined);
+	const all = new Uint8Array(bytes);
+	let at = 0;
+	for (const c of chunks) {
+		all.set(c, at);
+		at += c.length;
+	}
+	const text = new TextDecoder().decode(all);
 	const split = text.search(/\r?\n\r?\n/);
-	return (split >= 0 ? text.slice(split).trim() : text).slice(0, max);
+	const bodyText = (split >= 0 ? text.slice(split).trim() : text).trim();
+	return { text: bodyText.slice(0, LIMITS.storedBody), chars: bodyText.length };
 }
 
 async function sha256Hex(s: string): Promise<string> {
@@ -218,27 +341,43 @@ export async function handleInbound(msg: RoutedEmail, env: BridgeEnv, fetchImpl:
 	// Stable id: the same mail always maps to the same id, so a redelivery is the same event.
 	const messageId = headerId || `in_${(await sha256Hex(`${from}|${to}|${msg.headers.get("date") ?? ""}|${msg.headers.get("subject") ?? ""}`)).slice(0, 32)}`;
 	const inReplyTo = msg.headers.get("in-reply-to")?.trim() || undefined;
-	const stored: InboundMessage = {
-		messageId,
-		from,
-		to,
-		subject: msg.headers.get("subject") ?? "",
-		text: await readText(msg.raw),
-		date: new Date().toISOString(),
-		threadId: `t_${(await sha256Hex(inReplyTo ?? messageId)).slice(0, 24)}`,
-		...(inReplyTo ? { inReplyTo } : {}),
-	};
-	await env.MAIL.put(MESSAGE_PREFIX + messageId, JSON.stringify(stored));
+	let stored = false;
+	// RECIPIENT SCOPE FIRST (#1278): mail for any address this bridge does not serve is neither stored nor forwarded, however the
+	// account routes it. It is still reported, so PAGS records a routing failure instead of the mail silently vanishing.
+	if (inScope(env, to)) {
+		const { text, chars } = await readText(msg.raw);
+		const date = new Date().toISOString();
+		const message: InboundMessage = {
+			messageId,
+			from,
+			to,
+			subject: msg.headers.get("subject") ?? "",
+			text,
+			date,
+			threadId: `t_${(await sha256Hex(inReplyTo ?? messageId)).slice(0, 24)}`,
+			...(inReplyTo ? { inReplyTo } : {}),
+			...(chars > text.length ? { bodyChars: chars } : {}),
+		};
+		// A redelivery keeps its first index entry: the index key is derived from the FIRST arrival's time.
+		const first = await env.MAIL.get(MESSAGE_PREFIX + messageId);
+		if (first) {
+			stored = true;
+		} else {
+			await env.MAIL.put(MESSAGE_PREFIX + messageId, JSON.stringify(message));
+			await env.MAIL.put(indexKey(to, date, messageId), JSON.stringify({ id: messageId, threadId: message.threadId, from, to, subject: clip(message.subject, LIMITS.subject), date, snippet: text.slice(0, LIMITS.snippet), hasAttachments: false }));
+			stored = true;
+		}
+		const route = routesOf(env).find((r) => r.address === to);
+		if (route?.destination) await msg.forward(route.destination).catch(() => undefined);
+	}
+	const threadId = `t_${(await sha256Hex(inReplyTo ?? messageId)).slice(0, 24)}`;
 
-	const route = routesOf(env).find((r) => r.address === to);
-	if (route?.destination) await msg.forward(route.destination).catch(() => undefined);
-
-	if (!env.PAGS_INBOUND_URL) return { stored: true, notified: false };
-	const event = { type: "message.received", eventId: `in:${messageId}`, messageId, threadId: stored.threadId, from, to };
+	if (!env.PAGS_INBOUND_URL) return { stored, notified: false };
+	const event = { type: "message.received", eventId: `in:${messageId}`, messageId, threadId, from, to };
 	try {
 		const res = await fetchImpl(env.PAGS_INBOUND_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(event) });
-		return { stored: true, notified: res.ok || res.status === 422 };
+		return { stored, notified: res.ok || res.status === 422 };
 	} catch {
-		return { stored: true, notified: false };
+		return { stored, notified: false };
 	}
 }

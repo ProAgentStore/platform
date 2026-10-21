@@ -39,7 +39,8 @@ import { safeFetch, SsrfError } from "../ssrf.js";
 import { clipMarked } from "../clip-marked.js";
 import { logEvent } from "../events.js";
 import { recordProbeFailure, resolveEmailWorkerConnection, resolveEmailWorkerSecret } from "../email-worker-connections.js";
-import { type ConnectionProfile, type IdentitySnapshot, loadProfile, parseIdentity, replyDecision, senderDecision, type SenderDecision } from "../email-worker-identities.js";
+import { type ConnectionProfile, type IdentitySnapshot, inMailboxScope, loadProfile, parseIdentity, replyDecision, senderDecision, type SenderDecision } from "../email-worker-identities.js";
+import { budgetUsed, chargeBudget, handledAmong, markHandled, RUN_BUDGET, runKeyFor } from "../email-worker-checkpoints.js";
 import { findSentReceipt, insertReceipt, isDuplicateSend, listReceipts, recordReceipt, type ReceiptKind } from "../email-worker-receipts.js";
 
 function fail(message: string): RegistryToolResult {
@@ -241,20 +242,95 @@ async function senderRefusal(ctx: RegistryToolCtx, r: ResolvedConnection, kind: 
 	return fail(d.message);
 }
 
+/** Hard bounds on what one list call returns and costs (#1278) — enforced here, whatever the model asks for or the bridge sends. */
+const LIST_MAX = 25;
+const LIST_DEFAULT = 10;
+/** Bridge pages one list call may fetch while skipping handled or out-of-scope mail. */
+const SCAN_CALLS = 8;
+const READ_DEFAULT_CHARS = 6000;
+const READ_MAX_CHARS = 20_000;
+
+const str = (v: unknown, max: number): string => clipMarked(typeof v === "string" ? v : "", max);
+
+/** A run-budget refusal: nothing was fetched, and the answer says what the run has used. */
+async function budgetRefusal(ctx: RegistryToolCtx, r: ResolvedConnection, kind: ReceiptKind, what: string, used: Record<string, number>): Promise<RegistryToolResult> {
+	await recordReceipt(ctx.env, { userId: ctx.userId ?? "", instanceId: ctx.instanceId, endpoint: r.endpoint, accountId: r.accountId, kind, outcome: "refused", failureClass: "run_budget" });
+	return fail(`This run's ${what} budget is used (${JSON.stringify(used)} of ${JSON.stringify(RUN_BUDGET)}). Nothing was fetched. Continue in a new run; handled mail stays skipped.`);
+}
+
 const listHandler: ToolDef["handler"] = async (ctx, input) => {
 	const resolved = await resolveConnection(ctx, "list");
 	if ("refusal" in resolved) return resolved.refusal;
+	const instanceId = ctx.instanceId ?? "";
+	const runKey = runKeyFor(ctx.traceId);
+	const used = await budgetUsed(ctx.env, instanceId, runKey);
+	const room = RUN_BUDGET.summaries - used.summaries;
+	if (room <= 0) return budgetRefusal(ctx, resolved, "list", "summary", { summaries: used.summaries });
+	const asked = typeof input.limit === "number" && Number.isFinite(input.limit) ? Math.floor(input.limit) : LIST_DEFAULT;
+	const want = Math.max(1, Math.min(LIST_MAX, asked, room));
+	const includeHandled = input.include_handled === true;
+	const messages: Array<Record<string, unknown>> = [];
+	let cursor = typeof input.cursor === "string" ? input.cursor : undefined;
+	let nextCursor: string | null = null;
+	let scanned = 0;
+	let skippedHandled = 0;
+	let droppedOutOfScope = 0;
+	let droppedOverLimit = 0;
+	let calls = 0;
 	try {
-		const res = await callAdapter(resolved.endpoint, resolved.secret, "/v1/email-worker/messages/list", {
-			folder: typeof input.folder === "string" ? input.folder : undefined,
-			cursor: typeof input.cursor === "string" ? input.cursor : undefined,
-			limit: typeof input.limit === "number" ? input.limit : 10,
-		});
+		do {
+			// Ask for no more than the room left: a page can then be consumed whole, so its cursor never skips unseen mail.
+			const res = await callAdapter(resolved.endpoint, resolved.secret, "/v1/email-worker/messages/list", {
+				folder: typeof input.folder === "string" ? input.folder : undefined,
+				cursor,
+				limit: want - messages.length,
+			});
+			calls++;
+			const page = Array.isArray(res.messages) ? (res.messages as Array<Record<string, unknown>>) : [];
+			nextCursor = typeof res.nextCursor === "string" && res.nextCursor ? res.nextCursor : null;
+			cursor = nextCursor ?? undefined;
+			const inScope = page.filter((m) => {
+				const ok = inMailboxScope(resolved.profile, m.to);
+				if (!ok) droppedOutOfScope++;
+				return ok;
+			});
+			const ids = inScope.map((m) => (typeof m.id === "string" ? m.id : "")).filter(Boolean);
+			const handled = await handledAmong(ctx.env, instanceId, resolved.endpoint, resolved.accountId, ids);
+			for (const m of inScope) {
+				scanned++;
+				const id = typeof m.id === "string" ? m.id : "";
+				if (!id) continue;
+				if (handled.has(id) && !includeHandled) {
+					skippedHandled++;
+					continue;
+				}
+				// A bridge that returns more than it was asked for cannot be resumed past: the extras are counted, not silently lost.
+				if (messages.length >= want) {
+					droppedOverLimit++;
+					continue;
+				}
+				messages.push({ id, threadId: typeof m.threadId === "string" ? m.threadId : undefined, from: str(m.from, 254), to: str(m.to, 254), subject: str(m.subject, 200), date: str(m.date, 40), snippet: str(m.snippet, 160), hasAttachments: m.hasAttachments === true, ...(includeHandled ? { handled: handled.has(id) } : {}) });
+			}
+		} while (messages.length < want && nextCursor && calls < SCAN_CALLS);
+		await chargeBudget(ctx.env, instanceId, runKey, { summaries: messages.length });
 		await Promise.all([
 			auditReceipt(ctx, { event: "email.list", endpoint: resolved.endpoint, accountId: resolved.accountId, outcome: "ok" }),
 			recordReceipt(ctx.env, { userId: ctx.userId ?? "", instanceId: ctx.instanceId, endpoint: resolved.endpoint, accountId: resolved.accountId, kind: "list", outcome: "ok" }),
 		]);
-		return ok(res);
+		const stopped = messages.length >= want ? (want < asked && want === room ? "run_budget" : "limit") : nextCursor ? "scan_budget" : "exhausted";
+		return ok({
+			messages,
+			nextCursor,
+			// The truth about what was NOT shown: `more` is whether the mailbox has unscanned mail past this page.
+			more: nextCursor !== null,
+			stoppedBecause: stopped,
+			scanned,
+			skippedHandled,
+			droppedOutOfScope,
+			...(droppedOverLimit ? { droppedOverLimit } : {}),
+			budget: { summariesUsed: used.summaries + messages.length, summariesMax: RUN_BUDGET.summaries },
+			note: nextCursor ? "More mail remains beyond this page; pass nextCursor to continue. Handled mail (read in full or replied to) is skipped unless include_handled is true." : "No unscanned mail remains.",
+		});
 	} catch (e) {
 		return fail((await adapterFailure(ctx, resolved, "list", "email.list", e)).message);
 	}
@@ -265,13 +341,46 @@ const readHandler: ToolDef["handler"] = async (ctx, input) => {
 	if (!id) return fail("message_id is required — get one from email_worker_list_messages.");
 	const resolved = await resolveConnection(ctx, "read");
 	if ("refusal" in resolved) return resolved.refusal;
+	const instanceId = ctx.instanceId ?? "";
+	const runKey = runKeyFor(ctx.traceId);
+	const used = await budgetUsed(ctx.env, instanceId, runKey);
+	const charsLeft = RUN_BUDGET.bodyChars - used.bodyChars;
+	if (used.reads >= RUN_BUDGET.reads || charsLeft <= 0) return budgetRefusal(ctx, resolved, "read", "read", { reads: used.reads, bodyChars: used.bodyChars });
+	const asked = typeof input.max_chars === "number" && Number.isFinite(input.max_chars) ? Math.floor(input.max_chars) : READ_DEFAULT_CHARS;
+	const maxChars = Math.max(1, Math.min(READ_MAX_CHARS, asked, charsLeft));
+	const offset = typeof input.offset === "number" && Number.isFinite(input.offset) ? Math.max(0, Math.floor(input.offset)) : 0;
 	try {
-		const res = await callAdapter(resolved.endpoint, resolved.secret, "/v1/email-worker/messages/get", { id });
+		const res = await callAdapter(resolved.endpoint, resolved.secret, "/v1/email-worker/messages/get", { id, offset, maxChars });
+		// A message addressed to someone else is not this agent's mail, however the id was obtained. Nothing from it is returned.
+		if (!inMailboxScope(resolved.profile, res.to)) {
+			await recordReceipt(ctx.env, { userId: ctx.userId ?? "", instanceId: ctx.instanceId, endpoint: resolved.endpoint, accountId: resolved.accountId, kind: "read", outcome: "refused", failureClass: "scope_recipient", messageId: id });
+			return fail("That message is not addressed to this agent's mailbox, so it was not read.");
+		}
+		const rawBody = typeof res.body === "string" ? res.body : "";
+		const body = rawBody.length > maxChars ? clipMarked(rawBody, maxChars) : rawBody;
+		const more = typeof res.nextOffset === "number" || rawBody.length > maxChars;
+		const out = {
+			id: typeof res.id === "string" ? res.id : id,
+			threadId: res.threadId,
+			from: str(res.from, 254),
+			to: str(res.to, 254),
+			subject: str(res.subject, 200),
+			date: res.date,
+			body,
+			bodyChars: typeof res.bodyChars === "number" ? res.bodyChars : rawBody.length,
+			offset,
+			truncated: res.truncated === true || more,
+			...(more ? { nextOffset: typeof res.nextOffset === "number" ? res.nextOffset : offset + maxChars } : {}),
+			attachments: Array.isArray(res.attachments) ? res.attachments : [],
+		};
 		await Promise.all([
+			chargeBudget(ctx.env, instanceId, runKey, { reads: 1, bodyChars: body.length }),
+			// Handled = read to its end. A body still being paged is not yet dealt with.
+			out.truncated ? Promise.resolve() : markHandled(ctx.env, instanceId, resolved.endpoint, resolved.accountId, id, "read"),
 			auditReceipt(ctx, { event: "email.read", endpoint: resolved.endpoint, accountId: resolved.accountId, messageId: id, outcome: "ok" }),
 			recordReceipt(ctx.env, { userId: ctx.userId ?? "", instanceId: ctx.instanceId, endpoint: resolved.endpoint, accountId: resolved.accountId, kind: "read", outcome: "ok", messageId: id, threadId: typeof res.threadId === "string" ? res.threadId : null }),
 		]);
-		return { ...ok(res), success: true, content: JSON.stringify(res, null, 2) };
+		return { ...ok(out), success: true, content: JSON.stringify(out, null, 2) };
 	} catch (e) {
 		return fail((await adapterFailure(ctx, resolved, "read", "email.read", e, { messageId: id })).message);
 	}
@@ -360,7 +469,20 @@ const replyHandler: ToolDef["handler"] = async (ctx, input) => {
 	if (!sender.ok) return senderRefusal(ctx, resolved, "reply", sender, resolved.profile.replyIdentity);
 	const key = await intentKey(ctx, resolved, "reply", [sender.from ?? "", messageId, body], input.idempotency_key);
 	if (typeof key !== "string") return fail(key.error);
-	return deliver(ctx, resolved, {
+	// The parent must be mail addressed to THIS mailbox. Checked before anything is sent, with a one-character read, so a
+	// message id from another recipient (or a bridge that does not enforce scope itself) never reaches a reply.
+	try {
+		const parent = await callAdapter(resolved.endpoint, resolved.secret, "/v1/email-worker/messages/get", { id: messageId, offset: 0, maxChars: 1 });
+		if (!inMailboxScope(resolved.profile, parent.to)) throw new AdapterError("The message to reply to is not addressed to this agent's mailbox.", "protocol");
+	} catch (e) {
+		const err = toAdapterError(e);
+		if (err.failureClass === "protocol") {
+			await recordReceipt(ctx.env, { userId: ctx.userId ?? "", instanceId: ctx.instanceId, endpoint: resolved.endpoint, accountId: resolved.accountId, kind: "reply", outcome: "refused", failureClass: "scope_parent", messageId, idempotencyKey: key });
+			return fail("That message is not in this agent's mailbox (or does not exist), so nothing was sent.");
+		}
+		return fail((await adapterFailure(ctx, resolved, "reply", "email.reply", e, { messageId })).message);
+	}
+	const sent = await deliver(ctx, resolved, {
 		kind: "reply",
 		event: "email.reply",
 		path: "/v1/email-worker/messages/reply",
@@ -370,6 +492,8 @@ const replyHandler: ToolDef["handler"] = async (ctx, input) => {
 		to: null,
 		refMessageId: messageId,
 	});
+	if (sent.success) await markHandled(ctx.env, ctx.instanceId ?? "", resolved.endpoint, resolved.accountId, messageId, "reply").catch(() => undefined);
+	return sent;
 };
 
 /** What this connection may send as, what it only routes, and whether the bridge is healthy — shown explicitly (#1270 AC3). */
@@ -405,8 +529,11 @@ const eventsHandler: ToolDef["handler"] = async (ctx, input) => {
 	const page = await listReceipts(ctx.env, { userId: ctx.userId ?? "", endpoint: resolved.endpoint, accountId: resolved.accountId, kind, limit });
 	if (page.receipts.length === 0) return { head: "No events recorded for this connection yet.", content: "", success: true };
 	// Addresses in these rows were written by whoever sent the mail, so the dispatcher fences them.
-	const events = page.receipts.map(({ idempotencyKey: _k, instanceId: _i, endpoint: _e, accountId: _a, ...rest }) => rest);
-	return { content: JSON.stringify({ events, nextBefore: page.nextBefore }, null, 2), success: true, origin: "this connection's audit receipts" };
+	// Inbound-side events for a recipient outside this mailbox are not this agent's to see (#1278); a send's recipient is outbound and is not judged.
+	const inboundSide = new Set(["inbound", "delivery", "routing_failure"]);
+	const visible = page.receipts.filter((r) => !inboundSide.has(String(r.kind)) || !r.toAddress || inMailboxScope(resolved.profile, r.toAddress));
+	const events = visible.map(({ idempotencyKey: _k, instanceId: _i, endpoint: _e, accountId: _a, ...rest }) => rest);
+	return { content: JSON.stringify({ events, nextBefore: page.nextBefore, ...(visible.length < page.receipts.length ? { withheldOutOfScope: page.receipts.length - visible.length } : {}) }, null, 2), success: true, origin: "this connection's audit receipts" };
 };
 
 
@@ -414,13 +541,14 @@ export const EMAIL_WORKER_TOOLS: ToolDef[] = [
 	{
 		name: "email_worker_list_messages",
 		description:
-			"List messages from this agent's worker-backed mailbox (newest first). Returns message/thread ids, sender, subject, date and a snippet. Use email_worker_read_message for the full body.",
+			"List unhandled messages from this agent's worker-backed mailbox (newest first), at most 25 per call and a fixed number per run. Returns message/thread ids, sender, subject, date and a snippet, plus how many were skipped as handled, whether more mail remains (nextCursor) and the run's budget. Only mail addressed to this mailbox is ever listed. Use email_worker_read_message for a body.",
 		jsonSchema: {
 			type: "object",
 			properties: {
 				folder: { type: "string", description: "Folder/label to list, if the worker supports one. Default is the adapter's own default (usually inbox)." },
 				cursor: { type: "string", description: "Pagination cursor from a previous call's nextCursor." },
-				limit: { type: "number", description: "How many messages to return (adapter-defined cap, default 10)." },
+				limit: { type: "number", description: "How many summaries to return (1-25, default 10; also bounded by the run's remaining summary budget)." },
+				include_handled: { type: "boolean", description: "Also list mail this agent already handled (read in full or replied to). Default false: handled mail is skipped, and the answer says how much was." },
 			},
 		},
 		tier: "connector",
@@ -432,8 +560,16 @@ export const EMAIL_WORKER_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "email_worker_read_message",
-		description: "Read one message in full from this agent's worker-backed mailbox, by id from email_worker_list_messages.",
-		jsonSchema: { type: "object", properties: { message_id: { type: "string", description: "Message id from email_worker_list_messages." } }, required: ["message_id"] },
+		description: "Read one message from this agent's worker-backed mailbox, by id from email_worker_list_messages. The body is bounded (default 6000 characters) and says when it is truncated and where to continue; a message not addressed to this mailbox is refused. Reading a message to its end marks it handled.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				message_id: { type: "string", description: "Message id from email_worker_list_messages." },
+				max_chars: { type: "number", description: "Characters of body to return (1-20000, default 6000; also bounded by the run's remaining budget). A longer body comes back truncated with nextOffset." },
+				offset: { type: "number", description: "Continue a truncated body from this character offset (the previous call's nextOffset)." },
+			},
+			required: ["message_id"],
+		},
 		tier: "connector",
 		connector: "email-worker",
 		scope: "read",
