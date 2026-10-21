@@ -75,6 +75,8 @@ export interface ActionsRunnerJob {
 }
 
 export interface ActionsRunnerDeps {
+	/** Run a program briefly and return its trimmed stdout, or null when it is absent or fails (capability probes, #1260). */
+	probe?: (file: string, args: string[]) => string | null;
 	platform: NodeJS.Platform;
 	arch: string;
 	home: string;
@@ -124,6 +126,81 @@ export function checkPrerequisites(deps: Pick<ActionsRunnerDeps, "which">): Prer
 	return want.map(([name, note]) => (deps.which(name) ? { name, found: true } : { name, found: false, note: `not on PATH — needed for ${note}` }));
 }
 
+// ── Capability labels (#1260) ─────────────────────────────────────────────────────────────────────
+//
+// A runner carries `pags` and `pags-<node>`, so ANY machine could take any job — and a 4 GB Intel MacBook Air with no Homebrew took 37
+// in two hours, 12 of which failed for a missing `jq` or `brew`. The machine therefore reports what it HAS, as runner labels a workflow
+// (or a router) can require: `has-<tool>` for each known CI tool on PATH, and `macos-NN+` for the OS tiers it meets — a job that needs
+// macOS 14 asks for `macos-14+`, and a macOS 15 machine carries it too (every tier at or below its version, never only the highest, or
+// a label-matching router would refuse a newer machine a job an older one can take).
+//
+// A FIXED list, deliberately: workflows are not scanned. Adding a tool is one line here.
+
+/** The CI tools whose presence is reported, each with how to install it when a job needs it. */
+export const CAPABILITY_TOOLS: ReadonlyArray<{ tool: string; hint: string }> = [
+	{ tool: "brew", hint: "Homebrew — https://brew.sh" },
+	{ tool: "jq", hint: "brew install jq (macOS) · apt install jq (Linux)" },
+	{ tool: "flutter", hint: "https://docs.flutter.dev/get-started/install — Flutter 3.41 needs macOS 14 or newer" },
+	{ tool: "dart", hint: "ships with Flutter; or brew install dart-sdk" },
+	{ tool: "docker", hint: "Docker Desktop — https://docs.docker.com/get-started/get-docker/" },
+	{ tool: "python3", hint: "brew install python (macOS) · apt install python3 (Linux)" },
+	{ tool: "go", hint: "brew install go · https://go.dev/dl/" },
+	{ tool: "node", hint: "brew install node · https://nodejs.org" },
+	{ tool: "pnpm", hint: "corepack enable · npm i -g pnpm" },
+	{ tool: "aws", hint: "brew install awscli · https://aws.amazon.com/cli/" },
+	{ tool: "git", hint: "xcode-select --install (macOS) · apt install git (Linux)" },
+];
+
+/** The tools the org's fleet has had jobs fail for (#1260): a machine without one is told before it registers. */
+export const PREFLIGHT_TOOLS: readonly string[] = ["brew", "jq", "flutter", "dart"];
+
+/** macOS majors worth a tier label. Apple skipped 16-25; a version outside the list still gets its own tier. */
+const MACOS_TIERS = [11, 12, 13, 14, 15, 26];
+
+export interface CapabilityReport {
+	/** `has-<tool>` for each tool present, then `macos-NN+` tiers on macOS. Valid runner labels. */
+	labels: string[];
+	/** The preflight tools this machine lacks, each with how to install it. */
+	missing: Array<{ tool: string; hint: string }>;
+	/** Things worth knowing that are not a missing tool, e.g. an OS too old for Flutter. */
+	warnings: string[];
+	os: { platform: string; version: string | null };
+}
+
+/** The macOS major version, from `sw_vers -productVersion`, or null off macOS / when it cannot be read. */
+export function macosMajor(deps: Pick<ActionsRunnerDeps, "platform" | "probe">): { version: string | null; major: number | null } {
+	if (deps.platform !== "darwin") return { version: null, major: null };
+	const version = deps.probe?.("sw_vers", ["-productVersion"]) ?? null;
+	const major = version && /^\d+(\.\d+)*$/.test(version) ? Number.parseInt(version.split(".")[0], 10) : null;
+	return { version, major: major !== null && Number.isFinite(major) ? major : null };
+}
+
+/** The `macos-NN+` tiers a macOS of this major version meets: every known tier at or below it. */
+export function macosTierLabels(major: number | null): string[] {
+	if (major === null) return [];
+	const tiers = new Set(MACOS_TIERS.filter((t) => t <= major));
+	tiers.add(major);
+	return [...tiers].sort((a, b) => a - b).map((t) => `macos-${t}+`);
+}
+
+/** What this machine can run, as runner labels, plus the preflight gaps. Reads only PATH and two OS probes; installs nothing. */
+export function detectCapabilities(deps: Pick<ActionsRunnerDeps, "which" | "platform" | "probe">): CapabilityReport {
+	const labels = CAPABILITY_TOOLS.filter((t) => deps.which(t.tool)).map((t) => `has-${t.tool}`);
+	// Xcode is a developer directory, not a binary on PATH: `xcode-select -p` prints it when the tools are installed.
+	if (deps.platform === "darwin" && deps.which("xcode-select") && (deps.probe?.("xcode-select", ["-p"]) ?? "").startsWith("/")) labels.push("has-xcode");
+	const { version, major } = macosMajor(deps);
+	labels.push(...macosTierLabels(major));
+	const missing = CAPABILITY_TOOLS.filter((t) => PREFLIGHT_TOOLS.includes(t.tool) && !deps.which(t.tool));
+	const warnings: string[] = [];
+	if (major !== null && major < 14) warnings.push(`macOS ${version} is older than 14: Flutter 3.41's Dart VM will not start here, so Flutter jobs must not be routed to this machine — it will not carry the macos-14+ label, and installing the SDK does not fix it.`);
+	return { labels, missing, warnings, os: { platform: deps.platform, version } };
+}
+
+/** The `has-*` / `macos-NN+` labels alone (what a workflow's `runs-on` can require). */
+export function detectCapabilityLabels(deps: Pick<ActionsRunnerDeps, "which" | "platform" | "probe">): string[] {
+	return detectCapabilities(deps).labels;
+}
+
 const mask = (args: string[], token: string) => args.map((a) => (a === token ? "***" : a));
 
 const jobs = new Map<string, ActionsRunnerJob>();
@@ -137,7 +214,8 @@ function validate(req: ActionsRunnerRequest, action: RunnerAction): void {
 	if (!URL_SHAPE.test(req.url ?? "")) throw new Error("url must be https://github.com/<org> or https://github.com/<owner>/<repo>");
 	if (typeof req.token !== "string" || req.token.length < 10 || /\s/.test(req.token)) throw new Error(`token must be a GitHub runner ${action === "install" ? "registration" : "removal"} token`);
 	if (!/^[A-Za-z0-9._-]{1,64}$/.test(req.name ?? "")) throw new Error("name must be the machine's runner name (letters, digits, . _ -; at most 64)");
-	for (const l of req.labels ?? []) if (!/^[A-Za-z0-9._-]{1,100}$/.test(l)) throw new Error(`label ${JSON.stringify(l)} is not a valid runner label`);
+	// `+` is allowed for the OS tier labels (`macos-14+`, #1260).
+	for (const l of req.labels ?? []) if (!/^[A-Za-z0-9._+-]{1,100}$/.test(l)) throw new Error(`label ${JSON.stringify(l)} is not a valid runner label`);
 	if (req.runnerGroup !== undefined && !/^[A-Za-z0-9 ._-]{1,100}$/.test(req.runnerGroup)) throw new Error("runnerGroup is not a valid runner group name");
 }
 
@@ -301,6 +379,10 @@ export function liveRunnerDeps(): ActionsRunnerDeps {
 		exists: existsSync,
 		mkdir: (path) => mkdirSync(path, { recursive: true }),
 		which: (bin) => spawnSync(win ? "where" : "which", [bin], { stdio: "ignore" }).status === 0,
+		probe: (file, args) => {
+			const r = spawnSync(file, args, { encoding: "utf8", timeout: 5000 });
+			return r.status === 0 ? String(r.stdout).trim() : null;
+		},
 		latestVersion: async () => {
 			const res = await fetch("https://api.github.com/repos/actions/runner/releases/latest", { headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(30_000) });
 			const tag = res.ok ? ((await res.json()) as { tag_name?: unknown }).tag_name : null;
@@ -343,6 +425,7 @@ export function routeActionsRunner(path: string, body: Record<string, unknown>, 
 		if (path === "/coding/actions-runner/install" || path === "/coding/actions-runner/remove") {
 			return { status: 202, body: startRunnerJob(path.endsWith("install") ? "install" : "remove", body as unknown as ActionsRunnerRequest, deps()) };
 		}
+		if (path === "/coding/actions-runner/capabilities") return { status: 200, body: detectCapabilities(deps()) };
 		if (path === "/coding/actions-runner/status") {
 			return { status: 200, body: { job: typeof body.jobId === "string" ? runnerJob(body.jobId) : null, installed: installedRunners() } };
 		}

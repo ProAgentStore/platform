@@ -17397,7 +17397,7 @@ paths:
   /v1/instances/{instanceId}/actions-runner:
     post:
       summary: Install or remove the GitHub Actions runner on this agent's pinned machine
-      description: Mints a runner registration (or removal) token through the GitHub App and hands it to the machine's `pags up`; the token is never stored or returned. scope is {org} (an org owning one of this agent's repos) or {repo} (one of its repos, private only). Answers with the machine's job (202). Refused (403) with the permission to grant until the App's runner permissions are accepted (#1207). (#1208, #1209)
+      description: Mints a runner registration (or removal) token through the GitHub App and hands it to the machine's `pags up`; the token is never stored or returned. scope is {org} (an org owning one of this agent's repos) or {repo} (one of its repos, private only). Answers with the machine's job (202). Refused (403) with the permission to grant until the App's runner permissions are accepted (#1207). (#1208, #1209) The runner is labelled `pags`, `pags-<node>` and the machine's capabilities (#1260): `has-<tool>` for each of brew, jq, flutter, dart, docker, python3, go, node, pnpm, aws, git, xcode found on it, and `macos-NN+` for every macOS tier it meets. On install the answer also carries `capabilities` and an informational `preflight` (missing CI tools with install hints, OS warnings). Installing again for a runner that is already registered refreshes its capability labels at GitHub and answers `refreshed` instead of reinstalling.
       operationId: startInstanceActionsRunner
       tags: [Instances]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]

@@ -56,6 +56,9 @@ function deps(over: Partial<ProvisionDeps> & { githubStatus?: number; visibility
 	return f;
 }
 
+/** The requests that CHANGE the machine (install / remove) — its capability and status reads (#1260) are read-only. */
+const changing = (f: Fake) => f.relayed.filter((r) => !/\/(status|capabilities)$/.test(r.path));
+
 /** Every row of every table, as one string. */
 function dumpD1(): string {
 	const tables = (d1.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name);
@@ -70,7 +73,7 @@ describe("the token is minted, delivered, and stored nowhere (#1208 acceptance)"
 		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d);
 
 		expect(d.github).toContainEqual({ url: "https://api.github.com/orgs/proappstore-online/actions/runners/registration-token", method: "POST", auth: `Bearer ${APP_TOKEN}` });
-		expect(d.relayed).toEqual([{ path: "/coding/actions-runner/install", body: { url: "https://github.com/proappstore-online", token: REG_TOKEN, name: "pags-pink-laptop", labels: ["pags", "pags-pink-laptop"] } }]);
+		expect(changing(d)).toEqual([{ path: "/coding/actions-runner/install", body: { url: "https://github.com/proappstore-online", token: REG_TOKEN, name: "pags-pink-laptop", labels: ["pags", "pags-pink-laptop"] } }]);
 		expect(out).toMatchObject({ node: NODE, labels: ["pags", "pags-pink-laptop"], job: { id: "job-1", state: "running" } });
 
 		expect(JSON.stringify(out)).not.toContain(REG_TOKEN);
@@ -89,7 +92,7 @@ describe("the token is minted, delivered, and stored nowhere (#1208 acceptance)"
 			"https://api.github.com/repos/proappstore-online/interns/actions/runners/registration-token",
 			"https://api.github.com/repos/proappstore-online/interns/actions/runners/remove-token",
 		]);
-		expect(d.relayed.map((r) => [r.path, r.body.token])).toEqual([
+		expect(changing(d).map((r) => [r.path, r.body.token])).toEqual([
 			["/coding/actions-runner/install", REG_TOKEN],
 			["/coding/actions-runner/remove", REMOVE_TOKEN],
 		]);
@@ -102,7 +105,7 @@ describe("refusals: nothing is minted, nothing reaches the machine", () => {
 		const d = deps({ githubStatus: 403 });
 		await expect(startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d)).rejects.toThrow(/Self-hosted runners: Read and write.*#1207/);
 		await expect(mintRunnerToken({ repo: "proappstore-online/interns" }, "registration", deps({ githubStatus: 403 }))).rejects.toThrow(/Administration: Read and write/);
-		expect(d.relayed).toEqual([]);
+		expect(changing(d)).toEqual([]); // the capability and status reads are read-only; nothing was installed or removed
 	});
 
 	it("an org or repo this agent does not work on is refused before anything is minted", async () => {
@@ -139,5 +142,172 @@ describe("status", () => {
 		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1", jobId: "job-1" }, d);
 		expect(d.relayed).toEqual([{ path: "/coding/actions-runner/status", body: { jobId: "job-1" } }]);
 		expect(s).toMatchObject({ node: NODE, installed: [{ managed: false, name: "pink-laptop" }] });
+	});
+});
+
+// ── #1260: capability labels, the preflight, and the label refresh ────────────────────────────────────
+
+const REPORT = (over: Record<string, unknown> = {}) => ({
+	labels: ["has-brew", "has-git", "has-node", "macos-11+", "macos-12+", "macos-13+", "macos-14+"],
+	missing: [{ tool: "jq", hint: "brew install jq (macOS) · apt install jq (Linux)" }, { tool: "flutter", hint: "https://docs.flutter.dev/get-started/install" }],
+	warnings: [] as string[],
+	os: { platform: "darwin", version: "14.5" },
+	...over,
+});
+
+/** A machine that answers capabilities (or does not), and whose installed list the test controls. */
+function machine(opts: { capabilities?: unknown | Error; installed?: Array<{ name: string | null; url: string | null }> }) {
+	const d = deps();
+	const inner = d.call;
+	d.call = async <T>(conn: RunnerConn, path: string, body: unknown) => {
+		if (path.endsWith("/capabilities")) {
+			d.relayed.push({ path, body: body as Record<string, unknown> });
+			if (opts.capabilities instanceof Error) throw opts.capabilities;
+			return (opts.capabilities ?? REPORT()) as T;
+		}
+		if (path.endsWith("/status") && opts.installed) {
+			d.relayed.push({ path, body: body as Record<string, unknown> });
+			return { job: null, installed: opts.installed } as T;
+		}
+		return inner<T>(conn, path, body);
+	};
+	return d;
+}
+
+describe("capability labels join the runner's labels (#1260)", () => {
+	it("asks the machine what it can run BEFORE registering, and sends its labels beside pags and pags-<node>", async () => {
+		const d = machine({});
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d);
+		const expected = ["pags", "pags-pink-laptop", "has-brew", "has-git", "has-node", "macos-11+", "macos-12+", "macos-13+", "macos-14+"];
+		expect(out.labels).toEqual(expected);
+		expect(changing(d)).toEqual([{ path: "/coding/actions-runner/install", body: expect.objectContaining({ name: "pags-pink-laptop", labels: expected }) }]);
+		// asked first
+		expect(d.relayed[0].path).toBe("/coding/actions-runner/capabilities");
+		expect(JSON.stringify(out)).not.toContain(REG_TOKEN);
+	});
+
+	it("the preflight names each missing CI tool and how to install it, and never blocks the registration", async () => {
+		const d = machine({});
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d);
+		expect(out.preflight?.missing.map((m) => m.tool)).toEqual(["jq", "flutter"]);
+		expect(out.preflight?.message).toMatch(/lacks `jq`, `flutter`/);
+		expect(out.preflight?.message).toMatch(/jq — brew install jq/);
+		expect(out.preflight?.message).toMatch(/has-<tool>/);
+		expect(changing(d)).toHaveLength(1); // registered anyway: informational
+	});
+
+	it("an OS warning (macOS too old for Flutter) is carried into the preflight", async () => {
+		const warning = "macOS 12.7 is older than 14: Flutter 3.41's Dart VM will not start here.";
+		const d = machine({ capabilities: REPORT({ warnings: [warning], labels: ["has-git", "macos-11+", "macos-12+"], missing: [] }) });
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d);
+		expect(out.preflight?.message).toContain(warning);
+		expect(out.labels).not.toContain("macos-14+");
+	});
+
+	it("a fully equipped machine says so", async () => {
+		const d = machine({ capabilities: REPORT({ missing: [] }) });
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d);
+		expect(out.preflight?.message).toMatch(/has the CI tools checked/);
+	});
+
+	it("a runner too old to answer (404) or a failed check registers with the base labels only — and the preflight says it could not check", async () => {
+		for (const err of [new Error("POST /coding/actions-runner/capabilities → 404"), new Error("socket closed")]) {
+			const d = machine({ capabilities: err });
+			const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d);
+			expect(out.labels).toEqual(["pags", "pags-pink-laptop"]);
+			expect(out.capabilities).toBeNull();
+			expect(out.preflight?.message).toMatch(/could not report its tools/);
+			expect(changing(d)).toHaveLength(1);
+		}
+	});
+
+	it("labels the machine sends that are not valid runner labels are dropped, not forwarded to GitHub", async () => {
+		const d = machine({ capabilities: REPORT({ labels: ["has-jq", "has jq", "x".repeat(101), "$(rm -rf)", 5, "macos-14+"] }) });
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" } }, d);
+		expect(out.labels).toEqual(["pags", "pags-pink-laptop", "has-jq", "macos-14+"]);
+	});
+
+	it("a removal does not ask for capabilities", async () => {
+		const d = machine({});
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "remove", scope: { org: "proappstore-online" } }, d);
+		expect(d.relayed.some((r) => r.path.endsWith("/capabilities"))).toBe(false);
+		expect(out.preflight).toBeUndefined();
+	});
+});
+
+describe("refreshing the labels of a runner that is already registered (#1260)", () => {
+	const ORG = "proappstore-online";
+	const installed = [{ name: "pags-pink-laptop", url: `https://github.com/${ORG}` }];
+
+	function github(runnerLabels: Array<{ name: string; type: string }>, over: { listStatus?: number; putStatus?: number; name?: string } = {}) {
+		const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+		const fetch = async (url: string, init?: RequestInit) => {
+			const method = init?.method ?? "GET";
+			calls.push({ method, url, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+			if (method === "GET" && url.includes("/actions/runners?")) {
+				if (over.listStatus) return new Response("{}", { status: over.listStatus });
+				return Response.json({ runners: [{ id: 77, name: over.name ?? "pags-pink-laptop", labels: runnerLabels }] });
+			}
+			if (method === "PUT") return new Response(JSON.stringify({}), { status: over.putStatus ?? 200 });
+			return Response.json({ token: REG_TOKEN }, { status: 201 });
+		};
+		return { calls, fetch };
+	}
+	const base = [{ name: "self-hosted", type: "read-only" }, { name: "macOS", type: "read-only" }, { name: "ARM64", type: "read-only" }];
+
+	it("re-running setup on an installed runner relabels it at GitHub: stale capability labels go, current ones come, a hand-added label stays — no token minted, nothing installed", async () => {
+		const gh = github([...base, { name: "pags", type: "custom" }, { name: "pags-pink-laptop", type: "custom" }, { name: "has-jq", type: "custom" }, { name: "macos-12+", type: "custom" }, { name: "team-ios", type: "custom" }]);
+		const d = machine({ installed });
+		d.fetch = gh.fetch;
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: ORG } }, d);
+		const put = gh.calls.find((c) => c.method === "PUT");
+		expect(put?.url).toBe(`https://api.github.com/orgs/${ORG}/actions/runners/77/labels`);
+		expect(put?.body).toEqual({ labels: ["pags", "pags-pink-laptop", "team-ios", "has-brew", "has-git", "has-node", "macos-11+", "macos-12+", "macos-13+", "macos-14+"] });
+		expect(out.refreshed).toMatchObject({ changed: true });
+		expect(out.job).toMatchObject({ state: "done", service: "installed" });
+		expect(out.job.steps[0]).toMatch(/relabelled at GitHub/);
+		expect(gh.calls.some((c) => c.url.endsWith("registration-token"))).toBe(false);
+		expect(changing(d)).toEqual([]);
+		expect(JSON.stringify(out)).not.toContain(APP_TOKEN);
+	});
+
+	it("labels that already match are left alone: no PUT", async () => {
+		const desired = ["pags", "pags-pink-laptop", "has-brew", "has-git", "has-node", "macos-11+", "macos-12+", "macos-13+", "macos-14+"];
+		const gh = github([...base, ...desired.map((name) => ({ name, type: "custom" }))]);
+		const d = machine({ installed });
+		d.fetch = gh.fetch;
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: ORG } }, d);
+		expect(gh.calls.some((c) => c.method === "PUT")).toBe(false);
+		expect(out.refreshed?.changed).toBe(false);
+		expect(out.job.steps[0]).toMatch(/already match/);
+	});
+
+	it("a runner registered under another scope is not 'installed' here: it installs normally", async () => {
+		const gh = github(base);
+		const d = machine({ installed: [{ name: "pags-pink-laptop", url: "https://github.com/someone-else" }] });
+		d.fetch = async (url, init) => (url.includes("/actions/runners") && !url.endsWith("registration-token") ? gh.fetch(url, init) : Response.json({ token: REG_TOKEN }, { status: 201 }));
+		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: ORG } }, d);
+		expect(changing(d).map((r) => r.path)).toEqual(["/coding/actions-runner/install"]);
+		expect(out.refreshed).toBeUndefined();
+	});
+
+	it("GitHub's 403 names the permission to grant; a runner GitHub does not know says to reinstall — each changes nothing", async () => {
+		const denied = github(base, { listStatus: 403 });
+		const d1 = machine({ installed });
+		d1.fetch = denied.fetch;
+		await expect(startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: ORG } }, d1)).rejects.toThrow(/Self-hosted runners: Read and write/);
+		const unknown = github(base, { name: "some-other-runner" });
+		const d2 = machine({ installed });
+		d2.fetch = unknown.fetch;
+		await expect(startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: ORG } }, d2)).rejects.toThrow(/No runner named pags-pink-laptop is registered/);
+		expect(unknown.calls.some((c) => c.method === "PUT")).toBe(false);
+	});
+
+	it("a repo-scoped runner is relabelled at the repo", async () => {
+		const gh = github([...base, { name: "has-jq", type: "custom" }]);
+		const d = machine({ installed: [{ name: "pags-pink-laptop", url: "https://github.com/proappstore-online/interns" }] });
+		d.fetch = async (url, init) => (url.endsWith("/repos/proappstore-online/interns") ? Response.json({ visibility: "private" }) : gh.fetch(url, init));
+		await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { repo: "proappstore-online/interns" } }, d);
+		expect(gh.calls.find((c) => c.method === "PUT")?.url).toBe("https://api.github.com/repos/proappstore-online/interns/actions/runners/77/labels");
 	});
 });

@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { type ActionsRunnerDeps, type ActionsRunnerJob, clearRunnerJobs, readInstalledRunner, routeActionsRunner, runnerAsset, runnerDir, runnerJob, startRunnerJob } from "./actions-runner.js";
+import { type ActionsRunnerDeps, type ActionsRunnerJob, CAPABILITY_TOOLS, clearRunnerJobs, detectCapabilities, detectCapabilityLabels, macosTierLabels, readInstalledRunner, routeActionsRunner, runnerAsset, runnerDir, runnerJob, startRunnerJob } from "./actions-runner.js";
 
 const TOKEN = "AABBCCDDEEFF00112233445566778899";
 const HOME = "/Users/pags";
@@ -172,5 +172,91 @@ describe("routes (#1209)", () => {
 		expect(routeActionsRunner("/coding/actions-runner/install", { ...ORG, url: "nope" }, () => d)).toMatchObject({ status: 400, body: { error: expect.stringContaining("github.com") } });
 		expect((routeActionsRunner("/coding/actions-runner/status", { jobId: id }, () => d).body as { job: ActionsRunnerJob }).job.id).toBe(id);
 		expect(routeActionsRunner("/coding/actions-runner/other", {}, () => d).status).toBe(404);
+	});
+});
+
+// ── #1260: capability labels ─────────────────────────────────────────────────────────────────────────
+
+/** A machine with exactly these tools on PATH and these OS probe answers. */
+const machine = (tools: string[], platform: NodeJS.Platform = "darwin", probes: Record<string, string | null> = {}) => ({
+	platform,
+	which: (bin: string) => tools.includes(bin),
+	probe: (file: string, args: string[]) => probes[`${file} ${args.join(" ")}`] ?? null,
+});
+
+describe("detectCapabilityLabels (#1260)", () => {
+	it("a has-<tool> label for each known CI tool on PATH, and none for the rest", () => {
+		const labels = detectCapabilityLabels(machine(["git", "node", "pnpm", "jq", "brew"], "linux"));
+		expect(labels).toEqual(["has-brew", "has-jq", "has-node", "has-pnpm", "has-git"]);
+		expect(labels).not.toContain("has-flutter");
+	});
+
+	it("the tiny-laptop of the incident (Monterey, no Homebrew, no jq): git and node only, tiers up to macos-12+, and a warning about Flutter", () => {
+		const r = detectCapabilities(machine(["git", "node", "xcode-select"], "darwin", { "sw_vers -productVersion": "12.7.6", "xcode-select -p": "/Library/Developer/CommandLineTools" }));
+		expect(r.labels).toEqual(["has-node", "has-git", "has-xcode", "macos-11+", "macos-12+"]);
+		expect(r.labels).not.toContain("has-jq");
+		expect(r.labels).not.toContain("has-brew");
+		expect(r.labels).not.toContain("macos-14+");
+		expect(r.missing.map((m) => m.tool)).toEqual(["brew", "jq", "flutter", "dart"]);
+		expect(r.warnings).toHaveLength(1);
+		expect(r.warnings[0]).toMatch(/macOS 12\.7\.6 is older than 14.*Flutter/);
+		expect(r.os).toEqual({ platform: "darwin", version: "12.7.6" });
+	});
+
+	it("a current Mac with everything carries every tier it meets, so a job needing macos-13+ can still use it", () => {
+		const r = detectCapabilities(machine(["brew", "jq", "flutter", "dart", "git", "xcode-select", "docker"], "darwin", { "sw_vers -productVersion": "15.1", "xcode-select -p": "/Applications/Xcode.app/Contents/Developer" }));
+		expect(r.labels).toEqual(expect.arrayContaining(["has-brew", "has-jq", "has-flutter", "has-dart", "has-docker", "has-xcode", "macos-11+", "macos-13+", "macos-14+", "macos-15+"]));
+		expect(r.labels).not.toContain("macos-26+");
+		expect(r.missing).toEqual([]);
+		expect(r.warnings).toEqual([]);
+	});
+
+	it("macOS 26 (Apple skipped 16-25) meets every earlier tier and its own", () => {
+		expect(macosTierLabels(26)).toEqual(["macos-11+", "macos-12+", "macos-13+", "macos-14+", "macos-15+", "macos-26+"]);
+		expect(macosTierLabels(27)).toEqual(["macos-11+", "macos-12+", "macos-13+", "macos-14+", "macos-15+", "macos-26+", "macos-27+"]);
+		expect(macosTierLabels(null)).toEqual([]);
+	});
+
+	it("has-xcode needs the developer directory, not just the binary: xcode-select present but -p empty or failing is not Xcode", () => {
+		for (const probes of [{}, { "xcode-select -p": "" }, { "xcode-select -p": "error: unable to get active developer directory" }]) {
+			expect(detectCapabilityLabels(machine(["xcode-select"], "darwin", probes))).not.toContain("has-xcode");
+		}
+		expect(detectCapabilityLabels(machine(["xcode-select"], "linux", { "xcode-select -p": "/x" }))).not.toContain("has-xcode");
+	});
+
+	it("only macOS gets a tier label; an unreadable version gets none", () => {
+		expect(detectCapabilityLabels(machine([], "linux", { "sw_vers -productVersion": "14.0" })).some((l) => l.startsWith("macos-"))).toBe(false);
+		expect(detectCapabilityLabels(machine([], "win32")).some((l) => l.startsWith("macos-"))).toBe(false);
+		expect(detectCapabilityLabels(machine([], "darwin", { "sw_vers -productVersion": "garbage" })).some((l) => l.startsWith("macos-"))).toBe(false);
+		expect(detectCapabilityLabels({ platform: "darwin", which: () => false })).toEqual([]); // no probe available at all
+	});
+
+	it("every label it can emit is a valid runner label that the install request accepts", () => {
+		const everything = detectCapabilities(machine(CAPABILITY_TOOLS.map((t) => t.tool).concat("xcode-select"), "darwin", { "sw_vers -productVersion": "26.0", "xcode-select -p": "/x" }));
+		expect(everything.labels.length).toBeGreaterThan(10);
+		for (const l of everything.labels) expect(l, l).toMatch(/^[A-Za-z0-9._+-]{1,100}$/);
+		const d = fake();
+		expect(() => startRunnerJob("install", { ...ORG, labels: ["pags", "pags-pink-laptop", ...everything.labels] }, d)).not.toThrow();
+	});
+});
+
+describe("the capabilities route and the install labels (#1260)", () => {
+	it("POST /coding/actions-runner/capabilities answers 200 with the machine's report", () => {
+		const d = fake({ probe: (file, args) => (`${file} ${args.join(" ")}` === "sw_vers -productVersion" ? "14.2" : null) });
+		const r = routeActionsRunner("/coding/actions-runner/capabilities", {}, () => d);
+		expect(r.status).toBe(200);
+		expect(r.body).toMatchObject({ labels: expect.arrayContaining(["has-git", "has-node", "macos-14+"]), os: { platform: "darwin", version: "14.2" } });
+	});
+
+	it("an install carries the capability labels to config.sh (and a `+` in a label is accepted)", async () => {
+		const d = fake();
+		const job = await settle(startRunnerJob("install", { ...ORG, labels: ["pags", "pags-pink-laptop", "has-jq", "macos-14+"] }, d));
+		expect(job.state).toBe("done");
+		const config = d.ran.find((r) => r.file.endsWith("config.sh"));
+		expect(config?.args[config.args.indexOf("--labels") + 1]).toBe("pags,pags-pink-laptop,has-jq,macos-14+");
+	});
+
+	it("still refuses a label with a space or shell characters", () => {
+		for (const bad of ["has jq", "a;b", "x$y", "has-jq,rm"]) expect(() => startRunnerJob("install", { ...ORG, labels: [bad] }, fake())).toThrow(/not a valid runner label/);
 	});
 });

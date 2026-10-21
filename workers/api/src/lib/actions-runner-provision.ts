@@ -90,6 +90,22 @@ export interface RunnerJobView {
 	error?: string;
 }
 
+/** What a machine reports it can run (`/coding/actions-runner/capabilities`, #1260). */
+export interface RunnerCapabilities {
+	labels: string[];
+	missing: Array<{ tool: string; hint: string }>;
+	warnings: string[];
+	os: { platform: string; version: string | null };
+}
+
+/** The preflight an owner reads BEFORE the runner takes jobs: tools CI uses that this machine lacks, and what to do. Informational — it never blocks. */
+export interface RunnerPreflight {
+	missing: Array<{ tool: string; hint: string }>;
+	warnings: string[];
+	/** One paragraph for a person. */
+	message: string;
+}
+
 export interface ProvisionDeps extends MintDeps {
 	conn: (instanceId: string, userId: string) => Promise<RunnerConn | null>;
 	call: <T>(conn: RunnerConn, path: string, body: unknown) => Promise<T>;
@@ -142,6 +158,80 @@ async function boundConn(deps: ProvisionDeps, instanceId: string, userId: string
 const oldRunner = (e: unknown) => e instanceof Error && /→ 404/.test(e.message);
 
 /**
+ * The machine's capability labels, or null when it cannot say (a runner older than #1260 answers 404, or the call failed): the
+ * runner is then registered with the base labels only, exactly as before — never refused for a probe that could not run.
+ */
+async function machineCapabilities(deps: ProvisionDeps, conn: RunnerConn): Promise<RunnerCapabilities | null> {
+	try {
+		const r = await deps.call<Partial<RunnerCapabilities>>(conn, "/coding/actions-runner/capabilities", {});
+		const labels = Array.isArray(r.labels) ? r.labels.filter((l): l is string => typeof l === "string" && /^[A-Za-z0-9._+-]{1,100}$/.test(l)) : [];
+		const missing = Array.isArray(r.missing) ? r.missing.filter((m): m is { tool: string; hint: string } => !!m && typeof m.tool === "string" && typeof m.hint === "string") : [];
+		const warnings = Array.isArray(r.warnings) ? r.warnings.filter((w): w is string => typeof w === "string") : [];
+		return { labels, missing, warnings, os: { platform: String(r.os?.platform ?? ""), version: r.os?.version ?? null } };
+	} catch {
+		return null;
+	}
+}
+
+/** The preflight text: which CI tools are missing and how to get each; `null` capabilities say the machine could not be asked. */
+export function preflightFor(caps: RunnerCapabilities | null, node: string): RunnerPreflight {
+	if (!caps) return { missing: [], warnings: [], message: `${node} could not report its tools (an older runner, or the check failed), so the runner is labelled \`pags\` and \`pags-<node>\` only and a job that needs jq, brew or Flutter may still land there. Update it with runner_update, then run actions_runner_setup again to add capability labels.` };
+	const parts: string[] = [];
+	if (caps.missing.length) parts.push(`${node} lacks ${caps.missing.map((m) => `\`${m.tool}\``).join(", ")}: ${caps.missing.map((m) => `${m.tool} — ${m.hint}`).join("; ")}. Jobs that need them should require the matching \`has-<tool>\` label; it is added once the tool is installed and actions_runner_setup is run again.`);
+	for (const w of caps.warnings) parts.push(w);
+	if (!parts.length) parts.push(`${node} has the CI tools checked (${["brew", "jq", "flutter", "dart"].join(", ")}).`);
+	return { missing: caps.missing, warnings: caps.warnings, message: parts.join(" ") };
+}
+
+/** Labels this platform OWNS on a runner, so a refresh replaces them and leaves any label an owner added by hand alone. */
+const MANAGED_LABEL = /^(has-[a-z0-9]+|macos-\d+\+)$/;
+
+interface GithubRunner {
+	id: number;
+	name: string;
+	labels: Array<{ name: string; type?: string }>;
+}
+
+const ghBase = (scope: RunnerScope) => ("org" in scope ? `https://api.github.com/orgs/${scope.org}` : `https://api.github.com/repos/${scope.repo}`);
+
+/**
+ * Bring a registered runner's CUSTOM labels in line with what its machine reports now (#1260): drop its old capability labels
+ * (`has-*`, `macos-NN+`), add the current ones, keep every other custom label. GitHub's own labels (`self-hosted`, the OS, the CPU)
+ * are read-only and untouched. A no-op when nothing differs. Needs the same App permission as minting a registration token.
+ */
+export async function syncRunnerLabels(
+	scope: RunnerScope,
+	runnerName: string,
+	desired: readonly string[],
+	deps: MintDeps,
+): Promise<{ runnerId: number; before: string[]; after: string[]; changed: boolean }> {
+	const owner = scopeOwner(scope);
+	const app = await deps.installationToken(owner);
+	if (!app) throw new HttpError(409, `The ProAgentStore GitHub App is not installed on ${owner}, so it cannot update a runner's labels there.`);
+	const headers = { Authorization: `Bearer ${app}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ProAgentStore" };
+	const denied = (status: number) => new HttpError(403, `GitHub refused to ${status === 403 || status === 404 ? "list or relabel" : "read"} runners for ${"org" in scope ? scope.org : scope.repo} (${status}). The ProAgentStore App needs ${"org" in scope ? '"Self-hosted runners: Read and write" (organization)' : '"Administration: Read and write" (repository)'}, accepted on ${owner}'s installation — see #1207.`);
+	let found: GithubRunner | null = null;
+	for (let page = 1; page <= 5 && !found; page++) {
+		const res = await deps.fetch(`${ghBase(scope)}/actions/runners?per_page=100&page=${page}`, { headers });
+		if (res.status === 403 || res.status === 404) throw denied(res.status);
+		if (!res.ok) throw new HttpError(502, `GitHub returned ${res.status} listing runners.`);
+		const body = (await res.json().catch(() => null)) as { runners?: GithubRunner[] } | null;
+		const runners = body?.runners ?? [];
+		found = runners.find((r) => r.name === runnerName) ?? null;
+		if (runners.length < 100) break;
+	}
+	if (!found) throw new HttpError(409, `No runner named ${runnerName} is registered with GitHub for ${"org" in scope ? scope.org : scope.repo}, so there are no labels to refresh. Remove and install it again.`);
+	const before = found.labels.filter((l) => l.type === "custom").map((l) => l.name);
+	const after = [...new Set([...before.filter((l) => !MANAGED_LABEL.test(l)), ...desired])];
+	const same = before.length === after.length && after.every((l) => before.includes(l));
+	if (same) return { runnerId: found.id, before, after, changed: false };
+	const put = await deps.fetch(`${ghBase(scope)}/actions/runners/${found.id}/labels`, { method: "PUT", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ labels: after }) });
+	if (put.status === 403 || put.status === 404) throw denied(put.status);
+	if (!put.ok) throw new HttpError(502, `GitHub returned ${put.status} updating the runner's labels.`);
+	return { runnerId: found.id, before, after, changed: true };
+}
+
+/**
  * Start installing (or removing) the runner on the agent's pinned machine. Answers with the machine's
  * job, which {@link actionsRunnerStatus} reads back; the token is in neither the answer nor any record.
  */
@@ -149,12 +239,48 @@ export async function startActionsRunner(
 	env: Env,
 	input: { userId: string; instanceId: string; action: "install" | "remove"; scope: RunnerScope; runnerGroup?: string },
 	deps: ProvisionDeps = liveProvisionDeps(env, input.userId),
-): Promise<{ job: RunnerJobView; node: string; labels: string[] }> {
+): Promise<{ job: RunnerJobView; node: string; labels: string[]; capabilities?: RunnerCapabilities | null; preflight?: RunnerPreflight; refreshed?: { changed: boolean; before: string[]; after: string[] } }> {
 	const conn = await boundConn(deps, input.instanceId, input.userId);
 	if (input.action === "install") await checkScope(input.scope, input.instanceId, input.userId, deps);
 	const node = conn.runnerNode;
 	const label = nodeRunnerLabel(node);
-	const labels = [PAGS_RUNNER_LABEL, label];
+	// What the machine can run, asked BEFORE registering (#1260): its labels join the base ones, so a job that needs `jq` can require
+	// `has-jq`, and the owner reads what is missing while there is still time to install it. Removal does not need it.
+	const caps = input.action === "install" ? await machineCapabilities(deps, conn) : null;
+	const labels = [...new Set([PAGS_RUNNER_LABEL, label, ...(caps?.labels ?? [])])];
+	const preflight = input.action === "install" ? preflightFor(caps, node) : undefined;
+
+	// Already registered for this scope? Then installing again would do nothing, and the labels may be stale (a tool installed or an
+	// OS upgraded since): refresh them at GitHub instead (#1260). The CLI holds no GitHub credential; the platform does.
+	if (input.action === "install") {
+		const status = await deps.call<{ installed?: Array<{ name: string | null; url: string | null }> }>(conn, "/coding/actions-runner/status", {}).catch(() => null);
+		const url = scopeUrl(input.scope);
+		const present = status?.installed?.some((r) => r.name === label && r.url?.replace(/\/$/, "").toLowerCase() === url.toLowerCase());
+		if (present) {
+			const synced = await syncRunnerLabels(input.scope, label, labels, deps);
+			await logEvent(env, {
+				source: "runner",
+				event: "actions_runner.labels_refreshed",
+				userId: input.userId,
+				instanceId: input.instanceId,
+				message: `Refreshed the capability labels of ${node}'s GitHub Actions runner for ${url}`,
+				context: { node, url, labels, changed: synced.changed },
+			}).catch(() => undefined);
+			const job: RunnerJobView = {
+				id: `labels-${node}`,
+				action: "install",
+				url,
+				name: label,
+				state: "done",
+				steps: [synced.changed ? `relabelled at GitHub: ${synced.before.join(",") || "(none)"} → ${synced.after.join(",")}` : "labels already match what the machine reports — nothing changed"],
+				prerequisites: [],
+				runsAs: "",
+				service: "installed",
+			};
+			return { job, node, labels, capabilities: caps, preflight, refreshed: { changed: synced.changed, before: synced.before, after: synced.after } };
+		}
+	}
+
 	const { token } = await mintRunnerToken(input.scope, input.action === "install" ? "registration" : "remove", deps);
 	let job: RunnerJobView;
 	try {
@@ -176,9 +302,9 @@ export async function startActionsRunner(
 		instanceId: input.instanceId,
 		message: `Asked ${node} to ${input.action} the GitHub Actions runner for ${scopeUrl(input.scope)}`,
 		// Ids and names only — never the token.
-		context: { node, url: scopeUrl(input.scope), labels, jobId: job.id },
+		context: { node, url: scopeUrl(input.scope), labels, jobId: job.id, ...(preflight?.missing.length ? { missingTools: preflight.missing.map((m) => m.tool) } : {}) },
 	}).catch(() => undefined);
-	return { job, node, labels };
+	return { job, node, labels, ...(input.action === "install" ? { capabilities: caps, preflight } : {}) };
 }
 
 /** One job (when `jobId` is given) and every runner configured on the agent's machine. */
