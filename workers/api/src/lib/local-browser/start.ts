@@ -13,6 +13,7 @@ import { getLiveRuntime, callRuntime, runtimeJson } from "../../routes/instances
 import type { Env } from "../../types.js";
 import { LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "./contract.js";
 import { LOCAL_BROWSER_BRIEF_MIN_CLI, LOCAL_BROWSER_CODEX_MIN_CLI, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./policy.js";
+import { overloadRefusal } from "../runner-admission-gate.js";
 import { cliAtLeast } from "../runner-upgrade.js";
 import { syncScanCard } from "./scan-board.js";
 import {
@@ -135,6 +136,9 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 	if (!runtime) return fail("runner_offline", "No runner is connected. Run `pags up` on the machine that should do the research, then start the run again.");
 	const tooOld = engineRunnerProblem(run.policy.engine, runtime.runner_version, runtime.runner_node);
 	if (tooOld) return fail("runner_unsupported", tooOld);
+	// The admission gate (#1175): an overloaded machine takes no new browser research either — the same verdict coding gets.
+	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "browser runs", false);
+	if (overloaded) return fail("runner_overloaded", overloaded);
 
 	const consent = await listDomainConsent(env, instanceId, uid, now);
 	const navigate = consent.filter((x) => x.scope === "navigate");

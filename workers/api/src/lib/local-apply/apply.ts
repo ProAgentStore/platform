@@ -23,6 +23,7 @@ import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { readInstanceConfigPair } from "../instance-config.js";
 import { type JobApplication, getOwnedApplication } from "../local-artifact/store.js";
 import type { Env } from "../../types.js";
+import { overloadRefusal } from "../runner-admission-gate.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import {
 	LOCAL_APPLY_CANCEL_PATH,
@@ -278,6 +279,10 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	// the CLI can change the answer.
 	const contractProblem = runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) throw new HttpError(409, contractProblem);
+	// The admission gate (#1175): refused HERE, before the application leaves materials_ready, like an outdated machine — but 503,
+	// because the machine recovers by itself and the outbox should retry.
+	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "application runs", true);
+	if (overloaded) throw new HttpError(503, overloaded);
 
 	const now = Date.now();
 	const verdict = await submitGateFor(env, instanceId, uid, app, s, now, { oneClickRecoveryId: opts.oneClickRecoveryId });

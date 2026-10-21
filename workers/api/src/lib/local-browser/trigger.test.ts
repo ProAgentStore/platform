@@ -51,4 +51,10 @@ describe("run_local_browser — a scheduled research run through the owner's sta
 		await expect(runLocalBrowserTrigger(env, target, "x")).rejects.toThrow(/Update the CLI/);
 		expect(skip).not.toHaveBeenCalled();
 	});
+
+	it("an overloaded machine is a SKIP too, told once as busy (#1175)", async () => {
+		start.mockResolvedValue({ kind: "started", run: run({ status: "failed", errorCode: "runner_overloaded", error: "Mac is overloaded" }) });
+		await expect(runLocalBrowserTrigger(env, target, "x")).resolves.toMatchObject({ skipped: true, reason: "runner overloaded" });
+		expect(skip).toHaveBeenCalledWith(env, target, "busy");
+	});
 });

@@ -25,6 +25,7 @@ import { deliverEvent } from "../connections.js";
 import { readInstanceConfigPair } from "../instance-config.js";
 import { cliAtLeast } from "../runner-upgrade.js";
 import type { Env } from "../../types.js";
+import { overloadRefusal } from "../runner-admission-gate.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import { LOCAL_APPLY_PREFLIGHT_PATH, type LocalApplyPreflightResult } from "../local-apply/contract.js";
 import {
@@ -226,6 +227,8 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	}
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the lead will be tailored when it connects.");
+	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", true); // #1175
+	if (overloaded) throw new HttpError(503, overloaded);
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
@@ -321,6 +324,8 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	if ("error" in settings) throw new HttpError(409, `The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`);
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials, then retry.");
+	const overloadedRetry = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", true); // #1175
+	if (overloadedRetry) throw new HttpError(503, overloadedRetry);
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);

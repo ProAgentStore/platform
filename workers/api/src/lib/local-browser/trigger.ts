@@ -31,6 +31,11 @@ export async function runLocalBrowserTrigger(
 		await notifyTriggerSkip(env, target, "offline");
 		return { skipped: true, reason: "runner offline", runId: run.id, objective };
 	}
+	// An overloaded machine (#1175) is the machine not being ready this tick, like an absent one: skipped, told once, retried next tick.
+	if (run.status === "failed" && run.errorCode === "runner_overloaded") {
+		await notifyTriggerSkip(env, target, "busy");
+		return { skipped: true, reason: "runner overloaded", runId: run.id, objective };
+	}
 	if (run.status === "failed") throw new Error(run.error || `local browser run failed (${run.errorCode ?? "unknown"})`);
 	return { runId: run.id, status: run.status, objective };
 }

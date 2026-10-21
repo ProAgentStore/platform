@@ -202,14 +202,27 @@ export function rejectionFor(state: GateState, node: string): GateRejection | nu
 }
 
 /** One rejection, as a sentence a human reads — on the run's refusal, the board and the owner's notification. */
-export function describeRejection(r: GateRejection): string {
+export function describeRejection(r: GateRejection, what: { work?: string; retries?: boolean } = {}): string {
 	const units: Record<GateMetric, (v: number) => string> = {
 		cpu: (v) => `${v.toFixed(2)} load/core (threshold ${r.threshold})`,
 		memory: (v) => (v > 1024 ? `${(v / 1024 ** 3).toFixed(1)} GiB available (threshold ${(r.threshold / 1024 ** 3).toFixed(1)} GiB)` : `${v.toFixed(1)}% used (threshold ${r.threshold}%)`),
 		disk: (v) => (v > 1024 ? `${(v / 1024 ** 3).toFixed(1)} GiB free (threshold ${(r.threshold / 1024 ** 3).toFixed(1)} GiB)` : `${v.toFixed(1)}% used (threshold ${r.threshold}%)`),
 		sessions: (v) => `${v} active sessions (recommended max ${r.threshold})`,
 	};
-	return `${r.node} is overloaded (${r.metric}: ${units[r.metric](r.value)}). New coding sessions are refused until it recovers; this run is deferred and will retry automatically — nothing already running is touched.`;
+	return `${r.node} is overloaded (${r.metric}: ${units[r.metric](r.value)}). New ${what.work ?? "coding sessions"} are refused until it recovers; ${what.retries === false ? "start it again once it has" : "this run is deferred and will retry automatically"} — nothing already running is touched.`;
+}
+
+/**
+ * The admission gate for a browser, application-tailor or application-runner start (#1175). A machine over its limit refuses a new
+ * coding session (#1264); a browser or apply run is the same engine and browser load, so it is refused the same way — before a run
+ * row or an application move exists — with the same reason. Null when the machine is accepting (or its state is unknown: the gate
+ * never refuses on a read failure). Reads the verdict the last heartbeat wrote; it does not re-sample.
+ */
+export async function overloadRefusal(env: Pick<Env, "DB">, instanceId: string, userId: string, node: string | null | undefined, work: string, retries: boolean): Promise<string | null> {
+	if (!node) return null;
+	const gate = await currentGateState(env, instanceId, userId, node).catch(() => DEFAULT_GATE_STATE);
+	const rejection = rejectionFor(gate, node);
+	return rejection ? describeRejection(rejection, { work, retries }) : null;
 }
 
 /**

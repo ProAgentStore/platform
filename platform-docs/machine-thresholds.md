@@ -61,3 +61,11 @@ The gate judges the heartbeat sample each runner sends. Two readings were wrong 
   updated, its memory is still not judged.
 - **Disk on every platform.** The checkout volume is read with `statfs`, which reports real byte counts on Windows too (it
   has no inode counts, which are sent as 0 and shown as 0%), so a Windows machine's disk lines apply like any other.
+
+## What the gate refuses (#1175)
+
+The same verdict governs every kind of work that lands on the machine, not only coding sessions: a new **browser research run**,
+**application-tailor** run or **application-runner** fill on a rejecting machine is refused with the same reason, before a run row
+exists or an application leaves its current state. A browser run is recorded as failed with code `runner_overloaded`; a scheduled
+browser trigger treats it as a skip (told once), and a tailor or fill start answers 503 so the outbox retries once the machine
+recovers. The session limit counts every kind running on the machine (coding sessions, browser, tailor and apply runs).
