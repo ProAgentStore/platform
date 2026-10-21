@@ -11,7 +11,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { describeIdentities, probeEmailWorkerIdentity } from "../lib/connectors/email-worker.js";
-import { loadProfile, normalizeAddress, routeDecision, validateApproval } from "../lib/email-worker-identities.js";
+import { loadProfile as loadProfileRaw, normalizeAddress, PolicyReadError, routeDecision, validateApproval } from "../lib/email-worker-identities.js";
 import { listReceipts, recordReceipt } from "../lib/email-worker-receipts.js";
 import {
 	connectionForWebhookToken,
@@ -28,8 +28,29 @@ import {
 	saveEmailWorkerConnection,
 	updateEmailWorkerContractVersion,
 } from "../lib/email-worker-connections.js";
+import { scrubSecret } from "../lib/email-worker-identity-validator.js";
 import { logEvent } from "../lib/events.js";
 import type { Env } from "../types.js";
+
+/** The connection's policy, or a 503 `policy_unreadable` (#1280): an unreadable policy is never replaced by a guess. */
+async function loadProfile(...args: Parameters<typeof loadProfileRaw>): ReturnType<typeof loadProfileRaw> {
+	try {
+		return await loadProfileRaw(...args);
+	} catch (e) {
+		if (e instanceof PolicyReadError) throw new HttpError(503, "policy_unreadable");
+		throw e;
+	}
+}
+
+/** Record a good probe; a policy that cannot be read while doing so is the same 503, not a half-recorded success. */
+async function recordProbe(...args: Parameters<typeof recordProbeSuccess>): Promise<void> {
+	try {
+		await recordProbeSuccess(...args);
+	} catch (e) {
+		if (e instanceof PolicyReadError) throw new HttpError(503, "policy_unreadable");
+		throw e;
+	}
+}
 
 export const emailWorkerRoutes = new Hono<{ Bindings: Env }>();
 export const emailWorkerInstanceRoutes = new Hono<{ Bindings: Env }>();
@@ -81,10 +102,10 @@ emailWorkerRoutes.post("/connections", async (c) => {
 	const accountLabel = typeof body.label === "string" ? body.label.trim() : null;
 
 	const probe = await probeEmailWorkerIdentity(endpoint, secret);
-	if (!probe.ok) throw new HttpError(422, `Could not connect: ${probe.error}`);
+	if (!probe.ok) throw new HttpError(422, `Could not connect: ${scrubSecret(probe.error, secret)}`);
 
 	await saveEmailWorkerConnection(c.env, { userId: session.uid, endpoint, accountId, secret, accountLabel, contractVersion: probe.contractVersion });
-	await recordProbeSuccess(c.env, session.uid, endpoint, accountId, probe.snapshot);
+	await recordProbe(c.env, session.uid, endpoint, accountId, probe.snapshot);
 	const connections = await listEmailWorkerConnections(c.env, session.uid, publicOrigin(c.req.url));
 	const saved = connections.find((x) => x.endpoint === endpoint && x.accountId === accountId);
 	const identities = describeIdentities(await loadProfile(c.env, session.uid, endpoint, accountId));
@@ -110,11 +131,11 @@ emailWorkerRoutes.post("/connections/test", async (c) => {
 	const stored = !body.secret; // testing the STORED credential: record what the bridge reported, and its health
 	if (probe.ok) {
 		await updateEmailWorkerContractVersion(c.env, session.uid, endpoint, accountId, probe.contractVersion).catch(() => undefined);
-		if (stored) await recordProbeSuccess(c.env, session.uid, endpoint, accountId, probe.snapshot).catch(() => undefined);
+		if (stored) await recordProbe(c.env, session.uid, endpoint, accountId, probe.snapshot);
 	} else if (stored) {
 		await recordProbeFailure(c.env, session.uid, endpoint, accountId, probe.failureClass);
 	}
-	if (!probe.ok) return c.json({ ok: false, error: probe.error, failureClass: probe.failureClass });
+	if (!probe.ok) return c.json({ ok: false, error: scrubSecret(probe.error, secret), failureClass: probe.failureClass });
 	return c.json({ ok: true, contractVersion: probe.contractVersion, address: probe.address, provider: probe.snapshot.provider, identities: describeIdentities(await loadProfile(c.env, session.uid, endpoint, accountId)) });
 });
 
@@ -242,6 +263,10 @@ emailWorkerInboundRoutes.post("/:token", async (c) => {
 	const to = normalizeAddress(body.to) ?? undefined;
 	const receipt = { userId: conn.userId, endpoint: conn.endpoint, accountId: conn.accountId, eventId, messageId, threadId, fromAddress: from, toAddress: to } as const;
 
+	// Read the policy BEFORE the event is recorded as seen (#1280): an unreadable policy answers 503 so the bridge redelivers, rather
+	// than the event being marked handled and then lost.
+	const profile = await loadProfile(c.env, conn.userId, conn.endpoint, conn.accountId);
+
 	// Replay: the same event id is recorded ONCE. A repeat is acknowledged and logged as deduped, never processed again.
 	const isNew = await recordInboundEventOnce(c.env, conn.userId, conn.endpoint, conn.accountId, eventId);
 	if (!isNew) {
@@ -249,7 +274,6 @@ emailWorkerInboundRoutes.post("/:token", async (c) => {
 		return c.json({ ok: true, deduped: true }, 202);
 	}
 
-	const profile = await loadProfile(c.env, conn.userId, conn.endpoint, conn.accountId);
 	const audit = (event: string, level: "info" | "warn", outcome: string, failureClass?: string) =>
 		logEvent(c.env, {
 			source: "email-worker",

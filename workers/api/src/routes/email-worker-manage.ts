@@ -19,7 +19,8 @@ import {
 	resolveEmailWorkerSecret,
 	updateEmailWorkerContractVersion,
 } from "../lib/email-worker-connections.js";
-import { loadProfile } from "../lib/email-worker-identities.js";
+import { scrubSecret } from "../lib/email-worker-identity-validator.js";
+import { loadProfile, PolicyReadError } from "../lib/email-worker-identities.js";
 import { buildEmailWorkerStatus } from "../lib/email-worker-status.js";
 import { logEvent } from "../lib/events.js";
 import type { Env } from "../types.js";
@@ -52,10 +53,24 @@ emailWorkerManageRoutes.get("/:id/email-worker/status", async (c) => {
 	const session = await requireUser(c);
 	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
 	const connections = await listEmailWorkerConnections(c.env, session.uid, "https://api.proagentstore.online");
-	const profiles = new Map(await Promise.all(connections.map(async (x) => [`${x.endpoint}\u0000${x.accountId}`, await loadProfile(c.env, session.uid, x.endpoint, x.accountId)] as const)));
+	// An unreadable policy is reported as such (#1280) — never replaced by a generic profile, which has no sender policy and would read as ready.
+	const unreadable = new Set<string>();
+	const profileEntries = await Promise.all(
+		connections.map(async (x) => {
+			const key = `${x.endpoint}\u0000${x.accountId}`;
+			try {
+				return [key, await loadProfile(c.env, session.uid, x.endpoint, x.accountId)] as const;
+			} catch (e) {
+				if (!(e instanceof PolicyReadError)) throw e;
+				unreadable.add(key);
+				return null;
+			}
+		}),
+	);
+	const profiles = new Map(profileEntries.filter((e): e is NonNullable<typeof e> => e !== null));
 	const consent = (await listConsents(c.env, instance.id)).find((r) => r.connector === "email-worker" && r.scope === "write");
 	const pinned = pinnedEmailWorkerConnectionFrom(configOf(instance.config)) ?? null;
-	const status = buildEmailWorkerStatus({ connections, profiles, pinned, writeConsent: consent ? (consent.mode === "ask" ? "ask" : "always") : "off" });
+	const status = buildEmailWorkerStatus({ connections, profiles, unreadable, pinned, writeConsent: consent ? (consent.mode === "ask" ? "ask" : "always") : "off" });
 	// `?enrollment=<id>` folds in where one secure enrollment stands (metadata only), so one read answers "did the owner enter it yet?".
 	const eid = c.req.query("enrollment");
 	return c.json(eid ? { ...status, enrollment: await enrollmentView(c.env, session.uid, instance.id, eid) } : status);
@@ -116,9 +131,14 @@ emailWorkerManageRoutes.post("/:id/email-worker/test", async (c) => {
 	const probe = await probeEmailWorkerIdentity(endpoint, secret);
 	if (!probe.ok) {
 		await recordProbeFailure(c.env, session.uid, endpoint, accountId, probe.failureClass);
-		return c.json({ ok: false, code: "bridge_failure", failureClass: probe.failureClass, error: probe.error.split(secret).join("[redacted]") });
+		return c.json({ ok: false, code: "bridge_failure", failureClass: probe.failureClass, error: scrubSecret(probe.error, secret) });
 	}
 	await updateEmailWorkerContractVersion(c.env, session.uid, endpoint, accountId, probe.contractVersion).catch(() => undefined);
-	await recordProbeSuccess(c.env, session.uid, endpoint, accountId, probe.snapshot).catch(() => undefined);
+	try {
+		await recordProbeSuccess(c.env, session.uid, endpoint, accountId, probe.snapshot);
+	} catch (e) {
+		if (e instanceof PolicyReadError) return c.json({ ok: false, code: "policy_unreadable", error: "policy_unreadable" }, 503);
+		throw e;
+	}
 	return c.json({ ok: true, endpoint, accountId, contractVersion: probe.contractVersion, address: probe.address, provider: probe.snapshot.provider });
 });

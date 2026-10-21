@@ -37,9 +37,10 @@
 import type { Connector, RegistryToolCtx, RegistryToolResult, ToolDef } from "./types.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
 import { clipMarked } from "../clip-marked.js";
+import { ECHO_MESSAGE, SUPPORTED_CONTRACT, containsSecret, scrubSecret, validateIdentityResponse } from "../email-worker-identity-validator.js";
 import { logEvent } from "../events.js";
 import { recordProbeFailure, resolveEmailWorkerConnection, resolveEmailWorkerSecret } from "../email-worker-connections.js";
-import { type ConnectionProfile, type IdentitySnapshot, inMailboxScope, loadProfile, parseIdentity, replyDecision, senderDecision, type SenderDecision } from "../email-worker-identities.js";
+import { type ConnectionProfile, type IdentitySnapshot, inMailboxScope, loadProfile, parseIdentity, PolicyReadError, replyDecision, senderDecision, type SenderDecision } from "../email-worker-identities.js";
 import { budgetUsed, chargeBudget, handledAmong, markHandled, RUN_BUDGET, runKeyFor } from "../email-worker-checkpoints.js";
 import { findSentReceipt, insertReceipt, isDuplicateSend, listReceipts, recordReceipt, type ReceiptKind } from "../email-worker-receipts.js";
 
@@ -118,9 +119,13 @@ async function callAdapter(endpoint: string, secret: string, path: string, body:
 			}
 			if (!res.ok) {
 				const parsed = (await res.json().catch(() => ({}))) as AdapterErrorBody;
-				throw new AdapterError(parsed.error?.message || `The worker refused this call (HTTP ${res.status}).`, "protocol");
+				// The bridge's own words, with any echo of the credential removed before they can reach a log, a receipt or a tool result (#1280).
+				throw new AdapterError(scrubSecret(parsed.error?.message || `The worker refused this call (HTTP ${res.status}).`, secret), "protocol");
 			}
-			return (await res.json()) as Record<string, unknown>;
+			const reply = (await res.json()) as Record<string, unknown>;
+			// No reply from the bridge may carry the credential back, on any call: it would reach the model, a receipt or a snapshot (#1280).
+			if (containsSecret(reply, secret)) throw new AdapterError(ECHO_MESSAGE.replace("identity ", ""), "protocol");
+			return reply;
 		} catch (e) {
 			if (e instanceof AdapterError) throw e;
 			if (e instanceof SsrfError) throw new AdapterError(`The configured worker address is not reachable: ${e.message}`, "protocol");
@@ -137,15 +142,19 @@ export async function probeEmailWorkerIdentity(
 	secret: string,
 ): Promise<{ ok: true; contractVersion: string; address: string | null; snapshot: IdentitySnapshot } | { ok: false; error: string; failureClass: string }> {
 	try {
-		const res = await callAdapter(endpoint, secret, "/v1/email-worker/identity", {});
-		const contractVersion = typeof res.contractVersion === "string" ? res.contractVersion : "unknown";
+		const raw = await callAdapter(endpoint, secret, "/v1/email-worker/identity", {});
+		// Strict (#1280): only the supported typed contract is accepted. `{}`, another contract version, an unknown provider, a
+		// wrong-typed list or a reply that carries the credential never becomes a stored identity.
+		const checked = validateIdentityResponse(raw, secret);
+		if (!checked.ok) return { ok: false, error: checked.reason, failureClass: "protocol" };
+		const res = checked.identity;
 		const account = (res.account ?? {}) as { address?: unknown };
 		// The snapshot is the bridge's own report of the customer's Cloudflare identities (#1270): which addresses
 		// can SEND, which only ROUTE, and on which domains. A generic worker simply reports none of that.
-		return { ok: true, contractVersion, address: typeof account.address === "string" ? account.address : null, snapshot: parseIdentity(res) };
+		return { ok: true, contractVersion: SUPPORTED_CONTRACT, address: typeof account.address === "string" ? account.address.trim().toLowerCase() : null, snapshot: parseIdentity(res) };
 	} catch (e) {
 		const failureClass = e instanceof AdapterError ? healthClass(e.failureClass) : "bridge_unavailable";
-		return { ok: false, error: e instanceof Error ? e.message : String(e), failureClass };
+		return { ok: false, error: scrubSecret(e instanceof Error ? e.message : String(e), secret), failureClass };
 	}
 }
 
@@ -172,7 +181,15 @@ async function resolveConnection(ctx: RegistryToolCtx, kind: ReceiptKind): Promi
 	}
 	const secret = await resolveEmailWorkerSecret(ctx.env, ctx.userId, resolved.endpoint, resolved.accountId);
 	if (!secret) return { refusal: fail(`The connection "${resolved.label}" has no usable secret stored. Reconnect it in the console.`) };
-	const profile = await loadProfile(ctx.env, ctx.userId, resolved.endpoint, resolved.accountId);
+	let profile: ConnectionProfile;
+	try {
+		profile = await loadProfile(ctx.env, ctx.userId, resolved.endpoint, resolved.accountId);
+	} catch (e) {
+		if (!(e instanceof PolicyReadError)) throw e;
+		// Fail closed (#1280): without a readable policy nothing is read, listed, sent or replied to — a guessed generic profile would send as anyone.
+		await recordReceipt(ctx.env, { userId: ctx.userId, instanceId: ctx.instanceId, endpoint: resolved.endpoint, accountId: resolved.accountId, kind, outcome: "refused", failureClass: "policy_unreadable" }).catch(() => undefined);
+		return { refusal: fail("policy_unreadable: this connection's sender policy could not be read, so nothing was read, listed, sent or replied to. Test the connection again; if it persists, reconnect it.") };
+	}
 	return { endpoint: resolved.endpoint, accountId: resolved.accountId, secret, profile };
 }
 

@@ -261,22 +261,58 @@ interface ProfileRow {
 	last_failure_class?: string | null;
 }
 
-function parseJson<T>(raw: string | null | undefined, fallback: T): T {
-	if (!raw) return fallback;
-	try {
-		return JSON.parse(raw) as T;
-	} catch {
-		return fallback;
+/**
+ * A connection's sender policy could not be read or is malformed (#1280). Never swallowed into a generic profile: a generic profile
+ * has NO sender policy, so an unreadable Cloudflare policy would otherwise send as anyone and report itself ready.
+ */
+export class PolicyReadError extends Error {
+	readonly policyUnreadable = true;
+	constructor(message: string) {
+		super(message);
+		this.name = "PolicyReadError";
 	}
 }
 
+const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+
+/** JSON in a policy column: absent is fine, present-but-unparseable is not. */
+function parseColumn(raw: string | null | undefined, column: string): unknown {
+	if (raw === null || raw === undefined || raw === "") return undefined;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		throw new PolicyReadError(`The stored ${column} is not readable.`);
+	}
+}
+
+function snapshotFrom(raw: unknown): IdentitySnapshot | null {
+	if (raw === undefined || raw === null) return null;
+	const s = raw as Partial<IdentitySnapshot>;
+	const ok =
+		typeof raw === "object" &&
+		(s.provider === "cloudflare" || s.provider === "generic") &&
+		isStringArray(s.domains) &&
+		isStringArray(s.senders) &&
+		isStringArray(s.replyIdentities) &&
+		Array.isArray(s.routes) &&
+		s.routes.every((r) => typeof r === "object" && r !== null && typeof (r as { address?: unknown }).address === "string") &&
+		(s.mailboxes === undefined || isStringArray(s.mailboxes));
+	if (!ok) throw new PolicyReadError("The stored identity snapshot is malformed.");
+	return s as IdentitySnapshot;
+}
+
+/** A row's profile. No row is a legitimate generic profile; a row that cannot be read is a {@link PolicyReadError}. */
 export function profileFromRow(r: ProfileRow | null | undefined): ConnectionProfile {
 	if (!r) return GENERIC_PROFILE;
-	const snapshot = parseJson<IdentitySnapshot | null>(r.identity_snapshot, null);
+	if (r.provider !== null && r.provider !== undefined && r.provider !== "cloudflare" && r.provider !== "generic") throw new PolicyReadError("The stored provider is not recognised.");
+	const snapshot = snapshotFrom(parseColumn(r.identity_snapshot, "identity snapshot"));
+	const approved = parseColumn(r.approved_senders, "approved senders");
+	if (approved !== undefined && !isStringArray(approved)) throw new PolicyReadError("The stored approved senders are malformed.");
+	if (r.reply_identity !== null && r.reply_identity !== undefined && typeof r.reply_identity !== "string") throw new PolicyReadError("The stored reply identity is malformed.");
 	return {
 		provider: r.provider === "cloudflare" ? "cloudflare" : "generic",
 		snapshot,
-		approvedSenders: parseJson<string[]>(r.approved_senders, []).filter((a): a is string => typeof a === "string"),
+		approvedSenders: approved ?? [],
 		replyIdentity: r.reply_identity ?? null,
 		health: { lastProbeAt: r.last_probe_at ?? null, lastProbeOk: r.last_probe_ok === null || r.last_probe_ok === undefined ? null : r.last_probe_ok === 1, lastFailureClass: r.last_failure_class ?? null },
 	};
@@ -284,12 +320,16 @@ export function profileFromRow(r: ProfileRow | null | undefined): ConnectionProf
 
 const PROFILE_COLUMNS = "provider, identity_snapshot, approved_senders, reply_identity, last_probe_at, last_probe_ok, last_failure_class";
 
-/** The connection's sender policy. A missing row, or one from before 0271, is a generic profile. */
+/**
+ * The connection's sender policy (#1280, fail closed). A missing row is the legitimate absent profile — a generic worker with no policy.
+ * A database error, or a row whose policy cannot be read or is malformed, throws a {@link PolicyReadError}; callers refuse, never guess.
+ */
 export async function loadProfile(env: Env, userId: string, endpoint: string, accountId: string): Promise<ConnectionProfile> {
+	let row: ProfileRow | null;
 	try {
-		const row = await env.DB.prepare(`SELECT ${PROFILE_COLUMNS} FROM email_worker_connections WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3`).bind(userId, endpoint, accountId).first<ProfileRow>();
-		return profileFromRow(row);
+		row = await env.DB.prepare(`SELECT ${PROFILE_COLUMNS} FROM email_worker_connections WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3`).bind(userId, endpoint, accountId).first<ProfileRow>();
 	} catch {
-		return GENERIC_PROFILE;
+		throw new PolicyReadError("The connection's sender policy could not be read.");
 	}
+	return profileFromRow(row);
 }

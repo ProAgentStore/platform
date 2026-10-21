@@ -17,6 +17,7 @@ export type BlockerCode =
 	| "no_identity_report"
 	| "no_approved_sender"
 	| "no_reply_identity"
+	| "policy_unreadable"
 	| "write_consent_off"
 	| "write_consent_ask";
 
@@ -38,7 +39,10 @@ export interface ConnectionStatus {
 }
 
 export interface EmailWorkerStatus {
-	state: "absent" | "ambiguous" | "stale_pin" | "connected";
+	state: "absent" | "ambiguous" | "stale_pin" | "connected" | "blocked";
+	/** `blocked` when the resolved connection's sender policy cannot be read (#1280); otherwise absent. */
+	status?: "blocked";
+	reason?: "policy_unreadable";
 	pinned: EmailWorkerPin | null;
 	resolved: { endpoint: string; accountId: string; label: string } | null;
 	connections: ConnectionStatus[];
@@ -52,10 +56,13 @@ export interface EmailWorkerStatus {
 export function buildEmailWorkerStatus(input: {
 	connections: readonly EmailWorkerConnectionInfo[];
 	profiles: ReadonlyMap<string, ConnectionProfile>;
+	/** Connections whose stored policy could not be read: they have no profile, and are never treated as a generic one. */
+	unreadable?: ReadonlySet<string>;
 	pinned: EmailWorkerPin | null;
 	writeConsent: "off" | "ask" | "always";
 }): EmailWorkerStatus {
 	const { connections, profiles, pinned, writeConsent } = input;
+	const unreadable = input.unreadable ?? new Set<string>();
 	const key = (c: { endpoint: string; accountId: string }) => `${c.endpoint}\u0000${c.accountId}`;
 	const res = resolveEmailWorkerConnectionFrom(connections, pinned ?? undefined);
 	const statuses: ConnectionStatus[] = connections.map((c) => {
@@ -77,6 +84,10 @@ export function buildEmailWorkerStatus(input: {
 		blockers.push({ code, effect: "blocks_reads", message: res.message });
 	} else {
 		const profile = profiles.get(key(res));
+		if (unreadable.has(key(res))) {
+			state = "blocked";
+			blockers.push({ code: "policy_unreadable", effect: "blocks_reads", message: "This connection's sender policy could not be read, so nothing is read, listed, sent or replied to. Test the connection again; if it persists, reconnect it." });
+		}
 		if (profile) {
 			if (profile.health.lastProbeOk === false) {
 				blockers.push({ code: "bridge_unreachable", effect: "blocks_reads", failureClass: profile.health.lastFailureClass ?? "bridge_failure", message: `The bridge failed its last check (${profile.health.lastFailureClass ?? "bridge_failure"}). Test the connection; if it is an auth failure, re-enroll the secret.` });
@@ -99,5 +110,5 @@ export function buildEmailWorkerStatus(input: {
 	}
 	const blocksReads = blockers.some((b) => b.effect === "blocks_reads");
 	const blocksSends = blocksReads || blockers.some((b) => b.effect === "blocks_sends");
-	return { state, pinned, resolved: res.ok ? { endpoint: res.endpoint, accountId: res.accountId, label: res.label } : null, connections: statuses, writeConsent, blockers, readyToRead: !blocksReads, readyToSend: !blocksSends };
+	return { state, ...(state === "blocked" ? { status: "blocked" as const, reason: "policy_unreadable" as const } : {}), pinned, resolved: res.ok ? { endpoint: res.endpoint, accountId: res.accountId, label: res.label } : null, connections: statuses, writeConsent, blockers, readyToRead: !blocksReads, readyToSend: !blocksSends };
 }

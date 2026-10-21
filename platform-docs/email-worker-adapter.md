@@ -42,6 +42,15 @@ Response:
 notion of "its own address"). This is the ONLY call PAGS makes before a connection is stored — a
 Worker that cannot answer this is never saved as a connection.
 
+**Strict validation (#1280).** PAGS stores a connection only when the identity reply is exactly the supported typed contract:
+`contractVersion` is `email-worker/v1` (no other value, no fuzzy match), `account` is an object whose `address` is null or one
+plain mailbox address, and `provider`, when present, is `cloudflare` or `generic`. A Cloudflare reply's `domains`, `senders`,
+`replyIdentities`, `mailboxes` and `routes` must be well-typed lists when present. A bare `{}`, another version, an unknown provider
+or a wrong-typed list is a protocol failure and nothing is stored. A reply — to this call or any other — that contains the bearer
+secret anywhere (keys or values) is rejected as a credential echo with a fixed message; PAGS never stores or returns it. A stored
+sender policy that cannot be read or is malformed fails closed (`policy_unreadable`): nothing is read, sent or replied to until it can
+be read again. A connection with no stored policy at all is a legitimate generic profile.
+
 #### Optional identity fields — the Cloudflare profile (#1270)
 
 A Worker bridging **Cloudflare Email Sending and Email Routing** adds these to the identity reply.

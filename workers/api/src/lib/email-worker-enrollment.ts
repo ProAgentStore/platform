@@ -98,7 +98,9 @@ export async function completeEnrollment(env: Env, userId: string, instanceId: s
 		return { ok: false, status: 422, code: "probe_failed", message: `Could not connect: ${message}`, failureClass: probe.failureClass };
 	}
 	await saveEmailWorkerConnection(env, { userId, endpoint: row.endpoint, accountId, secret: value, accountLabel: row.account_label, contractVersion: probe.contractVersion });
-	await recordProbeSuccess(env, userId, row.endpoint, accountId, probe.snapshot);
+	// The connection and its secret are stored; the secret is already spent. If the identity snapshot cannot be recorded now (an
+	// unreadable policy, #1280), the enrollment is still complete and status reports the policy as unreadable until a test records it.
+	await recordProbeSuccess(env, userId, row.endpoint, accountId, probe.snapshot).catch(() => undefined);
 	await env.DB.prepare("UPDATE email_worker_enrollments SET outcome = 'connected', failure_class = NULL, completed_at = datetime('now') WHERE id = ?1").bind(id).run();
 	return { ok: true, contractVersion: probe.contractVersion, address: probe.address };
 }

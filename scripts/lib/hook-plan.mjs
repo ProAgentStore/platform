@@ -15,6 +15,7 @@ export const BIOME_SCOPE = ["packages/", "workers/", "store/", "agents/coder/"];
 
 /** The guard scripts CI runs, with CI's own arguments — the pre-push hook runs exactly these. */
 export const CI_GUARDS = [
+	["scripts/check-workflow-runner.mjs"],
 	["scripts/check-agents-allowlist.mjs"],
 	["scripts/check-qa-config.mjs"],
 	["scripts/check-file-size.mjs"],

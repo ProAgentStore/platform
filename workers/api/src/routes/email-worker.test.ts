@@ -176,11 +176,19 @@ describe("POST /v1/email-worker/connections/test", () => {
 		vi.stubGlobal("fetch", createEmailWorkerFixture({ secret: "s", contractVersion: "email-worker/v1" }));
 		await req(app, env, "/v1/email-worker/connections", { method: "POST", body: JSON.stringify({ endpoint: EP, secret: "s" }) }, await tok("u1"));
 
-		vi.stubGlobal("fetch", createEmailWorkerFixture({ secret: "s", contractVersion: "email-worker/v2" }));
 		const res = await req(app, env, "/v1/email-worker/connections/test", { method: "POST", body: JSON.stringify({ endpoint: EP }) }, await tok("u1"));
 		const body = await jsonBody(res);
 		expect(body.ok).toBe(true);
-		expect(body.contractVersion).toBe("email-worker/v2");
+		expect(body.contractVersion).toBe("email-worker/v1");
+	});
+
+	it("a bridge that later claims another contract version fails the test as a protocol failure (#1280: exactly email-worker/v1)", async () => {
+		const { app, env } = testApp();
+		vi.stubGlobal("fetch", createEmailWorkerFixture({ secret: "s", contractVersion: "email-worker/v1" }));
+		await req(app, env, "/v1/email-worker/connections", { method: "POST", body: JSON.stringify({ endpoint: EP, secret: "s" }) }, await tok("u1"));
+		vi.stubGlobal("fetch", createEmailWorkerFixture({ secret: "s", contractVersion: "email-worker/v2" }));
+		const body = await jsonBody(await req(app, env, "/v1/email-worker/connections/test", { method: "POST", body: JSON.stringify({ endpoint: EP }) }, await tok("u1")));
+		expect(body).toMatchObject({ ok: false, failureClass: "protocol" });
 	});
 
 	it("reports a failed test distinctly, without throwing", async () => {
