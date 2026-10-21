@@ -89,6 +89,8 @@ export interface ToolPolicyEntry {
 	 * `allowed` (#569). See {@link projectToolListing} for the budget this pays for.
 	 */
 	jsonSchema?: unknown;
+	/** Fields of the schema that are comma-separated strings and also accept an array (#1263). With `jsonSchema`, same conditions. */
+	listFields?: readonly string[];
 	/** The final answer: may this instance run this tool right now? */
 	allowed: boolean;
 	/** True when the agent declares it but the owner switched it off. */
@@ -140,6 +142,7 @@ export type PolicyInput = {
 	mutates?: boolean;
 	description: string;
 	jsonSchema: unknown;
+	listFields?: readonly string[];
 	tier?: ToolTier;
 	invocableBy?: readonly ToolInvocation[];
 };
@@ -276,6 +279,7 @@ export function resolveToolPolicy(
 			mutates: t.mutates ?? true,
 			description: t.description,
 			jsonSchema: t.jsonSchema,
+			...(t.listFields?.length ? { listFields: t.listFields } : {}),
 			allowed: isDeclared && !disabled,
 			disabled,
 			reason,
@@ -342,13 +346,13 @@ export const LISTING_DESCRIPTION_MAX_CHARS = 800;
 export function projectToolListing(policy: readonly ToolPolicyEntry[], opts: ToolListingOptions = {}): ToolListingRow[] {
 	const rows = opts.allowedOnly ? policy.filter((t) => t.allowed) : policy;
 	return rows.map((t) => {
-		const { jsonSchema, disabled, writeConsent, ...rest } = t;
+		const { jsonSchema, listFields, disabled, writeConsent, ...rest } = t;
 		return {
 			...rest,
 			description: clipMarked(t.description, LISTING_DESCRIPTION_MAX_CHARS, { within: true, what: "characters of this tool description" }),
 			...(disabled ? { disabled } : {}),
 			...(writeConsent !== "n/a" ? { writeConsent } : {}),
-			...(opts.schemas && t.allowed && jsonSchema !== undefined ? { jsonSchema } : {}),
+			...(opts.schemas && t.allowed && jsonSchema !== undefined ? { jsonSchema, ...(listFields?.length ? { listFields } : {}) } : {}),
 		};
 	});
 }

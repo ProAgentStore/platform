@@ -79,3 +79,39 @@ describe("jsonSchemaToZodShape", () => {
 		expect(jsonSchemaToZodShape({ type: "object" })).toEqual({ shape: {}, unsupported: [] });
 	});
 });
+
+describe("comma-list fields (#1263)", () => {
+	const schema = {
+		type: "object",
+		properties: { repo: { type: "string" }, labels: { type: "string", description: "Labels. A comma-separated STRING." }, assignees: { type: "string" }, number: { type: "integer" } },
+		required: ["repo", "labels"],
+	};
+
+	it("without listFields a string stays a string: an array is refused, as the schema says", () => {
+		const { shape } = jsonSchemaToZodShape(schema);
+		expect(z.object(shape).safeParse({ repo: "a/b", labels: ["bug"] }).success).toBe(false);
+	});
+
+	it("a field the API named as a list takes a string or an array of strings, and keeps its description and required-ness", () => {
+		const { shape, unsupported } = jsonSchemaToZodShape(schema, ["labels", "assignees"]);
+		expect(unsupported).toEqual([]);
+		const obj = z.object(shape);
+		expect(obj.safeParse({ repo: "a/b", labels: "bug,mcp" }).success).toBe(true);
+		expect(obj.safeParse({ repo: "a/b", labels: ["bug", "mcp"], assignees: ["serge"] }).success).toBe(true);
+		expect(obj.safeParse({ repo: "a/b" }).success).toBe(false); // labels is still required
+		expect(obj.safeParse({ repo: "a/b", labels: "x", assignees: undefined }).success).toBe(true); // assignees is still optional
+		expect(shape.labels.description).toBe("Labels. A comma-separated STRING.");
+	});
+
+	it("still refuses anything that is neither: numbers, objects, arrays of non-strings", () => {
+		const obj = z.object(jsonSchemaToZodShape(schema, ["labels"]).shape);
+		for (const labels of [5, { a: 1 }, [1], [["bug"]], null]) expect(obj.safeParse({ repo: "a/b", labels }).success, JSON.stringify(labels)).toBe(false);
+	});
+
+	it("only widens a STRING field it was told about: other fields and non-string 'list' names are unchanged", () => {
+		const { shape } = jsonSchemaToZodShape(schema, ["number", "missing", "repo"]);
+		const obj = z.object(shape);
+		expect(obj.safeParse({ repo: "a/b", labels: "x", number: { a: 1 } }).success).toBe(false); // number: not widened
+		expect(obj.safeParse({ repo: ["a/b"], labels: "x" }).success).toBe(true); // repo WAS named, and is a string field
+	});
+});

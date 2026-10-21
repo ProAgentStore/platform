@@ -143,7 +143,7 @@ function objectShape(s: JsonSchemaLike, path: string, unsupported: string[]): z.
  * entry for the root — the tool still registers, it just advertises no fields, which is the
  * pre-#783 state and never worse than it.
  */
-export function jsonSchemaToZodShape(schema: unknown): ZodShapeResult {
+export function jsonSchemaToZodShape(schema: unknown, listFields: readonly string[] = []): ZodShapeResult {
 	const unsupported: string[] = [];
 	if (!isObject(schema)) {
 		if (schema !== undefined) unsupported.push("");
@@ -155,5 +155,17 @@ export function jsonSchemaToZodShape(schema: unknown): ZodShapeResult {
 		if (type !== undefined && type !== "object") unsupported.push("");
 		return { shape: {}, unsupported };
 	}
-	return { shape: objectShape(s, "", unsupported), unsupported };
+	const shape = objectShape(s, "", unsupported);
+	// Comma-list fields (#1263): the schema declares `string` — the API joins an array before validating — so the pinned session accepts
+	// either form too. Only a field the API NAMED as a list is widened, and only when it is a string; no schema keyword is invented.
+	const required = new Set(Array.isArray(s.required) ? s.required : []);
+	for (const key of listFields) {
+		const prop = s.properties[key];
+		if (!isObject(prop) || primaryType(prop as JsonSchemaLike).type !== "string") continue;
+		let field: z.ZodTypeAny = z.union([z.string(), z.array(z.string())]);
+		const desc = (prop as JsonSchemaLike).description;
+		if (typeof desc === "string" && desc) field = field.describe(desc);
+		shape[key] = required.has(key) ? field : field.optional();
+	}
+	return { shape, unsupported };
 }

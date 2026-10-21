@@ -39,6 +39,11 @@ export interface ManifestToolRequest {
 export interface ManifestTool {
 	name: string;
 	description: string;
+	/**
+	 * Params declared `string` that hold a comma-separated list and also accept an array (`ToolDef.listFields`, #1263). Built-in
+	 * manifests only: `sanitizeConnectorManifest` does not copy it from untrusted JSON.
+	 */
+	listFields?: readonly string[];
 	/** read = safe; write = mutates (consent-gated, #90). Default read. */
 	scope?: "read" | "write";
 	/**
@@ -180,7 +185,7 @@ export function compileConnector(
 		if (t.handler) {
 			const fn = handlers[t.handler];
 			if (!fn) throw new Error(`Manifest ${m.id}: tool "${t.name}" references unknown handler "${t.handler}".`);
-			return { name: t.name, description: t.description, jsonSchema: toJsonSchema(t.params), tier: "connector", connector: m.id, scope, mutates, untrustedOutput: t.untrustedOutput, handler: fn };
+			return { name: t.name, description: t.description, jsonSchema: toJsonSchema(t.params), tier: "connector", connector: m.id, scope, mutates, untrustedOutput: t.untrustedOutput, ...(t.listFields?.length ? { listFields: t.listFields } : {}), handler: fn };
 		}
 		const req = t.request ?? {};
 		return {

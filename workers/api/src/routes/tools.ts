@@ -69,7 +69,7 @@ import { readLoopLimits, writeLoopLimits } from "../lib/loop-limits-store.js";
 import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
 import type { TriggerAction } from "../lib/triggers.js";
-import { validateAgainstSchema } from "../lib/json-schema-validate.js";
+import { coerceListFields, validateAgainstSchema } from "../lib/json-schema-validate.js";
 import type { Env } from "../types.js";
 
 /**
@@ -244,13 +244,17 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	// instance could still be driven to any tool in the registry from here or via MCP.
 	const policy = await instanceToolPolicy(c.env, instanceId, session.uid, instance.config);
 	const entry = policy.find((t) => t.name === name);
-	const input = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+	const rawInput = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	if (!entry?.allowed) {
 		// An owner-liftable refusal becomes a request with a verified remedy link (#1009); a creator's declaration never does.
-		const asked = entry ? await recoverPolicyRefusal(c.env, { instanceId, userId: session.uid, operation: name, reason: entry.reason, args: input }).catch(() => null) : null;
+		const asked = entry ? await recoverPolicyRefusal(c.env, { instanceId, userId: session.uid, operation: name, reason: entry.reason, args: rawInput }).catch(() => null) : null;
 		if (asked) return c.json({ error: explainRefusal(name, entry?.reason ?? "not_declared"), blocker: asked.blocker }, 403);
 		throw new HttpError(403, explainRefusal(name, entry?.reason ?? "not_declared"));
 	}
+	// An array for a comma-list field is joined first (#1263); everything after sees the string the schema declares.
+	const coerced = coerceListFields(tool.listFields, rawInput);
+	if (coerced.error) throw new HttpError(400, coerced.error);
+	const input = coerced.input;
 	const invalid = validateAgainstSchema(tool.jsonSchema, input);
 	if (invalid) throw new HttpError(400, invalid);
 	// The owner invoking a tool directly (console, MCP call_instance_tool) is an explicit owner act (#1015).

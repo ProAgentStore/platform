@@ -148,13 +148,17 @@ export async function resumeBlockedOperation(env: Env, input: { requestId: strin
 	const fingerprint = await permissionOperationFingerprint(req.operationKind, args);
 	if (fingerprint !== req.operationFingerprint || fingerprint !== req.continuationRef) return { httpStatus: 409, status: "refused", detail: "Resume arguments do not match the blocked operation" };
 	const { getRegistryTool, runRegistryTool } = await import("./tool-registry.js");
-	const { validateAgainstSchema } = await import("./json-schema-validate.js");
+	const { coerceListFields, validateAgainstSchema } = await import("./json-schema-validate.js");
 	const tool = getRegistryTool(req.operationKind);
 	if (!tool) {
 		await staleRequest(env, req);
 		return end("stale", 409, "The blocked tool is no longer available");
 	}
-	const invalid = validateAgainstSchema(tool.jsonSchema, args);
+	// The fingerprint above was taken on the arguments as given; a comma-list array (#1263) is joined only now, for validation and the run.
+	const coerced = coerceListFields(tool.listFields, args);
+	if (coerced.error) return { httpStatus: 400, status: "refused", detail: coerced.error };
+	const runArgs = coerced.input;
+	const invalid = validateAgainstSchema(tool.jsonSchema, runArgs);
 	if (invalid) return { httpStatus: 400, status: "refused", detail: invalid };
 	const live = await verifyGrant(env, req);
 	if (!live.ok) {
@@ -169,7 +173,7 @@ export async function resumeBlockedOperation(env: Env, input: { requestId: strin
 	try {
 		// No preApprovedTicketId: an `ask` consent re-enters its own per-call approval. A grant never
 		// approves an old call on its own.
-		result = await runRegistryTool(req.operationKind, { env, userId: req.userId, instanceId: req.instanceId, turn: { author: "owner", explicit: true } }, args);
+		result = await runRegistryTool(req.operationKind, { env, userId: req.userId, instanceId: req.instanceId, turn: { author: "owner", explicit: true } }, runArgs);
 	} catch {
 		await markUncertainRequest(env, consumed);
 		return { httpStatus: 503, status: "uncertain", detail: "The resumed operation's outcome is uncertain and will not be retried" };

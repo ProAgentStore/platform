@@ -53,12 +53,13 @@ export const AREA_LABELS: ReadonlyArray<readonly [name: string, meaning: string]
 
 /**
  * How to write a label list at the point of use. The registry validates input against the declared
- * schema, and these fields are declared `string`, so an ARRAY is refused (`Field "labels" must be a
- * string`) — the #1241 seam's array/string conversion covers a tool's own arguments, not the nested
- * input of `call_instance_tool`. Checked in `label-vocabulary.test.ts` against the real validator.
+ * schema, and these fields are declared `string` (what the model is shown). The #1241 seam's array/string
+ * conversion covers a tool's own arguments, not the nested input of `call_instance_tool`, so the tools list
+ * these fields in `ToolDef.listFields` and the route joins an array BEFORE validating (#1263). Checked in
+ * `label-vocabulary.test.ts` against the real route-side coercion and validator.
  */
 export const LABEL_LIST_FORMAT =
-	'A comma-separated STRING, e.g. "bug,P1: blocks external users" — not an array (an array is refused). Spaces and colons inside a name are fine; a name containing a comma cannot be given.';
+	'A comma-separated STRING, e.g. "bug,P1: blocks external users" — an array of names is accepted too and joined for you. Spaces and colons inside a name are fine; a name containing a comma cannot be given, as a string or as an array entry.';
 
 /** What the platform does with each group of label, in the words an agent needs to choose one. */
 export const LABEL_VOCABULARY = [

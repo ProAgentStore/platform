@@ -234,6 +234,13 @@ export interface ToolDef {
 	description: string;
 	/** Draft-07 object schema for the tool's input. Passed to the LLM + validated on the API. */
 	jsonSchema: JsonSchema;
+	/**
+	 * Input fields declared `type: "string"` that hold a COMMA-SEPARATED LIST (`labels`, `assignees`, `exclude_labels`; #1263). A caller
+	 * may send an array of strings for these; it is joined to the string BEFORE validation, so the handler and the published schema are
+	 * unchanged. Kept beside the schema, never inside it: the schema reaches the model verbatim, and an unknown keyword there is a
+	 * request some providers reject.
+	 */
+	listFields?: readonly string[];
 	/** base = always granted · standard = creator-selectable · runtime = needs a local runner · connector = external system. */
 	tier: "base" | "standard" | "runtime" | "connector";
 	/** Which connector provides it (e.g. "github"). Present for connector-tier tools. */

@@ -622,6 +622,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_list_issues",
+			listFields: ["labels", "exclude_labels"],
 			untrustedOutput: true,
 			scope: "read",
 			description:
@@ -701,6 +702,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_create_issue",
+			listFields: ["labels"],
 			untrustedOutput: false,
 			scope: "write",
 			description: `Open a new GitHub issue in a repo. WRITE — the issue is really created. ${LABEL_VOCABULARY}`,
@@ -727,6 +729,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_update_issue",
+			listFields: ["labels", "assignees"],
 			untrustedOutput: false,
 			scope: "write",
 			description:
@@ -737,7 +740,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 				number: { type: "number", required: true, description: "The issue number to update." },
 				state: { type: "string", description: '"closed" to close it, "open" to reopen it. Omit to leave the state alone.' },
 				labels: { type: "string", description: `Labels — REPLACES the issue's current labels. Omit to leave them alone. ${LABEL_LIST_FORMAT}` },
-				assignees: { type: "string", description: "Comma-separated GitHub logins — REPLACES the issue's current assignees. Omit to leave them alone." },
+				assignees: { type: "string", description: "Comma-separated GitHub logins (an array of logins is accepted too) — REPLACES the issue's current assignees. Omit to leave them alone." },
 				title: { type: "string", description: "A new title. Omit to leave it alone." },
 				body: { type: "string", description: "A new body (markdown). This overwrites the existing body — omit to leave it alone." },
 			},

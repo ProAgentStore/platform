@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GITHUB_TOOLS } from "./connectors/github.js";
 import { AUTO_PICKUP_DEFAULTS, exclusionReason, kindRank, pickNextIssue, priorityRank, type PickCandidate } from "./auto-pickup.js";
 import { isNeedsHumanLabel } from "./fleet-snapshot.js";
-import { validateAgainstSchema } from "./json-schema-validate.js";
+import { coerceListFields, validateAgainstSchema } from "./json-schema-validate.js";
 import { AREA_LABELS, BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS, LABEL_FILTER_HINT, LABEL_LIST_FORMAT, LABEL_VOCABULARY } from "./label-vocabulary.js";
 
 const tool = (name: string) => {
@@ -66,14 +66,24 @@ describe("the vocabulary names exactly what the code acts on (#1245)", () => {
 describe("the list format is what the registry accepts (#1245)", () => {
 	const example = "bug,P1: blocks external users";
 
-	it("says STRING, and an array really is refused", () => {
+	it("says STRING, accepts an array too, and the schema the model sees still declares a string", () => {
 		expect(LABEL_LIST_FORMAT).toMatch(/comma-separated STRING/);
 		expect(LABEL_LIST_FORMAT).toContain(example);
-		for (const [name, field] of [["github_create_issue", "labels"], ["github_update_issue", "labels"], ["github_list_issues", "labels"], ["github_list_issues", "exclude_labels"]] as const) {
-			const schema = tool(name).jsonSchema;
+		expect(LABEL_LIST_FORMAT).toMatch(/array of names is accepted too/);
+		for (const [name, field] of [["github_create_issue", "labels"], ["github_update_issue", "labels"], ["github_update_issue", "assignees"], ["github_list_issues", "labels"], ["github_list_issues", "exclude_labels"]] as const) {
+			const t = tool(name);
 			const base = name === "github_update_issue" ? { repo: "a/b", number: 1 } : name === "github_create_issue" ? { repo: "a/b", title: "t" } : { repo: "a/b" };
-			expect(validateAgainstSchema(schema, { ...base, [field]: ["bug", "mcp"] }), `${name}.${field} array`).toBe(`Field "${field}" must be a string`);
-			expect(validateAgainstSchema(schema, { ...base, [field]: example }), `${name}.${field} string`).toBeNull();
+			// the schema is unchanged — string — so every consumer of it (model, pinned session) is
+			expect((t.jsonSchema.properties as Record<string, { type: unknown }>)[field].type, `${name}.${field} declared type`).toBe("string");
+			expect(t.listFields, `${name} lists ${field}`).toContain(field);
+			expect(validateAgainstSchema(t.jsonSchema, { ...base, [field]: example }), `${name}.${field} string`).toBeNull();
+			// the route coerces BEFORE validating, so an array reaches the handler as the string it already parses
+			const coerced = coerceListFields(t.listFields, { ...base, [field]: ["bug", "mcp"] });
+			expect(coerced.error, `${name}.${field}`).toBeNull();
+			expect(coerced.input[field]).toBe("bug,mcp");
+			expect(validateAgainstSchema(t.jsonSchema, coerced.input), `${name}.${field} array, after coercion`).toBeNull();
+			// the bare validator still judges the declared type
+			expect(validateAgainstSchema(t.jsonSchema, { ...base, [field]: ["bug", "mcp"] }), `${name}.${field} uncoerced`).toBe(`Field "${field}" must be a string`);
 		}
 	});
 });

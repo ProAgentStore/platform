@@ -136,6 +136,8 @@ export interface PinnedToolRow {
 	mutates?: boolean;
 	invocableBy?: readonly string[];
 	jsonSchema?: unknown;
+	/** Fields of `jsonSchema` that are comma-separated strings and also accept an array (#1263); the API joins it before validating. */
+	listFields?: readonly string[];
 }
 
 export interface PinnedSurface {
@@ -260,7 +262,7 @@ const resultOffset = z
 export function registerToolRows(server: McpServer, ctx: PinnedCtx, rows: readonly PinnedToolRow[], target: RowTarget): void {
 	const { env, tokenFor, safetyFor } = ctx;
 	for (const row of rows) {
-		const { shape: own, unsupported } = jsonSchemaToZodShape(row.jsonSchema);
+		const { shape: own, unsupported } = jsonSchemaToZodShape(row.jsonSchema, row.listFields);
 		const scope: McpScope = row.mutates ? "write" : "read";
 		const note = unsupported.length
 			? ` (Fields without a published shape, sent through as given: ${unsupported.map((u) => u || "<root>").join(", ")}.)`

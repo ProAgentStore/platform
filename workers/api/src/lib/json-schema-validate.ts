@@ -86,6 +86,30 @@ export function unknownKeysRefusal(schema: JsonSchema, input: Record<string, unk
 	return `Unknown input ${unknown.length === 1 ? "key" : "keys"} ${named.join(", ")} — refused rather than silently ignored. ${accepts}`;
 }
 
+/**
+ * Accept an array for a field that is declared a comma-separated string (#1263) — `labels: ["bug","mcp"]` for `labels: "bug,mcp"`.
+ *
+ * Done BEFORE validation, only for the fields a tool lists in `listFields`, and only for an array of non-empty strings none of which
+ * holds a comma: such an entry would be silently split into two by the handler's comma parse, so it is refused by name instead. A
+ * non-array value is left exactly as it is for the validator to judge. An empty array becomes "", which every list field already
+ * reads as "nothing given". Returns the input to validate and run (a copy when anything changed), or the refusal.
+ */
+export function coerceListFields(listFields: readonly string[] | undefined, input: Record<string, unknown>): { input: Record<string, unknown>; error: string | null } {
+	if (!listFields?.length) return { input, error: null };
+	let out = input;
+	for (const key of listFields) {
+		const val = input[key];
+		if (!Array.isArray(val)) continue;
+		const bad = val.findIndex((v) => typeof v !== "string" || !v.trim());
+		if (bad >= 0) return { input, error: `Field "${key}" takes a comma-separated string, or an array of non-empty strings — entry ${bad} is not a non-empty string` };
+		const comma = val.find((v) => (v as string).includes(","));
+		if (comma !== undefined) return { input, error: `Field "${key}" takes a comma-separated string, or an array of names — "${comma}" contains a comma, which would be read as two names. Pass each name as its own entry` };
+		if (out === input) out = { ...input };
+		out[key] = (val as string[]).map((v) => v.trim()).join(",");
+	}
+	return { input: out, error: null };
+}
+
 /** Validate one tool call's input against its declared schema. */
 export function validateAgainstSchema(schema: JsonSchema, input: Record<string, unknown>): string | null {
 	const unknown = unknownKeysRefusal(schema, input);

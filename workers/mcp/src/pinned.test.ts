@@ -198,6 +198,44 @@ describe("the pinned path (#783)", () => {
 	});
 });
 
+describe("a comma-list field on a pinned session (#1263)", () => {
+	const listing = {
+		tools: [
+			{
+				name: "github_update_issue",
+				description: "Change an issue.",
+				allowed: true,
+				mutates: true,
+				scope: "write",
+				invocableBy: ["chat", "call_instance_tool"],
+				jsonSchema: { type: "object", properties: { repo: { type: "string" }, number: { type: "number" }, labels: { type: "string", description: "Labels. A comma-separated STRING." } }, required: ["repo", "number"] },
+				listFields: ["labels"],
+			},
+		],
+	};
+
+	it("publishes the field as a string OR an array, and sends the caller's array to the API as given — the route joins it", async () => {
+		const { tools, fetchStub } = await setup({ pinned: "inst-1", listing: { body: listing } });
+		const tool = tools.get("github_update_issue")!;
+		const labels = (tool.schema as Record<string, { safeParse: (v: unknown) => { success: boolean } }>).labels;
+		expect(labels.safeParse("bug,mcp").success).toBe(true);
+		expect(labels.safeParse(["bug", "mcp"]).success).toBe(true);
+		expect(labels.safeParse([1]).success).toBe(false);
+		fetchStub.respond((u) => u.includes("/tools/github_update_issue"), { body: { success: true, content: "updated" } });
+		await tool.handler({ repo: "a/b", number: 4, labels: ["bug", "mcp"] });
+		const call = fetchStub.calls.find((c) => c.url.includes("/tools/github_update_issue"))!;
+		expect(JSON.parse(call.body!)).toEqual({ repo: "a/b", number: 4, labels: ["bug", "mcp"] });
+	});
+
+	it("a listing from an API that names no listFields keeps the field a plain string", async () => {
+		const plain = { tools: [{ ...listing.tools[0], listFields: undefined }] };
+		const { tools } = await setup({ pinned: "inst-1", listing: { body: plain } });
+		const labels = (tools.get("github_update_issue")!.schema as Record<string, { safeParse: (v: unknown) => { success: boolean } }>).labels;
+		expect(labels.safeParse(["bug"]).success).toBe(false);
+		expect(labels.safeParse("bug").success).toBe(true);
+	});
+});
+
 describe("PagsMcp.init on a pinned session", () => {
 	it("registers the instance's tools plus chat/guide/messages and server diagnostics", async () => {
 		const { tools, fetchStub } = await setup({ pinned: "inst-1" });
