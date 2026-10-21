@@ -34,7 +34,7 @@ const CH_ALERTS = "333333333333333333";
 const CH_PRIVATE = "444444444444444444";
 const CH_HIDDEN = "555555555555555555";
 const CH_VOICE = "666666666666666666";
-const DISCORD_TOOLS = ["discord_list_granted_channels", "discord_read_messages", "discord_send_message", "discord_add_reaction"];
+const DISCORD_TOOLS = ["discord_list_granted_channels", "discord_read_messages", "discord_read_reactions", "discord_send_message", "discord_add_reaction"];
 
 let d1: RealSchemaD1;
 let env: Env;
@@ -65,6 +65,10 @@ function discord(path: string, method: string, auth: string | null): Response {
 	if (path === `/channels/${CH_ALERTS}`) return json({ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD });
 	if (path === `/channels/${CH_VOICE}`) return json({ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD });
 	if (path === `/channels/${CH_PRIVATE}`) return json({ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD });
+	// #1274: one message with its reaction counts, and who reacted with each emoji.
+	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888` && method === "GET") return json({ id: "888888888888888888", reactions: [{ count: 2, me: false, emoji: { id: null, name: "👍" } }, { count: 1, me: true, emoji: { id: "123123123123123123", name: "pags" } }] });
+	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888/reactions/${encodeURIComponent("👍")}` && method === "GET") return json([{ id: "111111111111111110", username: "ana", email: "never-passed-on@example.com" }, { id: "111111111111111111", username: "bo", bot: true }]);
+	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888/reactions/pags:123123123123123123` && method === "GET") return json([{ id: "111111111111111112", username: "cy" }]);
 	if (path.startsWith(`/channels/${CH_ALERTS}/messages`) && method === "GET") return json([{ id: "888888888888888888", content: "deploy failed on main" }]);
 	if (path === `/channels/${CH_ALERTS}/messages` && method === "POST") return json({ id: "999999999999999990" });
 	return json({ message: "Unknown" }, 404);
@@ -205,6 +209,15 @@ describe("a newly connected bot, through the agent's own tools (#1132)", () => {
 		expect(read.json.success).toBe(true);
 		expect(read.json.content).toContain("deploy failed on main");
 
+		// #1274: reactions on one message — read permission only, same grant check; reacting users are trimmed to id, name and bot flag.
+		const reacted = await tool("discord_read_reactions", { grantId, messageId: "888888888888888888" });
+		expect(reacted.json.success).toBe(true);
+		expect(reacted.json.content).toContain("\"emoji\": \"👍\"");
+		expect(reacted.json.content).toContain("\"username\": \"ana\"");
+		expect(reacted.json.content).toContain("pags:123123123123123123");
+		expect(reacted.json.content).not.toContain("never-passed-on@example.com");
+		expect((await tool("discord_read_reactions", { grantId: "not-a-grant", messageId: "888888888888888888" })).json.content).toMatch(/holds no Discord grant/);
+
 		sent = [];
 		const blocked = await tool("discord_send_message", { grantId, content: "on it @everyone" });
 		expect(blocked.json.success).toBe(false);
@@ -324,7 +337,7 @@ describe("release-note grants reach a coder that declares no Discord tools (#121
 
 		expect(JSON.parse((await callTool("discord_list_granted_channels")).json.content)).toEqual({ channels: [] });
 		sent = [];
-		for (const [name, args] of [["discord_read_messages", { grantId }], ["discord_send_message", { grantId, content: "hello" }], ["discord_add_reaction", { grantId, messageId: "888888888888888888", emoji: "👍" }]] as const) {
+		for (const [name, args] of [["discord_read_messages", { grantId }], ["discord_read_reactions", { grantId, messageId: "888888888888888888" }], ["discord_send_message", { grantId, content: "hello" }], ["discord_add_reaction", { grantId, messageId: "888888888888888888", emoji: "👍" }]] as const) {
 			const r = await callTool(name, args);
 			expect(r.json.success, name).toBe(false);
 			expect(r.json.content, name).toMatch(/reserved for release notes/);

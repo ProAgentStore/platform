@@ -120,6 +120,7 @@ const INTERNET = new Set<string>([
 	"browser_act",
 	// ── discord ── bot messages leave the platform; grants only constrain which channel ──
 	"discord_read_messages",
+	"discord_read_reactions",
 	"discord_send_message",
 	"discord_add_reaction",
 	// ── http / mcp / search / sheets ──

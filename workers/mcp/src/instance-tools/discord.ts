@@ -7,8 +7,8 @@ import type { InstanceToolsCtx } from "./shared.js";
 /**
  * The native Discord bot connector's OWNER lifecycle (#1132): connect / rotate / disconnect the bot,
  * see what it can reach, and grant / revoke one instance's channels. The agent's own tools
- * (`discord_list_granted_channels`, `discord_read_messages`, `discord_send_message`,
- * `discord_add_reaction`) still act only on a granted channel, and a send still needs the instance's
+ * (`discord_list_granted_channels`, `discord_read_messages`, `discord_read_reactions`,
+ * `discord_send_message`, `discord_add_reaction`) still act only on a granted channel, and a send still needs the instance's
  * Discord write consent (`set_instance_connector_consent`) — these tools set up the grant, never the
  * consent.
  *

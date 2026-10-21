@@ -156,6 +156,72 @@ const sendMessage: ToolDef["handler"] = async (ctx, input) => {
 	return { content: JSON.stringify({ sent: true, channelId: granted.channelId, messageId: result.messageId, ...(replyTo ? { repliedTo: replyTo } : {}) }, null, 2), success: true };
 };
 
+/** Emoji listed per message, and how many of them have their reacting users fetched: bounds the Discord calls one tool call can make (#1274). */
+const MAX_REACTION_EMOJIS = 20;
+const MAX_EMOJIS_WITH_USERS = 10;
+const DEFAULT_USERS_PER_EMOJI = 25;
+const MAX_USERS_PER_EMOJI = 200;
+const USERS_PAGE = 100;
+
+type ReactionSummary = { count: number; me: boolean; emoji: { id: string | null; name: string | null } };
+
+/** The path segment Discord wants for an emoji: the character itself, or `name:id` for a custom one. */
+const reactionPathEmoji = (e: ReactionSummary["emoji"]): string | null => (e.id ? `${e.name ?? "_"}:${e.id}` : e.name || null);
+
+/**
+ * Who reacted with one emoji, by Discord's GET reactions endpoint — paged with `after` until `want` users or the end.
+ * Only ids, names and the bot flag are kept; a reacting user's other fields are not passed on.
+ */
+async function reactingUsers(token: string, channelId: string, messageId: string, emoji: string, want: number): Promise<{ users: Array<{ id: string; username: string | null; bot: boolean }>; error?: string }> {
+	const users: Array<{ id: string; username: string | null; bot: boolean }> = [];
+	let after = "";
+	while (users.length < want) {
+		const limit = Math.min(USERS_PAGE, want - users.length);
+		const page = await discordRequest(token, `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}?limit=${limit}${after ? `&after=${after}` : ""}`);
+		if (!page.ok) return { users, error: page.message };
+		const batch = Array.isArray(page.data) ? (page.data as Array<{ id?: unknown; username?: unknown; bot?: unknown }>) : [];
+		for (const u of batch) {
+			const id = snowflake(u.id);
+			if (id) users.push({ id, username: typeof u.username === "string" ? u.username : null, bot: u.bot === true });
+		}
+		const last = snowflake(batch.at(-1)?.id);
+		if (batch.length < limit || !last) break;
+		after = last;
+	}
+	return { users };
+}
+
+const readReactions: ToolDef["handler"] = async (ctx, input) => {
+	const granted = await grantedChannel(ctx, input.grantId);
+	if ("error" in granted) return { content: granted.error, success: false };
+	const messageId = snowflake(input.messageId);
+	if (typeof input.messageId !== "string" || !messageId) return { content: "messageId must be a Discord message id (a string of 16-22 digits).", success: false };
+	const includeUsers = input.includeUsers !== false;
+	const perEmoji = Math.min(Math.max(Math.trunc(Number(input.usersPerEmoji) || DEFAULT_USERS_PER_EMOJI), 1), MAX_USERS_PER_EMOJI);
+	const token = await botToken(ctx);
+	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
+	const message = await discordRequest(token, `/channels/${granted.channelId}/messages/${messageId}`);
+	if (!message.ok) return { content: message.message, success: false };
+	const all = ((message.data as { reactions?: unknown } | null)?.reactions ?? []) as ReactionSummary[];
+	const listed = Array.isArray(all) ? all.slice(0, MAX_REACTION_EMOJIS) : [];
+	const reactions = [];
+	for (const [i, r] of listed.entries()) {
+		const path = reactionPathEmoji(r.emoji ?? { id: null, name: null });
+		const row: Record<string, unknown> = { emoji: path, custom: !!r.emoji?.id, count: Number(r.count) || 0, botReacted: r.me === true };
+		if (includeUsers && path && i < MAX_EMOJIS_WITH_USERS) {
+			const who = await reactingUsers(token, granted.channelId, messageId, path, Math.min(perEmoji, Number(r.count) || perEmoji));
+			row.users = who.users;
+			row.usersComplete = !who.error && who.users.length >= (Number(r.count) || 0);
+			if (who.error) row.usersError = who.error;
+		}
+		reactions.push(row);
+	}
+	return {
+		content: JSON.stringify({ channelId: granted.channelId, messageId, reactions, emojiCount: all.length, ...(all.length > listed.length ? { emojiOmitted: all.length - listed.length } : {}), ...(includeUsers && listed.length > MAX_EMOJIS_WITH_USERS ? { usersOmittedAfterEmoji: MAX_EMOJIS_WITH_USERS } : {}) }, null, 2),
+		success: true,
+	};
+};
+
 const addReaction: ToolDef["handler"] = async (ctx, input) => {
 	const granted = await grantedChannel(ctx, input.grantId);
 	if ("error" in granted) return { content: granted.error, success: false };
@@ -199,6 +265,17 @@ export const DISCORD_CONNECTOR: Connector = {
 			mutates: false,
 			untrustedOutput: true,
 			handler: readMessages,
+		},
+		{
+			name: "discord_read_reactions",
+			description: "Read the reactions on ONE message in a Discord channel explicitly granted to this agent: each emoji, its count, whether the bot reacted, and (includeUsers, default true) the users who reacted — up to usersPerEmoji each (default 25, max 200), for the first 10 emoji. Take messageId from discord_read_messages. Read-only.",
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, messageId: { type: "string" }, includeUsers: { type: "boolean" }, usersPerEmoji: { type: "number" } }, required: ["grantId", "messageId"] },
+			tier: "connector",
+			connector: "discord",
+			scope: "read",
+			mutates: false,
+			untrustedOutput: true,
+			handler: readReactions,
 		},
 		{
 			name: "discord_send_message",

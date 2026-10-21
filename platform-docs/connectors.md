@@ -44,12 +44,22 @@ resolved before the run and is refused at dispatch instead.
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 | `email-worker` | bearer token **per connection** (owner-pasted, endpoint-keyed like `mcp`) | read + write | `email_worker_list_messages`, `email_worker_read_message`, `email_worker_send` (write), `email_worker_reply` (write), `email_worker_identities`, `email_worker_list_events` against a customer-owned Worker implementing the [adapter contract](email-worker-adapter.md) — see [Worker-backed email](#worker-backed-email) |
-| `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_send_message`, `discord_add_reaction` |
+| `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_read_reactions`, `discord_send_message`, `discord_add_reaction` |
 
 To connect Discord, store a **Discord bot token** in **Profile → API Keys & connector credentials**.
 Then, on the particular agent's **Permissions** tab, select a server and text channel to grant.
 The bot needs its normal Discord permissions in that channel; sending messages or reactions also
 requires that instance's Discord write consent.
+
+**Reading reactions (#1274).** `discord_read_reactions` takes a `grantId` and a `messageId` (a string, as
+`discord_read_messages` returns it) and returns that one message's reactions: each emoji (a custom one as `name:id`), its
+`count`, whether the bot itself reacted, and the users who reacted — `id`, `username` and a `bot` flag, nothing else Discord
+sends about them. Users come from Discord's paginated reactions endpoint: `usersPerEmoji` (default 25, at most 200) and
+`includeUsers: false` for counts only. One call lists at most 20 emoji and fetches users for the first 10; the result says
+when it left any out (`emojiOmitted`, `usersOmittedAfterEmoji`), and `usersComplete` is false for an emoji with more
+reactors than were fetched. It is read-only — read permission and the same per-channel grant, no write consent — and the
+bot needs View Channel and Read Message History there. If the users call fails for one emoji the counts are still
+returned, with `usersError` on that emoji.
 
 **Replying to a message (#1273).** `discord_send_message` takes an optional `replyToMessageId` — a message id
 (a string of 16-22 digits, as `discord_read_messages` returns it) from the *same* granted channel. The message is then posted
