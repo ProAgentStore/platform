@@ -7,7 +7,8 @@
  * with the labels `pags` and `pags-<node>`, then install and start it as a service (`svc.sh` on
  * macOS/Linux, `config.cmd --runasservice` on Windows). Remove: stop and uninstall the service, then
  * `config remove`. One runner per machine per scope; each lives in its own folder under
- * `~/.proagentstore/actions-runner/`.
+ * `~/.proagentstore/actions-runner/` — except on Windows (#1272), where it lives under
+ * `%ProgramData%\ProAgentStore\actions-runner\` and is NEVER placed in a user profile; see windows-runner-root.ts.
  *
  * Jobs, not one relay call: a download and configure outlasts the relay's two-minute ceiling, so the
  * cloud starts a job, gets its id at once, and reads `status` until it settles (the #858 clone shape).
@@ -28,6 +29,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
+
+import { checkWindowsReadiness, type WindowsReadinessDeps } from "./windows-runner-readiness.js";
+import { liveWindowsDeps } from "./windows-runner-live.js";
+import { ensureWindowsRunnerRoot, machineRoot, NETWORK_SERVICE, type WindowsRootDeps } from "./windows-runner-root.js";
 
 const run = promisify(execFile);
 
@@ -94,6 +99,13 @@ export interface ActionsRunnerDeps {
 	exec: (file: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
 	now: () => number;
 	newId: () => string;
+	/**
+	 * Windows only (#1272): the machine-root effects. REQUIRED on win32 — without them there is nowhere safe to install, and the
+	 * answer is a refusal, never a fallback into the user profile.
+	 */
+	windows?: WindowsRootDeps;
+	/** Windows only: the probes behind the host-readiness check, reported with the capabilities (#1272). */
+	readiness?: WindowsReadinessDeps;
 }
 
 const URL_SHAPE = /^https:\/\/github\.com\/([A-Za-z0-9-]+)(?:\/([A-Za-z0-9._-]+))?$/;
@@ -103,6 +115,11 @@ export function runnerDir(home: string, url: string): string {
 	const m = URL_SHAPE.exec(url);
 	if (!m) throw new Error(`Not a GitHub org or repo URL: ${url}`);
 	return join(home, ".proagentstore", "actions-runner", m[2] ? `${m[1]}--${m[2]}` : m[1]);
+}
+
+/** A Windows runner lives under `%ProgramData%`, never in the profile (#1272): `…\\ProAgentStore\\actions-runner\\<scope>`. */
+export function windowsRunnerDir(programData: string, url: string): string {
+	return machineRoot(programData, runnerDir("", url).split(/[\\/]/).pop() as string);
 }
 
 /** The release asset for this OS/CPU, or an error naming what is unsupported. */
@@ -225,7 +242,8 @@ function validate(req: ActionsRunnerRequest, action: RunnerAction): void {
  */
 export function startRunnerJob(action: RunnerAction, req: ActionsRunnerRequest, deps: ActionsRunnerDeps): ActionsRunnerJob {
 	validate(req, action);
-	const dir = runnerDir(deps.home, req.url);
+	if (deps.platform === "win32" && !deps.windows) throw new Error("This machine's Windows runner root is unavailable, so nothing was installed. A service-managed runner is never placed in a user profile.");
+	const dir = deps.platform === "win32" && deps.windows ? windowsRunnerDir(deps.windows.programData, req.url) : runnerDir(deps.home, req.url);
 	const running = [...jobs.values()].find((j) => j.dir === dir && j.state === "running");
 	if (running) return running;
 	const job: ActionsRunnerJob = {
@@ -269,6 +287,13 @@ async function step(job: ActionsRunnerJob, deps: ActionsRunnerDeps, file: string
 export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerRequest, deps: ActionsRunnerDeps): Promise<ActionsRunnerJob> {
 	const win = deps.platform === "win32";
 	try {
+		// Convergence (#1272): every install and re-run sets AND verifies the root's ACL first, so `pags up`, a restart and a
+		// self-update all land on the same permissions. A failure here stops the install before anything is downloaded.
+		if (win && deps.windows) {
+			const root = await ensureWindowsRunnerRoot(deps.windows, { folder: job.dir.split(/[\\/]/).pop() as string });
+			job.steps.push(...root.steps, `service account ${root.identity} limited to ${root.root} (${root.verified} check passed)`);
+			job.runsAs = root.identity;
+		}
 		if (deps.exists(join(job.dir, ".runner"))) {
 			job.steps.push(`already configured in ${job.dir} — not reinstalled (remove it first to re-register)`);
 			job.service = "installed";
@@ -296,7 +321,7 @@ export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerReques
 			"_work",
 			"--replace",
 			...(req.runnerGroup ? ["--runnergroup", req.runnerGroup] : []),
-			...(win ? ["--runasservice"] : []),
+			...(win ? ["--runasservice", "--windowslogonaccount", NETWORK_SERVICE] : []),
 		];
 		await step(job, deps, win ? join(job.dir, "config.cmd") : join(job.dir, "config.sh"), config, req.token);
 		if (win) {
@@ -353,6 +378,8 @@ export interface InstalledRunner {
 	managed: boolean;
 	name: string | null;
 	url: string | null;
+	/** A Windows runner still in the user profile (#1272): it is migrated to the machine root, never repaired in place. */
+	legacy?: boolean;
 }
 
 export function readInstalledRunner(dir: string, managed: boolean, readText: (path: string) => string | null): InstalledRunner | null {
@@ -370,7 +397,9 @@ export function readInstalledRunner(dir: string, managed: boolean, readText: (pa
 /** The real machine. */
 export function liveRunnerDeps(): ActionsRunnerDeps {
 	const win = process.platform === "win32";
+	const live = win ? liveWindowsDeps() : null;
 	return {
+		...(live ? { windows: live.root, readiness: live.readiness } : {}),
 		platform: process.platform,
 		arch: process.arch,
 		home: homedir(),
@@ -409,11 +438,13 @@ export function liveRunnerDeps(): ActionsRunnerDeps {
 }
 
 /** Every runner configured on this machine: the platform's own, and a hand install at ~/actions-runner. */
-export function installedRunners(home = homedir()): InstalledRunner[] {
+export function installedRunners(home = homedir(), programData = process.platform === "win32" ? process.env.ProgramData : undefined): InstalledRunner[] {
 	const readText = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : null);
-	const base = join(home, ".proagentstore", "actions-runner");
-	const managed = existsSync(base) ? readdirSync(base).map((d) => readInstalledRunner(join(base, d), true, readText)) : [];
-	return [...managed, readInstalledRunner(join(home, "actions-runner"), false, readText)].filter((r): r is InstalledRunner => r !== null);
+	const scan = (base: string, legacy: boolean) => (existsSync(base) ? readdirSync(base).map((d) => readInstalledRunner(join(base, d), true, readText)).map((r) => (r && legacy ? { ...r, legacy: true } : r)) : []);
+	// The machine root (#1272) and, on Windows, any profile-scoped install still waiting to be migrated (`legacy`).
+	const machine = programData ? scan(join(programData, "ProAgentStore", "actions-runner"), false) : [];
+	const profile = scan(join(home, ".proagentstore", "actions-runner"), process.platform === "win32");
+	return [...machine, ...profile, readInstalledRunner(join(home, "actions-runner"), false, readText)].filter((r): r is InstalledRunner => r !== null);
 }
 
 /**
@@ -425,7 +456,11 @@ export function routeActionsRunner(path: string, body: Record<string, unknown>, 
 		if (path === "/coding/actions-runner/install" || path === "/coding/actions-runner/remove") {
 			return { status: 202, body: startRunnerJob(path.endsWith("install") ? "install" : "remove", body as unknown as ActionsRunnerRequest, deps()) };
 		}
-		if (path === "/coding/actions-runner/capabilities") return { status: 200, body: detectCapabilities(deps()) };
+		if (path === "/coding/actions-runner/capabilities") {
+			const d = deps();
+			// On Windows the report also says whether the HOST is fit to take jobs (#1272); the cloud withholds routing until it is.
+			return { status: 200, body: { ...detectCapabilities(d), ...(d.readiness ? { windows: checkWindowsReadiness(d.readiness) } : {}) } };
+		}
 		if (path === "/coding/actions-runner/status") {
 			return { status: 200, body: { job: typeof body.jobId === "string" ? runnerJob(body.jobId) : null, installed: installedRunners() } };
 		}

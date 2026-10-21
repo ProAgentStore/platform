@@ -5,6 +5,7 @@
  */
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { fakeMachine } from "./windows-runner.fixture.js";
 import { type ActionsRunnerDeps, type ActionsRunnerJob, CAPABILITY_TOOLS, clearRunnerJobs, detectCapabilities, detectCapabilityLabels, macosTierLabels, readInstalledRunner, routeActionsRunner, runnerAsset, runnerDir, runnerJob, startRunnerJob } from "./actions-runner.js";
 
 const TOKEN = "AABBCCDDEEFF00112233445566778899";
@@ -83,13 +84,52 @@ describe("install (#1209)", () => {
 		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh"]);
 	});
 
-	it("Windows: the zip is expanded and config.cmd installs the service itself (--runasservice)", async () => {
-		const d = fake({ platform: "win32", arch: "x64" });
+	it("Windows: installs under ProgramData with the root's ACL set first, then expands the zip and has config.cmd install the service (#1272)", async () => {
+		const win = fakeMachine();
+		const d = fake({ platform: "win32", arch: "x64", windows: win });
 		const job = await settle(startRunnerJob("install", ORG, d));
+		expect(job.state).toBe("done");
+		expect(job.dir).toBe("C:\\ProgramData\\ProAgentStore\\actions-runner\\proappstore-online");
+		expect(job.dir.toLowerCase()).not.toContain("users");
 		expect(d.downloads[0]).toMatch(/actions-runner-win-x64-2\.329\.0\.zip$/);
 		expect(d.ran.map((r) => r.file.split(/[\\/]/).pop())).toEqual(["powershell", "config.cmd"]);
-		expect(d.ran[1].args).toContain("--runasservice");
+		expect(d.ran[1].args).toEqual(expect.arrayContaining(["--runasservice", "--windowslogonaccount", "NT AUTHORITY\\NETWORK SERVICE"]));
+		// The ACL was set (and proven) before anything was downloaded into the root.
+		expect(win.calls.some((c) => c.file === "icacls" && c.args.includes("/grant:r"))).toBe(true);
+		expect(job.steps.findIndex((x) => x.includes("icacls"))).toBeLessThan(job.steps.findIndex((x) => x.startsWith("download")));
+		expect(job.runsAs).toBe("NT AUTHORITY\\NETWORK SERVICE");
 		expect(job.service).toBe("installed");
+		expect(JSON.stringify(job)).not.toContain(TOKEN);
+	});
+
+	it("Windows: never installs into a profile — without the machine-root deps it refuses rather than falling back (#1272)", () => {
+		const d = fake({ platform: "win32", arch: "x64" });
+		expect(() => startRunnerJob("install", ORG, d)).toThrow(/never placed in a user profile/);
+		expect(d.downloads).toEqual([]);
+	});
+
+	it("Windows: a failed ACL check stops the install before anything is downloaded or configured (#1272)", async () => {
+		const win = fakeMachine();
+		win.ignoreGrants.value = true;
+		const d = fake({ platform: "win32", arch: "x64", windows: win });
+		const job = await settle(startRunnerJob("install", ORG, d));
+		expect(job.state).toBe("failed");
+		expect(job.error).toMatch(/does not have the required permissions/);
+		expect(d.downloads).toEqual([]);
+		expect(d.ran).toEqual([]);
+	});
+
+	it("Windows: re-running on a configured runner re-verifies the root and reinstalls nothing (#1272)", async () => {
+		const win = fakeMachine();
+		const d = fake({ platform: "win32", arch: "x64", windows: win });
+		const first = await settle(startRunnerJob("install", ORG, d));
+		d.files.add(join(first.dir, ".runner"));
+		const grantsBefore = win.calls.filter((c) => c.args.includes("/grant:r")).length;
+		const again = await settle(startRunnerJob("install", ORG, d));
+		expect(again.steps.join("\n")).toMatch(/already configured/);
+		expect(again.steps).toContain("ACL already satisfies the policy");
+		expect(win.calls.filter((c) => c.args.includes("/grant:r")).length).toBe(grantsBefore);
+		expect(d.downloads).toHaveLength(1);
 	});
 
 	it("is idempotent: a folder already configured is not reinstalled", async () => {
@@ -258,5 +298,15 @@ describe("the capabilities route and the install labels (#1260)", () => {
 
 	it("still refuses a label with a space or shell characters", () => {
 		for (const bad of ["has jq", "a;b", "x$y", "has-jq,rm"]) expect(() => startRunnerJob("install", { ...ORG, labels: [bad] }, fake())).toThrow(/not a valid runner label/);
+	});
+});
+
+describe("Windows readiness rides the capabilities report (#1272)", () => {
+	it("a Windows machine's capabilities carry its readiness; other machines' do not", () => {
+		const readiness = { platform: "win32" as const, userProfile: "C:\\Users\\admin", probe: () => "Microsoft Windows [Version 10.0.19045.1]", whichPath: (b: string) => (b === "aws" ? null : `C:\\Program Files\\${b}.exe`) };
+		const win = routeActionsRunner("/coding/actions-runner/capabilities", {}, () => fake({ platform: "win32", readiness }));
+		expect((win.body as { windows: { ready: boolean; reasons: Array<{ tool?: string }> } }).windows).toMatchObject({ ready: false, reasons: [{ tool: "aws" }] });
+		const mac = routeActionsRunner("/coding/actions-runner/capabilities", {}, () => fake());
+		expect((mac.body as { windows?: unknown }).windows).toBeUndefined();
 	});
 });

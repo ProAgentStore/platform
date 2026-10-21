@@ -16,6 +16,7 @@ import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
 import { checkEngine, listEngineModels } from "./coding/engine-check.js";
 import { routeActionsRunner } from "./coding/actions-runner.js";
+import { routeWindowsRunner } from "./coding/windows-runner-routes.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
 import { runNativePreflight } from "./native/preflight.js";
@@ -586,7 +587,9 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	// The GitHub Actions runner service on this machine (#1209) — coding/actions-runner.ts.
 	if (req.method === "POST" && path.startsWith("/coding/actions-runner/")) {
-		const r = routeActionsRunner(path, await readJson<Record<string, unknown>>(req));
+		const body = await readJson<Record<string, unknown>>(req);
+		// Windows readiness and legacy-install migration (#1272) are async; everything else is the synchronous router.
+		const r = (await routeWindowsRunner(path, body)) ?? routeActionsRunner(path, body);
 		return json(res, r.status, r.body);
 	}
 	// Background cold-start clones (#858): start (or join) one, and read it back. An older runner 404s

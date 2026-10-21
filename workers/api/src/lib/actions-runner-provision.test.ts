@@ -262,7 +262,7 @@ describe("refreshing the labels of a runner that is already registered (#1260)",
 		const out = await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: ORG } }, d);
 		const put = gh.calls.find((c) => c.method === "PUT");
 		expect(put?.url).toBe(`https://api.github.com/orgs/${ORG}/actions/runners/77/labels`);
-		expect(put?.body).toEqual({ labels: ["pags", "pags-pink-laptop", "team-ios", "has-brew", "has-git", "has-node", "macos-11+", "macos-12+", "macos-13+", "macos-14+"] });
+		expect(put?.body).toEqual({ labels: ["team-ios", "pags", "pags-pink-laptop", "has-brew", "has-git", "has-node", "macos-11+", "macos-12+", "macos-13+", "macos-14+"] });
 		expect(out.refreshed).toMatchObject({ changed: true });
 		expect(out.job).toMatchObject({ state: "done", service: "installed" });
 		expect(out.job.steps[0]).toMatch(/relabelled at GitHub/);

@@ -154,6 +154,98 @@ on macOS and Linux: the login session, `machine.json` (the machine's stable ID),
 (`browser-runner\`), and the CLI versions fetched by the self-updating stub (`cli\`). The Task Scheduler wrapper's
 `pags-up-loop.cmd` and `pags-up.log` sit there too.
 
+## The Actions runner on Windows: the machine service root
+
+A GitHub Actions runner that PAGS installs as a Windows service (`actions_runner_setup`, #1209) lives in a **machine-scoped root**,
+never in a user profile:
+
+```text
+C:\ProgramData\ProAgentStore\actions-runner\<org>          (or <owner>--<repo> for a repo-scoped runner)
+    _work  _diag  _temp  _cache  _logs                       the folders the runner writes to
+```
+
+**Installing a service-managed runner under `C:\Users\<user>` is prohibited.** PAGS will not do it (the install refuses if the
+machine root is unavailable rather than falling back), and a runner a person installs there by hand is treated as legacy and
+migrated (below). Do not "fix" a runner that fails to start by granting `NETWORK SERVICE` (or anything else) access through a
+profile — that is exactly the change this design exists to avoid (#1271 proposed it; #1272 replaced it).
+
+### The trust boundary
+
+A self-hosted runner executes **repository-controlled workflow code** as the service account. So:
+
+| Who | Access to the runner root | Why |
+|---|---|---|
+| `NT AUTHORITY\SYSTEM`, `Administrators` | Full control | Recovery, uninstall and repair never need an ownership change. |
+| The service account (`NT AUTHORITY\NETWORK SERVICE` by default, or a dedicated non-administrator account) | **Modify**, on this root only | The runner writes its work, logs and cache here and self-updates by creating sibling folders in the root. |
+| Everyone else — `Users`, `Authenticated Users`, `Everyone`, the interactive owner | **None** | Nothing writable by other accounts leaks in; workflow code cannot be edited from a normal login. |
+
+The root does **not** inherit from `ProgramData` (`icacls /inheritance:r`). The service account is given **no** access to a user's
+profile, desktop, SSH material, keychains or development checkouts, and needs none: the runner's own startup check walks the
+directories *above* its root, and the root's ancestors (`C:\ProgramData\ProAgentStore\…`) are readable by the service by
+default. The service identity must be least-privilege — SYSTEM, an Administrator or a broad group is refused.
+
+Setup is **idempotent**: every install, `pags up`, service restart and self-update sets the ACL if it has drifted and verifies it,
+and an unchanged root is left alone. Success is reported only after (1) the ACL is read back and matches this table exactly and (2) a
+one-shot task run **as the service account** can list the root, write and delete a file in `_work`, and **cannot** list the owner's
+profile. (The effective-access probe runs for the built-in service accounts; a dedicated named account is verified by its ACL
+because proving access as it would need its password, which PAGS never asks for.) The ACL check reads `icacls` output in English
+account names; on a localised Windows the grants (made by SID) still apply but the read-back may not recognise a name — set the
+display language to English for the install, or contact us.
+
+### Host readiness is separate from the service
+
+A running service is not usable CI capacity. Before a Windows runner is offered any routing label, the machine reports whether the
+**host** is ready (`/coding/actions-runner/capabilities` → `windows`):
+
+- Windows build 17763 (Windows 10 1809 / Server 2019) or newer;
+- `git`, `bash` (Git for Windows — workflow steps written as `shell: bash`), `node`, `pnpm` and the AWS CLI all on the **machine** `PATH`.
+  A tool installed inside a user profile does not count: the service account cannot see a profile.
+
+If anything is missing the runner is still installed, but it is registered **without** `pags` / `pags-<node>`, carrying
+`pags-unavailable` instead, so nothing that routes by label can reach it. The answer to the setup call lists each reason and its fix
+(for example *"`aws` is not on PATH — needed for deploys that run `aws s3 sync`. Install the AWS CLI v2 MSI for all users."*). Fix it and run
+`actions_runner_setup` again: the labels are swapped on the registered runner; it is not reinstalled.
+
+### Migrating a profile-scoped install
+
+A runner still under `%USERPROFILE%\.proagentstore\actions-runner\<org>` is **migrated, never repaired in place**. Running
+`actions_runner_setup` for its org does it:
+
+1. **Drain** — wait for a running job to finish; if one never does, stop with nothing changed.
+2. **Stop** the old service. (It is never modified.)
+3. **Prepare** the machine root and its ACL (above), before anything is copied into it.
+4. **Copy** the runner's program files — *not* its old registration, credentials or working data.
+5. **Re-register** with a **fresh, short-lived registration token** minted for this migration (never stored, masked in every record),
+   as the service account, under a **staged name** (`<name>-m`). The old name is not reused: re-registering under it would invalidate the old
+   runner's credentials at GitHub and leave nothing to roll back to.
+6. **Verify** — GitHub must show the new runner online, and a platform-owned smoke job must complete on exactly that runner. Until both
+   pass it carries only `pags-unavailable` and receives no work.
+7. **Hand over** — only then does it get the routing labels, and the old install is marked **removable**. It is **not removed**.
+
+Any failure before step 7 rolls back: the new service and the folder this migration created are removed, the old service is started
+again and reported running, and the answer says what failed. The staged registration GitHub still lists is reported for the platform
+to deregister. A migration that is repeated after it reached verification does nothing new.
+
+The smoke job is not configured in every deployment. Without it the migrated runner is online but **stays unrouted** and the old
+install stays stopped-but-intact, and the answer says so — it is never promoted on the strength of "it started".
+
+### Verifying a Windows runner (a person, on the machine)
+
+The code is proven against a fake Windows. These steps need the real one and are **not** automated or done by an agent; do them on
+the machine before relying on it, and never use a real candidate-facing or production repository as the test:
+
+1. On a **fresh** machine: run `actions_runner_setup` for a test org. In an **elevated** PowerShell, `icacls C:\ProgramData\ProAgentStore\actions-runner\<org>`
+   must list only `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators` and the service account, none marked `(I)`.
+2. `Get-Service actions.runner.*` shows it **Running** with log-on `NT AUTHORITY\NETWORK SERVICE`; `C:\Users\<you>` and `.proagentstore` carry no extra ACE for it
+   (`icacls C:\Users\<you>` unchanged).
+3. GitHub → the org's Actions → Runners shows it **Idle/online**; a trivial workflow that targets `[self-hosted, pags-<node>]` (a single `echo`) completes on it.
+4. Run `actions_runner_setup` again and restart the service: `icacls` output is identical and nothing is reinstalled.
+5. Uninstall `aws` (or install it per-user only): `actions_runner_setup` reports the runner **unavailable** with the AWS CLI reason, and the runner shows `pags-unavailable`.
+6. **Legacy migration** (only on a machine that still has a profile install, with no job running): run `actions_runner_setup`; confirm the new runner appears
+   as `<name>-m`, comes online, passes the smoke job, and takes the routing labels; confirm the old folder is **untouched** and that its service is stopped.
+   Remove the old install yourself afterwards (`config.cmd remove` with a removal token, then delete the folder) — PAGS never does.
+7. To test **rollback**, make the destination unwritable before migrating (or stop the new service so GitHub never shows it online): the old service must be running again afterwards.
+
 ## Updates
 
 **Updates run on Windows from CLI 0.4.117.** Up to 0.4.116 every npm call in the self-update path (the

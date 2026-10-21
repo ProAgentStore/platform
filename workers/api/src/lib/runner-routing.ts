@@ -57,6 +57,44 @@ export class PublicRepoError extends Error {
 	}
 }
 
+// ── Availability (#1272) ──────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// A runner SERVICE that is up is not necessarily usable capacity: a Windows machine without the AWS CLI, or with it installed only
+// inside a user profile the service cannot read, would take jobs and fail them. The machine reports its host readiness with its
+// capabilities; an UNAVAILABLE runner is registered without the routing labels (`pags`, `pags-<node>`) and carries this one instead,
+// so nothing that routes by label can reach it — and the reason travels back to the owner, who is told what to fix. Fixing it and
+// running the setup again swaps the labels back (the label refresh in actions-runner-provision.ts); no re-registration is needed.
+
+/** The label an unavailable runner carries INSTEAD of the routing labels. Nothing routes to it. */
+export const RUNNER_UNAVAILABLE_LABEL = "pags-unavailable";
+
+/** The readiness a machine reports (a Windows machine's `windows` block of /coding/actions-runner/capabilities). */
+export interface HostReadinessReport {
+	applicable?: boolean;
+	ready?: boolean;
+	reasons?: Array<{ code?: string; tool?: string; message?: string; remedy?: string }>;
+	summary?: string;
+}
+
+export interface RunnerAvailability {
+	available: boolean;
+	/** Each actionable reason: what is wrong and how to fix it. Empty when available. */
+	reasons: string[];
+	summary: string;
+}
+
+/** Can this machine be routed jobs? An absent report (an older runner, or a non-Windows machine) is available: never refused for a probe that did not run. */
+export function runnerAvailability(readiness: HostReadinessReport | null | undefined): RunnerAvailability {
+	if (!readiness || readiness.applicable === false || readiness.ready !== false) return { available: true, reasons: [], summary: "" };
+	const reasons = (readiness.reasons ?? []).flatMap((r) => (typeof r.message === "string" ? [`${r.message}${typeof r.remedy === "string" ? ` ${r.remedy}` : ""}`] : []));
+	return { available: false, reasons, summary: readiness.summary ?? (reasons.join(" ") || "This machine reported that it is not ready to take jobs.") };
+}
+
+/** The labels to register: the routing labels when available; the unavailable marker (plus the informational capability labels) when not. */
+export function routingLabels(node: string, capabilityLabels: readonly string[], availability: RunnerAvailability): string[] {
+	return [...new Set(availability.available ? [PAGS_RUNNER_LABEL, nodeRunnerLabel(node), ...capabilityLabels] : [RUNNER_UNAVAILABLE_LABEL, ...capabilityLabels])];
+}
+
 /** Throws unless the repo is private — the guard every runner-group add must pass, and re-check periodically. */
 export function assertPrivateRepo(visibility: unknown): asserts visibility is "private" {
 	if (visibility !== "private") throw new PublicRepoError(typeof visibility === "string" ? visibility : "");

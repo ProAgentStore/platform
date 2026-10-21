@@ -129,3 +129,28 @@ describe("consumes #1112's classification as it actually comes out (#1113)", () 
 		expect(shouldFallbackToSelfHosted(unreadable)).toBe(false);
 	});
 });
+
+describe("runner availability (#1272)", () => {
+  it("no report, a non-applicable report and a ready report are all available — never refused for a probe that did not run", async () => {
+    const { runnerAvailability } = await import("./runner-routing.js");
+    for (const r of [null, undefined, {}, { applicable: false, ready: false }, { applicable: true, ready: true }]) expect(runnerAvailability(r).available, JSON.stringify(r)).toBe(true);
+  });
+
+  it("an unready host is unavailable, with each reason and its fix", async () => {
+    const { runnerAvailability } = await import("./runner-routing.js");
+    const a = runnerAvailability({ applicable: true, ready: false, reasons: [{ code: "tool_missing", tool: "aws", message: "`aws` is not on PATH.", remedy: "Install the AWS CLI MSI." }, { code: "x" }], summary: "held out" });
+    expect(a).toEqual({ available: false, reasons: ["`aws` is not on PATH. Install the AWS CLI MSI."], summary: "held out" });
+    expect(runnerAvailability({ applicable: true, ready: false }).summary).toMatch(/not ready/);
+  });
+
+  it("an unavailable runner is registered WITHOUT the routing labels, so nothing that routes by label can reach it", async () => {
+    const { routingLabels, nodeRunnerLabel, PAGS_RUNNER_LABEL, RUNNER_UNAVAILABLE_LABEL } = await import("./runner-routing.js");
+    const ok = { available: true, reasons: [], summary: "" };
+    const no = { available: false, reasons: ["x"], summary: "x" };
+    expect(routingLabels("Pink Laptop", ["has-git"], ok)).toEqual([PAGS_RUNNER_LABEL, nodeRunnerLabel("Pink Laptop"), "has-git"]);
+    const held = routingLabels("Pink Laptop", ["has-git"], no);
+    expect(held).toEqual([RUNNER_UNAVAILABLE_LABEL, "has-git"]);
+    expect(held).not.toContain(PAGS_RUNNER_LABEL);
+    expect(held.some((l) => l === nodeRunnerLabel("Pink Laptop"))).toBe(false);
+  });
+});
