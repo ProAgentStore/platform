@@ -712,6 +712,18 @@ export async function requireOwnedInstance(
 	return instance;
 }
 
+/**
+ * Sticky placement for an unpinned agent (#1173). The default `instance_runtimes` row names the machine routing prefers, and every
+ * registration used to overwrite it — so with two machines up the serving machine (and checkout) changed with reconnect order.
+ * A registration from ANOTHER machine now leaves the row alone while its current holder still has a live relay socket. It takes
+ * over when the holder is gone (failover by design, not by accident) or when the registration is a `--force` takeover. The
+ * per-machine node row is always written, so the other machine stays addressable and is the failover target.
+ */
+export function holdsDefaultRow(prev: Pick<RuntimeRow, "runner_node"> | null, incomingNode: string, force: boolean, holderLive: boolean): boolean {
+	const holder = normalizeRunnerNode(prev?.runner_node);
+	return !!incomingNode && !!holder && holder !== incomingNode && !force && holderLive;
+}
+
 export async function getRuntime(
 	env: Env,
 	instanceId: string,

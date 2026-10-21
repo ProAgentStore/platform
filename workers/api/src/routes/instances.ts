@@ -72,6 +72,7 @@ import {
 	requireRuntime,
 	getLiveRuntime,
 	d1Timestamp,
+	holdsDefaultRow,
 	runtimeNodeResponse,
 	runtimeResponse,
 	safeCapabilities,
@@ -566,21 +567,26 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		}
 	}
 
-	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)
-		.bind(
-			instanceId,
-			session.uid,
-			placement,
-			endpointUrl,
-			tokenParts.ciphertext,
-			tokenParts.dekWrapped,
-			tokenParts.iv,
-			tokenParts.plaintext,
-			capabilities,
-			runnerVersion,
-			runnerNode,
-		)
-		.run();
+	// Sticky placement (#1173): another machine already serves this agent and is still connected — it keeps the default row.
+	const holderNode = normalizeRunnerNode(prevRuntime?.runner_node);
+	const stickyHolder = !!runnerNode && !!holderNode && holderNode !== runnerNode && !body.force && (await relayConnected(c.env, instanceId, holderNode).catch(() => false));
+	if (!holdsDefaultRow(prevRuntime, runnerNode, body.force === true, stickyHolder)) {
+		await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)
+			.bind(
+				instanceId,
+				session.uid,
+				placement,
+				endpointUrl,
+				tokenParts.ciphertext,
+				tokenParts.dekWrapped,
+				tokenParts.iv,
+				tokenParts.plaintext,
+				capabilities,
+				runnerVersion,
+				runnerNode,
+			)
+			.run();
+	}
 
 	// A replacement default runner can't own tasks paused on the previous default,
 	// but adding another Coder node should not expire work on other machines.
