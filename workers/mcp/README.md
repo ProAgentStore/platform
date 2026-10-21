@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**372 tool registrations.** 345 are always registered; 27 are gated to the console
+**378 tool registrations.** 351 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -466,6 +466,12 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_machine_thresholds` | One machine's admission thresholds (#1275): the session limit and the CPU, memory and disk lines the runner admission gate judges it against, where each came from, and the gate's verdict now | read | | |
 | `set_machine_thresholds` | Change a machine's admission thresholds (partial: a number sets, null returns a field to its default) — `maxSessions` replaces the cores/memory formula; shared by every agent on the machine | write | yes | |
 | `reset_machine_thresholds` | Remove every threshold override on a machine (back to the defaults and the session formula) | write | yes | |
+| `get_instance_email_worker` | A worker-backed (Cloudflare) mail connection's state, pin, identities, bridge health, write-consent mode and named blockers (#1277); `enrollment_id` adds a secure enrollment's progress. No credential | read | | |
+| `begin_email_worker_enrollment` | Open a SECURE enrollment: returns a console link where the owner types the bridge secret (#1277); the tool takes and returns no secret | write | yes | |
+| `complete_email_worker_enrollment` | Server consumes the owner-entered secret, tests the bridge and stores the connection (#1277); `not_entered`, `probe_failed` (auth, protocol, bridge_unavailable) are distinct | write | yes | |
+| `test_email_worker_connection` | Test a stored connection with its stored credential; refreshes contract version, identities and health (#1277) | write | yes | |
+| `set_instance_email_worker_account` | Pin an instance to one worker-backed mail connection, or clear the pin (#1277) | write | yes | |
+| `set_email_worker_identities` | Approve sender identities and the reply identity on a connection; a routed-only alias is refused (#1277) | write | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |
 | `runner_node_forget_preflight` | Every alias and blocker before a machine registration is forgotten | read | | |

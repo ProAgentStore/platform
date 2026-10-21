@@ -15,6 +15,13 @@ import { sqlTime, sqlTimeMs, sqlTimeToIso } from "./sql-time.js";
 
 const TTL_MS = 24 * 60 * 60_000; // 24 hours for one-time input
 
+/**
+ * The `purpose` marker on a request created to enroll a worker-backed mail connection (#1277). Its value is the
+ * connection's bridge credential: only the enrollment service may consume it (`opts.enrollment`), so no
+ * agent-reachable path — tmux_secure_get, inject — can write it out to a file or terminal.
+ */
+export const EMAIL_WORKER_ENROLL_PURPOSE = "email-worker-enrollment";
+
 /** What a secure input request looks like from storage. */
 interface SecureInputRow {
 	id: string;
@@ -333,7 +340,7 @@ export async function consumeSecureInput(
 	requestId: string,
 	instanceId: string | null,
 	userId: string,
-	opts: { consumedNode?: string | null } = {},
+	opts: { consumedNode?: string | null; enrollment?: boolean } = {},
 ): Promise<string | null> {
 	if (!env.KEY_ENCRYPTION_KEY) {
 		await logError(env, {
@@ -345,13 +352,15 @@ export async function consumeSecureInput(
 
 	// Fetch the row with all encrypted columns
 	const row = await env.DB.prepare(
-		`SELECT id, status, secret_ciphertext, dek_wrapped, iv, expires_at FROM secure_input_requests
+		`SELECT id, status, purpose, secret_ciphertext, dek_wrapped, iv, expires_at FROM secure_input_requests
      WHERE id = ?1 AND user_id = ?3 AND (?2 IS NULL OR instance_id = ?2)`,
 	)
 		.bind(requestId, instanceId, userId)
 		.first<SecureInputRow>();
 
 	if (!row) return null;
+	// An enrollment's value is a bridge credential; it is spent only by the enrollment that created it (#1277).
+	if (row.purpose === EMAIL_WORKER_ENROLL_PURPOSE && !opts.enrollment) return null;
 
 	// Validate status and expiry
 	if (row.status !== "ready") return null;

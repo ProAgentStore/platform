@@ -16804,6 +16804,91 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: "No connection (and no secret given) to test." }
 
+  /v1/instances/{instanceId}/email-worker/status:
+    get:
+      summary: Readiness of this instance's worker-backed email, with every blocker named (#1277)
+      description: |
+        One read of what the MCP `get_instance_email_worker` tool returns: `state` (`absent`, `ambiguous`,
+        `stale_pin`, `connected`), the pin, each connection's identities and bridge health, the instance's
+        write-consent mode, and `blockers[]` — `no_connection`, `ambiguous_connection`, `stale_pin`,
+        `bridge_unreachable` (with `failureClass`), `no_identity_report`, `no_approved_sender`,
+        `no_reply_identity`, `write_consent_off`, `write_consent_ask`. `?enrollment=<id>` adds where a secure
+        enrollment stands. Carries no credential.
+      operationId: getInstanceEmailWorkerStatus
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: enrollment, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { description: The status }
+        "404": { description: Instance not found }
+
+  /v1/instances/{instanceId}/email-worker/enrollments:
+    post:
+      summary: Open a secure enrollment for a worker-backed email connection (#1277)
+      description: |
+        Binds a one-shot secure-input request to one endpoint/account and returns its `consoleUrl`. The OWNER
+        types the bridge secret there; it is never sent to or returned by this API. A body containing `secret`
+        is refused.
+      operationId: beginEmailWorkerEnrollment
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint: { type: string, description: The bridge Worker's https URL }
+                accountId: { type: string }
+                label: { type: string }
+      responses:
+        "201": { description: "The enrollment id and the console path where the owner enters the secret" }
+        "400": { description: Invalid endpoint, or a secret was sent }
+
+  /v1/instances/{instanceId}/email-worker/enrollments/{enrollmentId}/complete:
+    post:
+      summary: Consume the owner-entered secret, test the bridge and store the connection (#1277)
+      description: |
+        Server-side only. `409 not_entered` — the owner has not typed it (or it expired); nothing is consumed.
+        `422 probe_failed` — the bridge did not identify itself (`failureClass` auth, protocol or
+        bridge_unavailable); the value is kept for a retry and no connection is stored.
+      operationId: completeEmailWorkerEnrollment
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: enrollmentId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Connected; contract version and bridge address }
+        "404": { description: No such enrollment }
+        "409": { description: not_entered or already_connected }
+        "422": { description: probe_failed }
+
+  /v1/instances/{instanceId}/email-worker/test:
+    post:
+      summary: Test a stored worker-backed email connection with its stored credential (#1277)
+      description: Takes no secret. Omit `endpoint` to test the connection this instance resolves to. Records health.
+      operationId: testInstanceEmailWorker
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                endpoint: { type: string }
+                accountId: { type: string }
+      responses:
+        "200": { description: "ok with contract version, or ok:false with failureClass" }
+        "404": { description: No stored connection }
+        "409": { description: Ambiguous or stale pin }
+
   /v1/instances/{instanceId}/email-worker/account:
     get:
       summary: This instance's worker-backed email connection pin

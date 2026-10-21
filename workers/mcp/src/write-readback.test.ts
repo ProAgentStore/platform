@@ -608,6 +608,20 @@ const READBACK: Record<string, string | null> = {
 	// #1267: the endpoint and pin set_instance_mcp_account saves are the `endpoint`/`pinned` list_instance_mcp_accounts returns.
 	"set_instance_mcp_account.url": "list_instance_mcp_accounts",
 	"set_instance_mcp_account.account_id": "list_instance_mcp_accounts",
+	// #1277: enrollment, test, pin and identities are all read back from get_instance_email_worker (connections[].endpoint/accountId/label,
+	// pinned, connections[].identities.senders[].approved/replyIdentity; with enrollment_id, the enrollment's endpoint/accountId/label/state).
+	"begin_email_worker_enrollment.endpoint": "get_instance_email_worker",
+	"begin_email_worker_enrollment.account_id": "get_instance_email_worker",
+	"begin_email_worker_enrollment.label": "get_instance_email_worker",
+	"complete_email_worker_enrollment.enrollment_id": "get_instance_email_worker",
+	"test_email_worker_connection.endpoint": "get_instance_email_worker",
+	"test_email_worker_connection.account_id": "get_instance_email_worker",
+	"set_instance_email_worker_account.endpoint": "get_instance_email_worker",
+	"set_instance_email_worker_account.account_id": "get_instance_email_worker",
+	"set_email_worker_identities.endpoint": "get_instance_email_worker",
+	"set_email_worker_identities.account_id": "get_instance_email_worker",
+	"set_email_worker_identities.approved_senders": "get_instance_email_worker",
+	"set_email_worker_identities.reply_identity": "get_instance_email_worker",
 
 	// ── stats ──
 	"set_agent_stats_schema.cards": "get_agent_stats_schema",

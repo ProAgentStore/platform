@@ -1235,4 +1235,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.167": "sha256:18a52264db674e5eb0cb66146eeccdde27e811ffab09c07afcad516d84dbf048",
 	// #1275: get_machine_thresholds, set_machine_thresholds, reset_machine_thresholds (per-machine admission thresholds and session limit).
 	"0.1.168": "sha256:ff7a608fa4dba213c814e29cfea661717a0d87112f23d2c12a6e34d66d0e63d8",
+	// #1277: get_instance_email_worker, begin/complete_email_worker_enrollment, test_email_worker_connection, set_instance_email_worker_account, set_email_worker_identities (worker-backed mail management; no tool carries a secret). 0.1.169 is reserved by the concurrent #1279 connector-oauth work.
+	"0.1.170": "sha256:e4ffa62293e5bc1f3aa2e84e4df0a32651326ecc1efe71748cc5063c8acaa061",
 };

@@ -492,6 +492,14 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_machine_thresholds: "read",
 	set_machine_thresholds: "write",
 	reset_machine_thresholds: "write",
+	// #1277: worker-backed mail management. Reading status is a read; enrollment, test, pin and sender approval change reversible owner
+	// configuration. None sends or reads mail, and none can change the write consent that gates sends.
+	get_instance_email_worker: "read",
+	begin_email_worker_enrollment: "write",
+	complete_email_worker_enrollment: "write",
+	test_email_worker_connection: "write",
+	set_instance_email_worker_account: "write",
+	set_email_worker_identities: "write",
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
 	coding_session_message: "runtime",

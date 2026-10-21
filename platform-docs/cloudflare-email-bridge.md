@@ -127,3 +127,25 @@ Failure classes you will see: `sender_routed_only`, `sender_not_approved`, `send
 `workers/api/src/lib/connectors/email-worker-cloudflare.test.ts` runs the connector against the real
 bridge template (`templates/cloudflare-email-bridge/src/bridge.ts`) over in-memory Cloudflare
 bindings. A bridge of your own is conformant when it answers the same calls the same way.
+
+## Managing the connection over MCP (#1277)
+
+An owner's agent can configure and inspect a bridge connection through the same API services the console uses. No MCP tool
+accepts or returns the bridge secret.
+
+1. `get_instance_email_worker` — state (`absent`, `ambiguous`, `stale_pin`, `connected`), the pin, identities and bridge health,
+   the instance's write-consent mode, and `blockers[]`. Each way mail can fail to flow is a separate code: `no_connection`,
+   `ambiguous_connection`, `stale_pin`, `bridge_unreachable` (with `failureClass` `auth`, `protocol` or `bridge_unavailable`),
+   `no_identity_report`, `no_approved_sender`, `no_reply_identity`, `write_consent_off`, `write_consent_ask`.
+2. `begin_email_worker_enrollment` returns a console link. The **owner** types the bridge secret there (the console's secure-input
+   page; envelope-encrypted, one-shot). The request is bound to one endpoint and account, and only the enrollment can spend it —
+   `tmux_secure_get` and `secure_input_inject` get nothing from it.
+3. `complete_email_worker_enrollment` consumes the entered value on the server, calls the bridge's `/v1/email-worker/identity`
+   with it and stores the connection only if the bridge identifies itself. `not_entered` consumes nothing; `probe_failed` keeps
+   the value so a Worker fix does not cost a retype.
+4. `test_email_worker_connection` re-tests the stored credential (no secret argument) and records health.
+5. `set_instance_email_worker_account` pins the instance to one connection; `set_email_worker_identities` approves senders and the
+   reply identity. A routed-only alias is refused. Write consent for sending stays the owner's console decision; MCP reports it and
+   cannot change it.
+
+Every writer takes `dry_run`; read the result back with `get_instance_email_worker`.

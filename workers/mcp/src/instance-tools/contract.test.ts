@@ -28,6 +28,7 @@ import { registerObservabilityTools } from "./observability.js";
 import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
 import { registerRuntimeTools } from "./runtime.js";
+import { registerEmailWorkerTools } from "./email-worker.js";
 import { registerMachineControlTools } from "./machine-control.js";
 import { registerSecureInputTools } from "./secure-input.js";
 import { registerSettingsTools } from "./settings.js";
@@ -565,6 +566,13 @@ const TABLE: Record<string, Row> = {
 	set_machine_policy: ["machineControl", "write", null, "envelope", "auto_update,cleanup_mode,cleanup_now,cleanup_overrides,display_name,dry_run,machine_id,token"],
 	set_machine_thresholds: ["machineControl", "write", null, "envelope", "cpuLoad1PerCpu,cpuLoad5PerCpu,diskFreeMinBytes,diskUsedPctMax,dry_run,machine_id,maxSessions,memAvailableMinBytes,memUsedPctMax,recoveryBand,recoveryStreak,token"],
 	reset_machine_thresholds: ["machineControl", "write", null, "envelope", "dry_run,machine_id,token"],
+	// #1277: no tool here has a secret parameter - enrollment is a console handoff.
+	get_instance_email_worker: ["emailWorker", "read", null, null, "enrollment_id,instance_id,token"],
+	begin_email_worker_enrollment: ["emailWorker", "write", null, "envelope", "account_id,dry_run,endpoint,instance_id,label,token"],
+	complete_email_worker_enrollment: ["emailWorker", "write", null, "envelope", "dry_run,enrollment_id,instance_id,token"],
+	test_email_worker_connection: ["emailWorker", "write", null, "envelope", "account_id,dry_run,endpoint,instance_id,token"],
+	set_instance_email_worker_account: ["emailWorker", "write", null, "envelope", "account_id,dry_run,endpoint,instance_id,token"],
+	set_email_worker_identities: ["emailWorker", "write", null, "envelope", "account_id,approved_senders,dry_run,endpoint,instance_id,reply_identity,token"],
 	set_instance_terminal_session: ["runtime", "write", null, "envelope", "active_terminal_target,dry_run,instance_id,token"],
 	set_instance_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,settings,token"],
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],
@@ -682,6 +690,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	applications: registerApplicationTools as any,
 	knowledge: registerKnowledgeTools as any,
 	machineControl: registerMachineControlTools as any,
+	emailWorker: registerEmailWorkerTools as any,
 	mcpConnections: registerMcpConnectionTools as any,
 	observability: registerObservabilityTools as any,
 	recent: registerRecentTools as any,
