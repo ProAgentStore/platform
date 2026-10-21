@@ -152,7 +152,9 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		if (startRefusalIsWaitable(started.reason)) {
 			// Only a requeue that moved the claimed row is a deferral, and its event carries the ordinal that
 			// row now counts (#1017), so a repeated bookkeeping write for it lands on the same deferral.
-			const requeue = await requeueEntry(env, entry.id, started.error);
+			// The reason rides along (#1264): only `runner_overloaded` turns it into a TIMED backoff —
+			// see `objective-queue.ts`'s `requeueEntry`.
+			const requeue = await requeueEntry(env, entry.id, started.error, { reason: started.reason ?? null });
 			if (requeue.requeued) await recordLifecycle(env, { ...lifecycleOf(entry), event: "deferred", reason: started.error, deferralSeq: requeue.deferralSeq });
 			return { drained: true, entryId: entry.id, started: false, requeued: requeue.requeued, error: started.error };
 		}
@@ -203,6 +205,32 @@ export async function drainPendingQueues(env: Env, instanceId: string, userId: s
 	const out: QueueDrainResult[] = [];
 	for (const r of rows.results ?? []) out.push(await tryDequeueAndStart(env, instanceId, r.repo_id ?? null, userId));
 	return out;
+}
+
+/**
+ * The TIMED half of the `runner_overloaded` backoff (#1264). Every other waitable reason is woken
+ * by an EVENT — a run finishing, a relay reconnecting — which already calls `drainPendingQueues`.
+ * Nothing wakes an overloaded machine recovering on its own clock, so this is its own per-minute
+ * cron tick (`scheduled()` in index.ts): find the instances with a `runner_overloaded` entry whose
+ * backoff has elapsed, and drain each — which re-asks the gate fresh and either starts it or
+ * requeues it again at the next step of the schedule. Never throws; bounded per tick like every
+ * other sweep here.
+ */
+export async function runDueOverloadRetries(env: Env, now: number = Date.now()): Promise<number> {
+	const rows = await env.DB.prepare(
+		`SELECT DISTINCT instance_id, user_id FROM instance_objective_queue
+		  WHERE status = 'pending' AND defer_reason = 'runner_overloaded' AND next_retry_at IS NOT NULL AND next_retry_at <= ?1
+		  LIMIT 200`,
+	)
+		.bind(now)
+		.all<{ instance_id: string; user_id: string }>()
+		.catch(() => ({ results: [] as Array<{ instance_id: string; user_id: string }> }));
+	let tried = 0;
+	for (const r of rows.results ?? []) {
+		await drainPendingQueues(env, r.instance_id, r.user_id).catch(() => undefined);
+		tried++;
+	}
+	return tried;
 }
 
 /** The handles a drain transition is recorded under — the platform is the actor (#1017). */

@@ -41,6 +41,10 @@ interface ObjectiveQueueRow {
 	actor_uid?: string | null;
 	client_claimed?: string | null;
 	position?: number | null;
+	/** Why it is waiting (#1264), e.g. `"runner_overloaded"` — null for every entry never deferred for that reason. */
+	defer_reason?: string | null;
+	/** When a TIMED backoff may try it again, ms epoch (#1264); null = eligible the moment something drains the queue. */
+	next_retry_at?: number | null;
 }
 
 export interface ObjectiveQueueEntry {
@@ -66,10 +70,14 @@ export interface ObjectiveQueueEntry {
 	position?: number | null;
 	/** Who queued it, as far as the platform can verify (#1017). `unknown` = before attribution existed. */
 	attribution?: { kind: "owner"; uid: string; verified: true; clientClaimed: string | null } | { kind: "unknown"; legacy: true };
+	/** Why it is waiting (#1264) — see {@link ObjectiveQueueRow.defer_reason}. */
+	deferReason: string | null;
+	/** When a timed backoff may try it again, ms epoch (#1264); null = eligible as soon as something drains the queue. */
+	nextRetryAt: number | null;
 }
 
 const COLUMNS =
-	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed";
+	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed, defer_reason, next_retry_at";
 
 /**
  * The queue in BOARD order (#1097): each entry is a card (`objective:<id>`), and where the owner placed it
@@ -97,6 +105,8 @@ function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 		requestId: row.request_id ?? null,
 		...(row.position !== undefined ? { position: row.position } : {}),
 		attribution: row.actor_uid ? { kind: "owner", uid: row.actor_uid, verified: true, clientClaimed: row.client_claimed ?? null } : { kind: "unknown", legacy: true },
+		deferReason: row.defer_reason ?? null,
+		nextRetryAt: row.next_retry_at ?? null,
 	};
 }
 
@@ -157,6 +167,8 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 		createdAt,
 		startedAt: null,
 		finishedAt: null,
+		deferReason: null,
+		nextRetryAt: null,
 	};
 }
 
@@ -237,15 +249,19 @@ const CLAIM_CANDIDATES = 5;
  * run can fire close together (the workflow's own drain and a retried step), and two drains starting
  * the SAME objective twice is the failure this shape exists to make impossible.
  */
-export async function dequeueNext(env: Env, instanceId: string, repoId: string | null): Promise<ObjectiveQueueEntry | null> {
+export async function dequeueNext(env: Env, instanceId: string, repoId: string | null, now: number = Date.now()): Promise<ObjectiveQueueEntry | null> {
 	const candidates = await env.DB.prepare(
 		// The linearization point of a reorder (#1097): one committed before this SELECT decides this start.
+		// `next_retry_at` (#1264) excludes an entry on a TIMED backoff — the only one it must wait out is
+		// `runner_overloaded`, which is the only reason that ever sets it; every other pending entry has it
+		// NULL and is exactly as eligible as it always was.
 		`SELECT ${ORDERED_COLUMNS} FROM ${ORDERED_FROM}
 		  WHERE q.instance_id = ?1 AND q.status = 'pending' AND (q.repo_id IS NULL OR q.repo_id = ?2)
+		    AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?4)
 		  ORDER BY ${ORDER}
 		  LIMIT ?3`,
 	)
-		.bind(instanceId, repoId ?? null, CLAIM_CANDIDATES)
+		.bind(instanceId, repoId ?? null, CLAIM_CANDIDATES, now)
 		.all<ObjectiveQueueRow>();
 	for (const row of candidates.results ?? []) {
 		const startedAt = Date.now();
@@ -304,7 +320,22 @@ export interface Requeued {
 	deferralSeq: number | null;
 }
 
-export async function requeueEntry(env: Env, id: string, note?: string | null): Promise<Requeued> {
+/**
+ * The TIMED backoff for a `runner_overloaded` deferral (#1264): 1, 2, 5, then 10 minutes, by the
+ * entry's OWN deferral count (every reason shares the counter, so an entry bounced between `busy`
+ * and `runner_overloaded` ramps on its total deferrals, not an overload-only tally — simpler, and
+ * the imprecision costs at most one step of the schedule). The SQL in {@link requeueEntry} restates
+ * these same four values in a CASE, because the write has to be one atomic statement; keep both in
+ * step if this schedule ever changes.
+ */
+export const OVERLOAD_BACKOFF_MS = [60_000, 120_000, 300_000, 600_000] as const;
+
+export function overloadBackoffMs(deferralCount: number): number {
+	const i = Math.max(1, Math.trunc(deferralCount)) - 1;
+	return OVERLOAD_BACKOFF_MS[Math.min(i, OVERLOAD_BACKOFF_MS.length - 1)];
+}
+
+export async function requeueEntry(env: Env, id: string, note?: string | null, opts: { reason?: string | null } = {}): Promise<Requeued> {
 	// `stop_reason` carries WHY it is still waiting (#984). The column is otherwise null on a pending
 	// row and is already surfaced as `stopReason`, so the entry can say "the repo holds #978's
 	// uncommitted work" instead of sitting pending with nothing recorded — which is indistinguishable
@@ -313,13 +344,19 @@ export async function requeueEntry(env: Env, id: string, note?: string | null): 
 	// above is overwritten by `finishQueueEntry`, and this column is not, so a lost `deferred` event is
 	// still a named gap after admission, cancellation or failure.
 	// `deferral_count + 1` stays NULL on a pre-0218 row: one more deferral of an uncounted history is not a count.
+	// `next_retry_at` (#1264): ONLY `runner_overloaded` sets it — see `OVERLOAD_BACKOFF_MS` above for
+	// why these four literals must match it. Every other reason keeps it NULL, unchanged from before
+	// this column existed: those entries are woken by an EVENT (a run finishing, a relay reconnecting),
+	// never a clock, and must stay eligible the instant that event drains the queue.
 	const row = await env.DB.prepare(
 		`UPDATE instance_objective_queue
-		    SET status = 'pending', started_at = NULL, stop_reason = ?2, deferred_at = ?3, deferral_count = deferral_count + 1
+		    SET status = 'pending', started_at = NULL, stop_reason = ?2, deferred_at = ?3, deferral_count = deferral_count + 1,
+		        defer_reason = ?4,
+		        next_retry_at = CASE WHEN ?4 = 'runner_overloaded' THEN ?3 + (CASE WHEN deferral_count + 1 <= 1 THEN 60000 WHEN deferral_count + 1 = 2 THEN 120000 WHEN deferral_count + 1 = 3 THEN 300000 ELSE 600000 END) ELSE NULL END
 		  WHERE id = ?1 AND status = 'running'
 		  RETURNING deferral_count`,
 	)
-		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null, Date.now())
+		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null, Date.now(), opts.reason ?? null)
 		.first<{ deferral_count: number | null }>();
 	return row ? { requeued: true, deferralSeq: row.deferral_count } : { requeued: false, deferralSeq: null };
 }

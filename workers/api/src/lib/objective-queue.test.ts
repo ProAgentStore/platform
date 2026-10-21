@@ -13,7 +13,7 @@
  *     failure the shape exists to prevent, and it is only observable through `meta.changes`.
  */
 import { describe, expect, it } from "vitest";
-import { cancelQueueEntry, dequeueNext, enqueueObjective, finishQueueEntry, listQueue, requeueEntry } from "./objective-queue.js";
+import { cancelQueueEntry, dequeueNext, enqueueObjective, finishQueueEntry, listQueue, overloadBackoffMs, OVERLOAD_BACKOFF_MS, requeueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
@@ -193,6 +193,13 @@ describe("dequeueNext", () => {
 		await dequeueNext(env, "i1", null);
 		expect(calls[0].args[1]).toBeNull();
 	});
+
+	it("excludes an entry whose timed backoff has not elapsed yet (#1264), and binds `now`", async () => {
+		const { env, calls } = buildEnv({ rows: [] });
+		await dequeueNext(env, "i1", "r1", 5000);
+		expect(calls[0].sql).toContain("next_retry_at IS NULL OR q.next_retry_at <= ?4");
+		expect(calls[0].args[3]).toBe(5000);
+	});
 });
 
 describe("finishQueueEntry", () => {
@@ -229,5 +236,34 @@ describe("requeueEntry", () => {
 		expect(calls[0].sql).not.toContain("created_at");
 		// Only a row this drain actually claimed may be given back.
 		expect(calls[0].sql).toContain("status = 'running'");
+	});
+
+	it("leaves next_retry_at NULL for every reason except runner_overloaded (#1264) — busy/paused/etc. stay EVENT-woken", async () => {
+		const { env, calls } = buildEnv();
+		await requeueEntry(env, "objq-1", "the repo is busy", { reason: "busy" });
+		expect(calls[0].args[3]).toBe("busy");
+		expect(calls[0].sql).toContain("WHEN ?4 = 'runner_overloaded' THEN");
+		expect(calls[0].sql).toContain("ELSE NULL END");
+	});
+
+	it("binds the reason as null when none is given (every call site before #1264)", async () => {
+		const { env, calls } = buildEnv();
+		await requeueEntry(env, "objq-1", "some note");
+		expect(calls[0].args[3]).toBeNull();
+	});
+});
+
+describe("overloadBackoffMs — the 1, 2, 5, 10 minute schedule #1264 asks for", () => {
+	it("steps through the schedule by deferral count, then holds at the last step", () => {
+		expect(overloadBackoffMs(1)).toBe(60_000);
+		expect(overloadBackoffMs(2)).toBe(120_000);
+		expect(overloadBackoffMs(3)).toBe(300_000);
+		expect(overloadBackoffMs(4)).toBe(600_000);
+		expect(overloadBackoffMs(40)).toBe(600_000); // caps rather than growing unboundedly
+	});
+
+	it("treats zero or negative as the first step — never a zero or negative delay", () => {
+		expect(overloadBackoffMs(0)).toBe(OVERLOAD_BACKOFF_MS[0]);
+		expect(overloadBackoffMs(-3)).toBe(OVERLOAD_BACKOFF_MS[0]);
 	});
 });

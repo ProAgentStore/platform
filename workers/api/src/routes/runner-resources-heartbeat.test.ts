@@ -89,3 +89,35 @@ describe("machine resources on the heartbeat (#924)", () => {
 		expect(row?.status).toBe("online");
 	});
 });
+
+describe("the admission gate re-judges every heartbeat (#1264)", () => {
+	const overloaded = { loadAvg: [30, 25, 15], cpus: 8, memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB, platform: "darwin", sampledAt: Date.UTC(2026, 9, 20, 9, 57) };
+
+	it("a breaching sample flips the node to rejecting, surfaced on list_runner_nodes", async () => {
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: overloaded });
+		const node = await machine();
+		expect(node.resources).toMatchObject({ gateState: "rejecting:cpu" });
+		const row = await d1.DB.prepare("SELECT gate_state FROM instance_runtime_nodes WHERE instance_id = 'i-a' AND runner_node = 'Macmini'").first<{ gate_state: string }>();
+		expect(JSON.parse(row!.gate_state)).toMatchObject({ state: "rejecting", metric: "cpu" });
+	});
+
+	it("a healthy machine reports accepting, the default for every node before this heartbeat ever ran", async () => {
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(1, Date.UTC(2026, 9, 5, 6, 0)) });
+		expect((await machine()).resources).toMatchObject({ gateState: "accepting" });
+	});
+
+	it("does not reopen on the FIRST clear heartbeat after rejecting — needs two consecutive (#1264)", async () => {
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: overloaded });
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(1, Date.UTC(2026, 9, 20, 9, 57, 30)) });
+		expect((await machine()).resources).toMatchObject({ gateState: "rejecting:cpu" });
+		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(1, Date.UTC(2026, 9, 20, 9, 58, 0)) });
+		expect((await machine()).resources).toMatchObject({ gateState: "accepting" });
+	});
+
+	it("a heartbeat with no sample at all leaves the gate untouched — nothing to judge, never a false rejection", async () => {
+		await heartbeat("i-a", { runnerNode: "Macmini" });
+		expect((await machine()).resources).toBeNull();
+		const row = await d1.DB.prepare("SELECT gate_state FROM instance_runtime_nodes WHERE instance_id = 'i-a' AND runner_node = 'Macmini'").first<{ gate_state: string | null }>();
+		expect(row?.gate_state).toBeNull();
+	});
+});

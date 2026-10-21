@@ -27,6 +27,14 @@ export interface RunnerResourceSample {
 	cpus: number;
 	memTotalBytes: number;
 	memFreeBytes: number;
+	/**
+	 * Memory truly available for new work — free + reclaimable (inactive, purgeable, cache) — when
+	 * the runner reports it (#1264). No shipped CLI does yet; absent, every reader (including the
+	 * admission gate) falls back to {@link memFreeBytes}, which undercounts on macOS exactly as the
+	 * memory warning below already documents. The field exists now so a future CLI release can add
+	 * it without a second platform change.
+	 */
+	memAvailableBytes?: number;
 	/** `process.platform` — it decides what `memFreeBytes` means (see {@link resourcesView}). */
 	platform: string;
 	/** Epoch ms, the runner's clock. */
@@ -94,6 +102,9 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 	if (load.length !== 3 || load.some((v) => v === null) || !cpus || !memTotalBytes || memFreeBytes === null || memFreeBytes > memTotalBytes || !sampledAt) return null;
 	const platform = typeof r.platform === "string" ? r.platform.slice(0, 32) : "unknown";
 	const sample: RunnerResourceSample = { loadAvg: load as [number, number, number], cpus, memTotalBytes, memFreeBytes, platform, sampledAt };
+	// #1264: optional, and never above the total — same shape as every other field here, absent means "not reported".
+	const memAvailableBytes = finite(r.memAvailableBytes, 2 ** 53);
+	if (memAvailableBytes !== null && memAvailableBytes <= memTotalBytes) sample.memAvailableBytes = memAvailableBytes;
 	// The #924 follow-up fields, each validated on its own: one malformed part is dropped, never the
 	// whole sample, and an absent part stays absent ("not reported"), never zero.
 	const d = r.disk as Record<string, unknown> | undefined;
@@ -174,6 +185,14 @@ export interface RunnerResourcesView {
 	sessions: SessionUsage[] | null;
 	/** High-water marks crossed, each a sentence. `[]` when the machine looks fine. */
 	warnings: string[];
+	/**
+	 * The admission gate's own verdict (#1264): `"accepting"`, or `"rejecting:<metric>"` naming what
+	 * tripped it — computed by `runner-admission-gate.ts`'s `gateStateLabel` and passed in by the
+	 * caller, never imported here (that module imports FROM this one; importing it back would cycle).
+	 * Independent of `warnings` above, which are softer heads-up lines — a node can warn without
+	 * rejecting, and the gate's own threshold is always at or past its matching warning.
+	 */
+	gateState: string;
 }
 
 const round = (n: number, places = 2) => Math.round(n * 10 ** places) / 10 ** places;
@@ -208,7 +227,7 @@ export function runnerIdentityOf(instanceId: string, node: string, raw: unknown)
  * used and the warning would cry wolf on every machine. The numbers are still reported there; only
  * the alarm is withheld, and CPU load (which means the same thing everywhere) still warns.
  */
-export function resourcesView(raw: unknown, activeSessions: number | null): RunnerResourcesView | null {
+export function resourcesView(raw: unknown, activeSessions: number | null, gateState: string = "accepting"): RunnerResourcesView | null {
 	const s = parseResourceSample(raw);
 	if (!s) return null;
 	const loadPerCpu = round(s.loadAvg[0] / s.cpus);
@@ -272,6 +291,7 @@ export function resourcesView(raw: unknown, activeSessions: number | null): Runn
 		relayRttMs: typeof s.relayRttMs === "number" ? Math.round(s.relayRttMs) : null,
 		sessions: s.sessions ? [...s.sessions].sort((a, b) => b.cpuPct - a.cpuPct) : null,
 		warnings,
+		gateState,
 	};
 }
 

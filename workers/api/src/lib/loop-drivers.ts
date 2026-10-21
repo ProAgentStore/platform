@@ -42,6 +42,7 @@ import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
 import { recordEngineAuthRefusal } from "./engine-auth-refusal.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
+import { currentGateState, DEFAULT_GATE_STATE, describeRejection, rejectionFor } from "./runner-admission-gate.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { checkStartIdempotency } from "./start-idempotency.js";
 import type { Env } from "../types.js";
@@ -180,10 +181,15 @@ export type LoopStartResult =
 			 * machine's relay connects again (`routes/relay.ts`) — instead of failing and stranding the
 			 * rest of the queue behind it.
 			 *
+			 * `runner_overloaded` (#1264) is the fourth: the machine is connected but past its admission
+			 * gate's thresholds (CPU, memory, disk or session count) — see `runner-admission-gate.ts`.
+			 * Nothing fixes it by itself the way a reconnect does; it is waited on a TIMED backoff
+			 * instead (`objective-queue.ts`'s `next_retry_at`), which only this reason sets.
+			 *
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "duplicate" | "issue_closed" | "already_done";
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "duplicate" | "issue_closed" | "already_done";
 			/** Set with `duplicate` / `issue_closed` / `already_done` (#1253): the prior run, issue and times. */
 			detail?: Record<string, unknown>;
 			/**
@@ -204,7 +210,9 @@ export type LoopStartResult =
 export function startRefusalIsWaitable(reason: string | undefined): boolean {
 	// `paused` (#1015): the owner switched the agent off; resuming it is what unblocks the entry.
 	// `runner_offline` (#1161): the machine is away; its relay reconnecting drains the queue.
-	return reason === "busy" || reason === "recovery_required" || reason === "paused" || reason === "runner_offline";
+	// `runner_overloaded` (#1264): the machine is over its admission gate's thresholds; a timed
+	// backoff retries it as the metric recovers — see `objective-queue.ts`'s `next_retry_at`.
+	return reason === "busy" || reason === "recovery_required" || reason === "paused" || reason === "runner_offline" || reason === "runner_overloaded";
 }
 
 export interface LoopDriver {
@@ -345,6 +353,20 @@ const codingDriver: LoopDriver = {
 			// Only the MACHINE being away is waitable (#1161); a runner that is attached but blocked by the budget ceiling is not.
 			const reason = connectivity.state === "attached" ? undefined : ("runner_offline" as const);
 			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity }), ...(reason ? { reason } : {}) };
+		}
+
+		// The admission gate (#1264): the machine IS reachable, but every heartbeat re-judges it
+		// against CPU/memory/disk/session thresholds (`runner-admission-gate.ts`, `updateGateState`),
+		// and this reads that verdict — no re-sampling here, just the state the last heartbeat wrote.
+		// AFTER connectivity (a dead machine's stale gate state would be a wrong reason for the real
+		// blocker) and BEFORE the checkout/handoff checks below, which would needlessly touch a repo
+		// on a machine this run should not land on at all. Never reached for a run already under way:
+		// this driver's `start` is only called to BEGIN an objective, and an admitted one keeps
+		// running — the gate controls admission, never a session already open.
+		if (facts?.node) {
+			const gate = await currentGateState(env, instanceId, userId, facts.node).catch(() => DEFAULT_GATE_STATE);
+			const rejection = rejectionFor(gate, facts.node);
+			if (rejection) return { ok: false, status: 409, reason: "runner_overloaded", error: describeRejection(rejection), detail: { ...rejection } };
 		}
 
 		// Is the CHECKOUT usable? (#548)

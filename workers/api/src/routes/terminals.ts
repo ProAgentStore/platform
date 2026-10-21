@@ -16,6 +16,7 @@ import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/run
 import { detectDuplicateRunners, type DuplicateVerdict, type RunnerProcessIdentity } from "../lib/runner-duplicates.js";
 import { runnerIdentityOf } from "../lib/runner-resources.js";
 import { getMachinePolicy, machinePolicyWire, setMachinePolicy, silentAfterInstall, type MachinePolicy } from "../lib/machine-policy.js";
+import { gateStateLabel, parseGateState } from "../lib/runner-admission-gate.js";
 import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
 import type { Env } from "../types.js";
 
@@ -43,6 +44,8 @@ interface NodeRow {
 	machine_id: string | null;
 	/** The machine's last resource sample, JSON (#924); null from a CLI before 0.4.71. */
 	resources?: string | null;
+	/** The admission gate's hysteresis state, JSON (#1264); null until a heartbeat with a sample has landed. */
+	gate_state?: string | null;
 	instance_config: string | null;
 	agent_name: string | null;
 	agent_slug: string | null;
@@ -233,6 +236,8 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	const nameStamp = new Map<string, number>();
 	/** Freshest resource sample per group (#924). */
 	const sampleFor = new Map<string, RunnerResourceSample>();
+	/** The gate state recorded alongside the freshest sample for each group (#1264). */
+	const gateStateFor = new Map<string, string | null>();
 
 	// An UNIDENTIFIED row adopts the identity of its hostname — but only when that hostname is
 	// unambiguous.
@@ -303,7 +308,10 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		// The freshest sample on ANY of the machine's rows, by the runner's own clock — every agent's
 		// heartbeat carries the same machine reading, under whichever name it registered (#924).
 		const sample = parseResourceSample(r.resources);
-		if (sample && sample.sampledAt > (sampleFor.get(key)?.sampledAt ?? 0)) sampleFor.set(key, sample);
+		if (sample && sample.sampledAt > (sampleFor.get(key)?.sampledAt ?? 0)) {
+			sampleFor.set(key, sample);
+			gateStateFor.set(key, r.gate_state ?? null); // carried with the sample it was computed from (#1264)
+		}
 
 		if (!n.instances.some((i) => i.instanceId === r.instance_id)) {
 			// Only list agents that actually USE a local runner. `pags up` (multiplexed)
@@ -348,7 +356,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	// FRESHEST registration, which is the version actually running there — an old row left behind
 	// by a CLI the machine has since upgraded past must not keep prescribing an upgrade.
 	for (const [key, n] of byKey) {
-		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length);
+		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length, gateStateLabel(parseGateState(gateStateFor.get(key) ?? null)));
 		n.supervisor = n.resources?.runner?.supervisor ?? null;
 		n.identityHint = identityHint(n.machineId, n.runnerVersion);
 		// What a machine pin reads as (#1250): the target machine's name, else its current hostname, else its id.
@@ -453,7 +461,7 @@ terminalRoutes.get("/nodes", async (c) => {
 
 	const nodeRows = (await c.env.DB.prepare(
 		`SELECT n.instance_id, n.runner_node, n.placement, n.runner_version, n.status, n.last_seen_at, n.updated_at,
-		        n.machine_id, n.resources,
+		        n.machine_id, n.resources, n.gate_state,
 		        i.config AS instance_config, a.name AS agent_name, a.slug AS agent_slug,
 		        a.category AS agent_category, a.config AS agent_config
 		 FROM instance_runtime_nodes n

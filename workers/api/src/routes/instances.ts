@@ -103,6 +103,7 @@ import { wakeRunsParkedOnMachine } from "../lib/coding-park.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { healthOfError, healthOfResponse, runnerStatusView } from "../lib/runner-health.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
+import { describeRejection, rejectionFor, updateGateState } from "../lib/runner-admission-gate.js";
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
 import { fleetUpdatingFor, getMachinePolicy, reportMachinePolicyStatus } from "../lib/machine-policy.js";
@@ -751,6 +752,26 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const node = normalizeRunnerNode(body.runnerNode);
 	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", node);
 		await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
+		// #1264: re-judge the admission gate off the sample just stored, so coding_loop_start reads a
+		// verdict no older than this heartbeat. One notification per OVERLOAD EPISODE, not per
+		// rejected job — gated on the accepting → rejecting transition itself, read off the DB write.
+		if (node) {
+			const gate = await updateGateState(c.env, instanceId, session.uid, node).catch(() => null);
+			if (gate?.enteredOverload) {
+				const rejection = rejectionFor(gate.state, node);
+				if (rejection) {
+					await notifyUser(
+						c.env,
+						session.uid,
+						"runner_overloaded",
+						`⚠️ ${node} is overloaded`,
+						describeRejection(rejection),
+						deepLinkFor({ kind: "coding-tab", instanceId }),
+						{ kind: "alert", instanceId, key: `runner-overload:${node}` },
+					).catch(() => undefined);
+				}
+			}
+		}
 		const machineId = normalizeMachineId(body.machineId);
 		await reportMachinePolicyStatus(c.env, session.uid, machineId, typeof body.autoUpdateStatus === "object" && body.autoUpdateStatus !== null
 			? body.autoUpdateStatus

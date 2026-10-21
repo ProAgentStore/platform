@@ -44,7 +44,18 @@ describe("loopDriverFor — the ONE Loop dispatches on what the agent DECLARES (
  * coding test assert against the offline path by accident.
  */
 function stubEnv(
-	opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean; failLoopRunInsert?: boolean; repoCheck?: unknown; engineCheck?: unknown } = {},
+	opts: {
+		repos?: unknown[];
+		session?: unknown;
+		claimTaken?: boolean;
+		runnerOnline?: boolean;
+		hasRuntimeRow?: boolean;
+		failLoopRunInsert?: boolean;
+		repoCheck?: unknown;
+		engineCheck?: unknown;
+		/** The admission gate's stored state (#1264) — a JSON string, as the DB column holds it. */
+		gateState?: string | null;
+	} = {},
 ) {
 	const sql: string[] = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
@@ -82,6 +93,9 @@ function stubEnv(
 								// `agent_instances.config` is read for the node pin — an unpinned agent
 								// routes to whichever machine actually holds a live socket.
 								if (q.includes("FROM agent_instances")) return { config: null };
+								// The admission gate's own read (#1264) — checked BEFORE the generic
+								// instance_runtime_nodes branch below, which this query also matches.
+								if (q.includes("gate_state")) return { gate_state: opts.gateState ?? null };
 								if (q.includes("FROM instance_runtimes") || q.includes("FROM instance_runtime_nodes")) return runtimeRow;
 								if (q.includes("FROM coding_repos")) return (opts.repos ?? [])[0] ?? null;
 								return sessionRow;
@@ -457,6 +471,37 @@ describe("the coding driver's preconditions are refusals, not crashes", () => {
 		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
 		expect(out).toMatchObject({ ok: false, status: 409, reason: "runner_offline" });
 		expect(startRefusalIsWaitable(out.ok ? undefined : out.reason)).toBe(true);
+	});
+
+	it("refuses an overloaded machine with reason: \"runner_overloaded\" — waitable, and opens no session (#1264)", async () => {
+		const gateState = JSON.stringify({ state: "rejecting", metric: "memory", value: 99.6, threshold: 92, streak: 0, since: 1000 });
+		const { env, created, commands } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: null, gateState });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "runner_overloaded", detail: { code: "runner_overloaded", metric: "memory", value: 99.6, threshold: 92, node: "macbook" } });
+		expect(startRefusalIsWaitable(out.ok ? undefined : out.reason)).toBe(true);
+		if (!out.ok) expect(out.error).toMatch(/overloaded/);
+		// The gate controls ADMISSION only: no session was opened, and nothing was sent to the runner —
+		// the "never kill running sessions" invariant, checked from the other direction (never START
+		// one either) since there is no running session for this test to leave untouched.
+		expect(created).toHaveLength(0);
+		expect(commands.filter((c) => c.path?.startsWith("/coding/"))).toHaveLength(0);
+	});
+
+	it("an overloaded machine never touches a session ALREADY open — the gate blocks admission, not a run in progress (#1264)", async () => {
+		// A live session already exists (the fixture below) — the gate still refuses the NEW start
+		// (nothing here claims the session's driver, drives it, or ends it).
+		const gateState = JSON.stringify({ state: "rejecting", metric: "cpu", value: 3, threshold: 1.5, streak: 0, since: 1000 });
+		const { env, commands } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: { id: "s1", client_type: "claude", status: "active" }, gateState });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "runner_overloaded" });
+		expect(commands.some((c) => c.path === "/coding/end")).toBe(false);
+	});
+
+	it("accepts the run when the gate is open (no stored gate state — the default, and every existing CLI before #1264)", async () => {
+		const { env, created } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: null, gateState: null });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(created).toHaveLength(1);
 	});
 
 	it("opens a session itself when none is live and the runner is connected", async () => {

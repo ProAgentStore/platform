@@ -159,7 +159,7 @@ describe("when the start is refused", () => {
 		dequeueNext.mockResolvedValue(entry());
 		start.mockResolvedValue({ ok: false, status: 409, reason: "busy", error: "repo is already being worked on" });
 		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
-		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "repo is already being worked on");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "repo is already being worked on", { reason: "busy" });
 		expect(finishQueueEntry).not.toHaveBeenCalled();
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
 	});
@@ -171,7 +171,7 @@ describe("when the start is refused", () => {
 		dequeueNext.mockResolvedValue(entry());
 		start.mockResolvedValue({ ok: false, status: 409, reason: "recovery_required", error: "This checkout holds 8 uncommitted files belonging to run run-978 (issue #978)." });
 		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
-		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "This checkout holds 8 uncommitted files belonging to run run-978 (issue #978).");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "This checkout holds 8 uncommitted files belonging to run run-978 (issue #978).", { reason: "recovery_required" });
 		expect(finishQueueEntry).not.toHaveBeenCalled();
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
 	});
@@ -182,7 +182,18 @@ describe("when the start is refused", () => {
 		dequeueNext.mockResolvedValue(entry());
 		start.mockResolvedValue({ ok: false, status: 409, reason: "runner_offline", error: "No coding runner connected for owner/repo — run `pags up`." });
 		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
-		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "No coding runner connected for owner/repo — run `pags up`.");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "No coding runner connected for owner/repo — run `pags up`.", { reason: "runner_offline" });
+		expect(finishQueueEntry).not.toHaveBeenCalled();
+		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
+	});
+
+	it("runner_overloaded is WAITED FOR, with the reason passed through for the timed backoff (#1264)", async () => {
+		// Unlike `runner_offline`, nothing EVENT-SHAPED resolves this — the machine recovers on its own
+		// clock, which only `requeueEntry`'s own timed `next_retry_at` (via this reason) catches.
+		dequeueNext.mockResolvedValue(entry());
+		start.mockResolvedValue({ ok: false, status: 409, reason: "runner_overloaded", error: "Mac.modem is overloaded (memory: 99.6% used (threshold 92%))." });
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "Mac.modem is overloaded (memory: 99.6% used (threshold 92%)).", { reason: "runner_overloaded" });
 		expect(finishQueueEntry).not.toHaveBeenCalled();
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
 	});
@@ -251,7 +262,7 @@ describe("a paused instance keeps its queue (#1015)", () => {
 		start.mockResolvedValue({ ok: false, status: 409, reason: "paused", error: "This agent is paused." });
 		const out = await tryDequeueAndStart(envWithStatus("active"), "i1", "r1", "owner-1");
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
-		expect(requeueEntry).toHaveBeenCalledWith(expect.anything(), "objq-1", "This agent is paused.");
+		expect(requeueEntry).toHaveBeenCalledWith(expect.anything(), "objq-1", "This agent is paused.", { reason: "paused" });
 		expect(finishQueueEntry).not.toHaveBeenCalled();
 	});
 });
