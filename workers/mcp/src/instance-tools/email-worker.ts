@@ -18,7 +18,6 @@ import type { InstanceToolsCtx } from "./shared.js";
  */
 export function registerEmailWorkerTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
-	const base = (instance_id: string) => `/v1/instances/${encodeURIComponent(instance_id)}/email-worker`;
 	const token = z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.");
 	const instance = z.string().describe("Private instance ID or slug from my_instances. Copy it exactly.");
 	const endpointArg = z.string().describe("The https URL of the owner's bridge Worker, e.g. https://mail.example.com.");
@@ -34,7 +33,7 @@ export function registerEmailWorkerTools(server: McpServer, ctx: InstanceToolsCt
 			const denied = await requirePermission(safetyFor(t), "read", "get_instance_email_worker", { instance_id, enrollment_id });
 			if (denied) return denied;
 			const q = enrollment_id ? `?enrollment=${encodeURIComponent(enrollment_id)}` : "";
-			const data = (await authedCall(`${base(instance_id)}/status${q}`, sessionToken, {}, env)) as { error?: string };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/email-worker/status${q}`, sessionToken, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);
@@ -57,7 +56,7 @@ export function registerEmailWorkerTools(server: McpServer, ctx: InstanceToolsCt
 			const input = { instance_id, ...body };
 			const denied = await requirePermission(safetyFor(t), "write", "begin_email_worker_enrollment", input);
 			if (denied) return denied;
-			const path = `${base(instance_id)}/enrollments`;
+			const path = `/v1/instances/${encodeURIComponent(instance_id)}/email-worker/enrollments`;
 			if (dry_run) return dryRun(safetyFor(t), "begin_email_worker_enrollment", `open a secure enrollment for ${endpoint}`, input, { endpoint: path, method: "POST", body });
 			const data = (await authedCall(path, sessionToken, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (!data.error) await audit(safetyFor(t), { tool: "begin_email_worker_enrollment", action: "completed", input, result: data });
@@ -75,7 +74,7 @@ export function registerEmailWorkerTools(server: McpServer, ctx: InstanceToolsCt
 			const input = { instance_id, enrollment_id };
 			const denied = await requirePermission(safetyFor(t), "write", "complete_email_worker_enrollment", input);
 			if (denied) return denied;
-			const path = `${base(instance_id)}/enrollments/${encodeURIComponent(enrollment_id)}/complete`;
+			const path = `/v1/instances/${encodeURIComponent(instance_id)}/email-worker/enrollments/${encodeURIComponent(enrollment_id)}/complete`;
 			if (dry_run) return dryRun(safetyFor(t), "complete_email_worker_enrollment", `consume the entered secret for enrollment ${enrollment_id}, test the bridge and store the connection`, input, { endpoint: path, method: "POST" });
 			const data = (await authedCall(path, sessionToken, { method: "POST" }, env)) as { error?: string };
 			if (!data.error) await audit(safetyFor(t), { tool: "complete_email_worker_enrollment", action: "completed", input, result: data });
@@ -94,8 +93,8 @@ export function registerEmailWorkerTools(server: McpServer, ctx: InstanceToolsCt
 			const input = { instance_id, ...body };
 			const denied = await requirePermission(safetyFor(t), "write", "test_email_worker_connection", input);
 			if (denied) return denied;
-			if (dry_run) return dryRun(safetyFor(t), "test_email_worker_connection", endpoint ? `test the stored credential for ${endpoint}` : `test the connection ${instance_id} resolves to`, input, { endpoint: `${base(instance_id)}/test`, method: "POST", body });
-			const data = (await authedCall(`${base(instance_id)}/test`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string };
+			if (dry_run) return dryRun(safetyFor(t), "test_email_worker_connection", endpoint ? `test the stored credential for ${endpoint}` : `test the connection ${instance_id} resolves to`, input, { endpoint: `/v1/instances/${encodeURIComponent(instance_id)}/email-worker/test`, method: "POST", body });
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/email-worker/test`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (!data.error || (data as { ok?: boolean }).ok === false) await audit(safetyFor(t), { tool: "test_email_worker_connection", action: "completed", input, result: data });
 			return jsonText(data);
 		},
@@ -112,7 +111,7 @@ export function registerEmailWorkerTools(server: McpServer, ctx: InstanceToolsCt
 			const input = { instance_id, ...body };
 			const denied = await requirePermission(safetyFor(t), "write", "set_instance_email_worker_account", input);
 			if (denied) return denied;
-			const path = `${base(instance_id)}/account`;
+			const path = `/v1/instances/${encodeURIComponent(instance_id)}/email-worker/account`;
 			if (dry_run) return dryRun(safetyFor(t), "set_instance_email_worker_account", endpoint ? `pin ${instance_id} to ${endpoint}` : `clear the mail connection pin on ${instance_id}`, input, { endpoint: path, method: "PUT", body });
 			const data = (await authedCall(path, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (!data.error) await audit(safetyFor(t), { tool: "set_instance_email_worker_account", action: "completed", input, result: data });
