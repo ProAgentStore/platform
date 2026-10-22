@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import ToolPermissions from "../../components/ToolPermissions";
+import EmailWorkerPanel from "../../components/EmailWorkerPanel";
 import AgentAccountChoice from "../../components/AgentAccountChoice";
 import { DiscordConnectorPanel } from "../../components/DiscordConnectorPanel";
 import { FileConnectorPanel } from "../../components/FileConnectorPanel";
@@ -127,6 +128,10 @@ export default function ConnectorsSection({
 		() => connectorPolicy?.find((policy) => policy.id === "discord")?.allowed !== false,
 		[connectorPolicy],
 	);
+	const showsEmailWorker = useMemo(
+		() => connectorPolicy?.find((policy) => policy.id === "email-worker")?.allowed !== false,
+		[connectorPolicy],
+	);
 
 	return (
 		<div id="permissions-and-connections" tabIndex={-1} ref={focusRef} data-testid="permissions-and-connections"><Card className="mb-3 sm:mb-4">
@@ -151,6 +156,8 @@ export default function ConnectorsSection({
 			)}
 
 			<ToolPermissions instanceId={instanceId} />
+
+			{showsEmailWorker && <EmailWorkerPanel instanceId={instanceId} />}
 
 			<AgentAccountChoice instanceId={instanceId} />
 
