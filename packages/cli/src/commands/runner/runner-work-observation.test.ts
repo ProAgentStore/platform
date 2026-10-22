@@ -20,6 +20,7 @@ describe("sessionStateOf — one engine as the update guard reads it (#1020)", (
 describe("session counts agree with the blocker, on every mix (#1020)", () => {
 	const kinds = [
 		{ alive: true, runState: "idle" },
+		{ alive: true, runState: "idle", platformRun: true },
 		{ alive: false },
 		{ alive: true, runState: "working" },
 		{ alive: true },
@@ -29,12 +30,12 @@ describe("session counts agree with the blocker, on every mix (#1020)", () => {
 	const mixes: unknown[][] = [[]];
 	for (let i = 0; i < 3; i++) for (const m of [...mixes]) for (const k of kinds) mixes.push([...m, k]);
 
-	it("blocking sessions = active turns + unknown, idle retained and stopped never block", () => {
+	it("blocking sessions = active turns + owned idle + unknown, idle retained and stopped never block", () => {
 		for (const sessions of mixes) {
 			const counts = sessionStateCounts(sessions);
 			const busy = observedRunnerWork({ sessions, work: IDLE_WORK }).filter((b) => b.startsWith("coding session"));
-			expect(busy.length, JSON.stringify(sessions)).toBe(counts.activeTurns + counts.unknown);
-			expect(counts.activeTurns + counts.idleRetained + counts.stopped + counts.unknown).toBe(sessions.length);
+			expect(busy.length, JSON.stringify(sessions)).toBe(counts.activeTurns + counts.ownedIdle + counts.unknown);
+			expect(counts.activeTurns + counts.ownedIdle + counts.idleRetained + counts.stopped + counts.unknown).toBe(sessions.length);
 		}
 	});
 });
@@ -43,16 +44,16 @@ describe("readWorkLook carries the counts on the sessions observation only (#102
 	it("busy to idle: an active turn, then the same engine idle and retained", () => {
 		const busy = readWorkLook(ok({ sessions: [{ sessionId: "s1", alive: true, runState: "working" }] }), ok({ work: { codingTurns: 1, localRuns: 0, detail: [] } }), 1);
 		expect(busy.busy).toEqual(["coding session s1 (working)"]);
-		expect(busy.observations[0].sessionStates).toEqual({ activeTurns: 1, idleRetained: 0, stopped: 0, unknown: 0 });
+		expect(busy.observations[0].sessionStates).toEqual({ activeTurns: 1, ownedIdle: 0, idleRetained: 0, stopped: 0, unknown: 0 });
 		const idle = readWorkLook(ok({ sessions: [{ sessionId: "s1", alive: true, runState: "idle" }] }), ok({ work: IDLE_WORK }), 2);
 		expect(idle.busy).toEqual([]);
-		expect(idle.observations[0].sessionStates).toEqual({ activeTurns: 0, idleRetained: 1, stopped: 0, unknown: 0 });
+		expect(idle.observations[0].sessionStates).toEqual({ activeTurns: 0, ownedIdle: 0, idleRetained: 1, stopped: 0, unknown: 0 });
 		expect(idle.observations[1]).toEqual({ source: "health", success: true, sampledAt: 2 });
 	});
 
 	it("a dead or malformed session is counted as such, and the malformed one still blocks", () => {
 		const r = readWorkLook(ok({ sessions: [{ alive: false }, { alive: true }] }), ok({ work: IDLE_WORK }), 3);
-		expect(r.observations[0].sessionStates).toEqual({ activeTurns: 0, idleRetained: 0, stopped: 1, unknown: 1 });
+		expect(r.observations[0].sessionStates).toEqual({ activeTurns: 0, ownedIdle: 0, idleRetained: 0, stopped: 1, unknown: 1 });
 		expect(r.busy).toEqual(["coding session unidentified-session (unknown)"]);
 	});
 
@@ -68,5 +69,28 @@ describe("readWorkLook carries the counts on the sessions observation only (#102
 	it("carries no session id, state text or other content — counts only", () => {
 		const r = readWorkLook(ok({ sessions: [{ sessionId: "csess_secret", alive: true, runState: "working", prompt: "p", cwd: "/x" }] }), ok({ work: { codingTurns: 1, localRuns: 0, detail: [] } }), 6);
 		expect(JSON.stringify(r.observations)).not.toMatch(/csess_secret|working|prompt|cwd/);
+	});
+});
+
+describe("a session a platform run owns blocks a restart even while idle (#1178)", () => {
+	it("reads as owned_idle only when the runner says so; an older runner's idle stays retained", () => {
+		expect(sessionStateOf({ alive: true, runState: "idle", platformRun: true })).toBe("owned_idle");
+		expect(sessionStateOf({ alive: true, runState: "idle", platformRun: false })).toBe("idle_retained");
+		expect(sessionStateOf({ alive: true, runState: "idle" })).toBe("idle_retained");
+		// ownership never turns a stopped engine into a blocker, and a non-boolean claim is not ownership
+		expect(sessionStateOf({ alive: false, runState: "idle", platformRun: true })).toBe("stopped");
+		expect(sessionStateOf({ alive: true, runState: "idle", platformRun: "yes" })).toBe("idle_retained");
+	});
+
+	it("names the session in the blocker, and the observation counts it apart from active turns", () => {
+		const sessions = [{ sessionId: "s1", alive: true, runState: "idle", platformRun: true }, { sessionId: "s2", alive: true, runState: "idle" }];
+		expect(observedRunnerWork({ sessions, work: { codingTurns: 1, localRuns: 0, detail: ["coding session s1 (idle, owned by a platform run): x"] } })).toEqual(["coding session s1 (idle, owned by a platform run)"]);
+		const look = readWorkLook(ok({ sessions }), ok({ work: { codingTurns: 1, localRuns: 0, detail: ["d"] } }), 1);
+		expect(look.busy).toEqual(["coding session s1 (idle, owned by a platform run)"]);
+		expect(look.observations[0]).toMatchObject({ sessionStates: { ownedIdle: 1, idleRetained: 1, activeTurns: 0 } });
+	});
+
+	it("the same session is safe to restart across once the run releases it", () => {
+		expect(observedRunnerWork({ sessions: [{ sessionId: "s1", alive: true, runState: "idle", platformRun: false }], work: IDLE_WORK })).toEqual([]);
 	});
 });

@@ -145,7 +145,7 @@ export async function connectViaRelay(
 	/** The local work look both an update and a restart are guarded by (#1020, #1032). */
 	const workLook = async (signal?: AbortSignal) => {
 		const [sessionsResult, healthResult] = await Promise.allSettled([
-			requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean; runState?: string }> }>("GET", "/coding/sessions", {
+			requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean; runState?: string; platformRun?: boolean }> }>("GET", "/coding/sessions", {
 			url: localUrl,
 			token: runnerToken,
 			instanceId: instanceIds[0],

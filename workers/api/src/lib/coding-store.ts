@@ -594,16 +594,40 @@ export async function resumeSessionsForNode(env: Env, instanceId: string, userId
  * Move a session to a different machine (`runner_node`). Used by the machine-switch reclaim:
  * when a session's owning machine goes offline and the user runs the agent on another machine,
  * point the session at the machine that's connected now so it resumes there instead of
- * dead-ending on the offline one. No status change — the session stays active, just relocates.
+ * dead-ending on the offline one.
+ *
+ * A SUSPENDED session is reactivated by the same statement (#1178). Suspension means "its machine was
+ * taken over elsewhere"; relocating it means the run is about to drive it on THIS machine, and the
+ * sweeps, the stop signal and `resumeSessionsForNode` all read `status` — so leaving `suspended`
+ * behind made a run drive a row that every later check skips. One UPDATE, so the node and the
+ * status can never disagree, and replaying it changes nothing. It does not reactivate when another
+ * session of the repo is already `active` (idx_coding_sessions_one_active allows one), nor one whose run
+ * released its checkout (#1077): that session stays suspended until `takeBackCheckout` has decided the
+ * checkout is free, exactly as `resumeSessionsForNode` leaves it. In both it keeps the old status and
+ * only relocates, as before.
  */
 export async function reassignSessionNode(env: Env, instanceId: string, userId: string, sessionId: string, runnerNode: string | null): Promise<void> {
 	const node = (runnerNode || "").trim().slice(0, 120) || null;
+	const reactivate = `status = 'suspended' AND NOT EXISTS (SELECT 1 FROM coding_sessions o WHERE o.repo_id = coding_sessions.repo_id AND o.status = 'active' AND o.id <> coding_sessions.id) AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr WHERE lr.session_id = coding_sessions.id AND lr.status = 'running' AND lr.checkout_released_at IS NOT NULL)`;
 	await env.DB.prepare(
-		"UPDATE coding_sessions SET runner_node = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+		`UPDATE coding_sessions
+		 SET runner_node = ?4,
+		     status = CASE WHEN ${reactivate} THEN 'active' ELSE status END,
+		     ended_at = CASE WHEN ${reactivate} THEN NULL ELSE ended_at END,
+		     updated_at = datetime('now')
+		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
 	)
 		.bind(sessionId, instanceId, userId, node)
 		.run();
 }
+
+/**
+ * "Nothing owns this session right now" (#1178), as SQL over `coding_sessions` with `?5` the oldest heartbeat still counted as alive:
+ * no single-flight driver claim touched since then, and no `running` platform run that has ticked since then. A claim or a run that
+ * has gone quiet for {@link STALE_DRIVER_MS} owns nothing — the same staleness `claimSessionDriver` already takes a claim at.
+ */
+const NOT_DRIVEN_SQL = `NOT (coding_sessions.driver_id IS NOT NULL AND COALESCE(coding_sessions.driver_at, 0) >= ?5)
+		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr2 WHERE lr2.session_id = coding_sessions.id AND lr2.status = 'running' AND lr2.last_alive_at >= ?5)`;
 
 /**
  * End a session. Also acts on a SUSPENDED one: `pags up --force` on another machine suspends
@@ -611,7 +635,15 @@ export async function reassignSessionNode(env: Env, instanceId: string, userId: 
  * legitimately relocated run) an `active`-only filter left no way to stop it at all — Kill returned
  * 0 changes while the Pilot kept spending BYOK decisions.
  */
-export async function endSession(env: Env, instanceId: string, userId: string, sessionId: string, status: CodingSessionStatus = "ended"): Promise<boolean> {
+export async function endSession(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	sessionId: string,
+	status: CodingSessionStatus = "ended",
+	/** Only end it if nothing is driving it as of this moment — decided in the UPDATE itself, so a claim taken a millisecond ago still wins (#1178). */
+	guard?: { notDrivenSince: number },
+): Promise<boolean> {
 	const res = await env.DB.prepare(
 		// driver_id cleared here too: an ended session cannot be "being driven", and this is the
 		// ONE place a session leaves `active` (#206), so every terminal path — the end route, the
@@ -620,9 +652,10 @@ export async function endSession(env: Env, instanceId: string, userId: string, s
 		`UPDATE coding_sessions
 		 SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now'),
 		     driver_id = NULL, driver_at = NULL
-		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status IN ('active', 'suspended')`,
+		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status IN ('active', 'suspended')
+		   ${guard ? `AND ${NOT_DRIVEN_SQL}` : ""}`,
 	)
-		.bind(sessionId, instanceId, userId, status)
+		.bind(...(guard ? [sessionId, instanceId, userId, status, guard.notDrivenSince] : [sessionId, instanceId, userId, status]))
 		.run();
 	const changed = (res.meta.changes ?? 0) > 0;
 	// Only when the row actually moved: a no-op end (already ended) must not resurrect a card.
@@ -645,20 +678,26 @@ export async function reconcileOrphanedSessions(
 	instanceId: string,
 	userId: string,
 	liveSessionIds: Iterable<string>,
+	now: number = Date.now(),
 ): Promise<string[]> {
 	const live = new Set(liveSessionIds);
+	const drivenSince = now - STALE_DRIVER_MS;
 	const { results } = await env.DB.prepare(
 		`SELECT id FROM coding_sessions
 		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'
 		   AND updated_at < datetime('now', '-3 minutes')
 		   -- #1076: a parked run stopped this engine on purpose; its session is not an orphan. #1160: nor is one whose machine went away and is back.
-		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr WHERE lr.session_id = coding_sessions.id AND lr.status = 'running' AND lr.waiting_reason IN ('decision', 'runner_away') AND lr.workflow_instance_id IS NOT NULL)`,
+		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs lr WHERE lr.session_id = coding_sessions.id AND lr.status = 'running' AND lr.waiting_reason IN ('decision', 'runner_away') AND lr.workflow_instance_id IS NOT NULL)
+		   -- #1178: nor is one a live run or driver still owns. A restart empties the runner memory-only session list while the run is
+		   -- between turns and about to relaunch the engine, so "not tracked" is exactly what an owned session looks like then.
+		   AND ${NOT_DRIVEN_SQL.replace(/\?5/g, "?3")}`,
 	)
-		.bind(instanceId, userId)
+		.bind(instanceId, userId, drivenSince)
 		.all<{ id: string }>();
-	const orphaned = (results ?? []).map((r) => r.id).filter((id) => !live.has(id));
-	for (const id of orphaned) {
-		await endSession(env, instanceId, userId, id, "ended");
+	const orphaned: string[] = [];
+	for (const id of (results ?? []).map((r) => r.id).filter((id) => !live.has(id))) {
+		// The same predicate again inside the UPDATE: a claim taken between the read above and this write must still win.
+		if (await endSession(env, instanceId, userId, id, "ended", { notDrivenSince: drivenSince })) orphaned.push(id);
 	}
 	return orphaned;
 }

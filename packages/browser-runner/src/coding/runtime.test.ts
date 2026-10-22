@@ -97,6 +97,51 @@ describe("CodingRuntime liveWork (#1007)", () => {
 		expect(runtime.liveWork()).toEqual([]);
 	});
 
+	describe("a platform run owns the session between its turns (#1178)", () => {
+		const idle = (id = "owned") => runtimeWithSessions([[id, { config: { clientType: "claude" }, alive: true, runState: () => "idle", stop: () => undefined, takeUsage: () => [], takeActs: () => [], authResolved: null }]]);
+
+		it("blocks a restart while its lease is live, across a whole Pilot decision, and not after it expires", () => {
+			const rt = idle();
+			const t0 = Date.now();
+			rt.holdForRun("owned", 15 * 60_000, t0);
+			expect(rt.ownedByRun("owned", t0 + 12 * 60_000)).toBe(true);
+			expect(rt.list()[0]).toMatchObject({ sessionId: "owned", runState: "idle" });
+			expect(rt.liveWork()).toEqual(["coding session owned (idle, owned by a platform run): Claude conversation resumes after a restart"]);
+			// a run that died without releasing cannot pin the machine forever
+			expect(rt.ownedByRun("owned", t0 + 15 * 60_000 + 1)).toBe(false);
+		});
+
+		it("a renewal extends it; a release, a non-positive lease and ending the session clear it", () => {
+			const rt = idle();
+			rt.holdForRun("owned", 60_000, 0);
+			rt.holdForRun("owned", 60_000, 50_000);
+			expect(rt.ownedByRun("owned", 100_000)).toBe(true);
+			rt.releaseRun("owned");
+			expect(rt.ownedByRun("owned", 100_000)).toBe(false);
+			rt.holdForRun("owned", 60_000);
+			rt.holdForRun("owned", 0);
+			expect(rt.ownedByRun("owned")).toBe(false);
+			rt.holdForRun("owned", 60_000);
+			rt.end("owned");
+			expect(rt.ownedByRun("owned")).toBe(false);
+		});
+
+		it("caps an absurd lease, ignores nonsense, and never leases a session the runner does not have", () => {
+			const rt = idle();
+			rt.holdForRun("owned", 10 ** 12, 0);
+			expect(rt.ownedByRun("owned", CodingRuntime.MAX_RUN_LEASE_MS + 1)).toBe(false);
+			rt.holdForRun("owned", "forever" as never, 0);
+			expect(rt.ownedByRun("owned", 1)).toBe(false);
+			rt.holdForRun("nope", 60_000);
+			expect(rt.ownedByRun("nope")).toBe(false);
+		});
+
+		it("an unowned idle session still does not block, as before", () => {
+			expect(idle().liveWork()).toEqual([]);
+			expect(idle().list()[0].platformRun).toBe(false);
+		});
+	});
+
 	it("names the engine from a REAL session's config — a live Claude turn is never reported as lost (#1053)", () => {
 		const real = (id: string, clientType: "claude" | "codex") => {
 			const session = new HeadlessSession({ id, workDir: "/tmp/does-not-matter", clientType });

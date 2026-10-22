@@ -95,12 +95,13 @@ describe("coding-store session lifecycle (node-owned suspend/resume)", () => {
 		expect(card?.args).toEqual(["cancelled", "inst-1", "user-1", "csess-s1", "csess-s2"]);
 	});
 
-	it("reassignSessionNode relocates a session to the machine that's connected now (no status change)", async () => {
+	it("reassignSessionNode relocates a session to the machine that's connected now, reactivating only a SUSPENDED one (#1178)", async () => {
 		const { env, writes } = mockEnv();
 		await reassignSessionNode(env, "inst-1", "user-1", "csess-9", "node-B");
 		expect(writes.length).toBe(1);
-		expect(writes[0].sql).toContain("UPDATE coding_sessions SET runner_node = ?4");
-		expect(writes[0].sql).not.toContain("status ="); // relocate only — the session stays active
+		expect(writes[0].sql).toContain("SET runner_node = ?4");
+		// One statement moves the node and reactivates; it can only ever turn `suspended` into `active` (behaviour: coding-session-restart-races.test.ts).
+		expect(writes[0].sql).toMatch(/status = CASE WHEN status = 'suspended'[\s\S]*THEN 'active' ELSE status END/);
 		expect(writes[0].args).toEqual(["csess-9", "inst-1", "user-1", "node-B"]);
 	});
 

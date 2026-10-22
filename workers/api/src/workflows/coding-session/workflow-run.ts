@@ -76,6 +76,13 @@ import { withTurnReplay } from "../../lib/coding-turn-replay.js";
 import type { Env } from "../../types.js";
 
 /**
+ * How long one capture keeps the runner believing a platform run owns the session (#1178). The Pilot may spend up to 12 minutes
+ * deciding between two captures (`decideRetry`), so the lease is longer than that; the next capture renews it and the closing
+ * drain releases it. Capped by the runner at 20 minutes.
+ */
+export const RUN_OWNERSHIP_LEASE_MS = 15 * 60_000;
+
+/**
  * The coding orchestrator's remote brain: a durable Cloudflare Workflow that
  * drives the user's local coding CLI (a child process, not tmux) toward an objective — read the
  * pane, ask Claude (BYOK) for the next instruction, send it, wait for idle,
@@ -437,7 +444,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			callRunner<CodingPaneSnapshot & { sessionId: string; usage?: unknown; acts?: unknown }>(
 				conn,
 				"/coding/capture",
-				{ sessionId, drainUsage: true },
+				// `platformRun`: this run owns the session for the next decision (#1178). The lease outlives a Pilot decision (12 min) and is
+				// refreshed by the next capture, so the runner's update guard never reads the gap between turns as idle.
+				{ sessionId, drainUsage: true, platformRun: { leaseMs: RUN_OWNERSHIP_LEASE_MS } },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			),
 			env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
@@ -1201,7 +1210,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			const snap = await callRunner<{ usage?: unknown; acts?: unknown; consumedInputs?: string[] }>(
 				conn,
 				"/coding/capture",
-				{ sessionId, drainUsage: true },
+				// The run is over with this session: release the ownership lease with the closing drain (#1178).
+				{ sessionId, drainUsage: true, platformRun: false },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			).catch(() => null);
 			if (!snap) return null;

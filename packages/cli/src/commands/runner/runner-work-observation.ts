@@ -4,6 +4,8 @@ export interface RunnerCodingLifecycle {
 	sessionId?: unknown;
 	alive?: unknown;
 	runState?: unknown;
+	/** A platform run owns this session (#1178): its Pilot may be deciding, so an idle engine is not safe to restart across. */
+	platformRun?: unknown;
 }
 
 export interface RunnerWorkObservation {
@@ -39,7 +41,7 @@ export function isWorkShape(work: unknown): work is { codingTurns: number; local
  * state; anything else — a missing or non-boolean `alive`, a missing state, a non-object entry — is
  * `unknown`. The guard blocks on the last two, so the counts below and the blocker cannot disagree.
  */
-export type SessionState = "active_turn" | "idle_retained" | "stopped" | "unknown";
+export type SessionState = "active_turn" | "owned_idle" | "idle_retained" | "stopped" | "unknown";
 
 export function sessionStateOf(session: unknown): SessionState {
 	if (!session || typeof session !== "object") return "unknown";
@@ -47,22 +49,28 @@ export function sessionStateOf(session: unknown): SessionState {
 	if (s.alive === false) return "stopped";
 	const state = typeof s.runState === "string" && s.runState ? s.runState : null;
 	if (s.alive !== true || !state) return "unknown";
-	return state === "idle" ? "idle_retained" : "active_turn";
+	// Idle between a run's turns is `owned_idle`, which blocks like a turn: only a runner that says `platformRun: true` is read this way,
+	// so an older runner (no field) keeps the old reading.
+	if (state === "idle") return s.platformRun === true ? "owned_idle" : "idle_retained";
+	return "active_turn";
 }
 
 /** Counts only — never a session id, state text, path or prompt. What the `sessions` observation reports. */
 export interface SessionStateCounts {
 	activeTurns: number;
+	/** Idle, but a platform run owns the session (#1178) — blocks a restart. */
+	ownedIdle: number;
 	idleRetained: number;
 	stopped: number;
 	unknown: number;
 }
 
 export function sessionStateCounts(sessions: unknown[]): SessionStateCounts {
-	const counts: SessionStateCounts = { activeTurns: 0, idleRetained: 0, stopped: 0, unknown: 0 };
+	const counts: SessionStateCounts = { activeTurns: 0, ownedIdle: 0, idleRetained: 0, stopped: 0, unknown: 0 };
 	for (const session of sessions) {
 		const state = sessionStateOf(session);
 		if (state === "active_turn") counts.activeTurns++;
+		else if (state === "owned_idle") counts.ownedIdle++;
 		else if (state === "idle_retained") counts.idleRetained++;
 		else if (state === "stopped") counts.stopped++;
 		else counts.unknown++;
@@ -82,7 +90,7 @@ export function observedRunnerWork(observation: RunnerWorkObservation): string[]
 		if (kind === "stopped" || kind === "idle_retained") return [];
 		const id = typeof session?.sessionId === "string" && session.sessionId ? session.sessionId : "unidentified-session";
 		const state = typeof session?.runState === "string" && session.runState ? session.runState : "unknown";
-		return [`coding session ${id} (${state})`];
+		return [kind === "owned_idle" ? `coding session ${id} (idle, owned by a platform run)` : `coding session ${id} (${state})`];
 	});
 	const unmatchedCodingTurns = Math.max(0, codingTurns - activeCoding.length);
 	const localDetail = detail.slice(codingTurns);

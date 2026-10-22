@@ -226,6 +226,44 @@ export class CodingRuntime {
 	private owners = new Map<string, string>();
 
 	/**
+	 * Sessions a platform run owns, and until when (#1178). A run is a sequence of turns with the Pilot deciding BETWEEN them — up to 12
+	 * minutes in which the engine sits at `runState: "idle"`, which the update guard reads as safe to restart. The run says it owns the
+	 * session with a lease on each capture (`holdForRun`), the lease outlives the longest decision, and an expired one stops counting by
+	 * itself, so a run that died without releasing cannot pin a machine forever. Memory-only like the sessions themselves: a restart
+	 * that does happen loses both together.
+	 */
+	private runLeases = new Map<string, number>();
+
+	/** The longest lease a caller may ask for — a decision is bounded at 12 minutes, so this is a cap, not a default. */
+	static readonly MAX_RUN_LEASE_MS = 20 * 60_000;
+
+	/** A platform run owns this session for `leaseMs` more (capped). A non-positive or non-finite lease releases it. */
+	holdForRun(sessionId: string, leaseMs: unknown, now: number = Date.now()): void {
+		if (!this.sessions.has(sessionId)) return;
+		if (typeof leaseMs !== "number" || !Number.isFinite(leaseMs) || leaseMs <= 0) {
+			this.runLeases.delete(sessionId);
+			return;
+		}
+		this.runLeases.set(sessionId, now + Math.min(leaseMs, CodingRuntime.MAX_RUN_LEASE_MS));
+	}
+
+	/** The run is over with this session; it is no longer owned. */
+	releaseRun(sessionId: string): void {
+		this.runLeases.delete(sessionId);
+	}
+
+	/** Does a live platform run own this session right now? */
+	ownedByRun(sessionId: string, now: number = Date.now()): boolean {
+		const until = this.runLeases.get(sessionId);
+		if (until === undefined) return false;
+		if (until <= now) {
+			this.runLeases.delete(sessionId);
+			return false;
+		}
+		return true;
+	}
+
+	/**
 	 * Coding turns that are running here (#896, #1007).
 	 *
 	 * A retained session is a conversation, not necessarily work in flight: a healthy engine remains
@@ -245,7 +283,8 @@ export class CodingRuntime {
 				const alive = s.alive;
 				if (alive === false) return [];
 				const state = s.runState();
-				if (alive === true && state === "idle") return [];
+				// Idle BETWEEN the turns of a platform run is not idle: the Pilot is deciding and the engine's context is the run's (#1178).
+				if (alive === true && state === "idle") return this.ownedByRun(sessionId) ? [`coding session ${sessionId} (idle, owned by a platform run): ${consequence}`] : [];
 				if (alive === true && (state === "thinking" || state === "responding")) return [`coding session ${sessionId} (${state}): ${consequence}`];
 				// An unrecognised `alive`/`runState` pair is not proof that an engine is idle.
 				return [`coding session ${sessionId} (${typeof state === "string" ? state : "unknown"}): ${consequence}`];
@@ -598,6 +637,7 @@ export class CodingRuntime {
 		if (session) {
 			session.stop();
 			this.sessions.delete(sessionId);
+			this.runLeases.delete(sessionId);
 			// What the run left behind: its leftovers, browsers, temp folder and worktrees (#1265).
 			// After the delete, so this session is no longer "live" to its own sweep. Never blocks the answer.
 			const live = this.liveSessions();
@@ -624,11 +664,13 @@ export class CodingRuntime {
 		return this.instanceRefusal(sessionId, instanceId) === null;
 	}
 
-	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string; runState: "idle" | "thinking" | "responding" }> {
+	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string; runState: "idle" | "thinking" | "responding"; platformRun: boolean }> {
 		return [...this.sessions.entries()].map(([sessionId, s]) => ({
 			sessionId,
 			alive: s.alive,
 			engineLabel: s.engineLabel,
+			// Additive (#1178): a platform run owns this session, so idle is not safe to restart across. An older reader ignores it.
+			platformRun: this.ownedByRun(sessionId),
 			// Whether an engine is mid-turn — what `runner_update` waits on before restarting (#859).
 			runState: s.runState(),
 		}));

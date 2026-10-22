@@ -339,7 +339,11 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		// `drainUsage` opts this caller in to consuming the session's measured engine spend (#267).
 		// Only the cloud paths that write the ledger send it; an older cloud omits it and simply
 		// gets the snapshot it always got.
-		const b = await readJson<{ sessionId: string; drainUsage?: boolean }>(req);
+		// `platformRun` (#1178): the run driving this session says so, with a lease long enough to cover its Pilot's decision, so the update
+		// guard does not read the idle gap between turns as a safe moment to restart. `false` (or `0`) releases it. An older cloud omits it.
+		const b = await readJson<{ sessionId: string; drainUsage?: boolean; platformRun?: { leaseMs?: number } | false }>(req);
+		if (b.platformRun === false) runner.coding.releaseRun(b.sessionId);
+		else if (b.platformRun && typeof b.platformRun === "object") runner.coding.holdForRun(b.sessionId, b.platformRun.leaseMs);
 		return json(res, 200, runner.coding.snapshot(b.sessionId, { drainUsage: b.drainUsage === true }));
 	}
 	if (req.method === "POST" && path === "/coding/act") {
