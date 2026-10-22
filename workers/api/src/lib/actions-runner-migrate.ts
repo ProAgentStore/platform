@@ -21,7 +21,7 @@ import type { RunnerConn } from "./runner-client.js";
 import { RUNNER_UNAVAILABLE_LABEL, type RunnerAvailability, routingLabels } from "./runner-routing.js";
 import type { Env } from "../types.js";
 
-export type MigrationOutcome = "ready_for_removal" | "awaiting_verification" | "rolled_back" | "failed";
+export type MigrationOutcome = "running" | "ready_for_removal" | "awaiting_verification" | "rolled_back" | "failed";
 
 export interface MigrationView {
 	outcome: MigrationOutcome;
@@ -41,6 +41,10 @@ interface Machine {
 	steps?: string[];
 	legacyRestored?: boolean;
 	orphanRegistration?: string;
+}
+
+interface MachineMigrationStatus {
+	legacy?: Array<{ folder?: string; running?: boolean; migration?: Machine | null }>;
 }
 
 /**
@@ -98,19 +102,47 @@ export async function migrateLegacyRunner<C extends { labels: string[] }, P>(
 	const finalLabels = routingLabels(a.node, a.caps?.labels ?? [], a.availability ?? { available: true, reasons: [], summary: "" });
 	// Unrouted until proven: the migrated runner carries the unavailable marker, not the routing labels.
 	const stagedLabels = [RUNNER_UNAVAILABLE_LABEL, ...(a.caps?.labels ?? [])];
-	const token = await ops.mintToken();
-	let machine: Machine;
-	try {
-		machine = await deps.call<Machine>(conn, "/coding/actions-runner/migration/start", { folder: a.folder, url: ops.scopeUrl, token, labels: stagedLabels });
-	} catch (e) {
-		// callRunner's message carries the status and the machine's error, not the token.
-		throw new HttpError(409, `Migrating ${a.node}'s Windows runner to the machine root failed to start, and the old runner is unchanged: ${e instanceof Error ? e.message.split(token).join("***") : "unknown error"}`);
+	const read = async () => {
+		const status = await deps.call<MachineMigrationStatus>(conn, "/coding/actions-runner/migration/status", { folder: a.folder });
+		return status.legacy?.find((item) => item.folder === a.folder) ?? null;
+	};
+	let observed = await read().catch(() => null);
+	if (!observed?.running && (!observed?.migration || observed.migration.stage === "rolled_back")) {
+		const token = await ops.mintToken();
+		try {
+			await deps.call(conn, "/coding/actions-runner/migration/start", { folder: a.folder, url: ops.scopeUrl, token, labels: stagedLabels });
+		} catch (e) {
+			// A lost response does not prove that a mutating command did nothing. Read status before
+			// describing the old runner as unchanged (#1301).
+			observed = await read().catch(() => null);
+			if (!observed?.running && !observed?.migration) {
+				throw new HttpError(409, `Migrating ${a.node}'s Windows runner could not be started; status confirms that no migration was recorded: ${e instanceof Error ? e.message.split(token).join("***") : "unknown error"}`);
+			}
+		}
 	}
+
+	let machine: Machine | null = observed?.migration ?? null;
+	// The local operation may legitimately spend ten minutes draining an active job. Poll short,
+	// read-only relay calls instead of holding a single mutating call open (#1301).
+	for (let i = 0; i < 5; i++) {
+		observed = await read();
+		machine = observed?.migration ?? null;
+		if (machine && ["awaiting_verification", "ready_for_removal", "rolled_back"].includes(machine.stage ?? "")) break;
+		if (!observed?.running && machine) {
+			throw new HttpError(409, `Migration of ${a.node} stopped at ${machine.stage ?? "an unknown stage"}. Its receipt is preserved; run the machine-side rollback before retrying setup.`);
+		}
+		await wait(deps, 1_000);
+	}
+	machine ??= { stage: "drain", steps: [] };
 	steps.push(...(machine.steps ?? []));
 	const view = (outcome: MigrationOutcome, extra: Partial<MigrationView> = {}): MigrationView => ({ outcome, stagedName: machine.stagedName ?? null, steps, legacyRestored: machine.legacyRestored, orphanRegistration: machine.orphanRegistration, ...extra });
 	const job = (state: MigrateJobView["state"], error?: string): MigrateJobView => ({ id: `migrate-${a.node}`, action: "install", url: a.url, name: machine.stagedName ?? a.label, state, steps, prerequisites: [], runsAs: "NT AUTHORITY\\NETWORK SERVICE", service: state === "failed" ? "not_installed" : "installed", ...(error ? { error } : {}) });
 	const out = (migration: MigrationView, state: MigrateJobView["state"], error?: string) => ({ job: job(state, error), node: a.node, labels: migration.outcome === "ready_for_removal" ? finalLabels : stagedLabels, capabilities: a.caps, preflight: a.preflight, migration });
 	const log = (event: string, context: Record<string, unknown>) => logEvent(env, { source: "runner", event: `actions_runner.${event}`, userId: a.userId, instanceId: a.instanceId, message: `Windows runner migration for ${a.node}: ${event}`, context: { node: a.node, url: a.url, ...context } }).catch(() => undefined);
+	if (!["awaiting_verification", "ready_for_removal", "rolled_back"].includes(machine.stage ?? "")) {
+		steps.push("migration is still running on the machine; run setup again to read the same operation's progress");
+		return out(view("running", { steps }), "running");
+	}
 
 	if (machine.stage === "rolled_back") {
 		await log("migration_rolled_back", { error: machine.error ?? null, legacyRestored: machine.legacyRestored ?? null });

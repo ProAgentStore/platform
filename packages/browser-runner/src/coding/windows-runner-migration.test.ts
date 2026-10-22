@@ -163,6 +163,7 @@ describe("rollback at every stage leaves the old runner running and intact", () 
 		expect(rec.stage).toBe("rolled_back");
 		expect(m.removed).toEqual([DEST]);
 		expect(m.services.get(legacy.service)).toBe("running");
+		expect(readMigration(m, DEST)).toMatchObject({ stage: "rolled_back", legacyRestored: true, error: "disk full" });
 	});
 
 	it("a failed registration removes the staged service and names the orphan GitHub still lists, for the platform to deregister", async () => {
@@ -255,8 +256,32 @@ describe("the runner's migration routes", () => {
 		expect((await routeWindowsRunner("/coding/actions-runner/migration/start", { folder: "nope", token: TOKEN }, win))?.status).toBe(400);
 		expect((await routeWindowsRunner("/coding/actions-runner/migration/start", { folder: "proappstore-online", token: "short" }, win))?.status).toBe(400);
 		const ok = await routeWindowsRunner("/coding/actions-runner/migration/start", { folder: "proappstore-online", token: TOKEN, labels: ["pags", "bad label"] }, win);
-		expect(ok?.status).toBe(200);
+		expect(ok?.status).toBe(202);
+		expect(ok?.body).toMatchObject({ accepted: true, started: true, folder: "proappstore-online" });
 		expect(JSON.stringify(ok?.body)).not.toContain(TOKEN);
+	});
+
+	it("starts a slow migration once and reports it through status instead of holding the relay request open (#1301)", async () => {
+		let release: ((busy: boolean) => void) | undefined;
+		m.busy = async () => new Promise<boolean>((resolve) => {
+			release = resolve;
+		});
+		const first = await routeWindowsRunner("/coding/actions-runner/migration/start", { folder: "proappstore-online", url: "https://github.com/proappstore-online", token: TOKEN, labels: ["pags"] }, win);
+		expect(first).toMatchObject({ status: 202, body: { accepted: true, started: true } });
+		expect((await routeWindowsRunner("/coding/actions-runner/migration/status", {}, win))?.body).toMatchObject({ legacy: [{ folder: "proappstore-online", running: true }] });
+
+		const duplicate = await routeWindowsRunner("/coding/actions-runner/migration/start", { folder: "proappstore-online", url: "https://github.com/proappstore-online", token: TOKEN, labels: ["pags"] }, win);
+		expect(duplicate).toMatchObject({ status: 202, body: { accepted: true, started: false } });
+		release?.(false);
+		for (let i = 0; i < 20; i++) {
+			await Promise.resolve();
+			const status = (await routeWindowsRunner("/coding/actions-runner/migration/status", {}, win))?.body as { legacy: Array<{ running: boolean; migration: MigrationRecord | null }> };
+			if (!status.legacy[0].running) {
+				expect(status.legacy[0].migration?.stage).toBe("awaiting_verification");
+				return;
+			}
+		}
+		throw new Error("background migration did not settle");
 	});
 
 	it("complete and rollback need a recorded migration and a well-formed verdict", async () => {

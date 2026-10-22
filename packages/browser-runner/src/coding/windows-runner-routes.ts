@@ -11,14 +11,37 @@ import { win32 } from "node:path";
 type Reply = { status: number; body: unknown };
 const bad = (error: string): Reply => ({ status: 400, body: { error } });
 
+/**
+ * Migration does real service work and may spend ten minutes draining a running job. It must not
+ * hold one relay command open while it does that (#1301). The durable migration record remains the
+ * source of truth; this map only says that this runner process is still advancing that record.
+ */
+const activeMigrations = new Map<string, Promise<MigrationRecord>>();
+
+function migrationKey(deps: MigrationDeps, folder: string): string {
+	return win32.join(deps.programData, "ProAgentStore", "actions-runner", folder).toLowerCase();
+}
+
+function beginMigration(req: Parameters<typeof startMigration>[0], deps: MigrationDeps): boolean {
+	const key = migrationKey(deps, req.legacy.folder);
+	if (activeMigrations.has(key)) return false;
+	const task = startMigration(req, deps).finally(() => activeMigrations.delete(key));
+	activeMigrations.set(key, task);
+	return true;
+}
+
 export function windowsReadiness(win: LiveWindows = liveWindowsDeps()): WindowsReadiness {
 	return checkWindowsReadiness(win.readiness);
 }
 
 /** Legacy installs and where each stands. `needed` is what makes the cloud start a migration. */
-export function migrationStatus(deps: MigrationDeps): { needed: boolean; legacy: Array<LegacyInstall & { migration: MigrationRecord | null }> } {
-	const legacy = findLegacyInstalls(deps).map((l) => ({ ...l, migration: readMigration(deps, win32.join(deps.programData, "ProAgentStore", "actions-runner", l.folder)) }));
-	return { needed: legacy.some((l) => !l.migration || l.migration.stage === "rolled_back"), legacy };
+export function migrationStatus(deps: MigrationDeps): { needed: boolean; legacy: Array<LegacyInstall & { migration: MigrationRecord | null; running: boolean }> } {
+	const legacy = findLegacyInstalls(deps).map((l) => ({
+		...l,
+		migration: readMigration(deps, win32.join(deps.programData, "ProAgentStore", "actions-runner", l.folder)),
+		running: activeMigrations.has(migrationKey(deps, l.folder)),
+	}));
+	return { needed: legacy.some((l) => (!l.migration && !l.running) || l.migration?.stage === "rolled_back"), legacy };
 }
 
 const FOLDER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$/;
@@ -38,8 +61,8 @@ export async function routeWindowsRunner(path: string, body: Record<string, unkn
 		const url = typeof body.url === "string" ? body.url : legacy.url;
 		if (!url || typeof body.token !== "string" || body.token.length < 10 || /\s/.test(body.token)) return bad("url and a fresh registration token are required");
 		const labels = Array.isArray(body.labels) ? body.labels.filter((l): l is string => typeof l === "string" && /^[A-Za-z0-9._+-]{1,100}$/.test(l)) : [];
-		const rec = await startMigration({ legacy, url, token: body.token, labels }, w.migration);
-		return { status: rec.stage === "rolled_back" ? 409 : 200, body: rec };
+		const started = beginMigration({ legacy, url, token: body.token, labels }, w.migration);
+		return { status: 202, body: { accepted: true, started, folder } };
 	}
 	const rec = readMigration(w.migration, dest);
 	if (!rec) return bad(`No migration is recorded for ${folder}.`);

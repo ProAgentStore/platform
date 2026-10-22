@@ -86,6 +86,7 @@ export interface MigrationRequest {
 export const COPY_EXCLUDE = [".runner", ".credentials", ".credentials_rsaparams", ".service", "_work", "_diag", "_temp", "_cache", "_logs", ".pags-migration.json"] as const;
 export const STAGED_SUFFIX = "-m";
 export const MANIFEST = ".pags-migration.json";
+export const RECEIPT_DIR = "actions-runner-migrations";
 
 const mask = (args: string[], token: string) => args.map((a) => (a === token ? "***" : a));
 const legacyBase = (home: string) => win32.join(home, ".proagentstore", "actions-runner");
@@ -118,7 +119,10 @@ export function findLegacyInstalls(deps: Pick<MigrationDeps, "platform" | "home"
 const destFor = (deps: MigrationDeps, folder: string) => win32.join(deps.programData, "ProAgentStore", "actions-runner", folder);
 
 export function readMigration(deps: Pick<MigrationDeps, "readText">, destDir: string): MigrationRecord | null {
-	const raw = deps.readText(win32.join(destDir, MANIFEST));
+	// The sibling receipt survives rollback removing a destination created by the migration. The
+	// in-destination manifest remains for compatibility and for a person inspecting that runner.
+	const receipt = win32.join(win32.dirname(win32.dirname(destDir)), RECEIPT_DIR, `${win32.basename(destDir)}.json`);
+	const raw = deps.readText(receipt) ?? deps.readText(win32.join(destDir, MANIFEST));
 	if (raw === null) return null;
 	try {
 		return JSON.parse(raw) as MigrationRecord;
@@ -128,7 +132,11 @@ export function readMigration(deps: Pick<MigrationDeps, "readText">, destDir: st
 }
 
 function save(deps: MigrationDeps, rec: MigrationRecord): void {
-	deps.writeText(win32.join(rec.destDir, MANIFEST), JSON.stringify(rec, null, 2));
+	const content = JSON.stringify(rec, null, 2);
+	const receiptDir = win32.join(win32.dirname(win32.dirname(rec.destDir)), RECEIPT_DIR);
+	deps.mkdir(receiptDir);
+	deps.writeText(win32.join(receiptDir, `${win32.basename(rec.destDir)}.json`), content);
+	if (deps.exists(rec.destDir)) deps.writeText(win32.join(rec.destDir, MANIFEST), content);
 }
 
 async function sc(deps: MigrationDeps, rec: MigrationRecord, verb: "stop" | "start" | "delete", service: string): Promise<void> {
@@ -181,9 +189,11 @@ export async function startMigration(req: MigrationRequest, deps: MigrationDeps)
 		const identity = validateServiceIdentity(req.identity ?? NETWORK_SERVICE);
 		if (!/^nt authority\\(network service|local service)$/i.test(identity)) throw new Error("Migration supports the built-in NETWORK SERVICE / LOCAL SERVICE accounts only; a named account needs a password this never handles.");
 
+		save(deps, rec);
 		await drain(deps, rec, req.legacy.dir);
 
 		rec.stage = "stop";
+		save(deps, rec);
 		if (req.legacy.serviceName) {
 			await sc(deps, rec, "stop", req.legacy.serviceName).catch((e) => {
 				if (!alreadyStopped(e)) throw e;
@@ -191,8 +201,10 @@ export async function startMigration(req: MigrationRequest, deps: MigrationDeps)
 			});
 		}
 		rec.legacyStopped = !!req.legacy.serviceName;
+		save(deps, rec);
 
 		rec.stage = "prepare";
+		save(deps, rec);
 		rec.createdDest = !deps.exists(destDir);
 		const ensured = await ensureWindowsRunnerRoot(deps, { folder: req.legacy.folder, identity });
 		rec.steps.push(...ensured.steps);
@@ -200,11 +212,13 @@ export async function startMigration(req: MigrationRequest, deps: MigrationDeps)
 
 		rec.stage = "copy";
 		rec.steps.push(`copy ${req.legacy.dir} → ${destDir} (without ${COPY_EXCLUDE.join(", ")})`);
+		save(deps, rec);
 		await deps.copyTree(req.legacy.dir, destDir, COPY_EXCLUDE);
 
 		rec.stage = "register";
 		const config = ["--unattended", "--url", req.url, "--token", req.token, "--name", rec.stagedName, "--labels", req.labels.join(","), "--work", "_work", "--replace", "--runasservice", "--windowslogonaccount", identity];
 		rec.steps.push(`config.cmd ${mask(config, req.token).join(" ")}`);
+		save(deps, rec);
 		await deps.exec(win32.join(destDir, "config.cmd"), config, destDir);
 		rec.registered = true;
 		rec.newService = deps.readText(win32.join(destDir, ".service"))?.replace(/^﻿/, "").trim() || null;
@@ -280,5 +294,6 @@ export async function rollbackMigration(rec: MigrationRecord, deps: MigrationDep
 	rec.stage = "rolled_back";
 	rec.removable = false;
 	if (problems.length) rec.error = `${rec.error ?? "Migration failed"} — and rollback reported: ${problems.join("; ")}`;
+	save(deps, rec);
 	return rec;
 }

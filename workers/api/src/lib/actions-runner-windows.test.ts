@@ -31,6 +31,7 @@ interface Rig extends ProvisionDeps {
 	relayed: Array<{ path: string; body: Record<string, unknown> }>;
 	puts: Array<{ url: string; labels: string[] }>;
 	runnerStatus: { value: string | null };
+	migrationStatus: { value: Record<string, unknown> | null; running: boolean };
 }
 
 function rig(opts: { windows?: unknown; installed?: unknown[]; migration?: Record<string, unknown>; completeStage?: string; smoke?: ProvisionDeps["smoke"] | null; online?: boolean } = {}): Rig {
@@ -38,6 +39,7 @@ function rig(opts: { windows?: unknown; installed?: unknown[]; migration?: Recor
 		relayed: [],
 		puts: [],
 		runnerStatus: { value: null },
+		migrationStatus: { value: null, running: false },
 		installationToken: async () => APP,
 		agentRepos: async () => [`${ORG}/interns`],
 		conn: async () => ({ runnerNode: NODE, instanceId: "inst-1" }) as RunnerConn,
@@ -57,8 +59,15 @@ function rig(opts: { windows?: unknown; installed?: unknown[]; migration?: Recor
 		call: async <T>(_c: RunnerConn, path: string, body: unknown) => {
 			r.relayed.push({ path, body: body as Record<string, unknown> });
 			if (path.endsWith("/capabilities")) return { labels: ["has-git"], missing: [], warnings: [], os: { platform: "win32", version: null }, ...(opts.windows !== undefined ? { windows: opts.windows } : {}) } as T;
+			if (path.endsWith("/migration/status")) {
+				return { legacy: [{ folder: "proappstore-online", running: r.migrationStatus.running, migration: r.migrationStatus.value }] } as T;
+			}
+			if (path.endsWith("/migration/start")) {
+				r.migrationStatus.value = opts.migration ?? { stage: "awaiting_verification", stagedName: `${LABEL}-m`, steps: ["old runner is idle", `config.cmd --token ***`], legacyRestored: undefined };
+				r.migrationStatus.running = false;
+				return { accepted: true, started: true, folder: "proappstore-online" } as T;
+			}
 			if (path.endsWith("/status")) return { job: null, installed: opts.installed ?? [] } as T;
-			if (path.endsWith("/migration/start")) return (opts.migration ?? { stage: "awaiting_verification", stagedName: `${LABEL}-m`, steps: ["old runner is idle", `config.cmd --token ***`], legacyRestored: undefined }) as T;
 			if (path.endsWith("/migration/complete")) {
 				const v = (body as { verdict: { online: boolean; smoke: { ok: boolean } } }).verdict;
 				return (v.online && v.smoke.ok ? { stage: opts.completeStage ?? "ready_for_removal", steps: ["verified; old install is removable (not removed)"] } : { stage: "rolled_back", legacyRestored: true, orphanRegistration: `${LABEL}-m`, steps: [] }) as T;
@@ -189,15 +198,64 @@ describe("migrating a profile-scoped install (#1272)", () => {
 		expect(r.relayed.some((x) => x.path.endsWith("/migration/complete"))).toBe(false);
 	});
 
-	it("a /migration/start the machine cannot run fails with the old runner unchanged, and the token is not in the message", async () => {
+	it("a rejected start is described as unchanged only after status confirms that no migration was recorded, and the token is masked", async () => {
 		const r = rig({ windows: WIN_READY, installed: legacy });
 		const inner = r.call;
 		r.call = async <T>(c: RunnerConn, path: string, body: unknown) => {
 			if (path.endsWith("/migration/start")) throw new Error(`runner → 500: config failed --token ${REG}`);
 			return inner<T>(c, path, body);
 		};
-		await expect(install(r)).rejects.toThrow(/old runner is unchanged/);
+		await expect(install(r)).rejects.toThrow(/status confirms that no migration was recorded/);
 		await install(r).catch((e: Error) => expect(e.message).not.toContain(REG));
+	});
+
+	it("a lost start response is recovered from status instead of claiming the old runner is unchanged (#1301)", async () => {
+		const r = rig({ windows: WIN_READY, installed: legacy });
+		const inner = r.call;
+		r.call = async <T>(c: RunnerConn, path: string, body: unknown) => {
+			if (path.endsWith("/migration/start")) {
+				await inner(c, path, body);
+				throw new Error("Runner /coding/actions-runner/migration/start → 504: relay response was lost");
+			}
+			return inner<T>(c, path, body);
+		};
+		const out = await install(r);
+		expect(out.migration?.outcome).toBe("ready_for_removal");
+		expect(r.relayed.filter((x) => x.path.endsWith("/migration/start"))).toHaveLength(1);
+	});
+
+	it("polls a slow local migration to its recorded result without starting it twice (#1301)", async () => {
+		const r = rig({ windows: WIN_READY, installed: legacy });
+		const inner = r.call;
+		let polls = 0;
+		r.call = async <T>(c: RunnerConn, path: string, body: unknown) => {
+			if (path.endsWith("/migration/status")) {
+				polls++;
+				if (polls >= 4) {
+					r.migrationStatus.running = false;
+					r.migrationStatus.value = { stage: "awaiting_verification", stagedName: `${LABEL}-m`, steps: ["completed after a slow copy"] };
+				}
+			}
+			const result = await inner<T>(c, path, body);
+			if (path.endsWith("/migration/start")) {
+				r.migrationStatus.running = true;
+				r.migrationStatus.value = null;
+			}
+			return result;
+		};
+		const out = await install(r);
+		expect(out.migration?.steps).toContain("completed after a slow copy");
+		expect(r.relayed.filter((x) => x.path.endsWith("/migration/start"))).toHaveLength(1);
+		expect(polls).toBeGreaterThanOrEqual(4);
+	});
+
+	it("a repeated setup joins an active migration and returns progress without minting a second start (#1301)", async () => {
+		const r = rig({ windows: WIN_READY, installed: legacy });
+		r.migrationStatus.running = true;
+		r.migrationStatus.value = { stage: "copy", stagedName: `${LABEL}-m`, steps: ["copying runner files"] };
+		const out = await install(r);
+		expect(out).toMatchObject({ job: { state: "running" }, migration: { outcome: "running", steps: expect.arrayContaining(["copying runner files"]) } });
+		expect(r.relayed.some((x) => x.path.endsWith("/migration/start"))).toBe(false);
 	});
 
 	it("the registration token is in no returned value and no stored row", async () => {
