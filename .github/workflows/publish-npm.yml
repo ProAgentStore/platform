@@ -49,6 +49,9 @@ jobs:
       - name: Build CLI
         run: pnpm --filter @proagentstore/cli build
 
+      - name: Verify packed CLI in a clean install
+        run: pnpm --filter @proagentstore/cli test:package
+
       - name: Check published CLI version
         id: cli-version
         run: |

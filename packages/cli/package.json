@@ -1,6 +1,6 @@
 {
   "name": "@proagentstore/cli",
-  "version": "0.4.175",
+  "version": "0.4.176",
   "description": "CLI for creating, publishing, and running ProAgentStore agents",
   "license": "MIT",
   "type": "module",
@@ -28,9 +28,13 @@
   "scripts": {
     "build": "pnpm --filter @proagentstore/browser-runner build && tsup src/index.ts src/bootstrap.ts --format esm --dts && node scripts/copy-browser-runner.mjs",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:package": "node scripts/smoke-package.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@playwright/mcp": "0.0.77",
+    "playwright": "^1.60.0",
     "chalk": "^5.6.2",
     "commander": "^13.0.0"
   },
