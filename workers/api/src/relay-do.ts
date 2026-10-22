@@ -154,7 +154,7 @@ export class RelayDO extends DurableObject<Env> {
 
 		// A pong is not noise — it is the ONLY evidence that the peer holding this slot still
 		// exists (#497). Dropping it here is what let a frozen runner look alive.
-		if (text === "pong") { this.liveness.pong(); return; }
+		if (text === "pong") { this.liveness.pong(ws); return; }
 
 		let parsed: CommandResponse;
 		try {
@@ -223,7 +223,9 @@ export class RelayDO extends DurableObject<Env> {
 		// look at a frozen peer is intentionally optimistic. Dispatch is different: before making a
 		// caller wait up to two minutes, require a real pong. This bounded probe closes #846's gap
 		// where `relayConnected=true` could be a zombie WebSocket that never consumed commands.
-		if (!(await this.liveness.probe(sockets, { deadlineMs: PONG_DEADLINE_MS }))) {
+		// The sockets that ANSWERED (#1183): the command goes to one of those, never to a dead socket that happens to be listed first.
+		const alive = await this.liveness.probeAlive(sockets, { deadlineMs: PONG_DEADLINE_MS });
+		if (alive.length === 0) {
 			this.emitDispatchObservation({ path: body.path, timeoutMs, outcome: "unresponsive", dispatchStartedAt });
 			return Response.json(
 				{ error: RELAY_UNRESPONSIVE_ERROR, code: "RUNNER_RELAY_UNRESPONSIVE" },
@@ -246,7 +248,7 @@ export class RelayDO extends DurableObject<Env> {
 				// Send to the first socket that is still open (#880) — the probe above may have closed
 				// `sockets[0]`. None open is a disconnect, and says so in the words callers classify
 				// (`DROPPED_REASONS`), not the runtime's raw send-after-close text.
-				if (!sendOnFirstOpen(sockets, JSON.stringify(cmd))) {
+				if (!sendOnFirstOpen(alive, JSON.stringify(cmd))) {
 					clearTimeout(timer);
 					this.pending.delete(id);
 					reject(new Error("Runner disconnected"));

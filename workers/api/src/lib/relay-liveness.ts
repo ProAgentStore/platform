@@ -32,15 +32,19 @@
  * answers optimistically, and the next one (a poll or two later) tells the truth — which is the
  * whole distance from "reports connected forever" to "self-corrects in seconds", at zero latency.
  *
- * Both are optimistic when they know nothing: no ping has been sent yet, or the DO was
- * hibernated and lost its counters, reads as connected. An unknown must not be reported as an
- * outage — that is the same rule #348 states about unmetered spend, applied to liveness.
+ * Both are optimistic when they know nothing: a socket that has never been pinged reads as
+ * connected. An unknown must not be reported as an outage - that is the same rule #348 states about
+ * unmetered spend, applied to liveness. Since #1183 a hibernation no longer makes everything
+ * unknown: each socket's last ping and pong live in its hibernation attachment.
  */
 
 /** The half of a WebSocket this module uses. Structural, so a test needs no Cloudflare runtime. */
 export interface PingableSocket {
 	send(data: string): void;
 	close(code: number, reason: string): void;
+	/** Hibernation attachments (#1183): survive the DO being evicted, so a socket's last ping and pong do too. Absent in a bare test double. */
+	serializeAttachment?(value: unknown): void;
+	deserializeAttachment?(): unknown;
 }
 
 /** How long an incumbent has to answer before a connecting runner may evict it. */
@@ -49,17 +53,80 @@ export const PONG_DEADLINE_MS = 1500;
 /** How long an unanswered ping must stand before `observe` calls the peer gone. */
 export const PONG_STALE_MS = 2000;
 
-export class RunnerLiveness {
-	private waiters = new Set<(alive: boolean) => void>();
-	private lastPingAt = 0;
-	private lastPongAt = 0;
+/** One socket's own evidence: when it was last pinged and last answered (ms epoch; 0 = never). */
+interface SocketRecord {
+	pingAt: number;
+	pongAt: number;
+}
 
-	/** Record an inbound `"pong"`, and release anything waiting on one. */
-	pong(now: number = Date.now()): void {
-		this.lastPongAt = now;
-		const waiting = [...this.waiters];
-		this.waiters.clear();
-		for (const w of waiting) w(true);
+/** The attachment key the record lives under, beside whatever else a socket carries. */
+const ATTACHMENT_KEY = "liveness";
+
+/**
+ * Per-SOCKET ping/pong bookkeeping (#1183).
+ *
+ * It used to be two counters in the DO's memory, one pair for the whole slot. Two consequences: after hibernation the counters were
+ * gone and the first `/status` read "connected" whatever the peer was doing; and in a slot with two sockets one live pong vouched
+ * for a dead one. Now each socket has its own record, written into its hibernation attachment as it changes, so it survives the DO
+ * being evicted and is read back from the socket itself. A socket with no record at all (accepted before this) is still unknown and
+ * reads as connected ONCE - that is the same rule as before for a genuine unknown - but the ping that call sends starts its record.
+ */
+export class RunnerLiveness {
+	private waiters = new Set<{ sockets: Set<PingableSocket>; settle: (alive: PingableSocket[]) => void }>();
+	private memory = new WeakMap<PingableSocket, SocketRecord>();
+	/** The last pong that named no socket. Only the slot-wide fallback uses it; the relay always names the socket. */
+	private anonymousPongAt = 0;
+
+	private read(ws: PingableSocket): SocketRecord | null {
+		const mem = this.memory.get(ws);
+		if (mem) return mem;
+		try {
+			const att = ws.deserializeAttachment?.() as Record<string, unknown> | null | undefined;
+			const rec = att?.[ATTACHMENT_KEY] as Partial<SocketRecord> | undefined;
+			if (rec && typeof rec.pingAt === "number" && typeof rec.pongAt === "number") {
+				const restored = { pingAt: rec.pingAt, pongAt: rec.pongAt };
+				this.memory.set(ws, restored);
+				return restored;
+			}
+		} catch {
+			/* no attachment, or one that cannot be read: unknown */
+		}
+		return null;
+	}
+
+	private write(ws: PingableSocket, rec: SocketRecord): void {
+		this.memory.set(ws, rec);
+		try {
+			if (!ws.serializeAttachment) return;
+			const att = (ws.deserializeAttachment?.() as Record<string, unknown> | null | undefined) ?? {};
+			ws.serializeAttachment({ ...(typeof att === "object" ? att : {}), [ATTACHMENT_KEY]: rec });
+		} catch {
+			/* the in-memory record still stands for this wake */
+		}
+	}
+
+	/**
+	 * Record an inbound `"pong"` from `ws`, and release anything waiting on it.
+	 *
+	 * A pong credits THAT socket only. Called with no socket (a bare number or nothing) it credits every socket that has an unanswered
+	 * ping - the old slot-wide behaviour, kept for callers that cannot say which socket answered.
+	 */
+	pong(from?: PingableSocket | number, at?: number): void {
+		const ws = typeof from === "object" ? from : undefined;
+		const now = typeof from === "number" ? from : (at ?? Date.now());
+		const answered: PingableSocket[] = [];
+		if (ws) {
+			this.write(ws, { pingAt: this.read(ws)?.pingAt ?? 0, pongAt: now });
+			answered.push(ws);
+		} else {
+			for (const w of this.waiters) for (const s of w.sockets) answered.push(s);
+			for (const s of answered) this.write(s, { pingAt: this.read(s)?.pingAt ?? 0, pongAt: now });
+			this.anonymousPongAt = now;
+		}
+		for (const w of [...this.waiters]) {
+			const hit = answered.filter((s) => w.sockets.has(s));
+			if (hit.length) w.settle(hit);
+		}
 	}
 
 	/**
@@ -67,7 +134,7 @@ export class RunnerLiveness {
 	 *
 	 * A send that THROWS is the one unambiguous death: the socket is half-closed and can never
 	 * carry anything again, so it is closed here rather than left in the DO's list to be
-	 * re-pinged forever. An unanswered ping is NOT treated this way — the runner does synchronous
+	 * re-pinged forever. An unanswered ping is NOT treated this way - the runner does synchronous
 	 * local execs (tmux capture), so a live one can be briefly slow, and closing it would drop the
 	 * commands in flight for a peer that was about to answer.
 	 */
@@ -77,53 +144,69 @@ export class RunnerLiveness {
 			try {
 				ws.send("ping");
 				reachable.push(ws);
+				this.write(ws, { pingAt: now, pongAt: Math.max(this.read(ws)?.pongAt ?? 0, this.anonymousPongAt) });
 			} catch {
 				try { ws.close(1000, "stale"); } catch { /* already closed */ }
 			}
 		}
-		if (reachable.length > 0) this.lastPingAt = now;
 		return reachable;
+	}
+
+	/**
+	 * The sockets that answer a ping right now (empty when none does within the deadline). Resolves as soon as one has answered, so a
+	 * dead socket beside a live one costs a command nothing, and the caller can send on a socket that is known to be there.
+	 */
+	async probeAlive(
+		sockets: readonly PingableSocket[],
+		opts: { deadlineMs?: number; now?: number } = {},
+	): Promise<PingableSocket[]> {
+		const now = opts.now ?? Date.now();
+		const deadlineMs = opts.deadlineMs ?? PONG_DEADLINE_MS;
+		const reachable = this.ping(sockets, now);
+		if (reachable.length === 0) return [];
+		return await new Promise<PingableSocket[]>((resolve) => {
+			const waiter = {
+				sockets: new Set(reachable),
+				settle: (alive: PingableSocket[]) => {
+					clearTimeout(timer);
+					this.waiters.delete(waiter);
+					resolve(alive);
+				},
+			};
+			const timer = setTimeout(() => waiter.settle([]), deadlineMs);
+			this.waiters.add(waiter);
+		});
 	}
 
 	/**
 	 * Explicit liveness question: is the peer answering right now?
 	 *
 	 * `false` means a connect caller may evict it and a command caller must fail fast. Unreachable
-	 * sockets are `false` immediately — there is nothing to wait for.
+	 * sockets are `false` immediately - there is nothing to wait for.
 	 */
-	async probe(
-		sockets: readonly PingableSocket[],
-		opts: { deadlineMs?: number; now?: number } = {},
-	): Promise<boolean> {
-		const now = opts.now ?? Date.now();
-		const deadlineMs = opts.deadlineMs ?? PONG_DEADLINE_MS;
-		if (this.ping(sockets, now).length === 0) return false;
-		return await new Promise<boolean>((resolve) => {
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			const settle = (alive: boolean) => {
-				if (timer) clearTimeout(timer);
-				this.waiters.delete(settle);
-				resolve(alive);
-			};
-			timer = setTimeout(() => settle(false), deadlineMs);
-			this.waiters.add(settle);
-		});
+	async probe(sockets: readonly PingableSocket[], opts: { deadlineMs?: number; now?: number } = {}): Promise<boolean> {
+		return (await this.probeAlive(sockets, opts)).length > 0;
 	}
 
 	/**
-	 * STATUS-time question, answered without waiting: does the evidence say this peer is gone?
+	 * STATUS-time question, answered without waiting: does the evidence say this slot's peer is gone?
 	 *
-	 * Sends a fresh ping (so the NEXT call has an answer to judge) and reports on the last one.
+	 * Sends a fresh ping to every socket (so the NEXT call has an answer to judge) and judges each socket on ITS OWN previous round
+	 * trip: a socket is gone when its last ping has stood unanswered past the grace window. The slot is connected while any socket is
+	 * not gone - a pong from one never clears another.
 	 */
 	observe(sockets: readonly PingableSocket[], now: number = Date.now()): boolean {
-		const pingedAt = this.lastPingAt;
+		// Each socket's verdict is taken BEFORE this call's ping overwrites its record.
+		const before = new Map(sockets.map((ws) => [ws, this.read(ws)] as const));
 		const reachable = this.ping(sockets, now);
 		if (reachable.length === 0) return false;
-		// A ping that has been standing unanswered longer than the grace window is the evidence.
-		// Anything younger than that is simply "we have not heard back yet", which is not an
-		// outage — the whole point of pinging now is that the next caller gets a real answer.
-		if (pingedAt > 0 && this.lastPongAt < pingedAt && now - pingedAt > PONG_STALE_MS) return false;
-		return true;
+		return reachable.some((ws) => {
+			const rec = before.get(ws);
+			// No record at all: unknown, and an unknown is not an outage. This call's ping starts it.
+			if (!rec || rec.pingAt === 0) return true;
+			// A ping standing unanswered longer than the grace window is the evidence, for THIS socket.
+			return !(rec.pongAt < rec.pingAt && now - rec.pingAt > PONG_STALE_MS);
+		});
 	}
 }
 
