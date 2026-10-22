@@ -23,6 +23,9 @@ type Connection = {
 	identities: Identities;
 };
 type Enrollment = { enrollmentId: string; state: "pending" | "ready" | "connected" | "probe_failed" | "expired" | "consumed"; failureClass: string | null };
+type BeginEnrollmentResponse = { enrollmentId: string; consoleUrl: string };
+type EnrollmentCompletionResponse = { ok: boolean; error?: string };
+type EmailWorkerTestResponse = { ok: boolean; error?: string };
 type Status = {
 	state: "absent" | "ambiguous" | "stale_pin" | "connected" | "blocked";
 	connections: Connection[];
@@ -91,13 +94,13 @@ export default function EmailWorkerPanel({ instanceId }: { instanceId: string })
 		const senders = chosen.identities.senders ?? [];
 		setApproved(senders.filter((sender) => sender.approved).map((sender) => sender.address));
 		setReplyIdentity(senders.find((sender) => sender.replyIdentity)?.address ?? "");
-	}, [chosen?.endpoint, chosen?.accountId]);
+	}, [chosen]);
 
 	const beginEnrollment = async () => {
 		if (!endpoint.trim()) { setMessage("Enter the HTTPS URL of the deployed Cloudflare Email Bridge."); return; }
 		setBusy(true); setMessage("");
 		try {
-			const data = await api<{ enrollmentId: string; consoleUrl: string }>(`/v1/instances/${instanceId}/email-worker/enrollments`, { method: "POST", body: JSON.stringify({ endpoint: endpoint.trim(), label: label.trim() || undefined }) });
+			const data = await api<BeginEnrollmentResponse>(`/v1/instances/${instanceId}/email-worker/enrollments`, { method: "POST", body: JSON.stringify({ endpoint: endpoint.trim(), label: label.trim() || undefined }) });
 			setEnrollmentId(data.enrollmentId);
 			rememberEnrollment(instanceId, data.enrollmentId);
 			window.open(data.consoleUrl, "_blank", "noopener");
@@ -110,7 +113,7 @@ export default function EmailWorkerPanel({ instanceId }: { instanceId: string })
 		if (!enrollmentId) return;
 		setBusy(true); setMessage("");
 		try {
-			const data = await api<{ ok: boolean; error?: string }>(`/v1/instances/${instanceId}/email-worker/enrollments/${encodeURIComponent(enrollmentId)}/complete`, { method: "POST" });
+			const data = await api<EnrollmentCompletionResponse>(`/v1/instances/${instanceId}/email-worker/enrollments/${encodeURIComponent(enrollmentId)}/complete`, { method: "POST" });
 			if (!data.ok) { setMessage(data.error ?? "The bridge secret has not been entered yet."); return; }
 			rememberEnrollment(instanceId, null);
 			setEnrollmentId("");
@@ -135,7 +138,7 @@ export default function EmailWorkerPanel({ instanceId }: { instanceId: string })
 	const test = async () => {
 		setBusy(true); setMessage("");
 		try {
-			const data = await api<{ ok: boolean; error?: string }>(`/v1/instances/${instanceId}/email-worker/test`, { method: "POST" });
+			const data = await api<EmailWorkerTestResponse>(`/v1/instances/${instanceId}/email-worker/test`, { method: "POST" });
 			setMessage(data.ok ? "Bridge health check passed." : data.error ?? "Bridge health check failed.");
 			await load();
 		} catch (e) { setMessage(e instanceof Error ? e.message : "Could not test this bridge."); }
