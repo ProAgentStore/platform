@@ -134,6 +134,8 @@ export function createRunnerCommand(): Command {
 				// replace is an authorisation rather than a signal aimed at a name pattern.
 				env: {
 					...process.env,
+					// The bearer token rides the environment, never argv (#1182).
+					...spec.env,
 					PAGS_RUNNER_BUILD: CLI_VERSION,
 					...(crashAccount ? { PAGS_RUNNER_ACCOUNT: crashAccountKey(crashAccount) } : {}),
 					...(lockHeld ? { PAGS_RUNNER_RSID: lockHeld.rsid, PAGS_RUNNER_CONTROL_NONCE: lockHeld.nonce, PAGS_RUNNER_LAUNCH: lockHeld.launch } : {}),

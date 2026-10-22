@@ -32,7 +32,7 @@ describe("runner command helpers", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("builds runner process args", () => {
+	it("builds runner process args - the token is NOT among them (#1182)", () => {
 		expect(
 			buildRunnerArgs({
 				host: "127.0.0.1",
@@ -46,8 +46,6 @@ describe("runner command helpers", () => {
 			"127.0.0.1",
 			"--port",
 			"49171",
-			"--token",
-			"secret",
 			"--instance-id",
 			"inst-1",
 			"--headless",

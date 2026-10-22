@@ -23,12 +23,23 @@ export async function findFreePort(start: number): Promise<number> {
 	return start;
 }
 
+/**
+ * The runtime's bearer token never goes on its command line (#1182): `--token <t>` is in the process table, where `ps` shows it to every
+ * other user on the host - and the token plus no `Origin` is all a request to the runtime's 127.0.0.1 port needs. It travels in the
+ * child's ENVIRONMENT instead (`PAGS_RUNNER_TOKEN`, which the runtime already reads), readable only by the same user. The runtime keeps
+ * it out of every engine and tool it starts (`PLATFORM_CREDENTIAL_ENV`).
+ */
+export function runnerSecretEnv(opts: RunnerStartOptions): { PAGS_RUNNER_TOKEN?: string } {
+	const token = clean(opts.token);
+	return token ? { PAGS_RUNNER_TOKEN: token } : {};
+}
+
+/** The runtime's arguments: everything EXCEPT the token (see {@link runnerSecretEnv}). */
 export function buildRunnerArgs(opts: RunnerStartOptions): string[] {
 	const args: string[] = [];
 	if (clean(opts.host)) args.push("--host", clean(opts.host) as string);
 	if (clean(opts.port)) args.push("--port", clean(opts.port) as string);
 	if (clean(opts.dataDir)) args.push("--data-dir", clean(opts.dataDir) as string);
-	if (clean(opts.token)) args.push("--token", clean(opts.token) as string);
 	if (clean(opts.instanceId)) args.push("--instance-id", clean(opts.instanceId) as string);
 	if (opts.headless) args.push("--headless");
 	return args;
@@ -64,7 +75,7 @@ export function spawnNeedsShell(command: string, platform: NodeJS.Platform = pro
 	return platform === "win32" && !win32.isAbsolute(command);
 }
 
-export function runnerSpawnSpec(opts: RunnerStartOptions): { command: string; args: string[]; cwd: string; shell: boolean } {
+export function runnerSpawnSpec(opts: RunnerStartOptions): { command: string; args: string[]; cwd: string; shell: boolean; env: { PAGS_RUNNER_TOKEN?: string } } {
 	const root = findWorkspaceRoot();
 	const localPackage = resolve(root, "packages", "browser-runner", "src", "index.ts");
 	const bundledPackage = bundledRunnerPath();
@@ -81,7 +92,7 @@ export function runnerSpawnSpec(opts: RunnerStartOptions): { command: string; ar
 		command = process.execPath;
 		args = [bundledPackage, ...runnerArgs];
 	}
-	return { command, args, cwd, shell: spawnNeedsShell(command) };
+	return { command, args, cwd, shell: spawnNeedsShell(command), env: runnerSecretEnv(opts) };
 }
 
 export function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
@@ -92,6 +103,7 @@ export function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
 			cwd: spec.cwd,
 			stdio: "inherit",
 			shell: spec.shell,
+			env: { ...process.env, ...spec.env },
 		});
 		child.on("error", reject);
 		child.on("exit", (code) => {
