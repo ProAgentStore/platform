@@ -382,3 +382,24 @@ export function githubSyncLines(r: GithubInstallationSyncResponse): string[] {
 	if (!lines.length) lines.push(r.dryRun ? "Nothing to bind." : "Nothing new to bind.");
 	return lines;
 }
+
+/**
+ * What a connector row shows of the owner's connections, as one comparable string (#1281): connected-ness, each account with when it was
+ * (re)connected, and which optional powers it holds. Two reads that differ here mean a sign-in finished in between.
+ */
+export function connectionFingerprint(entry: ConnectorEntry | undefined): string {
+	if (!entry) return "";
+	return JSON.stringify({
+		connected: entry.connected,
+		account: entry.account,
+		connectedAt: entry.connectedAt,
+		granted: entry.grantedScopes ?? null,
+		grants: (entry.optionalGrants ?? []).map((g) => [g.id, g.held]),
+		accounts: (entry.accounts ?? []).map((a) => [a.accountId, a.connectedAt, (a.optionalGrants ?? []).map((g) => [g.id, g.held]), a.missingScopes ?? null]),
+	});
+}
+
+/** "Complete the sign-in in the new tab" is true only until the connection changes; after that it must say what happened or go away. */
+export function signInCompleted(before: string, entries: ConnectorEntry[], id: string): boolean {
+	return connectionFingerprint(entries.find((e) => e.id === id)) !== before;
+}

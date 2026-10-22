@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import {
 	accountConnections,
 	accountRows,
+	connectionFingerprint,
 	connectionSummary,
 	disconnectedMessage,
 	disconnectPromptFor,
@@ -11,6 +12,7 @@ import {
 	githubSyncLines,
 	grantOffers,
 	needsPerAgentChoice,
+	signInCompleted,
 	startPath,
 } from "../lib/accountConnections";
 import type { GithubInstallationSyncResponse } from "../lib/types";
@@ -49,10 +51,19 @@ export default function AccountConnections() {
 	// a plain connect is read-only, and nothing is asked for that the owner did not choose.
 	const [chosen, setChosen] = useState<Record<string, string[]>>({});
 
+	// The sign-in this page is waiting on (#1281): which connector, and how it looked when the tab was opened.
+	const signIn = useRef<{ id: string; label: string; before: string } | null>(null);
+
 	const load = useCallback(async () => {
 		try {
 			const d = await api<{ connectors?: ConnectorEntry[] }>("/v1/connectors");
 			setEntries(d.connectors ?? []);
+			const waiting = signIn.current;
+			if (waiting && signInCompleted(waiting.before, d.connectors ?? [], waiting.id)) {
+				// The connection changed since the tab was opened: the instruction is no longer true, so say what happened instead.
+				signIn.current = null;
+				setMsg(`${waiting.label} connection updated.`);
+			}
 		} catch {
 			// An empty section with no explanation is worse than an empty section that says so.
 			setEntries([]);
@@ -95,14 +106,18 @@ export default function AccountConnections() {
 		try {
 			const { url } = await api<{ url: string }>(startPath(entry.flow.start, grants, account));
 			window.open(url, "_blank", "noopener");
+			signIn.current = { id: entry.id, label: entry.label, before: connectionFingerprint(entries?.find((e) => e.id === entry.id)) };
 			setMsg(`Complete the ${entry.label} sign-in in the new tab, then come back here.`);
 		} catch (e) {
+			signIn.current = null;
 			setMsg(e instanceof Error ? e.message : `Failed to start the ${entry.label} connection`);
 		}
 	};
 
 	const disconnect = async (entry: ConnectorEntry, accountId?: string, accountName?: string) => {
 		if (!entry.flow) return;
+		// A disconnect is its own outcome: a sign-in still pending must not turn the next reload into "connection updated" over it.
+		signIn.current = null;
 		// Disconnecting ONE of several accounts (#715) is a different act from disconnecting the
 		// connector: it does not touch the others, so it gets its own confirmation rather than the
 		// provider-wide one, which would overstate what is about to happen.
@@ -254,16 +269,21 @@ export default function AccountConnections() {
 								{needsPerAgentChoice(entry) && (
 									<ul className="mt-1.5 space-y-1">
 										{accountRows(entry).map((row) => (
-											<li key={row.accountId} className="flex items-center justify-between gap-2 text-2xs">
-												<span className="text-muted-soft">
-													{row.name}
-													{row.note && <span className="text-warning"> · {row.note}</span>}
-												</span>
+											/* One mailbox = one group (#1281): its address and note on top, its own actions on a wrapping line below.
+										   The old single non-wrapping flex row gave three grant buttons and Disconnect `shrink-0`, so below 1024px the
+										   address was crushed to ~10px (a 1,100px-tall column) and the buttons ran off the page. */
+										<li key={row.accountId} className="text-2xs border border-line rounded-md px-2 py-1.5" data-testid="gmail-account-row">
+											<span className="block text-muted-soft min-w-0 [overflow-wrap:anywhere]">
+												<span className="font-semibold text-ink">{row.name}</span>
+												{row.note && <span className="text-warning"> · {row.note}</span>}
+											</span>
+											<span className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
 												{grantOffers(entry.accounts?.find((a) => a.accountId === row.accountId)?.optionalGrants).map((g) => (
 													<button
 														key={g.id}
 														type="button"
-														className="shrink-0 underline underline-offset-2"
+														className="text-left underline underline-offset-2"
+														aria-label={`Allow: ${g.label} — ${row.name}`}
 														onClick={() => connect(entry, [g.id], row.accountId || row.name)}
 													>
 														Allow: {g.label}
@@ -271,12 +291,14 @@ export default function AccountConnections() {
 												))}
 												<button
 													type="button"
-													className="shrink-0 text-danger underline underline-offset-2"
+													className="text-danger underline underline-offset-2"
+													aria-label={`Disconnect ${row.name}`}
 													onClick={() => disconnect(entry, row.accountId, row.name)}
 												>
 													Disconnect
 												</button>
-											</li>
+											</span>
+										</li>
 										))}
 									</ul>
 								)}
