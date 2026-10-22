@@ -28,11 +28,14 @@ export interface DiscoverableInstance {
  * either lose a race with the pinned machine or, worse, win one and silently relocate the
  * user's agent away from where they pinned it.
  */
-export function isEligible(inst: DiscoverableInstance, thisNode: string, alsoKnownAs: readonly string[] = []): boolean {
+export function isEligible(inst: DiscoverableInstance, thisNode: string, alsoKnownAs: readonly string[] = [], machineId = ""): boolean {
 	if (inst.status !== "active") return false;
 	if (inst.capabilities?.runtime == null) return false;
 	// A pin is a MACHINE (#1250): pinned to this machine's own id, it is here whatever hostname it has.
 	if (pinnedHere(inst, alsoKnownAs)) return true;
+	// And a pin to ANOTHER machine's id is not here, whatever the hostname says (#1181). The server routes by machine id; this machine's
+	// local name history is a guess about hostnames, and a stale or reused name in it must not attach an agent the router will not send here.
+	if (idPinnedElsewhere(inst, machineId)) return false;
 	const pin = inst.config?.runnerNode;
 	// A pin named a HOSTNAME, and `os.hostname()` moves under the machine — DHCP, a VPN, the
 	// `.local` mDNS form (#379). So "pinned elsewhere" and "pinned here under the name I had
@@ -53,8 +56,8 @@ export function isEligible(inst: DiscoverableInstance, thisNode: string, alsoKno
  * (the other machine disconnects, or the user runs --force) lets the next pass attach.
  */
 /** The ids this machine should hold per a membership pass: active, runtime-capable, and not pinned to another machine. */
-export function eligibleIds(eligible: readonly DiscoverableInstance[], thisNode: string, alsoKnownAs: readonly string[] = []): Set<string> {
-	return new Set(eligible.filter((i) => isEligible(i, thisNode, alsoKnownAs)).map((i) => i.id));
+export function eligibleIds(eligible: readonly DiscoverableInstance[], thisNode: string, alsoKnownAs: readonly string[] = [], machineId = ""): Set<string> {
+	return new Set(eligible.filter((i) => isEligible(i, thisNode, alsoKnownAs, machineId)).map((i) => i.id));
 }
 
 /**
@@ -73,9 +76,10 @@ export function diffMembership(
 	blocked: ReadonlySet<string> = new Set(),
 	/** Hostnames this machine has also answered to, so a pin made under one still points here. */
 	alsoKnownAs: readonly string[] = [],
+	machineId = "",
 ): { attach: DiscoverableInstance[]; detach: string[] } {
 	const have = new Set(attached);
-	const want = eligible.filter((i) => isEligible(i, thisNode, alsoKnownAs));
+	const want = eligible.filter((i) => isEligible(i, thisNode, alsoKnownAs, machineId));
 	const wantIds = new Set(want.map((i) => i.id));
 	return {
 		attach: want.filter((i) => !have.has(i.id) && !blocked.has(i.id)),
@@ -137,10 +141,11 @@ export function partitionByPin<T extends DiscoverableInstance>(
 	instances: readonly T[],
 	thisNode: string,
 	alsoKnownAs: readonly string[] = [],
+	machineId = "",
 ): { here: T[]; elsewhere: T[] } {
 	const here: T[] = [];
 	const elsewhere: T[] = [];
-	for (const inst of instances) (isEligible(inst, thisNode, alsoKnownAs) ? here : elsewhere).push(inst);
+	for (const inst of instances) (isEligible(inst, thisNode, alsoKnownAs, machineId) ? here : elsewhere).push(inst);
 	return { here, elsewhere };
 }
 
@@ -149,12 +154,12 @@ export function partitionByPin<T extends DiscoverableInstance>(
  * run lets go of when a repin asks. Only the pin: an agent pinned here (under any of this machine's
  * names), unpinned, or not in the listing at all is kept, because a scoped run was started for it.
  */
-export function pinnedAway(held: Iterable<string>, instances: readonly DiscoverableInstance[], thisNode: string, alsoKnownAs: readonly string[] = []): string[] {
+export function pinnedAway(held: Iterable<string>, instances: readonly DiscoverableInstance[], thisNode: string, alsoKnownAs: readonly string[] = [], machineId = ""): string[] {
 	const byId = new Map(instances.map((i) => [i.id, i]));
 	return [...held].filter((id) => {
 		const inst = byId.get(id);
 		const pin = inst?.config?.runnerNode;
-		return !!inst && !pinnedHere(inst, alsoKnownAs) && !!pin && pin !== thisNode && !alsoKnownAs.includes(pin);
+		return !!inst && !pinnedHere(inst, alsoKnownAs) && (idPinnedElsewhere(inst, machineId) || (!!pin && pin !== thisNode && !alsoKnownAs.includes(pin)));
 	});
 }
 
@@ -163,6 +168,12 @@ export function pinnedAway(held: Iterable<string>, instances: readonly Discovera
  * hostnames. Only ever a reason to keep an agent: a pin to another id still falls through to the
  * hostname check the server resolved it to, so a caller that omits the id behaves exactly as before.
  */
+/** Pinned by machine id to a machine that is not this one. False when either side has no id: names then stay the only evidence. */
+function idPinnedElsewhere(inst: DiscoverableInstance, machineId: string): boolean {
+	const pinned = inst.config?.runnerMachineId;
+	return !!pinned && !!machineId && pinned !== machineId;
+}
+
 function pinnedHere(inst: DiscoverableInstance, alsoKnownAs: readonly string[]): boolean {
 	const id = inst.config?.runnerMachineId;
 	return !!id && alsoKnownAs.includes(id);

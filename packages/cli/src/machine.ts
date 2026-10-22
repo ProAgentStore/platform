@@ -188,7 +188,18 @@ function sameIdentity(a: MachineIdentity, b: MachineIdentity): boolean {
 export function loadMachineIdentity(now = hostname()): MachineIdentity {
 	let stored: MachineIdentity | null = null;
 	try {
-		if (existsSync(MACHINE_FILE)) stored = parseMachineFile(readFileSync(MACHINE_FILE, "utf-8"));
+		if (existsSync(MACHINE_FILE)) {
+			const raw = readFileSync(MACHINE_FILE, "utf-8");
+			stored = parseMachineFile(raw);
+			if (!stored) {
+				// An unreadable identity file is NOT a new machine (#1181): minting a UUID over it would orphan every row, pin and
+				// session the server holds under the old id, and the name history with it. Keep the id when it can still be read out of
+				// the damage, and keep the damaged file itself beside the new one so nothing is lost for good.
+				const recovered = recoverMachineId(raw);
+				backUpUnreadable(raw);
+				if (recovered) stored = { id: recovered, names: [], declined: [] };
+			}
+		}
 	} catch {
 		/* unreadable — fall through and try to (re)write it */
 	}
@@ -201,4 +212,19 @@ export function loadMachineIdentity(now = hostname()): MachineIdentity {
 	// would be new on every start, which is worse than none: it would fragment the machine
 	// further rather than merging it.
 	return stored ?? { id: "", names: [] };
+}
+
+/** The machine id out of a damaged machine.json (a truncated write, a stray byte), or null. Only a value the server would accept. */
+export function recoverMachineId(text: string): string | null {
+	const found = /"id"\s*:\s*"([A-Za-z0-9_-]{8,64})"/.exec(text)?.[1];
+	return found && isValidMachineId(found) ? found : null;
+}
+
+/** Keep the unreadable file where a person can find it. Best effort: failing to back it up never stops the runner. */
+function backUpUnreadable(raw: string): void {
+	try {
+		writeFileSync(`${MACHINE_FILE}.corrupt-${Date.now()}`, raw);
+	} catch {
+		/* the original is about to be rewritten; nothing more can be done */
+	}
 }

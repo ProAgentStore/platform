@@ -79,6 +79,23 @@ export function stampMs(value: string | null | undefined): number {
 }
 
 /**
+ * Give an id-less registration the id its hostname unambiguously carries elsewhere (#1181).
+ *
+ * `pags up` stamps the machine id only on the instances it registers in a session, so an instance it did not attach keeps a NULL id under
+ * the very same hostname. The machines list has always read that row as the machine (`groupTerminalNodes`, `/runner-node`), while the
+ * router looked only at explicit ids — so an agent could show as attached to a machine the router would not route to. One rule, used by
+ * both: a name that carries exactly one id lends it to its id-less rows; a name carrying two lends nothing, and a row stays as it is.
+ */
+export function withAdoptedIds<T extends NodeRegistration>(rows: readonly T[]): T[] {
+	const byName = adoptableIdByName(rows);
+	return rows.map((r) => {
+		if (normalizeMachineId(r.machineId)) return r;
+		const id = byName.get(normalizeRunnerNode(r.node));
+		return id ? { ...r, machineId: id } : r;
+	});
+}
+
+/**
  * Other node NAMES that are provably the same machine as `pinned`, freshest first.
  *
  * Empty whenever the proof is missing — the pinned name has no recorded `machine_id`, or nothing
@@ -91,11 +108,13 @@ export function stampMs(value: string | null | undefined): number {
  */
 export function aliasNodesFor(
 	pinned: string,
-	rows: readonly NodeRegistration[],
+	allRows: readonly NodeRegistration[],
 	instanceId?: string | null,
 ): string[] {
 	const pin = normalizeRunnerNode(pinned);
 	if (!pin) return [];
+	// The same identity the machines list shows (#1181): an id-less row under a hostname that only ever carried ONE id is that machine.
+	const rows = withAdoptedIds(allRows);
 
 	const ids = new Set<string>();
 	for (const row of rows) {

@@ -188,7 +188,23 @@ async function sameMachineNodes(env: Env, instanceId: string, userId: string, pi
 		.bind(userId, ...ids)
 		.all<NodeRegistration>()
 		.catch(() => ({ results: [] as NodeRegistration[] }));
-	return aliasNodesFor(pinned, results ?? [], instanceId);
+	// The id-less rows under those names too (#1181): each name's rows are the evidence for which id it carries, and an id-less row under an
+	// unambiguous name is that machine — the answer the machines list gives, so the router and the list cannot disagree.
+	const names = [...new Set((results ?? []).map((r) => r.node).filter(Boolean))];
+	let rows: NodeRegistration[] = results ?? [];
+	if (names.length) {
+		const nm = names.map((_, i) => `?${i + 2}`).join(",");
+		const { results: sameNames } = await env.DB.prepare(
+			`SELECT runner_node AS node, machine_id AS machineId, instance_id AS instanceId, last_seen_at AS lastSeenAt
+			 FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node IN (${nm}) ORDER BY updated_at DESC`,
+		)
+			.bind(userId, ...names)
+			.all<NodeRegistration>()
+			.catch(() => ({ results: [] as NodeRegistration[] }));
+		const seen = new Set(rows.map((r) => `${r.instanceId}\0${r.node}`));
+		rows = [...rows, ...(sameNames ?? []).filter((r) => !seen.has(`${r.instanceId}\0${r.node}`))];
+	}
+	return aliasNodesFor(pinned, rows, instanceId);
 }
 
 /**

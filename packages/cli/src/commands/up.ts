@@ -188,7 +188,7 @@ export const upCommand = new Command("up")
 		// agent, and the user debugging it knows where it is pinned.
 		if (!opts.instance) {
 			const me = loadMachineIdentity(hostname());
-			const split = partitionByPin(instances, hostname(), [...me.names, me.id]);
+			const split = partitionByPin(instances, hostname(), [...me.names, me.id], me.id);
 			instances = split.here;
 			elsewhere = split.elsewhere;
 		}

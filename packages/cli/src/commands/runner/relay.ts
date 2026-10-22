@@ -313,7 +313,7 @@ export async function connectViaRelay(
 		// its socket and, with it, its heartbeat — and attach nothing.
 		if (plan.release) {
 			const res = await requestPags<{ instances?: DiscoverableInstance[] }>("GET", "/v1/instances/my/instances", { ...opts, pagsToken: pagsToken() });
-			const released = pinnedAway(attached.keys(), res.instances ?? [], runnerNode, [...machine.names, machine.id]);
+			const released = pinnedAway(attached.keys(), res.instances ?? [], runnerNode, [...machine.names, machine.id], machine.id);
 			for (const id of released) detach(id, `${id.slice(0, 8)}… (pinned to another machine now)`);
 			if (released.length && attached.size === 0) writeLine("This `pags up --instance` holds no agent now — close it, or restart it without --instance.");
 			return { status: 200, result: { attached: [...attached.keys()], released } };
@@ -533,7 +533,7 @@ export async function connectViaRelay(
 				{ ...opts, pagsToken: pagsToken() },
 			);
 			routes.learn(res.instances);
-			shouldHoldNow = eligibleIds(res.instances ?? [], runnerNode, [...machine.names, machine.id]);
+			shouldHoldNow = eligibleIds(res.instances ?? [], runnerNode, [...machine.names, machine.id], machine.id);
 			const { attach: toAttach, detach: toDetach } = diffMembership(
 				attached.keys(),
 				res.instances ?? [],
@@ -543,6 +543,7 @@ export async function connectViaRelay(
 				// previous hostname reads as "pinned to another machine", and this poll
 				// detaches the agent twenty seconds after startup attached it (#379). Its id: a pin (#1250).
 				[...machine.names, machine.id],
+				machine.id,
 			);
 			for (const inst of toAttach) {
 				await registerRuntime(inst.id);
