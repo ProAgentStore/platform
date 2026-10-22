@@ -12,7 +12,7 @@ import { postIssueComment } from "../lib/github-issues.js";
 import { clipMarked } from "../lib/clip-marked.js";
 import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
-import { decisionRunForCard, resolveCodingPause } from "../lib/coding-answer.js";
+import { CodingSessionEnded, decisionRunForCard, resolveCodingPause } from "../lib/coding-answer.js";
 import { codingCardId } from "../lib/coding-board.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
@@ -319,6 +319,23 @@ export async function readInstanceConfig(env: Env, instanceId: string, userId: s
  * value channel. Split out of instances.ts to keep that file focused. The heavy
  * `/apply` trigger itself stays in instances.ts next to task creation.
  */
+/**
+ * The reply for an answer whose session has ended (#1185): never `delivered`. The answer is on the question's row when there was one,
+ * and the run that continues the work reads it from there; the run that asked is stuck on a session it can no longer use.
+ */
+function sessionEndedReply(base: Record<string, unknown>, sessionId: string, recorded: boolean) {
+	const kept = recorded ? "Your answer is saved on the question, so a new run on the same issue can read it." : "Your answer was not saved: there is no question row for it.";
+	return {
+		ok: false,
+		...base,
+		recorded,
+		outcome: "session_ended",
+		delivered: false,
+		next: "rerun",
+		error: `Session ${sessionId} has ended, so this answer cannot reach the run that asked — it will not advance. ${kept} Stop the run with coding_loop_stop and start it again with coding_loop_start (pass the same issue).`,
+	};
+}
+
 export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 	/** Upload my résumé (binary) — stored in R2 so a remote runner can fetch it. */
 	router.put("/:instanceId/apply-resume", async (c) => {
@@ -569,8 +586,13 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			// run parked with the owner's answer in hand; the runner's pause is the one thing still waiting, so
 			// the answer goes there, and a failed delivery is said as one. A park from BEFORE the application is
 			// the one that answer ended, clearing as the run resumes, and keeps the already-applied reply.
-			const delivered = await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(() => true, () => false);
+			let ended = false;
+			const delivered = await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(() => true, (e: unknown) => {
+				ended = e instanceof CodingSessionEnded;
+				return false;
+			});
 			const base = { kind: "coding", runId: coding.runId, sessionId: coding.sessionId, recorded: false, questionId: null };
+			if (ended) return c.json(sessionEndedReply(base, coding.sessionId, false), 409);
 			if (delivered) return c.json({ ok: true, ...base, outcome: "delivered", delivered: true, message: "Delivered to the waiting run." });
 			return c.json({ ok: false, ...base, outcome: "not_delivered", delivered: false, next: "retry", error: "The run is waiting on this card, but the coding runner could not be reached to hand it your answer. Make sure `pags up` is running on its machine and answer again." }, 409);
 		}
@@ -595,13 +617,20 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			// Not a zero-compute park: a live wait that polls. It reads the row on its next check; the runner push
 			// wakes it sooner. With nothing on the row (a question that was never captured) the push is the only
 			// delivery, so its failure is the reply.
+			let ended = false;
 			const delivered = await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, value).then(
 				() => true,
 				(e: unknown) => {
+					// #1185: an ended session is a fact about the answer, not a runner that could not be reached.
+					if (e instanceof CodingSessionEnded) {
+						ended = true;
+						return false;
+					}
 					if (!recorded) throw e;
 					return false;
 				},
 			);
+			if (ended) return c.json(sessionEndedReply(base, coding.sessionId, !!recorded), 409);
 			if (delivered) return c.json({ ok: true, ...base, outcome: "delivered", delivered: true, message: "Delivered to the waiting run." });
 			return c.json({ ok: true, ...base, outcome: "stored", delivered: false, message: "Saved on the question. The coding runner could not be reached just now; the waiting run reads your answer from the question on its next check." }, 202);
 		}

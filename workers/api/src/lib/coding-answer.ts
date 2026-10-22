@@ -35,10 +35,25 @@ export async function decisionRunForCard(env: Env, instanceId: string, userId: s
 	return null;
 }
 
-/** Hand the owner's answer (or a bare "done") to the coding pause on this session's runner. */
+/**
+ * The session an answer was meant for has ended (#1185). The runner's resolve answers `ok` whether or not a pause is pending, so a
+ * delivery to an ended session used to be reported as landed while nothing could ever read it — after a repin, a restart, a killed
+ * session — and the run went on waiting on the same question. The session row is the authority.
+ */
+export class CodingSessionEnded extends HttpError {
+	constructor(public readonly sessionId: string) {
+		super(409, `Session ${sessionId} has ended, so there is no coding pause left to hand an answer to.`);
+	}
+}
+
+/**
+ * Hand the owner's answer (or a bare "done") to the coding pause on this session's runner. Throws {@link CodingSessionEnded} for a
+ * session whose row is `ended`; a `suspended` one is a parked run's normal state and is still delivered to.
+ */
 export async function resolveCodingPause(env: Env, instanceId: string, userId: string, sessionId: string, value: string | undefined): Promise<void> {
 	const session = await getSession(env, instanceId, userId, sessionId);
 	if (!session) throw new HttpError(404, "Session not found");
+	if (session.status === "ended") throw new CodingSessionEnded(sessionId);
 	const conn = await getSessionRunnerConn(env, instanceId, userId, session);
 	if (!conn) throw new HttpError(409, "No coding runner connected — the run is still waiting for your answer. Run `pags up` on its machine and answer again.");
 	await touchSessionActivity(env, instanceId, userId, sessionId);

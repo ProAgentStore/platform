@@ -23,6 +23,7 @@
 import type { Hono } from "hono";
 import { withinConfirmationWindow } from "../lib/confirmation-window.js";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { repinNote } from "../lib/coding-run-session.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
 import { type AttachCause, attachBlocker, heartbeatContext, newAttachProgress, recordAttach, windowExpiredCause } from "../lib/runner-attach-report.js";
 import { attachedOnMachine, attachOnRepin, attachAgentOnNode } from "../lib/runner-repin.js";
@@ -74,8 +75,10 @@ export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
 		// A display name, a machine id or a hostname of exactly one machine; stored as the machine id (#1250).
 		const { to, machineId, displayName } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
-		if (!machineId) return c.json({ runnerNode: null, machineId: null, displayName: null });
-		const pinned = { runnerNode: to, machineId, displayName };
+		// #1185: a run parked on a question stays on the machine it parked on, whatever the pin now says — say so, once, beside the result.
+		const parked = await repinNote(c.env, instanceId, session.uid, to);
+		if (!machineId) return c.json({ runnerNode: null, machineId: null, displayName: null, ...parked });
+		const pinned = { runnerNode: to, machineId, displayName, ...parked };
 		const base = { instanceId, userId: session.uid, node: to, via: "pin" as const, forced: false };
 		// No runner would take it — paused, canceled, or no local runtime (#1114): the pin is saved,
 		// nothing is asked to attach, and the answer says why.

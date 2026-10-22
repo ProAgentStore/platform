@@ -1,3 +1,4 @@
+import { reconcileRunWithSession, sessionFactsFor } from "../lib/coding-run-session.js";
 import { Hono } from "hono";
 import { instanceGateView } from "../lib/machine-thresholds.js";
 import { HttpError, requireUser } from "../lib/auth.js";
@@ -1485,7 +1486,8 @@ toolRoutes.get("/:id/loop", async (c) => {
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
 	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset")), startsAfter) : {};
 	const [pending, autoPickup, runnerGate] = await Promise.all([answersPendingFor(c.env, runs.map((r) => r.runId)), autoPickupStatus(c.env, instanceId, session.uid), instanceGateView(c.env, instanceId, session.uid)]); // #1231, #1233, #1275
-	return c.json({ runs: runs.map((run) => withHealth(run, now, pending)), autoPickup, runnerGate, total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
+	const facts = await sessionFactsFor(c.env, session.uid, runs.map((r) => r.sessionId ?? "")); // #1185: a run is read beside its session
+	return c.json({ runs: runs.map((run) => reconcileRunWithSession(withHealth(run, now, pending), facts, now)), autoPickup, runnerGate, total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
 });
 
 /**
@@ -1509,7 +1511,8 @@ toolRoutes.get("/:id/loop/:runId", async (c) => {
 	const run = await getLoopRun(c.env, session.uid, c.req.param("runId"));
 	if (!run) throw new HttpError(404, "loop run not found");
 	const repoCi = await instanceRepoCi(c.env, c.req.param("id"), session.uid);
-	return c.json({ ...withHealth(run, Date.now(), await answersPendingFor(c.env, [run.runId])), ...(repoCi ? { repoCi } : {}) });
+	const now = Date.now();
+	return c.json({ ...reconcileRunWithSession(withHealth(run, now, await answersPendingFor(c.env, [run.runId])), await sessionFactsFor(c.env, session.uid, [run.sessionId ?? ""]), now), ...(repoCi ? { repoCi } : {}) });
 });
 
 toolRoutes.post("/:id/loop/:runId/cancel", async (c) => {
