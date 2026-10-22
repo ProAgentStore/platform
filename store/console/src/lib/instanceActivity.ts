@@ -127,6 +127,7 @@ const OUTCOME_WORD: Record<string, string> = {
 	constraint_refused: "was stopped: your constraints are too long to send whole",
 	turn_lost: "lost an engine turn to a runner restart",
 	decision: "waited 30 days for your answer to its question",
+	runner_gone: "waited a day for its machine, which did not come back",
 	failed: "failed",
 };
 

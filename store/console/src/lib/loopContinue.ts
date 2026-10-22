@@ -25,7 +25,7 @@
  */
 
 /** The endings the server will continue. Kept in the order `RESUMABLE_STOP_REASONS` lists them. */
-export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision", "engine_error"] as const;
+export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision", "runner_gone", "engine_error"] as const;
 
 /** The fields of a loop run that decide whether Continue is offered (`LoopRunView` has more). */
 export interface LoopRunContinueLike {
@@ -147,6 +147,8 @@ const REASON_LABEL: Record<string, string> = {
 	// #1053. A runner restart cut a turn off and it could not be resumed exactly once — check the worktree first.
 	turn_lost: "Lost a turn to a runner restart",
 	decision: "Parked on your answer; the 30-day wait ran out",
+	// #1188. Its machine stayed away past the whole 24h wait; continuing works once the machine is connected again.
+	runner_gone: "Its machine was away for a day",
 	// #1200. The engine CLI exited non-zero (a bad model, a crash) — its own message is on the run, and no person was asked.
 	engine_error: "The coding CLI crashed",
 };

@@ -28,6 +28,7 @@ export type LoopStopReason =
 	| "constraint_refused" // the owner's constraints in force do not fit the engine's envelope whole: nothing more was sent (#1019)
 	| "turn_lost" // a runner restart or engine relaunch cut a turn off and it could not be resumed exactly once: nothing was re-sent (#1053)
 	| "decision" // parked on a question to the owner and nobody answered within the park's 30 days: continuable (#1076)
+	| "runner_gone" // the machine stayed away past the run's whole 24h park (#1160); continuable once it is back (#1188)
 	| "engine_error"; // the coding CLI itself exited non-zero (a bad model, a crash): its own message carried, never a wait on a person (#1200)
 
 export interface LoopState {
@@ -244,7 +245,7 @@ export function statusFor(reason: LoopStopReason): LoopRunStatus {
 	//
 	// `turn_lost` (#1053): the turn may have half-run before the restart, so somebody has to look at the worktree.
 	// `decision` (#1076): the run asked the owner a question and is still owed the answer.
-	if (reason === "decision" || reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "engine_auth" || reason === "constraint_refused" || reason === "turn_lost") return "needs_human";
+	if (reason === "decision" || reason === "runner_gone" || reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "engine_auth" || reason === "constraint_refused" || reason === "turn_lost") return "needs_human";
 	return "failed";
 }
 

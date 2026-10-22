@@ -34,8 +34,8 @@ import type { LoopStopReason } from "./agent-loop.js";
  *   `provider_stall`     the model's transport died mid-reply, after the resumes were spent (#758).
  *
  * `runner_gone` is deliberately NOT here even though it is also not the objective failing. #341
- * already gives it its own sentence, and it differs in the one way that matters to the owner: the
- * machine is not coming back on its own, so it is an ACTION rather than an interruption. Widening
+ * already gives it its own sentence, and it is an ACTION rather than an interruption: the owner has
+ * to bring the machine back. It has its own continuable stop reason instead (#1188). Widening
  * this set to include it would replace a message that was written for that case with a generic one.
  *
  * ── Why a subject per class, rather than one sentence (#758)
@@ -128,7 +128,11 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 	const message = err instanceof Error ? err.message : String(err ?? "");
 	// A waited-out runner is reported as ITSELF, without the "run error:" prefix — that prefix
 	// reads as a crash, and "the runner did not come back" is a finding, not one (#341).
-	if (isRunnerGone(err)) return { detail: message, stopReason: null };
+	// Its own stop reason (#1188): the work is intact on the machine and the run is continuable once that machine is back.
+	// Only a run with a loop-run row reaches the 24h park; a run without one (no `loopRunId`, so no durable row to continue
+	// or wake) keeps its old 10/30-minute ending: no durable run exists to continue, so none is invented. The stop reason is only
+	// written to a loop-run row, which such a run lacks; its session card reads it as needing the owner, with the same sentence.
+	if (isRunnerGone(err)) return { detail: message, stopReason: "runner_gone" };
 	const cls = classifyCodingFailure(err).class;
 	// An ending only the owner can clear (#773). Same shape as the interruption below — what to DO
 	// first, the vendor's own text last where the card's 300 characters will cut it — and its own

@@ -215,6 +215,7 @@ describe("describeLoopRun", () => {
 			constraint_refused: true,
 			turn_lost: true,
 			decision: true,
+			runner_gone: true,
 		};
 		const statuses = Object.keys(DOMAIN) as Array<LoopRunStatus | "running">;
 		const closed = statuses.filter((s) => s !== "running");

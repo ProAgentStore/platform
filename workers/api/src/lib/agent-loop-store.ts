@@ -417,6 +417,7 @@ export const CONTINUE_RESUME_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
  *                         run again" after topping up (#773), and that restart is this successor.
  *   * `engine_auth`     — the coding CLI was not signed in and the park ran out before anyone signed
  *                         it in (#881). Once the relay has signed it in, the successor carries on.
+ *   * `runner_gone`    — its machine stayed away past the 24h park (#1188); continuable once it is back (`runnerAwayRefusal`).
  *   * `decision`        — the run parked on a question and its 30-day park ran out unanswered (#1076).
  *                         The answer, once given, is on the question row for the successor.
  *
@@ -425,7 +426,7 @@ export const CONTINUE_RESUME_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
  * its own handoff rather than a successor. `cancelled` is a human stopping it, and a restart after
  * that may well be the "start clean" #806 lists as an option in its own right. `done` needs nothing.
  */
-export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision", "engine_error"] as const satisfies readonly LoopStopReason[];
+export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision", "runner_gone", "engine_error"] as const satisfies readonly LoopStopReason[];
 
 export type ResumableStopReason = (typeof RESUMABLE_STOP_REASONS)[number];
 

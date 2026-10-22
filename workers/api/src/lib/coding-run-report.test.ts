@@ -71,12 +71,13 @@ describe("an interruption is not the objective failing (#546, #758)", () => {
 		}
 	});
 
-	it("leaves the two endings that already had a sentence exactly as they were", () => {
+	it("leaves the two endings that already had a sentence with exactly their sentences", () => {
 		// #341 wrote the runner sentence deliberately: "the runner did not come back" is a finding,
 		// not a crash, and it must not be replaced by the generic interruption wording.
 		const gone = codingCrashReport(new RunnerGoneError("waited 10 minutes; the machine did not come back"));
 		expect(gone.detail).toBe("waited 10 minutes; the machine did not come back");
-		expect(gone.stopReason).toBeNull();
+		// Its own continuable stop reason since #1188 — the sentence itself is untouched.
+		expect(gone.stopReason).toBe("runner_gone");
 		// A genuine crash keeps the prefix, because for it the prefix is true.
 		const crash = codingCrashReport(new Error("Cannot read properties of undefined (reading 'pane')"));
 		expect(crash.detail).toBe("run error: Cannot read properties of undefined (reading 'pane')");

@@ -193,6 +193,18 @@ async function restoreParkedForContinue(env: Env, instanceId: string, userId: st
 	await env.DB.prepare("UPDATE agent_loop_runs SET checkout_snapshot = NULL, checkout_released_at = NULL WHERE run_id = ?1").bind(run.runId).run();
 }
 
+/**
+ * A `runner_gone` run is continuable only while a machine can take it (#1188): the run ended because its machine was away
+ * past the whole 24h park, so continuing it onto a machine that is still away would only start a run that waits again.
+ * Async because it asks the relay; null when the run is some other ending, or its machine is connected. The pin is honoured
+ * (`getBoundRunnerConn`), so the machine asked is the one the continue would run on.
+ */
+export async function runnerAwayRefusal(env: Env, instanceId: string, userId: string, run: LoopRunView): Promise<string | null> {
+	if (run.stopReason !== "runner_gone") return null;
+	const conn = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
+	return conn ? null : "its machine is still away — run `pags up` on it, then continue";
+}
+
 export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): void {
 	/**
 	 * Carry a stopped run's objective onto a fresh run with a new iteration ceiling.
@@ -213,7 +225,7 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 		const run = await getLoopRun(c.env, session.uid, runId);
 		if (!run || run.instanceId !== instanceId) throw new HttpError(404, "loop run not found");
 
-		const refusal = continueRefusal(run);
+		const refusal = continueRefusal(run) ?? (await runnerAwayRefusal(c.env, instanceId, session.uid, run));
 		if (refusal) throw new HttpError(409, refusal);
 
 		const body = (await c.req.json().catch(() => ({}))) as {
@@ -292,7 +304,7 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 		const run = await getLoopRun(c.env, session.uid, runId);
 		if (!run || run.instanceId !== instanceId) throw new HttpError(404, "loop run not found");
 
-		const refusal = continueRefusal(run);
+		const refusal = continueRefusal(run) ?? (await runnerAwayRefusal(c.env, instanceId, session.uid, run));
 		const maxIterations = await continueCeiling(c.env, session.uid, instanceId, run);
 		const repoId = await continueRepoId(c.env, instanceId, session.uid, run);
 
