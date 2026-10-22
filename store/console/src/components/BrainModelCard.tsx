@@ -32,7 +32,14 @@ export function BrainConfirmDialog({ option, busy, onConfirm, onCancel }: { opti
 	);
 }
 
-/** The picker: every option with its provider and cost; one whose prerequisite is missing is disabled and says why. */
+/**
+ * The picker: every option with its provider and cost; one whose prerequisite is missing is disabled and says why.
+ *
+ * The select is `w-full max-w-full min-w-0` at EVERY width (#1284). A native select sizes itself to its longest option, and these
+ * labels carry provider, cost and the missing-credential note (~850px), so a `sm:w-auto` here let the control outgrow the card from 640px
+ * up while the Settings tab's `overflow-x-hidden` clipped its edge and arrow. The closed control now truncates to the card; the full text
+ * of every option is still in the open list, and the prerequisites are spelled out below it.
+ */
 export function BrainModelPicker({ options, value, busy, onPick }: { options: BrainOption[]; value: string; busy?: boolean; onPick: (option: BrainOption) => void }) {
 	return (
 		<>
@@ -45,7 +52,7 @@ export function BrainModelPicker({ options, value, busy, onPick }: { options: Br
 					const option = options.find((o) => o.id === e.target.value);
 					if (option) onPick(option);
 				}}
-				className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
+				className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full max-w-full min-w-0"
 			>
 				{!options.some((o) => o.id === value) && <option value={value}>{value || "(not set — Claude Sonnet 4.6 by default)"}</option>}
 				{options.map((o) => (
