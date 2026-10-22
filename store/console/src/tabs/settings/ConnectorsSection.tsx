@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import ToolPermissions from "../../components/ToolPermissions";
 import EmailWorkerPanel from "../../components/EmailWorkerPanel";
 import AgentAccountChoice from "../../components/AgentAccountChoice";
+import GmailIdentityPanel from "../../components/GmailIdentityPanel";
 import { DiscordConnectorPanel } from "../../components/DiscordConnectorPanel";
 import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
@@ -215,6 +216,7 @@ export default function ConnectorsSection({
 						</span>
 					</label>
 					{!emailStatus?.connected && <p className="text-xs text-muted mt-1">Connect Gmail in <b>Preferences → Connections</b> to enable this.</p>}
+					<GmailIdentityPanel instanceId={instanceId} connected={emailStatus?.connected === true} />
 				</div>
 			)}
 			{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
