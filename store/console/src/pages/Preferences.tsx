@@ -70,7 +70,7 @@ export default function Preferences() {
 	const [codingMsg, setCodingMsg] = useState("");
 	/** The engine choice awaiting the server's answer, or null. The control shows it, disabled, as "Saving…" — never as stored. */
 	const [pendingEngine, setPendingEngine] = useState<string | null>(null);
-	// The release-notes default every agent inherits (#1217): undefined = the platform default (on).
+	// The release-notes default every CODER agent inherits (#1217, #1286): undefined = the platform default (on).
 	const [releaseNotes, setReleaseNotes] = useState<boolean | undefined>(undefined);
 	const [releaseNotesMsg, setReleaseNotesMsg] = useState("");
 	const [applyingCoding, setApplyingCoding] = useState(false);
@@ -166,7 +166,7 @@ export default function Preferences() {
 				body: JSON.stringify({ releaseNotes: enabled === undefined ? null : { enabled } }),
 			});
 			setReleaseNotes(d.preferences?.releaseNotes?.enabled);
-			setReleaseNotesMsg("Saved — agents without their own release-notes setting follow this.");
+			setReleaseNotesMsg("Saved — coder agents without their own release-notes setting follow this.");
 		} catch (e) {
 			setReleaseNotesMsg(e instanceof Error ? e.message : String(e));
 		}
@@ -258,7 +258,7 @@ export default function Preferences() {
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Release notes</h3>
 				<p className="text-xs text-muted mb-3">
-					When a coder run ships to a repository's default branch, it posts one release note to the Discord and Slack channels granted to that agent. This is the default for every agent; an agent can override it, and choose its channels, on its Permissions tab.
+					When a coder run ships to a repository's default branch, it posts one release note to the Discord and Slack channels granted to that agent. This is the default for your coder agents only (other agents have no release notes); a coder can override it, and choose its channels, on its Permissions tab.
 				</p>
 				<label htmlFor="account-release-notes" className="text-xs text-muted block mb-1">Default</label>
 				<select

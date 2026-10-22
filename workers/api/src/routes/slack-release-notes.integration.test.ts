@@ -65,7 +65,7 @@ function slack(method: string, auth: string | null, form: URLSearchParams): Resp
 beforeEach(() => {
 	d1 = realSchemaD1();
 	d1.exec("INSERT INTO users (id, github_login) VALUES ('u1', 'u1')");
-	d1.exec("INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 'rn-1217-coder', 'Release-notes coder', '{}')");
+	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 'rn-1217-coder', 'Release-notes coder', '${JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding" } })}')`);
 	d1.exec("INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('inst-a', 'ag', 'u1', 'active', '{}'), ('inst-b', 'ag', 'u1', 'active', '{}')");
 	env = { DB: d1.DB, KEY_ENCRYPTION_KEY: "a".repeat(64), SESSION_SIGNING_KEY: "s".repeat(64) } as unknown as Env;
 	posts = [];

@@ -12,7 +12,7 @@ import { instancePermissionsLink, instanceSettingsLink } from "../../../../worke
 import { PERMISSIONS_CONTROL_ID } from "../lib/permissionRequestFocus";
 import { legacyTabRedirect, parseInstanceSplat, resolveInstanceRoute } from "../lib/instanceRoute";
 import { checkConsoleLink } from "../lib/routes";
-import { SURFACES, visibleSurfaces } from "../lib/surfaces";
+import { SURFACES, type SurfaceContext, visibleSurfaces } from "../lib/surfaces";
 import PermissionsTab from "./PermissionsTab";
 import SettingsTab from "./SettingsTab";
 import GmailIdentityPanel from "../components/GmailIdentityPanel";
@@ -104,5 +104,29 @@ describe("permission links land on the Permissions tab", () => {
 		expect(legacyTabRedirect("settings", "")).toBeNull();
 		expect(legacyTabRedirect("settings", "?takeover=t1")).toBeNull();
 		expect(legacyTabRedirect("knowledge", "?focus=permissions")).toBeNull();
+	});
+});
+
+describe("release notes are a coder integration (#1286)", () => {
+	const markup = (isCoding?: boolean) => renderToStaticMarkup(createElement(PermissionsTab, { instanceId: "i1", instanceName: "Scout", isCoding }));
+
+	it("a non-coder's Permissions has no release-notes panel, and so mounts nothing that fetches release-note setup", () => {
+		// The panel owns every release-notes fetch (setting, Discord/Slack channel lists, grants): not mounted, nothing loads.
+		for (const html of [markup(), markup(false)]) {
+			expect(html).not.toContain('data-testid="release-notes-panel"');
+			expect(html).not.toContain("Release notes");
+			expect(html).toContain('data-testid="discord-connector-panel"'); // ordinary Discord access is unaffected
+		}
+	});
+
+	it("a coder keeps the panel", () => {
+		expect(markup(true)).toContain('data-testid="release-notes-panel"');
+	});
+
+	it("the Permissions surface hands the declared coding capability down — not a name", () => {
+		const render = SURFACES.find((s) => s.id === "permissions")?.render as (ctx: SurfaceContext) => never;
+		const html = (isCoding: boolean, instanceName: string) => renderToStaticMarkup(render({ instanceId: "i1", instanceName, isCoding } as SurfaceContext));
+		expect(html(false, "Coder")).not.toContain('data-testid="release-notes-panel"'); // a chat agent named "Coder"
+		expect(html(true, "Banana")).toContain('data-testid="release-notes-panel"'); // a renamed coder
 	});
 });

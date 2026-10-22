@@ -11,6 +11,8 @@ import type { ConnectorGrant } from "./TriggersSection";
 interface Props {
 	instanceId: string;
 	instanceName?: string;
+	/** Declared coding capability (#1286): release notes are a coder integration, so only a coder mounts (and loads) the panel. */
+	isCoding?: boolean;
 }
 
 /**
@@ -18,7 +20,7 @@ interface Props {
  * tool permissions, and its Gmail / Drive / WorkDrive connections. Split out of Settings (what the
  * agent IS: name, brain, engine, runner, triggers) so each is its own page; the controls are unchanged.
  */
-export default function PermissionsTab({ instanceId, instanceName }: Props) {
+export default function PermissionsTab({ instanceId, instanceName, isCoding = false }: Props) {
 	const permissionRequest = permissionRequestFocus(window.location.search);
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
@@ -235,8 +237,8 @@ export default function PermissionsTab({ instanceId, instanceName }: Props) {
 				onAddDiscordGrant={addDiscordGrant}
 				onRemoveDiscordGrant={removeDiscordGrant}
 			/>
-			{/* #1217: who receives this agent's release notes, across its Discord and Slack grants. */}
-			<ReleaseNotesPanel instanceId={instanceId} refreshKey={discordChanges} />
+			{/* #1217: who receives this agent's release notes, across its Discord and Slack grants. Coders only (#1286). */}
+			{isCoding && <ReleaseNotesPanel instanceId={instanceId} refreshKey={discordChanges} />}
 		</div>
 	);
 }

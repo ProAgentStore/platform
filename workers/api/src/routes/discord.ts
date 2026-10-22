@@ -2,6 +2,7 @@
 //
 // A bot token is an account-level credential. A channel grant is a separate, instance-level
 // boundary, so connecting a bot never lets every subscribed agent read or post everywhere it can.
+import { requireReleaseNotesEligible } from "../lib/release-notes-eligibility.js";
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { clipMarked } from "../lib/clip-marked.js";
@@ -180,6 +181,7 @@ discordRoutes.post("/instances/:instanceId/grants", async (c) => {
 		throw new HttpError(400, 'purpose must be "agent" (the default: a channel the agent\'s Discord tools may use) or "release_notes" (a channel the platform posts release notes to).');
 	}
 	const forReleaseNotes = body.purpose === "release_notes";
+	if (forReleaseNotes) await requireReleaseNotesEligible(c.env, instanceId, session.uid); // #1286: only a coder has release notes
 	if (!forReleaseNotes) {
 		const refusal = await connectorRefusalFor(c.env, "discord", instanceId, session.uid, instance.config);
 		if (refusal) throw new HttpError(403, refusal);

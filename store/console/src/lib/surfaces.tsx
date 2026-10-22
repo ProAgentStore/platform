@@ -387,7 +387,7 @@ export const SURFACES: SurfaceDef[] = [
 		// agent has tools an owner can switch off, and every permission push lands here.
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId, instanceName }) => <PermissionsTab instanceId={instanceId} instanceName={instanceName} />,
+		render: ({ instanceId, instanceName, isCoding }) => <PermissionsTab instanceId={instanceId} instanceName={instanceName} isCoding={isCoding} />,
 	},
 ];
 

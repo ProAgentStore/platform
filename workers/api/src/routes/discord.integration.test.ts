@@ -77,7 +77,7 @@ function discord(path: string, method: string, auth: string | null): Response {
 beforeEach(() => {
 	d1 = realSchemaD1();
 	d1.exec("INSERT INTO users (id, github_login) VALUES ('u1', 'u1')");
-	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 'discord-cc', 'Discord Command Center', '${JSON.stringify({ capabilities: { surfaces: [], runtime: null, tools: DISCORD_TOOLS } })}')`);
+	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 'discord-cc', 'Discord Command Center', '${JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: null, tools: DISCORD_TOOLS } })}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('${INSTANCE}', 'ag', 'u1', 'active', '{}')`);
 	env = { DB: d1.DB, KEY_ENCRYPTION_KEY: "a".repeat(64), SESSION_SIGNING_KEY: "s".repeat(64) } as unknown as Env;
 	sent = [];

@@ -23,7 +23,7 @@ export function registerReleaseNotesTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"get_instance_release_notes",
-		"Read one instance's release-notes setting: `settings` (what the instance itself stored — `enabled` and `channels`, each absent when inherited), `account` (the account default from get_account_preferences), and `effective` — `enabled` with `enabledFrom` (instance | account | platform), and every Discord and Slack channel granted to the instance with `selected` (whether it receives the notes) and its `grantId`. `missing` lists chosen grant ids that were since revoked. Read-only.",
+		"Coding agents only — any other instance answers with an unsupported-feature error (#1286). Read one instance's release-notes setting: `settings` (what the instance itself stored — `enabled` and `channels`, each absent when inherited), `account` (the account default from get_account_preferences), and `effective` — `enabled` with `enabledFrom` (instance | account | platform), and every Discord and Slack channel granted to the instance with `selected` (whether it receives the notes) and its `grantId`. `missing` lists chosen grant ids that were since revoked. Read-only.",
 		{ token: tokenArg, instance_id: instanceId },
 		async ({ token, instance_id }) => {
 			const session = tokenFor(token);
@@ -37,7 +37,7 @@ export function registerReleaseNotesTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"set_instance_release_notes",
-		"Set whether one instance posts release notes, and to which of its granted channels. Patch per field: omit a field to keep it. `enabled` true/false sets it for this instance; null returns it to the account default. `channels` is a list of `grantId`s from get_instance_release_notes (Discord and Slack alike); null means every granted channel. A grant id this instance does not hold is refused and nothing is saved. Returns the same shape as get_instance_release_notes. Call with dry_run first.",
+		"Coding agents only — any other instance answers with an unsupported-feature error (#1286). Set whether one instance posts release notes, and to which of its granted channels. Patch per field: omit a field to keep it. `enabled` true/false sets it for this instance; null returns it to the account default. `channels` is a list of `grantId`s from get_instance_release_notes (Discord and Slack alike); null means every granted channel. A grant id this instance does not hold is refused and nothing is saved. Returns the same shape as get_instance_release_notes. Call with dry_run first.",
 		{
 			token: tokenArg,
 			instance_id: instanceId,
@@ -64,7 +64,7 @@ export function registerReleaseNotesTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"send_test_release_note",
-		"Post a TEST release note to one channel granted to this instance (its `grantId` from get_instance_release_notes), to check the channel works before a run depends on it. Sent whether or not release notes are on or the channel is chosen — it tests the channel. A grant this instance does not hold is refused; a failed post returns the provider's reason (e.g. the Slack bot is not in the channel). WRITE: posts a message to the channel.",
+		"Coding agents only — any other instance answers with an unsupported-feature error (#1286). Post a TEST release note to one channel granted to this instance (its `grantId` from get_instance_release_notes), to check the channel works before a run depends on it. Sent whether or not release notes are on or the channel is chosen — it tests the channel. A grant this instance does not hold is refused; a failed post returns the provider's reason (e.g. the Slack bot is not in the channel). WRITE: posts a message to the channel.",
 		{ token: tokenArg, instance_id: instanceId, grant_id: z.string().describe("Channel grant id from get_instance_release_notes."), dry_run: z.boolean().optional() },
 		async ({ token, instance_id, grant_id, dry_run }) => {
 			const session = tokenFor(token);
