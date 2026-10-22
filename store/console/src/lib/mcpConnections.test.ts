@@ -2,18 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
 	blockerHint,
 	canAuthorize,
+	connectionStateBadge,
 	connectionsFromGrants,
 	credentialNote,
+	deriveMcpConnectionState,
 	hasMcpCapability,
 	mcpAccountNotice,
 	mcpAccountRows,
 	mcpNeedsAccountChoice,
 	normalizeEndpoint,
+	openableEndpoint,
 	presetFor,
+	selectedAccountName,
 	statusBadge,
 	summarizeSmoke,
 	surfaceLine,
 	type McpAccountsState,
+	type McpConnectionState,
 	type McpCredential,
 	type McpStatus,
 } from "./mcpConnections";
@@ -262,5 +267,113 @@ describe("statusBadge — the two multi-account verdicts (#1267)", () => {
 		// would send someone to check a host that is fine.
 		expect(statusBadge("account_ambiguous" as McpStatus).tone).toBe("amber");
 		expect(statusBadge("pinned_account_gone" as McpStatus).tone).toBe("amber");
+	});
+});
+
+
+// ── #1285: a grant is not a connection ──────────────────────────────────────────────────────────
+
+describe("deriveMcpConnectionState (#1285)", () => {
+	const EP = "https://mcp.proappstore.online/mcp/apps/hiring";
+	const GRANTS = [{ endpoint: EP, tool: "*" }];
+	const CRED: McpCredential = { endpoint: EP, accountId: "", authMode: "oauth", issuer: null, scopes: null, expiresAt: null, expired: false, accountLabel: null, createdAt: "2026-10-01", updatedAt: "2026-10-01" };
+	const accts = (over: Partial<McpAccountsState> = {}): McpAccountsState => ({ endpoint: EP, accounts: [], pinned: null, resolves: null, blocked: null, ...over });
+	const derive = (over: { credentials?: McpCredential[]; accounts?: McpAccountsState | null; lastStatus?: McpStatus | null; grants?: typeof GRANTS } = {}): McpConnectionState =>
+		deriveMcpConnectionState({ endpoint: EP, grants: over.grants ?? GRANTS, credentials: over.credentials ?? [CRED], accounts: over.accounts === undefined ? null : over.accounts, lastStatus: over.lastStatus ?? null });
+
+	it("the reported case: a * grant, no token, no connected account is NO TOKEN — not a working read & write server", () => {
+		const reported = accts({ blocked: { reason: "not_connected", message: "No account is connected on this server." } });
+		expect(derive({ credentials: [], accounts: reported })).toBe("no_token");
+	});
+
+	it("a grant alone with no credential at all is no_token, whatever the account lookup says", () => {
+		expect(derive({ credentials: [] })).toBe("no_token");
+		expect(derive({ credentials: [], accounts: accts({ accounts: [{ accountId: "w", label: "Work", connectedAt: null }], resolves: "w" }) })).toBe("no_token");
+	});
+
+	it("a credential held but the server reports not_connected is grant_only", () => {
+		expect(derive({ accounts: accts({ blocked: { reason: "not_connected", message: "m" } }) })).toBe("grant_only");
+	});
+
+	it("a credential, no accounts, nothing blocked and nothing resolving is grant_only — never 'connected'", () => {
+		expect(derive({ accounts: accts({ accounts: [], blocked: null, resolves: null }) })).toBe("grant_only");
+	});
+
+	it("an account that resolves is connected", () => {
+		expect(derive({ accounts: accts({ accounts: [{ accountId: "work", label: "Work", connectedAt: null }], resolves: "work" }) })).toBe("connected");
+	});
+
+	it("an account choice still owed is account_required: ambiguous, a pin to an account that is gone, or accounts with none resolving", () => {
+		expect(derive({ accounts: accts({ blocked: { reason: "ambiguous", message: "m" } }) })).toBe("account_required");
+		expect(derive({ accounts: accts({ blocked: { reason: "pinned_account_gone", message: "m" } }) })).toBe("account_required");
+		expect(derive({ accounts: accts({ accounts: [{ accountId: "a", label: null, connectedAt: null }, { accountId: "b", label: null, connectedAt: null }], resolves: null }) })).toBe("account_required");
+		expect(derive({ lastStatus: "account_ambiguous" })).toBe("account_required");
+	});
+
+	it("a failed test is connection_failed, for every failure status", () => {
+		for (const status of ["credential_missing", "credential_expired", "auth_required", "unreachable", "unsupported_protocol", "blocked", "permission_denied", "invalid_url"] as McpStatus[]) {
+			expect(derive({ lastStatus: status }), status).toBe("connection_failed");
+		}
+	});
+
+	it("a stored credential that has expired is connection_failed even before any test", () => {
+		expect(derive({ credentials: [{ ...CRED, expired: true }] })).toBe("connection_failed");
+	});
+
+	it("a failed test beats a resolving account: the server says it does not work, so the badge does not say it does", () => {
+		const resolving = accts({ accounts: [{ accountId: "w", label: "W", connectedAt: null }], resolves: "w" });
+		expect(derive({ accounts: resolving, lastStatus: "unreachable" })).toBe("connection_failed");
+		expect(derive({ accounts: resolving, lastStatus: "connected" })).toBe("connected");
+	});
+
+	it("falls back to grant_only when nothing is known, and for an endpoint with no grants", () => {
+		expect(derive({ accounts: null })).toBe("grant_only");
+		expect(derive({ grants: [] })).toBe("grant_only");
+	});
+
+	it("matches the credential by the endpoint, not by any credential the owner holds", () => {
+		expect(derive({ credentials: [{ ...CRED, endpoint: "https://other.example/mcp" }] })).toBe("no_token");
+	});
+});
+
+describe("connection state presentation (#1285)", () => {
+	const STATES = ["no_token", "grant_only", "account_required", "connection_failed", "connected", "checking", "unknown"] as const;
+
+	it("every state has its own words AND symbol, so none is told apart by colour alone", () => {
+		const badges = STATES.map((s) => connectionStateBadge(s));
+		expect(new Set(badges.map((b) => b.label)).size).toBe(STATES.length);
+		expect(new Set(badges.map((b) => b.symbol)).size).toBeGreaterThanOrEqual(5);
+		for (const b of badges) expect(b.consequence.length).toBeGreaterThan(20);
+	});
+
+	it("the words say what the owner needs to know: only 'connected' is green, and the grant-only states say calls refuse", () => {
+		expect(connectionStateBadge("connected").tone).toBe("green");
+		expect(connectionStateBadge("connection_failed").tone).toBe("red");
+		for (const s of ["no_token", "grant_only", "account_required"] as const) {
+			expect(connectionStateBadge(s).tone).toBe("amber");
+			expect(connectionStateBadge(s).consequence).toMatch(/every call refuses/);
+		}
+		expect(connectionStateBadge("no_token").label).toBe("No token — grant only");
+		expect(connectionStateBadge("grant_only").label).toBe("Not connected");
+	});
+
+	it("names the account a call would use, by its label, or nothing when none resolves", () => {
+		const a = { accounts: [{ accountId: "w1", label: "Work", connectedAt: null }], resolves: "w1" };
+		expect(selectedAccountName(a)).toBe("Work");
+		expect(selectedAccountName({ ...a, resolves: null })).toBeNull();
+		expect(selectedAccountName(null)).toBeNull();
+	});
+
+	it("opens only a normalized https endpoint: no javascript:, no query with a token, no http", () => {
+		expect(openableEndpoint("https://mcp.proappstore.online/mcp/apps/hiring")).toBe("https://mcp.proappstore.online/mcp/apps/hiring");
+		for (const bad of ["javascript:alert(1)", "http://example.com/mcp", "https://example.com/mcp?token=SECRET", "https://example.com/mcp/", "not a url", ""]) expect(openableEndpoint(bad), bad).toBeNull();
+	});
+
+	it("the account picker is owed when a pin points at a vanished account or none is chosen, even with one account left", () => {
+		const one = [{ accountId: "w", label: "W", connectedAt: null }];
+		expect(mcpNeedsAccountChoice({ accounts: one })).toBe(false);
+		expect(mcpNeedsAccountChoice({ accounts: one, blocked: { reason: "pinned_account_gone", message: "m" } })).toBe(true);
+		expect(mcpNeedsAccountChoice({ accounts: one, blocked: { reason: "ambiguous", message: "m" } })).toBe(true);
+		expect(mcpNeedsAccountChoice({ accounts: [], blocked: { reason: "not_connected", message: "m" } })).toBe(false);
 	});
 });

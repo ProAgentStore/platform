@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import {
 	blockerHint,
 	canAuthorize,
 	connectionsFromGrants,
 	credentialNote,
+	deriveMcpConnectionState,
+	type McpConnectionDisplay,
 	mcpAccountNotice,
 	mcpAccountRows,
 	mcpNeedsAccountChoice,
 	normalizeEndpoint,
 	presetFor,
+	selectedAccountName,
 	statusBadge,
 	summarizeSmoke,
 	surfaceLine,
@@ -20,7 +24,9 @@ import {
 	type McpReport,
 	type McpSurfaceReport,
 } from "../lib/mcpConnections";
+import { mcpEndpointFocus } from "../lib/permissionRequestFocus";
 import Button from "./Button";
+import McpConnectionHeader from "./McpConnectionHeader";
 import McpServerAccess from "./McpServerAccess";
 
 /**
@@ -61,6 +67,9 @@ import McpServerAccess from "./McpServerAccess";
  * credential and grants no tool. Its smoke test runs through `mcp_call_tool` like any other call,
  * so it passes the very same per-tool consent — "we wrote this server" is not a permission.
  */
+/** A DOM-id-safe slug of an endpoint — ids tie a row's URL block, its copy button and its account picker together. */
+const endpointDomId = (endpoint: string) => `mcp-${endpoint.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
+
 export default function McpConnections({ instanceId, grants, onGrantsChanged }: { instanceId: string; grants: McpGrant[]; onGrantsChanged: (grants: McpGrant[]) => void }) {
 	const [url, setUrl] = useState("");
 	const [openAuth, setOpenAuth] = useState(false);
@@ -69,6 +78,11 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 	const [msg, setMsg] = useState("");
 	const [busyTool, setBusyTool] = useState("");
 	const [creds, setCreds] = useState<McpCredentialState>({ credentials: [], legacy: { present: false } });
+	/** Whether the credential lookup has answered. Until it has, "No token" would be a guess, so a row says "Checking…" instead (#1285). */
+	const [credsStatus, setCredsStatus] = useState<"loading" | "ok" | "failed">("loading");
+	/** Endpoints whose account lookup has finished, successfully or not — absent state + tried = "could not read", not "nothing connected". */
+	const [accountsTried, setAccountsTried] = useState<Record<string, boolean>>({});
+	const focusedEndpoint = mcpEndpointFocus(useLocation().search);
 	/** Which endpoint's token field is open, and what has been typed into it. Never pre-filled
 	 *  from the server — there is nothing to pre-fill it with, by design. */
 	const [tokenFor, setTokenFor] = useState("");
@@ -93,9 +107,11 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 		try {
 			const next = await api<McpCredentialState>(`/v1/instances/${instanceId}/mcp/credentials`);
 			setCreds(next);
+			setCredsStatus("ok");
 			return next;
 		} catch {
 			/* metadata only — a failure here must not block the grant UI, which is the primary job */
+			setCredsStatus("failed");
 			return null;
 		}
 	}, [instanceId]);
@@ -111,6 +127,8 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 				setAccountsByEndpoint((prev) => ({ ...prev, [endpoint]: next }));
 			} catch {
 				/* account state is an enhancement over the grant list, which must keep rendering */
+			} finally {
+				setAccountsTried((prev) => ({ ...prev, [endpoint]: true }));
 			}
 		},
 		[instanceId],
@@ -403,13 +421,50 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 			{connections.length > 0 && (
 				<ul className="mb-2">
 					{connections.map((c) => (
-						<li key={c.endpoint} className="text-xs mb-1.5">
-							<div className="flex items-center gap-2">
-								<code className="font-mono text-muted truncate max-w-[16rem]">{c.endpoint}</code>
-								<span className="text-muted-soft">{c.wildcard ? "read & write" : `${c.grants.length} individual grant${c.grants.length === 1 ? "" : "s"}`}</span>
+						<li key={c.endpoint} className="text-xs mb-3" data-testid="mcp-connection" data-endpoint={c.endpoint}>
+							{(() => {
+								const acct = accountsByEndpoint[c.endpoint] ?? null;
+								const hasCred = creds.credentials.some((k) => k.endpoint === c.endpoint);
+								const lastStatus = report?.endpoint === c.endpoint ? report.status : null;
+								// Until BOTH lookups have answered the panel does not guess; if one failed it says so rather than reporting "no token".
+								const state: McpConnectionDisplay =
+									credsStatus === "loading" || (hasCred && !acct && !accountsTried[c.endpoint])
+										? "checking"
+										: credsStatus === "failed" || (hasCred && !acct)
+											? "unknown"
+											: deriveMcpConnectionState({ endpoint: c.endpoint, grants, credentials: creds.credentials, accounts: acct, lastStatus });
+								const preset = presetFor(presets, c.endpoint);
+								const oauthReady = !!preset || (report?.endpoint === c.endpoint && canAuthorize(report));
+								const check = () => {
+									setUrl(c.endpoint);
+									void runTest(c.endpoint, openAuth ? "none" : "vault");
+								};
+								const primary =
+									state === "no_token" || state === "grant_only"
+										? { label: "Connect account", disabled: authorizing === c.endpoint || testing, onClick: () => (oauthReady ? void authorize(c.endpoint, preset?.scope ?? null) : check()) }
+										: state === "account_required"
+											? { label: "Choose account", onClick: () => document.getElementById(`${endpointDomId(c.endpoint)}-account`)?.focus() }
+											: state === "connection_failed" || state === "unknown"
+												? { label: "Check connection", disabled: testing, onClick: check }
+												: null;
+								return (
+									<McpConnectionHeader
+										instanceId={instanceId}
+										endpoint={c.endpoint}
+										wildcard={c.wildcard}
+										grantCount={c.grants.length}
+										state={state}
+										accountName={selectedAccountName(acct)}
+										focused={focusedEndpoint === c.endpoint}
+										primary={primary}
+										idPrefix={endpointDomId(c.endpoint)}
+									/>
+								);
+							})()}
+							<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
 								{(() => {
 									const note = credentialNote(creds.credentials, c.endpoint);
-									return <span className={note.tone === "amber" ? "text-warning" : "text-muted-soft"}>· {note.label}</span>;
+									return <span className={note.tone === "amber" ? "text-warning" : "text-muted-soft"}>Token: {note.label}</span>;
 								})()}
 								{/* An OAuth server gets Reauthorize, not "replace token": there is no token to
 								    replace, and offering one sends the user hunting for something that
@@ -465,6 +520,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 									<div className="flex flex-wrap items-center gap-1.5 mt-1">
 										<span className={notice.blocked ? "text-warning text-2xs" : "text-muted-soft text-2xs"}>{notice.message}</span>
 										<select
+											id={`${endpointDomId(c.endpoint)}-account`}
 											aria-label={`Account to use on ${c.endpoint}`}
 											className="text-2xs bg-paper border border-line rounded px-1 py-0.5"
 											disabled={savingPin === c.endpoint}

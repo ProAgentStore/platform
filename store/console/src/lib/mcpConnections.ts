@@ -133,9 +133,14 @@ export interface McpAccountsState {
 	blocked: { reason: "not_connected" | "ambiguous" | "pinned_account_gone"; message: string } | null;
 }
 
-/** Does this endpoint hold more than one account — does the owner have to be told which to use? */
-export function mcpNeedsAccountChoice(state: Pick<McpAccountsState, "accounts">): boolean {
-	return state.accounts.length > 1;
+/**
+ * Does the owner have to be shown the account picker? More than one account is a choice to make;
+ * a pin to an account that is gone, or several accounts and none pinned, is a choice that is
+ * STILL OWED even when only one account is left (#1285) — hiding the picker there left the
+ * owner looking at "every call refuses" with nowhere to fix it.
+ */
+export function mcpNeedsAccountChoice(state: Pick<McpAccountsState, "accounts"> & Partial<Pick<McpAccountsState, "blocked">>): boolean {
+	return state.accounts.length > 1 || state.blocked?.reason === "pinned_account_gone" || state.blocked?.reason === "ambiguous";
 }
 
 /** The rows to render under an endpoint's account picker — same naming rule as `accountRows`. */
@@ -352,4 +357,94 @@ export function summarizeSmoke(raw: unknown): { ok: boolean; count: number | nul
 		})
 		.filter(Boolean);
 	return { ok: true, count: payload.length, sample, detail: "" };
+}
+
+// ── What state is this server REALLY in? (#1285) ────────────────────────────────────────────────
+//
+// A grant is a permission: "this agent may call this server". It says nothing about whether the
+// server can be reached as anyone. The panel used to show the grant ("read & write") and nothing
+// else unless there was an account choice to make, so an endpoint with no token and no connected
+// account looked exactly like a working one while every call refused. These five states are the
+// truth an owner needs, derived from facts the panel already holds.
+
+export type McpConnectionState = "no_token" | "grant_only" | "connected" | "account_required" | "connection_failed";
+
+const FAILURE_STATUSES: ReadonlySet<McpStatus> = new Set(["credential_missing", "credential_expired", "auth_required", "unreachable", "unsupported_protocol", "blocked", "permission_denied", "invalid_url"]);
+const ACCOUNT_STATUSES: ReadonlySet<McpStatus> = new Set(["account_ambiguous", "pinned_account_gone"]);
+
+/**
+ * Derive one server's state. Order matters, and each step is the first honest answer:
+ *
+ *   no grants               → "grant_only" (a safe default; the caller lists connections FROM grants)
+ *   no stored credential    → "no_token": nothing to authenticate with, so nothing can connect
+ *   server says not_connected → "grant_only": a credential is held but no account resolves
+ *   account choice owed     → "account_required"
+ *   an expired credential, or the last test failed → "connection_failed"
+ *   an account resolves     → "connected"
+ *
+ * `lastStatus` is the result of a test the owner ran in THIS session, or null. It is never cached
+ * across sessions: a stored "connected" would be the green badge for a server that has since gone down.
+ */
+export function deriveMcpConnectionState(input: {
+	endpoint: string;
+	grants: readonly McpGrant[];
+	credentials: readonly McpCredential[];
+	accounts: McpAccountsState | null;
+	lastStatus: McpStatus | null;
+}): McpConnectionState {
+	const { endpoint, grants, credentials, accounts, lastStatus } = input;
+	if (!grants.some((g) => g.endpoint === endpoint)) return "grant_only";
+	if (credentialNote(credentials, endpoint).label === "No token") return "no_token";
+	const reason = accounts?.blocked?.reason;
+	if (reason === "not_connected") return "grant_only";
+	if (reason === "ambiguous" || reason === "pinned_account_gone" || (!!accounts && accounts.accounts.length > 0 && accounts.resolves === null)) return "account_required";
+	if (lastStatus && ACCOUNT_STATUSES.has(lastStatus)) return "account_required";
+	if (credentialNote(credentials, endpoint).label === "Token expired") return "connection_failed";
+	if (lastStatus && FAILURE_STATUSES.has(lastStatus)) return "connection_failed";
+	if (accounts && accounts.resolves !== null) return "connected";
+	return "grant_only";
+}
+
+/**
+ * What to show for a state. States differ by WORDS and by a leading symbol, never by colour alone
+ * (a colour-blind owner, and a screen reader, get the same distinction). `consequence` is the
+ * sentence that ties the state back to what the owner sees elsewhere in the row.
+ */
+export type McpConnectionDisplay = McpConnectionState | "checking" | "unknown";
+
+export function connectionStateBadge(state: McpConnectionDisplay): { label: string; symbol: string; tone: "green" | "amber" | "red"; consequence: string } {
+	switch (state) {
+		case "no_token":
+			return { label: "No token — grant only", symbol: "○", tone: "amber", consequence: "This agent is allowed to call the server, but nothing is connected to it yet, so every call refuses. Connect an account or add a token." };
+		case "grant_only":
+			return { label: "Not connected", symbol: "○", tone: "amber", consequence: "This agent is allowed to call the server, but no connected account resolves for it, so every call refuses." };
+		case "account_required":
+			return { label: "Account required", symbol: "◐", tone: "amber", consequence: "Accounts are connected but this agent is not set to use one, so every call refuses until you choose." };
+		case "connection_failed":
+			return { label: "Connection failed", symbol: "✕", tone: "red", consequence: "The credential or the server is not working. Check the connection, then reconnect or replace the token." };
+		case "connected":
+			return { label: "Connected", symbol: "●", tone: "green", consequence: "An account is connected and this agent will use it." };
+		// Before the credential and account lookups answer, and when the account lookup itself failed, the panel does not guess.
+		case "checking":
+			return { label: "Checking…", symbol: "…", tone: "amber", consequence: "Looking up this server’s connection." };
+		case "unknown":
+			return { label: "State unavailable", symbol: "?", tone: "amber", consequence: "The connection state could not be read just now. Check the connection to find out whether calls will work." };
+	}
+}
+
+/** The account a call would use right now, by display name — or null when none resolves. Never an id the owner did not name when it has a label. */
+export function selectedAccountName(accounts: Pick<McpAccountsState, "accounts" | "resolves"> | null): string | null {
+	if (!accounts || accounts.resolves === null) return null;
+	return mcpAccountRows(accounts).find((a) => a.accountId === accounts.resolves)?.name ?? null;
+}
+
+/** An https URL safe to put in an `href` and to open: the normalized endpoint, nothing else. */
+export function openableEndpoint(endpoint: string): string | null {
+	const normalized = normalizeEndpoint(endpoint);
+	return normalized !== null && normalized === endpoint ? normalized : null;
+}
+
+/** An accessible name for a state's action button that says WHICH server it acts on, so two rows' "Connect account" buttons are told apart by a screen reader. */
+export function mcpConnectionActionLabel(label: string, endpoint: string): string {
+	return `${label} — ${endpoint}`;
 }
