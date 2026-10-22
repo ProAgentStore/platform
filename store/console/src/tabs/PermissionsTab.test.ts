@@ -15,6 +15,7 @@ import { checkConsoleLink } from "../lib/routes";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 import PermissionsTab from "./PermissionsTab";
 import SettingsTab from "./SettingsTab";
+import GmailIdentityPanel from "../components/GmailIdentityPanel";
 
 beforeEach(() => vi.stubGlobal("window", { location: { search: "" }, addEventListener: () => undefined, removeEventListener: () => undefined }));
 afterEach(() => vi.unstubAllGlobals());
@@ -48,6 +49,11 @@ describe("each tab renders its own content", () => {
 		expect(html).not.toContain('data-testid="settings-brain-section"');
 		expect(html).toContain('data-testid="discord-connector-panel"');
 		expect(html).toContain("Discord bot");
+		// The Cloudflare bridge is configured per agent: unlike an OAuth account it needs an
+		// instance pin and one-shot secret enrollment, so its control belongs beside the agent's
+		// other Permissions & Connections controls, not under account-wide Preferences.
+		expect(html).toContain('data-testid="cloudflare-email-bridge-panel"');
+		expect(html).toContain("Cloudflare Email Bridge");
 	});
 
 	it("Settings keeps the instance, brain and runner — and no longer holds Permissions & Connections", () => {
@@ -62,6 +68,20 @@ describe("each tab renders its own content", () => {
 		vi.stubGlobal("window", { location: { search: "?focus=permissions&permission_request=pr_1" }, addEventListener: () => undefined, removeEventListener: () => undefined });
 		expect(permissions()).toContain(`id="${PERMISSIONS_CONTROL_ID}"`);
 		expect(settings()).not.toContain(`id="${PERMISSIONS_CONTROL_ID}"`);
+	});
+});
+
+describe("Gmail sending identity", () => {
+	it("offers a verified sender selector when Gmail is connected", () => {
+		const html = renderToStaticMarkup(createElement(GmailIdentityPanel, { instanceId: "i1", connected: true }));
+		expect(html).toContain('data-testid="gmail-identity-panel"');
+		expect(html).toContain("Gmail sending identity");
+		// Data loads after mount; SSR must render an honest loading state rather than a fake alias.
+		expect(html).toContain("Loading Gmail sending identities");
+	});
+
+	it("does not show a sender configuration before Gmail is connected", () => {
+		expect(renderToStaticMarkup(createElement(GmailIdentityPanel, { instanceId: "i1", connected: false }))).toBe("");
 	});
 });
 
