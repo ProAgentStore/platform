@@ -15,7 +15,7 @@ import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayCon
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import { isRunnerSessionAbsent, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
-import { runnerParkDeps } from "../../lib/runner-park.js";
+import { runnerParkDeps, runnerWaitState } from "../../lib/runner-park.js";
 import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
 import { ObjectiveDelivery, type ObjectiveDeliveryState } from "../../lib/coding-objective-delivery.js";
 import { sendAct } from "../../lib/coding-act-send.js";
@@ -373,17 +373,38 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	 */
 	const guard = makeRunnerGuard({
 		wait: {
-			probe: () => runtimeConnectivity(env, instanceId, userId),
+			// JOURNALLED when labelled (#1177): the body replays after every `step.sleep`, and a live read there answers differently the second
+			// time (the machine is back), which made the replay take a different path than the original — a budget undercounted.
+			probe: (label) =>
+				label
+					? (runRetry(label, () => runtimeConnectivity(env, instanceId, userId)) as Promise<Awaited<ReturnType<typeof runtimeConnectivity>>>)
+					: runtimeConnectivity(env, instanceId, userId),
 			// step.sleep, so a ten-minute pause survives the workflow being evicted.
 			sleep: (label) => step.sleep(label, RUNNER_PROBE_INTERVAL),
-			announce: postToChat,
+			// Posted once per label however often the body replays past it (#1177).
+			announce: async (message, label) => {
+				if (!label) return postToChat(message);
+				await runRetry(`say-${label}`, async () => {
+					await postToChat(message);
+					return null;
+				});
+			},
 			// The run still owns this session while it waits. Without the heartbeat a long pause
 			// would let its OWN single-flight claim go stale and a second Pilot could take the
-			// session out from under it — the collision the claim exists to prevent.
-			tick: async () => {
-				if (event.payload.driverId) await touchSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId).catch(() => undefined);
-				await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+			// session out from under it — the collision the claim exists to prevent. And its LIVENESS stays current (#1177) while the run row
+			// says `runner_away`: alive and waiting, with no progress claimed.
+			tick: async (_waitedMs, label) => {
+				const beat = async () => {
+					if (event.payload.driverId) await touchSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId).catch(() => undefined);
+					await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+					if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now()).catch(() => undefined);
+					return null;
+				};
+				if (label) await runRetry(label, beat);
+				else await beat();
 			},
+			// The wait as run state: `runner_away` and the instant it gives up (#1177). A run without a loop-run row has no row to say it on.
+			state: event.payload.loopRunId ? runnerWaitState(env, runRetry, { runId: event.payload.loopRunId }) : undefined,
 		},
 		// The runner restarted and lost the session the run still owns (#1053) — never one the owner ended.
 		sessionLost: async (e) =>

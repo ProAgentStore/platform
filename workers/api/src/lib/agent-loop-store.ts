@@ -94,7 +94,8 @@ export interface LoopRunRow {
  *   runner_away        — the machine running the engine went away for longer than the guard's poll
  *                        (#1160): a closed lid, a night, an update. The run waits at zero compute and
  *                        is woken when the machine re-registers. Its deadline is a GIVE-UP
- *                        (`RUNNER_PARK_MS`): past it the run stops as `runner_gone`.
+ *                        (`RUNNER_PARK_MS`): past it the run stops as `runner_gone`. Set from the
+ *                        start of the disconnect (#1177), while the guard still polls.
  *
  * ── Why this is an array and not only a union (#596)
  *

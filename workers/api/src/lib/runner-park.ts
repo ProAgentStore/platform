@@ -17,7 +17,7 @@ import type { WorkflowStep } from "cloudflare:workers";
 import type { Env } from "../types.js";
 import { recordLiveness } from "./agent-loop-store.js";
 import { recordParkedWorkflow } from "./coding-park.js";
-import { type RunnerParkDeps, runnerBackEventType, type RunStep } from "./runner-availability.js";
+import { type RunnerParkDeps, runnerBackEventType, type RunnerWaitState, type RunStep } from "./runner-availability.js";
 
 /** The durable park the guard drives, for a run that has a loop-run row to be woken through. */
 export function runnerParkDeps(env: Env, step: WorkflowStep, run: RunStep, ids: { runId: string; workflowInstanceId: string }): RunnerParkDeps {
@@ -35,6 +35,29 @@ export function runnerParkDeps(env: Env, step: WorkflowStep, run: RunStep, ids: 
 				() => true,
 				() => false,
 			),
+		end: async (label) => {
+			await run(label, async () => {
+				await recordLiveness(env, ids.runId, Date.now(), null);
+				return null;
+			});
+		},
+	};
+}
+
+/**
+ * The wait as run state while the guard POLLS for a machine (#1177): `runner_away` with the instant the wait gives up, written through the
+ * workflow's journal so a replay neither rewrites it with a later clock nor loses it. It sets no workflow id — the poll is not waiting on
+ * an event, so there is nothing for a re-registration to send one to; the park that follows does that (`runnerParkDeps`).
+ */
+export function runnerWaitState(env: Env, run: RunStep, ids: { runId: string }): RunnerWaitState {
+	return {
+		now: async (label) => (await run(label, async () => Date.now())) as number,
+		begin: async (label, until) => {
+			await run(label, async () => {
+				await recordLiveness(env, ids.runId, Date.now(), { reason: "runner_away", until });
+				return null;
+			});
+		},
 		end: async (label) => {
 			await run(label, async () => {
 				await recordLiveness(env, ids.runId, Date.now(), null);

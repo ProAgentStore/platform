@@ -129,15 +129,37 @@ export interface RunnerParkDeps {
 /** Re-attempts of one step around a disconnect before the loss is treated as terminal. */
 export const RECONNECT_ROUNDS = 3;
 
+/**
+ * The wait as RUN STATE (#1177): while the guard waits for a machine the run row says `runner_away` with the instant the wait gives up,
+ * so health reads "waiting for its machine" instead of `working` and then `stalled`. Supplied by the workflow; absent, the wait records nothing.
+ */
+export interface RunnerWaitState {
+	/** The wall clock, journalled, so a replay agrees with itself about when the wait began. */
+	now: (label: string) => Promise<number>;
+	/** The run is waiting for its machine until `until` (the instant it gives up), journalled. */
+	begin: (label: string, until: number) => Promise<void>;
+	/** The machine is back, or the wait is over: clear the reason, journalled. */
+	end: (label: string) => Promise<void>;
+}
+
 export interface RunnerWaitDeps {
-	/** Live connectivity, resolved the way delegation resolves it (`runtimeConnectivity`). */
-	probe: () => Promise<RuntimeFacts>;
+	/**
+	 * Live connectivity, resolved the way delegation resolves it (`runtimeConnectivity`). Given a `label`, the answer is JOURNALLED
+	 * (#1177): a workflow replays its body, and a live read there answers differently the second time (the runner is back), which sent the
+	 * replay down a different path than the original — a budget undercounted, a notice posted again. Without a label it is a live read.
+	 */
+	probe: (label?: string) => Promise<RuntimeFacts>;
 	/** A DURABLE sleep — `step.sleep`, so the pause survives an eviction. */
 	sleep: (label: string) => Promise<void>;
-	/** One line into the owner's thread. A pause nobody can see is indistinguishable from a hang (#252). */
-	announce: (message: string) => Promise<void>;
-	/** Called on each tick while paused — the run still owns its session and should say so. */
-	tick?: (waitedMs: number) => Promise<void>;
+	/**
+	 * One line into the owner's thread. A pause nobody can see is indistinguishable from a hang (#252). Given a `label`, it is posted
+	 * ONCE per label however many times the workflow replays past it (#1177).
+	 */
+	announce: (message: string, label?: string) => Promise<void>;
+	/** Called on each tick while paused — the run still owns its session and should say so, and its liveness stays current without claiming progress. */
+	tick?: (waitedMs: number, label?: string) => Promise<void>;
+	/** The wait as run state (#1177). */
+	state?: RunnerWaitState;
 }
 
 export interface RunnerWaitResult {
@@ -237,8 +259,8 @@ export function parkExpiredMessage(d: AttachmentDiagnosis, parkedMs: number): st
  * Pure over {@link RunnerWaitDeps} — no D1, no relay, no Workflow — so the whole pause/resume
  * machine unit-tests without any of them, the same way `runCodingLoop` does.
  */
-export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string; waitMs: number; unresponsive?: boolean }): Promise<RunnerWaitResult> {
-	let facts = await deps.probe();
+export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string; waitMs: number; unresponsive?: boolean; extraMs?: number }): Promise<RunnerWaitResult> {
+	let facts = await deps.probe(`${opts.label}-q`);
 	// After a runner that did not ANSWER, the instant read is the one fact not to trust (#913): it
 	// counts the failed dispatch's own milliseconds-old ping as connected, so the wait returned after
 	// 0ms and the run re-dispatched straight into the same silence. Waiting one interval first is
@@ -250,15 +272,24 @@ export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string;
 	}
 
 	const ticks = Math.max(0, Math.floor(opts.waitMs / RUNNER_PROBE_INTERVAL_MS));
-	if (ticks > 0) await deps.announce(opts.unresponsive && facts.relayConnected ? slowRunnerMessage(opts.waitMs) : pauseMessage(describeFacts(facts), opts.waitMs));
+	if (ticks > 0) {
+		// The wait is run state before it is a notice (#1177): `runner_away` until the instant it gives up — the end of this poll, plus the
+		// park that follows it when the run can park — so a reader of the run row sees a wait, not work and then a stall.
+		if (deps.state) {
+			const start = await deps.state.now(`${opts.label}-t0`);
+			await deps.state.begin(`${opts.label}-w0`, start + opts.waitMs + (opts.extraMs ?? 0));
+		}
+		await deps.announce(opts.unresponsive && facts.relayConnected ? slowRunnerMessage(opts.waitMs) : pauseMessage(describeFacts(facts), opts.waitMs), `${opts.label}-n`);
+	}
 
 	for (let i = 0; i < ticks; i++) {
 		await deps.sleep(`${opts.label}-p${i}`);
 		const waited = (i + 1) * RUNNER_PROBE_INTERVAL_MS;
-		await deps.tick?.(waited);
-		facts = await deps.probe();
+		await deps.tick?.(waited, `${opts.label}-k${i}`);
+		facts = await deps.probe(`${opts.label}-q${i}`);
 		if (facts.relayConnected) {
-			await deps.announce(resumeMessage(facts.node, waited));
+			await deps.state?.end(`${opts.label}-w1`);
+			await deps.announce(resumeMessage(facts.node, waited), `${opts.label}-back`);
 			return { returned: true, waitedMs: waited, state: "attached", message: "", remedy: null };
 		}
 	}
@@ -330,7 +361,7 @@ export function makeRunnerGuard(cfg: {
 				// change is most likely to break. So when the error does not say it is a disconnect, ask
 				// the relay: a live socket means the runner is fine and this error is about something
 				// else. One cheap DO fetch buys the difference between waiting and mis-waiting.
-				if (!isRunnerUnreachable(e) && (await cfg.wait.probe().catch(() => null))?.relayConnected) throw e;
+				if (!isRunnerUnreachable(e) && (await cfg.wait.probe(`${name}-chk${round}`).catch(() => null))?.relayConnected) throw e;
 				await recover(name, round, isRunnerUnresponsive(e));
 			}
 		}
@@ -347,7 +378,7 @@ export function makeRunnerGuard(cfg: {
 		for (let attempt = 0; ; attempt++) {
 			const tag = attempt === 0 ? `${round}` : `${round}-${attempt}`;
 			const budget = Math.min(perLoss, Math.max(0, total - spent));
-			const w = await waitForRunner(cfg.wait, { label: `${name}-w${tag}`, waitMs: budget, unresponsive });
+			const w = await waitForRunner(cfg.wait, { label: `${name}-w${tag}`, waitMs: budget, unresponsive, extraMs: cfg.park ? Math.max(0, parkTotal - parked) : 0 });
 			spent += w.waitedMs;
 			// A machine that went AWAY parks the run (#1160). One still connected but silent does not: it is
 			// registered, so no re-registration would ever wake the park, and the honest answer is the one below.
@@ -381,12 +412,13 @@ export function makeRunnerGuard(cfg: {
 	async function parkUntilBack(p: RunnerParkDeps, label: string): Promise<void> {
 		const start = await p.now(`${label}-pk`);
 		const left = parkTotal - parked;
-		let facts = await cfg.wait.probe();
+		let facts = await cfg.wait.probe(`${label}-pk-q`);
 		if (left <= 0) throw new RunnerGoneError(parkExpiredMessage(describeFacts(facts), parked));
 		const until = start + left;
 		await p.begin(`${label}-pk-begin`, until);
-		await cfg.wait.announce(parkMessage(describeFacts(facts), until, left));
-		const quiet: RunnerWaitDeps = { ...cfg.wait, announce: async () => undefined };
+		await cfg.wait.announce(parkMessage(describeFacts(facts), until, left), `${label}-pk-n`);
+		// The wake poll below neither announces nor touches the wait state: the park owns both until it ends.
+		const quiet: RunnerWaitDeps = { ...cfg.wait, announce: async () => undefined, state: undefined };
 		for (let i = 0; ; i++) {
 			const at = await p.now(`${label}-pk${i}-at`);
 			if (at >= until) {
@@ -396,13 +428,13 @@ export function makeRunnerGuard(cfg: {
 			}
 			const woken = await p.waitForBack(`${label}-pk${i}`, Math.min(RUNNER_PARK_CHECK_MS, until - at));
 			const now = await p.now(`${label}-pk${i}-t`);
-			await cfg.wait.tick?.(now - start);
+			await cfg.wait.tick?.(now - start, `${label}-pk${i}-k`);
 			const back = woken ? await waitForRunner(quiet, { label: `${label}-pk${i}-w`, waitMs: RUNNER_WAKE_POLL_MS }) : null;
-			facts = await cfg.wait.probe();
+			facts = await cfg.wait.probe(`${label}-pk${i}-q`);
 			if (back?.returned || facts.relayConnected) {
 				parked += now - start;
 				await p.end(`${label}-pk-end`);
-				await cfg.wait.announce(resumeMessage(facts.node, now - start));
+				await cfg.wait.announce(resumeMessage(facts.node, now - start), `${label}-pk-back`);
 				return;
 			}
 		}
