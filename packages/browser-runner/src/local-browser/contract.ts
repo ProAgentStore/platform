@@ -429,47 +429,128 @@ export function redactSourceFailure(f: LocalBrowserSourceFailure, secrets: reado
  *
  * Wrapped as `{ result }` on purpose: a FAILED envelope carries its own `error` field, so returning
  * the envelope bare made `"error" in parsed` true for every failed run and rejected it as invalid.
+ *
+ * ── Normalise what is only a version difference, refuse what is a malformed result (#1153)
+ *
+ * Five verification attempts on two Job Scout leads ended `runner_result_invalid` and the owner was told only that the runner "sent a
+ * result PAGS could not accept". Two things were wrong, and both are fixed here. First, the parse refused an envelope for things that
+ * are not malformed, just OLDER or NEWER than this file: a runner that predates `traceId` or `engineAuth`, a `fields` object sent as a
+ * JSON string, an outcome in another case, a source-failure reason this release does not know. Each of those is now normalised to the
+ * contract's closed vocabulary (the original is kept in `notes`, never lost) — so the stored value is still one of ours.
+ * Second, the refusal said nothing actionable: it named the FIRST problem, with no value. It now names every problem (up to
+ * {@link RESULT_PROBLEMS_SHOWN}), each with the path and a short, redacted look at what arrived.
+ *
+ * Still FAIL-CLOSED, and deliberately so: nothing that decides a verdict is guessed. A missing `runId`, an `outcome` that is neither
+ * completed nor failed, a finding without a title, an http(s) url or evidence, a source failure without a url, a missing or non-array
+ * `findings` or `sourceFailures` — each refuses the whole envelope, because dropping one finding of several could turn a conflict into a verdict.
  */
-export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserResultEnvelope } | { error: string } {
-	if (!raw || typeof raw !== "object") return { error: "result must be an object" };
+export const RESULT_PROBLEMS_SHOWN = 5;
+
+/** A short, redacted look at a value that arrived, for a diagnostic. Never more than 80 characters. */
+function looked(v: unknown): string {
+	const head = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t); // the cut is marked, and n is a parameter, not a silent constant
+	if (v === undefined) return "missing";
+	if (v === null) return "null";
+	if (typeof v === "string") return JSON.stringify(redactText(head(v, 60)));
+	if (Array.isArray(v)) return `an array of ${v.length}`;
+	return typeof v;
+}
+
+export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserResultEnvelope; notes?: string[] } | { error: string } {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: `the result must be a JSON object, got ${looked(raw)}` };
 	const o = raw as Record<string, unknown>;
+	const notes: string[] = [];
+	const problems: string[] = [];
 	const runId = str(o.runId, 100);
-	if (!runId) return { error: "runId is required" };
-	const outcome = o.outcome === "completed" || o.outcome === "failed" ? o.outcome : null;
-	if (!outcome) return { error: "outcome must be completed or failed" };
-	const traceId = str(o.traceId, 100);
-	if (!traceId) return { error: "traceId is required" };
-	const engineAuth = oneOf(LOCAL_BROWSER_ENGINE_AUTHS, o.engineAuth);
-	if (!engineAuth) return { error: `engineAuth must be one of ${LOCAL_BROWSER_ENGINE_AUTHS.join(", ")}` };
-	if (!Array.isArray(o.findings) || !Array.isArray(o.sourceFailures)) return { error: "findings and sourceFailures must be arrays" };
-	if (o.findings.length > LOCAL_BROWSER_CAPS.findings) return { error: `at most ${LOCAL_BROWSER_CAPS.findings} findings` };
-	if (o.sourceFailures.length > LOCAL_BROWSER_CAPS.sourceFailures) return { error: `at most ${LOCAL_BROWSER_CAPS.sourceFailures} source failures` };
-	const findings: LocalBrowserFinding[] = [];
-	for (const [i, f] of o.findings.entries()) {
-		const r = (f && typeof f === "object" ? f : {}) as Record<string, unknown>;
-		const title = str(r.title, 500);
-		const url = str(r.url, 2000);
-		const evidence = str(r.evidence, LOCAL_BROWSER_CAPS.text);
-		if (!title || !url || !isHttpUrl(url) || !evidence) return { error: `findings[${i}] needs title, an http(s) url and evidence` };
-		const fields: LocalBrowserFinding["fields"] = {};
-		const rawFields = r.fields && typeof r.fields === "object" && !Array.isArray(r.fields) ? (r.fields as Record<string, unknown>) : {};
-		for (const [k, v] of Object.entries(rawFields).slice(0, LOCAL_BROWSER_CAPS.fieldCount)) {
-			if (SENSITIVE_KEY.test(k)) continue;
-			if (typeof v === "string") fields[k.slice(0, 100)] = v.slice(0, LOCAL_BROWSER_CAPS.text);
-			else if (typeof v === "number" || typeof v === "boolean" || v === null) fields[k.slice(0, 100)] = v;
+	if (!runId) problems.push(`runId is required (got ${looked(o.runId)})`);
+	const outcomeRaw = typeof o.outcome === "string" ? o.outcome.trim().toLowerCase() : "";
+	const outcome = outcomeRaw === "completed" || outcomeRaw === "failed" ? outcomeRaw : null;
+	if (!outcome) problems.push(`outcome must be "completed" or "failed" (got ${looked(o.outcome)})`);
+	else if (o.outcome !== outcome) notes.push(`outcome ${looked(o.outcome)} read as "${outcome}"`);
+	// An older runner sent neither; both are bookkeeping, not part of any verdict.
+	let traceId = str(o.traceId, 100);
+	if (!traceId && runId) {
+		traceId = runId;
+		notes.push("traceId was missing; the run id stands in for it");
+	}
+	let engineAuth = oneOf(LOCAL_BROWSER_ENGINE_AUTHS, o.engineAuth);
+	if (!engineAuth) {
+		engineAuth = "unknown";
+		notes.push(`engineAuth (${o.engineAuth === undefined ? "missing" : "unrecognised"}) is not one of ${LOCAL_BROWSER_ENGINE_AUTHS.join(", ")}; read as "unknown"`);
+	}
+	const list = (v: unknown, name: string): unknown[] => {
+		// Every runner that ever existed sent both lists, so an absent one is a malformed envelope, not an older one.
+		if (!Array.isArray(v)) {
+			problems.push(`${name} must be an array (got ${looked(v)})`);
+			return [];
 		}
-		// #947: capped and key-filtered is not redacted. A finding is the longest-lived thing a run
-		// produces, and its free text was the one part of this envelope nothing cleaned.
-		findings.push(redactFinding({ title, url, evidence, fields }));
+		return v;
+	};
+	const rawFindings = list(o.findings, "findings");
+	const rawFailures = list(o.sourceFailures, "sourceFailures");
+	if (rawFindings.length > LOCAL_BROWSER_CAPS.findings) problems.push(`at most ${LOCAL_BROWSER_CAPS.findings} findings (got ${rawFindings.length})`);
+	if (rawFailures.length > LOCAL_BROWSER_CAPS.sourceFailures) problems.push(`at most ${LOCAL_BROWSER_CAPS.sourceFailures} source failures (got ${rawFailures.length})`);
+	const findings: LocalBrowserFinding[] = [];
+	if (rawFindings.length <= LOCAL_BROWSER_CAPS.findings) {
+		for (const [i, f] of rawFindings.entries()) {
+			const r = (f && typeof f === "object" && !Array.isArray(f) ? f : {}) as Record<string, unknown>;
+			const title = str(r.title, 500);
+			const url = str(r.url, 2000);
+			const evidence = str(r.evidence, LOCAL_BROWSER_CAPS.text);
+			const bad: string[] = [];
+			if (!title) bad.push(`title (got ${looked(r.title)})`);
+			if (!url || !isHttpUrl(url)) bad.push(`an http(s) url (got ${looked(r.url)})`);
+			if (!evidence) bad.push(`evidence (got ${looked(r.evidence)})`);
+			if (bad.length || !title || !url || !evidence) {
+				problems.push(`findings[${i}] needs ${bad.join(", ")}`);
+				continue;
+			}
+			const fields: LocalBrowserFinding["fields"] = {};
+			let rawFields: unknown = r.fields;
+			// A JSON-encoded object is the same data in a different wrapper.
+			if (typeof rawFields === "string") {
+				try {
+					rawFields = JSON.parse(rawFields);
+					notes.push(`findings[${i}].fields arrived as a JSON string; parsed`);
+				} catch {
+					rawFields = undefined;
+					notes.push(`findings[${i}].fields was an unreadable string; read as empty`);
+				}
+			}
+			const fieldMap = rawFields && typeof rawFields === "object" && !Array.isArray(rawFields) ? (rawFields as Record<string, unknown>) : {};
+			for (const [k, v] of Object.entries(fieldMap).slice(0, LOCAL_BROWSER_CAPS.fieldCount)) {
+				if (SENSITIVE_KEY.test(k)) continue;
+				if (typeof v === "string") fields[k.slice(0, 100)] = v.slice(0, LOCAL_BROWSER_CAPS.text);
+				else if (typeof v === "number" || typeof v === "boolean" || v === null) fields[k.slice(0, 100)] = v;
+			}
+			// #947: capped and key-filtered is not redacted. A finding is the longest-lived thing a run
+			// produces, and its free text was the one part of this envelope nothing cleaned.
+			findings.push(redactFinding({ title, url, evidence, fields }));
+		}
 	}
 	const sourceFailures: LocalBrowserSourceFailure[] = [];
-	for (const [i, f] of o.sourceFailures.entries()) {
-		const r = (f && typeof f === "object" ? f : {}) as Record<string, unknown>;
-		const url = str(r.url, 2000);
-		const reason = oneOf(LOCAL_BROWSER_SOURCE_FAILURE_REASONS, r.reason);
-		if (!url || !reason) return { error: `sourceFailures[${i}] needs url and a known reason` };
-		const detail = str(r.detail, 1000);
-		sourceFailures.push(redactSourceFailure(detail ? { url, reason, detail } : { url, reason }));
+	if (rawFailures.length <= LOCAL_BROWSER_CAPS.sourceFailures) {
+		for (const [i, f] of rawFailures.entries()) {
+			const r = (f && typeof f === "object" && !Array.isArray(f) ? f : {}) as Record<string, unknown>;
+			const url = str(r.url, 2000);
+			if (!url) {
+				problems.push(`sourceFailures[${i}] needs a url (got ${looked(r.url)})`);
+				continue;
+			}
+			// A reason this release does not know is a newer runner's, not a malformed one: filed as the generic `error`, original kept.
+			let reason = oneOf(LOCAL_BROWSER_SOURCE_FAILURE_REASONS, r.reason);
+			let detail = str(r.detail, 1000);
+			if (!reason) {
+				notes.push(`sourceFailures[${i}].reason (${r.reason === undefined ? "missing" : "unrecognised"}) is unknown; read as "error"`);
+				reason = "error";
+				detail = detail ?? (typeof r.reason === "string" && r.reason.trim() ? `reason: ${r.reason.trim().length > 60 ? `${r.reason.trim().substring(0, 60)}…` : r.reason.trim()}` : null);
+			}
+			sourceFailures.push(redactSourceFailure(detail ? { url, reason, detail } : { url, reason }));
+		}
+	}
+	if (problems.length || !runId || !outcome || !traceId) {
+		const shown = problems.filter((_, n) => n < RESULT_PROBLEMS_SHOWN);
+		return { error: `${shown.join("; ")}${problems.length > shown.length ? `; and ${problems.length - shown.length} more` : ""}` };
 	}
 	const out: LocalBrowserResultEnvelope = { runId, outcome, findings, sourceFailures, summary: redactText(str(o.summary, LOCAL_BROWSER_CAPS.text) ?? ""), traceId, engineAuth };
 	// Redacted again here, whatever the runner did: an error is CLI output, and CLIs print keys.
@@ -482,5 +563,5 @@ export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserRes
 		const code = oneOf(LOCAL_BROWSER_ERROR_CODES, o.errorCode);
 		if (code) out.errorCode = code;
 	}
-	return { result: out };
+	return notes.length ? { result: out, notes } : { result: out };
 }

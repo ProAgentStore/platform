@@ -7,6 +7,7 @@
  * through the two functions here, so the pull and the report routes cannot disagree about what an
  * event or a result does to a run.
  */
+import { clipMarked } from "../clip-marked.js";
 import { logError } from "../error-log.js";
 import { persistJobLeadFindings } from "./findings.js";
 import { syncScanCard } from "./scan-board.js";
@@ -199,7 +200,7 @@ export async function applyRunnerResult(env: Env, instanceId: string, uid: strin
 		now,
 	);
 	if (!moved) throw new HttpError(409, `The run cannot end from "${run.status}"`);
-	await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: to, findings: parsed.findings.length, sourceFailures: parsed.sourceFailures.length, engineAuth: parsed.engineAuth } }], now);
+	await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: to, findings: parsed.findings.length, sourceFailures: parsed.sourceFailures.length, engineAuth: parsed.engineAuth, ...(checked.notes?.length ? { normalized: checked.notes.filter((_, n) => n < 10) } : {}) } }], now);
 	// A Job Search Scout's findings enter the job-lead pipeline now, not when someone reviews them (#1096).
 	// A failure here must not undo the run's end: what was not stored stays on the run, unreviewed.
 	const ended = await persistJobLeadFindings(env, instanceId, uid, moved, now).catch(async (err) => {
@@ -260,7 +261,11 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	if (res.status === 404) return endLost(env, instanceId, uid, run, "The runner no longer holds this run — it was restarted or updated. Start the run again.", now);
 	if (!res.ok) return lostByTime ? endLost(env, instanceId, uid, run, "The runner stopped answering for this run.", now) : run;
 
-	const body = (await runtimeJson(res)) as { state?: unknown; pauseReason?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
+	const parsedBody = await runtimeJson(res).catch(() => null);
+	// A reply that is not a JSON object is a runner (or a proxy in front of it) not answering properly, the same as a non-2xx: it is
+	// NOT a malformed result, which only a runner that reported the run ended can send (#1153).
+	if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) return lostByTime ? endLost(env, instanceId, uid, run, "The runner stopped answering for this run with a readable status.", now) : run;
+	const body = parsedBody as { state?: unknown; pauseReason?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
 	const events = Array.isArray(body.events) ? body.events : [];
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await ingestRunnerEvents(env, instanceId, uid, run, events, now, { runnerSeq: lastSeq })).run;
@@ -279,13 +284,28 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	} else if (body.state === "running" && current.status === "paused") {
 		current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
 	}
-	if (body.state === "ended" && body.result !== undefined && !isTerminal(current.status)) {
+	if (body.state === "ended" && !isTerminal(current.status)) {
+		// "Ended" with no result is a malformed result, not a runner that is away: it is told so, once, instead of the run waiting on
+		// a result that was never coming until it is filed `runner_lost` for silence (#1153).
+		const missing = body.result === undefined || body.result === null;
 		try {
+			if (missing) throw new HttpError(400, "Invalid result: the runner reported the run ended but sent no result");
 			current = await applyRunnerResult(env, instanceId, uid, current, body.result, now);
 		} catch (err) {
-			// A runner that ended the run but sent a result PAGS cannot accept still ended it.
-			const failed = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "failed", errorCode: "runner_result_invalid", error: err instanceof Error ? err.message : String(err) }, now);
-			current = failed ?? current;
+			if (err instanceof HttpError && err.status === 400) {
+				// A result PAGS cannot accept still ended the run — failed, fail-closed, and the reason says which field and what arrived.
+				const message = `${err.message} — the runner and PAGS disagree about the result format; update the runner (\`pags update\`) and run it again.`;
+				const failed = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "failed", errorCode: "runner_result_invalid", error: clipMarked(message, 1000, { within: true, what: "characters of the refusal" }) }, now);
+				if (failed) {
+					await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: "failed", errorCode: "runner_result_invalid" } }], now);
+					await syncScanCard(env, instanceId, uid, failed);
+					await notifyEnded(env, uid, instanceId, failed).catch(() => undefined);
+				}
+				current = failed ?? current;
+			} else if (!(err instanceof HttpError && err.status === 409)) {
+				// Our own store failing is not the runner's fault: the run stays as it is and the next tick reads the result again.
+				await logError(env, { source: "local-browser", message: `run ${run.id}: applying the runner's result failed: ${err instanceof Error ? err.message : String(err)}`, userId: uid, context: { instanceId, runId: run.id } }).catch(() => undefined);
+			}
 		}
 	}
 	return current;

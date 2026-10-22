@@ -51,10 +51,9 @@ describe("parseLocalBrowserResult", () => {
 	it.each([
 		[{ ...RESULT, runId: "" }, /runId/],
 		[{ ...RESULT, outcome: "paused" }, /outcome/],
-		[{ ...RESULT, engineAuth: "sk-ant-123" }, /engineAuth/],
 		[{ ...RESULT, findings: [{ title: "x", url: "javascript:alert(1)", evidence: "e" }] }, /findings\[0\]/],
 		[{ ...RESULT, findings: [{ title: "x", url: "https://a.com" }] }, /findings\[0\]/],
-		[{ ...RESULT, sourceFailures: [{ url: "https://a.com", reason: "bypassed" }] }, /sourceFailures\[0\]/],
+		[{ ...RESULT, sourceFailures: [{ reason: "timeout" }] }, /sourceFailures\[0\] needs a url/],
 		[{ ...RESULT, findings: Array.from({ length: 201 }, () => RESULT.findings[0]) }, /at most 200 findings/],
 	])("refuses an invalid envelope (%#)", (raw, why) => {
 		const r = parseLocalBrowserResult(raw);
@@ -165,5 +164,65 @@ describe("redactText (#947)", () => {
 	it("leaves ordinary text alone", async () => {
 		const { redactText } = await import("./contract");
 		expect(redactText("Found 3 senior TypeScript roles in Sydney on seek.com.au")).toBe("Found 3 senior TypeScript roles in Sydney on seek.com.au");
+	});
+});
+
+describe("parseLocalBrowserResult — normalise a version difference, refuse a malformed result (#1153)", () => {
+	const ok = (raw: unknown) => {
+		const r = parseLocalBrowserResult(raw);
+		if (!("result" in r)) throw new Error(`expected a result, got: ${r.error}`);
+		return r;
+	};
+
+	it("an older runner's envelope without traceId or engineAuth is accepted, with both read from the contract — and the notes say so", () => {
+		const { traceId: _t, engineAuth: _e, ...older } = RESULT;
+		const r = ok(older);
+		expect(r.result).toMatchObject({ runId: RESULT.runId, traceId: RESULT.runId, engineAuth: "unknown" });
+		expect(r.notes?.join(" ")).toMatch(/traceId was missing/);
+		expect(r.notes?.join(" ")).toMatch(/engineAuth \(missing\)/);
+	});
+
+	it("an engineAuth outside the closed list is stored as 'unknown', and its value is never echoed into the notes", () => {
+		const r = ok({ ...RESULT, engineAuth: "sk-ant-api03-THISISASECRETVALUE" });
+		expect(r.result.engineAuth).toBe("unknown");
+		expect(JSON.stringify(r.notes)).not.toContain("THISISASECRET");
+	});
+
+	it("an unknown source-failure reason is filed as 'error' with the original in its detail; the vocabulary stays closed", () => {
+		const r = ok({ ...RESULT, sourceFailures: [{ url: "https://a.com", reason: "geo_blocked" }] });
+		expect(r.result.sourceFailures).toEqual([{ url: "https://a.com", reason: "error", detail: "reason: geo_blocked" }]);
+	});
+
+	it("outcome in another case and fields as a JSON string are read; an absent list is NOT (every runner sent both)", () => {
+		const r = ok({ ...RESULT, outcome: " Completed ", findings: [{ title: "t", url: "https://a.com/j", evidence: "e", fields: '{"verification_outcome":"active"}' }] });
+		expect(r.result.outcome).toBe("completed");
+		expect(r.result.findings[0].fields).toEqual({ verification_outcome: "active" });
+		expect(parseLocalBrowserResult({ ...RESULT, sourceFailures: undefined })).toEqual({ error: expect.stringMatching(/sourceFailures must be an array \(got missing\)/) });
+	});
+
+	it("STILL fails closed on what decides a verdict: a bad finding refuses the whole envelope, never just that finding", () => {
+		const good = { title: "t", url: "https://a.com/j", evidence: "e", fields: { verification_outcome: "expired" } };
+		const bad = { title: "t", url: "not a url", evidence: "e", fields: { verification_outcome: "active" } };
+		const r = parseLocalBrowserResult({ ...RESULT, findings: [good, bad] });
+		expect(r).toHaveProperty("error");
+		expect(parseLocalBrowserResult({ ...RESULT, findings: "oops" })).toEqual({ error: expect.stringMatching(/findings must be an array \(got "oops"\)/) });
+		expect(parseLocalBrowserResult({ ...RESULT, outcome: "paused" })).toHaveProperty("error");
+		expect(parseLocalBrowserResult([])).toEqual({ error: expect.stringMatching(/must be a JSON object/) });
+	});
+
+	it("the refusal is actionable: every problem, with its path and a short redacted look at what arrived", () => {
+		const r = parseLocalBrowserResult({ ...RESULT, runId: "", findings: [{ title: "", url: "ftp://x", evidence: "" }, { title: "ok" }] });
+		const error = "error" in r ? r.error : "";
+		expect(error).toMatch(/runId is required \(got ""\)/);
+		expect(error).toMatch(/findings\[0\] needs title \(got ""\), an http\(s\) url \(got "ftp:\/\/x"\), evidence/);
+		expect(error).toMatch(/findings\[1\] needs an http\(s\) url \(got missing\), evidence \(got missing\)/);
+	});
+
+	it("a credential-shaped value in a refused field is redacted in the diagnostic, and a long list of problems is capped", () => {
+		const secret = "sk-ant-api03-" + "A".repeat(40);
+		const r = parseLocalBrowserResult({ ...RESULT, findings: Array.from({ length: 9 }, () => ({ title: secret, url: secret, evidence: "" })) });
+		const error = "error" in r ? r.error : "";
+		expect(error).not.toContain(secret);
+		expect(error).toMatch(/and 4 more$/);
 	});
 });

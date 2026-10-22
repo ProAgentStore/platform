@@ -108,6 +108,14 @@ describe("what the browser is given and what it may answer (#1030)", () => {
 		expect(outcomeFromRun(runs.get("d") as never)).toMatchObject({ outcome: "temporarily_unverifiable", detail: expect.stringMatching(/conflicting/) });
 		expect(outcomeFromRun({ id: "e", status: "failed", errorCode: "runner_lost" } as never)).toMatchObject({ outcome: "temporarily_unverifiable" });
 	});
+
+	it("a result the runner sent and PAGS refused says why (#1153) - not a generic 'ended failed' - and a lost runner stays a different thing", () => {
+		const invalid = outcomeFromRun({ id: "f", status: "failed", errorCode: "runner_result_invalid", error: "Invalid result: findings[0] needs evidence (got missing) - update the runner" } as never);
+		expect(invalid).toMatchObject({ outcome: "temporarily_unverifiable", detail: expect.stringMatching(/runner's result was refused: .*findings\[0\] needs evidence/) });
+		const lost = outcomeFromRun({ id: "g", status: "failed", errorCode: "runner_lost", error: "The runner went offline during the run." } as never);
+		expect(lost.detail).toMatch(/runner_lost/);
+		expect(lost.detail).not.toMatch(/refused/);
+	});
 });
 
 describe("the dispatcher (#1030)", () => {

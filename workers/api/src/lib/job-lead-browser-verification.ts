@@ -140,7 +140,12 @@ export function namesFromRun(run: LocalBrowserRun | null): { title?: string; com
 /** The typed outcome a finished run reported — anything unreadable is temporarily_unverifiable, never a guess. */
 export function outcomeFromRun(run: LocalBrowserRun | null): { outcome: BrowserVerificationOutcome; detail: string } {
 	if (!run) return { outcome: "temporarily_unverifiable", detail: "The verification run could not be found." };
-	if (run.status !== "completed") return { outcome: "temporarily_unverifiable", detail: `The verification run ended ${run.status}${run.errorCode ? ` (${run.errorCode})` : ""}.` };
+	if (run.status !== "completed") {
+		// A result the runner sent and PAGS refused is a protocol problem on one machine, not a posting that could not be read (#1153):
+		// say which field, and that the cure is the runner's version — a retry on the same runner will be refused the same way.
+		if (run.errorCode === "runner_result_invalid") return { outcome: "temporarily_unverifiable", detail: `The runner's result was refused: ${run.error ?? "it was not in the expected format"}` };
+		return { outcome: "temporarily_unverifiable", detail: `The verification run ended ${run.status}${run.errorCode ? ` (${run.errorCode})` : ""}${run.error ? `: ${run.error}` : "."}` };
+	}
 	const reported = (run.result?.findings ?? []).map((f) => f.fields?.[OUTCOME_FIELD]).filter((o): o is string => typeof o === "string");
 	const distinct = [...new Set(reported)];
 	if (distinct.length !== 1 || !(BROWSER_VERIFICATION_OUTCOMES as readonly string[]).includes(distinct[0])) {
@@ -407,7 +412,7 @@ export async function reconcileVerificationAttempts(env: Env, now = Date.now(), 
 			.run();
 		// Single writer: another tick that already claimed this attempt applies it, not this one.
 		if ((claimed.meta?.changes ?? 0) === 0) continue;
-		await settle(env, row, outcome, { attempt: a.attempt, receiptId: a.id, exhausted: outcome === "temporarily_unverifiable" && a.attempt >= MAX_ATTEMPTS, detail, ...(outcome === "active" ? { names: namesFromRun(run) } : {}) }, now);
+		await settle(env, row, outcome, { attempt: a.attempt, receiptId: a.id, exhausted: outcome === "temporarily_unverifiable" && a.attempt >= MAX_ATTEMPTS, detail, ...(run?.errorCode === "runner_result_invalid" ? { why: "the browser runner's results were refused as malformed (see the attempt detail) - not a posting that could not be read" } : {}), ...(outcome === "active" ? { names: namesFromRun(run) } : {}) }, now);
 		settled++;
 	}
 	return settled;
