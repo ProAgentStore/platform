@@ -110,10 +110,27 @@ export interface HolderFacts {
 	healthRsid: string | null;
 }
 
-/** The config directory the lock lives in, beside `machine.json`. `PAGS_CONFIG_DIR` separates a dev runner. */
+/** The runner's own config directory (logs, crash reports, policy). `PAGS_CONFIG_DIR` separates a dev runner's files — NOT its lock ({@link lockDir}). */
 export function configDir(env: NodeJS.ProcessEnv = process.env): string {
 	return env.PAGS_CONFIG_DIR?.trim() || join(homedir(), ".config", "proagentstore");
 }
+
+/**
+ * Where the lock lives: the MACHINE's config directory, beside `machine.json` (#1180).
+ *
+ * The lock is a fact about the machine — one runner per machine per account, under the hostname and machine identity that always
+ * come from the home directory — so it must not move with `PAGS_CONFIG_DIR`. That variable separates a dev runner's OWN files (logs,
+ * crash reports, auto-update policy: {@link configDir}); keyed by it, the lock gave a dev runner a slot of its own, and it ran beside
+ * `pags up` under the same hostname and identity and fought it through 4409 / `--force`. `env.HOME` is read only for an env passed
+ * in by a caller (a test isolating a fake home); the process's own environment resolves through the OS exactly as `machine.ts` does.
+ */
+export function lockDir(env: NodeJS.ProcessEnv = process.env): string {
+	const home = env !== process.env && env.HOME?.trim() ? env.HOME.trim() : homedir();
+	return join(home, ".config", "proagentstore");
+}
+
+/** The account a lock is taken under when a bare `runner connect` has no session to name one (#1180). */
+export const UNKNOWN_LOCK_ACCOUNT = "(unknown account)";
 
 /** A stable, non-identifying file-name component for an account. */
 export const accountKey = (account: string): string => createHash("sha256").update(account.trim().toLowerCase()).digest("hex").slice(0, 12);
@@ -126,7 +143,7 @@ export const accountKey = (account: string): string => createHash("sha256").upda
  * slots. One lock for the machine would make the second account's runner unstartable for no safety
  * gain.
  */
-export const lockPath = (account: string, env: NodeJS.ProcessEnv = process.env): string => join(configDir(env), `up-${accountKey(account)}.lock`);
+export const lockPath = (account: string, env: NodeJS.ProcessEnv = process.env): string => join(lockDir(env), `up-${accountKey(account)}.lock`);
 
 /**
  * The verdict on the process named in a lock file. PURE.
@@ -301,7 +318,7 @@ export async function acquireLock(input: AcquireInput): Promise<AcquireResult> {
 	const path = lockPath(input.account, env);
 	const rsid = input.rsid ?? randomUUID();
 	const handoff = input.handoffFrom?.trim() || env.PAGS_LOCK_HANDOFF?.trim() || "";
-	mkdirSync(configDir(env), { recursive: true });
+	mkdirSync(lockDir(env), { recursive: true });
 
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const written = tryWrite(path, buildLock(input, rsid, env));

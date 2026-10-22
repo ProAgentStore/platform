@@ -18,7 +18,7 @@ import {
 } from "./process.js";
 import { connectViaRelay } from "./relay.js";
 import { thresholdsCommand } from "./thresholds.js";
-import { acquireLock, configDir, holderMessage, releaseLock } from "../../runner-lock.js";
+import { acquireLock, configDir, holderMessage, releaseLock, UNKNOWN_LOCK_ACCOUNT } from "../../runner-lock.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { CLI_VERSION } from "./process.js";
 import { crashAccountKey } from "../../crash-reports.js";
@@ -92,9 +92,15 @@ export function createRunnerCommand(): Command {
 			// `--replace` must be able to stop that one. `pags up` checks the lock before spawning
 			// us so it can refuse with who holds it; we take it, so a bare `runner connect` and a
 			// service-launched one are held to the same rule.
-			const lockAccount = clean(process.env.PAGS_LOCK_ACCOUNT) || "";
+			//
+			// EVERY connect takes it (#1180). `pags up` names the account in PAGS_LOCK_ACCOUNT; a hand-started `runner connect` has no
+			// such variable, and used to run lock-free beside `pags up` under the same hostname and machine identity, fighting it through
+			// 4409 / `--force`. It now takes the lock for the signed-in account, or for `UNKNOWN_LOCK_ACCOUNT` when there is no session
+			// to read (a token given by flag): still one runner for that slot rather than none. The lock is the machine's, so a dev
+			// runner's own PAGS_CONFIG_DIR does not give it a slot of its own (`lockDir`).
+			const lockAccount = clean(process.env.PAGS_LOCK_ACCOUNT) || loadSession()?.user.login?.trim() || UNKNOWN_LOCK_ACCOUNT;
 			let lockHeld: { path: string; rsid: string; nonce: string; launch: string } | null = null;
-			if (lockAccount) {
+			{
 				const taken = await acquireLock({ account: lockAccount, node: hostname(), machineId: loadMachineIdentity().id || null, version: CLI_VERSION, port: Number(port), runnerToken });
 				if (!taken.ok) {
 					for (const line of taken.lock ? holderMessage(taken.lock, taken.verdict) : ["Another `pags up` holds this machine for this account."]) writeError(line);
@@ -117,7 +123,7 @@ export function createRunnerCommand(): Command {
 			const spec = runnerSpawnSpec(runnerOpts);
 			// Crash reports (#1087): the runtime records its own, stamped with this build and this
 			// account; this process records the runtime's death and delivers both.
-			const crashAccount = lockAccount || loadSession()?.user.login || "";
+			const crashAccount = lockAccount === UNKNOWN_LOCK_ACCOUNT ? "" : lockAccount;
 			const crashes = crashAccount ? crashPaths(configDir(), crashAccount, opts.dataDir) : null;
 			const runner = spawn(spec.command, spec.args, {
 				cwd: spec.cwd,

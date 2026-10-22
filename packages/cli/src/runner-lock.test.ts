@@ -12,7 +12,7 @@
  * legitimate holders. Only a pid that is GONE (or reused) may be taken automatically.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -25,6 +25,7 @@ import {
 	holderMessage,
 	holderWhere,
 	isTakeable,
+	lockDir,
 	lockPath,
 	pidStartedAt,
 	readLock,
@@ -135,15 +136,13 @@ describe("what a refused `pags up` says", () => {
 });
 
 describe("where the lock lives", () => {
-	// #1092: these pin the config dir with PAGS_CONFIG_DIR — the one input `configDir` reads. They used
-	// to pass `{ HOME }`, which `configDir` ignores (it calls `homedir()`), so the path's PARENT was the
-	// real home of whoever ran the suite, and `not.toContain("serge-ivo")` failed on a machine whose
-	// home directory is /Users/serge-ivo. Secrecy is a property of the FILENAME; the parent is the user's.
-	const at = (dir: string) => ({ PAGS_CONFIG_DIR: dir }) as NodeJS.ProcessEnv;
+	// #1092: secrecy is a property of the FILENAME; the parent is the user's. The directory is the MACHINE's (#1180), so a test pins
+	// it through `{ HOME }`, which `lockDir` reads for a caller-supplied env (and never for the process's own).
+	const at = (home: string) => ({ HOME: home }) as NodeJS.ProcessEnv;
 
 	it("is per ACCOUNT, so two accounts can each run one runner here (Q1)", () => {
-		const a = lockPath("serge-ivo", at("/home/x/.config/proagentstore"));
-		const b = lockPath("someone-else", at("/home/x/.config/proagentstore"));
+		const a = lockPath("serge-ivo", at("/home/x"));
+		const b = lockPath("someone-else", at("/home/x"));
 		expect(a).not.toBe(b);
 		expect(basename(a)).toMatch(/^up-[0-9a-f]{12}\.lock$/);
 		// The account is hashed, not spelled out, and the same account always resolves the same way.
@@ -155,22 +154,26 @@ describe("where the lock lives", () => {
 
 	it("keeps the account out of the FILENAME even when the home directory is named after it (#1092)", () => {
 		// The audit machine's real layout: the OS user and the PAGS account share a name.
-		const dir = "/Users/serge-ivo/.config/proagentstore";
-		const a = lockPath("serge-ivo", at(dir));
+		const home = "/Users/serge-ivo";
+		const a = lockPath("serge-ivo", at(home));
 		// The parent is the user's own directory and is left exactly as given — it is not ours to hide.
-		expect(dirname(a)).toBe(dir);
-		// The segment this module names is hashed: no account, in any case or with stray spaces.
+		expect(dirname(a)).toBe(`${home}/.config/proagentstore`);
 		expect(basename(a)).toBe(`up-${accountKey("serge-ivo")}.lock`);
 		for (const spelling of ["serge-ivo", "Serge-Ivo", "SERGE-IVO"]) expect(basename(a)).not.toContain(spelling);
-		expect(lockPath(" Serge-Ivo ", at(dir)), "normalised: case and surrounding space do not make a second lock").toBe(a);
-		// Per-account uniqueness holds in that directory too.
-		expect(lockPath("someone-else", at(dir))).not.toBe(a);
-		expect(dirname(lockPath("someone-else", at(dir)))).toBe(dir);
+		expect(lockPath(" Serge-Ivo ", at(home)), "normalised: case and surrounding space do not make a second lock").toBe(a);
+		expect(lockPath("someone-else", at(home))).not.toBe(a);
+		expect(dirname(lockPath("someone-else", at(home)))).toBe(dirname(a));
 	});
 
-	it("follows PAGS_CONFIG_DIR, which is how a dev runner stays out of the installed one's way", () => {
-		expect(configDir({ PAGS_CONFIG_DIR: "/tmp/alt" } as NodeJS.ProcessEnv)).toBe("/tmp/alt");
-		expect(lockPath("a", { PAGS_CONFIG_DIR: "/tmp/alt" } as NodeJS.ProcessEnv)).toMatch(/^\/tmp\/alt\/up-/);
+	it("is the MACHINE's, beside machine.json — PAGS_CONFIG_DIR moves a dev runner's files, never its lock (#1180)", () => {
+		const dev = { HOME: "/home/x", PAGS_CONFIG_DIR: "/tmp/alt" } as NodeJS.ProcessEnv;
+		// The dev runner's own files follow its directory...
+		expect(configDir(dev)).toBe("/tmp/alt");
+		// ...but its lock is the same file the installed runner takes, so the two collide instead of fighting through 4409.
+		expect(lockPath("a", dev)).toBe(lockPath("a", { HOME: "/home/x" } as NodeJS.ProcessEnv));
+		expect(lockDir(dev)).toBe("/home/x/.config/proagentstore");
+		// The process's own environment resolves through the OS, as machine.ts does, and ignores PAGS_CONFIG_DIR too.
+		expect(lockDir()).toBe(join(homedir(), ".config", "proagentstore"));
 	});
 });
 
@@ -198,7 +201,8 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-lock-"));
-		env = { PAGS_CONFIG_DIR: dir } as NodeJS.ProcessEnv;
+		env = { HOME: dir } as NodeJS.ProcessEnv;
+		mkdirSync(join(dir, ".config", "proagentstore"), { recursive: true });
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
