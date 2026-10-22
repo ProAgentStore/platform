@@ -6,6 +6,7 @@ import TranslationFields from "../components/TranslationFields";
 import AccountConnections from "../components/AccountConnections";
 import NotificationPreferences from "../components/NotificationPreferences";
 import NotificationPolicySection from "../tabs/settings/NotificationPolicySection";
+import { saveCodingEngine } from "../lib/codingDefault";
 import { useNotificationsStore } from "../lib/useNotificationsStore";
 import ApprovalGateSection from "../tabs/settings/ApprovalGateSection";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
@@ -67,6 +68,8 @@ export default function Preferences() {
 	const [coding, setCoding] = useState<{ defaultEngineId?: string }>({});
 	const [codingEngineOptions, setCodingEngineOptions] = useState<ReadonlyArray<CodingEngineOption>>([]);
 	const [codingMsg, setCodingMsg] = useState("");
+	/** The engine choice awaiting the server's answer, or null. The control shows it, disabled, as "Saving…" — never as stored. */
+	const [pendingEngine, setPendingEngine] = useState<string | null>(null);
 	// The release-notes default every agent inherits (#1217): undefined = the platform default (on).
 	const [releaseNotes, setReleaseNotes] = useState<boolean | undefined>(undefined);
 	const [releaseNotesMsg, setReleaseNotesMsg] = useState("");
@@ -139,19 +142,18 @@ export default function Preferences() {
 		await api("/v1/preferences", { method: "PUT", body: JSON.stringify({ translation: next }) });
 	}, []);
 
-	const saveCodingDefault = useCallback(async (defaultEngineId: string) => {
-		const next = defaultEngineId ? { defaultEngineId } : {};
-		setCoding(next);
-		setCodingMsg("Saved — future coder sessions inherit this unless the agent has its own engine.");
-		try {
-			const d = await api<AccountPreferencesWriteResponse>("/v1/preferences", {
-				method: "PUT",
-				body: JSON.stringify({ coding: next }),
-			});
-			setCoding(d.preferences?.coding || {});
-		} catch (e) {
-			setCodingMsg(e instanceof Error ? e.message : String(e));
+	// The choice is shown as PENDING until the server confirms it (#1282): a refused save returns the control to what is stored.
+	const saveCodingDefault = useCallback(async (choice: string) => {
+		setPendingEngine(choice);
+		setCodingMsg("");
+		const done = await saveCodingEngine((body) => api<AccountPreferencesWriteResponse>("/v1/preferences", { method: "PUT", body: JSON.stringify(body) }), choice);
+		if (done.ok) {
+			setCoding(done.persisted ? { defaultEngineId: done.persisted } : {});
+			setCodingMsg("Saved — future coder sessions inherit this unless the agent has its own engine.");
+		} else {
+			setCodingMsg(`Not saved — ${done.error}`);
 		}
+		setPendingEngine(null);
 	}, []);
 
 	const saveReleaseNotesDefault = useCallback(async (value: "" | "on" | "off") => {
@@ -282,7 +284,8 @@ export default function Preferences() {
 						<label htmlFor="account-coding-engine" className="text-xs text-muted block mb-1">Engine</label>
 						<select
 							id="account-coding-engine"
-							value={coding.defaultEngineId || ""}
+							value={pendingEngine ?? (coding.defaultEngineId || "")}
+							disabled={pendingEngine !== null}
 							onChange={(e) => void saveCodingDefault(e.target.value)}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full sm:w-56"
 						>
@@ -296,7 +299,11 @@ export default function Preferences() {
 						{applyingCoding ? "Applying…" : "Apply to idle coders"}
 					</Button>
 				</div>
-				{codingMsg && <p className="text-xs text-muted mt-2">{codingMsg}</p>}
+				{(pendingEngine !== null || codingMsg) && (
+					<p className="text-xs text-muted mt-2" role={codingMsg.startsWith("Not saved") ? "alert" : undefined}>
+						{pendingEngine !== null ? "Saving…" : codingMsg}
+					</p>
+				)}
 			</Card>
 
 			<Card className="mb-3 sm:mb-4">
