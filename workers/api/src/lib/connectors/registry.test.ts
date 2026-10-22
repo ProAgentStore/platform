@@ -287,7 +287,7 @@ describe("connector registry", () => {
 
 		it("explains server-wide access and the connector's Off and Ask each time modes", () => {
 			expect(getConnector("mcp")?.writeMeaning).toBe(
-				"Grant read & write access to a server below, or choose individual tools in Advanced permissions. Off blocks every MCP write; Ask each time requires approval for each call.",
+				"MCP write access is a kill switch, not a permission: grant read & write access to a server below, or choose individual tools in Advanced permissions. Off blocks every MCP write; Ask each time requires approval for each call.",
 			);
 		});
 

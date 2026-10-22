@@ -179,7 +179,7 @@ export const CONNECTORS: Connector[] = [
 		// only checkbox in the panel that grants no reach on its own (#262: grants are per server
 		// AND per remote tool), so losing this sentence would make ticking it read as a full grant.
 		writeMeaning:
-			"Grant read & write access to a server below, or choose individual tools in Advanced permissions. Off blocks every MCP write; Ask each time requires approval for each call.",
+			"MCP write access is a kill switch, not a permission: grant read & write access to a server below, or choose individual tools in Advanced permissions. Off blocks every MCP write; Ask each time requires approval for each call.",
 		grantModel: "user",
 		tools: MCP_TOOLS,
 	},

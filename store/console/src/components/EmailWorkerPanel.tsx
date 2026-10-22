@@ -206,7 +206,7 @@ export default function EmailWorkerPanel({ instanceId }: { instanceId: string })
 							<div className="mt-2"><Button onClick={() => void saveIdentities()} disabled={busy}>Save sender approvals</Button></div>
 						</div>
 					)}
-					{status.blockers.length > 0 && <div className="text-xs text-amber-700 dark:text-amber-300">{status.blockers.map((blocker) => <p key={blocker.code}>{blocker.message}</p>)}</div>}
+					{status.blockers.length > 0 && <div className="text-xs text-warning">{status.blockers.map((blocker) => <p key={blocker.code}>{blocker.message}</p>)}</div>}
 				</div>
 			)}
 			{message && <p className="mt-2 text-xs text-muted">{message}</p>}
