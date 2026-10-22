@@ -99,6 +99,7 @@ export {
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
 import { adoptableIdByName, freshestVersion, namesOfMachine, normalizeMachineId, pinCandidates, sanitizeMachineNames } from "../lib/machine-identity.js";
+import { failoverField } from "../lib/runner-failover.js";
 import { resolveRunnerPin, resolveRunnerPins } from "../lib/runtime-nodes.js";
 import { machineDisplayNames } from "../lib/machine-names.js";
 import { wakeRunsParkedOnMachine } from "../lib/coding-park.js";
@@ -721,6 +722,7 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 		nodes: available,
 		nodesDetail,
 		resolvedNode,
+		...failoverField({ pinned: runnerNode, pinnedMachineId: pin.machineId, nodes: nodesDetail, resolvedNode }), // #1179
 	});
 });
 
