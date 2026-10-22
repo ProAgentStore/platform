@@ -27,7 +27,7 @@ export function registerGmailIdentityTools(server: McpServer, ctx: InstanceTools
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(t), "read", "get_instance_gmail_identity", { instance_id });
 			if (denied) return denied;
-			const data = (await authedCall(path(instance_id), sessionToken, {}, env)) as { error?: string };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/gmail/identity`, sessionToken, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);
@@ -57,7 +57,7 @@ export function registerGmailIdentityTools(server: McpServer, ctx: InstanceTools
 				const what = clear ? `clear the Gmail identity on ${instance_id}` : `pin ${instance_id} to send as ${send_as ?? "(none)"}, scoped to ${(inbound_scope ?? []).join(", ") || "the whole mailbox"}`;
 				return dryRun(safetyFor(t), "set_instance_gmail_identity", what, input, { endpoint: path(instance_id), method: "PUT", body });
 			}
-			const data = (await authedCall(path(instance_id), sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/gmail/identity`, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (!data.error) await audit(safetyFor(t), { tool: "set_instance_gmail_identity", action: "completed", input, result: data });
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
