@@ -67,8 +67,11 @@ describe("the picker is deterministic and never random (#1233)", () => {
 	it("settings are validated at the write and defaulted at the read", () => {
 		expect(autoPickupFrom(null)).toEqual(AUTO_PICKUP_DEFAULTS);
 		expect(autoPickupFrom({ autoPickup: { enabled: true, maxPerDay: 999 } })).toMatchObject({ enabled: true, maxPerDay: 10, maxIterations: 30 });
+		expect(autoPickupFrom({ autoPickup: { enabled: true, maxPerDay: 100 } })).toMatchObject({ enabled: true, maxPerDay: 100 });
 		expect(autoPickupPatchProblem({ enabled: "yes" })).toMatch(/true or false/);
 		expect(autoPickupPatchProblem({ priorityLabels: Array.from({ length: 21 }, (_, i) => `L${i}`) })).toMatch(/at most 20/);
+		expect(autoPickupPatchProblem({ maxPerDay: 100 })).toBeNull();
+		expect(autoPickupPatchProblem({ maxPerDay: 101 })).toMatch(/1 to 100/);
 		expect(autoPickupPatchProblem({ maxIterations: 0 })).toMatch(/1 to 100/);
 		expect(autoPickupPatchProblem({ surprise: 1 })).toMatch(/Unknown/);
 		expect(autoPickupPatchProblem({ enabled: true, excludeLabels: ["design"], maxPerDay: 3 })).toBeNull();

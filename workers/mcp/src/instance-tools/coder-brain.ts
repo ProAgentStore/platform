@@ -50,7 +50,7 @@ export function registerCoderBrainTools(server: McpServer, ctx: InstanceToolsCtx
 			enabled: z.boolean().optional(),
 			priority_labels: z.array(z.string()).max(20).optional().describe("Priority labels, highest first. Default [\"P0\",\"P1\",\"P2\",\"P3\"]."),
 			exclude_labels: z.array(z.string()).max(20).optional().describe("Labels that keep an issue out, on top of the built-in ones."),
-			max_per_day: z.coerce.number().int().min(1).max(50).optional(),
+			max_per_day: z.coerce.number().int().min(1).max(100).optional(),
 			max_iterations: z.coerce.number().int().min(1).max(100).optional(),
 			dry_run: z.boolean().optional(),
 		},

@@ -65,7 +65,7 @@ export function autoPickupFrom(config: unknown): AutoPickupSettings {
 		enabled: a.enabled === true,
 		priorityLabels: labelList(a.priorityLabels, AUTO_PICKUP_DEFAULTS.priorityLabels),
 		excludeLabels: labelList(a.excludeLabels, AUTO_PICKUP_DEFAULTS.excludeLabels),
-		maxPerDay: intIn(a.maxPerDay, 1, 50, AUTO_PICKUP_DEFAULTS.maxPerDay),
+		maxPerDay: intIn(a.maxPerDay, 1, 100, AUTO_PICKUP_DEFAULTS.maxPerDay),
 		maxIterations: intIn(a.maxIterations, 1, 100, AUTO_PICKUP_DEFAULTS.maxIterations),
 	};
 }
@@ -80,7 +80,7 @@ export function autoPickupPatchProblem(patch: Record<string, unknown>): string |
 		const v = patch[k];
 		if (k in patch && (!Array.isArray(v) || v.length > MAX_LABELS || v.some((x) => typeof x !== "string" || !x.trim() || x.length > 50))) return `${k} must be a list of at most ${MAX_LABELS} labels, each 1-50 characters.`;
 	}
-	if ("maxPerDay" in patch && intIn(patch.maxPerDay, 1, 50, -1) < 0) return "maxPerDay must be a whole number from 1 to 50.";
+	if ("maxPerDay" in patch && intIn(patch.maxPerDay, 1, 100, -1) < 0) return "maxPerDay must be a whole number from 1 to 100.";
 	if ("maxIterations" in patch && intIn(patch.maxIterations, 1, 100, -1) < 0) return "maxIterations must be a whole number from 1 to 100.";
 	return null;
 }
