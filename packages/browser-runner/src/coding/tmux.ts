@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { RunnerInputError } from "../errors.js";
 
 /**
@@ -10,7 +11,8 @@ import { RunnerInputError } from "../errors.js";
  * the tmux analogue of Playwright's page actions in the browser runtime.
  *
  * Everything goes through `execFileSync` with an args array so user/agent text
- * is never shell-interpolated.
+ * is never shell-interpolated, and typed text goes over stdin (`typeLiteral`) so it is
+ * not in any process's argv either (#1196).
  */
 
 /**
@@ -79,9 +81,39 @@ export function sendKey(target: string, key: string): void {
 	tmuxExec(["send-keys", "-t", target, key]);
 }
 
-/** Send literal text to a pane (no shell interpolation, no key interpretation). */
+/**
+ * Type literal text into a pane WITHOUT the text in any process's argv (#1196).
+ *
+ * `send-keys -l <text>` left the text in a child's argv, readable through `ps` or `/proc/<pid>/cmdline`. Here it travels on
+ * STDIN to `load-buffer`, then `paste-buffer -d -r` types it: `-d` deletes the buffer as it pastes, `-r` keeps line feeds as
+ * line feeds (what `send-keys -l` typed), and no `-p` means no bracketed-paste markers. A paste that fails still has its
+ * buffer deleted. No tmux error here quotes the text: it is not in the argv they quote.
+ *
+ * RESIDUAL TRUST BOUNDARY: between `load-buffer` and `paste-buffer` (milliseconds) the text is a named tmux buffer that any
+ * process of the same user able to reach the tmux server socket can read with `tmux show-buffer`; afterwards it is in the
+ * pane and its scrollback, and in the program the pane runs. This removes the process table from the exposure; it does not
+ * make the exposure zero.
+ */
+export function typeLiteral(target: string, text: string): void {
+	if (!text) return;
+	const buffer = `pags-type-${randomUUID()}`;
+	const opts = (input: string) => ({ input, encoding: "utf8" as const, timeout: 5000, stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"] });
+	try {
+		viaTmux(() => execFileSync("tmux", ["load-buffer", "-b", buffer, "-"], opts(text)));
+		viaTmux(() => execFileSync("tmux", ["paste-buffer", "-d", "-r", "-b", buffer, "-t", target], opts("")));
+	} finally {
+		// `-d` deleted it on a paste that ran; this is the paste that did not.
+		try {
+			execFileSync("tmux", ["delete-buffer", "-b", buffer], opts(""));
+		} catch {
+			// Already gone — the normal case.
+		}
+	}
+}
+
+/** Send literal text to a pane (no shell interpolation, no key interpretation), over stdin (#1196). An empty string is a no-op. */
 export function sendText(target: string, text: string): void {
-	tmuxExec(["send-keys", "-t", target, "-l", text]);
+	typeLiteral(target, text);
 }
 
 /** True if a tmux session with this name exists. */

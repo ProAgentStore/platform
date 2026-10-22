@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { RunnerInputError } from "../errors.js";
+import { appleString, itermWriteScript } from "./apple-script.js";
 import { capturePane, createSession, killSession, listSessionsDetailed, runCommand as tmuxRunCommand, sendKey as tmuxSendKey, sendText as tmuxSendText, sessionExists, tmuxExec } from "./tmux.js";
 
 export type TerminalBackend = "tmux" | "kitty" | "iterm2";
@@ -239,11 +240,11 @@ export function runTerminalCommand(target: string, command: string, backend?: Te
 			tmuxRunCommand(t.id, command);
 			return capturePane(t.id, 200);
 		case "kitty":
-			kittyExec(["@", "send-text", "--match", `id:${t.id}`, command]);
+			kittyExec(["@", "send-text", "--match", `id:${t.id}`, "--stdin"], 5000, command);
 			kittyExec(["@", "send-key", "--match", `id:${t.id}`, "enter"]);
 			return captureTerminalTarget(t.id, { backend: "kitty" });
 		case "iterm2":
-			itermSessionScript(t.id, `tell theSession to write text ${appleString(command)}`);
+			osascriptStdin(itermWriteScript(t.id, command, true));
 			return captureTerminalTarget(t.id, { backend: "iterm2" });
 	}
 }
@@ -258,12 +259,12 @@ export function sendTerminalKeys(target: string, opts: { backend?: TerminalBacke
 			for (const key of opts.keys ?? []) tmuxSendKey(t.id, key);
 			return capturePane(t.id, 200);
 		case "kitty":
-			if (opts.text != null) kittyExec(["@", "send-text", "--match", `id:${t.id}`, opts.text]);
+			if (opts.text) kittyExec(["@", "send-text", "--match", `id:${t.id}`, "--stdin"], 5000, opts.text);
 			for (const key of opts.keys ?? []) kittyExec(["@", "send-key", "--match", `id:${t.id}`, kittyKeyName(key)]);
 			return captureTerminalTarget(t.id, { backend: "kitty" });
 		case "iterm2":
 			if ((opts.keys ?? []).length > 0) throw new RunnerInputError("iTerm2 generic key events are not supported yet; send text or run a command.");
-			itermSessionScript(t.id, `tell theSession to write text ${appleString(opts.text ?? "")}`);
+			osascriptStdin(itermWriteScript(t.id, opts.text ?? "", true));
 			return captureTerminalTarget(t.id, { backend: "iterm2" });
 	}
 }
@@ -368,19 +369,24 @@ function listItermTargets(): TerminalTarget[] {
 	}
 }
 
-function kittyExec(args: string[], timeoutMs = 5000): string {
+/** `input` is typed text for `send-text --stdin` (#1196): it travels on stdin, never in argv, and no error here quotes it. */
+function kittyExec(args: string[], timeoutMs = 5000, input?: string): string {
 	try {
-		return execFileSync("kitty", args, { encoding: "utf8", timeout: timeoutMs, stdio: "pipe" });
+		return execFileSync("kitty", args, { encoding: "utf8", timeout: timeoutMs, stdio: "pipe", ...(input === undefined ? {} : { input }) });
 	} catch (e) {
 		throw new Error(`kitty remote control is unavailable. Start kitty with remote control enabled (for example, allow_remote_control yes). ${e instanceof Error ? e.message : String(e)}`);
 	}
 }
 
-function osascript(script: string): string {
+/** Every iTerm2 script — typed text or not — goes over stdin (#1196), so none of it is in argv. */
+const osascript = (script: string): string => osascriptStdin(script);
+
+/** Run a script read from STDIN (`osascript -`), so text inside it is never in argv (#1196). Errors never carry the script. */
+export function osascriptStdin(script: string): string {
 	try {
-		return execFileSync("osascript", ["-e", script], { encoding: "utf8", timeout: 5000, stdio: "pipe" });
+		return execFileSync("osascript", ["-"], { encoding: "utf8", timeout: 5000, input: script, stdio: ["pipe", "pipe", "pipe"] });
 	} catch (e) {
-		throw new Error(`iTerm2 automation is unavailable. Open iTerm2 and grant macOS Automation/Accessibility permission if prompted. ${e instanceof Error ? e.message : String(e)}`);
+		throw new Error(`iTerm2 automation is unavailable. Open iTerm2 and grant macOS Automation/Accessibility permission if prompted. ${e instanceof Error ? e.message.split("\n")[0] : "osascript failed"}`);
 	}
 }
 
@@ -403,10 +409,6 @@ function itermCloseTarget(target: string): string {
 		"end tell",
 	].join("\n");
 	return osascript(script);
-}
-
-function appleString(s: string): string {
-	return JSON.stringify(s);
 }
 
 function shellQuote(s: string): string {

@@ -74,9 +74,8 @@ describe("/secure/type delivers without argv (#1143)", () => {
 		expect(err?.message).not.toContain(SECRET);
 	});
 
-	it("refuses iTerm2 (its value would ride a script argument), a missing session, and an empty value — before running anything", async () => {
+	it("refuses a missing session and an empty value — before running anything", async () => {
 		for (const [body, msg] of [
-			[{ target: "iterm2:1:1:1", value: SECRET }, /iTerm2/],
 			[{ target: "nope", value: SECRET }, /No tmux session/],
 			[{ target: "gcloud", value: "" }, /Nothing to type/],
 		] as const) {

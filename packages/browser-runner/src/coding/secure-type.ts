@@ -9,7 +9,11 @@
  *   • tmux  — `load-buffer -b <one-use name> -` (the value on stdin), then `paste-buffer -d -b <name> -t <session>`,
  *             which deletes the buffer as it pastes; a paste that fails deletes it anyway.
  *   • kitty — `kitty @ send-text --match id:<n> --stdin` (the value on stdin).
- *   • iTerm2 — refused: its `write text` takes the value inside an AppleScript argument, and always presses Return.
+ *   • iTerm2 — `osascript -` with the script (and the value inside it) on stdin, `write text … newline NO`: no Return is pressed.
+ *
+ * Residual trust boundary (#1196): off argv is not off the machine. The value is, briefly, a named tmux buffer any same-user
+ * process that can reach the tmux socket may read; an AppleScript in osascript's memory; and afterwards it is in the pane, its
+ * scrollback and the program the pane runs (`/secure/scrub` clears scrollback, panes are masked on the way out).
  *
  * Its own route (`POST /secure/type`), so ordinary `tmux_send_keys` text is unaffected, and so there is one body
  * this runner promises never to log or put in an error: errors name the target, never the value — and with the
@@ -18,12 +22,13 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { RunnerInputError } from "../errors.js";
+import { itermWriteScript } from "./apple-script.js";
 
 export interface SecureTypeDeps {
 	/** `execFileSync` — injectable so a test can see every argv this module ever builds. */
 	exec: (file: string, args: string[], opts: { input: string; encoding: "utf8"; timeout: number; stdio: ["pipe", "pipe", "pipe"] }) => string;
 	exists: (session: string) => boolean;
-	capture: (target: string, backend: "tmux" | "kitty") => string;
+	capture: (target: string, backend: "tmux" | "kitty" | "iterm2") => string;
 	settle: (session: string) => Promise<string>;
 }
 
@@ -46,7 +51,18 @@ export async function secureType(body: { target?: unknown; value?: unknown }, de
 		const pane = deps.capture(kitty[1], "kitty");
 		return { target, pane, paneBefore, changed: pane !== paneBefore };
 	}
-	if (/^iterm2:/i.test(target)) throw new RunnerInputError("iTerm2 cannot be typed into without the value in a script argument; use a tmux or kitty target.");
+	const iterm = /^iterm2:(.+)$/i.exec(target);
+	if (iterm) {
+		const id = iterm[1].trim();
+		const paneBefore = deps.capture(id, "iterm2");
+		try {
+			deps.exec("osascript", ["-"], opts(itermWriteScript(id, value, false)));
+		} catch {
+			throw new Error(`Typing into ${target} failed: iTerm2 automation is unavailable.`);
+		}
+		const pane = deps.capture(id, "iterm2");
+		return { target, pane, paneBefore, changed: pane !== paneBefore };
+	}
 
 	const session = target.replace(/^tmux:/i, "");
 	if (!deps.exists(session)) throw new RunnerInputError(`No tmux session "${session}".`, 404);
@@ -76,7 +92,7 @@ export async function machineSecureTypeDeps(): Promise<SecureTypeDeps> {
 	return {
 		exec: (file, args, opts) => execFileSync(file, args, opts),
 		exists: sessionExists,
-		capture: (t, backend) => (backend === "kitty" ? captureTerminalTarget(t, { backend: "kitty" }) : capturePane(t, 200)),
+		capture: (t, backend) => (backend === "tmux" ? capturePane(t, 200) : captureTerminalTarget(t, { backend })),
 		settle: (session) => waitForPaneSettle(session, { quietMs: 750, timeoutMs: 3_000 }),
 	};
 }
