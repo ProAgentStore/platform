@@ -100,6 +100,18 @@ describe("the account timezone", () => {
 		expect(badEntry.status).toBe(400);
 	});
 
+	it("replaces the notifications section whole, so a writer must send mutes, scope AND rules together (#1283)", async () => {
+		const { app, env, saved } = testApp({ notifications: { muted: [], instances: ["inst-a"], rules: [{ type: "deploy", push: false }] } });
+		// A write that leaves `rules` out removes them: the contract the page now honours by always sending the whole section.
+		await call(app, env, put({ notifications: { muted: ["deploy"], instances: ["inst-a"] } }));
+		expect(saved().notifications).toEqual({ muted: ["deploy"], instances: ["inst-a"] });
+		await call(app, env, put({ notifications: { muted: ["deploy"], instances: ["inst-a"], rules: [{ type: "deploy", push: false }] } }));
+		expect(saved().notifications).toEqual({ muted: ["deploy"], instances: ["inst-a"], rules: [{ type: "deploy", push: false }] });
+		// A sibling section is still patched independently.
+		await call(app, env, put({ attention: { pushOff: [] } }));
+		expect(saved().notifications).toEqual({ muted: ["deploy"], instances: ["inst-a"], rules: [{ type: "deploy", push: false }] });
+	});
+
 	it("round-trips the owner-attention channel control, and serves the vocabulary (#991)", async () => {
 		// The config surface for the generic attention policy. Two things have to hold: the event
 		// table is SERVED (so a new event gets a control by being added to `lib/owner-attention.ts`,

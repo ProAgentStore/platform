@@ -4,7 +4,25 @@ import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
 import { CHANNEL_HELP, type PolicyChoice, type PolicyRow, policyRows, rulesFromChoices, SOURCE_LABEL } from "../../lib/notificationPolicy";
-import type { AccountPreferencesResponse, InstanceNotificationPolicy, NotificationVocabulary } from "../../lib/types";
+import type { InstanceNotificationPolicy, NotificationPolicyRule, NotificationVocabulary } from "../../lib/types";
+
+/**
+ * At the ACCOUNT level the rules are not this component's to fetch or write (#1283): they are one field of the page's shared
+ * notifications store, which writes the whole `notifications` section (mutes, scope and rules) on every change. A copy held here
+ * is what let a rule save restore mutes the page had loaded minutes earlier, and a switch erase the rules.
+ */
+export interface AccountNotificationRules {
+	rules: NotificationPolicyRule[];
+	/** The server's resolved matrix, refreshed by the store after each write. */
+	effective: InstanceNotificationPolicy["effective"];
+	/** The first read of the stored settings has landed. */
+	ready: boolean;
+	/** Why the last load or write failed, or "". */
+	error: string;
+	/** Apply the new rules to the shared store; `error` is why it was refused, read after the fact (not from a stale render). */
+	onChange: (rules: NotificationPolicyRule[]) => Promise<{ ok: boolean; error: string }>;
+	onRetry: () => void;
+}
 
 /**
  * Settings → Notifications (#992): which notifications THIS agent may send the owner.
@@ -25,40 +43,24 @@ import type { AccountPreferencesResponse, InstanceNotificationPolicy, Notificati
  * both levels on purpose: the control, the three states and the "where did this come from" line
  * are the same question at either level, and two copies would drift into two answers.
  */
-export default function NotificationPolicySection({ instanceId }: { instanceId?: string }) {
+export default function NotificationPolicySection({ instanceId, account }: { instanceId?: string; account?: AccountNotificationRules }) {
 	const [vocab, setVocab] = useState<NotificationVocabulary | null>(null);
 	const [policy, setPolicy] = useState<InstanceNotificationPolicy | null>(null);
 	const [error, setError] = useState("");
 	const [msg, setMsg] = useState("");
 	const [saving, setSaving] = useState(false);
-	// The account's OTHER notification keys, carried through a rules save unchanged: `notifications`
-	// is one section and a partial write would drop the mutes and the instance scope.
-	const [accountSections, setAccountSections] = useState<{ muted?: string[]; instances?: string[] } | null>(null);
-
-	const accountPolicy = useCallback(async (): Promise<InstanceNotificationPolicy> => {
-		const d = await api<AccountPreferencesResponse & { notificationEffective?: InstanceNotificationPolicy["effective"] }>("/v1/preferences");
-		const n = d.preferences?.notifications;
-		setAccountSections({ ...(n?.muted ? { muted: n.muted } : {}), ...(n?.instances ? { instances: n.instances } : {}) });
-		// Shaped as an instance policy so one component renders both: at the account level the
-		// owner's own rules ARE the "instance" level of the resolution, which is exactly how the
-		// server reports their source.
-		return { instanceId: "", rules: n?.rules ?? [], effective: d.notificationEffective ?? [] };
-	}, []);
 
 	const load = useCallback(async () => {
 		try {
 			const v = await api<NotificationVocabulary>("/v1/instances/notification-vocabulary");
 			setVocab(v);
-			setPolicy(
-				instanceId
-					? await api<InstanceNotificationPolicy>(`/v1/instances/${instanceId}/notifications`)
-					: await accountPolicy(),
-			);
+			// Account level: the policy comes from the shared store (below), so only the vocabulary is read here.
+			if (instanceId) setPolicy(await api<InstanceNotificationPolicy>(`/v1/instances/${instanceId}/notifications`));
 			setError("");
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [instanceId, accountPolicy]);
+	}, [instanceId]);
 
 	useEffect(() => {
 		void load();
@@ -78,14 +80,13 @@ export default function NotificationPolicySection({ instanceId }: { instanceId?:
 						? await api<InstanceNotificationPolicy>(`/v1/instances/${instanceId}/notifications`, { method: "PUT", body: JSON.stringify({ rules }) })
 						: await api<InstanceNotificationPolicy>(`/v1/instances/${instanceId}/notifications`, { method: "DELETE" });
 					setPolicy((prev) => (prev ? { ...prev, ...next, inherited: prev.inherited } : prev));
-				} else {
-					// The account section is a whole-object write, like the mutes beside it: send the
-					// rules and let the route re-resolve, then re-read so the effective column is the
-					// server's answer rather than this component's guess at it.
-					await api("/v1/preferences", { method: "PUT", body: JSON.stringify({ notifications: { ...(accountSections ?? {}), rules } }) });
-					setPolicy(await accountPolicy());
+					setMsg("Saved.");
+				} else if (account) {
+					// One writer for the whole section: the store applies this change to the CURRENT mutes and scope, writes all
+					// three, and re-reads the resolved matrix. A refusal puts the rows back to what is stored and says why.
+					const done = await account.onChange(rules);
+					setMsg(done.ok ? "Saved." : done.error || "Couldn't save that. Try again.");
 				}
-				setMsg("Saved.");
 			} catch (e) {
 				setMsg(e instanceof Error ? e.message : String(e));
 				// Put the controls back to what is STORED rather than showing a save that did not
@@ -95,14 +96,18 @@ export default function NotificationPolicySection({ instanceId }: { instanceId?:
 				setSaving(false);
 			}
 		},
-		[instanceId, load, accountPolicy, accountSections],
+		[instanceId, load, account],
 	);
 
+	// Shaped as an instance policy so one component renders both: at the account level the owner's own rules ARE the "instance"
+	// level of the resolution, which is exactly how the server reports their source.
+	const shown: InstanceNotificationPolicy | null = instanceId ? policy : account?.ready ? { instanceId: "", rules: account.rules, effective: account.effective } : null;
+	if (!instanceId && account && account.error && !account.ready) return <LoadFailed what="notification settings" detail={account.error} onRetry={account.onRetry} />;
 	if (error) return <LoadFailed what="notification settings" detail={error} onRetry={() => void load()} />;
-	if (!vocab || !policy) return null;
+	if (!vocab || !shown) return null;
 
-	const rows = policyRows(vocab, policy);
-	const overridden = (policy.rules ?? []).length > 0;
+	const rows = policyRows(vocab, shown);
+	const overridden = (shown.rules ?? []).length > 0;
 
 	const setChoice = (row: PolicyRow, channel: "inapp" | "push", choice: PolicyChoice) => {
 		void save(rows.map((r) => (r.key === row.key ? { ...r, [channel]: { ...r[channel], choice } } : r)));

@@ -6,6 +6,7 @@ import TranslationFields from "../components/TranslationFields";
 import AccountConnections from "../components/AccountConnections";
 import NotificationPreferences from "../components/NotificationPreferences";
 import NotificationPolicySection from "../tabs/settings/NotificationPolicySection";
+import { useNotificationsStore } from "../lib/useNotificationsStore";
 import ApprovalGateSection from "../tabs/settings/ApprovalGateSection";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 import Card from "../components/Card";
@@ -72,9 +73,9 @@ export default function Preferences() {
 	const [applyingCoding, setApplyingCoding] = useState(false);
 	const [languages, setLanguages] = useState<ReadonlyArray<{ name: string; tag: string }>>([]);
 	const [notificationTypes, setNotificationTypes] = useState<ReadonlyArray<NotificationTypeSpec>>([]);
-	const [mutedNotifications, setMutedNotifications] = useState<string[]>([]);
-	// The instance scope (#784): empty means every instance.
-	const [notificationInstances, setNotificationInstances] = useState<string[]>([]);
+	// The mutes, the instance scope (#784) and the rules (#992) are ONE stored section, so they live in ONE store with ONE writer
+	// (#1283): every control edits it, every write sends the whole section, and a refused write rolls the page back to what is stored.
+	const notifications = useNotificationsStore();
 	// The owner-attention axis (#991): the kinds of request an agent can make, and the pushes
 	// turned off for them. Empty means every kind pushes.
 	const [attentionEvents, setAttentionEvents] = useState<ReadonlyArray<AttentionEventSpec>>([]);
@@ -109,8 +110,6 @@ export default function Preferences() {
 				// The vocabulary comes from the server, not from a second copy of the list here —
 				// see NotificationPreferences.
 				setNotificationTypes(d.notificationTypes || []);
-				setMutedNotifications(d.preferences?.notifications?.muted || []);
-				setNotificationInstances(d.preferences?.notifications?.instances || []);
 				setAttentionEvents(d.attentionEvents || []);
 				setAttentionPushOff(d.preferences?.attention?.pushOff || []);
 			} catch {
@@ -227,10 +226,11 @@ export default function Preferences() {
 
 			<NotificationPreferences
 				types={notificationTypes}
-				muted={mutedNotifications}
-				onSaved={setMutedNotifications}
-				instances={notificationInstances}
-				onInstancesSaved={setNotificationInstances}
+				muted={notifications.snapshot.state.muted}
+				instances={notifications.snapshot.state.instances}
+				onEdit={notifications.controller.edit.bind(notifications.controller)}
+				ready={notifications.snapshot.loaded}
+				storeError={notifications.snapshot.error}
 				attentionEvents={attentionEvents}
 				pushOff={attentionPushOff}
 				onPushOffSaved={setAttentionPushOff}
@@ -239,7 +239,19 @@ export default function Preferences() {
 			{/* #992: the per-event, per-channel rules under the switches above. Same component as an
 			    agent's own editor, so the two levels cannot describe the same choice differently. */}
 			<ApprovalGateSection />
-			<NotificationPolicySection />
+			<NotificationPolicySection
+				account={{
+					rules: notifications.snapshot.state.rules,
+					effective: notifications.snapshot.state.effective,
+					ready: notifications.snapshot.loaded,
+					error: notifications.snapshot.error,
+					onChange: async (rules) => {
+						const ok = await notifications.controller.edit({ kind: "rules", rules });
+						return { ok, error: notifications.controller.getSnapshot().error };
+					},
+					onRetry: () => void notifications.reload(),
+				}}
+			/>
 
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Release notes</h3>

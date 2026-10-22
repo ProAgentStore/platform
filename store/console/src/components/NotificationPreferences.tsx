@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import type { NotificationsEdit } from "../lib/notificationsStore";
+import { toggledScope } from "../lib/notificationsStore";
 import type { AttentionEventSpec, Instance, NotificationTypeSpec } from "../lib/types";
 import Card from "./Card";
 
@@ -30,22 +32,31 @@ import Card from "./Card";
 export default function NotificationPreferences({
 	types,
 	muted,
-	onSaved,
 	instances,
-	onInstancesSaved,
+	onEdit,
+	ready,
+	storeError,
 	attentionEvents,
 	pushOff,
 	onPushOffSaved,
 }: {
 	types: ReadonlyArray<NotificationTypeSpec>;
+	/**
+	 * The muted types, from the page's ONE notifications store (#1283) — not a copy held here. The store writes the whole
+	 * `notifications` section (mutes, scope AND rules) on every change, so toggling a switch cannot erase a rule.
+	 */
 	muted: string[];
-	onSaved: (muted: string[]) => void;
 	/**
 	 * The instance scope (#784): ids whose updates may interrupt you; empty means every instance.
 	 * Per ACCOUNT like the mute above, and for the same reason — a push fans out to every device.
 	 */
 	instances: string[];
-	onInstancesSaved: (instances: string[]) => void;
+	/** Apply one change to the shared store and write the whole section. Resolves to whether the server confirmed it. */
+	onEdit: (edit: NotificationsEdit) => Promise<boolean>;
+	/** False until the stored settings have loaded: a write before then would overwrite them with defaults. */
+	ready: boolean;
+	/** Why the last notifications write (or the first read) failed, or "". */
+	storeError: string;
 	/**
 	 * The owner-attention vocabulary (#991) — the KINDS of attention an agent can ask for, which is
 	 * a different axis from the product-area mutes above. Served by the route, mapped here, so a new
@@ -55,15 +66,14 @@ export default function NotificationPreferences({
 	pushOff: string[];
 	onPushOffSaved: (pushOff: string[]) => void;
 }) {
-	const [local, setLocal] = useState<string[]>(muted);
-	const [scope, setScope] = useState<string[]>(instances);
+	// `muted` and `instances` are shown straight from the shared store, so a refused save puts them back by itself.
+	const local = muted;
+	const scope = instances;
 	const [quiet, setQuiet] = useState<string[]>(pushOff);
 	const [roster, setRoster] = useState<Pick<Instance, "id" | "name" | "slug">[] | null>(null);
 	const [msg, setMsg] = useState("");
 
 	// The parent owns the stored value; re-sync when it finishes loading or another save lands.
-	useEffect(() => setLocal(muted), [muted]);
-	useEffect(() => setScope(instances), [instances]);
 	useEffect(() => setQuiet(pushOff), [pushOff]);
 
 	/**
@@ -107,53 +117,25 @@ export default function NotificationPreferences({
 		async (id: string, notify: boolean) => {
 			if (!roster) return;
 			const all = roster.map((r) => r.id);
-			const current = scope.length ? scope.filter((s) => all.includes(s)) : all;
-			const next = notify ? [...new Set([...current, id])] : current.filter((s) => s !== id);
-			if (next.length === 0) {
+			if (toggledScope(scope, id, notify, all) === null) {
 				setMsg("At least one agent has to stay on — use the switches above to silence a kind of update everywhere.");
 				return;
 			}
-			const stored = next.length >= all.length ? [] : next;
-			const previous = scope;
-			setScope(stored);
 			setMsg("");
-			try {
-				// The section is a whole-object write, so the mutes ride along unchanged.
-				await api("/v1/preferences", {
-					method: "PUT",
-					body: JSON.stringify({ notifications: { muted: local, ...(stored.length ? { instances: stored } : {}) } }),
-				});
-				onInstancesSaved(stored);
-			} catch {
-				setScope(previous);
-				setMsg("Couldn't save that. Try again.");
-			}
+			// The store writes the whole section (mutes, this scope and the rules) and puts the checkbox back if the save is refused.
+			await onEdit({ kind: "toggleInstance", id, notify, roster: all });
 		},
-		[roster, scope, local, onInstancesSaved],
+		[roster, scope, onEdit],
 	);
 
 	const toggle = useCallback(
 		async (id: string, notify: boolean) => {
-			const next = notify ? local.filter((m) => m !== id) : [...new Set([...local, id])];
-			const previous = local;
-			setLocal(next);
 			setMsg("");
-			try {
-				// The section is a whole-object write (#784): the instance scope rides along unchanged.
-				await api("/v1/preferences", {
-					method: "PUT",
-					body: JSON.stringify({ notifications: { muted: next, ...(scope.length ? { instances: scope } : {}) } }),
-				});
-				onSaved(next);
-			} catch {
-				// Put the control back rather than showing a save that did not happen — the same rule
-				// the timezone control follows, and it matters more here: a checkbox that looks off
-				// while the notifications keep arriving reads as the notification system being broken.
-				setLocal(previous);
-				setMsg("Couldn't save that. Try again.");
-			}
+			// A refused save returns the checkbox to what is stored — a switch that looks off while the notifications keep arriving
+			// reads as the notification system being broken — and the store carries the instance scope and the rules along unchanged.
+			await onEdit({ kind: "toggleType", id, notify });
 		},
-		[local, scope, onSaved],
+		[onEdit],
 	);
 
 	if (!types.length) return null;
@@ -188,6 +170,7 @@ export default function NotificationPreferences({
 							type="checkbox"
 							checked={on}
 							onChange={(e) => void toggle(t.id, e.target.checked)}
+							disabled={!ready}
 							aria-label={`Notify me about ${t.label}`}
 							className="mt-0.5"
 						/>
@@ -214,6 +197,7 @@ export default function NotificationPreferences({
 									type="checkbox"
 									checked={on}
 									onChange={(e) => void toggleInstance(r.id, e.target.checked)}
+									disabled={!ready}
 									aria-label={`Notify me about ${r.name || r.slug || r.id}`}
 									className="shrink-0"
 								/>
@@ -258,7 +242,11 @@ export default function NotificationPreferences({
 				</div>
 			)}
 
-			{msg && <p className="text-xs text-danger mt-2">{msg}</p>}
+			{(msg || storeError) && (
+				<p className="text-xs text-danger mt-2" role="alert">
+					{msg || storeError}
+				</p>
+			)}
 		</Card>
 	);
 }
