@@ -4,7 +4,7 @@ import { useModalLock } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
 import Card from "./Card";
 import LoadFailed from "./LoadFailed";
-import type { PilotModelResponse } from "../../../../workers/api/src/lib/pilot-model";
+import type { PilotModelResponse } from "../../../../workers/api/src/lib/pilot-model-contract";
 
 export type PilotModelView = PilotModelResponse["pilot"];
 
