@@ -166,8 +166,10 @@ export default function RepoTab({ instanceId }: Props) {
 								</div>
 							)}
 
+							{/* The list flows in the tab (#1306): a capped box with its own scrollbar inside the tab that already scrolls
+							    nested two vertical scrollers. Every path stays in the DOM and on screen. */}
 							{expanded[r.key] && r.paths && (
-								<div className="mt-2 max-h-56 overflow-y-auto bg-paper border border-line rounded-lg p-3 font-mono text-xs text-muted leading-relaxed">
+								<div className="mt-2 bg-paper border border-line rounded-lg p-3 font-mono text-xs text-muted leading-relaxed">
 									{r.paths.map((p) => <div key={p} className="truncate">{p}</div>)}
 								</div>
 							)}
