@@ -107,7 +107,14 @@ describe("runUserWorkersAi", () => {
 		);
 
 		// The protocol marker is how the chat loop knows to answer in the `tool` role (#851).
-		expect(result).toEqual({ response: "hello", protocol: "workers-ai" });
+		expect(result).toEqual({
+			response: "hello",
+			protocol: "workers-ai",
+			inference: {
+				provider: "cloudflare",
+				model: "@cf/meta/llama-3.2-3b-instruct",
+			},
+		});
 		expect(fetchMock).toHaveBeenCalledWith(
 			"https://api.cloudflare.com/client/v4/accounts/acct-abc/ai/run/%40cf/meta/llama-3.2-3b-instruct",
 			expect.objectContaining({

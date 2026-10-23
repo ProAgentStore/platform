@@ -6,7 +6,6 @@ import { runUserWorkersAi, UserAiProviderError, type StreamDeadlines } from "./u
 import { hitOutputCap } from "./reply-truncation.js";
 import { screenInstruction } from "./coding-authority.js";
 import { activeConstraints, constraintSources, screenScopedInstruction } from "./coding-scope-constraints.js";
-import type { CodingGoal } from "./coding-loop.js";
 import { AI_FIRST_TOKEN_TIMEOUT_MS, AI_STALL_TIMEOUT_MS, AI_TOTAL_TIMEOUT_MS } from "./ai-deadlines.js";
 
 export interface PilotInferenceReply {
@@ -26,8 +25,14 @@ export interface PilotInferenceBody {
 	streamDeadlines?: StreamDeadlines;
 }
 
+/** Only the security context this screen consumes; it does not depend on the loop that calls it. */
+type PilotScreenContext = Parameters<typeof constraintSources>[0] & {
+	mergePolicy?: Parameters<typeof screenInstruction>[0];
+	scopeConstraints?: Parameters<typeof screenScopedInstruction>[0];
+};
+
 /** Endings and owner interactions always get a Sonnet decision. Existing loop guards run again. */
-export function routinePilotReply(reply: PilotInferenceReply, goal: CodingGoal): boolean {
+export function routinePilotReply(reply: PilotInferenceReply, goal: PilotScreenContext): boolean {
 	if (hitOutputCap(reply.stopReason) || reply.malformed_tool_calls?.length || reply.tool_calls?.length !== 1) return false;
 	const call = reply.tool_calls[0];
 	const text = call.arguments?.text;

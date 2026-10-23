@@ -1,7 +1,7 @@
 import { decryptKey } from "./crypto.js";
 import { backfillKeyHint } from "./key-hint-backfill.js";
 import { keyHint } from "./key-hint.js";
-import { observeProviderAccount } from "./provider-account-hold.js";
+import { observeProviderAccount } from "./provider-account-observation.js";
 import {
 	AI_FIRST_TOKEN_TIMEOUT_MS,
 	AI_STALL_TIMEOUT_MS,
