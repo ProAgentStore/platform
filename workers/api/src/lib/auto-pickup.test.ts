@@ -165,6 +165,46 @@ describe("the wake, on the real schema (#1233)", () => {
 		expect(queued()).toEqual([]);
 	});
 
+	describe("provider-credit and owner-action holds (#1314)", () => {
+		const creditFailure = (at: string) =>
+			d1.exec(
+				`INSERT INTO error_log (id, user_id, source, message, level, repeat_count, context, last_context, created_at, last_seen_at)
+				 VALUES ('e-${at}', 'u1', 'coding:session', 'coding run abcd1234 failed (provider_credit) at s6-decide after 3 steps: Your credit balance is too low to access the Anthropic API.', 'error', 1, '{"failureClass":"provider_credit"}', '{"failureClass":"provider_credit"}', '${at}', '${at}')`,
+			);
+		const keySucceededAt = (at: string) =>
+			d1.exec(`INSERT OR REPLACE INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, last_used_at) VALUES ('u1', 'anthropic', 'a', x'00', x'00', x'00', 'a', '', '${at}')`);
+		const endRun = (id: string, entry: string, status: string, stopReason: string) =>
+			d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, stop_reason, max_iterations, started_at, queue_entry_id) VALUES ('${id}', 'u1', 'coder', 'x', '${status}', '${stopReason}', 10, 1, '${entry}')`);
+		const drain = () => d1.exec("UPDATE instance_objective_queue SET status = 'cancelled' WHERE status = 'pending'");
+
+		it("repeated wakes after a credit failure start nothing and notify once; recovery lifts the hold without a lockout", async () => {
+			creditFailure("2026-10-23 01:00:00");
+			for (let i = 0; i < 5; i++) expect(await runAutoPickup(env, "coder", "u1", deps(), Date.now() + i * 1000)).toMatchObject({ started: false, reason: expect.stringMatching(/balance is empty/) });
+			expect(queued()).toEqual([]);
+			expect(log.started).toEqual([]);
+			expect(log.notes).toHaveLength(1);
+			expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM auto_pickup_log WHERE outcome = 'started'").get()).toEqual({ n: 0 });
+
+			keySucceededAt("2026-10-23 03:29:17");
+			expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
+		});
+
+		it("a needs_human run counts toward the per-issue bound, but a provider_credit stop does not", async () => {
+			await runAutoPickup(env, "coder", "u1", deps());
+			const [{ id }] = d1.sqlite.prepare("SELECT id FROM instance_objective_queue").all() as Array<{ id: string }>;
+			drain();
+			endRun("r-credit", id, "needs_human", "provider_credit");
+			endRun("r-credit2", id, "needs_human", "provider_credit");
+			expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
+			drain();
+			endRun("r-human", id, "needs_human", "decision");
+			endRun("r-human2", id, "needs_human", "escalated");
+			// Issue 9 is now passed over (two owner-action stops); the next best is picked instead.
+			expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 3 });
+			expect(log.comments).toEqual([9]);
+		});
+	});
+
 	it("an empty queue wakes ONE picker: triage when the brain's PO layer is on, auto-pickup otherwise", async () => {
 		await setCoderBrain(env, "coder", "u1", { enabled: true, poEnabled: true });
 		expect(await autoPickupStatus(env, "coder", "u1")).toMatchObject({ enabled: true, picker: "triage" });
