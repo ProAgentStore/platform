@@ -11,6 +11,7 @@ import {
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
 import { pinnedManifest } from "./manifest.js";
+import { publicListingResponse, publishedSitemapEntries } from "./seo.js";
 
 const PAGES: Record<string, string> = {
 	"/": homepage,
@@ -65,6 +66,7 @@ const HTML_HEADERS: Record<string, string> = {
 const CONSOLE_HEADERS: Record<string, string> = {
 	...HTML_HEADERS,
 	"Cache-Control": "no-store",
+	"X-Robots-Tag": "noindex, nofollow",
 };
 
 const JS_HEADERS: Record<string, string> = {
@@ -267,7 +269,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 	// Static pages
 	const page = PAGES[path];
 	if (page) {
-		return new Response(page, { headers: path === "/console" || path === "/console/" ? CONSOLE_HEADERS : HTML_HEADERS });
+		return new Response(page, { headers: /^\/(console|admin)\/?$/.test(path) ? CONSOLE_HEADERS : HTML_HEADERS });
 	}
 
 	if (
@@ -336,29 +338,20 @@ async function route(request: Request, env: Env): Promise<Response> {
 	// robots.txt
 	if (path === "/robots.txt") {
 		return new Response(
-			"User-agent: *\nAllow: /\nDisallow: /console/\nDisallow: /admin/\n\nSitemap: https://proagentstore.online/sitemap.xml\nLLMs: https://proagentstore.online/llms.txt\n",
+			"User-agent: *\nAllow: /\nDisallow: /admin/api/\n\nSitemap: https://proagentstore.online/sitemap.xml\nLLMs: https://proagentstore.online/llms.txt\n",
 			{ headers: { "Content-Type": "text/plain", "Cache-Control": "public, max-age=86400" } },
 		);
 	}
 
 	// Dynamic sitemap — fetches published agents from API
 	if (path === "/sitemap.xml") {
-		const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/docs/coder-multi-machine/", "/docs/architecture/", "/docs/skill-publishing/", "/console/", "/changelog/"];
+		const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/docs/coder-multi-machine/", "/docs/architecture/", "/docs/skill-publishing/", "/changelog/"];
 		let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 		for (const u of staticUrls) {
 			xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;
 		}
 		try {
-			const res = await env.API.fetch("https://api.proagentstore.online/v1/agents");
-			const data = await res.json() as { agents?: Array<{ slug: string; creator_login?: string }> };
-			const devs = new Set<string>();
-			for (const a of data.agents || []) {
-				xml += `  <url><loc>https://proagentstore.online/agents/${a.slug}/</loc><changefreq>daily</changefreq></url>\n`;
-				if (a.creator_login) devs.add(a.creator_login);
-			}
-			for (const d of devs) {
-				xml += `  <url><loc>https://proagentstore.online/developers/${d}/</loc><changefreq>weekly</changefreq></url>\n`;
-			}
+			xml += await publishedSitemapEntries(env.API);
 		} catch (error) {
 			// Still served — the static URLs — but the agent list is missing, and that is recorded (#1086).
 			console.warn("Sitemap agent expansion failed", error);
@@ -395,13 +388,15 @@ async function route(request: Request, env: Env): Promise<Response> {
 	}
 
 	// Agent detail pages
-	if (path.match(/^\/agents\/[a-z0-9-]+\/?$/)) {
-		return new Response(agentDetailPage, { headers: HTML_HEADERS });
+	const agentMatch = path.match(/^\/agents\/([a-z0-9-]+)\/?$/);
+	if (agentMatch) {
+		return publicListingResponse(env.API, "agents", agentMatch[1], agentDetailPage, HTML_HEADERS);
 	}
 
 	// Developer profile pages
-	if (path.match(/^\/developers\/[a-zA-Z0-9_-]+\/?$/)) {
-		return new Response(developerProfilePage, { headers: HTML_HEADERS });
+	const developerMatch = path.match(/^\/developers\/([a-zA-Z0-9_-]+)\/?$/);
+	if (developerMatch) {
+		return publicListingResponse(env.API, "developers", developerMatch[1], developerProfilePage, HTML_HEADERS);
 	}
 
 	if (path === "/index.html") {
