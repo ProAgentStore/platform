@@ -7,6 +7,7 @@ import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { admitAutoPickup, pendingAutoPickupAdmission, type AutoPickupAdmission } from "./auto-pickup-admission.js";
 import { RESERVATION_TTL_MS, runAutoPickup, setAutoPickup, sweepAutoPickup, type AutoPickupDeps } from "./auto-pickup.js";
 import type { Env } from "../types.js";
+import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
 const issue = { number: 9, title: "An open issue", state: "open", labels: [], assignees: [], comments: 0, updatedAt: "", url: "u/9" };
 const now = 1_800_000_000_000;
@@ -27,6 +28,13 @@ describe("atomic auto-pickup admission (#1315)", () => {
 		await setAutoPickup(env, "coder", "u1", { enabled: true, maxPerDay: 100 });
 	});
 	afterEach(() => d1.close());
+
+	it("refuses an oversized objective intact before any allowance or queue write", async () => {
+		await expect(admitAutoPickup(env, admission({ objective: "x".repeat(MAX_CONFIGURABLE_OBJECTIVE_CHARS + 1) }))).rejects.toThrow("nothing was queued");
+		expect(rows("auto_pickup_admissions")).toEqual([]);
+		expect(rows("instance_objective_queue")).toEqual([]);
+		expect(rows("auto_pickup_log")).toEqual([]);
+	});
 
 	it("two wakes reading the same idle state queue one issue, consume one allowance and kick once", async () => {
 		let readers = 0;

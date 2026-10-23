@@ -29,6 +29,7 @@ export async function autoPickupAdmissionCursor(env: Pick<Env, "DB">, instanceId
 }
 
 export async function admitAutoPickup(env: Pick<Env, "DB">, a: AutoPickupAdmission): Promise<boolean> {
+	if (a.objective.length > MAX_CONFIGURABLE_OBJECTIVE_CHARS) throw new Error(`The automatic objective exceeds ${MAX_CONFIGURABLE_OBJECTIVE_CHARS} characters; nothing was queued or charged against the allowance.`);
 	const result = await env.DB.prepare(
 		`INSERT INTO auto_pickup_admissions
 		 (queue_entry_id, instance_id, user_id, repo_id, repo, issue_number, objective, max_iterations, detail, created_at)
@@ -50,7 +51,7 @@ export async function admitAutoPickup(env: Pick<Env, "DB">, a: AutoPickupAdmissi
 		     AND (r.checkout_released_at IS NULL OR EXISTS (SELECT 1 FROM coder_questions cq WHERE cq.run_id = r.run_id
 		       AND cq.applied_at IS NULL AND (cq.answered_at IS NOT NULL OR cq.state = 'unresolved'))))`,
 	)
-		.bind(a.entryId, a.instanceId, a.userId, a.repoId, a.repo, a.issue, a.objective.slice(0, MAX_CONFIGURABLE_OBJECTIVE_CHARS), a.maxIterations, a.detail, a.now, a.now - 86_400_000, a.observedAdmission, a.providerAccount?.provider ?? null, a.providerAccount?.credentialId ?? null, a.now - RESERVATION_TTL_MS)
+		.bind(a.entryId, a.instanceId, a.userId, a.repoId, a.repo, a.issue, a.objective, a.maxIterations, a.detail, a.now, a.now - 86_400_000, a.observedAdmission, a.providerAccount?.provider ?? null, a.providerAccount?.credentialId ?? null, a.now - RESERVATION_TTL_MS)
 		.run();
 	// Pending rows include the first wake's trigger-written objective, even while it is being
 	// admitted (queue.status=running, before agent_loop_runs exists). No model or runner is started here.
