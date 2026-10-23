@@ -20,9 +20,10 @@
  *
  * Run: node scripts/install-playwright-browsers.mjs
  */
-import { exec as execCb, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { runBoundedCommand, terminateInstallerTree } from "./lib/installer-process-tree.mjs";
 
 export const INSTALL_COMMAND = ["pnpm", ["exec", "playwright", "install", "--with-deps", "chromium", "webkit"]];
 export const ATTEMPT_TIMEOUT_MS = 480_000;
@@ -82,8 +83,16 @@ export function runAttempt(n, deps) {
 		}, heartbeatMs);
 		const bound = timers.setTimeout(() => {
 			log(`[install attempt ${n}] no finish after ${mmss(timeoutMs)} — killing the install's process tree.`);
-			killTree(child);
-			finish({ outcome: "timed_out", code: null });
+			try {
+				killTree(child);
+				finish({ outcome: "timed_out", code: null });
+			} catch (error) {
+				child.unref?.();
+				child.stdout?.destroy?.();
+				child.stderr?.destroy?.();
+				log(`[install] owned-process termination failed; refusing a competing retry: ${error.message}`);
+				finish({ outcome: "timed_out", code: null, terminationError: error.message });
+			}
 		}, timeoutMs);
 		child.on("error", (err) => finish({ outcome: "failed", code: null, error: err.message }));
 		child.on("close", (code) => finish(code === 0 ? { outcome: "ok", code } : { outcome: "failed", code }));
@@ -118,10 +127,11 @@ export async function installBrowsers(deps) {
 		} else {
 			log(`[install] attempt ${n} failed (exit ${result.code ?? result.error ?? "unknown"}); last output: ${result.lastLine}`);
 		}
+		if (result.terminationError) break;
 	}
 	const how = attempts.map((a, i) => `${i + 1}: ${a.outcome}${a.code != null ? ` (exit ${a.code})` : ""}`).join(", ");
 	const where = attempts.some((a) => a.outcome === "timed_out") ? "see the diagnostics above" : "see each attempt's output above";
-	log(`::error title=Playwright browser install failed::No install of chromium + webkit finished in ${maxAttempts} attempts (${how}). E2E needs both; ${where}.`);
+	log(`::error title=Playwright browser install failed::No install of chromium + webkit finished in ${attempts.length} attempts (${how}). E2E needs both; ${where}.`);
 	summary(`**Playwright browser install: \`failed\`** after ${maxAttempts} attempts (${how}).\n`);
 	return { status: "failed", attempts, exitCode: 1 };
 }
@@ -136,20 +146,13 @@ export async function runDiagnostics(execFn) {
 	return parts.join("\n");
 }
 
-const shell = (cmd) =>
-	new Promise((resolve) => execCb(cmd, { timeout: DIAGNOSTIC_TIMEOUT_MS, maxBuffer: 1 << 20 }, (err, stdout, stderr) => resolve(`${stdout}${stderr}${err && !stdout ? `(exit ${err.code ?? err.signal})` : ""}`)));
+const shell = (cmd) => runBoundedCommand("/bin/sh", ["-c", cmd], { timeoutMs: DIAGNOSTIC_TIMEOUT_MS });
 
 async function main() {
 	const result = await installBrowsers({
 		start: () => spawn(INSTALL_COMMAND[0], INSTALL_COMMAND[1], { stdio: ["ignore", "pipe", "pipe"], detached: true }),
-		// The whole group: playwright → apt-get → dpkg/http children, not just pnpm.
-		killTree: (child) => {
-			try {
-				process.kill(-child.pid, "SIGKILL");
-			} catch {
-				child.kill("SIGKILL");
-			}
-		},
+		// sudo may create a separate session: a group kill alone leaves root apt alive.
+		killTree: terminateInstallerTree,
 		write: (s) => process.stdout.write(s),
 		log: (line) => console.log(line),
 		summary: (md) => process.env.GITHUB_STEP_SUMMARY && appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`),

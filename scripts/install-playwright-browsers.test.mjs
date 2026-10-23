@@ -103,6 +103,16 @@ describe("installBrowsers (#1047)", () => {
 		expect(h.heals()).toBe(2);
 		expect(h.logs.at(-1)).toMatch(/^::error title=Playwright browser install failed::.*1: timed_out, 2: timed_out, 3: timed_out/);
 	});
+	it("does not start another apt process when owned-process termination fails", async () => {
+		const h = harness([hangs, succeedsAfter(1)]);
+		h.deps.killTree = () => { throw new Error("cannot terminate owned sudo child"); };
+		const done = installBrowsers(h.deps);
+		await vi.advanceTimersByTimeAsync(TIMEOUT + 1000);
+		expect(await done).toMatchObject({ status: "failed", exitCode: 1 });
+		expect(h.started()).toBe(1);
+		expect(h.heals()).toBe(0);
+		expect(h.logs.join("\n")).toContain("refusing a competing retry");
+	});
 
 	it("a quick non-zero exit is retried, then fails red with its exit code — and is not diagnosed as a hang", async () => {
 		const h = harness([failsFast, failsFast, failsFast]);
