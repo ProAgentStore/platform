@@ -332,3 +332,34 @@ this fix itself, and `runner_update` uses the same npm path: update it once at t
 Very old runners that cannot report a stable machine ID still need one manual upgrade/restart. They
 remain visible but their settings link is deliberately unavailable rather than attaching a policy to
 a mutable hostname.
+
+## Safe by construction, and visible when it is not (#1320)
+
+An update never leaves a machine broken, and the platform tells the owner when one needs a look — so nobody has to check
+machines by hand.
+
+**What already protects a machine** (#862, #1141): every release installs into a scratch folder and is renamed into place, beside
+the previous one; a new version is on *trial* until its relay registers; a version that crashes on import, is started six times
+unproven, or is still unproven five minutes after its first start is marked bad and the previous version runs again, never to be
+fetched again; the last good version always stays in the cache.
+
+**Pre-flight, before anything is fetched** (`bootstrap/preflight.ts`): the update folder must be writable, at least 400 MB must be
+free where it installs, and Node must be 18 or later. A machine that cannot pass is left exactly as it was and says why
+(`update pre-flight failed: only 90 MB free where the update installs…`); it shows up as a failed update in the fleet alerts below.
+An already-installed version needs no pre-flight, so a full disk never stops a machine starting on what it has.
+
+**Capability report on every start** (#1312): the runner detects its capabilities when it starts (including after every update
+restart), re-checks every ten minutes, sends the full record whenever the platform does not hold its hash, and re-sends it at least
+daily even when nothing changed.
+
+**Fleet alerts** (`lib/fleet-health.ts`, every five minutes): each machine that is online is judged on whether it has reported its
+capabilities (an alert after 30 minutes online with none), whether its report is stale (older than 36 hours), whether it is behind
+the latest published release (a release gets 12 hours, measured from when the platform first saw it), whether its last update
+failed, and whether its runner started five or more times in 24 hours. Each raises one alert per episode — a push notification
+linking to the machine, an `agent_events` row (`fleet.<kind>`) — and clears when the machine recovers. An offline machine is not
+judged here; machine silence has its own alarm.
+
+**Not built yet:** an out-of-band control channel — a separate launchd/systemd/Windows service with its own connection that can
+update, restart and roll back `pags` even when the main process is dead. Today a dead runner is brought back by the supervisor
+that started it (`pags up`, the service unit) and by `runner_update` / `runner_restart` over the relay, which need the runner
+connected. That channel, and a one-time rollout to every machine through it, remain open under #1320.

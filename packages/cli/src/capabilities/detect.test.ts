@@ -163,6 +163,21 @@ describe("the reporter sends the record once, then only its hash (#1312)", () =>
 		await reporter.settled();
 		expect(reporter.payload().capabilities?.nodeVersion).toBe("24.0.0");
 	});
+	it("re-sends the full record at least daily even when the platform holds the hash, so its copy is never stale (#1320)", async () => {
+		const clock = { t: 0 };
+		const reporter = new CapabilityReporter(() => detectMachineCapabilities(deps({ env: { [SKIP_PROBE_ENV]: "1" } })), () => clock.t);
+		reporter.payload();
+		await reporter.settled();
+		reporter.payload();
+		reporter.accept({ capabilitiesStored: true });
+		clock.t = 60 * 60_000;
+		expect(reporter.payload().capabilities).toBeUndefined(); // an hour on: the hash alone
+		clock.t = 25 * 60 * 60_000;
+		reporter.refreshIfDue();
+		await reporter.settled();
+		expect(reporter.payload().capabilities).toBeDefined(); // a day on: the record again
+		expect(reporter.payload().capabilities).toBeUndefined(); // …once, not on every beat
+	});
 	it("a failing detection never throws and reports nothing", async () => {
 		const reporter = new CapabilityReporter(async () => { throw new Error("boom"); });
 		reporter.refreshIfDue();

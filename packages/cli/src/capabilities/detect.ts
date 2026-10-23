@@ -243,6 +243,8 @@ export function capabilityHash(c: MachineCapabilities): string {
 }
 
 export const CAPABILITY_REFRESH_MS = 10 * 60_000;
+/** The full record is re-sent at least this often even when nothing changed, so the platform's copy is never stale (#1320). */
+export const CAPABILITY_RESEND_MS = 24 * 60 * 60_000;
 
 /**
  * Holds the latest record between heartbeats. The full record is sent only when the platform does not have this
@@ -252,6 +254,7 @@ export class CapabilityReporter {
 	private caps: MachineCapabilities | null = null;
 	private hash: string | null = null;
 	private acknowledged: string | null = null;
+	private sentFullAt = 0;
 	private detectedAt = 0;
 	private running: Promise<void> | null = null;
 	constructor(
@@ -283,7 +286,10 @@ export class CapabilityReporter {
 	payload(): { capabilityHash?: string; capabilities?: MachineCapabilities } {
 		this.refreshIfDue();
 		if (!this.caps || !this.hash) return {};
-		return this.acknowledged === this.hash ? { capabilityHash: this.hash } : { capabilityHash: this.hash, capabilities: this.caps };
+		const due = this.clock() - this.sentFullAt >= CAPABILITY_RESEND_MS;
+		if (this.acknowledged === this.hash && !due) return { capabilityHash: this.hash };
+		this.sentFullAt = this.clock();
+		return { capabilityHash: this.hash, capabilities: this.caps };
 	}
 
 	/** Read the platform's answer: stored means the hash is known; `capabilitiesWanted` asks for the record again. */

@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSy
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
 import { promisify } from "node:util";
+import { preflightInstall, type PreflightDeps, realPreflightDeps } from "./preflight.js";
 import { badVersions } from "./trial.js";
 
 const run = promisify(execFile);
@@ -197,9 +198,12 @@ export async function npmInstallInto(dir: string, version: string): Promise<void
  * run. Older versions beyond the last {@link KEEP} are removed — a version given up on (trial.ts) never counts as
  * one of them, so it can never push the last good version out of the cache.
  */
-export async function installPayload(version: string, root: string = payloadRoot(), install = npmInstallInto): Promise<Payload> {
+export async function installPayload(version: string, root: string = payloadRoot(), install = npmInstallInto, preflight: PreflightDeps = realPreflightDeps()): Promise<Payload> {
 	const done = payloadAt(packageDir(root, version));
 	if (done) return done;
+	// Pre-flight (#1320): refuse BEFORE anything is fetched or created, so a machine that cannot finish the install is left as it was.
+	const verdict = preflightInstall(root, preflight);
+	if (!verdict.ok) throw new Error(`update pre-flight failed: ${verdict.reason}`);
 	mkdirSync(root, { recursive: true });
 	const scratch = mkdtempSync(join(root, `.install-${version}-`));
 	try {

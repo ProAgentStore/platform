@@ -98,6 +98,7 @@ import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runDueGmailScoutScans } from "./lib/gmail-scout/scan.js";
 import { runDueCoderQuestions } from "./lib/coder-question-sweep.js";
 import { runCreditAutoResume } from "./lib/credit-auto-resume.js";
+import { runFleetHealth } from "./lib/fleet-health.js";
 import { runDueOverloadRetries } from "./lib/objective-queue-start.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
@@ -403,6 +404,13 @@ export default {
 		ctx.waitUntil(
 			runCreditAutoResume(env).catch((err) => logUnhandled(env, err, { path: "scheduled:credit-auto-resume", method: "CRON" })),
 		);
+		// Fleet visibility (#1320): a machine that stops reporting capabilities, falls behind the release, fails an update or
+		// crash-loops raises one alert per episode. Throttled inside (release lookup hourly); its own failure domain.
+		if (new Date(_event.scheduledTime).getUTCMinutes() % 5 === 0) {
+			ctx.waitUntil(
+				runFleetHealth(env).catch((err) => logUnhandled(env, err, { path: "scheduled:fleet-health", method: "CRON" })),
+			);
+		}
 		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.
 		// `runStaleRunSweep` swallows + logs its own errors.
