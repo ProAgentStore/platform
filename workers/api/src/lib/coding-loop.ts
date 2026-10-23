@@ -814,6 +814,10 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 	const lines: string[] = [];
 	lines.push(
 		"You orchestrate a local AI coding CLI. Its run context follows these platform rules.",
+		// #1319. A gate that refuses a stale checkout runs BEFORE any brief is read, so this cannot be the only defence (the platform
+		// fast-forwards a behind checkout itself); it is the instruction for the case the platform could not settle, and for a run
+		// that continues an old checkout.
+		"FIRST STEP, before any change: have the CLI run `git pull --ff-only` on the repo's configured branch (main). If git refuses, stop and report exactly what it said (call request_human) — never merge, rebase, stash or reset your way past it.",
 		"",
 		"You see the terminal pane. Decide the SINGLE next step and call exactly one tool.",
 		"- Drive the CLI with natural-language instructions via send_message; it does the editing/running.",

@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { AUTO_PICKUP_DEFAULTS, RESERVATION_TTL_MS, recoverReservations, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
+import { AUTO_PICKUP_DEFAULTS, autoPickupObjective, RESERVATION_TTL_MS, recoverReservations, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
 import { paidTokensSince } from "./usage.js";
 import { setCoderBrain } from "./coder-brain.js";
 import type { IssueSummary } from "./github-issues.js";
@@ -78,6 +78,14 @@ describe("the picker is deterministic and never random (#1233)", () => {
 	});
 });
 
+describe("the auto-picked objective starts with the pull-first step (#1319)", () => {
+	it("opens with `git pull --ff-only` on main and a stop-and-report if git refuses, before anything about the issue", () => {
+		const o = autoPickupObjective("acme/app", { number: 88, title: "Add a flag" });
+		expect(o.startsWith("First, run `git pull --ff-only` on main before any change; if git refuses, stop and report what it said. Implement GitHub issue #88 in acme/app: Add a flag.")).toBe(true);
+		expect(o).toContain('"closes #88"');
+	});
+});
+
 describe("the wake, on the real schema (#1233)", () => {
 	let d1: RealSchemaD1;
 	let env: Env;
@@ -109,7 +117,7 @@ describe("the wake, on the real schema (#1233)", () => {
 	it("an empty queue starts the highest-priority eligible issue: queued with its iterations, and kicked at once", async () => {
 		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, repo: "acme/app", issue: 9 });
 		const [entry] = queued();
-		expect(entry.objective).toMatch(/^Implement GitHub issue #9 in acme\/app: issue 9\. Read the issue and all its comments first\..*"closes #9"/);
+		expect(entry.objective).toMatch(/^First, run `git pull --ff-only` on main before any change; if git refuses, stop and report what it said\. Implement GitHub issue #9 in acme\/app: issue 9\. Read the issue and all its comments first\..*"closes #9"/);
 		expect(entry.max_iterations).toBe(30);
 		expect(JSON.parse(entry.metadata)).toEqual({ autoPickup: { repo: "acme/app", issue: 9 } });
 		expect(log.started).toEqual(["r1"]);

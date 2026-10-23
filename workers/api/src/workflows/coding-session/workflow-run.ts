@@ -34,7 +34,7 @@ import { accountTimeZone } from "../../lib/account-timezone.js";
 import type { EngineWaitState } from "../../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../../lib/repo-state.js";
 import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../../lib/repo-sync.js";
-import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, REPAIR_RUN_OBJECTIVE, repairCheckoutObjective, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../../lib/repo-sync-gate.js";
+import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, readWorkingStateWithRetry, REPAIR_RUN_OBJECTIVE, repairCheckoutObjective, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../../lib/repo-sync-gate.js";
 import { enforceRepoPolicies } from "../../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../../lib/work-card.js";
 import { normalizeRunnerNode } from "../../lib/runtime-nodes.js";
@@ -958,15 +958,16 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// TELLS, in the same voice as the state note, and pulls nothing itself.
 		const repoStart = (await step.do("repo-state-start", async () => {
 			const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
-			if (!repo) return { state: null, sync: null };
-			const [state, sync] = await Promise.all([
-				readRepoWorkingState(conn, { repo, sessionId }).catch(() => null),
+			if (!repo) return { state: null, sync: null, stateError: null };
+			const [read, sync] = await Promise.all([
+				// Retried once, and the error kept (#1319): an unreadable tree must not veto the fast-forward, and the owner is told why.
+				readWorkingStateWithRetry((onError) => readRepoWorkingState(conn, { repo, sessionId, onError })),
 				// `forceFetch`: a run's start is the one moment a fresh answer is worth a network
 				// round trip, whatever the cache holds.
 				readRepoSync(conn, { workDir: repo.workdir, sessionId, branch: repo.branch, forceFetch: true }).catch(() => null),
 			]);
-			return { state: state ?? null, sync: sync ?? null };
-		})) as { state: RepoWorkingState | null; sync: RepoSyncVerdict | null };
+			return { state: read.state, sync: sync ?? null, stateError: read.error };
+		})) as { state: RepoWorkingState | null; sync: RepoSyncVerdict | null; stateError?: string | null };
 		const repoState = repoStart.state;
 		// …and if it is merely BEHIND on a clean tree, the platform fast-forwards it itself (#802).
 		// The gate below stopped this platform's own coder twice in a row, 19 commits behind, and
@@ -980,7 +981,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			if (!eligible.eligible || !eligible.branch) return skippedSyncHeal(eligible);
 			const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
 			if (!repo) return null;
-			return attemptSyncSelfHeal(conn, { repo, sessionId, branch: eligible.branch });
+			const attempted = await attemptSyncSelfHeal(conn, { repo, sessionId, branch: eligible.branch });
+			return repoStart.stateError ? { ...attempted, stateReadError: repoStart.stateError } : attempted;
 		})) as SyncHealOutcome | null;
 		// The verdict the run is judged on is the checkout as it IS now — the re-read after a
 		// heal, else the start-of-run read.
@@ -1054,9 +1056,13 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// A pointer moved on the owner's checkout unattended (#802): the record says what
 			// arrived and how to put it back, in the trace as well, because "why is my checkout on
 			// a different commit" has to be answerable from `agent_trace`.
+			// An unreadable tree is recorded even when nothing was healed (#1319): the error the old code threw away.
+			if (repoStart.stateError && !(heal && heal.status !== "skipped")) {
+				await traceCodingRun(env, traceCtx, "coding.run.self_heal", `The working tree's state could not be read (${repoStart.stateError}).${heal ? ` ${describeSyncHeal(heal)}` : " No fast-forward was needed."}`, { stateReadError: repoStart.stateError, status: heal?.status ?? "none" });
+			}
 			if (heal && heal.status !== "skipped") {
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: describeSyncHeal(heal) });
-				await traceCodingRun(env, traceCtx, "coding.run.self_heal", describeSyncHeal(heal), { status: heal.status, commits: heal.commits, from: heal.from, to: heal.to });
+				await traceCodingRun(env, traceCtx, "coding.run.self_heal", describeSyncHeal(heal), { status: heal.status, commits: heal.commits, from: heal.from, to: heal.to, ...(heal.stateReadError ? { stateReadError: heal.stateReadError } : {}) });
 				if (heal.status === "healed") await postToChat(`**Repository fast-forwarded** — ${describeSyncHeal(heal)}`);
 			}
 			if (syncNote) {

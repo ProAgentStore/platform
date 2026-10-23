@@ -54,6 +54,7 @@ import { REPO_SYNC_MIN_CLI, readRepoSync, type RepoSyncVerdict } from "./repo-sy
 import { runnerUpgradeClause, runnerUpgradeRefusal } from "./runner-upgrade.js";
 import { isRunnerUnreachable } from "./runner-unreachable.js";
 import { callRunner, type RunnerConn } from "./runner-client.js";
+import { clipMarked } from "./clip-marked.js";
 import { logError } from "./error-log.js";
 import type { RepoWorkingState } from "./repo-observation.js";
 import type { CodingRepo } from "./coding-types.js";
@@ -312,7 +313,31 @@ export type SyncHealStatus =
 	/** Not attempted: `behind`, but the tree is dirty or off its branch. `detail` says which, so the refusal can. */
 	| "skipped";
 
+/**
+ * Read the working tree's state, and read it once more if the first try gave nothing (#1319). Returns the state, or null with the
+ * underlying error so the run can record WHY (the old `.catch(() => null)` threw it away). Never throws.
+ */
+export async function readWorkingStateWithRetry(read: (report: (message: string) => void) => Promise<RepoWorkingState | null>): Promise<{ state: RepoWorkingState | null; error: string | null }> {
+	let error: string | null = null;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			// `report` receives the reason the reader itself had for returning nothing (a timeout, a runner error); a throw is kept too.
+			let reported: string | null = null;
+			const state = await read((m) => {
+				reported = m;
+			});
+			if (state) return { state, error: null };
+			error = reported ?? "the runner returned no state";
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		}
+	}
+	return { state: null, error: error ? clipMarked(error, 300, { within: true }) : null };
+}
+
 export interface SyncHealOutcome {
+	/** Why the tree-state read failed, when it did (#1319): the heal was attempted regardless and the runner's own checks decided. */
+	stateReadError?: string | null;
 	status: SyncHealStatus;
 	/** One clause in the owner's language. Empty for `healed`/`noop`. */
 	detail: string;
@@ -349,7 +374,11 @@ export function syncSelfHealEligible(
 ): SyncHealEligibility {
 	const branch = (configuredBranch || "").trim() || v?.branch || null;
 	if (v?.state !== "behind") return { eligible: false, branch, why: "" };
-	if (!state) return { eligible: false, branch, why: "the working tree's state could not be read, so it was not fast-forwarded unattended" };
+	// An UNREADABLE state does not veto the heal (#1319). The read is a convenience: a timeout, a runner busy right after a re-pin
+	// or an older CLI all arrive here as null, and the machine re-checks branch, upstream, divergence and every conflicting local change
+	// at the hands anyway (repo-write.ts), so refusing to even ask protected nothing and stranded a checkout 48 commits behind. With a
+	// branch to name, the runner is asked; git's own refusal decides. Without one there is nothing to ask for.
+	if (!state) return branch ? { eligible: true, branch, why: "" } : { eligible: false, branch, why: "no branch is configured for this repo and the verdict named none, and the working tree's state could not be read" };
 	if (state.notAGitRepo) return { eligible: false, branch, why: "the path is not a git working tree" };
 	// A DIRTY tree is deliberately not a reason to skip (#804). It was, and the first checkout it
 	// met was 18 commits behind with one untracked `.claude/` folder — refused, with a human sent to
@@ -464,6 +493,11 @@ export async function attemptSyncSelfHeal(
  * the clause the refusal carries.
  */
 export function describeSyncHeal(h: SyncHealOutcome): string {
+	const unread = h.stateReadError ? ` (The working tree's state could not be read — ${h.stateReadError} — so the machine's own checks decided.)` : "";
+	return `${describeHealCore(h)}${unread}`;
+}
+
+function describeHealCore(h: SyncHealOutcome): string {
 	if (h.status === "healed") {
 		const n = h.commits !== null ? `${h.commits} commit${h.commits === 1 ? "" : "s"}` : "the missing commits";
 		const shas = h.from && h.to ? ` (${h.from} → ${h.to})` : "";

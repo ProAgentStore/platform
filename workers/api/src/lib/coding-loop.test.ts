@@ -1191,3 +1191,14 @@ describe("runCodingLoop — a dead session says why it died (#882)", () => {
 		expect(r.detail).toContain("npm install -g @openai/codex");
 	});
 });
+
+describe("every coder brief starts with a pull-first step (#1319)", () => {
+	it("the Pilot's stable instructions open with the FIRST STEP, ahead of the run context, and still keep STALE BASE", () => {
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/FIRST STEP, before any change: have the CLI run `git pull --ff-only` on the repo's configured branch \(main\)\. If git refuses, stop and report exactly what it said/);
+		expect(p).toMatch(/never merge, rebase, stash or reset your way past it/);
+		expect(p.indexOf("FIRST STEP")).toBeLessThan(p.indexOf("OBJECTIVE:"));
+		expect(p.indexOf("FIRST STEP")).toBeLessThan(p.indexOf("You see the terminal pane"));
+		expect(p).toContain("STALE BASE:");
+	});
+});

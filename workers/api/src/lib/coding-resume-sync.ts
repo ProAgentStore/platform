@@ -20,7 +20,7 @@ import type { Env } from "../types.js";
 import { getRepo } from "./coding-store.js";
 import { readRepoSync, type RepoSyncVerdict } from "./repo-sync.js";
 import { readRepoWorkingState } from "./repo-state.js";
-import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, skippedSyncHeal, syncSelfHealEligible, type SyncHealOutcome } from "./repo-sync-gate.js";
+import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, readWorkingStateWithRetry, skippedSyncHeal, syncSelfHealEligible, type SyncHealOutcome } from "./repo-sync-gate.js";
 import { callRunner, type RunnerConn } from "./runner-client.js";
 
 /** How many changed files a note names before it says how many more there are. */
@@ -56,12 +56,14 @@ export type ResumeSync = { ok: true; moved: string | null; heal: SyncHealOutcome
 export async function resyncBeforeAnswer(env: Env, conn: RunnerConn, input: { instanceId: string; userId: string; sessionId: string; repoId: string }): Promise<ResumeSync> {
 	const repo = await getRepo(env, input.instanceId, input.userId, input.repoId).catch(() => null);
 	if (!repo) return { ok: true, moved: null, heal: null };
-	const [state, sync] = await Promise.all([
-		readRepoWorkingState(conn, { repo, sessionId: input.sessionId }).catch(() => null),
+	const [read, sync] = await Promise.all([
+		// Retried once, error kept; an unreadable tree does not veto the fast-forward (#1319).
+		readWorkingStateWithRetry((onError) => readRepoWorkingState(conn, { repo, sessionId: input.sessionId, onError })),
 		readRepoSync(conn, { workDir: repo.workdir, sessionId: input.sessionId, branch: repo.branch, forceFetch: true }).catch(() => null as RepoSyncVerdict | null),
 	]);
-	const eligible = syncSelfHealEligible(sync, state, repo.branch ?? null);
-	const heal = eligible.eligible && eligible.branch ? await attemptSyncSelfHeal(conn, { repo, sessionId: input.sessionId, branch: eligible.branch }) : skippedSyncHeal(eligible);
+	const eligible = syncSelfHealEligible(sync, read.state, repo.branch ?? null);
+	const attempted = eligible.eligible && eligible.branch ? await attemptSyncSelfHeal(conn, { repo, sessionId: input.sessionId, branch: eligible.branch }) : skippedSyncHeal(eligible);
+	const heal = attempted && read.error ? { ...attempted, stateReadError: read.error } : attempted;
 	const after = heal?.sync ?? sync;
 	const gate = await gateRunOnSync(env, { instanceId: input.instanceId, userId: input.userId, sessionId: input.sessionId, node: conn.runnerNode ?? null, repo: repo.name, heal }, after);
 	if (gate.blocked) {

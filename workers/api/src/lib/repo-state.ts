@@ -138,7 +138,7 @@ export function saysNotAGitRepo(text: unknown): boolean {
  */
 export async function readRepoWorkingState(
 	conn: RunnerConn,
-	input: { repo: CodingRepo; sessionId?: string | null },
+	input: { repo: CodingRepo; sessionId?: string | null; /** Told WHY a null came back (#1319): the runner's error, which used to be swallowed here. */ onError?: (message: string) => void },
 ): Promise<RepoWorkingState | null> {
 	// `sessionId` first: the runner resolves a tracked session's REAL workDir, which is the only
 	// way to reach a managed clone dir (whose path D1 never learns). `workDir` covers a local
@@ -148,7 +148,10 @@ export async function readRepoWorkingState(
 		workDir: input.repo.workdir || undefined,
 		cmd: "status" as const,
 	};
-	if (!body.sessionId && !body.workDir) return null;
+	if (!body.sessionId && !body.workDir) {
+		input.onError?.("neither a session nor a working directory was available to read");
+		return null;
+	}
 	// The failure is INSPECTED rather than swallowed (#548). `.catch(() => null)` collapsed two
 	// different facts into one: "the runner did not answer" (genuinely unknown, and null is right)
 	// and "git answered that this is not a repository" (a definite verdict, and the single most
@@ -159,7 +162,9 @@ export async function readRepoWorkingState(
 		(e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }) as { output?: string; error?: string },
 	);
 	if (!res || typeof res.output !== "string" || res.error) {
-		return saysNotAGitRepo(res?.error) ? notAGitRepoState() : null;
+		if (saysNotAGitRepo(res?.error)) return notAGitRepoState();
+		input.onError?.(res?.error ? String(res.error) : "the runner answered without any output");
+		return null;
 	}
 	return parseGitShortStatus(res.output);
 }

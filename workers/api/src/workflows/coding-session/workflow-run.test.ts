@@ -432,6 +432,72 @@ describe("the sync gate: a run on an unconfirmed base never reaches the loop (#8
 		expect(events("coding.run.self_heal")).toHaveLength(1);
 	});
 
+	describe("an unreadable tree state does not block the heal (#1319)", () => {
+		const behind = (n = 48) => ({ ...IN_SYNC, behind: n, remoteHead: "bbbbbbbb2" });
+		const healsTo = () => {
+			let synced = 0;
+			runner["/coding/sync"] = () => (synced++ === 0 ? behind() : { ...IN_SYNC, localHead: "bbbbbbbb2", remoteHead: "bbbbbbbb2" });
+		};
+		const fastForwards = () => runnerCalls.filter((c) => c.path === "/coding/git-write" && c.body.cmd === "fast-forward");
+		const stateReads = () => runnerCalls.filter((c) => c.path === "/coding/git");
+
+		it("behind + a state read that fails twice: the runner is asked to fast-forward anyway, the run proceeds, the error is on the trace", async () => {
+			// The re-pin incident: the Mac mini's first request after the re-pin timed out, and the 48-commit-behind checkout was never pulled.
+			healsTo();
+			runner["/coding/git"] = () => { throw new Error("timed out waiting for the runner after the re-pin"); };
+			runner["/coding/git-write"] = () => ({ ok: true, changed: true, from: "eeb8b768", to: "bbbbbbbb2", commits: 48 });
+			const { result } = await run();
+			expect(result.outcome).toBe("done");
+			expect(decided).toHaveLength(1);
+			expect(fastForwards()).toHaveLength(1);
+			expect(stateReads().length).toBeGreaterThanOrEqual(2); // read, then retried once
+			const [heal] = events("coding.run.self_heal");
+			expect(heal.message).toContain("Fast-forwarded `main` by 48 commits");
+			expect(heal.message).toContain("timed out waiting for the runner after the re-pin");
+			expect(JSON.parse(heal.context ?? "{}")).toMatchObject({ status: "healed", stateReadError: expect.stringContaining("timed out waiting") });
+			expect(events("coding.run.blocked")).toHaveLength(0);
+		});
+
+		it("a read that fails once and then works is just a read: no error recorded", async () => {
+			healsTo();
+			let n = 0;
+			runner["/coding/git"] = () => { if (n++ === 0) throw new Error("transient"); return { output: "## main...origin/main\n" }; };
+			runner["/coding/git-write"] = () => ({ ok: true, changed: true, from: "eeb8b768", to: "bbbbbbbb2", commits: 48 });
+			await run();
+			expect(fastForwards()).toHaveLength(1);
+			expect(events("coding.run.self_heal").every((e) => !(e.context ?? "").includes("stateReadError"))).toBe(true);
+		});
+
+		it("behind on a clean, readable tree still heals and proceeds", async () => {
+			healsTo();
+			runner["/coding/git-write"] = () => ({ ok: true, changed: true, from: "eeb8b768", to: "bbbbbbbb2", commits: 48 });
+			const { result } = await run();
+			expect(result.outcome).toBe("done");
+			expect(fastForwards()).toHaveLength(1);
+		});
+
+		it("the runner still decides: unreadable state + a diverged or conflicting checkout blocks, with the machine's reason and the read error", async () => {
+			runner["/coding/sync"] = () => behind(3);
+			runner["/coding/git"] = () => { throw new Error("runner busy"); };
+			runner["/coding/git-write"] = () => ({ ok: false, refused: "diverged" });
+			const { result } = await run();
+			expect(decided).toHaveLength(0);
+			expect(result.outcome).toBe("failed");
+			expect(fastForwards()).toHaveLength(1);
+			expect(result.detail).toContain("did not happen");
+			expect(events("coding.run.blocked")).toHaveLength(1);
+			expect(events("coding.run.self_heal").some((e) => e.message.includes("runner busy"))).toBe(true);
+		});
+
+		it("an unreadable state on a checkout that is NOT behind records the error and changes nothing", async () => {
+			runner["/coding/git"] = () => { throw new Error("older CLI"); };
+			const { result } = await run();
+			expect(result.outcome).toBe("done");
+			expect(fastForwards()).toHaveLength(0);
+			expect(events("coding.run.self_heal")[0].message).toContain("older CLI");
+		});
+	});
+
 	it("gives a repair run the platform's brief INSTEAD of its objective, and lets it through the gate", async () => {
 		runner["/coding/sync"] = () => ({ ...IN_SYNC, ahead: 1, behind: 3 });
 		await run(params({}, { repairCheckout: true, objective: "owner note" }));
@@ -1041,6 +1107,15 @@ describe("a parked run is brought onto the current main before its answer is app
 		expect(decided[1].goal.userHint).toContain("yes");
 		expect(decided[1].goal.resumeNote).toContain("`main` moved: 3 commits (aaaaaaaa → bbbbbbbb), touching `src/api.ts`, `src/flag.ts`");
 		expect(decided[1].goal.resumeNote).toMatch(/Re-read any of those files/);
+	});
+
+	it("an unreadable tree state does not stop the resume fast-forward either (#1319): the machine's own checks decide, the error is on the record", async () => {
+		runner["/coding/git"] = () => { throw new Error("runner busy after the re-pin"); };
+		const { result } = await run(params({ loopRunId: "run-1" }), parkThen("moved"));
+		expect(result.outcome).toBe("done");
+		expect(order("fast-forward")).toBeGreaterThan(-1);
+		expect(order("/coding/act")).toBeGreaterThan(order("fast-forward"));
+		expect(decided[1].goal.resumeNote).toContain("`main` moved");
 	});
 
 	it("a base that did not move adds nothing to the answer turn", async () => {

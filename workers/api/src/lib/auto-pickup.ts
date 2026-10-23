@@ -167,7 +167,7 @@ export function pickNextIssue(candidates: PickCandidate[], settings: Pick<AutoPi
 }
 
 export function autoPickupObjective(repo: string, issue: Pick<IssueSummary, "number" | "title">): string {
-	return `Implement GitHub issue #${issue.number} in ${repo}: ${issue.title}. Read the issue and all its comments first. Add tests. Commit and push to main with "closes #${issue.number}" in the commit message once it is fully resolved.`;
+	return `First, run \`git pull --ff-only\` on main before any change; if git refuses, stop and report what it said. Implement GitHub issue #${issue.number} in ${repo}: ${issue.title}. Read the issue and all its comments first. Add tests. Commit and push to main with "closes #${issue.number}" in the commit message once it is fully resolved.`;
 }
 
 // ── The wake ────────────────────────────────────────────────────────────────────────────────────

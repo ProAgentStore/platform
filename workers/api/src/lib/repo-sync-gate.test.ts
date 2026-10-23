@@ -20,6 +20,7 @@ import {
 	gateRunOnSync,
 	REPAIR_RUN_HINT,
 	REPAIR_RUN_OBJECTIVE,
+	readWorkingStateWithRetry,
 	repairCheckoutObjective,
 	skippedSyncHeal,
 	syncFailureIsOldRunner,
@@ -264,8 +265,17 @@ describe("syncSelfHealEligible — the ONE case a fast-forward is safe unattende
 		expect(e.why).toContain("`main`");
 	});
 
-	it("is NOT eligible when the tree's state is unknown — unknown is not clean", () => {
-		expect(syncSelfHealEligible(BEHIND, null, "main")).toMatchObject({ eligible: false });
+	it("an UNREADABLE tree state does not veto the heal — the machine re-checks everything at the hands (#1319)", () => {
+		expect(syncSelfHealEligible(BEHIND, null, "main")).toEqual({ eligible: true, branch: "main", why: "" });
+		// …with the verdict's branch when none is configured, and nothing to ask for when neither names one.
+		expect(syncSelfHealEligible({ ...BEHIND, branch: "main" }, null, null)).toMatchObject({ eligible: true, branch: "main" });
+		expect(syncSelfHealEligible({ ...BEHIND, branch: null }, null, null)).toMatchObject({ eligible: false, why: expect.stringContaining("could not be read") });
+		// Only `behind` is ever healed: an unreadable state changes nothing about a diverged or current checkout.
+		expect(syncSelfHealEligible({ ...BEHIND, state: "diverged" }, null, "main").eligible).toBe(false);
+		expect(syncSelfHealEligible({ ...BEHIND, state: "in_sync" }, null, "main").eligible).toBe(false);
+	});
+
+	it("a state that IS read still decides: a branch it cannot name, or a different one, is not healed", () => {
 		expect(syncSelfHealEligible(BEHIND, { ...CLEAN, branch: null }, "main").eligible).toBe(false);
 		expect(syncSelfHealEligible(BEHIND, { branch: null, dirty: false, changedFiles: 0, notAGitRepo: true }, "main").eligible).toBe(false);
 	});
@@ -377,6 +387,35 @@ describe("the refusal carries the heal's story (#802)", () => {
 		expect(describeSyncHeal({ ...healed, commits: 1 })).toContain("by 1 commit (");
 		expect(describeSyncHeal({ ...healed, status: "noop" })).toContain("already current");
 		expect(describeSyncHeal(skipped)).toMatch(/^A fast-forward was not attempted: /);
+	});
+});
+
+describe("reading the tree's state is retried once and its error is kept (#1319)", () => {
+	it("returns the state of the first read that works, with no error", async () => {
+		const read = vi.fn().mockResolvedValue(CLEAN);
+		expect(await readWorkingStateWithRetry(read)).toEqual({ state: CLEAN, error: null });
+		expect(read).toHaveBeenCalledTimes(1);
+	});
+	it("retries once after a failure and uses the second answer", async () => {
+		const read = vi.fn().mockRejectedValueOnce(new Error("runner busy after the re-pin")).mockResolvedValueOnce(CLEAN);
+		expect(await readWorkingStateWithRetry(read)).toEqual({ state: CLEAN, error: null });
+		expect(read).toHaveBeenCalledTimes(2);
+	});
+	it("after two failures returns no state AND the underlying error, never throwing", async () => {
+		const read = vi.fn().mockRejectedValue(new Error("timed out after 15s waiting for the runner"));
+		expect(await readWorkingStateWithRetry(read)).toEqual({ state: null, error: "timed out after 15s waiting for the runner" });
+		expect(read).toHaveBeenCalledTimes(2);
+		expect((await readWorkingStateWithRetry(async () => null)).error).toBe("the runner returned no state");
+	});
+	it("bounds a very long error", async () => {
+		const out = await readWorkingStateWithRetry(async () => { throw new Error("x".repeat(2000)); });
+		expect(out.error?.length).toBeLessThanOrEqual(300);
+	});
+	it("describeSyncHeal says why the state was not read, so the owner sees the cause beside the outcome", () => {
+		const base: SyncHealOutcome = { status: "healed", detail: "", branch: "main", from: "aaaa", to: "bbbb", commits: 48, sync: null, stateReadError: "timed out" };
+		expect(describeSyncHeal(base)).toContain("Fast-forwarded `main` by 48 commits");
+		expect(describeSyncHeal(base)).toContain("The working tree's state could not be read — timed out — so the machine's own checks decided.");
+		expect(describeSyncHeal({ ...base, stateReadError: null })).not.toContain("could not be read");
 	});
 });
 
