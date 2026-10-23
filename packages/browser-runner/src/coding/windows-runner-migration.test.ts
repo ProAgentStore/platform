@@ -284,6 +284,62 @@ describe("the runner's migration routes", () => {
 		throw new Error("background migration did not settle");
 	});
 
+	// A runner restart kills the in-memory task, not the receipt. These write the receipt such a restart leaves behind.
+	const RECEIPT = `${PROGRAM_DATA}\\ProAgentStore\\actions-runner-migrations\\proappstore-online.json`;
+	const interruptedAt = (stage: MigrationRecord["stage"], over: Partial<MigrationRecord> = {}) => {
+		const rec: MigrationRecord = { legacyDir: legacy.dir, destDir: DEST, stagedName: "pink-laptop-m", stage, steps: [`got as far as ${stage}`], legacyService: legacy.service, newService: null, legacyStopped: stage !== "drain", createdDest: stage === "copy" || stage === "register", registered: false, ...over };
+		m.files.set(RECEIPT, JSON.stringify(rec));
+		if (rec.createdDest) m.dirs.add(DEST);
+		return rec;
+	};
+
+	it("a runner restart mid-stage leaves a truthful, recoverable receipt: interrupted, not running, with resume and rollback named (#1301)", async () => {
+		for (const stage of ["drain", "stop", "prepare", "copy", "register"] as const) {
+			interruptedAt(stage);
+			const status = (await routeWindowsRunner("/coding/actions-runner/migration/status", {}, win))?.body as { needed: boolean; legacy: Array<Record<string, unknown>> };
+			expect(status.legacy[0]).toMatchObject({ running: false, interrupted: true, actions: ["resume", "rollback"], migration: { stage } });
+			expect(status.needed).toBe(true); // repeating setup resumes it rather than reading as "nothing to do"
+		}
+		interruptedAt("awaiting_verification");
+		expect((await routeWindowsRunner("/coding/actions-runner/migration/status", {}, win))?.body).toMatchObject({ legacy: [{ interrupted: false, actions: [] }] });
+	});
+
+	it("resume carries on from the interrupted receipt, keeps what the first attempt did, and ends awaiting verification", async () => {
+		interruptedAt("copy");
+		const resumed = await routeWindowsRunner("/coding/actions-runner/migration/start", { folder: "proappstore-online", url: "https://github.com/proappstore-online", token: TOKEN, labels: ["pags"] }, win);
+		expect(resumed).toMatchObject({ status: 202, body: { started: true } });
+		let rec: MigrationRecord | null = null;
+		for (let i = 0; i < 50 && rec?.stage !== "awaiting_verification"; i++) {
+			await new Promise((r) => setTimeout(r, 0));
+			rec = readMigration(m, DEST);
+		}
+		expect(rec).toMatchObject({ stage: "awaiting_verification", legacyStopped: true, createdDest: true, registered: true });
+		expect(rec?.steps.join("\n")).toMatch(/resumed after an interruption at stage copy/);
+		expect(everything(rec as MigrationRecord)).not.toContain(TOKEN);
+		// Ownership survived the restart: rolling back this resumed run still removes the folder the FIRST attempt created.
+		const back = await rollbackMigration(rec as MigrationRecord, m);
+		expect(back.stage).toBe("rolled_back");
+		expect(m.removed).toContain(DEST);
+	});
+
+	it("rollback of an interrupted migration needs no token, restarts the old runner and removes only what was created", async () => {
+		interruptedAt("copy", { legacyStopped: true });
+		m.services.set(legacy.service, "stopped");
+		const out = await routeWindowsRunner("/coding/actions-runner/migration/rollback", { folder: "proappstore-online" }, win);
+		expect(out?.body).toMatchObject({ stage: "rolled_back", legacyRestored: true });
+		expect(m.services.get(legacy.service)).toBe("running");
+		expect(m.removed).toContain(DEST);
+	});
+
+	it("rollback after an interruption DURING registration assumes it registered: removes the staged service and names the orphan", async () => {
+		interruptedAt("register");
+		m.files.set(`${DEST}\\.service`, "actions.runner.proappstore-online.pink-laptop-m");
+		m.services.set("actions.runner.proappstore-online.pink-laptop-m", "running");
+		const out = (await routeWindowsRunner("/coding/actions-runner/migration/rollback", { folder: "proappstore-online" }, win))?.body as MigrationRecord;
+		expect(out).toMatchObject({ stage: "rolled_back", orphanRegistration: "pink-laptop-m", newService: "actions.runner.proappstore-online.pink-laptop-m" });
+		expect(m.calls.some((c) => c.file === "sc.exe" && c.args.join(" ") === "delete actions.runner.proappstore-online.pink-laptop-m")).toBe(true);
+	});
+
 	it("complete and rollback need a recorded migration and a well-formed verdict", async () => {
 		expect((await routeWindowsRunner("/coding/actions-runner/migration/complete", { folder: "proappstore-online", verdict: {} }, win))?.status).toBe(400);
 		await startMigration(request(), m);

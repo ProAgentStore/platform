@@ -258,6 +258,17 @@ describe("migrating a profile-scoped install (#1272)", () => {
 		expect(r.relayed.some((x) => x.path.endsWith("/migration/start"))).toBe(false);
 	});
 
+	it("a runner restarted mid-migration is resumed by repeating setup: one fresh start, no second registration path (#1301)", async () => {
+		const r = rig({ windows: WIN_READY, installed: legacy });
+		r.migrationStatus.running = false;
+		r.migrationStatus.value = { stage: "copy", stagedName: `${LABEL}-m`, steps: ["copy ..."] };
+		const out = await install(r);
+		const starts = r.relayed.filter((x) => x.path.endsWith("/migration/start"));
+		expect(starts).toHaveLength(1);
+		expect(out.migration?.outcome).toBe("ready_for_removal");
+		expect(JSON.stringify(out)).not.toContain(REG);
+	});
+
 	it("the registration token is in no returned value and no stored row", async () => {
 		const r = rig({ windows: WIN_READY, installed: legacy });
 		const out = await install(r);

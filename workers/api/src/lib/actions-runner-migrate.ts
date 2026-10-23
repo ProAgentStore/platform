@@ -44,7 +44,7 @@ interface Machine {
 }
 
 interface MachineMigrationStatus {
-	legacy?: Array<{ folder?: string; running?: boolean; migration?: Machine | null }>;
+	legacy?: Array<{ folder?: string; running?: boolean; interrupted?: boolean; migration?: Machine | null }>;
 }
 
 /**
@@ -107,7 +107,10 @@ export async function migrateLegacyRunner<C extends { labels: string[] }, P>(
 		return status.legacy?.find((item) => item.folder === a.folder) ?? null;
 	};
 	let observed = await read().catch(() => null);
-	if (!observed?.running && (!observed?.migration || observed.migration.stage === "rolled_back")) {
+	// A receipt stuck at an in-progress stage with nothing advancing it is a runner restart mid-stage (#1301). The machine says so
+	// (`interrupted`); an older runner does not, so the same fact is read from the stage. Setup RESUMES it with a fresh token.
+	const interrupted = (o: typeof observed) => !!o && !o.running && (o.interrupted ?? ["drain", "stop", "prepare", "copy", "register"].includes(o.migration?.stage ?? ""));
+	if (!observed?.running && (!observed?.migration || observed.migration.stage === "rolled_back" || interrupted(observed))) {
 		const token = await ops.mintToken();
 		try {
 			await deps.call(conn, "/coding/actions-runner/migration/start", { folder: a.folder, url: ops.scopeUrl, token, labels: stagedLabels });
@@ -129,7 +132,7 @@ export async function migrateLegacyRunner<C extends { labels: string[] }, P>(
 		machine = observed?.migration ?? null;
 		if (machine && ["awaiting_verification", "ready_for_removal", "rolled_back"].includes(machine.stage ?? "")) break;
 		if (!observed?.running && machine) {
-			throw new HttpError(409, `Migration of ${a.node} stopped at ${machine.stage ?? "an unknown stage"}. Its receipt is preserved; run the machine-side rollback before retrying setup.`);
+			throw new HttpError(409, `Migration of ${a.node} stopped at ${machine.stage ?? "an unknown stage"}. Its receipt is preserved; run setup again to resume it, or roll it back on the machine.`);
 		}
 		await wait(deps, 1_000);
 	}

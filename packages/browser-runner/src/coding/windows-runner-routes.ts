@@ -4,7 +4,7 @@
  * registration token in the body and never echo it; the verdict route is how the platform reports "online + smoke job passed".
  */
 import { checkWindowsReadiness, type WindowsReadiness } from "./windows-runner-readiness.js";
-import { completeMigration, findLegacyInstalls, type LegacyInstall, type MigrationDeps, type MigrationRecord, readMigration, rollbackMigration, startMigration } from "./windows-runner-migration.js";
+import { completeMigration, findLegacyInstalls, type LegacyInstall, type MigrationDeps, isInterrupted, type MigrationRecord, readMigration, rollbackMigration, startMigration } from "./windows-runner-migration.js";
 import { liveWindowsDeps, type LiveWindows } from "./windows-runner-live.js";
 import { win32 } from "node:path";
 
@@ -35,13 +35,16 @@ export function windowsReadiness(win: LiveWindows = liveWindowsDeps()): WindowsR
 }
 
 /** Legacy installs and where each stands. `needed` is what makes the cloud start a migration. */
-export function migrationStatus(deps: MigrationDeps): { needed: boolean; legacy: Array<LegacyInstall & { migration: MigrationRecord | null; running: boolean }> } {
-	const legacy = findLegacyInstalls(deps).map((l) => ({
-		...l,
-		migration: readMigration(deps, win32.join(deps.programData, "ProAgentStore", "actions-runner", l.folder)),
-		running: activeMigrations.has(migrationKey(deps, l.folder)),
-	}));
-	return { needed: legacy.some((l) => (!l.migration && !l.running) || l.migration?.stage === "rolled_back"), legacy };
+export function migrationStatus(deps: MigrationDeps): { needed: boolean; legacy: Array<LegacyInstall & { migration: MigrationRecord | null; running: boolean; interrupted: boolean; actions: Array<"resume" | "rollback"> }> } {
+	const legacy = findLegacyInstalls(deps).map((l) => {
+		const migration = readMigration(deps, win32.join(deps.programData, "ProAgentStore", "actions-runner", l.folder));
+		const running = activeMigrations.has(migrationKey(deps, l.folder));
+		// A runner restart mid-stage leaves the receipt at an in-progress stage with nothing advancing it. Say so, and name the two
+		// explicit ways out: `start` again (resume, which needs a fresh token) or `rollback` (which needs none).
+		const interrupted = isInterrupted(migration, running);
+		return { ...l, migration, running, interrupted, actions: interrupted ? (["resume", "rollback"] as Array<"resume" | "rollback">) : [] };
+	});
+	return { needed: legacy.some((l) => (!l.migration && !l.running) || l.migration?.stage === "rolled_back" || l.interrupted), legacy };
 }
 
 const FOLDER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$/;
@@ -71,6 +74,6 @@ export async function routeWindowsRunner(path: string, body: Record<string, unkn
 		if (!v || typeof v.online !== "boolean" || typeof v.smoke?.ok !== "boolean") return bad("verdict must be { online: boolean, smoke: { ok: boolean } }");
 		return { status: 200, body: await completeMigration(rec, { online: v.online, smoke: { ok: v.smoke.ok, detail: typeof v.smoke.detail === "string" ? v.smoke.detail : undefined } }, w.migration) };
 	}
-	if (path.endsWith("/migration/rollback")) return { status: 200, body: await rollbackMigration(rec, w.migration) };
+	if (path.endsWith("/migration/rollback")) return { status: 200, body: await rollbackMigration(rec, w.migration, "", { interrupted: isInterrupted(rec, activeMigrations.has(migrationKey(w.migration, folder))) }) };
 	return null;
 }

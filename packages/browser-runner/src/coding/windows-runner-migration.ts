@@ -39,6 +39,10 @@ export interface LegacyInstall {
 	serviceName: string | null;
 }
 
+/** Stages from which the migration advances by itself. A record left in one of them with nothing advancing it was interrupted (#1301). */
+export const IN_PROGRESS_STAGES: readonly MigrationStage[] = ["drain", "stop", "prepare", "copy", "register"];
+export const isInterrupted = (rec: MigrationRecord | null, running: boolean): boolean => !!rec && !running && IN_PROGRESS_STAGES.includes(rec.stage);
+
 export interface MigrationRecord {
 	legacyDir: string;
 	destDir: string;
@@ -168,6 +172,9 @@ export async function startMigration(req: MigrationRequest, deps: MigrationDeps)
 	// Idempotent: a migration already past registration is reported, never repeated.
 	if (existing && (existing.stage === "awaiting_verification" || existing.stage === "ready_for_removal")) return existing;
 
+	// A record still in progress with nobody advancing it is a runner restart mid-stage (#1301). Resuming keeps what the first attempt
+	// DID — it stopped the old service, it created the destination — so a later rollback still undoes exactly that and not less.
+	const resumed = existing && IN_PROGRESS_STAGES.includes(existing.stage) ? existing : null;
 	const name = req.legacy.name ?? req.legacy.folder;
 	const rec: MigrationRecord = {
 		legacyDir: req.legacy.dir,
@@ -177,10 +184,11 @@ export async function startMigration(req: MigrationRequest, deps: MigrationDeps)
 		steps: [],
 		legacyService: req.legacy.serviceName,
 		newService: null,
-		legacyStopped: false,
-		createdDest: false,
+		legacyStopped: resumed?.legacyStopped ?? false,
+		createdDest: resumed?.createdDest ?? false,
 		registered: false,
 	};
+	if (resumed) rec.steps.push(`resumed after an interruption at stage ${resumed.stage}`);
 	try {
 		if (deps.platform !== "win32") throw new Error("Windows runner migration only runs on Windows.");
 		if (isWithin(destDir, deps.home) || isWithin(destDir, req.legacy.dir)) throw new Error(`Refusing to migrate to ${destDir}: the destination must be outside the user profile.`);
@@ -205,7 +213,7 @@ export async function startMigration(req: MigrationRequest, deps: MigrationDeps)
 
 		rec.stage = "prepare";
 		save(deps, rec);
-		rec.createdDest = !deps.exists(destDir);
+		if (!resumed) rec.createdDest = !deps.exists(destDir);
 		const ensured = await ensureWindowsRunnerRoot(deps, { folder: req.legacy.folder, identity });
 		rec.steps.push(...ensured.steps);
 		save(deps, rec);
@@ -264,7 +272,7 @@ export async function completeMigration(rec: MigrationRecord, verdict: { online:
  * Put the machine back as it was: remove what this migration installed, start the old runner. Never touches the old folder's
  * contents, never removes a destination this run did not create.
  */
-export async function rollbackMigration(rec: MigrationRecord, deps: MigrationDeps, token = ""): Promise<MigrationRecord> {
+export async function rollbackMigration(rec: MigrationRecord, deps: MigrationDeps, token = "", opts: { interrupted?: boolean } = {}): Promise<MigrationRecord> {
 	const problems: string[] = [];
 	const attempt = async (what: string, f: () => Promise<void>) => {
 		try {
@@ -273,6 +281,13 @@ export async function rollbackMigration(rec: MigrationRecord, deps: MigrationDep
 			problems.push(`${what}: ${scrub(e instanceof Error ? e.message : String(e), token)}`);
 		}
 	};
+	// Interrupted while registering (an explicit rollback after a runner restart): config.cmd may have finished before the record could
+	// say so. Assume it did — removing a service that is not there is harmless, leaving one behind is not. A config.cmd that FAILED
+	// in this process is known not to have registered, and is not assumed to have.
+	if (opts.interrupted && !rec.registered && rec.stage === "register") {
+		rec.newService = deps.readText(win32.join(rec.destDir, ".service"))?.replace(/^﻿/, "").trim() || null;
+		rec.registered = true;
+	}
 	if (rec.registered) {
 		if (rec.newService) {
 			await attempt("stop new service", () => sc(deps, rec, "stop", rec.newService as string).catch((e) => (alreadyStopped(e) ? undefined : Promise.reject(e))));
