@@ -4,6 +4,7 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { type CoderBrainSettings, PO_TRIAGE_ACTION, coderBrainPatchProblem, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
 import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-question-store.js";
 import { brainModelRefusal, writeInstanceBrain } from "../lib/instance-brain.js";
+import { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, pilotModelProblem, readPilotModel, setPilotModel } from "../lib/pilot-model.js";
 import { autoPickupPatchProblem, readAutoPickup, setAutoPickup } from "../lib/auto-pickup.js";
 import { BUILTIN_EXCLUDE_LABELS } from "../lib/label-vocabulary.js";
 import type { Env } from "../types.js";
@@ -26,6 +27,7 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 			.all<{ id: string; name: string; schedule: string | null; enabled: number; config: string | null; next_run_at: string | null; last_run_at: string | null }>();
 		return {
 			settings: await readCoderBrain(env, instanceId, uid),
+			pilot: { model: await readPilotModel(env, instanceId, uid), fallbackModel: DEFAULT_PILOT_MODEL, options: PILOT_MODEL_OPTIONS },
 			triggers: (results ?? []).map((t) => ({ id: t.id, name: t.name, schedule: t.schedule, enabled: !!t.enabled, config: t.config ? JSON.parse(t.config) : {}, nextRunAt: t.next_run_at, lastRunAt: t.last_run_at })),
 		};
 	};
@@ -45,6 +47,10 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		const patch = Object.fromEntries(PATCH_KEYS.filter((k) => b[k] !== undefined).map((k) => [k, b[k]])) as Partial<CoderBrainSettings>;
 		const problem = coderBrainPatchProblem(patch);
 		if (problem) throw new HttpError(400, problem);
+		if (b.pilotModel !== undefined) {
+			const pilotProblem = pilotModelProblem(b.pilotModel);
+			if (pilotProblem) throw new HttpError(400, pilotProblem);
+		}
 		// #1061: a triage trigger this call creates is live unless the caller asks for a dry run.
 		if (b.poDryRun !== undefined && typeof b.poDryRun !== "boolean") throw new HttpError(400, "poDryRun must be true or false");
 		// `model` is this coder's Brain (#1043): the same check and the same store as the Brain card's
@@ -53,12 +59,16 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 			const refusal = await brainModelRefusal(c.env, uid, patch.model);
 			if (refusal) throw new HttpError(refusal.status, refusal.error);
 		}
-		if (patch.enabled === true || patch.poEnabled === true) {
+		if (patch.enabled === true || patch.poEnabled === true || b.pilotModel !== undefined) {
 			const caps = await capabilitiesForInstance(c.env, instanceId, uid).catch(() => null);
-			if (caps?.workflow !== "CODING_SESSION") throw new HttpError(409, "The coder brain acts on coding runs, so it needs a coding instance (a Repo Coder).");
+			if (caps?.workflow !== "CODING_SESSION") throw new HttpError(409, "The coder brain and Pilot act on coding runs, so they need a coding instance (a Repo Coder).");
 		}
 		if (patch.model !== undefined) await writeInstanceBrain(c.env, instanceId, patch.model);
-		const { triggers } = await setCoderBrain(c.env, instanceId, uid, patch, { poDryRun: b.poDryRun === true });
+		if (b.pilotModel !== undefined) await setPilotModel(c.env, instanceId, uid, b.pilotModel);
+		// A Pilot-only update must not normalise brain flags or resynchronise its triage triggers.
+		const { triggers } = Object.keys(patch).length || b.pilotModel === undefined
+			? await setCoderBrain(c.env, instanceId, uid, patch, { poDryRun: b.poDryRun === true })
+			: { triggers: { created: null, enabled: 0, disabled: 0 } };
 		return c.json({ ...(await view(c.env, instanceId, uid)), changed: triggers });
 	});
 

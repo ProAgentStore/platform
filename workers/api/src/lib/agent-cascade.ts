@@ -107,6 +107,7 @@ export const INSTANCE_CHILD_TABLES = [
 	"po_triage_reports",
 	// #1233 — brain-free auto-pickup's decision log.
 	"auto_pickup_log",
+	"auto_pickup_admissions", // #1315 — atomic auto-pickup allowance/queue receipts.
 	// #1025 — one durable row per question a coding run parks on.
 	"coder_questions",
 	// #1057 — local_native runs: events before their run (FK).

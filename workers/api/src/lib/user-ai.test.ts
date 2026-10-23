@@ -451,11 +451,13 @@ describe("system prompt blocks — the cacheable half and the per-turn half (#76
 		await decideCodingAction(env, "user-1", { goal: { ...goal, userHint: "otp: 1234" }, actionLog: ["1. did a thing"], snapshot });
 		const [round0, round1] = sent;
 		expect(round0.system[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
-		expect(round0.system[1].cache_control).toBeUndefined();
+		expect(round0.system[1].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+		expect(round0.system[2].cache_control).toBeUndefined();
 		// The cached prefix is byte-identical across rounds — only the uncached tail moved.
 		expect(round1.system[0].text).toBe(round0.system[0].text);
-		expect(round0.system[1].text).toContain("A previous run pushed X.");
-		expect(round1.system[1].text).toContain("The user just told you: otp: 1234");
+		expect(round1.system[1].text).toBe(round0.system[1].text);
+		expect(round0.system[2].text).toContain("A previous run pushed X.");
+		expect(round1.system[2].text).toContain("The user just told you: otp: 1234");
 		expect(round0.system[0].text).not.toContain("previous run");
 		// …and the model still reads exactly the prompt it read before the split.
 		expect(round0.system.map((b) => b.text).join("")).toBe(systemPrompt({ ...goal, resumeNote: "A previous run pushed X." }));
@@ -487,7 +489,7 @@ describe("system prompt blocks — the cacheable half and the per-turn half (#76
 		expect(a.at(-1)?.text).toMatch(/Current time: /);
 		expect(a.slice(0, -1).some((x) => /TERMINAL|Current time/.test(x.text))).toBe(false);
 		// Two breakpoints in all (system + steps), within the provider's four, 1h never after 5m.
-		expect([...sent[0].system, ...a].filter((x) => x.cache_control).length).toBe(2);
+		expect([...sent[0].system, ...a].filter((x) => x.cache_control).length).toBe(3);
 	});
 
 	it("the Pilot's message reads as before — steps, then the clock, the terminal and the instruction", () => {

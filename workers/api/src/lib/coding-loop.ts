@@ -1,7 +1,9 @@
 import { askOwnerDecision, type AskNeedsInput, type AskPart } from "./coding-ask.js";
 import type { EngineInputs } from "./coding-engine-inputs.js";
 import type { ObjectiveOrigin } from "./coding-objective-origin.js";
-import { runUserWorkersAi, systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
+import { systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
+import { DEFAULT_PILOT_MODEL, type PilotModelId } from "./pilot-model.js";
+import { routinePilotReply, runPilotInference, type PilotInferenceReply } from "./pilot-routing.js";
 import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
 import {
@@ -48,6 +50,8 @@ import { describeWriteRefusal } from "./write-scope-refusals.js";
  */
 
 export interface CodingGoal {
+	/** Explicit controller canary; separate from advisory Brain and the local coding engine. */
+	pilotModel?: PilotModelId;
 	/** What the user wants done in this repo (the high-level task). */
 	objective: string;
 	/** Who the platform verified wrote `objective` (#1019) — what the engine is told. Absent: unverified. */
@@ -183,6 +187,7 @@ export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"
 export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled" | "waiting" | "needs_reauth" | "engine_error";
 
 export interface CodingDecision {
+	pilotRouting?: PilotInferenceReply["pilotRouting"];
 	thought?: string;
 	action?: CodingActionKind;
 	/** What the Pilot wants to still know at its next decision (#822) — see {@link LEARNED_MAX}. */
@@ -799,23 +804,16 @@ export function systemPrompt(goal: CodingGoal): string {
 }
 
 /**
- * The Pilot's system prompt as cache blocks (#914) — the same text {@link systemPrompt} returns,
- * split where it stops being stable.
- *
- * Everything up to the run's own settings is fixed for the WHOLE run, and is cached with the 1-hour
- * TTL: the Pilot decides once per engine turn, measured at a median of 5.6 minutes apart (28 runs,
- * 57% averaging over five), so the default 5-minute entry had usually expired by the next decision
- * and the prefix was written again — the account's cache writes nearly equalled its reads. The
- * tail, the platform's resume note and the owner's latest hint, changes between rounds and is sent
- * uncached after the breakpoint, so a new round re-reads the prefix instead of rewriting it.
+ * The Pilot's system prompt as cache blocks (#914, #1317).
+ * Shared platform rules precede all run-specific content, so a new objective can reuse their cache.
+ * Owner rules, engine, repo, objective and merge authority follow in a separate run block; the
+ * latest directives and constraints remain last. Both stable prefixes use 1 hour because engine
+ * turns routinely outlast the default 5-minute cache; the changing round tail stays uncached.
  */
 export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 	const lines: string[] = [];
-	const rules = [goal.standingInstructions, goal.specialInstructions].filter(Boolean).join("\n\n");
-	if (rules) lines.push(`USER RULES (highest priority):\n${rules}\n`);
 	lines.push(
-		`You orchestrate a local "${goal.clientType}" AI coding CLI running in a terminal in the repo "${goal.repo}".`,
-		`OBJECTIVE: ${goal.objective}`,
+		"You orchestrate a local AI coding CLI. Its run context follows these platform rules.",
 		"",
 		"You see the terminal pane. Decide the SINGLE next step and call exactly one tool.",
 		"- Drive the CLI with natural-language instructions via send_message; it does the editing/running.",
@@ -842,7 +840,7 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 		// run planned in had never fetched it. The platform now says so in the rules above this
 		// prompt (UPSTREAM SYNC) — this is the standing rule for what to do about it, and for the
 		// push at the end, which the Engine does and the platform cannot see until it has happened.
-		"- STALE BASE: if the rules above say the checkout is BEHIND its upstream and the tree is clean, your FIRST instruction is to fast-forward it (`git pull --ff-only`) — never plan a change against a base that is missing commits. If it is dirty or has diverged, do not merge or rebase on your own initiative: report it and call request_human.",
+		"- STALE BASE: if the run context says the checkout is BEHIND its upstream and the tree is clean, your FIRST instruction is to fast-forward it (`git pull --ff-only`) — never plan a change against a base that is missing commits. If it is dirty or has diverged, do not merge or rebase on your own initiative: report it and call request_human.",
 		"- BEFORE ANY PUSH: have the CLI `git fetch` and rebase (or merge) onto the upstream first, then push. If that brought in commits, name them in your finish detail — what landed upstream while you worked is a fact the owner must read, never a silent merge.",
 		// WHAT YOU CAN SEE (#522, cause B). The Pilot was never told the size of its own window, so an
 		// answer whose start had scrolled past read as an answer that never came — and the only move
@@ -875,12 +873,14 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 		"",
 		"Never output step-by-step thinking; just call one tool.",
 	);
-	// Placed AFTER the objective and the user rules, and worded as overriding both, because the
-	// conflict this exists for is with the objective itself — "merge each before starting the next"
-	// is what a human typed. Null under the default policy, so the unconfigured prompt is unchanged.
+	const run = ["\n\nRUN CONTEXT:"];
+	const rules = [goal.standingInstructions, goal.specialInstructions].filter(Boolean).join("\n\n");
+	if (rules) run.push(`USER RULES (highest priority):\n${rules}\n`);
+	run.push(`Engine: "${goal.clientType}". Repository: "${goal.repo}".`, `OBJECTIVE: ${goal.objective}`);
+	// Owner-set merge authority still follows and overrides conflicting objective/rules (#314).
 	const authority = authorityInstruction(goal.mergePolicy ?? "merge");
-	if (authority) lines.push(`\n${authority}`);
-	if (goal.dryRun) lines.push("\nTEST MODE: avoid destructive or irreversible instructions; prefer read-only/plan steps.");
+	if (authority) run.push(`\n${authority}`);
+	if (goal.dryRun) run.push("\nTEST MODE: avoid destructive or irreversible instructions; prefer read-only/plan steps.");
 	const round: string[] = [];
 	// Attributed to the PLATFORM, never folded into `userHint` — see CodingGoal.resumeNote.
 	if (goal.resumeNote) round.push(`\n${goal.resumeNote}`);
@@ -889,9 +889,9 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 	if (goal.ownerDirectives?.length) round.push(ownerDirectivesBlock(goal.ownerDirectives));
 	const binding = constraintsBlock(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)));
 	if (binding) round.push(binding);
-	// Joined exactly as one list would have been, so the flattened text is byte-identical.
 	return [
-		{ text: lines.join("\n"), cache: true, ttl: "1h", label: "run" },
+		{ text: lines.join("\n"), cache: true, ttl: "1h", label: "platform" },
+		{ text: run.join("\n"), cache: true, ttl: "1h", label: "run" },
 		{ text: round.map((r) => `\n${r}`).join(""), label: "round" },
 	];
 }
@@ -912,7 +912,7 @@ export async function decideCodingAction(
 	const terminal = renderPaneForPilot(params.snapshot.pane, undefined, params.snapshot.paneChars);
 	const userMsg = pilotUserBlocks({ actionLog: params.actionLog, clock: clockLine(Date.now(), params.goal.timeZone), runState: params.snapshot.runState, terminal });
 
-	const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
+	const res = await runPilotInference(env, userId, params.goal.pilotModel ?? DEFAULT_PILOT_MODEL, {
 		messages: [
 			{ role: "system", content: system },
 			{ role: "user", content: userMsg },
@@ -934,14 +934,7 @@ export async function decideCodingAction(
 					{ label: "pilot.tools", value: CODING_TOOLS },
 				],
 			}
-			: undefined)) as {
-		response?: string;
-		tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
-		/** A decision whose arguments were not valid JSON (#853 finding 4) — never acted on. */
-		malformed_tool_calls?: Array<{ name: string; error: string }>;
-		usage?: { input: number; output: number };
-		stopReason?: string;
-	};
+			: undefined, (reply) => routinePilotReply(reply, params.goal));
 
 	const truncated = hitOutputCap(res.stopReason);
 	const call = res.tool_calls?.[0];
@@ -955,9 +948,9 @@ export async function decideCodingAction(
 			: unreadable
 				? `The decision named ${unreadable.name}, but its arguments were not valid JSON (${unreadable.error}), so it was not acted on.`
 				: res.response || "no action chosen";
-		return { thought: res.response, stuck: { why }, usage: res.usage, truncated };
+		return { thought: res.response, stuck: { why }, usage: res.usage, truncated, pilotRouting: res.pilotRouting };
 	}
-	return { ...toDecision(call), usage: res.usage, thought: res.response, truncated };
+	return { ...toDecision(call), usage: res.usage, thought: res.response, truncated, pilotRouting: res.pilotRouting };
 }
 
 /**
@@ -982,10 +975,10 @@ async function decideCapSummary(
 		"\n\nYou have reached your step cap without finishing. Call report_cap_status — do not send another instruction to the CLI. Report exactly what you did, your exact blocker quoted in full, a concrete plan (or say plainly you have none), and how many more steps you want and why.";
 	userBlocks[userBlocks.length - 1] = { ...userBlocks[userBlocks.length - 1], text: `${userBlocks[userBlocks.length - 1].text}${ask}` };
 
-	const res = (await runUserWorkersAi(
+	const res = await runPilotInference(
 		env,
 		userId,
-		"claude-sonnet-4-6",
+		DEFAULT_PILOT_MODEL,
 		{
 			messages: [
 				{ role: "system", content: system },
@@ -1008,14 +1001,14 @@ async function decideCapSummary(
 					],
 				}
 				: undefined,
-	)) as {
-		response?: string;
-		tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
-		usage?: { input: number; output: number };
-	};
+		() => false,
+		{ anthropicOnly: params.goal.pilotModel !== undefined && params.goal.pilotModel !== DEFAULT_PILOT_MODEL },
+	);
 
 	const capSummary = toCapSummary(res.tool_calls?.[0]);
-	return capSummary ? { capSummary, usage: res.usage, thought: res.response } : { thought: res.response, usage: res.usage };
+	const pilotRouting = { ...res.pilotRouting, requestedModel: params.goal.pilotModel ?? DEFAULT_PILOT_MODEL, model: res.inference?.model ?? DEFAULT_PILOT_MODEL,
+		...(params.goal.pilotModel && params.goal.pilotModel !== DEFAULT_PILOT_MODEL ? { fallbackReason: "Cap reports use Sonnet." } : {}) };
+	return capSummary ? { capSummary, usage: res.usage, thought: res.response, pilotRouting } : { thought: res.response, usage: res.usage, pilotRouting };
 }
 
 /**

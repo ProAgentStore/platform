@@ -1,6 +1,7 @@
 import { decryptKey } from "./crypto.js";
 import { backfillKeyHint } from "./key-hint-backfill.js";
 import { keyHint } from "./key-hint.js";
+import { observeProviderAccount } from "./provider-account-hold.js";
 import {
 	AI_FIRST_TOKEN_TIMEOUT_MS,
 	AI_STALL_TIMEOUT_MS,
@@ -23,6 +24,7 @@ import { isWorkersAiModel } from "./brain-models.js";
 import { redactCloudflareUpstream } from "./cloudflare-redact.js";
 import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
+import { DEFAULT_PILOT_MODEL, pilotModelProblem, type PilotModelId } from "./pilot-model.js";
 
 export class UserAiCredentialsError extends Error {
 	constructor(
@@ -120,8 +122,10 @@ export async function runUserWorkersAi(
 	/** `honorModel`: the owner PICKED this model (#852) — a Workers AI pick runs on Workers AI even
 	 *  when an Anthropic key is also stored. Without it the long-standing order below applies.
 	 *  `provider`: the provider this TURN already ran on (#853 finding 9) — it continues there or fails. */
-	opts?: { honorModel?: boolean; provider?: AiProvider },
+	opts?: { honorModel?: boolean; provider?: AiProvider; anthropicModel?: PilotModelId },
 ): Promise<unknown> {
+	// Explicit controller routing never silently substitutes a model or another provider (#1316).
+	if (opts?.anthropicModel !== undefined && pilotModelProblem(opts.anthropicModel)) throw new UserAiProviderError(pilotModelProblem(opts.anthropicModel) as string, 400);
 	if (ctx) ctx = { ...ctx, attempt: (body as { streamDeadlines?: StreamDeadlines } | null)?.streamDeadlines?.attempt ?? ctx.attempt }; // #1040: retries on the ledger
 	if (ctx?.promptSections?.length) {
 		await logPromptSectionEstimates(env, {
@@ -138,10 +142,10 @@ export async function runUserWorkersAi(
 	// A turn under way stays where it started (#853 finding 9): its history is in THAT provider's tool
 	// protocol, which the other one cannot read. Choosing per call sent a later round wherever the keys
 	// pointed at that moment — a removed or unreadable key flipped the turn mid-way.
-	if (opts?.provider === "anthropic") {
+	if (opts?.provider === "anthropic" || opts?.anthropicModel !== undefined) {
 		const key = await getUserProviderKey(env, userId, "anthropic");
-		if (!key) throw new UserAiCredentialsError(midTurnLoss("Anthropic", "the Anthropic key"));
-		return runAnthropic(env, userId, key, body as Parameters<typeof runAnthropic>[3], ctx);
+		if (!key) throw new UserAiCredentialsError(opts?.anthropicModel ? "The Pilot uses your Anthropic API key. Add it in Profile → API Keys." : midTurnLoss("Anthropic", "the Anthropic key"));
+		return runAnthropic(env, userId, key, body as Parameters<typeof runAnthropic>[3], ctx, opts.anthropicModel);
 	}
 	if (opts?.provider === "cloudflare") {
 		const creds = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
@@ -342,6 +346,7 @@ async function runAnthropic(
 	apiKey: string,
 	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number; streamDeadlines?: StreamDeadlines },
 	ctx?: UsageContext,
+	model: PilotModelId = DEFAULT_PILOT_MODEL,
 ): Promise<unknown> {
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
 	// The system prompt's breakpoints first, then the messages' — one budget, in request order (#914).
@@ -350,7 +355,7 @@ async function runAnthropic(
 	const messages = normalizeForAnthropic(anthropicUserBlocks((body.messages || []).filter((m) => m.role !== "system"), budget));
 
 	const anthropicBody: Record<string, unknown> = {
-		model: "claude-sonnet-4-6",
+		model,
 		// The fallback is what a caller inherits by NOT choosing, and #397 is the bill for that:
 		// chat was the one caller that never chose, so every reply a human read end to end was cut
 		// at ~4,000 characters. Every surface now names its own ceiling; this number is left where
@@ -429,6 +434,7 @@ async function runAnthropic(
 		const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 		const errObj = (errBody as { error?: { message?: string; type?: string } }).error;
 		const errMsg = errObj?.message || JSON.stringify(errBody);
+		if (res.status === 401 || res.status === 403 || isCreditBalanceMessage(errMsg)) await observeProviderAccount(env, userId, "anthropic", apiKey, isCreditBalanceMessage(errMsg) ? "provider_credit" : "provider_credentials");
 		// An exhausted balance arrives as a 400 `invalid_request_error` — the same status and type as
 		// a malformed request — with the sentence as its only signature (#773). The vendor's text is
 		// kept verbatim (it is what `coding-failure.ts` classifies on) and the remedy is appended in
@@ -471,6 +477,8 @@ async function runAnthropic(
 	await env.DB.prepare(
 		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = 'anthropic'",
 	).bind(userId).run();
+
+	await observeProviderAccount(env, userId, "anthropic", apiKey, null);
 
 	// Convert Anthropic response to Workers AI format for compatibility
 	const content = data.content;
@@ -519,11 +527,12 @@ async function runAnthropic(
 			// mistaken for a message's content field. Absent on every non-Anthropic provider, which
 			// is how the caller branches without a provider enum to keep in sync.
 			contentBlocks: content,
+			inference: meta,
 			usage,
 			stopReason,
 		};
 	}
-	return { response: textParts, usage, stopReason };
+	return { response: textParts, usage, stopReason, inference: meta };
 }
 
 /** One deadline ran out. Carries WHICH, because the three mean different things to the user. */
@@ -745,6 +754,7 @@ async function runCloudflareAi(
 	clearTimeout(timeout);
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
+		if (res.status === 401 || res.status === 403) await observeProviderAccount(env, userId, "cloudflare", credentials, "provider_credentials");
 		throw new UserAiProviderError(
 			`Cloudflare Workers AI request failed with HTTP ${res.status}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
@@ -757,6 +767,7 @@ async function runCloudflareAi(
 	await env.DB.prepare(
 		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = 'cloudflare'",
 	).bind(userId).run();
+	await observeProviderAccount(env, userId, "cloudflare", credentials, null);
 	// CF Workers AI is per-neuron (cost ~0), but still emit a ledger row with token
 	// counts when the response carries usage, so the Usage page shows CF calls too.
 	if (ctx) {
@@ -768,7 +779,7 @@ async function runCloudflareAi(
 	}
 	// One result shape for every brain, whichever habit the model has (#851) — see workers-ai-protocol.
 	const result = data && typeof data === "object" && "result" in data ? (data as { result: unknown }).result : data;
-	return platform ? fromWorkersAiResult(result, (payload as { max_tokens?: number }).max_tokens) : result;
+	return platform ? { ...fromWorkersAiResult(result, (payload as { max_tokens?: number }).max_tokens), inference: { provider: "cloudflare", model } } : result;
 }
 
 export async function getUserProviderKey(

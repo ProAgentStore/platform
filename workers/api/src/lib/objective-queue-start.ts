@@ -28,6 +28,7 @@ import { logError } from "./error-log.js";
 import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { dequeueNext, finishQueueEntry, requeueEntry } from "./objective-queue.js";
 import { pausedStartRefusal } from "./instance-pause.js";
+import { automaticProviderHold } from "./provider-account-hold.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
 import { markWokenForCheckout, releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
 import type { ObjectiveQueueEntry } from "./objective-queue.js";
@@ -35,7 +36,7 @@ import type { Env } from "../types.js";
 
 export type QueueDrainResult =
 	/** Nothing was waiting for this instance/repo. The common case, and one cheap SELECT. */
-	| { drained: false }
+	| { drained: false; held?: string }
 	/** An entry became a run. `runId` is where its account continues. */
 	| { drained: true; entryId: string; started: true; runId: string; driver: string }
 	/** An entry was claimed and could not be started. `requeued` says whether it kept its place. */
@@ -61,6 +62,8 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// objective was marked failed with "paused" as its epitaph. Left pending, untouched and with no
 		// budget opened, it starts when `POST /:id/resume` drains the queue.
 		if (await instancePaused(env, instanceId, userId)) return { drained: false };
+		const hold = await automaticProviderHold(env, instanceId, userId);
+		if (hold) return { drained: false, held: hold.reason };
 		// A run that parked on a question, released this checkout and now has its answer goes FIRST
 		// (#1077): it was there before anything queued. Woken, it takes the checkout back; its own end drains next.
 		const parked = repoId ? await releasedRunAwaitingCheckout(env, instanceId, repoId).catch(() => null) : null;

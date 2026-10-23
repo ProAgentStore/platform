@@ -21,6 +21,8 @@ export interface ModelPrice {
 export const PRICES: Record<string, ModelPrice> = {
 	// Anthropic (claude-sonnet-4-6 is the default the Anthropic path always uses)
 	"claude-sonnet-4-6": { inputPerM: 3, outputPerM: 15 },
+	// Haiku 5.5, prompts up to 100k; longer-prompt tier selected below (provider pricing, 2026-10-23).
+	"claude-haiku-5-5": { inputPerM: 0.1, outputPerM: 0.5 },
 	"claude-sonnet-4": { inputPerM: 3, outputPerM: 15 },
 	"claude-opus-5": { inputPerM: 5, outputPerM: 25 },
 	"claude-opus-4": { inputPerM: 15, outputPerM: 75 },
@@ -105,10 +107,11 @@ export function estimateCostMicros(
 	/** `write1h` is the part of `write` that went to the 1-hour cache, priced at its own rate. */
 	cache?: { read?: number | null; write?: number | null; write1h?: number | null },
 ): number {
-	const p = priceFor(model);
+	let p = priceFor(model);
 	const n = (v: number | null | undefined) => Math.max(0, Math.floor(Number(v) || 0));
 	const inTok = n(inputTokens);
 	const outTok = n(outputTokens);
+	if (normalizeModel(model) === "claude-haiku-5-5" && inTok + n(cache?.read) + n(cache?.write) > 100_000) p = { inputPerM: 0.5, outputPerM: 2.5 };
 	// tokens × (USD / 1e6 tokens) × 1e6 micros/USD  ⇒  tokens × USD-per-M, rounded.
 	const micros =
 		inTok * p.inputPerM +

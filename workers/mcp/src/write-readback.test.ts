@@ -312,6 +312,7 @@ const READBACK: Record<string, string | null> = {
 	// #1061: stored as the created trigger's `config.dryRun`, which po_triage_reports returns per trigger.
 	"set_coder_brain.po_dry_run": "po_triage_reports",
 	"set_coder_brain.model": "coder_questions",
+	"set_coder_brain.pilot_model": "po_triage_reports",
 	"set_coder_brain.human_timeout_minutes": "coder_questions",
 	"set_coder_brain.escalation_timeout_minutes": "coder_questions",
 	"set_coder_brain.max_decisions_per_run": "coder_questions",

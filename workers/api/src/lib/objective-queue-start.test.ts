@@ -29,6 +29,8 @@ const openBudget = vi.fn();
 const resolveAccountCeilings = vi.fn();
 const logError = vi.fn();
 
+vi.mock("./provider-account-hold.js", () => ({ automaticProviderHold: async () => null }));
+
 vi.mock("./objective-queue.js", () => ({
 	dequeueNext: (...a: unknown[]) => dequeueNext(...a),
 	finishQueueEntry: (...a: unknown[]) => finishQueueEntry(...a),

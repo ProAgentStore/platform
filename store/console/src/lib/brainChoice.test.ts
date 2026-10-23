@@ -62,7 +62,7 @@ describe("the confirmation before saving (#1043)", () => {
 		expect(html).toMatch(/data-testid="brain-confirm-model">Llama 4 Scout 17B</);
 		expect(html).toMatch(/data-testid="brain-confirm-cost">cheap/);
 		expect(html).toMatch(/data-testid="brain-confirm-billing">Billed per token to your own Cloudflare/);
-		expect(html).toMatch(/The Pilot that drives the coding CLI always uses Claude Sonnet/);
+		expect(html).toMatch(/The Pilot controller has its own model setting/);
 	});
 });
 

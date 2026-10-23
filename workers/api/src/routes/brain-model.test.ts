@@ -148,9 +148,7 @@ describe("changing the Brain model cannot change the coding engine or its sign-i
 		expect(await engineEnvs()).toEqual(envBefore);
 		const src = (f: string) => readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../lib", f), "utf8");
 		for (const f of ["coding-engines.ts", "coding-api-policy.ts", "coding-session-open.ts"]) expect(src(f)).not.toMatch(/instance-brain|advisoryBrain|readInstanceBrain/);
-		// …and the Pilot that drives the engine stays on Sonnet, outside the Brain selector.
-		expect(src("coding-loop.ts")).not.toMatch(/instance-brain|advisoryBrain/);
-		expect(src("coding-loop.ts")).toMatch(/runUserWorkersAi\(env, userId, "claude-sonnet-4-6"/);
+		// Pilot/provider model independence is exercised by coding-pilot-routing.test.ts.
 	});
 });
 

@@ -21,6 +21,7 @@
  * changed. Two windows firing in the same minute produce one wake (UNIQUE instance+slot).
  */
 import type { Env } from "../types.js";
+import { automaticProviderHold } from "./provider-account-hold.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { codingRunRefusal } from "./billing.js";
 import { clipMarked } from "./clip-marked.js";
@@ -234,6 +235,8 @@ export async function queueGate(env: Env, iid: string, uid: string, warn?: { not
 		const refusal = await codingRunRefusal(env, uid);
 		if (refusal) return refusal;
 	}
+	const providerHold = await automaticProviderHold(env, iid, uid);
+	if (providerHold) return providerHold.reason;
 	const [usage, paidTokens, ceilings] = await Promise.all([
 		accountUsageSince(env, uid, 24).catch(() => ({ chargedMicros: 0, tokens: 0 })),
 		paidTokensSince(env, uid, 24),

@@ -11,7 +11,7 @@ import { BRAIN_MODELS, type BrainModel, brainProviderLabel } from "../../../../w
 export const BRAIN_CARD_TITLE = "Brain model";
 export const BRAIN_CARD_SCOPE = "Advisory and orchestration only. It never edits, tests or deploys code.";
 export const BRAIN_SURFACES =
-	"Used for: the assistant chat and its tools, coder-brain decisions, the Co-pilot reading the terminal, Loop orchestration and the job-application supervisor. The Pilot that drives the coding CLI always uses Claude Sonnet, and the coding engine stays your subscription CLI.";
+	"Used for: the assistant chat and its tools, coder-brain decisions, the Co-pilot reading the terminal, Loop orchestration and the job-application supervisor. The Pilot controller has its own model setting, and the coding engine stays your subscription CLI.";
 
 /** `GET /v1/keys/status` — provider ids with whether a credential is stored; never a key value. */
 export interface KeysStatusResponse {

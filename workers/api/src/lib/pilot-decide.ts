@@ -2,8 +2,8 @@
  * One Pilot decision under the controller recovery policy (#907) — what the workflow's decide step runs.
  *
  * Inside the step: each ATTEMPT reserves and settles its own budget draw (`decideWithinBudget`), reloads
- * the owner's standing rules and directives (#1015), and makes exactly one provider request with that
- * attempt's deadlines. A stall is retried here, bounded by the policy's attempts and wall-clock ceiling,
+ * the owner's standing rules and directives (#1015), and uses the selected model within that attempt's deadlines. An opt-in canary may
+ * make one Sonnet validation request within the SAME deadline; recovery attempts go straight to Sonnet. A stall is retried here, bounded by the policy's attempts and wall-clock ceiling,
  * with cancellation checked before every attempt and after every backoff.
  *
  * Across the step boundary: an exhausted recovery is RETURNED, not thrown. Thrown, Cloudflare's own
@@ -20,6 +20,7 @@ import { type CodingDecision, type CodingGoal, type CodingPaneSnapshot, decideCo
 import { refreshGoalConstraints } from "./coding-standing-constraints.js";
 import type { ScopeConstraint } from "./coding-scope-constraints.js";
 import { ControllerAiCancelled, ControllerAiStalled, type ControllerAiPolicy, controllerAiCall } from "./controller-ai-recovery.js";
+import { readPilotModel } from "./pilot-model.js";
 
 /**
  * What crosses the step boundary: a decision, or a stall the recovery could not get past. Serializable.
@@ -53,6 +54,8 @@ export async function pilotDecide(env: Env, input: PilotDecideInput, opts: { pol
 			{ userId: input.userId, instanceId: input.instanceId, traceId, surface: "pilot", isCancelled: loopRunId ? () => isCancelRequested(env, loopRunId) : undefined, policy: opts.policy, sleep: opts.sleep },
 			(deadlines) =>
 				decideWithinBudget(env, { userId: input.userId, instanceId: input.instanceId, budgetId: input.budgetId, depth: input.depth }, async () => {
+					// Read inside the journalled decision attempt; old runs retain their recorded decisions.
+					input.params.goal.pilotModel = await readPilotModel(env, input.instanceId, input.userId);
 					// The owner's standing rules and latest directives, fresh for THIS attempt (#1015).
 					const ctx = { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId, sessionId: input.sessionId, runStartedAt: input.runStartedAt };
 					await refreshGoalConstraints(env, input.params.goal, ctx);

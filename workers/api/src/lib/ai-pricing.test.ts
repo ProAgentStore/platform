@@ -52,6 +52,12 @@ describe("priceFor", () => {
 });
 
 describe("estimateCostMicros", () => {
+	it("prices Haiku 5.5 using its full prompt's 100k boundary, including cached tokens", () => {
+		expect(estimateCostMicros("claude-haiku-5-5", 100_000, 1000)).toBe(10_500);
+		expect(estimateCostMicros("claude-haiku-5-5", 100_001, 1000)).toBe(52_501);
+		expect(estimateCostMicros("claude-haiku-5-5", 1, 1000, { read: 100_000 })).toBe(7501);
+		expect(estimateCostMicros("claude-haiku-5-5", 0, 0, { write: 100_000, write1h: 100_000 })).toBe(20_000);
+	});
 	it("computes tokens × per-M list price in micros", () => {
 		// 1M input @ $3 + 1M output @ $15 = $18 = 18_000_000 micros
 		expect(estimateCostMicros("claude-sonnet-4-6", 1_000_000, 1_000_000)).toBe(18_000_000);

@@ -13,18 +13,13 @@
  *   • pull requests (GitHub lists them as issues; the listing already drops them);
  *   • an issue assigned to a person (a `[bot]` assignee does not count);
  *   • an issue already queued or being worked on this instance;
- *   • an issue two auto-picked runs ended `failed` or `needs_human` on — passed over, with ONE comment on
- *     the issue. A `provider_credit` stop is not counted there: it is the account's fault, held below.
+ *   • an issue two auto-picked runs ended `failed` or `needs_human` on — passed over, with ONE comment on the issue.
  * Then ordered by priority label (`P0` > `P1` > `P2` > `P3` by default; `P1: blocks users` counts as
  * P1), then `bug` before unlabelled before `enhancement`, then board order where the owner has placed
  * the issue's card (#1097), then oldest (lowest number). Never random.
  *
- * Gates: no provider-account hold (#1314: the owner's key failed for credit/credentials and has not
- * succeeded since — replacement runs would only fail the same way, so none start until it recovers,
- * and the owner is told once), the instance active, no question waiting on the owner, the Pro gate and the daily budget
- * (`queueGate`, shared with triage), and a per-instance daily cap on auto-picked starts. The cap and the
- * issue are reserved by ONE conditional insert before anything is enqueued (#1315), so overlapping wakes
- * (the timer sweep and a run's terminal step) cannot queue the same issue twice or spend one allowance twice. When nothing
+ * Gates: the instance active, no question waiting on the owner, the Pro gate and the daily budget
+ * (`queueGate`, shared with triage), and a per-instance daily cap on auto-picked starts. When nothing
  * qualifies, the owner is told once — not on every empty queue.
  */
 import type { Env } from "../types.js";
@@ -36,11 +31,13 @@ import { patchInstanceConfig, parseConfigBlob } from "./instance-config.js";
 import { issueJobKey } from "./issue-tickets.js";
 import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS } from "./label-vocabulary.js"; // the label vocabulary's single source (#1245)
 import { referencedIssue } from "./objective-dedupe.js";
-import { readProviderAccountHealth } from "./provider-account-health.js";
-import { enqueueObjective } from "./objective-queue.js";
+import { admitAutoPickup, autoPickupAdmissionCursor, pendingAutoPickupAdmission } from "./auto-pickup-admission.js";
 import { tryDequeueAndStart } from "./objective-queue-start.js";
 import { coderIsIdle, PO_TRIAGE_OFF, queueGate, wakePoTriageIfIdle } from "./po-triage-wake.js";
 import { notifyUser } from "../routes/push.js";
+import { selectedProviderAccount } from "./provider-account-hold.js";
+import { recoverReservations } from "./auto-pickup-legacy-reservations.js";
+export { RESERVATION_TTL_MS, recoverReservations } from "./auto-pickup-legacy-reservations.js";
 
 export interface AutoPickupSettings {
 	enabled: boolean;
@@ -55,7 +52,7 @@ export interface AutoPickupSettings {
 }
 
 export const AUTO_PICKUP_DEFAULTS: AutoPickupSettings = { enabled: false, priorityLabels: [...DEFAULT_PRIORITY_LABELS], excludeLabels: [], maxPerDay: 10, maxIterations: 30 };
-/** Two auto-picked runs ended failed (or needing a human, #1314) on an issue → it is passed over (#1233's loop guard). */
+/** Two auto-picked runs ended failed or needing a human on an issue → it is passed over (#1233's loop guard). */
 export const MAX_AUTO_FAILURES = 2;
 const MAX_LABELS = 20;
 
@@ -195,16 +192,14 @@ async function log(env: Env, iid: string, uid: string, outcome: PickupOutcome, d
 		.run();
 }
 
-/** Record a refusal with its reason (#1276), unless the same one was written within {@link SKIP_LOG_DEBOUNCE_MS}; true when a row was written. Never throws. */
-async function logSkip(env: Env, iid: string, uid: string, outcome: "skipped_gate" | "skipped_busy" | "capped" | "error", reason: string, now: number): Promise<boolean> {
+/** Record a refusal with its reason (#1276), unless the same one was written within {@link SKIP_LOG_DEBOUNCE_MS}. Never throws. */
+async function logSkip(env: Env, iid: string, uid: string, outcome: "skipped_gate" | "skipped_busy" | "capped" | "error", reason: string, now: number): Promise<void> {
 	try {
 		const detail = clipMarked(reason, 300);
 		const seen = await env.DB.prepare("SELECT 1 AS x FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = ?2 AND detail = ?3 AND created_at > ?4 LIMIT 1").bind(iid, outcome, detail, now - SKIP_LOG_DEBOUNCE_MS).first<{ x: number }>();
 		if (!seen) await log(env, iid, uid, outcome, detail, null, null, now);
-		return !seen;
 	} catch {
 		// The log is a trace of the decision; failing to write it must not change the decision.
-		return false;
 	}
 }
 
@@ -214,22 +209,10 @@ export async function recordWakeError(env: Env, iid: string, uid: string, e: unk
 	if (settings?.enabled) await logSkip(env, iid, uid, "error", `the wake failed: ${e instanceof Error ? e.message : String(e)}`, now);
 }
 
-/**
- * #1314: the owner's provider account failed (credit/credentials) and its key has not succeeded since.
- * Recovery is read off the record, so there is no lockout to clear: the next successful call on the key
- * (a manual run, or `POST /v1/keys/anthropic/verify`) lifts the hold by itself. Never throws.
- */
-async function providerHold(env: Env, uid: string): Promise<{ reason: string } | null> {
-	const h = await readProviderAccountHealth(env, uid).catch(() => null);
-	if (h?.state !== "failing") return null;
-	const what = h.failureClass === "provider_credit" ? "its balance is empty" : "its credentials were rejected";
-	return { reason: `the owner's AI provider account failed (${what}) at ${h.lastFailureAt ?? "an unknown time"} and has not succeeded since, so replacement runs would fail the same way. ${h.remedy ?? ""} Auto-pickup resumes once the key succeeds (${h.verify}).`.replace(/\s+/g, " ").trim() };
-}
-
 /** Issue numbers already queued or worked on this repo, read from the objectives the queue and the open runs carry. */
 async function inFlightIssues(env: Env, iid: string, repoId: string): Promise<Set<number>> {
 	const { results } = await env.DB.prepare(
-		`SELECT objective FROM instance_objective_queue WHERE instance_id = ?1 AND status = 'pending' AND (repo_id = ?2 OR repo_id IS NULL)
+		`SELECT objective FROM instance_objective_queue WHERE instance_id = ?1 AND status IN ('pending', 'running') AND (repo_id = ?2 OR repo_id IS NULL)
 		 UNION ALL
 		 SELECT r.objective FROM agent_loop_runs r LEFT JOIN coding_sessions s ON s.id = r.session_id WHERE r.instance_id = ?1 AND r.status = 'running' AND (s.repo_id = ?2 OR s.repo_id IS NULL)`,
 	)
@@ -238,12 +221,21 @@ async function inFlightIssues(env: Env, iid: string, repoId: string): Promise<Se
 	return new Set((results ?? []).map((r) => referencedIssue(r.objective)).filter((n): n is number => n != null));
 }
 
-async function failuresByIssue(env: Env, iid: string, repo: string): Promise<Map<number, number>> {
+// Account outages are held by credential (#1314), rather than spending the issue's objective-failure allowance forever.
+async function failuresByIssue(env: Env, iid: string, repo: string, uid: string): Promise<Map<number, number>> {
 	const { results } = await env.DB.prepare(
 		`SELECT json_extract(q.metadata, '$.autoPickup.issue') AS issue, COUNT(*) AS n FROM agent_loop_runs r JOIN instance_objective_queue q ON q.id = r.queue_entry_id
-		  WHERE q.instance_id = ?1 AND json_extract(q.metadata, '$.autoPickup.repo') = ?2 AND (r.status = 'failed' OR (r.status = 'needs_human' AND COALESCE(r.stop_reason, '') <> 'provider_credit')) GROUP BY issue`,
+		  WHERE q.instance_id = ?1 AND json_extract(q.metadata, '$.autoPickup.repo') = ?2 AND r.status IN ('failed', 'needs_human')
+		    AND COALESCE(r.stop_reason, '') NOT IN ('provider_credit', 'provider_credentials')
+		    AND r.run_id NOT IN (
+		      SELECT COALESCE(json_extract(e.context, '$.runId'), json_extract(e.context, '$.traceId')) FROM error_log e
+		      WHERE e.user_id = ?3 AND e.source = 'coding:session'
+		        AND json_extract(e.context, '$.failureClass') IN ('provider_credit', 'provider_credentials')
+		        AND COALESCE(json_extract(e.context, '$.disposition'), 'ended') = 'ended'
+		        AND COALESCE(json_extract(e.context, '$.runId'), json_extract(e.context, '$.traceId')) IS NOT NULL
+		    ) GROUP BY issue`,
 	)
-		.bind(iid, repo)
+		.bind(iid, repo, uid)
 		.all<{ issue: number | null; n: number }>();
 	return new Map((results ?? []).filter((r) => r.issue != null).map((r) => [Number(r.issue), Number(r.n)] as const));
 }
@@ -251,69 +243,6 @@ async function failuresByIssue(env: Env, iid: string, repo: string): Promise<Map
 async function boardPositions(env: Env, iid: string): Promise<Map<string, number>> {
 	const { results } = await env.DB.prepare("SELECT job_key, position FROM board_items WHERE instance_id = ?1 AND position IS NOT NULL AND job_key LIKE 'issue:%'").bind(iid).all<{ job_key: string; position: number }>();
 	return new Map((results ?? []).map((r) => [r.job_key, r.position] as const));
-}
-
-/** A reservation older than this whose objective was never enqueued is a crash's leftover (#1315). */
-export const RESERVATION_TTL_MS = 2 * 60_000;
-
-/**
- * Reserve the allowance and the issue in ONE statement (#1315): the `started` row is inserted only if the
- * rolling-day cap still has room, no live reservation names this issue, and no queued or running run does.
- * One statement is one atomic step in D1, so of any number of overlapping wakes exactly one gets a row.
- */
-async function reserveStart(env: Env, iid: string, uid: string, repo: string, issue: number, detail: string, maxPerDay: number, now: number): Promise<string | null> {
-	const id = crypto.randomUUID();
-	const res = await env.DB.prepare(
-		`INSERT INTO auto_pickup_log (id, instance_id, user_id, repo, issue_number, outcome, detail, created_at, reserved)
-		 SELECT ?1, ?2, ?3, ?4, ?5, 'started', ?6, ?7, 1
-		  WHERE (SELECT COUNT(*) FROM auto_pickup_log WHERE instance_id = ?2 AND outcome = 'started' AND created_at > ?8) < ?9
-		    AND NOT EXISTS (SELECT 1 FROM auto_pickup_log WHERE instance_id = ?2 AND repo = ?4 AND issue_number = ?5 AND outcome = 'started' AND reserved = 1 AND created_at > ?10)
-		    AND NOT EXISTS (SELECT 1 FROM instance_objective_queue q WHERE q.instance_id = ?2 AND q.status = 'pending'
-		                      AND json_extract(q.metadata, '$.autoPickup.repo') = ?4 AND json_extract(q.metadata, '$.autoPickup.issue') = ?5)
-		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r JOIN instance_objective_queue q ON q.id = r.queue_entry_id
-		                     WHERE r.instance_id = ?2 AND r.status = 'running'
-		                       AND json_extract(q.metadata, '$.autoPickup.repo') = ?4 AND json_extract(q.metadata, '$.autoPickup.issue') = ?5)`,
-	)
-		.bind(id, iid, uid, repo, issue, detail, now, now - 86_400_000, maxPerDay, now - RESERVATION_TTL_MS)
-		.run();
-	return (res.meta?.changes ?? 0) > 0 ? id : null;
-}
-
-/** The objective is queued: the reservation becomes a complete start, remembering its entry. */
-async function confirmReservation(env: Env, reservationId: string, entryId: string): Promise<void> {
-	await env.DB.prepare("UPDATE auto_pickup_log SET reserved = 0, entry_id = ?2 WHERE id = ?1").bind(reservationId, entryId).run();
-}
-
-/** Enqueue failed: give the allowance back. */
-async function releaseReservation(env: Env, reservationId: string): Promise<void> {
-	await env.DB.prepare("DELETE FROM auto_pickup_log WHERE id = ?1 AND reserved = 1").bind(reservationId).run();
-}
-
-/**
- * Settle reservations a crash left between reserving and enqueueing (#1315): one whose objective did get
- * queued (the entry is found by its issue, created after the reservation) is completed, never queued a
- * second time; one with no entry is deleted so its allowance is not leaked. Only reservations older than
- * {@link RESERVATION_TTL_MS} are touched — a younger one belongs to a wake still running. Never throws.
- */
-export async function recoverReservations(env: Env, iid: string, now = Date.now()): Promise<number> {
-	let settled = 0;
-	try {
-		const { results } = await env.DB.prepare("SELECT id, repo, issue_number, created_at FROM auto_pickup_log WHERE instance_id = ?1 AND reserved = 1 AND created_at <= ?2").bind(iid, now - RESERVATION_TTL_MS).all<{ id: string; repo: string; issue_number: number; created_at: number }>();
-		for (const r of results ?? []) {
-			const entry = await env.DB.prepare(
-				`SELECT id FROM instance_objective_queue WHERE instance_id = ?1 AND created_at >= ?2
-				    AND json_extract(metadata, '$.autoPickup.repo') = ?3 AND json_extract(metadata, '$.autoPickup.issue') = ?4 ORDER BY created_at LIMIT 1`,
-			)
-				.bind(iid, r.created_at, r.repo, r.issue_number)
-				.first<{ id: string }>();
-			if (entry) await confirmReservation(env, r.id, entry.id);
-			else await releaseReservation(env, r.id);
-			settled++;
-		}
-	} catch {
-		// The next wake looks again; a failed recovery must not stop this one.
-	}
-	return settled;
 }
 
 /**
@@ -324,7 +253,20 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 	try {
 		const settings = await readAutoPickup(env, iid, uid);
 		if (!settings?.enabled) return { started: false, reason: "auto-pickup is off for this instance" };
-		await recoverReservations(env, iid, now);
+		await recoverReservations(env, iid, now); // only settle leases left by the published 0279 picker
+		// A previous wake may have committed its objective and died before its queue kick (#1315).
+		// Recover that SAME entry before the idle guard, but honour today's pause/question/budget gates.
+		const pendingAdmission = await pendingAutoPickupAdmission(env, iid, uid, now);
+		if (pendingAdmission) {
+			const gate = await queueGate(env, iid, uid);
+			if (gate) {
+				await logSkip(env, iid, uid, "skipped_gate", gate, now);
+				return { started: false, reason: gate };
+			}
+			await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(pendingAdmission.repoId);
+			return { started: true, ...pendingAdmission };
+		}
+		const observedAdmission = await autoPickupAdmissionCursor(env, iid);
 		if (!(await coderIsIdle(env, iid))) {
 			const reason = "the coder still has queued or running work";
 			await logSkip(env, iid, uid, "skipped_busy", reason, now);
@@ -335,14 +277,6 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		if (gate) {
 			await logSkip(env, iid, uid, "skipped_gate", gate, now);
 			return { started: false, reason: gate };
-		}
-		const hold = await providerHold(env, uid);
-		if (hold) {
-			await logSkip(env, iid, uid, "skipped_gate", hold.reason, now);
-			// One notice per failure episode: the sentence names the failure time, so a repeat of it is not news.
-			const told = await env.DB.prepare("SELECT 1 AS x FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'skipped_gate' AND detail = ?2 AND created_at < ?3 LIMIT 1").bind(iid, clipMarked(hold.reason, 300), now).first<{ x: number }>().catch(() => null);
-			if (!told) await (deps.notify ?? defaultNotify(env, uid, iid))("Auto-pickup is paused", hold.reason).catch(() => undefined);
-			return { started: false, reason: hold.reason };
 		}
 		const today = await env.DB.prepare("SELECT COUNT(*) AS n FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'started' AND created_at > ?2").bind(iid, now - 86_400_000).first<{ n: number }>();
 		if ((today?.n ?? 0) >= settings.maxPerDay) {
@@ -365,7 +299,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 				unreadable.push(r.githubRepo);
 				continue;
 			}
-			const [inFlight, failures] = await Promise.all([inFlightIssues(env, iid, r.id), failuresByIssue(env, iid, r.githubRepo)]);
+			const [inFlight, failures] = await Promise.all([inFlightIssues(env, iid, r.id), failuresByIssue(env, iid, r.githubRepo, uid)]);
 			for (const issue of listed.issues) {
 				candidates.push({ repo: r.githubRepo, repoId: r.id, issue, boardPosition: positions.get(issueJobKey(r.id, issue.number)) ?? null, failures: failures.get(issue.number) ?? 0, inFlight: inFlight.has(issue.number) });
 			}
@@ -383,23 +317,23 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		}
 
 		const { repo, repoId, issue } = verdict.pick;
-		// Reserve the allowance and the issue before enqueueing (#1315): the wake that loses a race starts nothing.
-		const reservation = await reserveStart(env, iid, uid, repo, issue.number, `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}`, settings.maxPerDay, now);
-		if (!reservation) {
-			const reason = `issue #${issue.number} was reserved by another wake, or the daily cap of ${settings.maxPerDay} was reached meanwhile`;
+		const providerAccount = await selectedProviderAccount(env, iid, uid);
+		const entryId = `objq-${crypto.randomUUID()}`;
+		const admitted = await admitAutoPickup(env, { entryId, instanceId: iid, userId: uid, repoId, repo, issue: issue.number,
+			objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations,
+			detail: `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}`, now, observedAdmission, providerAccount });
+		if (!admitted) {
+			const gate = await queueGate(env, iid, uid); // includes a provider hold observed after the first gate (#1314)
+			if (gate) {
+				await logSkip(env, iid, uid, "skipped_gate", gate, now);
+				return { started: false, reason: gate };
+			}
+			const reason = "another wake reserved this work, queued or running work already exists, or the daily cap/current auto-pickup settings refused this start";
 			await logSkip(env, iid, uid, "skipped_busy", reason, now);
 			return { started: false, reason };
 		}
-		let entry: Awaited<ReturnType<typeof enqueueObjective>>;
-		try {
-			entry = await enqueueObjective(env, { instanceId: iid, repoId, userId: uid, objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations, metadata: JSON.stringify({ autoPickup: { repo, issue: issue.number } }) });
-		} catch (e) {
-			await releaseReservation(env, reservation).catch(() => undefined);
-			throw e;
-		}
-		await confirmReservation(env, reservation, entry.id);
 		await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(repoId);
-		return { started: true, repo, issue: issue.number, entryId: entry.id };
+		return { started: true, repo, issue: issue.number, entryId };
 	} catch (e) {
 		const reason = `auto-pickup failed: ${e instanceof Error ? e.message : String(e)}`;
 		await logSkip(env, iid, uid, "error", reason, now);
@@ -454,14 +388,18 @@ export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof w
 		const { results } = await env.DB.prepare(
 			`SELECT i.id, i.user_id FROM agent_instances i
 			  WHERE i.status = 'active' AND json_extract(i.config, '$.autoPickup.enabled') = 1
-			    AND NOT EXISTS (SELECT 1 FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'none_eligible' AND l.created_at > ?1)
+			    AND (NOT EXISTS (SELECT 1 FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'none_eligible' AND l.created_at > ?1)
+			    OR EXISTS (SELECT 1 FROM auto_pickup_log l JOIN instance_objective_queue q ON q.id = l.entry_id
+			      WHERE l.instance_id = i.id AND l.outcome = 'started' AND l.reserved = 0
+			        AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3)))
 			  ORDER BY i.id LIMIT ?2`,
 		)
-			.bind(now - AUTO_PICKUP_IDLE_RECHECK_MS, AUTO_PICKUP_SWEEP_LIMIT)
+			.bind(now - AUTO_PICKUP_IDLE_RECHECK_MS, AUTO_PICKUP_SWEEP_LIMIT, now)
 			.all<{ id: string; user_id: string }>();
 		for (const r of results ?? []) {
 			try {
-				if (!(await coderIsIdle(env, r.id))) continue;
+				await recoverReservations(env, r.id, now);
+				if (!(await coderIsIdle(env, r.id)) && !(await pendingAutoPickupAdmission(env, r.id, r.user_id, now))) continue;
 				await wake(env, r.id, r.user_id);
 				woken++;
 			} catch (e) {

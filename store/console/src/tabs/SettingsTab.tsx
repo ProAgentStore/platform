@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import LoadFailed from "../components/LoadFailed";
 import BrainModelCard from "../components/BrainModelCard";
+import PilotModelCard from "../components/PilotModelCard";
 import CodingEngineCard from "../components/CodingEngineCard";
 import RunnerPanel from "../components/RunnerPanel";
 import SecureInputHistory from "../components/SecureInputHistory";
@@ -272,6 +273,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				{isCoding && <CoderBrainSection instanceId={instanceId} />}
 				{isCoding && <AutoPickupSection instanceId={instanceId} />}
 			</section>
+			{isCoding && <PilotModelCard instanceId={instanceId} />}
 			{isCoding && (
 				<section aria-labelledby="settings-coding-heading" data-testid="settings-coding-section" className="border-t border-line pt-4 mt-2">
 					<h2 id="settings-coding-heading" className="text-lg font-semibold mb-2">Coding — edits, tests and deploys</h2>
