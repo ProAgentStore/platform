@@ -24,7 +24,9 @@
  *  - **HTTPS**: `url.pags-push::https://github.com/.pushInsteadOf` (via `GIT_CONFIG_COUNT`, the
  *    env-only config git ≥ 2.31 reads) routes every push to github.com through
  *    `git-remote-pags-push`, which refuses an out-of-scope repository and execs git's own
- *    `git-remote-https` for an in-scope one. Fetches are not rewritten.
+ *    `git-remote-https` for an in-scope one. Fetches are not rewritten. The machine's own rewrites
+ *    away from https (an `insteadOf` to an ssh host alias) are kept for pushes ({@link pushRewrites}),
+ *    and the helper never waits on a terminal prompt (`GIT_TERMINAL_PROMPT=0`).
  *
  * Both cover a tag push, a force push, `--mirror`, `--no-verify` (no hook is involved), a push from
  * any clone in any directory, and git invoked by absolute path: they live in the environment every
@@ -119,6 +121,9 @@ ${checkScope(opts.scope.map(normalizeRepo).join(" "))}
 url="$2"
 refuse_unless_in_scope "git push" "$url"
 case "$url" in http://*) transport=http ;; *) transport=https ;; esac
+# Nobody can see a terminal prompt in an Engine's tool call: a push with no usable credential fails
+# NOW, with git's own reason, instead of waiting on a Username prompt until the tool times out.
+GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT
 exec ${sq(opts.realHelperDir)}/git-remote-$transport "$1" "$url"
 `;
 }
@@ -200,11 +205,69 @@ export function pushGuardEnv(env: NodeJS.ProcessEnv, scope: readonly string[] | 
 	if (env.GIT_SSH_COMMAND && !env.GIT_SSH_COMMAND.includes(root)) out.PAGS_REAL_GIT_SSH_COMMAND = env.GIT_SSH_COMMAND;
 	if (env.GIT_SSH) out.PAGS_REAL_GIT_SSH = env.GIT_SSH;
 	let count = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10) || 0;
-	for (const prefix of HTTPS_PUSH_PREFIXES) {
-		out[`GIT_CONFIG_KEY_${count}`] = `url.${PUSH_HELPER_TRANSPORT}::${prefix}.pushInsteadOf`;
-		out[`GIT_CONFIG_VALUE_${count}`] = prefix;
+	for (const [base, value] of pushRewrites(machineUrlRewrites(env))) {
+		out[`GIT_CONFIG_KEY_${count}`] = `url.${base}.pushInsteadOf`;
+		out[`GIT_CONFIG_VALUE_${count}`] = value;
 		count++;
 	}
 	out.GIT_CONFIG_COUNT = String(count);
 	return out;
+}
+
+/** One `url.<base>.insteadOf|pushInsteadOf = <value>` rule from the machine's git config. */
+export interface UrlRewrite {
+	base: string;
+	value: string;
+	push: boolean;
+}
+
+/** The machine's own url rewrites (global/system config and GIT_CONFIG_COUNT), read once per env. */
+export function machineUrlRewrites(env: NodeJS.ProcessEnv): UrlRewrite[] {
+	let raw = "";
+	try {
+		raw = execFileSync("git", ["config", "--get-regexp", "^url\\..*\\.(push)?insteadof$"], {
+			encoding: "utf8",
+			cwd: "/",
+			env: { ...env, GIT_TERMINAL_PROMPT: "0" },
+			timeout: 5_000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+	} catch {
+		/* none configured (git exits 1), or no git: nothing to preserve */
+	}
+	const out: UrlRewrite[] = [];
+	for (const line of raw.split("\n")) {
+		const m = /^url\.(.+)\.(pushinsteadof|insteadof) (.+)$/i.exec(line.trim());
+		if (m) out.push({ base: m[1], value: m[3], push: m[2].toLowerCase() === "pushinsteadof" });
+	}
+	return out;
+}
+
+/**
+ * The `pushInsteadOf` rules the guard adds, as `[base, value]`.
+ *
+ * #1252 routed every https push to github.com through the helper with ONE `pushInsteadOf`. But git
+ * consults `insteadOf` for a push only when NO `pushInsteadOf` matches — so that rule silently
+ * replaced the owner's own rewrite (`url."git@github-personal:".insteadOf https://github.com/`, how
+ * his https remotes reach GitHub over ssh with the right key). Every push from such a checkout was
+ * forced onto plain https, where the machine has no credential: `git-remote-https` asked for a
+ * Username on a terminal nobody sees and hung until the Engine's 2-minute tool timeout (Grass Karma
+ * #33). A rewrite the owner points AWAY from https github.com is therefore kept as a push rule: the
+ * push goes where it always went, and over ssh it is still checked, by the ssh wrapper.
+ */
+export function pushRewrites(machine: readonly UrlRewrite[]): Array<[string, string]> {
+	const leavesHttps = (base: string) => !HTTPS_PUSH_PREFIXES.some((p) => base.toLowerCase().startsWith(p));
+	const rules: Array<[string, string]> = [];
+	for (const prefix of HTTPS_PUSH_PREFIXES) {
+		// git's order for a push: pushInsteadOf rules if any applies, else insteadOf; longest value wins.
+		const applies = (r: UrlRewrite) => prefix.startsWith(r.value) || r.value.startsWith(prefix);
+		const push = machine.filter((r) => r.push && applies(r));
+		const relevant = (push.length ? push : machine.filter((r) => !r.push && applies(r))).filter((r) => leavesHttps(r.base));
+		// A rule more specific than the prefix: re-stated as a push rule, it out-matches ours.
+		for (const r of relevant) if (r.value.length > prefix.length && r.value.startsWith(prefix)) rules.push([r.base, r.value]);
+		// A rule covering the whole prefix: the prefix goes where it sends it, not to the helper.
+		const covering = relevant.filter((r) => prefix.startsWith(r.value)).sort((a, b) => b.value.length - a.value.length)[0];
+		rules.push(covering ? [covering.base + prefix.slice(covering.value.length), prefix] : [`${PUSH_HELPER_TRANSPORT}::${prefix}`, prefix]);
+	}
+	return rules;
 }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { engineSpawnEnv, writeGuardReport } from "./engine-env.js";
 import { gitGuardRoot } from "./git-guard.js";
-import { PUSH_GUARD_GAPS, PUSH_REFUSED_MARKER, pushGuardEnv, pushGuardRoot } from "./push-guard.js";
+import { PUSH_GUARD_GAPS, PUSH_REFUSED_MARKER, pushGuardEnv, pushGuardRoot, pushRewrites, renderPushHelper } from "./push-guard.js";
 
 /**
  * #1252, on temporary repositories only. Real git pushes over the ssh transport into local bare
@@ -183,5 +183,45 @@ describe("the Engine's env (#1252)", () => {
 		const e = engineSpawnEnv(undefined, SCOPE, join(dir, "gh"), join(dir, "git"), join(dir, "push-guard"));
 		expect(e.GIT_SSH_COMMAND).toContain("push-guard");
 		expect(e.GIT_CONFIG_COUNT).toBeDefined();
+	});
+});
+
+describe("the owner's own url rewrites survive the push guard (Grass Karma #33)", () => {
+	it("an https remote the owner rewrites to an ssh alias still pushes over ssh — not onto credential-less https", () => {
+		const allowed = bare("proappstore-online/template-app");
+		const cfg = join(dir, "gitconfig");
+		writeFileSync(cfg, '[url "git@github-personal:"]\n\tinsteadOf = https://github.com/\n');
+		const machine = { ...BASE_ENV, GIT_CONFIG_GLOBAL: cfg, GIT_SSH_COMMAND: fakeSsh() };
+		const e = pushGuardEnv(machine, SCOPE, join(dir, "guard-alias"), join(dir, "no-https-here"));
+		run(["remote", "add", "origin", "https://github.com/proappstore-online/template-app.git"]);
+		const r = run(["push", "origin", "main"], work, e);
+		expect(r.status, r.stderr).toBe(0);
+		expect(head(allowed)).toBe(run(["rev-parse", "HEAD"]).stdout.trim());
+	});
+
+	it("over that alias an out-of-scope push is still refused, by the ssh wrapper", () => {
+		const other = bare("proappstore-online/tennis-clubs");
+		const cfg = join(dir, "gitconfig");
+		writeFileSync(cfg, '[url "git@github-personal:"]\n\tinsteadOf = https://github.com/\n');
+		const e = pushGuardEnv({ ...BASE_ENV, GIT_CONFIG_GLOBAL: cfg, GIT_SSH_COMMAND: fakeSsh() }, SCOPE, join(dir, "guard-alias2"), join(dir, "x"));
+		const r = run(["push", "https://github.com/proappstore-online/tennis-clubs.git", "main"], work, e);
+		expect(r.stderr).toContain(`${PUSH_REFUSED_MARKER} git push to proappstore-online/tennis-clubs`);
+		expect(head(other)).toBe("");
+	});
+
+	it("pushRewrites: no machine rule routes through the helper; a covering or narrower ssh rule is kept", () => {
+		expect(pushRewrites([])).toEqual([["pags-push::https://github.com/", "https://github.com/"], ["pags-push::http://github.com/", "http://github.com/"]]);
+		expect(pushRewrites([{ base: "git@gh:", value: "https://github.com/", push: false }])[0]).toEqual(["git@gh:", "https://github.com/"]);
+		expect(pushRewrites([{ base: "ssh://git@gh/", value: "https://", push: false }])[0]).toEqual(["ssh://git@gh/github.com/", "https://github.com/"]);
+		const narrow = pushRewrites([{ base: "git@work:", value: "https://github.com/acme/", push: false }]);
+		expect(narrow).toContainEqual(["git@work:", "https://github.com/acme/"]);
+		expect(narrow).toContainEqual(["pags-push::https://github.com/", "https://github.com/"]);
+		// An https→https rewrite still goes through the helper, and a pushInsteadOf outranks insteadOf.
+		expect(pushRewrites([{ base: "https://github.com/", value: "https://gh/", push: false }])[0][0]).toBe("pags-push::https://github.com/");
+		expect(pushRewrites([{ base: "git@a:", value: "https://github.com/", push: false }, { base: "git@b:", value: "https://github.com/", push: true }])[0]).toEqual(["git@b:", "https://github.com/"]);
+	});
+
+	it("the https helper never waits on a terminal prompt", () => {
+		expect(renderPushHelper({ scope: SCOPE, realHelperDir: "/x" })).toMatch(/GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT\nexec /);
 	});
 });
