@@ -6,7 +6,7 @@
  * a service — rather than giving up.
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -132,6 +132,55 @@ describe("the supervisor, run for real (#1141)", () => {
 		expect(gaps.at(-1) ?? 0).toBeGreaterThan(gaps[0] ?? 0);
 		expect(readFileSync(join(dir, "pags-up.log"), "utf8")).toMatch(/supervisor: pags up exited \(1\); starting it again/);
 	}, 15_000);
+
+	// #1298: a spawn that FAILS emits "error" and never "exit"; retrying only on "exit" ended the supervisor with code 0.
+	it.skipIf(process.platform === "win32")("a missing executable is retried with backoff, never a successful exit, and recovers once it appears", async () => {
+		const fake = join(dir, "pags.mjs");
+		const starts = join(dir, "starts.log");
+		writeFileSync(fake, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(starts)}, "started\\n");\nsetInterval(() => {}, 1000);\n`);
+		const missing = join(dir, "missing-node");
+		const ctx: ServiceContext = { platform: process.platform, home: dir, nodePath: missing, script: fake, configDir: dir, pathEnv: process.env.PATH ?? "" };
+		const supervisor = servicePlan(ctx).files.find((f) => f.path === supervisorPath(ctx));
+		writeFileSync(supervisorPath(ctx), supervisor?.content ?? "");
+		const logPath = join(dir, "pags-up.log");
+		const log = () => (existsSync(logPath) ? readFileSync(logPath, "utf8") : "");
+
+		const child = spawn(process.execPath, [supervisorPath(ctx)], { env: { ...process.env, PAGS_SUPERVISOR_MIN_MS: "100", PAGS_SUPERVISOR_MAX_MS: "400", PAGS_SUPERVISOR_RESET_MS: "600000" }, stdio: "ignore" });
+		let exited: number | null | undefined;
+		child.once("exit", (code) => { exited = code; });
+		await new Promise((r) => setTimeout(r, 1_500));
+		expect(exited).toBeUndefined(); // still supervising, not a silent exit 0
+		const failures = log().match(/could not start pags up: .*ENOENT; starting it again in (\d+)s/g) ?? [];
+		expect(failures.length).toBeGreaterThanOrEqual(3);
+		expect(failures.length).toBeLessThanOrEqual(9); // backoff, not a tight loop
+		// One child per attempt, none duplicated: a start per failure, plus at most the attempt in flight.
+		const startsLogged = log().match(/supervisor: starting pags up/g)?.length ?? 0;
+		expect(startsLogged).toBeGreaterThanOrEqual(failures.length);
+		expect(startsLogged).toBeLessThanOrEqual(failures.length + 1);
+
+		symlinkSync(process.execPath, missing); // the executable becomes available
+		const deadline = Date.now() + 5_000;
+		while (!existsSync(starts) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+		expect(readFileSync(starts, "utf8")).toMatch(/started/);
+
+		child.kill("SIGTERM");
+		await new Promise((r) => child.once("exit", r));
+		expect(exited).toBe(0);
+	}, 20_000);
+
+	it.skipIf(process.platform === "win32")("SIGTERM during a pending retry stops it: the supervisor exits and starts nothing more", async () => {
+		const ctx: ServiceContext = { platform: process.platform, home: dir, nodePath: join(dir, "missing-node"), script: join(dir, "x.mjs"), configDir: dir, pathEnv: process.env.PATH ?? "" };
+		const supervisor = servicePlan(ctx).files.find((f) => f.path === supervisorPath(ctx));
+		writeFileSync(supervisorPath(ctx), supervisor?.content ?? "");
+		const child = spawn(process.execPath, [supervisorPath(ctx)], { env: { ...process.env, PAGS_SUPERVISOR_MIN_MS: "60000", PAGS_SUPERVISOR_MAX_MS: "60000" }, stdio: "ignore" });
+		await new Promise((r) => setTimeout(r, 600));
+		const stopped = new Promise((r) => child.once("exit", r));
+		child.kill("SIGTERM");
+		await Promise.race([stopped, new Promise((_, rej) => setTimeout(() => rej(new Error("did not stop while a retry was pending")), 3_000))]);
+		const text = readFileSync(join(dir, "pags-up.log"), "utf8");
+		expect(text.match(/supervisor: starting pags up/g)?.length).toBe(1);
+		expect(text).toMatch(/stopping \(SIGTERM\)/);
+	}, 10_000);
 });
 
 describe("a service pinned to a version manager's Node (#1154)", () => {

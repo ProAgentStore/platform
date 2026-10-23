@@ -92,6 +92,7 @@ const RESTART_CODE = 75; // \`pags up\` asking to be started again: an update, o
 const say = (line) => { try { appendFileSync(config.log, \`[\${new Date().toISOString()}] supervisor: \${line}\\n\`); } catch { /* a log that cannot be written must not stop the runner */ } };
 let delay = MIN;
 let child = null;
+let retry = null;
 let stopping = false;
 
 function start() {
@@ -106,21 +107,30 @@ function start() {
 		windowsHide: true,
 	});
 	if (typeof out === "number") closeSync(out);
-	child.on("error", (e) => say(\`could not start pags up: \${e.message}\`));
-	child.on("exit", (code, signal) => {
+	// One verdict per attempt (#1298): a spawn that fails (no such executable, EAGAIN) emits "error" and never "exit", so
+	// retrying only on "exit" ended the supervisor silently with code 0. Either event settles the attempt, once.
+	let settled = false;
+	const settle = (code, signal, why) => {
+		if (settled) return;
+		settled = true;
 		child = null;
 		if (stopping) return;
 		if (Date.now() - startedAt >= RESET) delay = MIN;
 		const wait = code === RESTART_CODE ? 1_000 : delay;
-		say(\`pags up exited (\${signal ?? code}); starting it again in \${Math.round(wait / 1000)}s\`);
+		say(\`\${why ?? \`pags up exited (\${signal ?? code})\`}; starting it again in \${Math.round(wait / 1000)}s\`);
 		if (code !== RESTART_CODE) delay = Math.min(delay * 2, MAX);
-		setTimeout(start, wait);
-	});
+		retry = setTimeout(start, wait);
+	};
+	const attempt = child;
+	// An "error" on a child that never got a pid is a failed spawn; on a running one (a kill that failed) it is only logged.
+	attempt.on("error", (e) => (attempt.pid === undefined ? settle(null, null, \`could not start pags up: \${e.message}\`) : say(\`pags up error: \${e.message}\`)));
+	attempt.on("exit", (code, signal) => settle(code, signal));
 }
 
 for (const sig of ["SIGTERM", "SIGINT"]) {
 	process.on(sig, () => {
 		stopping = true;
+		if (retry) clearTimeout(retry);
 		say(\`stopping (\${sig})\`);
 		if (child) child.kill("SIGTERM");
 		setTimeout(() => process.exit(0), 5_000).unref();
