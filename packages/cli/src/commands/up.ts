@@ -13,6 +13,7 @@ import { restartUpArgs, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/sel
 import { configDir, holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
 import { crashPaths, deliverCrashReports, recordChildExit } from "../crash-delivery.js";
 import { alreadyRunningLines, RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../existing-runner.js";
+import { LineSplitter } from "../line-buffer.js";
 import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
 import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
@@ -286,11 +287,12 @@ export const upCommand = new Command("up")
 		/** Our child's own process id (#896), announced on its first status line. */
 		let childRsid = "";
 
-		const handleOutput = (data: Buffer) => {
-			const text = data.toString("utf-8");
-			for (const line of text.split("\n")) {
+		// One splitter per stream (#1299): chunks are not lines, so a status line split across two reads used to be parsed as
+		// two fragments and never recognised, and stdout's half-line must not be joined to stderr's.
+		const handleLine = (line: string) => {
+			{
 				const trimmed = line.trim();
-				if (!trimmed) continue;
+				if (!trimmed) return;
 
 				logs.push(trimmed);
 				if (logs.length > 200) logs.shift();
@@ -317,7 +319,7 @@ export const upCommand = new Command("up")
 							: `Heartbeat failing${status.reason ? `: ${status.reason}` : ""} — the console will show this machine offline`;
 					}
 					printStatus(state);
-					continue;
+					return;
 				}
 
 				if (trimmed.includes("Relay connected:")) {
@@ -325,21 +327,21 @@ export const upCommand = new Command("up")
 					state.tunnelUrl = "WebSocket relay";
 					state.lastEvent = "Relay connected";
 					printStatus(state);
-					continue;
+					return;
 				}
 				if (trimmed.includes("WebSocket relay")) {
 					state.tunnel = "online";
 					state.tunnelUrl = "WebSocket relay";
 					state.lastEvent = "Connected via WebSocket relay";
 					printStatus(state);
-					continue;
+					return;
 				}
 
 				if (trimmed.includes("browser runtime listening")) {
 					state.runner = "online";
 					state.lastEvent = "Runner started";
 					printStatus(state);
-					continue;
+					return;
 				}
 				// A relay conflict is the one failure with a one-command remedy, and it matched
 				// NOTHING here: the old branch tested for "Another machine", a string nothing in
@@ -348,12 +350,12 @@ export const upCommand = new Command("up")
 				if (trimmed.includes("Relay conflict:")) {
 					state.lastEvent = "Another runner holds this agent — run `pags up --force` here to take it over";
 					printStatus(state);
-					continue;
+					return;
 				}
 				if (trimmed.includes("Relay conflict cleared:")) {
 					state.lastEvent = "Relay conflict cleared — reattaching";
 					printStatus(state);
-					continue;
+					return;
 				}
 
 				// Show errors
@@ -367,14 +369,23 @@ export const upCommand = new Command("up")
 		let childDead = false;
 		/** We are stopping the child ourselves (Ctrl-C) — its exit is not a crash. */
 		let stopping = false;
-		child.stdout?.on("data", handleOutput);
-		child.stderr?.on("data", handleOutput);
+		const stdoutLines = new LineSplitter();
+		const stderrLines = new LineSplitter();
+		const drain = () => {
+			for (const line of [...stdoutLines.flush(), ...stderrLines.flush()]) handleLine(line);
+		};
+		child.stdout?.on("data", (data: Buffer) => { for (const line of stdoutLines.push(data)) handleLine(line); });
+		child.stderr?.on("data", (data: Buffer) => { for (const line of stderrLines.push(data)) handleLine(line); });
+		// The last line may have no newline: say it at the end of its stream, and before the exit is judged on `logs`.
+		child.stdout?.on("end", () => { for (const line of stdoutLines.flush()) handleLine(line); });
+		child.stderr?.on("end", () => { for (const line of stderrLines.flush()) handleLine(line); });
 		const crashes = crashPaths(configDir(), session.user.login);
 		const recordConnectExit = (code: number | null, signal: string | null, tail: string[]) => {
 			recordChildExit({ paths: crashes, account: session.user.login, build: CLI_VERSION, kind: "connect_exit", what: "runner connect", code, signal, tail });
 			void deliverCrashReports({ apiBase: API_BASE, token: session.token, account: session.user.login, paths: crashes }).catch(() => undefined);
 		};
 		child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+			drain();
 			const action = runnerExitAction(code, stopping);
 			if (action === "restart") {
 				// `runner_update` installed a newer CLI and asked to be started again (#859) — not a crash. The WHOLE
