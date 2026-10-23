@@ -103,6 +103,46 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 		},
 	);
 
+	// ── Per-machine capability record (#1312) ────────────────────────────────────
+	//
+	// What a machine can actually do — OS, browsers that launch, iOS/Android/Docker, Node, Playwright and a bounded tool inventory —
+	// reported by its runner and stored per machine. Read it before pinning an agent; the platform checks it before starting work.
+	server.tool(
+		"get_machine_capabilities",
+		"Read what one machine can do (#1312), reported by its runner at startup and refreshed when it changes: OS and version, arch, CPU/memory/disk, Node and Playwright versions, whether chromium, firefox and webkit actually LAUNCH there (a real probe, with the reason when one fails — e.g. WebKit and Chromium on macOS 12), iOS simulators, Android adb, Docker, and a bounded inventory of developer tools (name and version only; no paths, users or secrets). `summary.browsers` gives each engine's verdict; `reported:false` means the machine has not reported yet (update its runner). include_history adds what changed and when. The summary is also on list_runner_nodes (`capabilities`). Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			machine_id: z.string().describe("Stable physical machine id from list_runner_nodes; do not use a hostname alias."),
+			include_history: z.boolean().optional().describe("Also return the recorded changes to this machine's capabilities."),
+		},
+		async ({ token, machine_id, include_history }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_machine_capabilities", { machine_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/terminals/machines/${encodeURIComponent(machine_id)}/capabilities${include_history ? "?history=1" : ""}`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"check_capability_requirements",
+		"Would this machine satisfy a job's requirements (#1312)? The same check the platform runs before starting work, without starting anything. `needs` are things like `webkit`, `chromium`, `firefox`, `node>=22`, `playwright>=1.58`, `wrangler`, `gh`, `docker`, `ios`, `android`; a version operator is >=, >, <=, < or =. Returns `satisfied` and, when not, one `failures` sentence per missing requirement naming why (e.g. \"needs webkit: macOS 12 is incompatible with Playwright 1.58.2\"). A machine that has not reported fails every requirement: it cannot be verified. Use the same strings as `requires` on coding_loop_start. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			machine_id: z.string().describe("Stable physical machine id from list_runner_nodes; do not use a hostname alias."),
+			needs: z.array(z.string().min(1).max(60)).min(1).max(20).describe("Requirements, e.g. [\"webkit\", \"node>=22\", \"wrangler\"]."),
+		},
+		async ({ token, machine_id, needs }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "check_capability_requirements", { machine_id, needs });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/terminals/machines/${encodeURIComponent(machine_id)}/capabilities/check?needs=${encodeURIComponent(needs.join(","))}`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
 	// ── Per-machine admission thresholds (#1275) ─────────────────────────────────
 	//
 	// The runner admission gate (#1264) refuses a NEW coding session on an overloaded machine. Its lines used to be one

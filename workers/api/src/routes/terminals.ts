@@ -21,6 +21,8 @@ import { parseCleanupChange } from "../lib/runner-cleanup-policy.js";
 import { gateStateLabel, parseGateState } from "../lib/runner-admission-gate.js";
 import { runtimeHealthOf } from "../lib/runner-resources.js";
 import { storedOverrides, thresholdsView } from "../lib/machine-thresholds.js";
+import { type CapabilitySummary, listCapabilitySummaries } from "../lib/machine-capabilities.js";
+import { registerMachineCapabilityRoutes } from "./terminals-capabilities.js";
 import { registerMachineThresholdRoutes } from "./terminals-thresholds.js";
 import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
 import type { Env } from "../types.js";
@@ -156,6 +158,8 @@ export interface TerminalNode {
 	 * heartbeat stopped, not that the machine went idle.
 	 */
 	resources: RunnerResourcesView | null;
+	/** What the machine can do (#1312): OS, browser verdicts, iOS/Android/Docker, tool counts. Null when it has not reported. */
+	capabilities?: CapabilitySummary | null;
 	/** What restarts its runner if it dies (#1154): `service`, a `launcher`, or `none`; null for a CLI that cannot say. */
 	supervisor: "service" | "launcher" | "none" | null;
 	/** Live: any (instance,node) relay socket is up. */
@@ -268,7 +272,7 @@ export async function machineGateRows(env: Pick<Env, "DB">, uid: string): Promis
 	return new Map((results ?? []).map((r) => [r.machine_id, { gate_thresholds: r.gate_thresholds, gate_state: r.gate_state }] as const));
 }
 
-export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[], displayNames: ReadonlyMap<string, string> = new Map(), machineGate: MachineGateRows = new Map(), defaultsEnv: { RUNNER_GATE_DEFAULTS?: string } = {}): TerminalNode[] {
+export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[], displayNames: ReadonlyMap<string, string> = new Map(), machineGate: MachineGateRows = new Map(), defaultsEnv: { RUNNER_GATE_DEFAULTS?: string } = {}, capabilitySummaries: ReadonlyMap<string, CapabilitySummary> = new Map()): TerminalNode[] {
 	const byKey = new Map<string, TerminalNode>();
 	/** hostname → group key, so a session (keyed by hostname) reaches its machine. */
 	const keyForName = new Map<string, string>();
@@ -402,6 +406,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length, gateStateLabel(parseGateState(policyRow ? policyRow.gate_state : gateStateFor.get(key) ?? null)), overrides.maxSessions ?? null);
 		if (n.machineId) n.thresholds = thresholdsView(defaultsEnv, overrides, policyRow?.gate_state ?? null, n.resources ? { cpus: n.resources.cpus, memTotalBytes: n.resources.memTotalBytes } : null);
 		n.supervisor = n.resources?.runner?.supervisor ?? null;
+		n.capabilities = n.machineId ? capabilitySummaries.get(n.machineId) ?? null : null;
 		n.runtime_health = runtimeHealthOf(n.resources);
 		n.identityHint = identityHint(n.machineId, n.runnerVersion);
 		// What a machine pin reads as (#1250): the target machine's name, else its current hostname, else its id.
@@ -525,7 +530,7 @@ terminalRoutes.get("/nodes", async (c) => {
 	).bind(uid).all<SessionRow>()).results;
 
 	const displayNames = await machineDisplayNames(c.env, uid);
-	const nodes = groupTerminalNodes(nodeRows, sessionRows, displayNames, await machineGateRows(c.env, uid), c.env);
+	const nodes = groupTerminalNodes(nodeRows, sessionRows, displayNames, await machineGateRows(c.env, uid), c.env, await listCapabilitySummaries(c.env, uid).catch(() => new Map<string, CapabilitySummary>()));
 
 	// Live status: a machine is connected if ANY of its (instance,node) relays holds a socket.
 	// One check per instance the node serves (bounded), all in parallel.
@@ -666,6 +671,7 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 	return c.json({ machine: { ...machine, displayName, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) } });
 });
 
+registerMachineCapabilityRoutes(terminalRoutes); // GET /machines/:machineId/capabilities, GET …/capabilities/check (#1312)
 registerMachineThresholdRoutes(terminalRoutes); // GET/PUT/DELETE /machines/:machineId/thresholds (#1275)
 
 /** The complete, non-mutating answer a caller needs before deleting a machine registration. */

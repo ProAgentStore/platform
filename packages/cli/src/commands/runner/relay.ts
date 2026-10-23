@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { CapabilityReporter } from "../../capabilities/detect.js";
 import { probeRuntimeHealth, type ResourceSample, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
 import { createCleanupSync } from "./cleanup-sync.js";
 import { sessionToken } from "./session-token.js";
@@ -427,6 +428,10 @@ export async function connectViaRelay(
 	// Post-run cleanup (#1265): the platform's per-machine mode goes down to the local runner on the heartbeat
 	// answer; the runner's status (mode, leftovers found, last pass) comes back up on the next heartbeat.
 	const cleanupSync = createCleanupSync(localUrl, runnerToken, fetch, writeLine);
+	// What this machine can do (#1312): detected once at startup in the background, re-detected every 10 minutes, and
+	// sent in full only when the platform does not hold this hash — every other beat carries the hash alone.
+	const capabilityReporter = new CapabilityReporter();
+	capabilityReporter.refreshIfDue();
 	const heartbeat = () => {
 		const timer = setTimeout(async () => {
 			// The live set, not the startup array — a heartbeat for a detached instance would
@@ -463,11 +468,13 @@ export async function connectViaRelay(
 						runnerNode,
 						machineId: machine.id,
 						resources,
+						...capabilityReporter.payload(),
 						autoUpdateStatus: autoUpdateStatusBody(),
 						...(cleanup.status ? { cleanup: cleanup.status } : {}),
 						...(cleanup.doneAt ? { cleanupNowDoneAt: cleanup.doneAt } : {}),
 					});
 					channel.accept(response, sent);
+					capabilityReporter.accept(response);
 					await cleanupSync.accept(response);
 				} catch (e) {
 					failure = e instanceof Error ? e.message : String(e);

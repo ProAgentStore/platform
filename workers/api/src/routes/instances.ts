@@ -106,6 +106,7 @@ import { wakeRunsParkedOnMachine } from "../lib/coding-park.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { healthOfError, healthOfResponse, runnerStatusView } from "../lib/runner-health.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
+import { storedCapabilityHash, upsertMachineCapabilities } from "../lib/machine-capabilities.js";
 import { describeRejection, rejectionFor, updateGateState } from "../lib/runner-admission-gate.js";
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
@@ -761,7 +762,7 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	await requireRuntime(c.env, instanceId, session.uid);
-		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown; machineId?: unknown; autoUpdateStatus?: unknown; latestVersion?: unknown; lastAttemptAt?: unknown; cleanup?: unknown; cleanupNowDoneAt?: unknown };
+		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown; capabilities?: unknown; capabilityHash?: unknown; machineId?: unknown; autoUpdateStatus?: unknown; latestVersion?: unknown; lastAttemptAt?: unknown; cleanup?: unknown; cleanupNowDoneAt?: unknown };
 	const node = normalizeRunnerNode(body.runnerNode);
 	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", node);
 		await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
@@ -794,7 +795,18 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 		const policy = await getMachinePolicy(c.env, session.uid, machineId);
 		await reportMachineCleanup(c.env, session.uid, machineId, policy, body.cleanup, body.cleanupNowDoneAt).catch(() => undefined);
 		const { cleanup: _cleanup, ...updatePolicy } = policy;
-		return c.json({ success: true, status: "online", autoUpdatePolicy: { ...updatePolicy, fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) }, ...cleanupAnswer(await getMachinePolicy(c.env, session.uid, machineId)) });
+		// What the machine can do (#1312). The full record arrives only when the runner's hash differs from the platform's;
+		// validated and clamped on the way in, best-effort (never fails a heartbeat), and the answer says whether the hash is now held.
+		const capabilityAnswer: { capabilitiesStored?: true; capabilitiesWanted?: true } = {};
+		if (machineId) {
+			if (body.capabilities) await upsertMachineCapabilities(c.env, session.uid, machineId, body.capabilities).catch(() => undefined);
+			if (typeof body.capabilityHash === "string") {
+				const held = await storedCapabilityHash(c.env, session.uid, machineId).catch(() => null);
+				if (held === body.capabilityHash) capabilityAnswer.capabilitiesStored = true;
+				else capabilityAnswer.capabilitiesWanted = true;
+			}
+		}
+		return c.json({ success: true, status: "online", ...capabilityAnswer, autoUpdatePolicy: { ...updatePolicy, fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) }, ...cleanupAnswer(await getMachinePolicy(c.env, session.uid, machineId)) });
 });
 
 /** R2 key for a voice turn's saved audio (owner-scoped path). */

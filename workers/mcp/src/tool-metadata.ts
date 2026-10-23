@@ -328,6 +328,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #1132: the native Discord bot — its live status, what it can reach, and an instance's grants. Never the token.
 	calendar_connection_status: "read",
 	list_instance_calendar_grants: "read",
+	get_machine_capabilities: "read",
+	check_capability_requirements: "read",
 	discord_bot_status: "read",
 	list_discord_guilds: "read",
 	list_discord_channels: "read",

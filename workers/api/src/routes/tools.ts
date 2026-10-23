@@ -1262,8 +1262,12 @@ toolRoutes.post("/:id/loop", async (c) => {
 		/** Start although the issue is closed or finished recently (#1253); needs `forceReason`. Never overrides a run in flight. */
 		force?: boolean;
 		forceReason?: string;
+		/** What the machine must be able to do (#1312): `webkit`, `node>=22`, `wrangler`… Refused at once, naming what is missing. */
+		requires?: unknown;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
+	if (body.requires !== undefined && (!Array.isArray(body.requires) || body.requires.length > 20 || body.requires.some((r) => typeof r !== "string" || !r.trim() || r.length > 60))) throw new HttpError(400, "requires must be a list of at most 20 requirements, each 1-60 characters (for example webkit, node>=22, wrangler, docker).");
+	const requires = Array.isArray(body.requires) ? (body.requires as string[]).map((r) => r.trim()) : undefined;
 	if (body.queuePosition !== undefined && body.queuePosition !== "end" && body.queuePosition !== "next") throw new HttpError(400, "queuePosition must be end or next");
 	if (body.requestId !== undefined && (typeof body.requestId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.requestId))) throw new HttpError(400, "requestId must contain 1–128 letters, numbers, underscores or hyphens");
 	// A REPAIR run needs no words from the caller (#804): the Pilot's objective is the platform's
@@ -1347,6 +1351,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 			issue,
 			force: body.force === true,
 			forceReason: typeof body.forceReason === "string" ? body.forceReason : undefined,
+			requires,
 		});
 		if (!started.ok) {
 			// Queue only the refusals WAITING fixes: an unusable checkout cannot be, while a busy repo, one

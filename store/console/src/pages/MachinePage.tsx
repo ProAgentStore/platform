@@ -6,6 +6,7 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import MachineCleanupCard from "../components/MachineCleanupCard";
+import MachineCapabilitiesCard from "../components/MachineCapabilitiesCard";
 import MachineThresholdsCard from "../components/MachineThresholdsCard";
 import MachineTelemetry from "../components/MachineTelemetry";
 import Page from "../components/Page";
@@ -174,6 +175,9 @@ export default function MachinePage() {
 
 					{/* #1265: the runner's post-run cleanup mode and its six switches. */}
 					<MachineCleanupCard machineId={machine.machineId || machineId} machine={machine} onChange={setMachine} />
+
+					{/* #1312: what this machine can actually run — OS, browsers that launch, iOS/Android/Docker, tools. */}
+					<MachineCapabilitiesCard machineId={machine.machineId || machineId} />
 
 					{/* #1275: the machine's session limit and CPU / memory / disk admission lines. */}
 					<MachineThresholdsCard machineId={machine.machineId || machineId} />

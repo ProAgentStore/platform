@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 387;
+export const MCP_TOOL_COUNT = 389;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 360;
+export const MCP_TOOL_ALWAYS_ON = 362;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -47,4 +47,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 380, issue: "#1279", date: "2026-10-22", reason: "get/set_instance_gmail_identity: the verified send-as sender and inbound recipient scope an instance's Gmail is pinned to. Not siblings of set_instance_connector_account (which picks WHICH connected mailbox): this decides which address that mailbox writes as and which recipient address it may read, and is read back with the live alias list and named blockers." },
 	{ count: 383, issue: "#1268", date: "2026-10-22", reason: "approval_status / get_approval_gate / set_approval_gate: the per-account approval gate. Not siblings of the permission-request tools: those resume one blocked call after a re-grant on one instance, these follow an exact held ACCOUNT change to its end and set the gate itself. Deliberately no approve or deny tool - that stays the owner's act at the console or the push link." },
 	{ count: 387, issue: "#1313", date: "2026-10-23", reason: "calendar_connection_status / list_instance_calendar_grants / grant_instance_calendar / revoke_instance_calendar_grant: the owner side of the read-only Google Calendar connector (live connection state and exact-calendar grants per agent). Not siblings of the Discord or Slack grant tools: those hold bot tokens and channels; these hold an OAuth connection and calendar ids, and `grant_instance_calendar` verifies the calendar against Google with the owner's connection before storing it." },
+	{ count: 389, issue: "#1312", date: "2026-10-23", reason: "get_machine_capabilities / check_capability_requirements: a machine's reported capability record (OS, browsers that actually launch, iOS/Android/Docker, Node/Playwright, a bounded tool inventory) and a dry check of job requirements against it. Not siblings of get_machine_thresholds (how loaded a machine may get) or native_preflight (a live probe of one native-control backend): this is the stored, versioned, change-tracked record the start gate reads, and the check runs that same gate without starting anything." },
 ];

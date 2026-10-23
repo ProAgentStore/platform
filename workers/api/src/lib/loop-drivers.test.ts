@@ -55,6 +55,8 @@ function stubEnv(
 		engineCheck?: unknown;
 		/** The admission gate's stored state (#1264) — a JSON string, as the DB column holds it. */
 		gateState?: string | null;
+		/** The machine's reported capability record (#1312), as the platform stores it; absent = never reported. */
+		capabilities?: Record<string, unknown> | null;
 	} = {},
 ) {
 	const sql: string[] = [];
@@ -96,6 +98,9 @@ function stubEnv(
 								// The admission gate's own read (#1264) — checked BEFORE the generic
 								// instance_runtime_nodes branch below, which this query also matches.
 								if (q.includes("gate_state")) return { gate_state: opts.gateState ?? null };
+								// The machine's id, then its stored capability record (#1312) — both before the generic branch below.
+								if (q.includes("SELECT machine_id FROM instance_runtime_nodes")) return { machine_id: "3901c9c4-004f-435e-bfc5-0b87b7ac5173" };
+								if (q.includes("FROM machine_capabilities")) return opts.capabilities ? { raw_json: JSON.stringify(opts.capabilities), capability_hash: "h", updated_at: "2026-10-23 00:00:00" } : null;
 								if (q.includes("FROM instance_runtimes") || q.includes("FROM instance_runtime_nodes")) return runtimeRow;
 								if (q.includes("FROM coding_repos")) return (opts.repos ?? [])[0] ?? null;
 								return sessionRow;
@@ -485,6 +490,38 @@ describe("the coding driver's preconditions are refusals, not crashes", () => {
 		// one either) since there is no running session for this test to leave untouched.
 		expect(created).toHaveLength(0);
 		expect(commands.filter((c) => c.path?.startsWith("/coding/"))).toHaveLength(0);
+	});
+
+	describe("capability requirements fail fast (#1312)", () => {
+		const MAC12 = { detectedAt: "2026-10-23T00:00:00.000Z", os: { name: "macOS", version: "12.7.6", arch: "x64" }, cpuCount: 4, memoryGb: 8, diskGb: 250, nodeVersion: "22.4.0", playwright: { version: "1.58.2", probes: [] }, ios: false, android: false, docker: false, inventory: [{ name: "git", version: "2.45.2" }] };
+		const MAC14 = { ...MAC12, os: { name: "macOS", version: "14.5", arch: "arm64" }, playwright: { version: "1.60.0", probes: [{ browser: "webkit", success: true, durationMs: 1 }] } };
+		const repos = [{ id: "r1", name: "fws/platform" }];
+
+		it("refuses a webkit job on the macOS 12 laptop, naming why, not waitable, with no session opened", async () => {
+			const { env, created, commands } = stubEnv({ repos, session: null, capabilities: MAC12 });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, requires: ["webkit"] });
+			expect(out).toMatchObject({ ok: false, status: 409, reason: "capability_missing" });
+			if (out.ok) throw new Error("unreachable");
+			expect(out.error).toMatch(/cannot run the job: machine 3901c9c4: needs webkit: webkit is not supported: macOS 12\.7\.6 is incompatible with Playwright 1\.58\.2/);
+			expect(out.detail).toEqual({ failures: [expect.stringMatching(/needs webkit/)] });
+			expect(startRefusalIsWaitable(out.reason)).toBe(false); // a laptop that cannot launch WebKit will not in ten minutes
+			expect(created).toHaveLength(0);
+			expect(commands.filter((c) => c.path?.startsWith("/coding/"))).toHaveLength(0);
+		});
+
+		it("refuses when the machine has never reported — it cannot be verified", async () => {
+			const { env } = stubEnv({ repos, session: null, capabilities: null });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, requires: ["node>=22"] });
+			expect(out).toMatchObject({ ok: false, reason: "capability_missing", error: expect.stringMatching(/has not reported its capabilities/) });
+		});
+
+		it("admits the job on a machine that meets every requirement, and a job with no requirements is untouched", async () => {
+			const ok = stubEnv({ repos, session: null, capabilities: MAC14 });
+			expect(await loopDriverFor(caps("CODING_SESSION")).start({ env: ok.env, ...base, requires: ["webkit", "node>=22"] })).toMatchObject({ ok: true });
+			const none = stubEnv({ repos, session: null, capabilities: null });
+			expect(await loopDriverFor(caps("CODING_SESSION")).start({ env: none.env, ...base })).toMatchObject({ ok: true });
+			expect(await loopDriverFor(caps("CODING_SESSION")).start({ env: stubEnv({ repos, session: null, capabilities: null }).env, ...base, requires: [] })).toMatchObject({ ok: true });
+		});
 	});
 
 	it("an overloaded machine never touches a session ALREADY open — the gate blocks admission, not a run in progress (#1264)", async () => {

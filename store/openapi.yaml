@@ -13543,6 +13543,56 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No identified machine belongs to the caller }
 
+  /v1/terminals/machines/{machineId}/capabilities:
+    get:
+      summary: What a machine can do
+      description: |
+        The machine's reported capability record (#1312) — OS and version, arch, resources, Node and Playwright
+        versions, a launch-probe verdict per browser engine with the reason when one fails, iOS/Android/Docker, and a
+        bounded tool inventory (names and versions only). Answered from the platform's stored record, so it works while
+        the runner is offline; `reported: false` means the machine has not reported yet. `history=1` adds the changes.
+      operationId: getTerminalMachineCapabilities
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+        - { name: history, in: query, required: false, schema: { type: string, enum: ["1"] } }
+      responses:
+        "200":
+          description: The capability record and summary
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/terminals/machines/{machineId}/capabilities/check:
+    get:
+      summary: Would this machine satisfy these requirements?
+      description: |
+        Runs the same requirement check the coding-run start gate runs (#1312) — engines (`webkit`, `chromium`,
+        `firefox`), `node>=22`, `playwright>=1.58`, a tool in the inventory, `docker`, `ios`, `android` — and
+        starts nothing. A machine that has not reported fails every requirement: it cannot be verified.
+      operationId: checkTerminalMachineCapabilities
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+        - { name: needs, in: query, required: true, schema: { type: string }, description: Comma-separated requirements, at most 20. }
+      responses:
+        "200":
+          description: Satisfied or not, with one sentence per failure
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machineId: { type: string }
+                  reported: { type: boolean }
+                  satisfied: { type: boolean }
+                  failures: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/terminals/machines/{machineId}/thresholds:
     get:
       summary: A machine's admission thresholds and the gate's verdict

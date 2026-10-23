@@ -78,9 +78,12 @@ describe("the detached runner process", () => {
 describe("where it keeps its files", () => {
 	it("per account, under the config dir, never spelling the account out", () => {
 		const env = { PAGS_CONFIG_DIR: dir } as NodeJS.ProcessEnv;
-		expect(backgroundLogPath("serge-ivo", env)).toMatch(new RegExp(`^${dir}/logs/runner-[0-9a-f]{12}\\.log$`));
-		expect(backgroundLogPath("serge-ivo", env)).not.toBe(backgroundLogPath("someone-else", env));
-		expect(backgroundStatePath("serge-ivo", env)).not.toContain("serge-ivo");
+		// A synthetic account name: the temp dir lives under the developer's home, so a real login that is also part of that
+		// path (e.g. a machine whose user is named like the account) would make "does not contain it" unfalsifiable.
+		const account = "acct-7f3a9c";
+		expect(backgroundLogPath(account, env)).toMatch(new RegExp(`^${dir}/logs/runner-[0-9a-f]{12}\\.log$`));
+		expect(backgroundLogPath(account, env)).not.toBe(backgroundLogPath("someone-else", env));
+		expect(backgroundStatePath(account, env)).not.toContain(account);
 	});
 
 	it("the state round-trips, and a foreign or broken file reads as none", () => {

@@ -528,6 +528,7 @@ const READBACK: Record<string, string | null> = {
 	"start_instance_loop.request_id": "coding_loop_status",
 	"start_instance_loop.max_iterations": "coding_loop_status",
 	"start_instance_loop.repair_checkout": "coding_loop_status",
+	"start_instance_loop.requires": "check_capability_requirements",
 	"start_instance_loop.force": "coding_loop_status",
 	"start_instance_loop.force_reason": "coding_loop_status",
 	"start_instance_loop.issue": "instance_board",
@@ -550,6 +551,8 @@ const READBACK: Record<string, string | null> = {
 	// A repair run's record carries the platform's fixed objective label, which is what the status
 	// tool reads back (#804).
 	"coding_loop_start.repair_checkout": "coding_loop_status",
+	// #1312: a start-time requirement, checked against the machine's record and never stored on the run; the same strings are verified by this reader.
+	"coding_loop_start.requires": "check_capability_requirements",
 	"coding_loop_start.force": "coding_loop_status",
 	"coding_loop_start.force_reason": "coding_loop_status",
 	"coding_loop_start.issue": "instance_board", // #895: the run on its issue card (`issue`, `run`)

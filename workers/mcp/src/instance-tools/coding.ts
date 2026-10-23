@@ -241,10 +241,11 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			issue: z.coerce.number().int().min(1).optional().describe("The GitHub issue (number, in this repo) this run works on (#895): the run is linked to that issue's board card, and the coding session names it. Omitted, the objective's own subject is used when it leads with one (\"Fix issue #12: …\"), recorded as inferred."),
 			force: z.boolean().optional().describe("Start although the issue is closed or a run finished it `done` within 7 days (#1253). Requires force_reason. Never overrides a run already working that issue."),
 			force_reason: z.string().max(500).optional().describe("Why this issue is being started again; posted as a comment on the issue. Required with force."),
+			requires: z.array(z.string().min(1).max(60)).max(20).optional().describe("What the agent's machine must be able to do (#1312), e.g. [\"webkit\", \"node>=22\", \"wrangler\"] — checked against the machine's reported capabilities before the run starts; a machine that cannot meet them refuses the start (409, reason capability_missing) naming each missing thing. Check first with check_capability_requirements."),
 			repair_checkout: z.boolean().optional().describe("Start a REPAIR run instead of a work run: when a run was blocked because the checkout is behind or has diverged (the block message ends by naming this flag), this lets the agent fix THAT itself — the platform writes the objective (get onto the branch, in sync with upstream, clean tree), the run is let through the pre-flight sync gate, and it may do nothing else: no ticket work, no pushes, and nothing is ever deleted — work in the way is parked on a `wip/` branch the report names. Coding agents only. Off by default."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, and the spend it would commit, without starting it."),
 		},
-		async ({ token, instance_id, objective, max_iterations, repo_id, request_id, queue_if_busy, queue_position, issue, force, force_reason, repair_checkout, dry_run }) => {
+		async ({ token, instance_id, objective, max_iterations, repo_id, request_id, queue_if_busy, queue_position, issue, force, force_reason, requires, repair_checkout, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			// A re-issue with its arguments stripped is a lost result being collected, not a new start (#1071).
@@ -297,7 +298,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 					method: "POST",
 					// `requireRepoChoice` (#877): this caller can name the repo, so on a multi-repo instance an
 					// omitted repo_id is refused with the list rather than resolved to whichever was touched last.
-					body: JSON.stringify({ requestId, objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, repoId, requireRepoChoice: true, queueIfBusy: queue_if_busy === true, ...(queue_position ? { queuePosition: queue_position } : {}), repairCheckout: repair, ...(issue ? { issue } : {}), ...(force ? { force: true, forceReason: force_reason } : {}) }),
+					body: JSON.stringify({ requestId, objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, repoId, requireRepoChoice: true, queueIfBusy: queue_if_busy === true, ...(queue_position ? { queuePosition: queue_position } : {}), repairCheckout: repair, ...(issue ? { issue } : {}), ...(force ? { force: true, forceReason: force_reason } : {}), ...(requires?.length ? { requires } : {}) }),
 				},
 				env,
 				{ tool: "coding_loop_start", possibleOutcomes: ["provisioning", "started", "queued", "not_started"], poll: { tool: "coding_loop_status", input: { instance_id: id, request_id: requestId } }, retry: { tool: "coding_loop_start", input: { instance_id: id, request_id: requestId, objective, max_iterations, repo_id, queue_if_busy, queue_position, issue, repair_checkout } } },

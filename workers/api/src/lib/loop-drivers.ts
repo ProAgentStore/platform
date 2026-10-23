@@ -42,6 +42,7 @@ import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
 import { recordEngineAuthRefusal } from "./engine-auth-refusal.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
+import { checkJobCapabilityRequirements } from "./machine-capabilities.js";
 import { currentGateState, DEFAULT_GATE_STATE, describeRejection, rejectionFor } from "./runner-admission-gate.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { checkStartIdempotency } from "./start-idempotency.js";
@@ -153,6 +154,12 @@ export interface LoopStartInput {
 	force?: boolean;
 	/** Why — posted as a comment on the issue. */
 	forceReason?: string;
+	/**
+	 * What the machine must be able to do (#1312): `webkit`, `node>=22`, `wrangler`, `docker`… Checked against the
+	 * machine's reported capability record before anything starts; a machine that cannot meet them refuses the run
+	 * with each missing thing named, and waiting does not fix it.
+	 */
+	requires?: string[];
 }
 
 export type LoopStartResult =
@@ -189,7 +196,7 @@ export type LoopStartResult =
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "duplicate" | "issue_closed" | "already_done";
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "capability_missing" | "duplicate" | "issue_closed" | "already_done";
 			/** Set with `duplicate` / `issue_closed` / `already_done` (#1253): the prior run, issue and times. */
 			detail?: Record<string, unknown>;
 			/**
@@ -367,6 +374,15 @@ const codingDriver: LoopDriver = {
 			const gate = await currentGateState(env, instanceId, userId, facts.node).catch(() => DEFAULT_GATE_STATE);
 			const rejection = rejectionFor(gate, facts.node);
 			if (rejection) return { ok: false, status: 409, reason: "runner_overloaded", error: describeRejection(rejection), detail: { ...rejection } };
+		}
+
+		// Capability requirements (#1312), after the machine is known to be reachable and not overloaded: the run names what
+		// it needs (WebKit, a Node version, a CLI) and the machine's own record answers. Fail fast, naming each missing thing —
+		// not waitable, because a laptop that cannot launch WebKit will not be able to in ten minutes.
+		if (input.requires?.length) {
+			const machine = facts?.node ? await env.DB.prepare("SELECT machine_id FROM instance_runtime_nodes WHERE instance_id = ?1 AND runner_node = ?2").bind(instanceId, facts.node).first<{ machine_id: string | null }>().catch(() => null) : null;
+			const verdict = await checkJobCapabilityRequirements(env, userId, machine?.machine_id ?? null, input.requires);
+			if (!verdict.ok) return { ok: false, status: 409, reason: "capability_missing", error: `This machine cannot run the job: ${verdict.failures.join("; ")}. Pin the agent to a machine that can, or install what is missing.`, detail: { failures: verdict.failures } };
 		}
 
 		// Is the CHECKOUT usable? (#548)

@@ -1243,4 +1243,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.174": "sha256:b773061288e5545286bf6312095fbb10bea9eb12dfa3dc881798f7712ac436f0", // set_auto_pickup.max_per_day now permits 1–100 starts per 24 hours (was 1–50).
 	"0.1.175": "sha256:0b781a80fa97eb014cda92d736ba911b2c3a53136199a5743e9befc35eb653ed", // #1313: calendar_connection_status, list/grant/revoke_instance_calendar_grant (the read-only Google Calendar connector's owner side).
 	"0.1.176": "sha256:5d8876dce73c7119450bad6827ef5931a9d1008dd0a6dd062854407bab40f430", // #1316: set_coder_brain.pilot_model adds a separate Pilot policy alongside the published Calendar surface.
+	"0.1.177": "sha256:9fe0aadca58aef8f09bdb7d96300f94681bea8078eb61a670265ce972e2de9fd", // #1312: get_machine_capabilities, check_capability_requirements; coding_loop_start / start_instance_loop gain requires.
 };
