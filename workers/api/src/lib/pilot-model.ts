@@ -9,6 +9,11 @@ export const PILOT_MODEL_OPTIONS = [
 ] as const;
 export type PilotModelId = (typeof PILOT_MODEL_OPTIONS)[number]["id"];
 
+/** The Pilot projection served by coder-brain and po-triage/reports. */
+export interface PilotModelResponse {
+	pilot: { model: PilotModelId; fallbackModel: typeof DEFAULT_PILOT_MODEL; options: typeof PILOT_MODEL_OPTIONS };
+}
+
 export function pilotModelProblem(model: unknown): string | null {
 	return PILOT_MODEL_OPTIONS.some((m) => m.id === model) ? null : "pilotModel must be claude-sonnet-4-6 or claude-haiku-5-5.";
 }

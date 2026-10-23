@@ -4,12 +4,9 @@ import { useModalLock } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
 import Card from "./Card";
 import LoadFailed from "./LoadFailed";
+import type { PilotModelResponse } from "../../../../workers/api/src/lib/pilot-model";
 
-export interface PilotModelView {
-	model: string;
-	fallbackModel: string;
-	options: ReadonlyArray<{ id: string; label: string; hint: string }>;
-}
+export type PilotModelView = PilotModelResponse["pilot"];
 
 export function PilotConfirmDialog({ option, fallbackModel, busy, onConfirm, onCancel }: {
 	option: PilotModelView["options"][number];
@@ -48,7 +45,7 @@ export default function PilotModelCard({ instanceId }: { instanceId: string }) {
 	const load = useCallback(async () => {
 		setError("");
 		try {
-			const d = await api<{ pilot: PilotModelView }>(`/v1/instances/${instanceId}/po-triage/reports?limit=1`);
+			const d = await api<PilotModelResponse>(`/v1/instances/${instanceId}/po-triage/reports?limit=1`);
 			setPilot(d.pilot);
 		} catch (e) { setError(e instanceof Error ? e.message : "Could not load the Pilot model."); }
 	}, [instanceId]);
@@ -57,7 +54,7 @@ export default function PilotModelCard({ instanceId }: { instanceId: string }) {
 		if (!pending) return;
 		setBusy(true); setSaveError(""); setMessage("");
 		try {
-			const d = await api<{ pilot: PilotModelView }>(`/v1/instances/${instanceId}/coder-brain`, { method: "PUT", body: JSON.stringify({ pilotModel: pending.id }) });
+			const d = await api<PilotModelResponse>(`/v1/instances/${instanceId}/coder-brain`, { method: "PUT", body: JSON.stringify({ pilotModel: pending.id }) });
 			setPilot(d.pilot);
 			setMessage("Saved — Pilot policy updated.");
 		} catch (e) { setSaveError(e instanceof Error ? e.message : "Could not save the Pilot model."); }

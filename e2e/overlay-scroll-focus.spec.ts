@@ -65,7 +65,7 @@ const insideDialog = (page: Page) => page.evaluate(() => !!document.activeElemen
  * and closing gives back the position and the focus. Returns the dialog for overlay-specific checks.
  */
 async function exerciseOverlay(page: Page, opener: Locator, close: (dialog: Locator) => Promise<void>) {
-	expect(await scrollBackground(opener)).toBeGreaterThan(0);
+	await expect.poll(() => scrollBackground(opener)).toBeGreaterThan(0);
 	const restored = await ownerTops(page);
 	expect(restored[0]).toBe(150);
 	// Not `.click()`/`.focus()`: Playwright and the browser scroll the opener back into view, which

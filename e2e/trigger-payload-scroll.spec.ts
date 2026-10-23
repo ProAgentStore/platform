@@ -63,5 +63,6 @@ test("the payload control collapses it again, and nothing was run or changed", a
 	await open(page, { width: 390, height: 844 });
 	await page.getByRole("button", { name: "hide payload" }).click();
 	await expect(page.locator("pre").filter({ hasText: "field23" })).toHaveCount(0);
-	expect(writes.filter((w) => /triggers/.test(w))).toEqual([]);
+	// Settings previews its draft with a read-only POST; every actual trigger mutation must still be absent.
+	expect(writes.filter((w) => /triggers/.test(w) && w !== "POST /v1/triggers/preview")).toEqual([]);
 });
