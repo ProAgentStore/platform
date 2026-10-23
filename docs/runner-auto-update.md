@@ -359,7 +359,21 @@ failed, and whether its runner started five or more times in 24 hours. Each rais
 linking to the machine, an `agent_events` row (`fleet.<kind>`) — and clears when the machine recovers. An offline machine is not
 judged here; machine silence has its own alarm.
 
-**Not built yet:** an out-of-band control channel — a separate launchd/systemd/Windows service with its own connection that can
-update, restart and roll back `pags` even when the main process is dead. Today a dead runner is brought back by the supervisor
-that started it (`pags up`, the service unit) and by `runner_update` / `runner_restart` over the relay, which need the runner
-connected. That channel, and a one-time rollout to every machine through it, remain open under #1320.
+## The watchdog: an always-on control channel (#1320)
+
+A second OS service, separate from the runner's (`online.proagentstore.pags-watchdog` LaunchAgent, `pags-watchdog.service` user
+unit, `pags watchdog` Scheduled Task), runs `pags watchdog run`. It has its own connection to the platform — a heartbeat every 30s
+to `/v1/terminals/machines/{id}/watchdog/heartbeat` with the account session — so it works when the runner is dead or wedged.
+
+- **Install.** A runner started by the service installs it once (`ensureWatchdogInstalled`; opt out with `PAGS_NO_WATCHDOG=1`).
+  By hand: `pags watchdog install | uninstall | status`.
+- **Reports.** Each heartbeat carries the watchdog's version, the payload versions on disk, trial and rollback state, bad versions,
+  whether a runner holds a live lock, crashes in the last 24h and the last error (paths and token-shaped strings removed). It also
+  carries the capability record (#1312) when the platform asks for it, so a machine with a dead runner still reports.
+- **Commands** (queued by the owner at `POST .../watchdog/commands`, a closed set): `status`, `update [version]` (installs beside the
+  current version; restarts the runner only if it is dead), `restart` (the runner's own service unit), `rollback` (needs a second
+  good version; marks the newest bad and restarts), `diagnose` (allow-listed checks). Open commands of one kind are not doubled; unanswered
+  ones expire (queued 24h, delivered 30m); at most three are delivered per heartbeat, each bounded to 10 minutes.
+- **Outage.** Heartbeats back off 5s → 300s; results of finished commands are carried until the platform acknowledges them.
+
+Rollback of a bad update itself is unchanged and needs no platform: trial period, bad-version memory, last-good kept (#1141).

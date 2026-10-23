@@ -300,7 +300,10 @@ const defaultRun = (file: string, args: string[]) => void execFileSync(file, arg
 
 /** One line per thing done or refused. `ok` is false when a required command failed. */
 export function installService(ctx: ServiceContext, deps: ServiceDeps = {}): { ok: boolean; lines: string[] } {
-	const plan = servicePlan(ctx);
+	return applyPlan(servicePlan(ctx), deps);
+}
+
+function applyPlan(plan: ServicePlan, deps: ServiceDeps): { ok: boolean; lines: string[] } {
 	const lines: string[] = [];
 	for (const f of plan.files) {
 		(deps.write ?? defaultWrite)(f.path, f.content);
@@ -321,7 +324,10 @@ export function installService(ctx: ServiceContext, deps: ServiceDeps = {}): { o
 }
 
 export function uninstallService(ctx: ServiceContext, deps: ServiceDeps = {}): { lines: string[] } {
-	const plan = serviceRemovalPlan(ctx);
+	return removeByPlan(serviceRemovalPlan(ctx), deps);
+}
+
+function removeByPlan(plan: { commands: ServiceCommand[]; files: string[] }, deps: ServiceDeps): { lines: string[] } {
 	const lines: string[] = [];
 	for (const c of plan.commands) {
 		try {
@@ -336,4 +342,141 @@ export function uninstallService(ctx: ServiceContext, deps: ServiceDeps = {}): {
 		lines.push(`removed ${f}`);
 	}
 	return { lines };
+}
+
+// ─── The watchdog service (#1320) ────────────────────────────────────────────────────────────────
+
+export const WATCHDOG_LABEL = "online.proagentstore.pags-watchdog";
+export const WATCHDOG_UNIT = "pags-watchdog.service";
+export const WATCHDOG_TASK = "pags watchdog";
+export const watchdogLogPath = (ctx: ServiceContext) => pathFor(ctx).join(ctx.configDir, "pags-watchdog.log");
+export const watchdogTaskScript = (ctx: ServiceContext) => pathFor(ctx).join(ctx.configDir, "pags-watchdog-task.ps1");
+
+/**
+ * The always-on control channel's OS unit: a SECOND service beside the runner's, running `pags watchdog run` and nothing else. It
+ * needs no supervisor script of its own — the OS restarts it (launchd KeepAlive, systemd Restart=always, the Scheduled Task re-trigger) —
+ * and it shares nothing with `pags up` but the account's sign-in, so a runner that is dead, wedged or mid-rollback leaves it running.
+ */
+export function watchdogServicePlan(ctx: ServiceContext): ServicePlan {
+	const args = [ctx.script, "watchdog", "run"];
+	const log = watchdogLogPath(ctx);
+	if (ctx.platform === "darwin") {
+		const plist = posix.join(ctx.home, "Library", "LaunchAgents", `${WATCHDOG_LABEL}.plist`);
+		const domain = `gui/${ctx.uid ?? 501}`;
+		return {
+			kind: "launchd",
+			files: [
+				{
+					path: plist,
+					content: `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>${WATCHDOG_LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>${xml(ctx.nodePath)}</string>
+${args.map((a) => `		<string>${xml(a)}</string>`).join("\n")}
+	</array>
+	<key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(ctx.pathEnv)}</string></dict>
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>30</integer>
+	<key>ProcessType</key><string>Background</string>
+	<key>WorkingDirectory</key><string>${xml(ctx.home)}</string>
+	<key>StandardOutPath</key><string>${xml(log)}</string>
+	<key>StandardErrorPath</key><string>${xml(log)}</string>
+</dict>
+</plist>
+`,
+				},
+			],
+			commands: [
+				{ file: "launchctl", args: ["bootout", `${domain}/${WATCHDOG_LABEL}`], optional: true, why: "unload an earlier copy" },
+				{ file: "launchctl", args: ["bootstrap", domain, plist], why: "load the watchdog LaunchAgent" },
+				{ file: "launchctl", args: ["kickstart", "-k", `${domain}/${WATCHDOG_LABEL}`], why: "start the watchdog now" },
+			],
+			notes: [...pinnedNodeNote(ctx), `LaunchAgent ${plist}. Logs: ${log}. Remove it with: pags watchdog uninstall`],
+		};
+	}
+	if (ctx.platform === "win32") {
+		const task = watchdogTaskScript(ctx);
+		const principal = `${ctx.domain ? `${ctx.domain}\\` : ""}${ctx.user ?? ""}`;
+		return {
+			kind: "scheduled-task",
+			files: [
+				{
+					path: task,
+					content: `# Written by \`pags watchdog install\` (#1320). Registers the "${WATCHDOG_TASK}" Scheduled Task; needs an elevated PowerShell.
+$ErrorActionPreference = 'Stop'
+$action    = New-ScheduledTaskAction -Execute ${ps(ctx.nodePath)} -Argument ${ps(args.map((a) => `"${a}"`).join(" "))}
+$trigger   = New-ScheduledTaskTrigger -AtStartup
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
+$principal = New-ScheduledTaskPrincipal -UserId ${ps(principal)} -LogonType S4U -RunLevel Limited
+$settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+Unregister-ScheduledTask -TaskName ${ps(WATCHDOG_TASK)} -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName ${ps(WATCHDOG_TASK)} -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+Start-ScheduledTask -TaskName ${ps(WATCHDOG_TASK)}
+`,
+				},
+			],
+			commands: [{ file: "powershell.exe", args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", task], why: "register and start the watchdog Scheduled Task" }],
+			notes: [...pinnedNodeNote(ctx), `Scheduled Task "${WATCHDOG_TASK}" — starts at boot as ${principal || "this user"}. Registering it needs an elevated PowerShell: if it was refused, run ${task} from one.`],
+		};
+	}
+	const unit = posix.join(ctx.home, ".config", "systemd", "user", WATCHDOG_UNIT);
+	return {
+		kind: "systemd",
+		files: [
+			{
+				path: unit,
+				content: `# Written by \`pags watchdog install\` (#1320).
+[Unit]
+Description=ProAgentStore watchdog (pags watchdog)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=${unitWord(ctx.nodePath)} ${args.map(unitWord).join(" ")}
+Environment=${unitWord(`PATH=${ctx.pathEnv}`)}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+`,
+			},
+		],
+		commands: [
+			{ file: "systemctl", args: ["--user", "daemon-reload"], why: "read the unit" },
+			{ file: "systemctl", args: ["--user", "enable", "--now", WATCHDOG_UNIT], why: "enable and start the watchdog" },
+			{ file: "loginctl", args: ["enable-linger", ...(ctx.user ? [ctx.user] : [])], optional: true, why: "keep it running with nobody logged in" },
+		],
+		notes: [...pinnedNodeNote(ctx), `systemd user unit ${unit}. Logs: ${log}.`, "Remove it with: pags watchdog uninstall"],
+	};
+}
+
+/** What removes the watchdog service. */
+export function watchdogRemovalPlan(ctx: ServiceContext): { commands: ServiceCommand[]; files: string[] } {
+	const plan = watchdogServicePlan(ctx);
+	const files = plan.files.map((f) => f.path);
+	if (plan.kind === "launchd") return { files, commands: [{ file: "launchctl", args: ["bootout", `gui/${ctx.uid ?? 501}/${WATCHDOG_LABEL}`], optional: true, why: "unload the watchdog LaunchAgent" }] };
+	if (plan.kind === "systemd") return { files, commands: [{ file: "systemctl", args: ["--user", "disable", "--now", WATCHDOG_UNIT], optional: true, why: "stop and disable the watchdog unit" }] };
+	return { files, commands: [{ file: "powershell.exe", args: ["-NoProfile", "-Command", `Stop-ScheduledTask -TaskName ${ps(WATCHDOG_TASK)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(WATCHDOG_TASK)} -Confirm:$false -ErrorAction SilentlyContinue`], optional: true, why: "remove the watchdog Scheduled Task" }] };
+}
+
+export function installWatchdogService(ctx: ServiceContext, deps: ServiceDeps = {}): { ok: boolean; lines: string[] } {
+	return applyPlan(watchdogServicePlan(ctx), deps);
+}
+
+export function uninstallWatchdogService(ctx: ServiceContext, deps: ServiceDeps = {}): { lines: string[] } {
+	return removeByPlan(watchdogRemovalPlan(ctx), deps);
+}
+
+/** The command that restarts the RUNNER's service unit, per OS — what the watchdog uses to bring a dead `pags up` back. */
+export function runnerServiceRestart(ctx: ServiceContext): ServiceCommand {
+	if (ctx.platform === "darwin") return { file: "launchctl", args: ["kickstart", "-k", `gui/${ctx.uid ?? 501}/${SERVICE_LABEL}`], why: "restart the runner's LaunchAgent" };
+	if (ctx.platform === "win32") return { file: "powershell.exe", args: ["-NoProfile", "-Command", `Stop-ScheduledTask -TaskName ${ps(WINDOWS_TASK)} -ErrorAction SilentlyContinue; Start-ScheduledTask -TaskName ${ps(WINDOWS_TASK)}`], why: "restart the runner's Scheduled Task" };
+	return { file: "systemctl", args: ["--user", "restart", SYSTEMD_UNIT], why: "restart the runner's systemd unit" };
 }

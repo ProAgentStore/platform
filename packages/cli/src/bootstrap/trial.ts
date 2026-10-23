@@ -113,6 +113,13 @@ export function markPayloadHealthy(root: string, version: string): boolean {
 	return true;
 }
 
+/** The rollback notice WITHOUT clearing it: the watchdog reports it, the version that runs next still takes it. */
+export function peekRollbackNotice(root: string): RollbackNotice | null {
+	const n = readJson(noticePath(root)) as Partial<RollbackNotice> | null;
+	if (!n || typeof n.from !== "string" || typeof n.reason !== "string") return null;
+	return { from: n.from, to: typeof n.to === "string" ? n.to : null, reason: n.reason, at: typeof n.at === "number" ? n.at : 0 };
+}
+
 /** Read and clear the rollback notice — reported once, by whichever version runs next. */
 export function takeRollbackNotice(root: string): RollbackNotice | null {
 	const n = readJson(noticePath(root)) as Partial<RollbackNotice> | null;

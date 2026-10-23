@@ -4,7 +4,7 @@ import { requireSession } from "./login.js";
 import { maybeClaimMachineNames } from "../machine-claim.js";
 import { loadMachineIdentity } from "../machine.js";
 import { partitionByPin, type DiscoverableInstance } from "./runner/membership.js";
-import { homedir, hostname, userInfo } from "node:os";
+import { hostname } from "node:os";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
@@ -18,7 +18,9 @@ import { LineSplitter } from "../line-buffer.js";
 import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
 import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
-import { installService, uninstallService, type ServiceContext } from "../service-install.js";
+import { installService, uninstallService } from "../service-install.js";
+import { serviceContext } from "../service-context.js";
+import { ensureWatchdogInstalled } from "../watchdog/ensure.js";
 import { logUpdateStep } from "../bootstrap/update-log.js";
 
 const API_BASE = "https://api.proagentstore.online";
@@ -86,6 +88,12 @@ export const upCommand = new Command("up")
 				: "The service was not fully installed — see the FAILED line above.");
 			if (!result.ok) process.exitCode = 1;
 			return;
+		}
+
+		// The always-on control channel (#1320): a runner the OS service started installs the watchdog service beside itself, once.
+		if (process.env.PAGS_SERVICE === "1") {
+			const w = ensureWatchdogInstalled(serviceContext());
+			if (w.action === "installed" || w.action === "failed") logUpdateStep(`watchdog: ${w.action} — ${w.why}`);
 		}
 
 		const state: TuiState = {
@@ -503,25 +511,3 @@ export const downCommand = new Command("down")
 		}
 		writeLine("");
 	});
-
-/** This machine and this CLI, as the service installer needs them (#1141). */
-function serviceContext(): ServiceContext {
-	const user = (() => {
-		try {
-			return userInfo().username;
-		} catch {
-			return process.env.USER || process.env.USERNAME || undefined; // no passwd entry (containers): fall back to the env
-		}
-	})();
-	return {
-		platform: process.platform,
-		home: homedir(),
-		nodePath: process.execPath,
-		script: process.argv[1],
-		configDir: configDir(),
-		pathEnv: process.env.PATH ?? "",
-		uid: process.getuid?.(),
-		user,
-		domain: process.env.USERDOMAIN,
-	};
-}

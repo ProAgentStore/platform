@@ -13596,6 +13596,78 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No identified machine belongs to the caller }
 
+  /v1/terminals/machines/{machineId}/watchdog:
+    get:
+      summary: The machine's always-on watchdog
+      description: |
+        The out-of-band control channel (#1320): whether a watchdog service has ever reported for this machine, whether it is
+        connected now (heartbeat within 5 minutes), its last status (versions on disk, runner alive, crashes, last error) and the
+        last 20 commands with their outcomes. Works while the runner is dead.
+      operationId: getTerminalMachineWatchdog
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      responses:
+        "200":
+          description: Watchdog state
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/terminals/machines/{machineId}/watchdog/heartbeat:
+    post:
+      summary: Watchdog heartbeat (called by the watchdog)
+      description: |
+        The watchdog's own connection to the platform (#1320): reports its status and the results of commands it ran, and receives
+        up to three queued commands. May also carry the capability record (#1312), so a machine whose runner is dead still reports.
+      operationId: postTerminalMachineWatchdogHeartbeat
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Commands to run, and whether the capability record is wanted
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/terminals/machines/{machineId}/watchdog/commands:
+    post:
+      summary: Queue a watchdog command
+      description: |
+        Queue `status`, `update` (optional `version`), `restart`, `rollback` or `diagnose` (allow-listed `check`) for the machine's
+        watchdog (#1320). An open command of the same kind is returned instead of doubling it. 409 when no watchdog has reported yet.
+      operationId: queueTerminalMachineWatchdogCommand
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, enum: [status, update, restart, rollback, diagnose] }
+                args: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: An open command of this kind already existed }
+        "201": { description: Command queued }
+        "400": { description: Unknown kind or arguments }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: No watchdog has reported for this machine }
+
   /v1/terminals/machines/{machineId}/capabilities:
     get:
       summary: What a machine can do

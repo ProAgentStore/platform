@@ -23,6 +23,7 @@ import { runtimeHealthOf } from "../lib/runner-resources.js";
 import { storedOverrides, thresholdsView } from "../lib/machine-thresholds.js";
 import { type CapabilitySummary, listCapabilitySummaries } from "../lib/machine-capabilities.js";
 import { registerMachineCapabilityRoutes } from "./terminals-capabilities.js";
+import { registerMachineWatchdogRoutes } from "./terminals-watchdog.js";
 import { registerMachineThresholdRoutes } from "./terminals-thresholds.js";
 import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
 import type { Env } from "../types.js";
@@ -671,6 +672,7 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 	return c.json({ machine: { ...machine, displayName, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) } });
 });
 
+registerMachineWatchdogRoutes(terminalRoutes); // POST …/watchdog/heartbeat, GET …/watchdog, POST …/watchdog/commands (#1320)
 registerMachineCapabilityRoutes(terminalRoutes); // GET /machines/:machineId/capabilities, GET …/capabilities/check (#1312)
 registerMachineThresholdRoutes(terminalRoutes); // GET/PUT/DELETE /machines/:machineId/thresholds (#1275)
 
