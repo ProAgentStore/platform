@@ -4,7 +4,8 @@ const API = "https://api.proagentstore.online";
 const SONNET = "claude-sonnet-4-6";
 const HAIKU = "claude-haiku-5-5";
 
-async function mock(page: Page, failSave = false, coding = true) {
+type Readback = "legacy" | "invalid" | "mismatched";
+async function mock(page: Page, failSave = false, coding = true, readback: { load?: Readback; save?: Readback } = {}) {
 	await page.addInitScript(() => localStorage.setItem("pags:session", "test-pags-token"));
 	let model = SONNET;
 	const writes: Array<{ path: string; body: unknown }> = [];
@@ -20,9 +21,11 @@ async function mock(page: Page, failSave = false, coding = true) {
 				if (failSave) return json({ error: "Pilot model is unavailable" }, 400);
 				model = req.postDataJSON().pilotModel;
 			}
-			return json({ settings: null, triggers: [], pilot: pilot() });
+			const response = pilot();
+			if (req.method() === "PUT" && readback.save === "mismatched") response.model = SONNET;
+			return json({ settings: null, triggers: [], pilot: req.method() === "PUT" && readback.save === "legacy" ? undefined : req.method() === "PUT" && readback.save === "invalid" ? { ...response, options: [] } : response });
 		}
-		if (path.endsWith("/po-triage/reports")) return json({ settings: null, triggers: [], reports: [], pilot: pilot() });
+		if (path.endsWith("/po-triage/reports")) return json({ settings: null, triggers: [], reports: [], pilot: readback.load === "legacy" ? undefined : readback.load === "invalid" ? { ...pilot(), options: [] } : pilot() });
 		if (path.endsWith("/coder-questions")) return json({ settings: null, questions: [] });
 		if (path.endsWith("/coding/engine-choice")) return json({ defaultEngineId: "claude", engines: [{ id: "claude", label: "Claude Code", command: "claude --model opus", model: "opus", modelSelectable: true, suggestions: [] }], lastObserved: null, appliesTo: "" });
 		if (path.endsWith("/state")) return json({ model: SONNET, modelChosen: true });
@@ -72,6 +75,47 @@ test("a refused Pilot choice retains the saved policy and reports failure", asyn
 	await expect(card).toContainText("Pilot model is unavailable");
 	await expect(card).not.toContainText("Saved —");
 });
+
+for (const load of ["legacy", "invalid"] as const) {
+	test(`Pilot load with ${load} 200 response shows a retryable API version error`, async ({ page }) => {
+		const readback: { load?: Readback } = { load };
+		const writes = await mock(page, false, true, readback);
+		await page.goto("/console/instances/inst-1/settings");
+		const card = page.getByTestId("pilot-model-card");
+		await expect(card).toContainText("The API did not return a supported Pilot policy");
+		await expect(card).toContainText("Retry after the API is updated");
+		await expect(card).not.toContainText("Loading Pilot model");
+		await expect(card.getByLabel("Pilot model")).toHaveCount(0);
+		readback.load = undefined;
+		await card.getByRole("button", { name: "Retry", exact: true }).click();
+		await expect(card.getByLabel("Pilot model")).toHaveValue(SONNET);
+		await expect(card.getByTestId("load-failed")).toHaveCount(0);
+		expect(writes).toEqual([]);
+	});
+}
+
+for (const save of ["legacy", "invalid", "mismatched"] as const) {
+	test(`Pilot save with ${save} 200 response cannot claim success and reloads actual policy`, async ({ page }) => {
+		const readback: { save?: Readback } = { save };
+		const writes = await mock(page, false, true, readback);
+		await page.goto("/console/instances/inst-1/settings");
+		const card = page.getByTestId("pilot-model-card"); const picker = card.getByLabel("Pilot model");
+		await picker.selectOption(HAIKU);
+		await page.getByRole("button", { name: "Use this Pilot", exact: true }).click();
+		await expect(card.getByRole("alert")).toContainText("Your request may have been applied");
+		await expect(card).not.toContainText("Saved —");
+		await expect(picker).toHaveValue(SONNET);
+		await expect(picker).toBeDisabled();
+		await expect(page.getByLabel("Brain model")).toHaveValue(SONNET);
+		await expect(page.getByLabel("Model", { exact: true })).toHaveValue("opus");
+		await card.getByRole("button", { name: "Reload Pilot policy", exact: true }).click();
+		await expect(picker).toHaveValue(HAIKU);
+		await expect(picker).toBeEnabled();
+		await expect(card.getByRole("alert")).toHaveCount(0);
+		await expect(card).not.toContainText("Saved —");
+		expect(writes).toEqual([{ path: "/v1/instances/inst-1/coder-brain", body: { pilotModel: HAIKU } }]);
+	});
+}
 
 test("a repository chat instance has no coding Pilot selector", async ({ page }) => {
 	await mock(page, false, false);

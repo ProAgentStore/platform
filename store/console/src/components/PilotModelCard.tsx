@@ -4,9 +4,18 @@ import { useModalLock } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
 import Card from "./Card";
 import LoadFailed from "./LoadFailed";
-import type { PilotModelResponse } from "../../../../workers/api/src/lib/pilot-model-contract";
+import { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, type PilotModelResponse } from "../../../../workers/api/src/lib/pilot-model-contract";
 
 export type PilotModelView = PilotModelResponse["pilot"];
+
+function validPilot(value: unknown): value is PilotModelView {
+	if (!value || typeof value !== "object") return false;
+	const p = value as Partial<PilotModelView>;
+	return p.fallbackModel === DEFAULT_PILOT_MODEL && Array.isArray(p.options)
+		&& p.options.length === PILOT_MODEL_OPTIONS.length
+		&& PILOT_MODEL_OPTIONS.every((known) => p.options?.some((o) => o?.id === known.id && typeof o.label === "string" && typeof o.hint === "string"))
+		&& PILOT_MODEL_OPTIONS.some((known) => known.id === p.model);
+}
 
 export function PilotConfirmDialog({ option, fallbackModel, busy, onConfirm, onCancel }: {
 	option: PilotModelView["options"][number];
@@ -41,12 +50,14 @@ export default function PilotModelCard({ instanceId }: { instanceId: string }) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
 	const [saveError, setSaveError] = useState("");
+	const [unverified, setUnverified] = useState(false);
 	const [message, setMessage] = useState("");
 	const load = useCallback(async () => {
-		setError("");
+		setError(""); setMessage("");
 		try {
 			const d = await api<PilotModelResponse>(`/v1/instances/${instanceId}/po-triage/reports?limit=1`);
-			setPilot(d.pilot);
+			if (!validPilot(d?.pilot)) throw new Error("The API did not return a supported Pilot policy. Its version may not support this setting yet. Retry after the API is updated.");
+			setPilot(d.pilot); setUnverified(false); setSaveError("");
 		} catch (e) { setError(e instanceof Error ? e.message : "Could not load the Pilot model."); }
 	}, [instanceId]);
 	useEffect(() => { void load(); }, [load]);
@@ -55,9 +66,13 @@ export default function PilotModelCard({ instanceId }: { instanceId: string }) {
 		setBusy(true); setSaveError(""); setMessage("");
 		try {
 			const d = await api<PilotModelResponse>(`/v1/instances/${instanceId}/coder-brain`, { method: "PUT", body: JSON.stringify({ pilotModel: pending.id }) });
+			if (!validPilot(d?.pilot) || d.pilot.model !== pending.id) throw new Error("The API did not confirm the requested Pilot policy; its version may not support this setting yet.");
 			setPilot(d.pilot);
 			setMessage("Saved — Pilot policy updated.");
-		} catch (e) { setSaveError(e instanceof Error ? e.message : "Could not save the Pilot model."); }
+		} catch (e) {
+			setUnverified(true);
+			setSaveError(`${e instanceof Error ? e.message : "Could not verify the save."} Your request may have been applied. Reload the policy to check before trying again.`);
+		}
 		finally { setBusy(false); setPending(null); }
 	};
 	return (
@@ -66,7 +81,7 @@ export default function PilotModelCard({ instanceId }: { instanceId: string }) {
 			<p className="text-xs text-muted mb-3">The Pilot reads the terminal and directs the coding CLI. The Brain above advises and orchestrates; the coding engine below edits, tests and deploys on your machine.</p>
 			{pilot ? <>
 				<label htmlFor="inst-pilot-model" className="block text-xs text-muted mb-1">Pilot model</label>
-				<select id="inst-pilot-model" value={pilot.model} disabled={busy} className="w-full max-w-full min-w-0 text-sm" onChange={(e) => {
+				<select id="inst-pilot-model" value={pilot.model} disabled={busy || unverified} className="w-full max-w-full min-w-0 text-sm" onChange={(e) => {
 					const option = pilot.options.find((o) => o.id === e.target.value);
 					if (option && option.id !== pilot.model) setPending(option);
 				}}>
@@ -75,7 +90,8 @@ export default function PilotModelCard({ instanceId }: { instanceId: string }) {
 				<p className="text-xs text-muted mt-2">Sonnet is the default: it uses Anthropic when configured, otherwise keeps the inherited Cloudflare route. Haiku 5.5 is an experimental canary; it and its fixed fallback, <code>{pilot.fallbackModel}</code>, require your Anthropic API key. Provider token charges are separate from your coding CLI subscription.</p>
 			</> : !error && <p className="text-xs text-muted">Loading Pilot model…</p>}
 			{error && <LoadFailed compact what="the Pilot model" detail={error} onRetry={() => void load()} />}
-			{saveError && <p className="text-xs text-danger mt-2" role="alert">Couldn't save the Pilot model: {saveError}</p>}
+			{saveError && <p className="text-xs text-danger mt-2" role="alert">Couldn't verify the Pilot model save: {saveError}</p>}
+			{unverified && <div className="mt-2 text-xs text-muted">Last confirmed policy shown. <Button size="sm" onClick={() => void load()}>Reload Pilot policy</Button></div>}
 			{message && <p className="text-xs text-muted mt-2" role="status">{message}</p>}
 			{pending && pilot && <PilotConfirmDialog option={pending} fallbackModel={pilot.fallbackModel} busy={busy} onConfirm={() => void confirm()} onCancel={() => setPending(null)} />}
 		</Card>
