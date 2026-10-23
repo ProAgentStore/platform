@@ -58,6 +58,15 @@ export interface LoopRunRow {
 	request_id?: string | null;
 	/** When a run parked on a question let go of its checkout (0246, #1077); null while it holds it. */
 	checkout_released_at?: number | null;
+	/** Automatic continue after a credit stop (0283, #1318): claim time, state, successor, tries, next try, last reason. */
+	auto_resume_at?: number | null;
+	auto_resume_state?: string | null;
+	auto_resume_successor?: string | null;
+	auto_resume_attempts?: number | null;
+	auto_resume_next_at?: number | null;
+	auto_resume_note?: string | null;
+	/** On the successor: the stopped run the platform continued it from. */
+	auto_resumed_from?: string | null;
 	/** The commit its set-aside work was saved as (0246); cleared once put back. */
 	checkout_snapshot?: string | null;
 	/** Where it parked (0263, #1242): the machine's id and hostname, the checkout, and whether the ref reached origin. */
@@ -240,6 +249,13 @@ export interface LoopRunView {
 	 * its work not put back. Null when there is none to account for.
 	 */
 	parked: ParkedWork | null;
+	/**
+	 * What the platform did about a `provider_credit` stop (#1318), or null when it did nothing (any other stop, or a run
+	 * the key recovery has not reached). `resumed` carries the successor run; `deferred` and `gave_up` say why.
+	 */
+	autoResume?: { state: "claimed" | "resumed" | "deferred" | "gave_up"; at: number | null; successorRunId: string | null; attempts: number; nextAttemptAt: number | null; note: string | null } | null;
+	/** On a run the platform started by itself after a credit stop: the stopped run it continued. */
+	autoResumedFrom?: string | null;
 }
 
 
@@ -271,6 +287,10 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		requestId: row.request_id ?? null,
 		blockedOnAnswer: row.status === "running" && row.waiting_reason === "decision" && row.checkout_released_at != null,
 		parked: parkedWork(row),
+		autoResume: row.auto_resume_state
+			? { state: row.auto_resume_state as "claimed" | "resumed" | "deferred" | "gave_up", at: row.auto_resume_at ?? null, successorRunId: row.auto_resume_successor ?? null, attempts: row.auto_resume_attempts ?? 0, nextAttemptAt: row.auto_resume_next_at ?? null, note: row.auto_resume_note ?? null }
+			: null,
+		autoResumedFrom: row.auto_resumed_from ?? null,
 	};
 }
 

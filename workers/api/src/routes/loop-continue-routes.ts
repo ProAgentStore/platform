@@ -65,6 +65,7 @@ import { continueBriefingPreview, continueBriefingSentence, type WorkingTreeRead
 import { readRepoWorkingState } from "../lib/repo-state.js";
 import { callRunner, getBoundRunnerConn, getRunnerConnIgnoringLiveness, relayConnected } from "../lib/runner-client.js";
 import { repoFreeForRun, runnerEngineProbe } from "../lib/coding-ownership.js";
+import { patchInstanceConfig, readInstanceConfigPair, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
@@ -205,7 +206,61 @@ export async function runnerAwayRefusal(env: Env, instanceId: string, userId: st
 	return conn ? null : "its machine is still away — run `pags up` on it, then continue";
 }
 
+/**
+ * Continue a stopped run WITHOUT an HTTP request (#1318) — the platform doing, after a top-up, what the owner would have
+ * pressed Continue for. The same start path as the POST below (`driver.start` with the continue lookback and the stopped run
+ * named), a fresh budget, the stopped run's own ceiling clamped the same way, the repo the run was on. It returns the driver's
+ * answer instead of throwing, so the caller can tell a refusal that waiting fixes (repo busy, machine away) from one it cannot.
+ *
+ * A run holding set-aside work is not continued here: putting that work back is the owner's explicit move (#1242).
+ */
+export async function startAutomaticContinuation(env: Env, run: LoopRunView, userId: string): Promise<{ ok: true; runId: string } | { ok: false; reason?: string; error: string }> {
+	const refusal = continueRefusal(run);
+	if (refusal) return { ok: false, reason: "not_continuable", error: refusal };
+	if (run.parked?.snapshot) return { ok: false, reason: "parked_work", error: "it holds set-aside work, which is put back only by an explicit Continue" };
+	const maxIterations = await continueCeiling(env, userId, run.instanceId, run);
+	const repoId = await continueRepoId(env, run.instanceId, userId, run);
+	const budget = await openBudget(env, userId, run.instanceId, undefined);
+	const caps = await capabilitiesForInstance(env, run.instanceId, userId).catch(() => null);
+	const started = await loopDriverFor(caps).start({
+		env,
+		instanceId: run.instanceId,
+		userId,
+		objective: run.objective,
+		maxIterations,
+		repoId,
+		budgetId: budget.id,
+		depth: 0,
+		resumeLookbackMs: CONTINUE_RESUME_LOOKBACK_MS,
+		continueFromRunId: run.runId,
+	});
+	return started.ok ? { ok: true, runId: started.runId } : { ok: false, reason: started.reason, error: started.error };
+}
+
 export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): void {
+	/**
+	 * Per-instance opt-out from continuing credit-stopped runs automatically (#1318). `enabled: false` stops it for this instance;
+	 * `true` states the default explicitly; `null` returns to following the account setting (on unless the account turned it off).
+	 */
+	router.get("/:id/auto-resume-on-credit", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("id");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const pair = await readInstanceConfigPair(c.env, instanceId, session.uid);
+		const v = pair?.config.autoResumeOnCredit;
+		return c.json({ instanceId, enabled: typeof v === "boolean" ? v : null });
+	});
+	router.put("/:id/auto-resume-on-credit", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("id");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const body = (await c.req.json().catch(() => null)) as { enabled?: unknown } | null;
+		if (!body || (typeof body.enabled !== "boolean" && body.enabled !== null)) throw new HttpError(400, "enabled must be true, false, or null (follow the account setting).");
+		if (body.enabled === null) await removeInstanceConfigKey(c.env, instanceId, session.uid, "autoResumeOnCredit");
+		else await patchInstanceConfig(c.env, instanceId, session.uid, "autoResumeOnCredit", body.enabled);
+		return c.json({ instanceId, enabled: body.enabled });
+	});
+
 	/**
 	 * Carry a stopped run's objective onto a fresh run with a new iteration ceiling.
 	 *

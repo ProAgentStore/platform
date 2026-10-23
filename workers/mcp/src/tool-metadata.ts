@@ -329,6 +329,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	calendar_connection_status: "read",
 	list_instance_calendar_grants: "read",
 	get_machine_capabilities: "read",
+	get_instance_auto_resume: "read",
 	check_capability_requirements: "read",
 	discord_bot_status: "read",
 	list_discord_guilds: "read",
@@ -443,6 +444,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	unbind_http_profile: "write",
 	// #1132: connecting/rotating the bot (verified with Discord first) and granting one channel — reversible owner state.
 	grant_instance_calendar: "write",
+	set_instance_auto_resume: "write",
 	connect_discord_bot: "write",
 	grant_instance_discord_channel: "write",
 	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.

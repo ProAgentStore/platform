@@ -189,6 +189,11 @@ export interface AccountPreferences {
 
 export interface CodingPreferences {
 	defaultEngineId?: string;
+	/**
+	 * Continue runs that stopped on an empty provider balance once the key works again (#1318). Absent means ON; `false`
+	 * turns it off for the account, and an instance can opt out on its own (`config.autoResumeOnCredit`).
+	 */
+	autoResumeOnCredit?: boolean;
 }
 
 export interface PreferenceLanguageOption {
@@ -387,9 +392,14 @@ const ENGINE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export function sanitizeCodingPreferences(raw: unknown, base: CodingPreferences = {}): CodingPreferences {
 	const o = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
 	const rawDefault = o.defaultEngineId;
-	if (rawDefault === null || rawDefault === "") return {};
-	if (typeof rawDefault === "string" && ENGINE_ID_RE.test(rawDefault)) return { defaultEngineId: rawDefault };
-	return base.defaultEngineId ? { defaultEngineId: base.defaultEngineId } : {};
+	const engine: CodingPreferences =
+		rawDefault === null || rawDefault === "" ? {}
+		: typeof rawDefault === "string" && ENGINE_ID_RE.test(rawDefault) ? { defaultEngineId: rawDefault }
+		: base.defaultEngineId ? { defaultEngineId: base.defaultEngineId } : {};
+	// null clears it back to the default (on); a boolean sets it; absent keeps what was stored.
+	const flag = o.autoResumeOnCredit;
+	const auto = typeof flag === "boolean" ? flag : flag === null ? undefined : base.autoResumeOnCredit;
+	return auto === undefined ? engine : { ...engine, autoResumeOnCredit: auto };
 }
 
 /** Parse a stored `users.preferences` blob. Junk yields no preferences, never a broken shape. */

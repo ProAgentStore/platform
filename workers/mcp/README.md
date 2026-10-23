@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**389 tool registrations.** 362 are always registered; 27 are gated to the console
+**391 tool registrations.** 364 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -463,6 +463,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `native_preflight` | Is the machine running this instance's runner ready for native desktop / Maestro control (#1057)? Permissions, Maestro, devices, stable error codes. Refused with NATIVE_NOT_ENABLED until the owner opts the machine in; drives and installs nothing | read | | |
 | `get_machine_policy` | One stable physical machine's display name, owner-scoped Auto-update policy, versions and lifecycle state; existing machines resolve to OFF when no policy was saved | read | | |
 | `set_machine_policy` | Name a machine (`display_name`, unique per account) and/or enable or disable its Auto-update; policy survives aliases and reconnects, and an idle runner rechecks it before installing | write | yes | |
+| `get_instance_auto_resume` | Whether this instance continues runs that stopped on an empty Anthropic balance by itself once the key works again (true/false, or null = follow the account setting) (#1318) | read | | |
+| `set_instance_auto_resume` | Opt one instance out of (or back into) automatic continuing of credit-stopped runs; `null` follows the account setting (#1318) | write | | |
 | `get_machine_capabilities` | What one machine can do (#1312): OS, arch, resources, Node/Playwright versions, per-engine browser launch verdicts with reasons, iOS/Android/Docker and a bounded tool inventory; optional change history | read | | |
 | `check_capability_requirements` | Would this machine satisfy a job's requirements (`webkit`, `node>=22`, `wrangler`, …)? The same check the start gate runs, naming each missing thing (#1312) | read | | |
 | `get_machine_thresholds` | One machine's admission thresholds (#1275): the session limit and the CPU, memory and disk lines the runner admission gate judges it against, where each came from, and the gate's verdict now | read | | |

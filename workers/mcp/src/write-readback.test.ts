@@ -537,6 +537,7 @@ const READBACK: Record<string, string | null> = {
 	"continue_instance_run.max_iterations": "coding_loop_status",
 	// Appended to the new run's OBJECTIVE, which is what `coding_loop_status` returns for it.
 	"continue_instance_run.note": "coding_loop_status",
+	"set_instance_auto_resume.mode": "get_instance_auto_resume",
 	"set_instance_loop_limits.min_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_objective_chars": "get_instance_loop_limits",

@@ -391,6 +391,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			coding: z
 				.object({
 					defaultEngineId: z.string().nullable().optional().describe("Coding engine id from get_account_preferences.codingEngineOptions. null clears it to the platform default."),
+					autoResumeOnCredit: z.boolean().nullable().optional().describe("Continue coding runs that stopped on an empty Anthropic balance once the key works again (default on). false turns it off for the account; null returns it to on. An instance can opt out on its own with set_instance_auto_resume."),
 				})
 				.optional()
 				.describe("Account coding defaults. Omit to leave unchanged."),

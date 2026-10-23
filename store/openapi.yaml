@@ -12523,6 +12523,59 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{id}/auto-resume-on-credit:
+    get:
+      summary: Does this instance continue credit-stopped runs automatically?
+      description: |
+        Whether runs on this instance that stopped on an empty provider balance (`stopReason: provider_credit`) are
+        continued by the platform once the key works again (#1318). `enabled` is `true` or `false` when the instance set
+        it and `null` when it follows the account setting (`coding.autoResumeOnCredit`; on unless the account turned it off).
+      operationId: getInstanceAutoResumeOnCredit
+      tags: [Instances]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The instance's setting
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instanceId: { type: string }
+                  enabled: { type: [boolean, "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Opt an instance out of (or back into) automatic continuing
+      description: '`{"enabled": false}` opts this instance out; `true` states the default; `null` returns it to the account setting.'
+      operationId: setInstanceAutoResumeOnCredit
+      tags: [Instances]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: [boolean, "null"] }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instanceId: { type: string }
+                  enabled: { type: [boolean, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/loop-limits:
     get:
       summary: Read this instance's iteration bounds

@@ -308,6 +308,7 @@ const TABLE: Record<string, Row> = {
 	check_instance_loop: ["coding", "read", null, null, "cursor,instance_id,offset,request_id,run_id,starts_cursor,starts_offset,token"],
 	get_instance_connector_account: ["connectorAccounts", "read", null, null, "connector,instance_id,token"],
 	get_instance_loop_limits: ["composition", "read", null, null, "instance_id,token"],
+	get_instance_auto_resume: ["composition", "read", null, null, "instance_id,token"],
 	get_instance_terminal_session: ["runtime", "read", null, null, "instance_id,token"],
 	get_instance_loop_presets: ["composition", "read", null, null, "instance_id,token"],
 	// `before` added by #674 — the backward arm, so a caller can walk a run's history after the
@@ -595,6 +596,7 @@ const TABLE: Record<string, Row> = {
 	set_supervision_enabled: ["composition", "write", null, null, "enabled,supervision_id,supervisor_instance_id,token"],
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
+	set_instance_auto_resume: ["composition", "write", null, "envelope", "dry_run,instance_id,mode,token"],
 	set_instance_loop_limits: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,max_objective_chars,min_iterations,token"],
 	set_instance_loop_presets: ["composition", "write", null, "envelope", "dry_run,instance_id,presets,token"],
 	replay_connection_delivery: ["composition", "runtime", null, "envelope", "delivery_id,dry_run,instance_id,token"],

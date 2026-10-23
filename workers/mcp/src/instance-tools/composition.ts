@@ -510,6 +510,49 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	// Automatic continue after a credit stop (#1318): an instance can opt out on its own; the account default is
+	// set_account_preferences coding.autoResumeOnCredit. Both default ON.
+	server.tool(
+		"get_instance_auto_resume",
+		"Read whether this instance's runs that stopped on an empty Anthropic balance (`stopReason: provider_credit`) are continued automatically once the key works again (#1318). `enabled` is true or false when this instance set it, or null when it follows the account setting (get_account_preferences coding.autoResumeOnCredit; on unless the account turned it off). Automatic continuing is paced (3 per owner per minute), happens once per stopped run, covers runs stopped within 7 days, and skips paused instances and runs you have since superseded. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_instance_auto_resume", { instance_id });
+			if (denied) return denied;
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/auto-resume-on-credit`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"set_instance_auto_resume",
+		"Turn automatic continuing of credit-stopped runs on or off for ONE instance (#1318). `mode: off` opts this instance out — its runs that stop on an empty Anthropic balance wait for you to continue them (continue_instance_run); `on` states the default; `follow_account` returns it to following the account setting. Changes nothing about runs already continued. Reversible owner configuration. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			mode: z.enum(["on", "off", "follow_account"]).describe("off = opt this instance out; on = automatic continuing is on here; follow_account = follow the account setting (on unless the account turned it off)."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, mode, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const enabled = mode === "on" ? true : mode === "off" ? false : null;
+			const input = { instance_id, mode };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_auto_resume", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/auto-resume-on-credit`;
+			if (dry_run) return dryRun(safetyFor(token), "set_instance_auto_resume", `${enabled === null ? "return this instance to the account setting for" : enabled ? "turn on" : "turn off"} automatic continuing of credit-stopped runs`, input, { endpoint, method: "PUT" });
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ enabled }) }, env);
+			if ((data as { error?: string }).error) return text(`Error: ${(data as { error?: string }).error}`);
+			await audit(safetyFor(token), { tool: "set_instance_auto_resume", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"set_instance_loop_limits",
 		`Set the iteration floor and ceiling for an instance's runs. A run started below \`min_iterations\` is silently raised to it — including a run that named no number at all — and one above \`max_iterations\` is lowered. This is a property of the INSTANCE, not of the call: it binds runs started from the console, from chat, from the objective queue, from a continue, and from another agent's delegation alike. Each bound is a whole number from 1 to ${MAX_CONFIGURABLE_ITERATIONS}; send nothing at all to clear the configuration. \`max_objective_chars\` sets the objective cap (#854) and, sent alone, leaves the iteration bounds untouched. The account-wide ceiling still wins — these can only narrow it, never widen it, so a floor above it is stored but capped at run time. Returns the stored bounds plus that ceiling.`,

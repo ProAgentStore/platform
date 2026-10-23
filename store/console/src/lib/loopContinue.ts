@@ -140,7 +140,7 @@ const REASON_LABEL: Record<string, string> = {
 	// than to the Retry button.
 	interrupted: "Cut off by the platform",
 	engine_limit: "Hit the coding CLI's usage limit",
-	provider_credit: "Out of AI provider credit",
+	provider_credit: "Out of AI provider credit — continues by itself after you top up",
 	engine_auth: "Coding CLI not signed in",
 	// #1019. Nobody cancelled and nothing failed: the owner's own rules did not fit the engine's envelope whole.
 	constraint_refused: "Stopped: your rules are too long to send",

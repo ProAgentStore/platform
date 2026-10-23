@@ -419,7 +419,7 @@ export const DRIVER_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
 	// this sentence is what the crash report and the chat bubble carry.
 	provider_credit: {
 		resume: false,
-		why: "the Anthropic API key balance is insufficient — never a machine or Claude CLI subscription; top up the key at console.anthropic.com/settings/billing to continue",
+		why: "the Anthropic API key balance is insufficient — never a machine or Claude CLI subscription; top up the key at console.anthropic.com/settings/billing. The stopped run is not replayed, but once the key works again the platform continues it by itself (paced, once per run, within 7 days; an owner or instance can opt out)",
 	},
 	provider_credentials: { resume: false, why: "no key or a rejected key; only the owner can clear it" },
 	provider_rate_limit: { resume: false, why: "the provider is throttling this key and wants a backoff, not an immediate replay" },

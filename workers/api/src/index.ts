@@ -97,6 +97,7 @@ import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runDueGmailScoutScans } from "./lib/gmail-scout/scan.js";
 import { runDueCoderQuestions } from "./lib/coder-question-sweep.js";
+import { runCreditAutoResume } from "./lib/credit-auto-resume.js";
 import { runDueOverloadRetries } from "./lib/objective-queue-start.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
@@ -396,6 +397,11 @@ export default {
 		// is woken by no event, only this clock. Its own failure domain, like every sweep above.
 		ctx.waitUntil(
 			runDueOverloadRetries(env).catch((err) => logUnhandled(env, err, { path: "scheduled:overload-retries", method: "CRON" })),
+		);
+		// Runs that stopped on an empty provider balance continue by themselves once the key works again (#1318); also the
+		// deploy's one-time backfill. Idempotent, paced and bounded; its own failure domain.
+		ctx.waitUntil(
+			runCreditAutoResume(env).catch((err) => logUnhandled(env, err, { path: "scheduled:credit-auto-resume", method: "CRON" })),
 		);
 		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.
