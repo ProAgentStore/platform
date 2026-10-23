@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import { useModalLock } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
 import Card from "./Card";
 import { AUTO_SUBMIT_ACKNOWLEDGEMENT, AUTO_SUBMIT_DANGER, AUTO_SUBMIT_WARNING, type AutoSubmitAllowance, type AutoSubmitRules, buildPolicySummary } from "../lib/autoSubmitPolicy";
@@ -68,8 +70,10 @@ export function AutoSubmitConfirmDialog({
 	busy?: boolean;
 	error?: string;
 }) {
+	const wrapRef = useRef<HTMLDivElement>(null);
+	useModalLock(wrapRef);
 	return (
-		<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+		<div ref={wrapRef} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
 			<Card role="dialog" aria-modal="true" aria-labelledby="auto-submit-confirm-title" data-testid="auto-submit-confirm" className="w-full max-w-lg">
 				<h3 id="auto-submit-confirm-title" className="text-base font-bold text-danger mb-2">
 					Enable auto-submit?

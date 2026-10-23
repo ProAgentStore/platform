@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { useModalLock } from "@proagentstore/sdk/hooks";
 import { isClaudeEngine, missingWriteFlag } from "@proagentstore/sdk/ui";
 import type { CodingEngine, EngineAuth } from "./types";
 import { engineContinuityNote } from "./engine-continuity";
@@ -24,6 +25,8 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 	onClose: () => void;
 	onSaved: () => void;
 }) {
+	const panelRef = useRef<HTMLDivElement>(null);
+	useModalLock(panelRef);
 	const [engines, setEngines] = useState<CodingEngine[]>(initial.map((e) => ({ ...e })));
 	const [defaultId, setDefaultId] = useState(initialDefault);
 	const [saving, setSaving] = useState(false);
@@ -95,7 +98,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 
 	return (
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-			<div className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[85dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
+			<div ref={panelRef} role="dialog" aria-modal="true" aria-label="CLI engines" className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[85dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
 				<div className="flex items-center justify-between gap-3 mb-1.5">
 					<h3 className="text-base font-bold flex items-center gap-1.5"><Cpu size={16} /> CLI engines</h3>
 					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-lg leading-none">✕</button>

@@ -7,8 +7,9 @@
  * can't carry Authorization headers), so previews are capped at 50MB —
  * larger files are download-only.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { API, getToken } from "@proagentstore/sdk/client";
+import { useModalLock } from "@proagentstore/sdk/hooks";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { X, Download } from "lucide-react";
@@ -49,6 +50,8 @@ export default function FilePreview({ instanceId, file, onClose }: {
 	const [text, setText] = useState<string | null>(null);
 	const [error, setError] = useState("");
 	const [loading, setLoading] = useState(kind !== "none" && !tooBig);
+	const panelRef = useRef<HTMLDivElement>(null);
+	useModalLock(panelRef);
 
 	useEffect(() => {
 		if (kind === "none" || tooBig) return;
@@ -104,7 +107,7 @@ export default function FilePreview({ instanceId, file, onClose }: {
 				<button type="button" aria-label="Close preview" className="absolute inset-0 cursor-default" onClick={onClose}>
 					<span className="sr-only">Close preview</span>
 				</button>
-				<div className="relative bg-panel border border-line rounded-xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
+				<div ref={panelRef} role="dialog" aria-modal="true" aria-label={`Preview of ${file.name}`} className="relative bg-panel border border-line rounded-xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
 					<div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-line shrink-0">
 						<div className="text-sm font-semibold truncate">{file.name}</div>
 						<div className="flex items-center gap-1.5 shrink-0">
@@ -116,7 +119,9 @@ export default function FilePreview({ instanceId, file, onClose }: {
 							</Button>
 						</div>
 					</div>
-				<div className="flex-1 min-h-0 overflow-auto bg-paper">
+				{/* biome-ignore lint/a11y/useSemanticElements: a <section> would not make this scroller focusable; the role + tabindex pair is the axe `scrollable-region-focusable` remedy. */}
+				{/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll container must take focus, or Safari has no keyboard route to the rest of a long preview (End/PageDown scroll the focused scroller). */}
+				<div role="region" tabIndex={0} aria-label="Preview content" className="flex-1 min-h-0 overflow-auto bg-paper">
 					{loading && <p className="text-center py-10 text-muted text-sm">Loading preview…</p>}
 					{error && <p className="text-center py-10 text-danger text-sm">{error}</p>}
 					{!loading && !error && (kind === "none" || tooBig) && (

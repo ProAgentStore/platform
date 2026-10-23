@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Flag, Loader2 } from "lucide-react";
 import { api } from "@proagentstore/sdk/client";
+import { useModalLock } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
 import { buildCapture, previewOf } from "../lib/feedback";
 import type { Message } from "../lib/types";
@@ -84,6 +85,8 @@ export function FeedbackComposer({
 	const [err, setErr] = useState<string | null>(null);
 	const [done, setDone] = useState(false);
 	const target = messages[index];
+	const panelRef = useRef<HTMLDivElement>(null);
+	useModalLock(panelRef);
 
 	const submit = async () => {
 		if (!body.trim() || saving) return;
@@ -104,7 +107,7 @@ export function FeedbackComposer({
 
 	return (
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-			<div className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[88dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
+			<div ref={panelRef} role="dialog" aria-modal="true" aria-label="Report a problem" className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[88dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
 				<div className="flex items-center justify-between gap-3 mb-1">
 					<h3 className="text-base font-bold flex items-center gap-1.5">
 						<Flag size={16} /> What went wrong?

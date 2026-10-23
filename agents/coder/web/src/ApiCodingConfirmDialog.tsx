@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useModalLock } from "@proagentstore/sdk/hooks";
 import { AlertTriangle } from "lucide-react";
 import Button from "./Button";
 import type { PendingApiConfirmation } from "./api-coding";
@@ -15,8 +16,10 @@ export default function ApiCodingConfirmDialog({ pending, busy, onCancel, onConf
 	onConfirm: () => void;
 }) {
 	const [acknowledged, setAcknowledged] = useState(false);
+	const wrapRef = useRef<HTMLDivElement>(null);
+	useModalLock(wrapRef);
 	return (
-		<div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4">
+		<div ref={wrapRef} className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4">
 			<div role="dialog" aria-modal="true" aria-labelledby="api-coding-title" data-testid="api-coding-confirm" className="bg-panel border border-danger rounded-2xl w-full max-w-lg p-4">
 				<h3 id="api-coding-title" className="text-base font-bold text-danger flex items-center gap-1.5 mb-2">
 					<AlertTriangle size={16} /> Code on a provider API key?

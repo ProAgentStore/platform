@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { useModalLock } from "@proagentstore/sdk/hooks";
 import type { CodingRepo } from "./types";
 import { repoProviderLabel } from "./repo-title";
 import { repoRepairNotice } from "./repo-repair";
@@ -25,6 +26,8 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 	/** Delete this repo (confirmed here); the parent removes it and closes the sheet. */
 	onDelete: () => void | Promise<void>;
 }) {
+	const panelRef = useRef<HTMLDivElement>(null);
+	useModalLock(panelRef);
 	const [name, setName] = useState(repo.name);
 	const [workdir, setWorkdir] = useState(repo.workdir || "");
 	const [rules, setRules] = useState(repo.instructions || "");
@@ -123,7 +126,7 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 
 	return (
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-			<div className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
+			<div ref={panelRef} role="dialog" aria-modal="true" aria-label="Repo settings" className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<h3 className="text-base font-bold flex items-center gap-1.5"><Settings size={16} /> Repo settings</h3>
 					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-lg leading-none">✕</button>

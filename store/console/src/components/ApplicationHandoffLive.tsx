@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { useTieredPolling } from "@proagentstore/sdk/hooks";
+import { useModalLock, useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
 import RemoteBrowser, { type RemoteFrame } from "./RemoteBrowser";
 import { deviceKind } from "../lib/browserTakeovers";
@@ -60,11 +60,8 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 
 	useEffect(() => { poll(); }, [poll]);
 	useTieredPolling(poll, { activeMs: 500, passiveMs: 500 }, false);
-	useEffect(() => {
-		const old = document.body.style.overflow;
-		document.body.style.overflow = "hidden";
-		return () => { document.body.style.overflow = old; };
-	}, []);
+	const dialogRef = useRef<HTMLDivElement>(null);
+	useModalLock(dialogRef, { focus: false });
 
 	const send = useCallback(async (body: Record<string, unknown>) => {
 		const seq = ++inputSeq.current;
@@ -101,7 +98,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		} catch (e) { setEndError(`Couldn't end the handoff — the Runner may still have the browser. ${e instanceof Error ? e.message : String(e)}`); }
 	};
 
-	return <div role="dialog" aria-modal="true" aria-label="Live Application Runner browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
+	return <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Live Application Runner browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
 		<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
 			<span className="font-bold text-ink text-sm">🖥 {reconciliation ? "Application reconciliation — read-only browser" : "Application Runner — live browser control"}</span>
 			<span className="text-xs text-muted-soft hidden md:inline">{reconciliation ? "Sign in or complete the site challenge only. This browser cannot fill, upload, submit, or clear the original uncertainty." : "Sign in or complete the site step in this existing browser, then resume. A sign-in alone never changes submission status."}</span>

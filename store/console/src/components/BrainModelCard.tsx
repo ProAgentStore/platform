@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { useModalLock } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
 import Card from "./Card";
 import type { InstanceModelState } from "../lib/types";
@@ -9,8 +10,10 @@ import { BRAIN_CARD_SCOPE, BRAIN_CARD_TITLE, BRAIN_SURFACES, type BrainOption, b
 /** The confirmation before a Brain model is saved (#1043): provider, model, cost and who is billed. */
 export function BrainConfirmDialog({ option, busy, onConfirm, onCancel }: { option: BrainOption; busy?: boolean; onConfirm: () => void; onCancel: () => void }) {
 	const c = brainConfirmation(option);
+	const wrapRef = useRef<HTMLDivElement>(null);
+	useModalLock(wrapRef);
 	return (
-		<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+		<div ref={wrapRef} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
 			<Card role="dialog" aria-modal="true" aria-labelledby="brain-confirm-title" data-testid="brain-confirm" className="w-full max-w-lg">
 				<h3 id="brain-confirm-title" className="text-base font-bold mb-2">Use {c.model} as this coder's Brain?</h3>
 				<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm mb-3">

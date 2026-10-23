@@ -8,7 +8,7 @@ import Button from "../components/Button";
 import Page from "../components/Page";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
-import { usePolling, useTieredPolling } from "@proagentstore/sdk/hooks";
+import { useModalLock, usePolling, useTieredPolling } from "@proagentstore/sdk/hooks";
 import { isRunFinished } from "../lib/runStatus";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { ArrowLeft, Trash2 } from "lucide-react";
@@ -202,12 +202,9 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	// ends a takeover is decided server-side. The catch-up fetch means the first thing they see
 	// on returning is a fresh frame, not the stale one they left.
 	useTieredPolling(poll, { activeMs: 500, passiveMs: 500 }, false);
-	// Full-screen overlay: lock body scroll while open (RemoteBrowser captures the keyboard).
-	useEffect(() => {
-		const prev = document.body.style.overflow;
-		document.body.style.overflow = "hidden";
-		return () => { document.body.style.overflow = prev; };
-	}, []);
+	// Full-screen overlay: freeze the page's real scroll owners while open (RemoteBrowser captures the keyboard).
+	const dialogRef = useRef<HTMLDivElement>(null);
+	useModalLock(dialogRef, { focus: false });
 
 	/**
 	 * IGNORABLE (#291), and this is the clearest case in the console.
@@ -246,7 +243,7 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 
 	// Full-screen overlay: the takeover's own bar, then the remote page as a browser (#1105).
 	return (
-		<div role="dialog" aria-modal="true" aria-label="Live remote browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
+		<div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Live remote browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
 			<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
 				<span className="font-bold text-ink text-sm">{kind === "captcha" ? "🔐 Live remote control — solve the verification" : "🖥 Live remote control"}</span>
 				<span className="text-xs text-muted-soft hidden md:inline">Click &amp; type here — sent live to the agent's browser (~2 fps).</span>

@@ -632,7 +632,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					<button type="button" aria-label="Close record details" className="absolute inset-0 bg-black/40 cursor-default" onClick={() => setDetail(null)}>
 						<span className="sr-only">Close record details</span>
 					</button>
-					<div className="relative bg-panel rounded shadow-lg max-w-2xl w-full max-h-[85vh] overflow-auto p-4">
+					<div role="dialog" aria-modal="true" aria-label="Record details" className="relative bg-panel rounded shadow-lg max-w-2xl w-full max-h-[85vh] overflow-auto p-4">
 						<div className="flex items-center justify-between mb-3">
 							<h3 className="font-semibold text-base">{String(detail.data.name ?? detail.data.title ?? detail.id ?? "Record")}</h3>
 							<button type="button" aria-label="Close record details" onClick={() => setDetail(null)} className="text-muted-soft">

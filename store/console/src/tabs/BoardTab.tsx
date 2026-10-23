@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { BoardColumn } from "../lib/types";
 import { formatTime } from "@proagentstore/sdk/ui";
-import { useTieredPolling } from "@proagentstore/sdk/hooks";
+import { useModalLock, useTieredPolling } from "@proagentstore/sdk/hooks";
 import { boardBusy } from "../lib/pollBusy";
 import { statusBadgeClass } from "../lib/statusBadge";
 import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, MessageCircleQuestion } from "lucide-react";
@@ -714,6 +714,8 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 	);
 	const [saving, setSaving] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
+	const panelRef = useRef<HTMLDivElement>(null);
+	useModalLock(panelRef);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -764,7 +766,7 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 
 	return (
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-			<div className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[88dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
+			<div ref={panelRef} role="dialog" aria-modal="true" aria-label="Board columns" className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[88dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
 				<div className="flex items-center justify-between gap-3 mb-1">
 					<h3 className="text-base font-bold flex items-center gap-1.5"><SlidersHorizontal size={16} /> Board columns</h3>
 					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-lg leading-none">✕</button>

@@ -13,6 +13,7 @@ import { resolvePollMs, resolvePollTier, shouldRefreshOnResume, type PollCadence
 export { resolvePollTier, resolvePollMs, shouldRefreshOnResume } from "./poll-cadence.js";
 export type { PollTier, PollCadence, PollSignals } from "./poll-cadence.js";
 
+export { useModalLock } from "./modal-lock.js";
 export { useVoice, type VoiceMode } from "./voice/use-voice.js";
 export { buildTranscribePrompt } from "./voice/prompt.js";
 export { resolveVoiceStatus, type VoiceStatus } from "./voice/convo.js";
