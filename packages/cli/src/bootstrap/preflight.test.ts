@@ -1,5 +1,5 @@
 /** #1320 — an update that cannot finish is refused before anything is fetched, and the machine is left as it was. */
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,7 +47,11 @@ describe("the real checks", () => {
 		expect(d.freeBytes(join(root, "not", "yet", "created"))).toBeGreaterThan(0); // walks up to the nearest existing parent
 	});
 	it("a path it cannot create is not writable", () => {
-		expect(realPreflightDeps().writable("/proc/definitely/not/here")).toBe(false);
+		// Under a regular FILE: creating a folder there fails at once (ENOTDIR) on every platform. (A path under /proc was used first;
+		// a recursive mkdir there can spin forever on Linux, which froze CI.)
+		const file = join(root, "a-file");
+		writeFileSync(file, "x");
+		expect(realPreflightDeps().writable(join(file, "sub"))).toBe(false);
 	});
 });
 
