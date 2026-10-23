@@ -18,6 +18,7 @@ import {
 } from "./process.js";
 import { connectViaRelay } from "./relay.js";
 import { thresholdsCommand } from "./thresholds.js";
+import { alreadyRunningLines, identifyPortOccupant, portCollisionLines, RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../../existing-runner.js";
 import { acquireLock, configDir, holderMessage, releaseLock, UNKNOWN_LOCK_ACCOUNT } from "../../runner-lock.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { CLI_VERSION } from "./process.js";
@@ -104,7 +105,8 @@ export function createRunnerCommand(): Command {
 				const taken = await acquireLock({ account: lockAccount, node: hostname(), machineId: loadMachineIdentity().id || null, version: CLI_VERSION, port: Number(port), runnerToken });
 				if (!taken.ok) {
 					for (const line of taken.lock ? holderMessage(taken.lock, taken.verdict) : ["Another `pags up` holds this machine for this account."]) writeError(line);
-					process.exit(1);
+					// A holder exists, so a runner is already serving here (#1295): not a crash, so not the generic exit 1.
+					process.exit(RUNNER_ALREADY_RUNNING_EXIT_CODE);
 				}
 				lockHeld = { path: taken.path, rsid: taken.lock.rsid, nonce: taken.lock.nonce, launch: taken.lock.launch };
 				// This process reports them in its own heartbeat (#1154) — they used to reach only the runtime's env.
@@ -155,6 +157,17 @@ export function createRunnerCommand(): Command {
 				const result = await deliverCrashReports({ apiBase: pagsApiBase(opts.apiBase), token, account: crashAccount, paths: crashes });
 				if (result.delivered) writeLine(`Delivered ${result.delivered} crash report(s) to ProAgentStore.`);
 			};
+			const reportDeath = (code: number | null, signal: NodeJS.Signals | null) => {
+				const how = signal ? `was killed by ${signal}` : `exited unexpectedly${code !== null ? ` (code ${code})` : ""}`;
+				writeError(`Local browser runtime ${how}. Run \`pags up\` again to reconnect.`);
+				if (crashes) recordChildExit({ paths: crashes, account: crashAccount, build: CLI_VERSION, kind: "runner_exit", what: "the local runtime", code, signal, tail: tail.lines() });
+				const finish = () => process.exit(code ?? 1);
+				const deadline = setTimeout(finish, 5_000);
+				void deliver().catch(() => undefined).finally(() => {
+					clearTimeout(deadline);
+					finish();
+				});
+			};
 			let shuttingDown = false;
 			runner.on("exit", (code, signal) => {
 				if (shuttingDown) return; // we asked it to stop (SIGINT/SIGTERM below)
@@ -167,15 +180,23 @@ export function createRunnerCommand(): Command {
 				// which used to print nothing at all. And the death is RECORDED — the dying runtime ran no
 				// handler of its own, so this is the only process that can — then delivered if the
 				// platform answers within a few seconds, else on the next start.
-				const how = signal ? `was killed by ${signal}` : `exited unexpectedly${code !== null ? ` (code ${code})` : ""}`;
-				writeError(`Local browser runtime ${how}. Run \`pags up\` again to reconnect.`);
-				if (crashes) recordChildExit({ paths: crashes, account: crashAccount, build: CLI_VERSION, kind: "runner_exit", what: "the local runtime", code, signal, tail: tail.lines() });
-				const finish = () => process.exit(code ?? 1);
-				const deadline = setTimeout(finish, 5_000);
-				void deliver().catch(() => undefined).finally(() => {
-					clearTimeout(deadline);
-					finish();
-				});
+				//
+				// Unless the port was TAKEN (#1295): a healthy runner of ours already serves it, which is the machine being connected,
+				// not a crash — said as such, nothing recorded, exit 78 so `pags up` neither reports nor retries. Anything else on the
+				// port is a real failed start and is diagnosed as one.
+				if (tail.lines().some((line) => /EADDRINUSE/.test(line))) {
+					void identifyPortOccupant(Number(port)).then((occupant) => {
+						if (occupant.kind === "pags-runner") {
+							for (const line of alreadyRunningLines(Number(port))) writeLine(line);
+							releaseHeldLock();
+							process.exit(RUNNER_ALREADY_RUNNING_EXIT_CODE);
+						}
+						for (const line of portCollisionLines(Number(port), occupant.detail)) writeError(line);
+						reportDeath(code, signal);
+					});
+					return;
+				}
+				reportDeath(code, signal);
 			});
 
 			const shutdown = () => {

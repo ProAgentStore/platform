@@ -12,6 +12,7 @@ import { processRestartDeps, restartPagsUp, RUNNER_DIED_EXIT_CODE, runnerExitAct
 import { restartUpArgs, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
 import { configDir, holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
 import { crashPaths, deliverCrashReports, recordChildExit } from "../crash-delivery.js";
+import { alreadyRunningLines, RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../existing-runner.js";
 import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
 import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
@@ -234,7 +235,9 @@ export const upCommand = new Command("up")
 				printLogo(CLI_VERSION);
 				for (const line of holderMessage(held.lock, held.verdict)) writeLine(`  ${line}`);
 				writeLine("");
-				process.exit(1);
+				// Not a failure (#1295): a launcher must not start this again, and ends cleanly on this code. An UNATTENDED
+				// start keeps exit 1 — a restart after an update waits for the old runner to let go, and is retried (#1151).
+				process.exit(unattended ? 1 : RUNNER_ALREADY_RUNNING_EXIT_CODE);
 			}
 			const replaced = await replaceHolder(held.lock, { now: opts.now === true });
 			if (!replaced.ok) {
@@ -388,6 +391,14 @@ export const upCommand = new Command("up")
 			if (action === "stop") {
 				clearScreen();
 				writeLine("  Runner stopped (pags down, or replaced by another pags up).");
+				process.exit(0);
+			}
+			// A healthy runner of this account already serves this machine (#1295): said once, nothing recorded or retried.
+			if (action === "already-running") {
+				clearScreen();
+				printLogo(CLI_VERSION);
+				for (const line of alreadyRunningLines()) writeLine(`  ${line}`);
+				writeLine("");
 				process.exit(0);
 			}
 			// It DIED — crashed, OOM-killed, killed by a signal (#896 F1: `code === null`). Record it with its last lines

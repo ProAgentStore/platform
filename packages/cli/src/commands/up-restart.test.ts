@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { relaunchDelayMs, type RestartDeps, restartOwner, restartPagsUp, RUNNER_DIED_EXIT_CODE, runnerExitAction, UP_LAUNCHER_ENV, UP_LAUNCHER_PID_ENV, upRestartMode } from "./up-restart.js";
+import { RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../existing-runner.js";
 import { RESTART_COMMAND_ENV, RUNNER_RESTART_EXIT_CODE, SERVICE_ENV } from "./runner/self-update.js";
 
 describe("upRestartMode (#1036)", () => {
@@ -64,6 +65,15 @@ describe("restartPagsUp (#1036)", () => {
 		const [file, argv, options] = spawnSyncFn.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }];
 		expect([file, argv]).toEqual(["/node", ["/pags", "up", "--headless"]]);
 		expect(options.env).toMatchObject({ A: "1", PAGS_NO_PROMPT: "1", [UP_LAUNCHER_ENV]: "1", [UP_LAUNCHER_PID_ENV]: "4242" });
+		expect(d.exit).toHaveBeenCalledWith(0);
+	});
+
+	it("#1295: a start that found a healthy runner already serving here ends the launcher cleanly — no retry storm", () => {
+		const spawnSyncFn = vi.fn(() => ({ status: RUNNER_ALREADY_RUNNING_EXIT_CODE }));
+		const d = deps({ env: { PAGS_NO_PROMPT: "1" }, spawnSync: spawnSyncFn as never });
+		restartPagsUp(["up"], {}, d, { initial: true });
+		expect(spawnSyncFn).toHaveBeenCalledTimes(1);
+		expect(d.sleep).not.toHaveBeenCalled();
 		expect(d.exit).toHaveBeenCalledWith(0);
 	});
 
@@ -185,6 +195,7 @@ describe("what a runner's exit means, and who restarts it (#1154)", () => {
 		expect(runnerExitAction(1, false)).toBe("died");
 		expect(runnerExitAction(null, false)).toBe("died"); // a signal
 		expect(runnerExitAction(null, true)).toBe("ignore");
+		expect(runnerExitAction(RUNNER_ALREADY_RUNNING_EXIT_CODE, false)).toBe("already-running"); // #1295: not a crash
 	});
 
 	it("reports the service, a live launcher, or nothing", () => {

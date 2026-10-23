@@ -83,7 +83,7 @@ describe("a bare `runner connect` takes the lock (#1180)", () => {
 	});
 
 	it("a refused connect prints who holds it and exits non-zero, before anything is spawned", () => {
-		expect(code).toMatch(/holderMessage\(taken\.lock, taken\.verdict\)[\s\S]{0,200}process\.exit\(1\)/);
+		expect(code).toMatch(/holderMessage\(taken\.lock, taken\.verdict\)[\s\S]{0,300}process\.exit\(RUNNER_ALREADY_RUNNING_EXIT_CODE\)/); // #1295: non-zero, but not the crash code
 		expect(code.indexOf("acquireLock(")).toBeLessThan(code.indexOf("spawn(spec.command"));
 	});
 });

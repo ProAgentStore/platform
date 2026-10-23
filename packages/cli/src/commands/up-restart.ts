@@ -29,6 +29,7 @@
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from "node:child_process";
 import { logUpdateStep } from "../bootstrap/update-log.js";
 import { pidAlive } from "../runner-lock.js";
+import { RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../existing-runner.js";
 import { leaveForRestart, RESTART_COMMAND_ENV, RUNNER_RESTART_EXIT_CODE, SERVICE_ENV } from "./runner/self-update.js";
 
 /** Set on a `pags up` that a {@link restartPagsUp} launcher started — it restarts by exiting to it. */
@@ -58,11 +59,13 @@ export function upRestartMode(env: NodeJS.ProcessEnv, parent: { pid: number; ali
  *   - `restart`: 75, an update or `runner_restart` asked for a start on the new release;
  *   - `ignore`: this `pags up` is stopping it itself (`q`, Ctrl-C);
  *   - `stop`: 0, a deliberate stop from outside (`pags down`, `--replace`) — leave cleanly, nobody restarts it;
+ *   - `already-running`: 78, a healthy runner of this account is already serving here (#1295) — not a crash: no report, no retry;
  *   - `died`: anything else (a crash, OOM, a signal) — hand it to the restart owner with {@link RUNNER_DIED_EXIT_CODE}.
  */
-export function runnerExitAction(code: number | null, stopping: boolean): "restart" | "ignore" | "stop" | "died" {
+export function runnerExitAction(code: number | null, stopping: boolean): "restart" | "ignore" | "stop" | "already-running" | "died" {
 	if (code === RUNNER_RESTART_EXIT_CODE) return "restart";
 	if (stopping) return "ignore";
+	if (code === RUNNER_ALREADY_RUNNING_EXIT_CODE) return "already-running";
 	return code === 0 ? "stop" : "died";
 }
 
@@ -166,6 +169,11 @@ export function restartPagsUp(args: string[], extraEnv: NodeJS.ProcessEnv, deps:
 		if (r.status === RUNNER_RESTART_EXIT_CODE) {
 			failures = 0;
 			continue;
+		}
+		// A healthy runner already serves this machine (#1295): nothing failed, so nothing is started again.
+		if (!r.error && r.status === RUNNER_ALREADY_RUNNING_EXIT_CODE) {
+			deps.exit(0);
+			return;
 		}
 		// A clean exit, or the person at the keyboard stopping it (Ctrl-C reaches the whole foreground group).
 		if (!r.error && (r.status === 0 || r.signal === "SIGINT")) {
