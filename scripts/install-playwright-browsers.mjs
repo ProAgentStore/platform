@@ -24,6 +24,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { runBoundedCommand, terminateInstallerTree } from "./lib/installer-process-tree.mjs";
+import { useHostedUbuntuArchive } from "./lib/installer-ubuntu-mirror.mjs";
 
 export const INSTALL_COMMAND = ["pnpm", ["exec", "playwright", "install", "--with-deps", "chromium", "webkit"]];
 export const ATTEMPT_TIMEOUT_MS = 480_000;
@@ -157,7 +158,10 @@ async function main() {
 		log: (line) => console.log(line),
 		summary: (md) => process.env.GITHUB_STEP_SUMMARY && appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`),
 		diagnose: () => runDiagnostics(shell),
-		heal: () => shell("sudo dpkg --configure -a 2>&1"),
+		heal: async () => {
+			await runBoundedCommand("sudo", ["-n", "dpkg", "--configure", "-a"], { rejectNonzero: true });
+			await useHostedUbuntuArchive();
+		},
 		now: Date.now,
 		timers: { setTimeout, clearTimeout, setInterval, clearInterval },
 		timeoutMs: ATTEMPT_TIMEOUT_MS,

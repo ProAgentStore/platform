@@ -10,6 +10,11 @@ describe("installer-owned process termination (#1333)", () => {
 		expect(output).toContain("stalled diagnostic");
 		expect(output).toContain("owned descendants terminated");
 	});
+	it("delivers configuration input without a shell and refuses failed or timed-out repairs", async () => {
+		expect(await runBoundedCommand(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], { input: "public mirror configuration", rejectNonzero: true })).toBe("public mirror configuration");
+		await expect(runBoundedCommand(process.execPath, ["-e", "process.exit(2)"], { rejectNonzero: true })).rejects.toThrow("exit 2");
+		await expect(runBoundedCommand(process.execPath, ["-e", "setInterval(()=>{},1000)"], { timeoutMs: 100, rejectNonzero: true })).rejects.toThrow("timed out");
+	});
 	it("follows ancestry across sessions without selecting an unrelated package manager", () => {
 		expect(installerDescendants(100, "1 0\n100 1\n200 100\n300 200\n400 1\n500 400\n")).toEqual([100, 200, 300]);
 		const signals = [];

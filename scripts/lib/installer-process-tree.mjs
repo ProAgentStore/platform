@@ -66,9 +66,9 @@ export function terminateInstallerTree(child, deps = {}) {
 }
 
 /** Bound diagnostic/repair shells too: shell-only timeout signals leave descendants holding pipes. */
-export function runBoundedCommand(command, args, { timeoutMs = 15000 } = {}) {
+export function runBoundedCommand(command, args, { timeoutMs = 15000, input, rejectNonzero = false } = {}) {
 	return new Promise((resolve, reject) => {
-		const child = spawn(command, args, { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(command, args, { detached: true, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
 		let output = "";
 		let finished = false;
 		const finish = (note = "", error = false) => {
@@ -81,7 +81,7 @@ export function runBoundedCommand(command, args, { timeoutMs = 15000 } = {}) {
 		const timer = setTimeout(() => {
 			try {
 				terminateInstallerTree(child);
-				finish(`(timed out after ${timeoutMs}ms; owned descendants terminated)`);
+				finish(`(timed out after ${timeoutMs}ms; owned descendants terminated)`, rejectNonzero);
 			} catch (error) {
 				child.unref();
 				child.stdout.destroy();
@@ -93,6 +93,10 @@ export function runBoundedCommand(command, args, { timeoutMs = 15000 } = {}) {
 		child.stdout.on("data", collect);
 		child.stderr.on("data", collect);
 		child.on("error", (error) => finish(`(could not start: ${error.message})`));
-		child.on("close", (code) => finish(code && !output ? `(exit ${code})` : ""));
+		child.on("close", (code) => finish(code && (!output || rejectNonzero) ? `(exit ${code})` : "", rejectNonzero && code !== 0));
+		if (input !== undefined) {
+			child.stdin.on("error", (error) => finish(`(stdin failed: ${error.message})`, true));
+			child.stdin.end(input);
+		}
 	});
 }
