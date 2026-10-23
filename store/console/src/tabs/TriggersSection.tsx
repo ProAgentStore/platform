@@ -650,8 +650,10 @@ export default function TriggersSection({
 																{counts.errors.slice(0, 5).map((err) => <li key={err} className="break-words">{err}</li>)}
 															</ul>
 														) : null}
+														{/* Flows in the tab (#1305): the payload is already bounded by truncatePayload, so a second capped box with its
+														    own vertical scrollbar only nested a scroller inside the tab that scrolls. */}
 														{open && (
-															<pre className="mt-1 text-2xs bg-panel border border-line rounded p-2 overflow-x-auto max-h-56 overflow-y-auto">
+															<pre className="mt-1 text-2xs bg-panel border border-line rounded p-2 overflow-x-auto">
 																{truncatePayload(event.payload)}
 															</pre>
 														)}
