@@ -22,7 +22,9 @@
  * Gates: no provider-account hold (#1314: the owner's key failed for credit/credentials and has not
  * succeeded since — replacement runs would only fail the same way, so none start until it recovers,
  * and the owner is told once), the instance active, no question waiting on the owner, the Pro gate and the daily budget
- * (`queueGate`, shared with triage), and a per-instance daily cap on auto-picked starts. When nothing
+ * (`queueGate`, shared with triage), and a per-instance daily cap on auto-picked starts. The cap and the
+ * issue are reserved by ONE conditional insert before anything is enqueued (#1315), so overlapping wakes
+ * (the timer sweep and a run's terminal step) cannot queue the same issue twice or spend one allowance twice. When nothing
  * qualifies, the owner is told once — not on every empty queue.
  */
 import type { Env } from "../types.js";
@@ -251,6 +253,69 @@ async function boardPositions(env: Env, iid: string): Promise<Map<string, number
 	return new Map((results ?? []).map((r) => [r.job_key, r.position] as const));
 }
 
+/** A reservation older than this whose objective was never enqueued is a crash's leftover (#1315). */
+export const RESERVATION_TTL_MS = 2 * 60_000;
+
+/**
+ * Reserve the allowance and the issue in ONE statement (#1315): the `started` row is inserted only if the
+ * rolling-day cap still has room, no live reservation names this issue, and no queued or running run does.
+ * One statement is one atomic step in D1, so of any number of overlapping wakes exactly one gets a row.
+ */
+async function reserveStart(env: Env, iid: string, uid: string, repo: string, issue: number, detail: string, maxPerDay: number, now: number): Promise<string | null> {
+	const id = crypto.randomUUID();
+	const res = await env.DB.prepare(
+		`INSERT INTO auto_pickup_log (id, instance_id, user_id, repo, issue_number, outcome, detail, created_at, reserved)
+		 SELECT ?1, ?2, ?3, ?4, ?5, 'started', ?6, ?7, 1
+		  WHERE (SELECT COUNT(*) FROM auto_pickup_log WHERE instance_id = ?2 AND outcome = 'started' AND created_at > ?8) < ?9
+		    AND NOT EXISTS (SELECT 1 FROM auto_pickup_log WHERE instance_id = ?2 AND repo = ?4 AND issue_number = ?5 AND outcome = 'started' AND reserved = 1 AND created_at > ?10)
+		    AND NOT EXISTS (SELECT 1 FROM instance_objective_queue q WHERE q.instance_id = ?2 AND q.status = 'pending'
+		                      AND json_extract(q.metadata, '$.autoPickup.repo') = ?4 AND json_extract(q.metadata, '$.autoPickup.issue') = ?5)
+		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r JOIN instance_objective_queue q ON q.id = r.queue_entry_id
+		                     WHERE r.instance_id = ?2 AND r.status = 'running'
+		                       AND json_extract(q.metadata, '$.autoPickup.repo') = ?4 AND json_extract(q.metadata, '$.autoPickup.issue') = ?5)`,
+	)
+		.bind(id, iid, uid, repo, issue, detail, now, now - 86_400_000, maxPerDay, now - RESERVATION_TTL_MS)
+		.run();
+	return (res.meta?.changes ?? 0) > 0 ? id : null;
+}
+
+/** The objective is queued: the reservation becomes a complete start, remembering its entry. */
+async function confirmReservation(env: Env, reservationId: string, entryId: string): Promise<void> {
+	await env.DB.prepare("UPDATE auto_pickup_log SET reserved = 0, entry_id = ?2 WHERE id = ?1").bind(reservationId, entryId).run();
+}
+
+/** Enqueue failed: give the allowance back. */
+async function releaseReservation(env: Env, reservationId: string): Promise<void> {
+	await env.DB.prepare("DELETE FROM auto_pickup_log WHERE id = ?1 AND reserved = 1").bind(reservationId).run();
+}
+
+/**
+ * Settle reservations a crash left between reserving and enqueueing (#1315): one whose objective did get
+ * queued (the entry is found by its issue, created after the reservation) is completed, never queued a
+ * second time; one with no entry is deleted so its allowance is not leaked. Only reservations older than
+ * {@link RESERVATION_TTL_MS} are touched — a younger one belongs to a wake still running. Never throws.
+ */
+export async function recoverReservations(env: Env, iid: string, now = Date.now()): Promise<number> {
+	let settled = 0;
+	try {
+		const { results } = await env.DB.prepare("SELECT id, repo, issue_number, created_at FROM auto_pickup_log WHERE instance_id = ?1 AND reserved = 1 AND created_at <= ?2").bind(iid, now - RESERVATION_TTL_MS).all<{ id: string; repo: string; issue_number: number; created_at: number }>();
+		for (const r of results ?? []) {
+			const entry = await env.DB.prepare(
+				`SELECT id FROM instance_objective_queue WHERE instance_id = ?1 AND created_at >= ?2
+				    AND json_extract(metadata, '$.autoPickup.repo') = ?3 AND json_extract(metadata, '$.autoPickup.issue') = ?4 ORDER BY created_at LIMIT 1`,
+			)
+				.bind(iid, r.created_at, r.repo, r.issue_number)
+				.first<{ id: string }>();
+			if (entry) await confirmReservation(env, r.id, entry.id);
+			else await releaseReservation(env, r.id);
+			settled++;
+		}
+	} catch {
+		// The next wake looks again; a failed recovery must not stop this one.
+	}
+	return settled;
+}
+
 /**
  * Start the coder's next eligible issue, if its queue is empty and auto-pickup is on. Never throws:
  * it runs on a finished run's terminal path, and every refusal is a reason.
@@ -259,6 +324,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 	try {
 		const settings = await readAutoPickup(env, iid, uid);
 		if (!settings?.enabled) return { started: false, reason: "auto-pickup is off for this instance" };
+		await recoverReservations(env, iid, now);
 		if (!(await coderIsIdle(env, iid))) {
 			const reason = "the coder still has queued or running work";
 			await logSkip(env, iid, uid, "skipped_busy", reason, now);
@@ -317,8 +383,21 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		}
 
 		const { repo, repoId, issue } = verdict.pick;
-		const entry = await enqueueObjective(env, { instanceId: iid, repoId, userId: uid, objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations, metadata: JSON.stringify({ autoPickup: { repo, issue: issue.number } }) });
-		await log(env, iid, uid, "started", `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}`, repo, issue.number, now);
+		// Reserve the allowance and the issue before enqueueing (#1315): the wake that loses a race starts nothing.
+		const reservation = await reserveStart(env, iid, uid, repo, issue.number, `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}`, settings.maxPerDay, now);
+		if (!reservation) {
+			const reason = `issue #${issue.number} was reserved by another wake, or the daily cap of ${settings.maxPerDay} was reached meanwhile`;
+			await logSkip(env, iid, uid, "skipped_busy", reason, now);
+			return { started: false, reason };
+		}
+		let entry: Awaited<ReturnType<typeof enqueueObjective>>;
+		try {
+			entry = await enqueueObjective(env, { instanceId: iid, repoId, userId: uid, objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations, metadata: JSON.stringify({ autoPickup: { repo, issue: issue.number } }) });
+		} catch (e) {
+			await releaseReservation(env, reservation).catch(() => undefined);
+			throw e;
+		}
+		await confirmReservation(env, reservation, entry.id);
 		await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(repoId);
 		return { started: true, repo, issue: issue.number, entryId: entry.id };
 	} catch (e) {

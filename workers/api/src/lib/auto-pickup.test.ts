@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { AUTO_PICKUP_DEFAULTS, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
+import { AUTO_PICKUP_DEFAULTS, RESERVATION_TTL_MS, recoverReservations, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
 import { paidTokensSince } from "./usage.js";
 import { setCoderBrain } from "./coder-brain.js";
 import type { IssueSummary } from "./github-issues.js";
@@ -92,6 +92,7 @@ describe("the wake, on the real schema (#1233)", () => {
 		notify: async (_t, body) => void log.notes.push(body),
 		startQueued: async (repoId) => void log.started.push(repoId),
 	});
+	const drain = () => d1.exec("UPDATE instance_objective_queue SET status = 'cancelled' WHERE status = 'pending'");
 	const queued = () => d1.sqlite.prepare("SELECT objective, max_iterations, metadata FROM instance_objective_queue WHERE status = 'pending'").all() as Array<{ objective: string; max_iterations: number; metadata: string }>;
 
 	beforeEach(async () => {
@@ -165,6 +166,108 @@ describe("the wake, on the real schema (#1233)", () => {
 		expect(queued()).toEqual([]);
 	});
 
+	describe("overlapping wakes reserve before they enqueue (#1315)", () => {
+		const startedRows = () => d1.sqlite.prepare("SELECT reserved, entry_id FROM auto_pickup_log WHERE outcome = 'started'").all() as Array<{ reserved: number; entry_id: string | null }>;
+		const pendingFor = (iid: string) => d1.sqlite.prepare("SELECT id FROM instance_objective_queue WHERE instance_id = ? AND status = 'pending'").all(iid) as Array<{ id: string }>;
+
+		it("two simultaneous wakes at maxPerDay 1 queue the issue once and spend the allowance once", async () => {
+			open = [issue(9, ["P1"])];
+			await setAutoPickup(env, "coder", "u1", { maxPerDay: 1 });
+			const results = await Promise.all([runAutoPickup(env, "coder", "u1", deps()), runAutoPickup(env, "coder", "u1", deps())]);
+			expect(results.filter((r) => r.started)).toHaveLength(1);
+			expect(queued()).toHaveLength(1);
+			expect(startedRows()).toEqual([{ reserved: 0, entry_id: expect.stringMatching(/^objq-/) }]);
+			expect(log.started).toHaveLength(1);
+			expect(results.find((r) => !r.started)).toMatchObject({ reason: expect.stringMatching(/reserved by another wake|daily cap|queued or running/) });
+		});
+
+		it("many overlapping wakes (the timer and terminal wakes together) still queue the issue once", async () => {
+			open = [issue(9, ["P1"])];
+			const results = await Promise.all(Array.from({ length: 6 }, () => runAutoPickup(env, "coder", "u1", deps())));
+			expect(results.filter((r) => r.started)).toHaveLength(1);
+			expect(queued()).toHaveLength(1);
+			expect(startedRows()).toHaveLength(1);
+		});
+
+		it("the cap holds at its selected size under overlap, and a later wake after the queue drains stays capped", async () => {
+			open = [issue(9, ["P1"])];
+			await setAutoPickup(env, "coder", "u1", { maxPerDay: 2 });
+			await Promise.all([runAutoPickup(env, "coder", "u1", deps()), runAutoPickup(env, "coder", "u1", deps())]);
+			drain();
+			await runAutoPickup(env, "coder", "u1", deps());
+			drain();
+			expect(startedRows()).toHaveLength(2);
+			expect(await runAutoPickup(env, "coder", "u1", deps())).toEqual({ started: false, reason: "the daily cap of 2 auto-picked run(s) is reached" });
+		});
+
+		it("independent instances each start their own work in parallel", async () => {
+			d1.exec("INSERT INTO agent_instances (id, agent_id, user_id, status, config) SELECT 'coder2', agent_id, user_id, status, config FROM agent_instances WHERE id = 'coder'");
+			d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo) VALUES ('r2', 'coder2', 'u1', 'app', 'acme/app')`);
+			await setAutoPickup(env, "coder2", "u1", { enabled: true, maxPerDay: 1 });
+			await setAutoPickup(env, "coder", "u1", { maxPerDay: 1 });
+			open = [issue(9, ["P1"])];
+			const results = await Promise.all([runAutoPickup(env, "coder", "u1", deps()), runAutoPickup(env, "coder2", "u1", deps()), runAutoPickup(env, "coder", "u1", deps()), runAutoPickup(env, "coder2", "u1", deps())]);
+			expect(results.filter((r) => r.started)).toHaveLength(2);
+			expect(pendingFor("coder")).toHaveLength(1);
+			expect(pendingFor("coder2")).toHaveLength(1);
+		});
+
+		it("an enqueue that fails gives the allowance back, so a retry at cap 1 still starts", async () => {
+			await setAutoPickup(env, "coder", "u1", { maxPerDay: 1 });
+			open = [issue(9, ["P1"])];
+			d1.exec("CREATE TRIGGER boom BEFORE INSERT ON instance_objective_queue BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+			expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: false, reason: expect.stringMatching(/auto-pickup failed.*disk full/) });
+			expect(startedRows()).toEqual([]);
+			d1.exec("DROP TRIGGER boom");
+			expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
+			expect(startedRows()).toHaveLength(1);
+		});
+
+		const orphan = (ageMs: number, now: number) =>
+			d1.exec(`INSERT INTO auto_pickup_log (id, instance_id, user_id, repo, issue_number, outcome, detail, created_at, reserved) VALUES ('orph', 'coder', 'u1', 'acme/app', 9, 'started', 'issue #9', ${now - ageMs}, 1)`);
+
+		it("a reservation a crash left before enqueueing is recovered without leaking the allowance", async () => {
+			const now = Date.now();
+			open = [issue(9, ["P1"])];
+			await setAutoPickup(env, "coder", "u1", { maxPerDay: 1 });
+			orphan(RESERVATION_TTL_MS + 1000, now);
+			expect(await runAutoPickup(env, "coder", "u1", deps(), now)).toMatchObject({ started: true, issue: 9 });
+			expect(queued()).toHaveLength(1);
+			expect(startedRows()).toHaveLength(1);
+		});
+
+		it("a reservation a crash left AFTER enqueueing is linked to its entry, never queued twice", async () => {
+			const now = Date.now();
+			await runAutoPickup(env, "coder", "u1", deps(), now - RESERVATION_TTL_MS - 5000);
+			const [entry] = queued();
+			d1.exec("UPDATE auto_pickup_log SET reserved = 1, entry_id = NULL WHERE outcome = 'started'"); // the crash: queued, never confirmed
+			expect(await recoverReservations(env, "coder", now)).toBe(1);
+			expect(startedRows()).toEqual([{ reserved: 0, entry_id: expect.stringMatching(/^objq-/) }]);
+			expect(queued()).toEqual([entry]);
+			expect(queued()).toHaveLength(1);
+		});
+
+		it("a young reservation belongs to a wake still running: it blocks the issue and is left alone", async () => {
+			const now = Date.now();
+			open = [issue(9, ["P1"])];
+			orphan(1000, now);
+			expect(await recoverReservations(env, "coder", now)).toBe(0);
+			const r = await runAutoPickup(env, "coder", "u1", deps(), now);
+			expect(r.started).toBe(false);
+			expect(queued()).toEqual([]);
+			expect(startedRows()).toHaveLength(1);
+		});
+
+		it("queue ordering is unchanged: the next wake still picks by priority after the first drains", async () => {
+			open = [issue(3, ["P3"]), issue(9, ["P1"])];
+			await Promise.all([runAutoPickup(env, "coder", "u1", deps()), runAutoPickup(env, "coder", "u1", deps())]);
+			expect(queued().map((q) => JSON.parse(q.metadata).autoPickup.issue)).toEqual([9]);
+			drain();
+			// Issue 9's run is over and still open (no human closed it), so it is a candidate again; priority still wins.
+			expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
+		});
+	});
+
 	describe("provider-credit and owner-action holds (#1314)", () => {
 		const creditFailure = (at: string) =>
 			d1.exec(
@@ -175,7 +278,6 @@ describe("the wake, on the real schema (#1233)", () => {
 			d1.exec(`INSERT OR REPLACE INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, last_used_at) VALUES ('u1', 'anthropic', 'a', x'00', x'00', x'00', 'a', '', '${at}')`);
 		const endRun = (id: string, entry: string, status: string, stopReason: string) =>
 			d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, stop_reason, max_iterations, started_at, queue_entry_id) VALUES ('${id}', 'u1', 'coder', 'x', '${status}', '${stopReason}', 10, 1, '${entry}')`);
-		const drain = () => d1.exec("UPDATE instance_objective_queue SET status = 'cancelled' WHERE status = 'pending'");
 
 		it("repeated wakes after a credit failure start nothing and notify once; recovery lifts the hold without a lockout", async () => {
 			creditFailure("2026-10-23 01:00:00");
