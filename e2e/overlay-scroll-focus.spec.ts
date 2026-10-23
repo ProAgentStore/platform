@@ -161,7 +161,7 @@ test.describe("coder dialogs (desktop and mobile)", () => {
 			{ name: "Repo settings", opener: "Repo settings" as string | RegExp },
 			{ name: "CLI engines", opener: /engines/i },
 		]) {
-			test(`${dialogCase.name} (${viewport.name}) locks the repo list and gives focus back`, async ({ page }) => {
+			test(`mobile — ${dialogCase.name} (${viewport.name}) locks the repo list and gives focus back`, async ({ page }) => {
 				await page.setViewportSize({ width: viewport.width, height: viewport.height });
 				const { writes } = await mock(page, [CODER]);
 				await page.route(`${API}/v1/instances/inst-coder/**`, async (route) => {

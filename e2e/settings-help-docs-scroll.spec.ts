@@ -50,7 +50,7 @@ for (const size of [
 	{ name: "phone 390×844", width: 390, height: 844 },
 	{ name: "desktop 1280×800", width: 1280, height: 800 },
 ]) {
-	test(`${size.name} — neither help document has a scrollbar of its own; each is shown whole`, async ({ page }) => {
+	test(`mobile — ${size.name} — neither help document has a scrollbar of its own; each is shown whole`, async ({ page }) => {
 		await open(page, size);
 		expect(await docScrollers(page)).toEqual([]); // before: the manual (238px cap) and the guide (446px cap)
 		const manual = page.getByTestId("operator-manual-inherited").locator("pre");
@@ -63,13 +63,13 @@ for (const size of [
 		expect(g.scroll).toBeLessThanOrEqual(g.client + 1);
 		await expect(manual).toContainText("Manual line 100:");
 		await expect(guide).toContainText("Guide line 100:");
+		expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 	});
 }
 
-test("the page does not overflow sideways, the full guide text is copied, and Refresh and Copy still work", async ({ page, context }) => {
+test("the full guide text is copied, and Refresh and Copy still work", async ({ page, context }) => {
 	await context.grantPermissions(["clipboard-read", "clipboard-write"]);
 	await open(page, { width: 390, height: 844 });
-	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 	await expect(page.getByRole("button", { name: "Refresh" }).first()).toBeVisible();
 	await page.getByRole("button", { name: "Copy", exact: true }).click();
 	await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();

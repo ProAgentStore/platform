@@ -46,7 +46,7 @@ for (const size of [
 	{ name: "phone 390×844", width: 390, height: 844 },
 	{ name: "desktop 1280×800", width: 1280, height: 800 },
 ]) {
-	test(`${size.name} — the expanded payload has no vertical scrollbar of its own and is shown whole`, async ({ page }) => {
+	test(`mobile — ${size.name} — the expanded payload has no vertical scrollbar of its own and is shown whole`, async ({ page }) => {
 		await open(page, size);
 		const pre = page.locator("pre").filter({ hasText: "field23" });
 		const box = await pre.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight, overflowY: getComputedStyle(el).overflowY }));

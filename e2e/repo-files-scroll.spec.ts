@@ -43,7 +43,7 @@ for (const size of [
 	{ name: "phone 390×844", width: 390, height: 844 },
 	{ name: "desktop 1280×800", width: 1280, height: 800 },
 ]) {
-	test(`${size.name} — the file list has no vertical scrollbar of its own; all 100 paths are on the page`, async ({ page }) => {
+	test(`mobile — ${size.name} — the file list has no vertical scrollbar of its own; all 100 paths are on the page`, async ({ page }) => {
 		await open(page, size);
 		const list = page.locator("div.font-mono").filter({ hasText: "src/module-000/index.ts" });
 		const box = await list.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight, overflowY: getComputedStyle(el).overflowY }));
