@@ -481,22 +481,29 @@ export default function AgentDetail() {
 		{ id: "ops", label: "Ops" },
 	];
 
+	// Chat owns ONE vertical scroll (#1302): the page fills the area under the console header and the transcript is
+	// the only thing that scrolls, so the header, tabs and composer are measured, not guessed. Every other tab
+	// is a normal page that scrolls in the console's <main>.
+	const chatTab = tab === "chat";
+	// On a short screen (landscape phone) the back link and description go, so the transcript keeps a usable height.
+	const shortHide = chatTab ? " [@media(max-height:520px)]:hidden" : "";
+
 	return (
-		<Page>
-			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink"><ArrowLeft size={14} /> Back</button>
+		<Page className={chatTab ? "flex-1 min-h-0 flex flex-col" : ""}>
+			<button type="button" onClick={() => navigate("/agents")} className={`text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink self-start shrink-0${shortHide}`}><ArrowLeft size={14} /> Back</button>
 
 			{/* Header */}
-			<div className="flex items-start gap-4 mb-4">
+			<div className={`flex items-start gap-4 mb-4 shrink-0${chatTab ? " [@media(max-height:520px)]:mb-2" : ""}`}>
 				<div className="w-[52px] h-[52px] rounded-[14px] flex items-center justify-center text-xl shrink-0 shadow-lg" style={{ background: agent.icon_bg || "#7c3aed" }}><Zap size={22} className="text-white" /></div>
-				<div>
-					<h2 className="font-display text-xl font-bold">{agent.name}</h2>
-					<div className="text-xs text-muted">{agent.slug}</div>
-					<div className="text-sm text-muted mt-1">{agent.description}</div>
+				<div className="min-w-0">
+					<h2 className={`font-display text-xl font-bold break-words${chatTab ? " line-clamp-2" : ""}`}>{agent.name}</h2>
+					<div className="text-xs text-muted break-all">{agent.slug}</div>
+					<div className={`text-sm text-muted mt-1 break-words${chatTab ? " line-clamp-2 [@media(max-height:520px)]:hidden" : ""}`}>{agent.description}</div>
 				</div>
 			</div>
 
 			{/* Tabs */}
-			<div className="flex gap-0 border-b border-line mb-4 overflow-x-auto">
+			<div className={`flex gap-0 border-b border-line mb-4 overflow-x-auto shrink-0${chatTab ? " [@media(max-height:520px)]:mb-1" : ""}`}>
 				{allTabs.map(t => (
 					<button key={t.id} type="button" onClick={() => setTab(t.id)}
 						className={`px-3 py-2 text-sm font-bold uppercase tracking-wide border-b-2 whitespace-nowrap transition-all ${tab === t.id ? "text-accent border-accent" : "text-muted border-transparent hover:text-ink"}`}
@@ -504,11 +511,11 @@ export default function AgentDetail() {
 				))}
 			</div>
 
-			{dataErr && <div className="mb-3"><LoadFailed compact what={dataErr.what} detail={dataErr.detail} onRetry={reloadTab} testId="agent-data-load-failed" /></div>}
+			{dataErr && <div className="mb-3 shrink-0"><LoadFailed compact what={dataErr.what} detail={dataErr.detail} onRetry={reloadTab} testId="agent-data-load-failed" /></div>}
 			{/* Chat */}
 			{tab === "chat" && (
-				<div className="flex flex-col" style={{ height: "calc(100dvh - 320px)", minHeight: 300 }}>
-					<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
+				<div className="flex flex-col flex-1 min-h-0" data-testid="agent-chat">
+					<div ref={chatRef} data-testid="agent-chat-transcript" className="flex-1 min-h-[120px] overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
 						{messages.map((m) => (
 							<div key={m.id || `${m.role}:${m.createdAt || ""}:${m.content.slice(0, 80)}`} className={`max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : m.role === "system" ? "bg-warning-soft text-warning self-center rounded-full px-4 py-1.5 text-xs border border-warning-line" : "bg-panel border border-line self-start rounded-bl-sm"}`}>
 								{m.role === "assistant" ? (
