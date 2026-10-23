@@ -88,7 +88,7 @@ export default function SessionDetail() {
 								<span className="text-accent">{e.type}</span>
 								<span className="ml-auto">{e.createdAt?.slice(0, 16)}</span>
 							</div>
-							<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-56 overflow-y-auto font-mono text-muted">{e.content}</pre>
+							<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono text-muted">{e.content}</pre>
 						</div>
 					))
 				)}

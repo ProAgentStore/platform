@@ -131,7 +131,7 @@ function ContextBlock({ context, label }: { context: string; label?: string }) {
 	return (
 		<div className="mt-1">
 			{label && <div className="text-2xs uppercase tracking-wide text-muted-soft">{label}</div>}
-			<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto font-mono text-muted">{pretty}</pre>
+			<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono text-muted">{pretty}</pre>
 		</div>
 	);
 }

@@ -121,5 +121,5 @@ function TraceRow({ e }: { e: TraceEvent }) {
 function ContextBlock({ context }: { context: string }) {
 	let pretty = context;
 	try { pretty = JSON.stringify(JSON.parse(context), null, 2); } catch { /* raw */ }
-	return <pre className="text-xs bg-paper border border-line rounded p-2 mt-1 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto font-mono text-muted">{pretty}</pre>;
+	return <pre className="text-xs bg-paper border border-line rounded p-2 mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-muted">{pretty}</pre>;
 }

@@ -69,7 +69,7 @@ export default function Terminals() {
 								<span className="ml-auto">{s.updatedAt?.slice(0, 16)}</span>
 							</div>
 							{s.terminalTail ? (
-								<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-56 overflow-y-auto font-mono text-muted">{s.terminalTail.split("\n").slice(-20).join("\n")}</pre>
+								<pre className="text-xs bg-paper border border-line rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono text-muted">{s.terminalTail.split("\n").slice(-20).join("\n")}</pre>
 							) : (
 								<div className="text-xs text-muted-soft">no terminal output captured</div>
 							)}
