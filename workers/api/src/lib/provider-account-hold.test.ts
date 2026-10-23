@@ -35,7 +35,7 @@ beforeEach(async () => {
 	notify.mockReset().mockResolvedValue(undefined);
 	await key(); await setAutoPickup(env, "coder", "u1", { enabled: true, maxPerDay: 100 });
 });
-afterEach(() => d1.close());
+afterEach(() => { d1.close(); vi.unstubAllGlobals(); });
 
 describe("provider and credential scoping", () => {
 	it("credit/auth holds survive repeated terminal/cron wakes; one notice; verified recovery admits again", async () => {
@@ -94,7 +94,29 @@ describe("provider and credential scoping", () => {
 		await observeProviderAccount(env, "u1", "cloudflare", CF, "provider_credentials");
 		expect(await automaticProviderHold(env, "coder", "u1")).toMatchObject({ provider: "cloudflare" });
 		d1.exec("UPDATE agent_instances SET config=json_set(config,'$.pilot.model','claude-haiku-5-5')");
-		expect(await selectedProviderAccount(env, "coder", "u1")).toBeNull();
+		await expect(selectedProviderAccount(env, "coder", "u1")).rejects.toThrow(/requires an Anthropic API key/);
+	});
+
+	it.each(["cloudflare-only", "no-keys"] as const)("an explicit Haiku Pilot with %s waits before automatic admission or a pending queue claim", async (availability) => {
+		if (availability === "cloudflare-only") await key("cloudflare", JSON.stringify(CF));
+		d1.exec("DELETE FROM user_api_keys WHERE provider='anthropic'");
+		d1.exec("UPDATE agents SET config = '{\"capabilities\":{\"workflow\":\"CODING_SESSION\",\"surfaces\":[\"coding\"],\"runtime\":\"coding\"}}'");
+		d1.exec("UPDATE agent_instances SET config=json_set(config,'$.pilot.model','claude-haiku-5-5')");
+		const fetch = vi.fn(async () => { throw new Error("A provider must not be probed by admission"); }); vi.stubGlobal("fetch", fetch);
+		const list = vi.fn(async () => ({ issues: [ISSUE], unreadable: false }));
+		for (let i = 0; i < 3; i++) expect(await runAutoPickup(env, "coder", "u1", { listOpenIssues: list, startQueued: async () => start() }))
+			.toMatchObject({ started: false, reason: expect.stringContaining("requires an Anthropic API key") });
+		expect(list).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+		expect(entries()).toEqual([]);
+		expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM auto_pickup_log WHERE outcome='started'").get()).toEqual({ n: 0 });
+		expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM auto_pickup_admissions").get()).toEqual({ n: 0 });
+		const q = await enqueueObjective(env, { instanceId: "coder", userId: "u1", repoId: "repo1", objective: "Original objective" });
+		expect(await tryDequeueAndStart(env, "coder", "repo1", "u1")).toMatchObject({ drained: false, held: expect.stringContaining("Profile → API Keys") });
+		expect(entries()).toEqual([{ id: q.id, objective: "Original objective", status: "pending", deferral_count: 0 }]);
+		await key();
+		expect(await automaticProviderHold(env, "coder", "u1")).toBeNull();
+		expect(await tryDequeueAndStart(env, "coder", "repo1", "u1")).toMatchObject({ started: true, entryId: q.id });
+		expect(fetch).not.toHaveBeenCalled();
 	});
 
 	it("old informational error-log failures alone never permanently bind an unrelated replacement credential", async () => {

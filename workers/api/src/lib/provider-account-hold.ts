@@ -17,6 +17,11 @@ export type ProviderAccountFailure = "provider_credit" | "provider_credentials";
 export interface ProviderAccountIdentity { provider: HeldProvider; credentialId: string }
 interface HoldRow { failure_class: ProviderAccountFailure; failed_at: number }
 export interface ProviderHold extends ProviderAccountIdentity { reason: string }
+class MissingProviderCredential extends Error {
+	constructor(public readonly provider: HeldProvider) {
+		super("Automatic runs are paused because the selected Haiku Pilot requires an Anthropic API key. Add an Anthropic key in Profile → API Keys. No queued objective or automatic-start allowance has been consumed.");
+	}
+}
 const UNREADABLE = "Automatic runs are waiting because the provider-account hold or selected credential could not be checked. Retry after account storage is available, or explicitly continue the original run.";
 
 /** Opaque, one-way equality token. Cloudflare binds BOTH the account and token, independently of JSON order. */
@@ -66,10 +71,11 @@ export async function selectedProviderAccount(env: Env, instanceId: string, user
 	const { results } = await env.DB.prepare("SELECT provider FROM user_api_keys WHERE user_id = ?1 AND provider IN ('anthropic', 'cloudflare')")
 		.bind(userId).all<{ provider: HeldProvider }>();
 	const keys = results ?? [];
-	if (!keys.length) return null;
 	const caps = await capabilitiesForInstance(env, instanceId, userId);
 	const brain = caps?.workflow === "CODING_SESSION" ? null : await readInstanceBrain(env, instanceId);
 	const explicitPilot = caps?.workflow === "CODING_SESSION" && await readPilotModel(env, instanceId, userId) !== DEFAULT_PILOT_MODEL;
+	if (explicitPilot && !keys.some((k) => k.provider === "anthropic")) throw new MissingProviderCredential("anthropic");
+	if (!keys.length) return null;
 	const provider: HeldProvider = explicitPilot ? "anthropic"
 		: brain?.modelChosen && isWorkersAiModel(brain.model) ? "cloudflare"
 		: keys.some((k) => k.provider === "anthropic") ? "anthropic" : "cloudflare";
@@ -99,7 +105,8 @@ export async function automaticProviderHold(env: Env, instanceId: string, userId
 			.bind(userId, account.provider, account.credentialId, Date.now()).run();
 		if ((claim.meta?.changes ?? 0) > 0) await (notify ? notify(reason) : notifyUser(env, userId, "coding", "Automatic runs are paused", reason, deepLinkFor({ kind: "profile" }), { kind: "update", instanceId, key: `provider-hold:${account.provider}:${h.failed_at}` })).catch(() => undefined);
 		return { ...account, reason };
-	} catch {
+	} catch (error) {
+		if (error instanceof MissingProviderCredential) return { provider: error.provider, credentialId: "", reason: error.message };
 		// Admission fails closed. No secrets or raw database errors enter the notice/queue result.
 		return { provider: "anthropic", credentialId: "", reason: UNREADABLE };
 	}
