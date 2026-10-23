@@ -4,7 +4,7 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { type CoderBrainSettings, PO_TRIAGE_ACTION, coderBrainPatchProblem, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
 import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-question-store.js";
 import { brainModelRefusal, writeInstanceBrain } from "../lib/instance-brain.js";
-import { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, pilotModelProblem, readPilotModel, setPilotModel } from "../lib/pilot-model.js";
+import { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, type PilotModelResponse, pilotModelProblem, readPilotModel, setPilotModel } from "../lib/pilot-model.js";
 import { autoPickupPatchProblem, readAutoPickup, setAutoPickup } from "../lib/auto-pickup.js";
 import { BUILTIN_EXCLUDE_LABELS } from "../lib/label-vocabulary.js";
 import type { Env } from "../types.js";
@@ -27,7 +27,7 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 			.all<{ id: string; name: string; schedule: string | null; enabled: number; config: string | null; next_run_at: string | null; last_run_at: string | null }>();
 		return {
 			settings: await readCoderBrain(env, instanceId, uid),
-			pilot: { model: await readPilotModel(env, instanceId, uid), fallbackModel: DEFAULT_PILOT_MODEL, options: PILOT_MODEL_OPTIONS },
+			pilot: { model: await readPilotModel(env, instanceId, uid), fallbackModel: DEFAULT_PILOT_MODEL, options: PILOT_MODEL_OPTIONS } satisfies PilotModelResponse["pilot"],
 			triggers: (results ?? []).map((t) => ({ id: t.id, name: t.name, schedule: t.schedule, enabled: !!t.enabled, config: t.config ? JSON.parse(t.config) : {}, nextRunAt: t.next_run_at, lastRunAt: t.last_run_at })),
 		};
 	};
