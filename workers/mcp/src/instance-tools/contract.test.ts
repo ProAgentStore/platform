@@ -13,6 +13,7 @@ import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerHttpProfileTools } from "./http-profiles.js";
+import { registerCalendarTools } from "./calendar.js";
 import { registerDiscordTools } from "./discord.js";
 import { registerReleaseNotesTools } from "./release-notes.js";
 import { registerConsoleLinkTools } from "./console-link.js";
@@ -652,6 +653,10 @@ const TABLE: Record<string, Row> = {
 	bind_http_profile: ["httpProfiles", "write", null, "envelope", "binding_name,connector,dry_run,instance_id,profile_id,token"],
 	unbind_http_profile: ["httpProfiles", "write", null, "envelope", "binding_name,connector,dry_run,instance_id,token"],
 	// #1132 — the native Discord bot's owner lifecycle + per-instance channel grants.
+	calendar_connection_status: ["calendar", "read", null, null, "token"],
+	list_instance_calendar_grants: ["calendar", "read", null, null, "instance_id,token"],
+	grant_instance_calendar: ["calendar", "write", null, "envelope", "calendar_id,dry_run,instance_id,token"],
+	revoke_instance_calendar_grant: ["calendar", "destructive", "revoke_instance_calendar_grant", "envelope", "confirm,dry_run,grant_id,instance_id,token"],
 	discord_bot_status: ["discord", "read", null, null, "token"],
 	connect_discord_bot: ["discord", "write", null, "envelope", "bot_token,dry_run,token"],
 	disconnect_discord_bot: ["discord", "destructive", "disconnect_discord_bot", "envelope", "confirm,dry_run,token"],
@@ -689,6 +694,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	connectorAccounts: registerConnectorAccountTools as any,
 	guide: registerGuideTools as any,
 	httpProfiles: registerHttpProfileTools as any,
+	calendar: registerCalendarTools as any,
 	discord: registerDiscordTools as any,
 	releaseNotes: registerReleaseNotesTools as any,
 	consoleLink: registerConsoleLinkTools as any,

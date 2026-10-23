@@ -19,6 +19,7 @@ import { registerBoardTools } from "./board.js";
 import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
+import { registerCalendarTools } from "./calendar.js";
 import { registerDiscordTools } from "./discord.js";
 import { registerEmailWorkerTools } from "./email-worker.js";
 import { registerGmailIdentityTools } from "./gmail-identity.js";
@@ -101,6 +102,7 @@ export function registerInstanceTools(
 	registerApprovalTools(server, ctx); // the account approval gate: where a held change stands, and the gate settings — no way to approve (#1268)
 	registerGmailIdentityTools(server, ctx); // verified per-instance Gmail send-as sender + inbound recipient scope, owner-configured (#1279)
 	registerEmailWorkerTools(server, ctx); // manage worker-backed (Cloudflare) mail connections: secure enrollment, pin, identities (#1277)
+	registerCalendarTools(server, ctx); // Google Calendar status + per-instance exact-calendar grants (#1313)
 	registerDiscordTools(server, ctx); // native Discord bot connect + per-instance channel grants (#1132)
 	registerReleaseNotesTools(server, ctx); // release-notes setting + test send, and the Slack bot + per-instance channel grants (#1217)
 	registerApplyTools(server, ctx);

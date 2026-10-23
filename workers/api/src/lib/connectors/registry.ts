@@ -16,6 +16,7 @@ import { NATIVE_TOOLS } from "./native.js";
 import { REPO_LOCAL_TOOLS } from "./repo-local.js";
 import { SUPERVISION_TOOLS } from "./supervision.js";
 import { META_CONNECTOR } from "./meta.js";
+import { GOOGLE_CALENDAR_CONNECTOR } from "./google-calendar.js";
 import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
 import { TERMINAL_TOOLS } from "./terminal.js";
 import { TMUX_TOOLS } from "./tmux.js";
@@ -191,6 +192,9 @@ export const CONNECTORS: Connector[] = [
 	// /v1/connectors/:id/oauth flow (#147), read + append rows. Inert until the Google OAuth app
 	// has the spreadsheets scope + the connector callback registered.
 	GOOGLE_SHEETS_CONNECTOR,
+	// google_calendar (#1313): read-only events on exact calendars granted per agent. Account-level OAuth
+	// through the same generic flow; inert until the Google OAuth app has the calendar.events.readonly scope.
+	GOOGLE_CALENDAR_CONNECTOR,
 	// The connected ACCOUNTS (#352 Stage 1) — declared with `tools: []`, so `connectorTools()`
 	// is byte-identical for these two and no agent gains anything. They were already connectors
 	// in storage (same `user_api_keys` row, same `instance_connector_grants`); this is the

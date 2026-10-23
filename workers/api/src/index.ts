@@ -28,6 +28,7 @@ import { accountApprovalRoutes, setGateReplay } from "./routes/account-approvals
 import { approvalGate } from "./lib/approval-gate-middleware.js";
 import { emailWorkerInboundRoutes, emailWorkerInstanceRoutes, emailWorkerRoutes } from "./routes/email-worker.js";
 import { driveRoutes } from "./routes/drive.js";
+import { calendarRoutes } from "./routes/calendar.js";
 import { discordRoutes } from "./routes/discord.js";
 import { slackRoutes } from "./routes/slack.js";
 import { instanceReleaseNotesRoutes } from "./routes/instances-release-notes.js";
@@ -255,6 +256,7 @@ app.route("/v1/instances", runEventRoutes); // /v1/instances/:id/run-events?sinc
 app.route("/v1/connectors", connectorRoutes); // generic OAuth2 authorize/callback for manifest oauth connectors (#147)
 app.route("/v1/mcp", mcpRoutes); // outbound MCP: DCR+PKCE authorize/callback (#180/#258) + first-party presets (#287)
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
+app.route("/v1/calendar", calendarRoutes); // Google Calendar: live connection state + per-instance exact-calendar grants (#1313)
 app.route("/v1/discord", discordRoutes); // owner bot discovery + per-instance channel grants
 app.route("/v1/slack", slackRoutes); // owner Slack bot + per-instance channel grants, for release notes (#1217)
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status

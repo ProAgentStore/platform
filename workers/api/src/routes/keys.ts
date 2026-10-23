@@ -479,8 +479,9 @@ keysRoutes.delete("/:provider", async (c) => {
 	const session = await requireUser(c);
 	const providerId = c.req.param("provider");
 	// The Discord bot token carries per-instance channel grants; removing it here revokes them, as
-	// `DELETE /v1/discord/bot` does — a reconnect must not silently re-arm them (#357, #1132).
-	const revoked = providerId === "discord" ? await revokeUserConnectorGrants(c.env, session.uid, "discord") : undefined;
+	// `DELETE /v1/discord/bot` does — a reconnect must not silently re-arm them (#357, #1132). Google Calendar's exact-calendar
+	// grants (#1313) are revoked the same way.
+	const revoked = providerId === "discord" || providerId === "google_calendar" ? await revokeUserConnectorGrants(c.env, session.uid, providerId) : undefined;
 	await c.env.DB.prepare(
 		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ''",
 	)

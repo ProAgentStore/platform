@@ -5,7 +5,7 @@ describe("connector registry", () => {
 	it("declares every connector the platform has, including the three tool-less accounts", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
 		expect(ids).toEqual([
-			"browser", "discord", "email-worker", "github", "gmail", "google_drive", "google_sheets", "http", "mcp",
+			"browser", "discord", "email-worker", "github", "gmail", "google_calendar", "google_drive", "google_sheets", "http", "mcp",
 			"meta", "native", "repo-local", "supervision", "terminal", "tmux", "web-search", "zoho_workdrive",
 		]);
 	});

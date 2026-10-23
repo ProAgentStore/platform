@@ -103,6 +103,8 @@ export const CONNECTOR_REACH: Readonly<Record<string, ToolReach>> = {
 	"web-search": "internet",
 	google_sheets: "internet",
 	google_drive: "internet",
+	// #1313. Even the grant listing mints a token at Google to report whether access works.
+	google_calendar: "internet",
 	zoho_workdrive: "internet",
 	gmail: "internet",
 	// #1269. A customer-owned HTTPS Worker, reached over the public internet exactly like any

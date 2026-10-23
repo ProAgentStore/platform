@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**383 tool registrations.** 356 are always registered; 27 are gated to the console
+**387 tool registrations.** 360 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -587,6 +587,10 @@ immediately instead of a whole transcript.
 | `list_instance_http_bindings` | The HTTP credential profiles one instance may use, by binding name — never a secret (#1123) | read | | |
 | `bind_http_profile` | Let an instance use one of your profiles under a binding name (#1123) | write | yes | |
 | `unbind_http_profile` | Remove a binding; the profile is kept (#1123) | write | yes | |
+| `calendar_connection_status` | Is Google Calendar connected and does the stored credential still work (checked live: ok / not_connected / revoked), how many calendar grants depend on it — never a credential (#1313) | read | | |
+| `list_instance_calendar_grants` | One instance's granted Google calendars, with the stable grant ids (#1313) | read | | |
+| `grant_instance_calendar` | Grant one instance ONE exact calendar, verified against Google with the owner's connection first; read-only reach, `primary` refused (#1313) | write | yes | |
+| `revoke_instance_calendar_grant` | Revoke one instance's calendar grant by id (#1313) | destructive | yes | `revoke_instance_calendar_grant` |
 | `discord_bot_status` | Is a Discord bot connected, does its token still work (checked live), which bot, how many grants depend on it — never the token (#1132) | read | | |
 | `connect_discord_bot` | Connect or rotate the Discord bot token, verified with Discord first; a different bot revokes old grants; never returned (#1132) | write | yes | |
 | `disconnect_discord_bot` | Remove the bot token and every Discord channel grant on every instance (#1132) | destructive | yes | `disconnect_discord_bot` |

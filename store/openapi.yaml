@@ -17282,6 +17282,106 @@ paths:
                   revoked: { $ref: "#/components/schemas/ConnectorReach" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/calendar/status:
+    get:
+      summary: Google Calendar connection state
+      description: Whether Google Calendar is connected, which Google account, and how many agent grants depend on it. With `check=1` the stored credential is exercised against Google, so a revoked connection reads `revoked` rather than connected. Never returns a credential. (#1313)
+      operationId: getCalendarStatus
+      tags: [Connectors]
+      parameters:
+        - { name: check, in: query, required: false, schema: { type: string, enum: ["1"] } }
+      responses:
+        "200":
+          description: Connection state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access: { type: string, enum: [ok, not_connected, revoked, unconfigured, error] }
+                  account: { type: [string, "null"] }
+                  accounts: { type: integer }
+                  message: { type: [string, "null"] }
+                  checked: { type: boolean }
+                  reach: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/calendar/instances/{instanceId}/grants:
+    get:
+      summary: Google calendars granted to this instance
+      description: The per-instance calendar boundary. An agent can read only a calendar named by one of these grants, and only read it. (#1313)
+      operationId: listCalendarGrants
+      tags: [Connectors]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Calendar grants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grants:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Grant one exact Google calendar to this instance
+      description: Verifies the calendar with the owner's connected Google account before saving the grant; a calendar that account cannot read, a revoked connection and `primary` are refused and nothing is stored. (#1313)
+      operationId: createCalendarGrant
+      tags: [Connectors]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [calendarId]
+              properties:
+                calendarId: { type: string, description: The exact calendar id, for example an address. }
+      responses:
+        "200":
+          description: The calendar was already granted; the same grant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grant: { type: object, additionalProperties: true }
+        "201":
+          description: Verified calendar grant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grant: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/calendar/instances/{instanceId}/grants/{grantId}:
+    delete:
+      summary: Revoke a Google calendar grant
+      operationId: deleteCalendarGrant
+      tags: [Connectors]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: grantId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Success" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/discord/bot:
     get:
       summary: My Discord bot — connected, live-validated, and its grant reach

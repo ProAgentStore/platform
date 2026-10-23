@@ -4,6 +4,7 @@ import ToolPermissions from "../../components/ToolPermissions";
 import EmailWorkerPanel from "../../components/EmailWorkerPanel";
 import AgentAccountChoice from "../../components/AgentAccountChoice";
 import GmailIdentityPanel from "../../components/GmailIdentityPanel";
+import { CalendarConnectorPanel } from "../../components/CalendarConnectorPanel";
 import { DiscordConnectorPanel } from "../../components/DiscordConnectorPanel";
 import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
@@ -129,6 +130,11 @@ export default function ConnectorsSection({
 		() => connectorPolicy?.find((policy) => policy.id === "discord")?.allowed !== false,
 		[connectorPolicy],
 	);
+	// Calendar has tools only an agent that declares them can use, so unlike Discord it is shown on a positive verdict (#1313).
+	const showsCalendar = useMemo(
+		() => connectorPolicy?.find((policy) => policy.id === "google_calendar")?.allowed === true,
+		[connectorPolicy],
+	);
 	const showsEmailWorker = useMemo(
 		() => connectorPolicy?.find((policy) => policy.id === "email-worker")?.allowed !== false,
 		[connectorPolicy],
@@ -189,6 +195,8 @@ export default function ConnectorsSection({
 			)}
 
 			{showsDiscord && <DiscordConnectorPanel grants={discordGrants} message={discordMsg} onAddGrant={onAddDiscordGrant} onRemoveGrant={onRemoveDiscordGrant} />}
+
+			{showsCalendar && <CalendarConnectorPanel instanceId={instanceId} />}
 
 			{showsEmail && (
 				<div className="mt-4" data-testid="settings-gmail-group">

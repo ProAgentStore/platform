@@ -123,6 +123,11 @@ const INTERNET = new Set<string>([
 	"discord_read_reactions",
 	"discord_send_message",
 	"discord_add_reaction",
+	// ── google calendar (#1313) ── even the grant listing mints a token at Google ──
+	"calendar_list_granted_calendars",
+	"calendar_list_events",
+	"calendar_get_event",
+	"calendar_reconcile_interview",
 	// ── http / mcp / search / sheets ──
 	"http_request",
 	"mcp_list_tools",

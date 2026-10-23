@@ -154,13 +154,13 @@ src/
                           + 3 deprecated aliases of the run tools: start/check/stop_instance_loop (#1243, src/deprecated-alias.ts)
 ```
 
-**383 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**387 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 13 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all seventeen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 329 across `instance-tools/`. 356 are always registered; 27 are
+`storage-tools.ts`, and 333 across `instance-tools/`. 360 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 13 + 2 + 1 + 1 + 15 + 329 = 383. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 13 + 2 + 1 + 1 + 15 + 333 = 387. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

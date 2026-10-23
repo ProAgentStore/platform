@@ -326,6 +326,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	test_http_profile: "read",
 	list_instance_http_bindings: "read",
 	// #1132: the native Discord bot — its live status, what it can reach, and an instance's grants. Never the token.
+	calendar_connection_status: "read",
+	list_instance_calendar_grants: "read",
 	discord_bot_status: "read",
 	list_discord_guilds: "read",
 	list_discord_channels: "read",
@@ -438,6 +440,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	bind_http_profile: "write",
 	unbind_http_profile: "write",
 	// #1132: connecting/rotating the bot (verified with Discord first) and granting one channel — reversible owner state.
+	grant_instance_calendar: "write",
 	connect_discord_bot: "write",
 	grant_instance_discord_channel: "write",
 	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.
@@ -579,6 +582,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #1123: deleting a profile drops its secret and every binding to it — not recoverable.
 	delete_http_profile: "destructive",
 	// #1132: disconnecting drops the bot token and every Discord grant; a revoke cuts an agent off a channel.
+	revoke_instance_calendar_grant: "destructive",
 	disconnect_discord_bot: "destructive",
 	revoke_instance_discord_grant: "destructive",
 	// #1217: disconnecting drops the Slack bot token and every Slack grant; a revoke stops an instance's notes reaching a channel.
