@@ -519,6 +519,8 @@ function SurfaceBlock({
 	copied: "instructions" | "guide" | null;
 	onCopy: (field: "instructions" | "guide", text: string) => void;
 }) {
+	// The document flows in the page (#1303): a capped box with its own scrollbar inside the console's scrolling <main> made two
+	// nested vertical scrollers per document. The page is the one scroll path; nothing here is clipped or hidden.
 	return (
 		<div>
 			<div className="flex items-center justify-between mb-1">
@@ -531,7 +533,7 @@ function SurfaceBlock({
 					{copied === field ? "Copied" : "Copy"}
 				</button>
 			</div>
-			<pre className="text-xs bg-line/30 rounded p-3 overflow-x-auto whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
+			<pre className="text-xs bg-line/30 rounded p-3 overflow-x-auto whitespace-pre-wrap break-words leading-relaxed">
 				{text}
 			</pre>
 		</div>
