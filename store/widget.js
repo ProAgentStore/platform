@@ -74,10 +74,17 @@
       #pags-fab:hover{transform:scale(1.05)}
       #pags-panel{position:fixed;bottom:88px;right:20px;width:380px;max-width:calc(100vw - 40px);height:520px;max-height:calc(100vh - 120px);background:${colors.bg};border:1px solid ${colors.line};border-radius:16px;box-shadow:0 10px 40px rgba(0,0,0,0.4);z-index:99998;display:none;flex-direction:column;overflow:hidden}
       #pags-panel.open{display:flex}
+      /* Expanded view (#1311): the conversation fills the viewport and the host page behind it is locked, so the
+         transcript is the ONLY vertical scroller. It is the default on phones and short screens, where a floating
+         panel over a scrolling page leaves two scrollbars fighting for one thumb; on a desktop the small docked
+         panel stays (the host page deliberately stays interactive beside it) and offers an expand control. */
+      #pags-panel.expanded{inset:0;bottom:0;right:0;width:100%;max-width:none;height:100vh;height:100dvh;max-height:none;border-radius:0;border:0;z-index:100000}
+      #pags-msgs{overscroll-behavior:contain}
       #pags-header{padding:12px 16px;border-bottom:1px solid ${colors.line};display:flex;align-items:center;gap:8px;background:${colors.panel}}
       #pags-header .dot{width:10px;height:10px;border-radius:50%;background:#22c55e;flex-shrink:0}
       #pags-header .name{font-weight:600;font-size:14px;color:${colors.ink};flex:1}
-      #pags-header .close{background:none;border:none;color:${colors.muted};cursor:pointer;font-size:18px;padding:4px}
+      #pags-header .close,#pags-header .expand{background:none;border:none;color:${colors.muted};cursor:pointer;font-size:18px;padding:4px;min-width:32px;min-height:32px}
+      #pags-panel.compact .expand{display:none}
       #pags-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
       .pags-msg{max-width:85%;padding:8px 12px;border-radius:12px;font-size:14px;line-height:1.5;white-space:pre-wrap}
       .pags-msg.user{background:${colors.userBg};color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
@@ -91,12 +98,13 @@
       #pags-powered{text-align:center;padding:6px;font-size:10px;color:${colors.muted};border-top:1px solid ${colors.line}}
       #pags-powered a{color:${colors.accent};text-decoration:none}
     </style>
-    <button id="pags-fab" onclick="document.getElementById('pags-panel').classList.toggle('open')">&#9889;</button>
+    <button id="pags-fab" aria-label="Open chat" aria-expanded="false">&#9889;</button>
     <div id="pags-panel">
       <div id="pags-header">
         <span class="dot"></span>
         <span class="name" id="pags-agent-name">Agent</span>
-        <button class="close" onclick="document.getElementById('pags-panel').classList.remove('open')">&times;</button>
+        <button class="expand" id="pags-expand" aria-label="Expand chat" aria-pressed="false">&#x2922;</button>
+        <button class="close" id="pags-close" aria-label="Close chat">&times;</button>
       </div>
       <div id="pags-msgs"></div>
       <div id="pags-thinking">Thinking...</div>
@@ -107,6 +115,62 @@
       <div id="pags-powered">Powered by <a href="https://proagentstore.online" target="_blank">ProAgentStore</a></div>
     </div>`;
 	document.body.appendChild(container);
+
+	// Open / expanded state (#1311). "Expanded" is the full-viewport view that locks the host's scroll; compact
+	// screens (phones, short landscape) are always expanded while open, so one scroller owns the gesture.
+	const panel = document.getElementById("pags-panel");
+	const fab = document.getElementById("pags-fab");
+	const expandBtn = document.getElementById("pags-expand");
+	const compactQuery = window.matchMedia("(max-width: 640px), (max-height: 560px)");
+	let wantsExpanded = false;
+	let locked = null; // the host's own inline overflow values, put back exactly on release
+
+	function lockHost() {
+		if (locked) return;
+		const html = document.documentElement;
+		const body = document.body;
+		locked = { html: html.style.overflow, body: body.style.overflow };
+		html.style.overflow = "hidden";
+		body.style.overflow = "hidden";
+	}
+	function unlockHost() {
+		if (!locked) return;
+		document.documentElement.style.overflow = locked.html;
+		document.body.style.overflow = locked.body;
+		locked = null;
+	}
+	function render() {
+		const open = panel.classList.contains("open");
+		const compact = compactQuery.matches;
+		const expanded = open && (compact || wantsExpanded);
+		panel.classList.toggle("compact", compact);
+		panel.classList.toggle("expanded", expanded);
+		fab.setAttribute("aria-expanded", String(open));
+		expandBtn.setAttribute("aria-pressed", String(expanded));
+		expandBtn.setAttribute("aria-label", expanded ? "Collapse chat" : "Expand chat");
+		// The launcher sits under a full-viewport panel; closing is the panel's own control.
+		fab.style.display = expanded ? "none" : "";
+		if (expanded) lockHost();
+		else unlockHost();
+		if (open) {
+			const msgs = document.getElementById("pags-msgs");
+			msgs.scrollTop = msgs.scrollHeight;
+		}
+	}
+	fab.addEventListener("click", () => {
+		panel.classList.toggle("open");
+		render();
+	});
+	document.getElementById("pags-close").addEventListener("click", () => {
+		panel.classList.remove("open");
+		wantsExpanded = false;
+		render();
+	});
+	expandBtn.addEventListener("click", () => {
+		wantsExpanded = !wantsExpanded;
+		render();
+	});
+	compactQuery.addEventListener("change", render);
 
 	// Load agent name
 	fetch(`${API}/v1/public/agents/${agentId}`)

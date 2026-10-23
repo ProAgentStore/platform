@@ -61,7 +61,7 @@ const CASES: Array<{ name: string; route: string; open?: (page: Page) => Promise
 const OLD_CAP = 224; // the shortest cap this replaced (max-h-56)
 
 for (const [label, size] of [["desktop 1440x900", { width: 1440, height: 900 }], ["phone 390x844", { width: 390, height: 844 }]] as const) {
-	test.describe(`admin long blocks flow in the page (#1309) — ${label}`, () => {
+	test.describe(`mobile — admin long blocks flow in the page (#1309) — ${label}`, () => {
 		for (const c of CASES) {
 			test(`${c.name}: no block scrolls on its own; the document is the only vertical scroller`, async ({ page }) => {
 				await page.setViewportSize(size);
