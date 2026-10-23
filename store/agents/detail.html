@@ -62,22 +62,23 @@
     .code{background:#050505;border:1px solid var(--line);border-radius:var(--radius);padding:.85rem;color:#c4b5fd;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;overflow:auto}
     .list{display:grid;gap:.55rem}.list-item{border:1px solid var(--line);background:var(--panel-2);border-radius:var(--radius);padding:.75rem}.list-item strong{display:block;font-size:.85rem;margin-bottom:.25rem}.list-item p{color:var(--muted);font-size:.8rem;line-height:1.45}
     .status-row{display:flex;align-items:center;gap:.55rem;color:var(--muted);font-size:.84rem}.dot{width:9px;height:9px;border-radius:50%;background:var(--muted-soft)}.dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}.dot.bad{background:var(--red)}
-    .chat{height:520px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+    /* #1310: the transcript flows in the page — the page is the only vertical scroller. overflow:clip (not hidden) rounds the corners without making this a scroll container, which would also break the sticky composer. */
+    .chat{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:clip}
     .chat-head{display:flex;justify-content:space-between;gap:1rem;align-items:center;padding:.8rem 1rem;border-bottom:1px solid var(--line)}
     .chat-head strong{font-size:.9rem}.chat-head span{font-size:.76rem;color:var(--muted)}
-    .messages{flex:1;overflow:auto;padding:1rem;display:flex;flex-direction:column;gap:.65rem}
+    .messages{flex:none;min-height:14rem;padding:1rem;display:flex;flex-direction:column;gap:.65rem}
     .msg{max-width:84%;padding:.62rem .78rem;border-radius:var(--radius);font-size:.87rem;line-height:1.5;white-space:pre-wrap}
     .msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px}
     .msg.assistant{align-self:flex-start;background:#202020;border:1px solid var(--line);border-bottom-left-radius:3px}
     .msg.system{align-self:center;background:rgba(245,158,11,.1);color:var(--amber);font-size:.78rem;border-radius:999px}
-    .chat-form{display:flex;gap:.5rem;padding:.75rem;border-top:1px solid var(--line)}
+    .chat-form{display:flex;gap:.5rem;padding:.75rem;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel)}
     .chat-form input{flex:1;min-width:0;background:#050505;border:1px solid var(--line);border-radius:var(--radius);color:var(--ink);padding:.58rem .7rem}.chat-form input:focus{outline:none;border-color:var(--accent)}
     .side{display:grid;gap:1rem;align-content:start}
     .locked{color:var(--muted);font-size:.84rem;line-height:1.5}
     footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:.8rem;color:var(--muted-soft)}
     footer a{color:var(--muted)}
-    @media(max-width:960px){.hero{grid-template-columns:1fr}.actions{justify-content:flex-start}.dashboard{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.side{grid-template-columns:1fr 1fr}.chat{height:470px}}
-    @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}nav{gap:.7rem;flex-wrap:wrap;justify-content:flex-end}.hero-main{flex-direction:column}.grid,.side{grid-template-columns:1fr}.actions{width:100%}.btn{flex:1}.chat{height:430px}.msg{max-width:92%}}
+    @media(max-width:960px){.hero{grid-template-columns:1fr}.actions{justify-content:flex-start}.dashboard{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.side{grid-template-columns:1fr 1fr}}
+    @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}nav{gap:.7rem;flex-wrap:wrap;justify-content:flex-end}.hero-main{flex-direction:column}.grid,.side{grid-template-columns:1fr}.actions{width:100%}.btn{flex:1}.msg{max-width:92%}}
   </style>
 
 
@@ -494,7 +495,8 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
         msgs.insertAdjacentHTML('beforeend','<div class="msg system">' + esc(error.message) + '</div>');
       } finally {
         $('thinking').style.display = 'none';
-        msgs.scrollTop = msgs.scrollHeight;
+        // The page scrolls, not the transcript: bring the newest message into view.
+        msgs.lastElementChild?.scrollIntoView({block:'nearest'});
       }
     }
 
