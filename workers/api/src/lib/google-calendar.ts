@@ -152,7 +152,7 @@ export function normalizeEvent(calendarId: string, raw: unknown): CalendarEvent 
 	const eventId = str(e.id);
 	if (!eventId) return null;
 	const attendeesRaw = Array.isArray(e.attendees) ? e.attendees : [];
-	const attendees: CalendarAttendee[] = attendeesRaw.slice(0, ATTENDEES_PER_EVENT).flatMap((a) => {
+	const attendees: CalendarAttendee[] = attendeesRaw.filter((_, i) => i < ATTENDEES_PER_EVENT).flatMap((a) => {
 		const r = a && typeof a === "object" ? (a as Record<string, unknown>) : {};
 		const email = normalEmail(r.email);
 		return email ? [{ email, displayName: str(r.displayName), rsvp: str(r.responseStatus), organizer: r.organizer === true, optional: r.optional === true, resource: r.resource === true }] : [];
