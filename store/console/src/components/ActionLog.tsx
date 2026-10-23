@@ -118,8 +118,10 @@ export function CardActionLog({ instanceId, taskId, running }: { instanceId: str
 			<button type="button" onClick={() => setOpen(!open)} className="text-2xs text-muted hover:text-accent min-h-11 sm:min-h-0" aria-expanded={open}>
 				{open ? "▾ Hide log" : "▸ Action log"}
 			</button>
+			{/* The log flows in the board (#1307): a capped box with its own scrollbar inside the tab that already scrolls
+			    nested two vertical scrollers. Order, links and Load more are unchanged; the run page's log was never capped. */}
 			{open && (
-				<div className="mt-1 max-h-72 overflow-y-auto border-t border-line/60 pt-1">
+				<div className="mt-1 border-t border-line/60 pt-1">
 					<ActionLog instanceId={instanceId} taskId={taskId} running={running} />
 				</div>
 			)}
