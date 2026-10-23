@@ -150,7 +150,7 @@ export async function watchdogHeartbeat(env: Env, userId: string, machineId: str
 		const detail = clipMarked(scrub(o.detail, 2000), 1500, { within: true });
 		// Only a command this machine was actually handed can be settled, and only once.
 		const res = await env.DB.prepare("UPDATE machine_watchdog_commands SET state = ?4, finished_at = ?5, result = ?6 WHERE id = ?1 AND user_id = ?2 AND machine_id = ?3 AND state = 'delivered'").bind(id, userId, machineId, state, now, detail).run();
-		if ((res.meta?.changes ?? 0) > 0) await logEvent(env, { source: "watchdog", event: "watchdog.command_result", level: state === "done" ? "info" : "warn", userId, message: `command ${id.slice(0, 8)} ${state}`, context: { machineId, commandId: id, state, result: clipMarked(detail, 500, { within: true }) } }).catch(() => undefined);
+		if ((res.meta?.changes ?? 0) > 0) await logEvent(env, { source: "watchdog", event: "watchdog.command_result", level: state === "done" ? "info" : "warn", userId, message: `command ${[...id].filter((_, i) => i < 8).join("")} ${state}`, context: { machineId, commandId: id, state, result: clipMarked(detail, 500, { within: true }) } }).catch(() => undefined);
 	}
 
 	await env.DB.prepare("UPDATE machine_watchdog_commands SET state = 'expired', finished_at = ?4, result = 'never collected' WHERE user_id = ?1 AND machine_id = ?2 AND state = 'queued' AND created_at < ?3").bind(userId, machineId, now - QUEUED_TTL_MS, now).run();
