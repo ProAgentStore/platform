@@ -11,7 +11,7 @@ import {
 	requestRunner,
 } from "./http.js";
 import {
-	findFreePort,
+	selectConnectPort,
 	runnerSpawnSpec,
 	startRunnerForeground,
 	waitForLocalRunner,
@@ -69,7 +69,9 @@ export function createRunnerCommand(): Command {
 		.command("connect <instanceIds...>")
 		.description("Start ONE local runtime, connect via WebSocket relay, and register it for every given PAGS instance")
 		.option("--host <host>", "Host to bind", "127.0.0.1")
-		.option("--port <port>", "Port to bind", "49171")
+		// NO default (#1296): commander would always fill `opts.port`, so the free-port choice below never ran and a taken
+		// 49171 (another account's runner, an unrelated app) crash-looped `pags up`. `selectConnectPort` owns the default.
+		.option("--port <port>", "Port to bind (default: first free port from 49171)")
 		.option("--data-dir <path>", "Runner data directory")
 		.option("--token <token>", "Runner bearer token. Defaults to PAGS_RUNNER_TOKEN or a generated token")
 		.option("--headless", "Run Playwright headless")
@@ -84,7 +86,7 @@ export function createRunnerCommand(): Command {
 			takeSessionTokenFromEnv();
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
-			const port = clean(opts.port) || String(await findFreePort(49171));
+			const port = await selectConnectPort(opts.port);
 
 			// ── The single-instance lock (#896) ──────────────────────────────────────────────
 			//

@@ -23,6 +23,18 @@ export async function findFreePort(start: number): Promise<number> {
 	return start;
 }
 
+/** Where the runtime looks first when no `--port` is given. */
+export const DEFAULT_RUNNER_PORT = 49171;
+
+/**
+ * The port `runner connect` serves on (#1296). An explicit `--port` is honoured exactly — a collision on it is reported as
+ * one, never quietly moved. With none, the first free port from {@link DEFAULT_RUNNER_PORT}. The option must therefore carry NO
+ * commander default: a default always populates `opts.port`, and this fallback was unreachable (the bug).
+ */
+export async function selectConnectPort(requested: string | undefined, find: (start: number) => Promise<number> = findFreePort): Promise<string> {
+	return clean(requested) || String(await find(DEFAULT_RUNNER_PORT));
+}
+
 /**
  * The runtime's bearer token never goes on its command line (#1182): `--token <t>` is in the process table, where `ps` shows it to every
  * other user on the host - and the token plus no `Origin` is all a request to the runtime's 127.0.0.1 port needs. It travels in the
