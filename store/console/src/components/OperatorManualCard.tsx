@@ -72,7 +72,7 @@ export default function OperatorManualCard(props: { instanceId: string } | { age
 					{!isTemplate && inherited && (
 						<div className="mb-3" data-testid="operator-manual-inherited">
 							<div className="text-2xs font-bold uppercase tracking-wide text-muted-soft mb-1">Inherited from template</div>
-							<pre className="text-xs whitespace-pre-wrap break-words bg-paper border border-line rounded p-2 max-h-60 overflow-auto">{inherited}</pre>
+							<pre className="text-xs whitespace-pre-wrap break-words bg-paper border border-line rounded p-2 overflow-x-auto">{inherited}</pre>
 						</div>
 					)}
 					{!isTemplate && inherited && <div className="text-2xs font-bold uppercase tracking-wide text-muted-soft mb-1">This instance — an addendum that wins where they conflict</div>}

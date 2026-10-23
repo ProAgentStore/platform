@@ -79,7 +79,7 @@ export default function ConnectionGuide({ instanceId, active }: { instanceId: st
 						Generated fresh each time from live state. Re-copy it after changing tools, repos or the
 						operator manual.
 					</p>
-					<pre className="text-xs whitespace-pre-wrap break-words bg-paper border border-line rounded p-3 max-h-[28rem] overflow-auto">
+					<pre className="text-xs whitespace-pre-wrap break-words bg-paper border border-line rounded p-3 overflow-x-auto">
 						{guide || (loading ? "" : "No guide yet — press Refresh.")}
 					</pre>
 				</>
