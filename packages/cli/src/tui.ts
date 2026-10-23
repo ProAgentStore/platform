@@ -24,6 +24,8 @@ export interface TuiState {
 	runner: "starting" | "online" | "offline" | "error";
 	tunnel: "starting" | "online" | "offline" | "error";
 	tunnelUrl: string;
+	/** The Secure link row's own sentence when the link is partly or wholly down (#1300); empty for the stock one. */
+	tunnelNote?: string;
 	registration: "pending" | "registered" | "failed";
 	/**
 	 * The heartbeat is what keeps the console's badge online, and it fails and recovers on its
@@ -115,7 +117,7 @@ export function printStatus(state: TuiState): void {
 		console.log(pad + icon + " " + w(label.padEnd(LABEL_WIDTH)) + d(override ?? note));
 	};
 	row("runner", state.runner);
-	row("tunnel", state.tunnel);
+	row("tunnel", state.tunnel, state.tunnelNote || undefined);
 	row("pags", state.registration, pagsNote(state.registration, state.heartbeat));
 	console.log("");
 

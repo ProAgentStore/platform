@@ -13,6 +13,7 @@ import { restartUpArgs, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/sel
 import { configDir, holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
 import { crashPaths, deliverCrashReports, recordChildExit } from "../crash-delivery.js";
 import { alreadyRunningLines, RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../existing-runner.js";
+import { RelayLinks } from "../relay-link.js";
 import { LineSplitter } from "../line-buffer.js";
 import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
@@ -284,6 +285,7 @@ export const upCommand = new Command("up")
 		// `runner connect` write to disk themselves (`crash-reports.ts`), and the exit of this child,
 		// recorded below.
 		const logs: string[] = [];
+		const relayLinks = new RelayLinks(state.instances.map((i) => i.id));
 		/** Our child's own process id (#896), announced on its first status line. */
 		let childRsid = "";
 
@@ -322,20 +324,19 @@ export const upCommand = new Command("up")
 					return;
 				}
 
-				if (trimmed.includes("Relay connected:")) {
-					state.tunnel = "online";
-					state.tunnelUrl = "WebSocket relay";
-					state.lastEvent = "Relay connected";
+				// The Secure link is the sum of the per-agent relays, from their own lifecycle lines (#1300): a disconnect takes
+				// the light away, one agent of several is not "all", and a reconnect brings it back. The one-off "CONNECTED —
+				// WebSocket relay" banner is printed whether or not any socket opened, so it no longer lights anything.
+				const link = relayLinks.apply(trimmed);
+				if (link) {
+					state.tunnel = link.tunnel;
+					state.tunnelNote = link.note;
+					state.tunnelUrl = link.tunnel === "online" ? "WebSocket relay" : "";
+					state.lastEvent = link.event;
 					printStatus(state);
 					return;
 				}
-				if (trimmed.includes("WebSocket relay")) {
-					state.tunnel = "online";
-					state.tunnelUrl = "WebSocket relay";
-					state.lastEvent = "Connected via WebSocket relay";
-					printStatus(state);
-					return;
-				}
+				if (trimmed.includes("WebSocket relay")) return;
 
 				if (trimmed.includes("browser runtime listening")) {
 					state.runner = "online";
@@ -343,20 +344,7 @@ export const upCommand = new Command("up")
 					printStatus(state);
 					return;
 				}
-				// A relay conflict is the one failure with a one-command remedy, and it matched
-				// NOTHING here: the old branch tested for "Another machine", a string nothing in
-				// the repo ever printed, while the CLI's real line ("Relay conflict: …") contains
-				// neither "error" nor "failed" and so missed the catch-all below too (#497).
-				if (trimmed.includes("Relay conflict:")) {
-					state.lastEvent = "Another runner holds this agent — run `pags up --force` here to take it over";
-					printStatus(state);
-					return;
-				}
-				if (trimmed.includes("Relay conflict cleared:")) {
-					state.lastEvent = "Relay conflict cleared — reattaching";
-					printStatus(state);
-					return;
-				}
+				// (Relay conflict / conflict cleared are lifecycle lines too: RelayLinks above says them, #497 / #1300.)
 
 				// Show errors
 				if (/error|Error|EADDRINUSE|ECONNREFUSED|failed|expired/i.test(trimmed)) {
