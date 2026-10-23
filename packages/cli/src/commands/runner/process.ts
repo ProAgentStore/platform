@@ -118,9 +118,23 @@ export function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
 			env: { ...process.env, ...spec.env },
 		});
 		child.on("error", reject);
-		child.on("exit", (code) => {
-			if (code && code !== 0) reject(new Error(`runner exited with code ${code}`));
-			else resolvePromise();
+		// Our own stop (Ctrl-C, SIGTERM) reaches the runtime too, and its death by that signal is the stop working, not a
+		// failure (#1297). Forward it so a stop aimed at this process also reaches a child that is not in the terminal's group.
+		let stopped: NodeJS.Signals | null = null;
+		const forwarders = (["SIGINT", "SIGTERM"] as const).map((sig) => {
+			const forward = () => {
+				stopped = sig;
+				child.kill(sig);
+			};
+			process.on(sig, forward);
+			return () => process.off(sig, forward);
+		});
+		child.on("exit", (code, signal) => {
+			for (const off of forwarders) off();
+			if (code === 0 || (code === null && signal !== null && signal === stopped)) resolvePromise();
+			// `code` is null when a signal killed the runtime (a SIGKILL, an OOM kill, a crash): that is a failed run, named.
+			else if (code === null) reject(new Error(`runner was killed by ${signal ?? "a signal"}`));
+			else reject(new Error(`runner exited with code ${code}`));
 		});
 	});
 }
