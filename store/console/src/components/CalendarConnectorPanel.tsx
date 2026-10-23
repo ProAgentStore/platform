@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
-import { type CalendarGrant, type CalendarStatus, calendarStateLine } from "../lib/calendarState";
+import { type CalendarGrant, type CalendarGrantListResponse, type CalendarGrantResponse, type CalendarStatus, calendarStateLine } from "../lib/calendarState";
 
 interface Props {
 	instanceId: string;
@@ -27,7 +27,7 @@ export function CalendarConnectorPanel({ instanceId }: Props) {
 			setStatus({ access: "error", account: null, accounts: 0, message: "Google Calendar's state could not be loaded.", checked: false, reach: { grants: 0, instances: 0 } });
 		}
 		try {
-			setGrants((await api<{ grants: CalendarGrant[] }>(`/v1/calendar/instances/${instanceId}/grants`)).grants);
+			setGrants((await api<CalendarGrantListResponse>(`/v1/calendar/instances/${instanceId}/grants`)).grants);
 		} catch {
 			setError("This agent's calendar grants could not be loaded.");
 		}
@@ -46,7 +46,7 @@ export function CalendarConnectorPanel({ instanceId }: Props) {
 		setError("");
 		setMessage("");
 		try {
-			const d = await api<{ grant: CalendarGrant }>(`/v1/calendar/instances/${instanceId}/grants`, { method: "POST", body: JSON.stringify({ calendarId: id }) });
+			const d = await api<CalendarGrantResponse>(`/v1/calendar/instances/${instanceId}/grants`, { method: "POST", body: JSON.stringify({ calendarId: id }) });
 			setGrants((gs) => [d.grant, ...gs.filter((g) => g.id !== d.grant.id)]);
 			setMessage(`Granted this agent read-only access to ${d.grant.resourceName}.`);
 			setCalendarId("");

@@ -17,6 +17,14 @@ export interface CalendarGrant {
 	resourceType: string;
 }
 
+export interface CalendarGrantListResponse {
+	grants: CalendarGrant[];
+}
+
+export interface CalendarGrantResponse {
+	grant: CalendarGrant;
+}
+
 /** What the owner reads about the connection, and whether granting a calendar can work right now. */
 export function calendarStateLine(status: CalendarStatus | null): { text: string; tone: "ok" | "warn" | "muted"; canGrant: boolean } {
 	if (!status) return { text: "Checking Google Calendar…", tone: "muted", canGrant: false };
