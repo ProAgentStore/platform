@@ -131,14 +131,16 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		}, 20_000);
 
 		it(`${mode}: the turn timeout ends the engine AND what it started`, async () => {
-			const { s } = session({ id: `to-${mode}`, tag: `to-${mode}`, bin: oneshot, client: "codex", cleanup: manager(mode), maxTurnMs: 1500 });
+			// 8s, not 1.5s (#1342): the ceiling starts at spawn, and under full-suite load a 1.5s ceiling fired before the fake
+			// engine had forked its child — no leak, or a child forked after gentle's process-table read. Still the real ceiling.
+			const { s } = session({ id: `to-${mode}`, tag: `to-${mode}`, bin: oneshot, client: "codex", cleanup: manager(mode), maxTurnMs: 8000 });
 			s.start();
 			s.input("hang");
 			await until(() => leaked(`to-${mode}`).length === 1, 8000, "the turn to leak its child");
 			const [child] = leaked(`to-${mode}`);
-			await until(() => !alive(child), 12_000, `${mode}: the timeout to end the leaked child`);
+			await until(() => !alive(child), 20_000, `${mode}: the timeout to end the leaked child`);
 			s.stop();
-		}, 25_000);
+		}, 40_000);
 
 		it(`${mode}: aborting a turn for its successor ends what the aborted turn started`, async () => {
 			const { s } = session({ id: `ab-${mode}`, tag: `ab-${mode}`, bin: oneshot, client: "codex", cleanup: manager(mode) });
