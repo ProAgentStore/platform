@@ -318,7 +318,7 @@ async function continueAuthorize(
 async function flowRef(nonce: string | null): Promise<string> {
 	if (!nonce) return "no-nonce";
 	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(nonce));
-	return [...new Uint8Array(digest)].slice(0, 5).map((b) => b.toString(16).padStart(2, "0")).join("");
+	return [...new Uint8Array(digest)].filter((_, i) => i < 5).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /**
