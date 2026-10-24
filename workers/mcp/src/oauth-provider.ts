@@ -313,6 +313,35 @@ async function continueAuthorize(
 	});
 }
 
+
+/** A short correlation id for one authorization flow: a hash of the flow's nonce, so the nonce itself (which binds the browser) is never logged or shown. */
+async function flowRef(nonce: string | null): Promise<string> {
+	if (!nonce) return "no-nonce";
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(nonce));
+	return [...new Uint8Array(digest)].slice(0, 5).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * One structured line per stage of the connect flow (#1327), keyed by the flow's reference. Stages and outcomes only —
+ * never a code, nonce, session or token — so support can follow a reconnect through the worker log by its reference.
+ */
+function flowEvent(stage: string, ref: string, outcome: "ok" | "failed", detail?: Record<string, unknown>): void {
+	console.log(JSON.stringify({ event: "mcp.oauth_flow", stage, ref, outcome, ...detail }));
+}
+
+/**
+ * A failed callback, as the owner sees it: what failed, what to do about it, and the reference to quote. Plain text, the same
+ * statuses as before, with the original message first so a client matching on it keeps working.
+ */
+async function flowFailure(stage: string, nonce: string | null, status: number, message: string, recovery: string, detail?: Record<string, unknown>): Promise<Response> {
+	const ref = await flowRef(nonce);
+	flowEvent(stage, ref, "failed", { status, ...detail });
+	return new Response(`${message}\n\nWhat to do: ${recovery}\nReference: ${ref} (quote this to support; it holds no secret).`, {
+		status,
+		headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+	});
+}
+
 async function validatePagsSession(
 	apiBaseUrl: string,
 	session: string,
@@ -345,7 +374,7 @@ async function oauthCallback(
 	const code = url.searchParams.get("code");
 
 	if (!nonce || !code) {
-		return new Response("missing nonce or code", { status: 400 });
+		return flowFailure("callback", nonce, 400, "missing nonce or code", "Start the connection again from your client; the sign-in did not come back with a code.");
 	}
 
 	// Browser binding: the nonce must match the cookie set at /authorize, proving this is
@@ -353,11 +382,11 @@ async function oauthCallback(
 	// victim is lured through an attacker-initiated authorization request.
 	const cookieNonce = readCookie(request, "pags_authnonce");
 	if (!cookieNonce || cookieNonce !== nonce) {
-		return new Response("authorization flow not bound to this browser", { status: 400 });
+		return flowFailure("callback", nonce, 400, "authorization flow not bound to this browser", "Open the connection from the same browser you started it in, then try again.", { reason: cookieNonce ? "cookie_mismatch" : "cookie_missing" });
 	}
 
 	const reqRaw = await env.OAUTH_KV?.get(`authreq:${nonce}`);
-	if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
+	if (!reqRaw) return flowFailure("callback", nonce, 400, "invalid or expired nonce", "The sign-in took longer than 10 minutes or was already used. Start the connection again from your client.");
 	await env.OAUTH_KV?.delete(`authreq:${nonce}`);
 
 	// Exchange the one-time code for the session — POST, server-to-server. The token exists only
@@ -370,11 +399,11 @@ async function oauthCallback(
 	const exBody = exRes?.ok ? await exRes.json<{ session?: string }>().catch(() => ({ session: undefined })) : { session: undefined };
 	const session = exBody.session;
 	if (!session) {
-		return new Response("invalid or expired code", { status: 400 });
+		return flowFailure("exchange", nonce, 400, "invalid or expired code", "The sign-in code was already used or expired. Start the connection again from your client; do not reuse the old window.", { exchangeStatus: exRes?.status ?? "no-response" });
 	}
 
 	if (!(await validatePagsSession(apiBaseUrl, session))) {
-		return new Response("invalid session", { status: 400 });
+		return flowFailure("session", nonce, 400, "invalid session", "ProAgentStore did not accept the new sign-in. Sign in again and retry; if it repeats, quote the reference to support.");
 	}
 
 	const authReq = JSON.parse(reqRaw) as AuthRequest;
@@ -398,6 +427,7 @@ async function oauthCallback(
 		},
 	});
 
+	flowEvent("authorized", await flowRef(nonce), "ok", { scopes: scopes.length, subject: Boolean(subject) });
 	return new Response(null, {
 		status: 302,
 		headers: { Location: redirectTo },

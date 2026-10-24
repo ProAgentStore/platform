@@ -381,6 +381,69 @@ describe("loginHandler /oauth/callback", () => {
 		await expect(res.text()).resolves.toContain("invalid or expired code");
 	});
 
+	it("a failed callback tells the owner what to do and a reference, and neither the page nor the log holds the nonce, code or session (#1327)", async () => {
+		const kv = makeKv({ "authreq:nonce-secret-1": JSON.stringify(DEFAULT_AUTH_REQ) });
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 400 }));
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-secret-1&code=code-secret-1",
+			{ headers: { Cookie: "pags_authnonce=nonce-secret-1" } },
+		);
+		fetchSpy.mockRestore();
+		const body = await res.text();
+		const logged = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		logSpy.mockRestore();
+		expect(res.status).toBe(400);
+		expect(body).toContain("invalid or expired code");
+		expect(body).toMatch(/What to do: .*Start the connection again/);
+		const ref = body.match(/Reference: ([0-9a-f]{10}) /)?.[1];
+		expect(ref).toBeTruthy();
+		expect(logged).toContain(`"event":"mcp.oauth_flow"`);
+		expect(logged).toContain(`"stage":"exchange"`);
+		expect(logged).toContain(`"ref":"${ref}"`);
+		for (const secret of ["nonce-secret-1", "code-secret-1"]) {
+			expect(body).not.toContain(secret);
+			expect(logged).not.toContain(secret);
+		}
+	});
+
+	it("the same flow has the same reference at each failing stage, so support can follow it (#1327)", async () => {
+		const refOf = async (cookie: string) => {
+			const kv = makeKv({ "authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ) });
+			const res = await run(makeEnv({ OAUTH_KV: kv }), "https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&code=c", { headers: { Cookie: cookie } });
+			return (await res.text()).match(/Reference: (\S+)/)?.[1];
+		};
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+		const a = await refOf("pags_authnonce=wrong");
+		const b = await refOf("");
+		logSpy.mockRestore();
+		expect(a).toMatch(/^[0-9a-f]{10}$/);
+		expect(a).toBe(b);
+	});
+
+	it("a completed connection logs its authorized stage with the same reference (#1327)", async () => {
+		const kv = makeKv({ "authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ) });
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const u = String(input);
+			if (u.includes("/v1/auth/mcp/exchange")) return new Response(JSON.stringify({ session: "good-session" }), { status: 200 });
+			return new Response("{}", { status: 200 });
+		});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&code=one-time-code",
+			{ headers: { Cookie: "pags_authnonce=nonce-1" } },
+		);
+		fetchSpy.mockRestore();
+		const logged = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		logSpy.mockRestore();
+		expect(res.status).toBe(302);
+		expect(logged).toContain(`"stage":"authorized"`);
+		expect(logged).toContain(`"outcome":"ok"`);
+		expect(logged).not.toContain("good-session");
+	});
+
 	it("rejects a callback whose nonce is not bound to the browser cookie", async () => {
 		const kv = makeKv({
 			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
