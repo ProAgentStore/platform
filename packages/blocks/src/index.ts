@@ -18,3 +18,4 @@ export { Modal } from "./Modal";
 export { type PillStatus, StatusPill } from "./StatusPill";
 export { TerminalPane } from "./TerminalPane";
 export { timeAgo } from "./time-ago";
+export { FilePreview, PREVIEW_MAX_BYTES, type PreviewButton, type PreviewFile, type PreviewKind, previewKind } from "./FilePreview";

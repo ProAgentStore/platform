@@ -10,7 +10,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CopyButton, EmptyState, MessageHeader, Modal, StatusPill, TerminalPane, timeAgo } from "./index";
+import { CopyButton, EmptyState, FilePreview, MessageHeader, Modal, PREVIEW_MAX_BYTES, previewKind, StatusPill, TerminalPane, timeAgo } from "./index";
 
 describe("timeAgo", () => {
 	const NOW = Date.parse("2026-10-14T12:00:00Z");
@@ -152,5 +152,42 @@ describe("Modal", () => {
 	it("never calls alert or confirm", async () => {
 		const src = (await import("node:fs")).readFileSync(new URL("./Modal.tsx", import.meta.url), "utf8");
 		expect(src).not.toMatch(/\b(alert|confirm)\(/);
+	});
+});
+
+describe("previewKind", () => {
+	it.each([
+		[{ id: "1", name: "a.pdf" }, "pdf"],
+		[{ id: "1", name: "x", mimeType: "application/pdf" }, "pdf"],
+		[{ id: "1", name: "a.PNG" }, "image"],
+		[{ id: "1", name: "n.md" }, "markdown"],
+		[{ id: "1", name: "d.json" }, "text"],
+		[{ id: "1", name: "x", mimeType: "text/plain" }, "text"],
+		[{ id: "1", name: "a.zip" }, "none"],
+	] as const)("%j → %s", (file, kind) => {
+		expect(previewKind(file)).toBe(kind);
+	});
+});
+
+describe("FilePreview", () => {
+	const Btn = ({ children, title }: { children: unknown; title: string }) => createElement("span", { "data-b": title }, children as never);
+	const render = (file: { id: string; name: string; size?: number }) =>
+		renderToStaticMarkup(
+			createElement(FilePreview, { file, fetchBlob: async () => new Blob(), onClose: () => {}, onDownloadError: () => {}, Button: Btn as never }),
+		);
+
+	it("an unpreviewable format says so and points at Download, without fetching", () => {
+		const out = render({ id: "1", name: "a.zip" });
+		expect(out).toContain("No preview for this format — use Download.");
+		expect(out).toContain('aria-label="Preview of a.zip"');
+		expect(out).toContain('data-b="Download"');
+	});
+
+	it("a file over 50MB is download-only", () => {
+		expect(render({ id: "1", name: "big.pdf", size: PREVIEW_MAX_BYTES + 1 })).toContain("Too large to preview");
+	});
+
+	it("a previewable file starts in the loading state", () => {
+		expect(render({ id: "1", name: "a.pdf" })).toContain("Loading preview…");
 	});
 });
