@@ -1,5 +1,9 @@
 /**
- * Continue runs that stopped on `provider_credit` once the owner's key works again (#1318).
+ * Continue runs that stopped on `provider_credit` once the owner's key works again (#1318) — and, since #1326, runs that
+ * stopped on `provider_credentials`: a 403 `permission_error` "Request not allowed" was measured coming and going on a key that
+ * worked minutes either side of it, and its hold used to be a deadlock — the hold paused every automatic start, so no call was
+ * ever made that could clear it. Refused keys are now probed on the same backoff, whether or not a run is waiting, because the
+ * hold itself is what is waiting.
  *
  * A credit stop is correct for the run that hit it — replaying a call the provider refuses for want of balance spends nothing and
  * fixes nothing (#773) — but nothing used to come back for it afterwards, so every stopped run waited for a person to press
@@ -28,8 +32,8 @@ import { logEvent } from "./events.js";
 import { getLoopRun, type LoopRunView } from "./agent-loop-store.js";
 import { startRefusalIsWaitable } from "./loop-drivers.js";
 import { readProviderAccountHealth } from "./provider-account-health.js";
-import { selectedProviderAccount } from "./provider-account-hold.js";
-import { runUserWorkersAi, UserAiProviderError } from "./user-ai.js";
+import { providerCredentialId, selectedProviderAccount, type HeldProvider } from "./provider-account-hold.js";
+import { getUserCloudflareAiCredentials, getUserProviderKey, runUserWorkersAi } from "./user-ai.js";
 import { readInstanceConfigPair } from "./instance-config.js";
 import { parseAccountPreferences } from "./preferences.js";
 
@@ -51,8 +55,8 @@ export interface CreditResumeDeps {
 	now?: () => number;
 	/** Start the successor. Defaults to the Continue path. */
 	start?: (env: Env, run: LoopRunView, userId: string) => Promise<{ ok: true; runId: string } | { ok: false; reason?: string; error: string }>;
-	/** The four-token probe of this owner's Anthropic key; true when it worked (which also clears the hold). */
-	probe?: (env: Env, userId: string) => Promise<boolean>;
+	/** The four-token probe of this owner's key on `provider`; true when it worked (which also clears the hold). */
+	probe?: (env: Env, userId: string, provider: HeldProvider) => Promise<boolean>;
 	windowMs?: number;
 }
 
@@ -71,7 +75,7 @@ async function candidates(env: Env, now: number, windowMs: number, userId?: stri
 		   FROM agent_loop_runs r
 		   JOIN agent_instances i ON i.id = r.instance_id AND i.status = 'active'
 		   LEFT JOIN coding_sessions s ON s.id = r.session_id
-		  WHERE r.stop_reason = 'provider_credit' AND r.finished_at IS NOT NULL AND r.finished_at > ?1
+		  WHERE r.stop_reason IN ('provider_credit', 'provider_credentials') AND r.finished_at IS NOT NULL AND r.finished_at > ?1
 		    AND r.auto_resume_at IS NULL AND (r.auto_resume_next_at IS NULL OR r.auto_resume_next_at <= ?2)
 		    AND (?3 IS NULL OR r.user_id = ?3)
 		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs n LEFT JOIN coding_sessions ns ON ns.id = n.session_id
@@ -96,12 +100,14 @@ export async function autoResumeEnabled(env: Env, userId: string, instanceId: st
 /** Has the key this instance runs on recovered since the run stopped? A hold, when there is one, is the authority; else the account's health record. */
 async function keyRecoveredSince(env: Env, userId: string, instanceId: string, stoppedAt: number): Promise<{ recovered: boolean; label: string; at: number | null }> {
 	const account = await selectedProviderAccount(env, instanceId, userId).catch(() => null);
-	if (account?.provider !== "anthropic") return { recovered: false, label: "", at: null };
+	if (!account) return { recovered: false, label: "", at: null };
 	const hold = await env.DB.prepare("SELECT failure_class, failed_at, cleared_at FROM provider_account_holds WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3")
 		.bind(userId, account.provider, account.credentialId)
 		.first<{ failure_class: string; failed_at: number; cleared_at: number | null }>();
 	const label = `…${account.credentialId.substring(0, 4)}`;
-	if (hold) return hold.failure_class === "provider_credit" && hold.cleared_at !== null && hold.cleared_at >= stoppedAt ? { recovered: true, label, at: hold.cleared_at } : { recovered: false, label, at: null };
+	// Either class: a run stopped on credit whose key was later refused (or the other way round) recovers when THIS key works.
+	if (hold) return hold.cleared_at !== null && hold.cleared_at >= stoppedAt ? { recovered: true, label, at: hold.cleared_at } : { recovered: false, label, at: null };
+	if (account.provider !== "anthropic") return { recovered: false, label, at: null };
 	// No hold row: the key failed before holds were recorded. The older record says whether it has succeeded since.
 	const health = await readProviderAccountHealth(env, userId).catch(() => null);
 	const succeededAt = health?.lastSuccessAt ? Date.parse(health.lastSuccessAt.includes("T") ? health.lastSuccessAt : `${health.lastSuccessAt.replace(" ", "T")}Z`) : NaN;
@@ -178,42 +184,62 @@ export async function resumeRecoveredCreditRuns(env: Env, deps: CreditResumeDeps
 	return summary;
 }
 
-/** The verify request: four tokens against the owner's Anthropic key. A success clears the hold as any real call does. */
-export async function probeAnthropicKey(env: Env, userId: string): Promise<boolean> {
+/** The fingerprint of the key stored for `provider` now, or null when none is. A probe always spends the CURRENT key. */
+async function currentCredentialId(env: Env, userId: string, provider: HeldProvider): Promise<string | null> {
+	const credential = provider === "anthropic" ? await getUserProviderKey(env, userId, "anthropic") : await getUserCloudflareAiCredentials(env, userId).catch(() => null);
+	return credential ? providerCredentialId(provider, credential) : null;
+}
+
+/** The model each held provider's probe names — the same pair `POST /v1/keys/:provider/verify` uses. */
+const PROBE_MODEL: Record<HeldProvider, string> = { anthropic: "claude-sonnet-4-6", cloudflare: "@cf/meta/llama-3.2-3b-instruct" };
+
+/** The verify request: four tokens against the owner's key. A success clears the hold as any real call does; any failure is "not yet". */
+export async function probeProviderKey(env: Env, userId: string, provider: HeldProvider): Promise<boolean> {
 	try {
-		await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages: [{ role: "system", content: "Reply with exactly: ok" }, { role: "user", content: "verify" }], max_tokens: 4, maxTokens: 4 }, undefined, { provider: "anthropic" });
+		await runUserWorkersAi(env, userId, PROBE_MODEL[provider], { messages: [{ role: "system", content: "Reply with exactly: ok" }, { role: "user", content: "verify" }], max_tokens: 4, maxTokens: 4 }, undefined, { provider });
 		return true;
-	} catch (e) {
-		if (e instanceof UserAiProviderError) return false;
+	} catch {
 		return false;
 	}
 }
 
 /**
- * Probe the failing credit keys that have runs waiting — and only those. A key nobody is waiting on is never spent on, and a
- * key that has been failing for a week is left for a real call to find out.
+ * Probe the held keys something is waiting on. A credit hold is probed only while credit-stopped runs wait — a key nobody waits
+ * on is never spent on. A refused-key hold (#1326) is probed while its owner has any active instance, because that hold is
+ * itself what pauses their automatic starts, and nothing else would ever call the key to clear it. A key failing for a week is
+ * left for a real call to find out.
  */
 export async function probeFailingKeys(env: Env, deps: CreditResumeDeps = {}): Promise<{ probed: number; recovered: number }> {
 	const now = (deps.now ?? Date.now)();
-	const probe = deps.probe ?? probeAnthropicKey;
+	const probe = deps.probe ?? probeProviderKey;
 	const out = { probed: 0, recovered: 0 };
 	const { results } = await env.DB.prepare(
-		`SELECT h.user_id, h.credential_id, h.failed_at, h.probe_attempts FROM provider_account_holds h
-		  WHERE h.provider = 'anthropic' AND h.failure_class = 'provider_credit' AND h.cleared_at IS NULL
-		    AND h.failed_at > ?1 AND (h.next_probe_at IS NULL OR h.next_probe_at <= ?2)
-		    AND EXISTS (SELECT 1 FROM agent_loop_runs r JOIN agent_instances i ON i.id = r.instance_id AND i.status = 'active'
-		                 WHERE r.user_id = h.user_id AND r.stop_reason = 'provider_credit' AND r.auto_resume_at IS NULL AND r.finished_at > ?3)
+		`SELECT h.user_id, h.provider, h.credential_id, h.failed_at, h.probe_attempts FROM provider_account_holds h
+		  WHERE h.cleared_at IS NULL AND h.failed_at > ?1 AND (h.next_probe_at IS NULL OR h.next_probe_at <= ?2)
+		    AND (
+		      (h.failure_class = 'provider_credit' AND h.provider = 'anthropic'
+		        AND EXISTS (SELECT 1 FROM agent_loop_runs r JOIN agent_instances i ON i.id = r.instance_id AND i.status = 'active'
+		                     WHERE r.user_id = h.user_id AND r.stop_reason = 'provider_credit' AND r.auto_resume_at IS NULL AND r.finished_at > ?3))
+		      OR (h.failure_class = 'provider_credentials'
+		        AND EXISTS (SELECT 1 FROM agent_instances i WHERE i.user_id = h.user_id AND i.status = 'active'))
+		    )
 		  LIMIT 25`,
-	).bind(now - PROBE_GIVE_UP_MS, now, now - (deps.windowMs ?? AUTO_RESUME_WINDOW_MS)).all<{ user_id: string; credential_id: string; failed_at: number; probe_attempts: number }>();
+	).bind(now - PROBE_GIVE_UP_MS, now, now - (deps.windowMs ?? AUTO_RESUME_WINDOW_MS)).all<{ user_id: string; provider: HeldProvider; credential_id: string; failed_at: number; probe_attempts: number }>();
 	for (const h of results ?? []) {
+		// A hold on a key since replaced (or removed) is retired, not probed: the probe would spend the NEW key, pass, and
+		// leave the old row due again on the next tick — a real provider call every minute (review of #1326).
+		if ((await currentCredentialId(env, h.user_id, h.provider).catch(() => null)) !== h.credential_id) {
+			await env.DB.prepare("UPDATE provider_account_holds SET cleared_at = ?4 WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3 AND cleared_at IS NULL").bind(h.user_id, h.provider, h.credential_id, now).run();
+			continue;
+		}
 		out.probed++;
-		const ok = await probe(env, h.user_id).catch(() => false);
+		const ok = await probe(env, h.user_id, h.provider).catch(() => false);
 		if (ok) {
 			out.recovered++;
-			await env.DB.prepare("UPDATE provider_account_holds SET probe_attempts = 0, next_probe_at = NULL WHERE user_id = ?1 AND provider = 'anthropic' AND credential_id = ?2").bind(h.user_id, h.credential_id).run();
+			await env.DB.prepare("UPDATE provider_account_holds SET probe_attempts = 0, next_probe_at = NULL WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3").bind(h.user_id, h.provider, h.credential_id).run();
 		} else {
 			const attempts = h.probe_attempts + 1;
-			await env.DB.prepare("UPDATE provider_account_holds SET probe_attempts = ?3, next_probe_at = ?4 WHERE user_id = ?1 AND provider = 'anthropic' AND credential_id = ?2").bind(h.user_id, h.credential_id, attempts, now + probeDelayMs(attempts)).run();
+			await env.DB.prepare("UPDATE provider_account_holds SET probe_attempts = ?4, next_probe_at = ?5 WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3").bind(h.user_id, h.provider, h.credential_id, attempts, now + probeDelayMs(attempts)).run();
 		}
 	}
 	return out;

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
+import type { KeyVerifyResponse as WorkerKeyVerifyResponse } from "../../../../workers/api/src/lib/key-verify-types";
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from "../../../../workers/api/src/lib/coding-default-engine-types";
 import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, AccountPreferencesWriteResponse as WorkerAccountPreferencesWriteResponse } from "../../../../workers/api/src/lib/preferences";
 import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, DiscordChannelListResponse as WorkerDiscordChannelListResponse, DiscordGrantListResponse as WorkerDiscordGrantListResponse, DiscordGrantResponse as WorkerDiscordGrantResponse, DiscordGuildListResponse as WorkerDiscordGuildListResponse, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse, PreparedApplicationTransferReceipt as WorkerPreparedApplicationTransferReceipt } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
+import type { AccountCodingDefaultApplyResponse, KeyVerifyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
 import type { DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuildListResponse } from "./discordTypes";
 import type { GmailScoutScanResponse, LeadVerification, LeadVerificationListResponse } from "./gmailScout";
 import type { RemoteAuthRequestResponse, RemoteAuthRequestView } from "./remoteAuth";
@@ -73,6 +74,10 @@ const _knowledgeDocHasNoInventedFields: Extra<KnowledgeDoc, WorkerKnowledgeDoc> 
 // import-safe for the same reason `agent-types.ts` is: it imports nothing.
 const _recordPageHasNoInventedFields: Extra<RecordQueryResponse, WorkerRecordQueryResult> extends never ? true : never = true;
 const _dataRecordHasNoInventedFields: Extra<DataRecord, WorkerCollectionRecord> extends never ? true : never = true;
+
+// ── KeyVerifyResponse ───────────────────────────────────────────────────────────────────────────
+// #1326: Profile → API Keys → Verify. The producer is the leaf `key-verify-types.ts`.
+const _keyVerifyHasNoInventedFields: Extra<KeyVerifyResponse, WorkerKeyVerifyResponse> extends never ? true : never = true;
 
 // ── InstanceModelState ──────────────────────────────────────────────────────────────────────────
 //

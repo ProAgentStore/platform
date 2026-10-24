@@ -220,7 +220,12 @@ const EXCLUSIONS = [
 // It is a ceiling, not a permission: adding a tool deletes an entry, and an entry that matches
 // nothing fails. Each group carries the issue tracking it where one exists.
 // ─────────────────────────────────────────────────────────────────────────────
-const KNOWN_GAPS = [];
+const KNOWN_GAPS = [
+	{
+		label: "Profile → API Keys → Verify (#1326) — tool tracked in #1343",
+		match: /^POST \/v1\/keys\/\{\}\/verify$/,
+	},
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Inventory

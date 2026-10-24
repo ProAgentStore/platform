@@ -25,7 +25,7 @@
  */
 
 /** The endings the server will continue. Kept in the order `RESUMABLE_STOP_REASONS` lists them. */
-export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth", "constraint_refused", "turn_lost", "decision", "runner_gone", "engine_error"] as const;
+export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "provider_credentials", "engine_auth", "constraint_refused", "turn_lost", "decision", "runner_gone", "engine_error"] as const;
 
 /** The fields of a loop run that decide whether Continue is offered (`LoopRunView` has more). */
 export interface LoopRunContinueLike {
@@ -141,6 +141,8 @@ const REASON_LABEL: Record<string, string> = {
 	interrupted: "Cut off by the platform",
 	engine_limit: "Hit the coding CLI's usage limit",
 	provider_credit: "Out of AI provider credit — continues by itself after you top up",
+	// #1326. The provider refused the key; the platform re-checks it and continues once it works.
+	provider_credentials: "AI provider refused the key — continues by itself once it works",
 	engine_auth: "Coding CLI not signed in",
 	// #1019. Nobody cancelled and nothing failed: the owner's own rules did not fit the engine's envelope whole.
 	constraint_refused: "Stopped: your rules are too long to send",

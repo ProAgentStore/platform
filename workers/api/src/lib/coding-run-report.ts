@@ -66,13 +66,21 @@ export const INTERRUPTED_CLASSES: ReadonlySet<CodingFailureClass> = new Set(Obje
  * `Loop stopped (failed)` with the vendor's sentence as detail, indistinguishable from a crash, so
  * an orchestrator treated it as transient and re-dispatched a run that could not start.
  *
- * One member for now. `provider_credentials` is deliberately NOT here: a bad key already carries its
- * own "Update it in Profile → API Keys" hint from `user-ai.ts`, and widening this table is a
- * decision about what the board column should say for it, which #773 did not make.
+ * Two members. #773 left `provider_credentials` out ("widening this table is a decision"); #1326 made
+ * it: a refused key is re-checked and its run continued automatically, so it needs a stop reason the
+ * auto-resume can find and a sentence that says so, instead of `run error:`.
  */
-const OWNER_ACTION: Partial<Record<CodingFailureClass, { stopReason: LoopStopReason }>> = {
+const OWNER_ACTION: Partial<Record<CodingFailureClass, { stopReason: LoopStopReason; detail: (message: string) => string }>> = {
 	provider_credit: {
 		stopReason: "provider_credit",
+		detail: providerCreditStopDetail,
+	},
+	// #1326: a refused key now has its own stop reason, because the platform does something about it —
+	// it re-checks the key on a backoff and continues the run once a check passes — and "failed" or
+	// "run error" told the owner neither that nor that the work so far stands.
+	provider_credentials: {
+		stopReason: "provider_credentials",
+		detail: providerCredentialsStopDetail,
 	},
 };
 
@@ -82,6 +90,15 @@ function providerCreditStopDetail(message: string): string {
 	return (
 		`Stopped because ${key} has insufficient balance — this is the Anthropic API key balance, never a machine or Claude CLI subscription, not by the objective. ` +
 		"Top up at console.anthropic.com/settings/billing, then start the run again; retrying before that will fail the same way."
+	);
+}
+
+/** Same order as the credit sentence: what happens next first, the vendor's text after it. */
+function providerCredentialsStopDetail(message: string): string {
+	const key = anthropicCreditKeyIdentity(message) ?? "the API key used for this request";
+	return (
+		`Stopped because the AI provider refused ${key}, not by the objective — whatever this run had already committed or pushed stands. ` +
+		"PAGS re-checks the key automatically and continues this run once it works; if it stays refused, fix or replace it in Profile → API Keys."
 	);
 }
 
@@ -138,7 +155,7 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 	// first, the vendor's own text last where the card's 300 characters will cut it — and its own
 	// stop reason, so `coding_loop_status` says "top up" rather than "failed".
 	const owner = OWNER_ACTION[cls];
-	if (owner) return { detail: `${providerCreditStopDetail(message)} ${withoutVendorAdvice(message)}`, stopReason: owner.stopReason };
+	if (owner) return { detail: `${owner.detail(message)} ${withoutVendorAdvice(message)}`, stopReason: owner.stopReason };
 	const subject = INTERRUPTED_BY[cls];
 	if (!subject) {
 		return { detail: `run error: ${message}`, stopReason: null };
@@ -243,7 +260,7 @@ export function withoutVendorAdvice(message: string): string {
  * is the only way the placeholder could return.
  */
 export function outcomeWord(outcome: string, stopReason?: LoopStopReason | null): string {
-	return stopReason === "interrupted" || stopReason === "provider_credit" || stopReason === "constraint_refused" || stopReason === "turn_lost" ? stopReason : outcome;
+	return stopReason === "interrupted" || stopReason === "provider_credit" || stopReason === "provider_credentials" || stopReason === "constraint_refused" || stopReason === "turn_lost" ? stopReason : outcome;
 }
 
 /**

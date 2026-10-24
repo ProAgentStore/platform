@@ -138,7 +138,7 @@ describe("automatic admission, without consuming the original objective", () => 
 	it("holds pre-existing pending work before claiming/opening a budget; verification drains that same entry", async () => {
 		const q = await enqueueObjective(env, { instanceId: "coder", userId: "u1", repoId: "repo1", objective: "Original owner-approved objective" });
 		await observeProviderAccount(env, "u1", "anthropic", OLD, "provider_credentials");
-		for (let i = 0; i < 3; i++) expect(await tryDequeueAndStart(env, "coder", "repo1", "u1")).toMatchObject({ drained: false, held: expect.stringContaining("rejected") });
+		for (let i = 0; i < 3; i++) expect(await tryDequeueAndStart(env, "coder", "repo1", "u1")).toMatchObject({ drained: false, held: expect.stringContaining("refused") });
 		expect(entries()).toEqual([{ id: q.id, objective: "Original owner-approved objective", status: "pending", deferral_count: 0 }]);
 		expect(start).not.toHaveBeenCalled();
 		await observeProviderAccount(env, "u1", "anthropic", OLD, null);

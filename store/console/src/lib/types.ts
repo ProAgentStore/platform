@@ -954,3 +954,12 @@ export interface ApplicationRunnerSettingsView {
 
 /** The operator-manual responses (#1237), the worker's own types re-exported: `agent-types.ts` imports nothing, so it is safe here. */
 export type { AgentOperatorManualResponse, OperatorManualResponse } from "../../../../workers/api/src/agent-types";
+
+/** Copy of `KeyVerifyResponse` (workers/api/src/lib/key-verify-types.ts) — Profile → API Keys → Verify (#1326). */
+export interface KeyVerifyResponse {
+	ok: boolean;
+	provider: string;
+	checkedAt: string;
+	error?: string;
+	remedy?: string;
+}

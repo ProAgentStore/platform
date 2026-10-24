@@ -25,6 +25,7 @@ nav = [
   { "Git Identity" = "git-identity.md" },
   { "Architecture" = "architecture.md" },
   { "Run Lifecycle" = "run-lifecycle.md" },
+  { "Provider Errors" = "provider-errors.md" },
   { "Skill Publishing" = "skill-publishing.md" }
 ]
 

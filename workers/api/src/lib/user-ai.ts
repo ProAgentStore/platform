@@ -1,6 +1,7 @@
 import { decryptKey } from "./crypto.js";
 import { backfillKeyHint } from "./key-hint-backfill.js";
 import { keyHint } from "./key-hint.js";
+import { clipMarked } from "./clip-marked.js";
 import { observeProviderAccount } from "./provider-account-observation.js";
 import {
 	AI_FIRST_TOKEN_TIMEOUT_MS,
@@ -340,6 +341,16 @@ function anthropicUserBlocks<M extends { role: string; content: unknown }>(messa
 	return messages.map((m) => (m.role === "user" && isUserPromptBlocks(m.content) ? { ...m, content: toAnthropicBlocks(m.content, budget) } : m));
 }
 
+/**
+ * The provider's own error type and request id, as a bracketed suffix (#1326). In the MESSAGE, not
+ * only `details`, because a Workflow step boundary keeps an error's message and drops its fields —
+ * and without these a refusal could not be told apart from a dead key, or traced with the provider.
+ */
+export function providerFacts(type: string | null | undefined, requestId: string | null | undefined): string {
+	const facts = [type, requestId ? `request-id ${requestId}` : null].filter(Boolean);
+	return facts.length ? ` [${facts.join("; ")}]` : "";
+}
+
 async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
@@ -444,6 +455,11 @@ async function runAnthropic(
 			? " — Your API key may not have access to this model. Get a key from console.anthropic.com/settings/keys"
 			: res.status === 401
 				? " — Invalid API key. Update it in Profile → API Keys → Anthropic"
+				// A 403 `permission_error` "Request not allowed" has been measured to come and go on a
+				// key that works minutes either side of it (#1326), so it is reported as a refusal the
+				// platform re-checks, not as a dead key.
+				: res.status === 403
+					? ` — Anthropic API key ending in ${keyHint(apiKey) ?? "an unavailable hint"} was refused. PAGS re-checks this key automatically and continues stopped runs once it works; if it stays refused, check the key and organization at console.anthropic.com or replace it in Profile → API Keys → Anthropic`
 				: res.status === 400 && isCreditBalanceMessage(errMsg)
 					// `keyHint` is exactly four non-secret trailing characters (#780). `runAnthropic`
 					// holds the precise key that made this request, so this identifies THAT key even if
@@ -451,7 +467,7 @@ async function runAnthropic(
 					? ` — Anthropic API key ending in ${keyHint(apiKey) ?? "an unavailable hint"} has insufficient balance. This is the Anthropic API key balance, never a machine or Claude CLI subscription. Top up at console.anthropic.com/settings/billing`
 					: "";
 		throw new UserAiProviderError(
-			`Anthropic (${res.status}): ${errMsg}${hint}`,
+			`Anthropic (${res.status}): ${errMsg}${providerFacts(errObj?.type, res.headers.get("request-id"))}${hint}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
 			errBody,
@@ -755,13 +771,16 @@ async function runCloudflareAi(
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
 		if (res.status === 401 || res.status === 403) await observeProviderAccount(env, userId, "cloudflare", credentials, "provider_credentials");
+		// `details` reaches the verify response and the error log; Cloudflare's errors quote the
+		// account path, which holds a token when the two were saved swapped (#893).
+		const redacted = redactCloudflareUpstream(data, credentials);
+		const first = (redacted as { errors?: Array<{ code?: unknown; message?: unknown }> })?.errors?.[0];
+		const said = typeof first?.message === "string" ? `: ${clipMarked(first.message, 300, { within: true })}` : "";
 		throw new UserAiProviderError(
-			`Cloudflare Workers AI request failed with HTTP ${res.status}`,
+			`Cloudflare Workers AI request failed with HTTP ${res.status}${said}${providerFacts(first?.code != null ? `code ${String(first.code)}` : null, res.headers.get("cf-ray"))}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
-			// `details` reaches the verify response and the error log; Cloudflare's errors quote the
-			// account path, which holds a token when the two were saved swapped (#893).
-			redactCloudflareUpstream(data, credentials),
+			redacted,
 		);
 	}
 	await env.DB.prepare(

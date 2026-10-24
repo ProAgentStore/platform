@@ -158,6 +158,14 @@ describe("runUserWorkersAi", () => {
 		} satisfies Partial<UserAiProviderError>);
 		expect(calls.some((sql) => sql.includes("UPDATE user_api_keys"))).toBe(false);
 	});
+
+	it("carries Cloudflare's own error message, code and ray id in the message (#1326)", async () => {
+		const { env } = envWithCloudflareKey(await encryptedCloudflareRow());
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }, { status: 403, headers: { "cf-ray": "8d1f2a" } })));
+		const err = (await runUserWorkersAi(env, "user-1", "@cf/meta/llama-3.2-3b-instruct", {}).catch((e: unknown) => e)) as UserAiProviderError;
+		expect(err.message).toBe("Cloudflare Workers AI request failed with HTTP 403: Authentication error [code 10000; request-id 8d1f2a]");
+		expect(classifyCodingFailure(err).class).toBe("provider_credentials");
+	});
 });
 
 async function envWithAnthropicKey(apiKey = "sk-ant-test") {
@@ -906,6 +914,23 @@ describe("the chat call streams, and its deadlines measure silence (#427)", () =
 		const other = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
 		expect(other.message).not.toContain("settings/billing");
 		expect(classifyCodingFailure(other).class).toBe("provider_error");
+	});
+
+	it("keeps the provider's error type and request id in the message, and names the refused key (#1326)", async () => {
+		// The live 403 from 23–24 Oct, verbatim. Before #1326 only the status and sentence survived, so a
+		// refusal that cleared by itself could not be told from a dead key, nor traced with Anthropic.
+		const env = await envWithAnthropicKey("sk-ant-live-key-8QAA");
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ type: "error", error: { type: "permission_error", message: "Request not allowed" } }, { status: 403, headers: { "request-id": "req_011CVx" } })));
+		const err = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
+		expect(err).toMatchObject({ name: "UserAiProviderError", upstreamStatus: 403, retryable: false });
+		expect(err.message.startsWith("Anthropic (403): Request not allowed [permission_error; request-id req_011CVx]")).toBe(true);
+		expect(err.message).toContain("Anthropic API key ending in 8QAA was refused");
+		expect(err.message).toContain("re-checks this key automatically");
+		expect(classifyCodingFailure(err)).toMatchObject({ class: "provider_credentials", upstreamStatus: 403 });
+		// No type and no request id: nothing is invented.
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { message: "overloaded" } }, { status: 529 })));
+		const bare = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
+		expect(bare.message).toBe("Anthropic (529): overloaded");
 	});
 });
 

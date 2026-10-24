@@ -210,6 +210,7 @@ describe("describeLoopRun", () => {
 			no_progress: true,
 			engine_limit: true,
 			provider_credit: true,
+			provider_credentials: true,
 			interrupted: true,
 			engine_auth: true,
 			constraint_refused: true,

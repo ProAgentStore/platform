@@ -31,8 +31,8 @@ const run = (id: string, over: Record<string, unknown> = {}) => {
 	}
 	d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, stop_reason, max_iterations, started_at, finished_at, session_id) VALUES ('${id}', 'u1', '${r.instance}', 'Implement #${id}', '${r.status}', ${r.stop ? `'${r.stop}'` : "NULL"}, 20, ${r.startedAt}, ${r.finishedAt}, ${session ? `'${session}'` : "NULL"})`);
 };
-const hold = (credential: string, cleared: number | null, failedAt = NOW - 5 * H) =>
-	providerCredentialId("anthropic", credential).then((id) => d1.exec(`INSERT OR REPLACE INTO provider_account_holds (user_id, provider, credential_id, failure_class, failed_at, cleared_at) VALUES ('u1', 'anthropic', '${id}', 'provider_credit', ${failedAt}, ${cleared === null ? "NULL" : cleared})`));
+const hold = (credential: string, cleared: number | null, failedAt = NOW - 5 * H, failureClass = "provider_credit") =>
+	providerCredentialId("anthropic", credential).then((id) => d1.exec(`INSERT OR REPLACE INTO provider_account_holds (user_id, provider, credential_id, failure_class, failed_at, cleared_at) VALUES ('u1', 'anthropic', '${id}', '${failureClass}', ${failedAt}, ${cleared === null ? "NULL" : cleared})`));
 const row = (id: string) => d1.sqlite.prepare("SELECT auto_resume_state AS state, auto_resume_successor AS successor, auto_resume_attempts AS attempts, auto_resume_next_at AS next, auto_resume_note AS note, auto_resume_at AS at FROM agent_loop_runs WHERE run_id = ?").get(id) as { state: string | null; successor: string | null; attempts: number; next: number | null; note: string | null; at: number | null };
 const events = (event?: string) => (d1.sqlite.prepare("SELECT event, message, context, instance_id FROM agent_events WHERE source = 'auto-resume' ORDER BY ts, rowid").all() as Array<{ event: string; message: string; context: string; instance_id: string | null }>).filter((e) => !event || e.event === event);
 const deps = (over: Partial<CreditResumeDeps> = {}): CreditResumeDeps => ({
@@ -328,5 +328,58 @@ describe("probing a failing key (#1318)", () => {
 		expect(out).toMatchObject({ probed: 1, resumed: 1 });
 		expect(row("r1")).toMatchObject({ state: "resumed" });
 		expect(holdRow()).toEqual({ a: 0, n: null });
+	});
+});
+
+describe("a refused key heals itself instead of pausing automatic runs forever (#1326)", () => {
+	const holdRow = () => d1.sqlite.prepare("SELECT probe_attempts AS a, next_probe_at AS n, cleared_at AS c FROM provider_account_holds").get() as { a: number; n: number | null; c: number | null };
+
+	it("files a 401/403 as provider_credentials, still not replayed inside the run", () => {
+		const f = classifyCodingFailure(new Error("Anthropic (403): Request not allowed [permission_error; request-id req_011] — Anthropic API key ending in 8QAA was refused."));
+		expect(f.class).toBe("provider_credentials");
+		expect(DRIVER_RESUME_POLICY.provider_credentials.resume).toBe(false);
+	});
+
+	it("probes a refused key with NO stopped run waiting — the hold itself is what waits (the deadlock this fixes)", async () => {
+		// The incident: the hold paused every automatic start, so no call was ever made that could clear it.
+		await hold(KEY, null, NOW - 5 * H, "provider_credentials");
+		const seen: string[] = [];
+		const out = await probeFailingKeys(env, { now: () => NOW, probe: async (_e, _u, provider) => { seen.push(provider); return false; } });
+		expect(out).toEqual({ probed: 1, recovered: 0 });
+		expect(seen).toEqual(["anthropic"]);
+		expect(holdRow()).toMatchObject({ a: 1, n: NOW + 5 * 60_000 });
+	});
+
+	it("does not probe a refused key whose owner has no active instance, nor one refused for over 7 days", async () => {
+		await hold(KEY, null, NOW - PROBE_GIVE_UP_MS - H, "provider_credentials");
+		expect((await probeFailingKeys(env, { now: () => NOW, probe: async () => true })).probed).toBe(0);
+		await hold(KEY, null, NOW - H, "provider_credentials");
+		d1.exec("UPDATE agent_instances SET status = 'paused'");
+		expect((await probeFailingKeys(env, { now: () => NOW, probe: async () => true })).probed).toBe(0);
+	});
+
+	it("retires a hold on a key since REPLACED instead of probing it (the probe would spend the new key every minute)", async () => {
+		await hold(OTHER_KEY, null, NOW - H, "provider_credentials");
+		let calls = 0;
+		expect((await probeFailingKeys(env, { now: () => NOW, probe: async () => { calls++; return true; } })).probed).toBe(0);
+		expect(calls).toBe(0);
+		expect(holdRow().c).toBe(NOW);
+	});
+
+	it("a passing probe clears the hold and the same tick continues the run that stopped on the refusal", async () => {
+		await hold(KEY, null, NOW - 5 * H, "provider_credentials");
+		run("r403", { stop: "provider_credentials" });
+		const probe = async () => { d1.exec(`UPDATE provider_account_holds SET cleared_at = ${NOW}`); return true; };
+		const out = await runCreditAutoResume(env, deps({ probe }));
+		expect(out).toMatchObject({ probed: 1, resumed: 1 });
+		expect(row("r403")).toMatchObject({ state: "resumed", successor: "succ-r403" });
+		expect(holdRow()).toMatchObject({ a: 0, n: null, c: NOW });
+	});
+
+	it("does not continue a refused-key run while the key is still refused", async () => {
+		await hold(KEY, null, NOW - 5 * H, "provider_credentials");
+		run("r403", { stop: "provider_credentials" });
+		expect((await runCreditAutoResume(env, deps({ probe: async () => false }))).resumed).toBe(0);
+		expect(started).toEqual([]);
 	});
 });

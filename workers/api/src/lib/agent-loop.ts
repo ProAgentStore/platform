@@ -23,6 +23,7 @@ export type LoopStopReason =
 	| "no_progress" // repeating itself — a loop that cannot terminate on its own
 	| "engine_limit" // the coding CLI's OWN usage window was still spent after this run's wait budget (#541)
 	| "provider_credit" // the owner's AI provider account has no credit left — top up, do not retry (#773)
+	| "provider_credentials" // the provider refused the owner's key (401/403); the platform re-checks it and continues once it works (#1326)
 	| "engine_auth" // the coding CLI is not signed in and nobody signed it in within the park (#881)
 	| "interrupted" // the PLATFORM cut the invocation off — the objective never reported (#546)
 	| "constraint_refused" // the owner's constraints in force do not fit the engine's envelope whole: nothing more was sent (#1019)
@@ -236,6 +237,7 @@ export function statusFor(reason: LoopStopReason): LoopRunStatus {
 	// `provider_credit` is the same shape as `engine_limit` one level down (#773): the run did not
 	// fail, the owner's own Anthropic account ran out of credit, and the only remedy is theirs — top
 	// up. "Failed" would invite a retry that costs nothing and fixes nothing; "needs you" says who.
+	// `provider_credentials` likewise (#1326): the provider refused the key, and the run is continued once a re-check passes.
 	//
 	// `engine_auth` is the same shape again (#881): the engine is not signed in, and signing it in
 	// is an owner act — which the re-auth relay makes possible from any device.
@@ -245,7 +247,7 @@ export function statusFor(reason: LoopStopReason): LoopRunStatus {
 	//
 	// `turn_lost` (#1053): the turn may have half-run before the restart, so somebody has to look at the worktree.
 	// `decision` (#1076): the run asked the owner a question and is still owed the answer.
-	if (reason === "decision" || reason === "runner_gone" || reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "engine_auth" || reason === "constraint_refused" || reason === "turn_lost") return "needs_human";
+	if (reason === "decision" || reason === "runner_gone" || reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "provider_credentials" || reason === "engine_auth" || reason === "constraint_refused" || reason === "turn_lost") return "needs_human";
 	return "failed";
 }
 

@@ -61,7 +61,7 @@ describe("settledDecision — the one outcome the transcript already decides (#7
 		expect(reason).toContain("never a machine or Claude CLI subscription");
 		expect(reason).toContain("ending in 9abc");
 		expect(reason).toContain("console.anthropic.com/settings/billing");
-		expect(settledDecision({ messages: failedTurn(BAD_KEY) })?.reason).toContain("only the owner can clear it");
+		expect(settledDecision({ messages: failedTurn(BAD_KEY) })?.reason).toContain("the AI provider refused the key");
 	});
 
 	it.each([

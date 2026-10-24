@@ -20,9 +20,11 @@ import {
 } from "./coding-repetition.js";
 import { clockLine } from "./coding-wait.js";
 import { engineSignInBlock, type EngineAuthPrompt } from "./engine-auth-prompt.js";
+import { engineProviderError, providerTurnVerdict } from "./engine-provider-error.js";
 import { deadSessionDetail } from "./coding-dead-session.js";
 import { instructionAttributionNote } from "./run-attribution.js";
 import {
+	classifyTurn,
 	EMPTY_STREAK,
 	type EngineTurnReport,
 	engineErrorEnding,
@@ -315,6 +317,11 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	let repeatedInstruction: string | null = null;
 	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545). */
 	let turns: TurnStreak = EMPTY_STREAK;
+	// Consecutive failed turns the engine's AI provider blamed on itself (#1326) — retried, not counted as strikes.
+	let transientStreak = 0;
+	// Whether THIS round has sent a turn. The first snapshot after a park still carries the turn that parked it, and a new
+	// round starts with an empty streak, so that turn reads as new — re-parking on it would never retry (#1326).
+	let actedThisRound = false;
 
 	for (let step = 0; step < maxSteps; step++) {
 		let snap = await deps.snapshot();
@@ -354,12 +361,39 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		// the top-of-step snapshot, the `waitIdle` result and the next step's snapshot are three
 		// sightings of ONE turn, and counting sightings would trip the bound on a single failure.
 		const seen = observeTurn(turns, snap.lastTurn);
+		// A NEW turn that worked ends a transient run of failures; a re-read of the same turn changes nothing.
+		if (seen.streak.lastAt !== turns.lastAt && classifyTurn(snap.lastTurn) === "ok") transientStreak = 0;
 		turns = seen.streak;
+		let retryingProvider = false;
 		if (seen.newFailure) {
 			// A turn refused on a dead login is not one of three strikes — no instruction and no retry
 			// changes it, and only the owner signing the engine in does (#881).
 			const block = engineSignInBlock(snap);
 			if (block) return reauthResult(block, goal, step, transcript);
+			// THE PROVIDER'S OWN WORDS (#1326): a usage window parks, a transient failure is retried, an empty account ends —
+			// none is the engine refusing to run, so none spends one of the three strikes below.
+			const reading = engineProviderError(turns.lastDetail, turns.lastTail);
+			const verdict = actedThisRound ? providerTurnVerdict(reading, transientStreak, goal.repo) : reading ? { transientStreak } : null;
+			transientStreak = verdict?.transientStreak ?? 0;
+			if (verdict) turns = { ...turns, consecutive: Math.max(0, turns.consecutive - 1) };
+			if (verdict?.end) {
+				transcript.push(`finish: engine_error — ${verdict.end}`);
+				return { outcome: "engine_error", detail: verdict.end, steps: step, transcript };
+			}
+			if (verdict?.park) {
+				transcript.push(`waiting: ${verdict.park}`);
+				await deps.onEvent?.("waiting", verdict.park);
+				return { outcome: "waiting", detail: verdict.park, steps: step, transcript };
+			}
+			if (verdict && !actedThisRound) retryingProvider = true; // the parked turn: not a strike, and the next instruction is the retry
+			if (verdict?.retry) {
+				retryingProvider = true;
+				actionLog.push(verdict.retry);
+				transcript.push(verdict.retry);
+				await deps.onEvent?.("engine_failed", verdict.retry);
+			}
+		}
+		if (seen.newFailure && !retryingProvider) {
 			const note = engineFailureNote(turns);
 			actionLog.push(note);
 			transcript.push(note);
@@ -598,6 +632,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		await deps.onEvent?.("action", label, decision.action);
 		// An act the platform refused to send ends the run with ITS reason — on the last step too, not as max_steps (#1019).
 		const acted = await deps.act(decision.action);
+		actedThisRound = true;
 		if (acted?.cancelled) return { outcome: "cancelled", detail: acted.stopReason, steps: step + 1, transcript };
 		// After sending an instruction, let the CLI run to completion before the
 		// next decision — otherwise the brain reasons over a stale (pre-response)

@@ -58,8 +58,11 @@ export async function automaticProviderHold(env: Env, instanceId: string, userId
 			.bind(userId, account.provider, account.credentialId).first<HoldRow>();
 		if (!h) return null;
 		const name = account.provider === "anthropic" ? "Anthropic" : "Cloudflare Workers AI";
-		const remedy = h.failure_class === "provider_credit" ? `Top up this ${name} account` : `Replace or repair this ${name} credential in Profile → API Keys`;
-		const reason = `Automatic runs are paused because this ${name} credential ${h.failure_class === "provider_credit" ? "has insufficient balance" : "was rejected"}. ${remedy}, then verify it in Profile → API Keys. Replacing the credential or a successful call/verification lifts this hold. You can explicitly Continue the original run; automatic wakes will not consume its objective.`;
+		// #1326: says what the platform is doing about it. The hold is re-checked on a backoff (`credit-auto-resume.ts`),
+		// so a refusal that clears by itself — measured on 403 "Request not allowed" — lifts without the owner.
+		const reason = h.failure_class === "provider_credit"
+			? `Automatic runs are paused because this ${name} credential has insufficient balance. Top up this ${name} account; PAGS re-checks it automatically and resumes once it works, or press Verify in Profile → API Keys. You can explicitly Continue the original run; automatic wakes will not consume its objective.`
+			: `Automatic runs are paused because ${name} refused this credential. PAGS re-checks it automatically (after 5 min, 15 min, 1 h, then every 6 h) and resumes on its own once it works. If it stays refused, check the key at the provider or replace it in Profile → API Keys, then press Verify. You can explicitly Continue the original run; automatic wakes will not consume its objective.`;
 		const claim = await env.DB.prepare("UPDATE provider_account_holds SET notice_at = ?4 WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3 AND cleared_at IS NULL AND notice_at IS NULL")
 			.bind(userId, account.provider, account.credentialId, Date.now()).run();
 		if ((claim.meta?.changes ?? 0) > 0) await (notify ? notify(reason) : notifyUser(env, userId, "coding", "Automatic runs are paused", reason, deepLinkFor({ kind: "profile" }), { kind: "update", instanceId, key: `provider-hold:${account.provider}:${h.failed_at}` })).catch(() => undefined);

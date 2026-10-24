@@ -5,6 +5,7 @@
  * Agents access external APIs via the proxy which injects the key.
  */
 import { Hono } from "hono";
+import type { KeyVerifyResponse } from "../lib/key-verify-types.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { upsertUserProviderKey } from "../lib/user-api-key-store.js";
 import { revokeUserConnectorGrants } from "../lib/connector-grants.js";
@@ -366,7 +367,7 @@ keysRoutes.post("/:provider/verify", async (c) => {
 			undefined,
 			{ provider: providerId as AiProvider },
 		);
-		return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() });
+		return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() } satisfies KeyVerifyResponse);
 	} catch (err) {
 		if (err instanceof UserAiCredentialsError) {
 			throw new HttpError(err.status, err.message);
@@ -384,7 +385,7 @@ keysRoutes.post("/:provider/verify", async (c) => {
 				failureClass: failure.class,
 				remedy: DRIVER_RESUME_POLICY[failure.class].why,
 				checkedAt: new Date().toISOString(),
-			}, 400);
+			} satisfies KeyVerifyResponse, 400);
 		}
 		throw err;
 	}

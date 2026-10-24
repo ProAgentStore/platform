@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import { api, getToken } from "@proagentstore/sdk/client";
 import { keyUsageLabel } from "../lib/keyUsage";
+import type { KeyVerifyResponse } from "../lib/types";
 import { appendMcpAuditPage, mcpAuditCoverageNote, type McpAuditPageView } from "../lib/mcpAuditPaging";
 
 interface ProfileField {
@@ -29,6 +30,9 @@ interface Provider {
 	 */
 	keyHint?: string | null;
 }
+
+/** Providers `POST /v1/keys/:provider/verify` can check (`VERIFIABLE_PROVIDERS` in routes/keys.ts). */
+const VERIFIABLE = new Set(["anthropic", "cloudflare"]);
 
 interface McpAuditEvent {
 	id?: string;
@@ -185,6 +189,24 @@ export default function Profile() {
 			await api(`/v1/keys/${providerId}`, { method: "PUT", body: JSON.stringify({ key, accountId }) });
 			loadKeys();
 		} catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+	};
+
+	// #1326: the pause notice and the hold's own sentence send the owner here to "Verify", and there was
+	// no such button — the route existed (`POST /v1/keys/:provider/verify`) with nothing calling it.
+	// A pass also lifts an automatic-run hold on that key, exactly as any successful call does.
+	const [verify, setVerify] = useState<Record<string, { checking: true } | { ok: boolean; text: string }>>({});
+	const verifyKey = async (providerId: string) => {
+		setVerify((v) => ({ ...v, [providerId]: { checking: true } }));
+		try {
+			const r = await api<KeyVerifyResponse>(`/v1/keys/${providerId}/verify`, { method: "POST" });
+			setVerify((v) => ({ ...v, [providerId]: r.ok ? { ok: true, text: "Works — any automatic-run pause on this key is lifted." } : { ok: false, text: [r.error, r.remedy].filter(Boolean).join(" — ") } }));
+			loadKeys();
+		} catch (e) {
+			// A refused key answers 400 with the provider's error and the platform's remedy in the body.
+			const body = (e as { body?: { remedy?: string } }).body;
+			const said = e instanceof Error ? e.message : String(e);
+			setVerify((v) => ({ ...v, [providerId]: { ok: false, text: body?.remedy ? `${said} — ${body.remedy}` : said } }));
+		}
 	};
 
 	const removeKey = async (providerId: string, providerName: string) => {
@@ -360,8 +382,10 @@ export default function Profile() {
 								// already on the wire — `MAX(last_used_at) … GROUP BY provider` in
 								// routes/keys.ts — and the panel simply dropped it.
 								const usage = keyUsageLabel(p);
+								const checked = verify[p.id];
 								return (
-								<div key={p.id} className="flex items-center gap-2 sm:gap-3 p-2.5 bg-paper border border-line rounded-lg">
+								<div key={p.id}>
+								<div className="flex flex-wrap items-center gap-2 sm:gap-3 p-2.5 bg-paper border border-line rounded-lg">
 									{/* A provider name is the only elastic part of this row; everything else is
 									    a fixed control. Let it truncate instead of widening the card. The
 									    usage line sits UNDER the name rather than beside it: at 320px the row
@@ -388,11 +412,21 @@ export default function Profile() {
 										) : null}
 									</div>
 									<span className={`text-xs ${p.hasKey ? "text-success" : "text-muted-soft"}`}>{p.hasKey ? "Stored" : "Not set"}</span>
+									{p.hasKey && VERIFIABLE.has(p.id) ? (
+										<Button size="sm" disabled={checked !== undefined && "checking" in checked} onClick={() => verifyKey(p.id)}>{checked !== undefined && "checking" in checked ? "Checking…" : "Verify"}</Button>
+									) : null}
 									{p.hasKey ? (
-										<Button size="sm" variant="danger" onClick={() => removeKey(p.id, p.name)}>Remove</Button>
+										<>
+											<Button size="sm" onClick={() => addKey(p.id, p.name)}>Replace</Button>
+											<Button size="sm" variant="danger" onClick={() => removeKey(p.id, p.name)}>Remove</Button>
+										</>
 									) : (
 										<Button size="sm" variant="primary" onClick={() => addKey(p.id, p.name)}>Add Key</Button>
 									)}
+								</div>
+								{checked && "ok" in checked ? (
+									<p className={`text-xs mt-1 px-2.5 ${checked.ok ? "text-success" : "text-danger"}`} data-testid={`key-verify-${p.id}`}>{checked.text}</p>
+								) : null}
 								</div>
 								);
 							})}

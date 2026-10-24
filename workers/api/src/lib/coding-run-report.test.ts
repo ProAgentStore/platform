@@ -131,7 +131,7 @@ describe("an empty provider balance is the OWNER's to clear — not a failure, n
 	it("is its own set, disjoint from the interruptions", () => {
 		// G1: asserted, not assumed — the two tables answer different questions ("what cut this off"
 		// vs "who has to act"), and a class in both would be reported twice with two sentences.
-		expect([...OWNER_ACTION_CLASSES].sort()).toEqual(["provider_credit"]);
+		expect([...OWNER_ACTION_CLASSES].sort()).toEqual(["provider_credentials", "provider_credit"]);
 		for (const cls of OWNER_ACTION_CLASSES) expect(INTERRUPTED_CLASSES.has(cls), cls).toBe(false);
 		expect(OWNER_ACTION_CLASSES.has(classifyCodingFailure(new Error(CREDIT)).class)).toBe(true);
 	});
@@ -165,13 +165,17 @@ describe("an empty provider balance is the OWNER's to clear — not a failure, n
 		expect(cardDetail(detail)).toContain("console.anthropic.com/settings/billing");
 	});
 
-	it("does not touch an invalid key — that keeps its own hint and its own column", () => {
-		// The split's other half: `provider_credentials` is NOT an owner-action class here, because its
-		// hint ("Update it in Profile → API Keys") is already in the message and its column was never
-		// decided by #773. Widening the table is a decision, and this pins that it was not made.
-		const key = codingCrashReport(new Error("Anthropic (401): invalid x-api-key — Invalid API key. Update it in Profile → API Keys → Anthropic"));
-		expect(key.stopReason).toBeNull();
-		expect(key.detail.startsWith("run error: ")).toBe(true);
+	it("files a refused key under its own stop reason, saying the platform re-checks it (#1326)", () => {
+		// #773 left `provider_credentials` out of this table on purpose ("widening it is a decision").
+		// #1326 made that decision: a refused key is continued automatically once a re-check passes,
+		// so the run must say that — and must land in a stop reason the auto-resume can find.
+		const key = codingCrashReport(new Error("Anthropic (403): Request not allowed [permission_error; request-id req_1] — Anthropic API key ending in 8QAA was refused."));
+		expect(key.stopReason).toBe("provider_credentials");
+		expect(key.detail.startsWith("Stopped because the AI provider refused Anthropic API key ending in 8QAA")).toBe(true);
+		expect(key.detail).toContain("re-checks the key automatically");
+		const anonymous = codingCrashReport(new Error("Anthropic (401): invalid x-api-key — Invalid API key. Update it in Profile → API Keys → Anthropic"));
+		expect(anonymous.stopReason).toBe("provider_credentials");
+		expect(anonymous.detail).toContain("the API key used for this request");
 	});
 
 	it("cannot be produced by any ordinary outcome", () => {

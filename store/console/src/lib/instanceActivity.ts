@@ -120,6 +120,7 @@ const OUTCOME_WORD: Record<string, string> = {
 	budget: "hit its spend limit",
 	engine_limit: "hit the CLI's usage limit",
 	provider_credit: "had an empty Anthropic API key balance (it continues by itself once the key works again)",
+	provider_credentials: "had its AI provider key refused (it continues by itself once the key works again)",
 	interrupted: "was cut off",
 	escalated: "asked a question",
 	needs_human: "asked a question",
