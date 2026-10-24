@@ -1,7 +1,7 @@
 import { type KeyboardEvent, type RefObject, useState, useEffect, useRef } from "react";
 import { renderMd, formatDateTime, classifyMessage, toolCallSummary, messageKey as sdkMessageKey } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
-import { CopyButton } from "@proagentstore/blocks";
+import { CopyButton, MessageHeader } from "@proagentstore/blocks";
 import { resolveComposer, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import type { LoopPreset } from "./types";
@@ -384,8 +384,8 @@ export default function CopilotView({
 							}`}
 						>
 							<CopyButton text={m.content} reveal="hover-from-sm" />
-							{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span data-msg-stamp className="font-normal opacity-80 text-right">{formatDateTime(m.time)}</span>}</div>}
-							{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span data-msg-stamp className="font-normal text-muted text-right">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "user" && <MessageHeader speaker="user" label="You" onPlay={m.audioKey ? () => playMessage(instanceId, m, voice.speak) : undefined} playTitle="Play your recording" playIcon={<Volume2 size={11} />} stamp={m.time ? formatDateTime(m.time) : undefined} />}
+							{m.role === "assistant" && <MessageHeader speaker="assistant" label="Co-pilot" onPlay={() => playMessage(instanceId, m, voice.speak)} playTitle="Play this message" playIcon={<Volume2 size={11} />} stamp={m.time ? formatDateTime(m.time) : undefined} />}
 							{m.role === "assistant" ? (
 								<SafeHtmlView className="msg-md" html={renderMd(m.content)} />
 							) : (

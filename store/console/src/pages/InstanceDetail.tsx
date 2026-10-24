@@ -9,6 +9,7 @@ import Button from "../components/Button";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
+import { MessageHeader } from "@proagentstore/blocks";
 import PlaybackIcon from "../components/PlaybackIcon";
 import InstanceMissing from "../components/InstanceMissing";
 import RetiredNotice, { RetiredBadge } from "../components/RetiredNotice";
@@ -1181,8 +1182,8 @@ function InstancePage() {
 										    320px — 210px of content in a 200px box. That is the trade, not a bug: 44px
 										    must be reserved either way, and a wrapped date is readable where a covered
 										    one is not. `text-right` is so the second line reads as deliberate. */}
-										{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span data-msg-stamp title={stampTitle(m.createdAt, timeZone)} className="font-normal opacity-80 text-right">{formatDateTime(m.createdAt)}</span>}</div>}
-										{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span data-msg-stamp title={stampTitle(m.createdAt, timeZone)} className="font-normal text-muted text-right">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.role === "user" && <MessageHeader speaker="user" label="You" onPlay={m.audioKey ? () => playMessage(m, messageKey(m, i)) : undefined} playTitle={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} playAriaLabel={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} playIcon={<PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} />} stamp={m.createdAt ? formatDateTime(m.createdAt) : undefined} stampTitle={m.createdAt ? stampTitle(m.createdAt, timeZone) : undefined} />}
+										{m.role === "assistant" && <MessageHeader speaker="assistant" label="Assistant" onPlay={() => playMessage(m, messageKey(m, i))} playTitle={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} playAriaLabel={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} playIcon={<PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} />} stamp={m.createdAt ? formatDateTime(m.createdAt) : undefined} stampTitle={m.createdAt ? stampTitle(m.createdAt, timeZone) : undefined} />}
 										{m.fabricated && <FabricatedNotice />}
 										{m.suspect && m.role === "user" && (
 											<div className="text-2xs text-warning font-bold mb-1 flex items-start gap-1">

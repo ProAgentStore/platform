@@ -10,7 +10,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CopyButton, TerminalPane, timeAgo } from "./index";
+import { CopyButton, MessageHeader, TerminalPane, timeAgo } from "./index";
 
 describe("timeAgo", () => {
 	const NOW = Date.parse("2026-10-14T12:00:00Z");
@@ -80,5 +80,36 @@ describe("CopyButton", () => {
 			expect(html).toContain('title="Copy"');
 			expect(html).toMatch(/class="tap-target absolute top-1 right-1\.5 .* p-1 rounded bg-black\/40 text-muted hover:text-accent transition-opacity"/);
 		}
+	});
+});
+
+describe("MessageHeader", () => {
+	const html = (props: Parameters<typeof MessageHeader>[0]) => renderToStaticMarkup(createElement(MessageHeader, props));
+
+	it("user: dim strip, label, stamp — and no play button without a recording", () => {
+		const out = html({ speaker: "user", label: "You", stamp: "Oct 14, 9:00", stampTitle: "full time" });
+		expect(out).toContain("text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0");
+		expect(out).toContain("You");
+		expect(out).not.toContain("<button");
+		expect(out).toContain('data-msg-stamp="true" title="full time" class="font-normal opacity-80 text-right"');
+	});
+
+	it("assistant: accent strip, play button with title/ARIA, muted stamp", () => {
+		const out = html({
+			speaker: "assistant",
+			label: "Assistant",
+			onPlay: () => {},
+			playTitle: "Play this message",
+			playAriaLabel: "Play this message",
+			stamp: "now",
+		});
+		expect(out).toContain("text-2xs text-accent mb-0.5");
+		expect(out).toContain('title="Play this message" aria-label="Play this message"');
+		expect(out).toContain("tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100");
+		expect(out).toContain("font-normal text-muted text-right");
+	});
+
+	it("omits the stamp span when there is no time", () => {
+		expect(html({ speaker: "assistant", label: "Co-pilot" })).not.toContain("data-msg-stamp");
 	});
 });

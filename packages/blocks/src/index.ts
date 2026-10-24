@@ -12,5 +12,6 @@
  * (`@source`), the same way it scans agents/coder/web.
  */
 export { CopyButton } from "./CopyButton";
+export { MessageHeader } from "./MessageHeader";
 export { TerminalPane } from "./TerminalPane";
 export { timeAgo } from "./time-ago";
