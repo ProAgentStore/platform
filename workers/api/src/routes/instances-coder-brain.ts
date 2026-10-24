@@ -6,6 +6,7 @@ import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-questi
 import { brainModelRefusal, writeInstanceBrain } from "../lib/instance-brain.js";
 import { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, type PilotModelResponse, pilotModelProblem, readPilotModel, setPilotModel } from "../lib/pilot-model.js";
 import { autoPickupPatchProblem, readAutoPickup, setAutoPickup } from "../lib/auto-pickup.js";
+import { listIssueQuarantines, releaseIssueQuarantine } from "../lib/issue-attempts.js";
 import { BUILTIN_EXCLUDE_LABELS } from "../lib/label-vocabulary.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -103,6 +104,24 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		}
 		await setAutoPickup(c.env, instanceId, uid, patch);
 		return c.json(await pickupView(c.env, instanceId, uid));
+	});
+
+	/**
+	 * The per-issue hard stop (#1336): issues stopped after repeated unsuccessful attempts, and the owner's audited decision to try
+	 * one again. Account-wide (the counter is keyed by owner + repo + issue across instances); the instance only authenticates.
+	 */
+	router.get("/:instanceId/issue-quarantines", async (c) => {
+		const { uid } = await owned(c);
+		return c.json({ quarantines: await listIssueQuarantines(c.env, uid, { includeReleased: new URL(c.req.url).searchParams.get("released") === "1" }) });
+	});
+	router.post("/:instanceId/issue-quarantines/release", async (c) => {
+		const { uid } = await owned(c);
+		const b = (await c.req.json().catch(() => ({}))) as { repo?: unknown; issue?: unknown; reason?: unknown };
+		if (typeof b.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(b.repo)) throw new HttpError(400, "repo must be owner/name.");
+		if (typeof b.issue !== "number" || !Number.isInteger(b.issue) || b.issue < 1) throw new HttpError(400, "issue must be a positive whole number.");
+		if (typeof b.reason !== "string" || !b.reason.trim()) throw new HttpError(400, "reason is required: a release is audited.");
+		if (!(await releaseIssueQuarantine(c.env, uid, b.repo, b.issue, b.reason))) throw new HttpError(404, `${b.repo}#${b.issue} is not quarantined (it may already have been released).`);
+		return c.json({ released: true, repo: b.repo, issue: b.issue });
 	});
 
 	/** #1025: the questions this coder parked on, each with its full state history (the audit trail). */

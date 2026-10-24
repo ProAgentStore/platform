@@ -7705,6 +7705,39 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: "Auto-pickup needs a coding instance." }
+  /v1/instances/{instanceId}/issue-quarantines:
+    get:
+      summary: Issues stopped after repeated unsuccessful attempts
+      description: |
+        The per-issue hard stop (#1336): issues this account's coders will no longer start because `maxAttemptsPerIssue`
+        (default 5, 1-50, an auto-pickup setting) distinct unsuccessful attempts were reached, with the count, threshold,
+        incident id and when it opened. Keyed by owner + repository + issue, so it holds across every instance on the repo.
+        `released=1` includes lifted ones with who released them and why. Other issues are unaffected.
+      operationId: listIssueQuarantines
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: released, in: query, required: false, schema: { type: string, enum: ["1"] } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/issue-quarantines/release:
+    post:
+      summary: Release a quarantined issue (the owner's audited decision)
+      description: |
+        Body `{ repo: "owner/name", issue: 123, reason }`. Restarts the issue's attempt count and lets it be started again.
+        The only ways out of a quarantine are this and a run on the issue ending `done`; it never expires. 404 when the issue
+        is not quarantined (including when it was already released).
+      operationId: releaseIssueQuarantine
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/coder-questions:
     get:
       summary: Coder questions and their audit trail

@@ -30,6 +30,7 @@ import { dequeueNext, finishQueueEntry, requeueEntry } from "./objective-queue.j
 import { pausedStartRefusal } from "./instance-pause.js";
 import { automaticProviderHold } from "./provider-account-hold.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
+import { recordDrainRefusal } from "./issue-attempt-hooks.js";
 import { markWokenForCheckout, releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
 import type { ObjectiveQueueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
@@ -169,6 +170,7 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// sentence rather than sitting pending forever with nobody ever told why nothing happened.
 		await finishQueueEntry(env, entry.id, "failed", started.error);
 		await recordLifecycle(env, { ...lifecycleOf(entry), event: "admission_failed", reason: started.error });
+		await recordDrainRefusal(env, entry, repoId, started.reason, started.error); // #1336: an attempt with no run, unless it was the start guard
 		return { drained: true, entryId: entry.id, started: false, requeued: false, error: started.error };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);

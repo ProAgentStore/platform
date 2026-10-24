@@ -32,6 +32,7 @@ import { issueJobKey } from "./issue-tickets.js";
 import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS } from "./label-vocabulary.js"; // the label vocabulary's single source (#1245)
 import { referencedIssue } from "./objective-dedupe.js";
 import { checkStartIdempotency } from "./start-idempotency.js";
+import { ISSUE_ATTEMPT_THRESHOLD_DEFAULT, ISSUE_ATTEMPT_THRESHOLD_MAX, ISSUE_ATTEMPT_THRESHOLD_MIN, sanitizeAttemptThreshold } from "./issue-attempts.js";
 import { AUTO_PICKUP_ATTEMPT_FACTOR, admitAutoPickup, autoPickupAdmissionCursor, NOT_REJECTED_BEFORE_RUN, pendingAutoPickupAdmission } from "./auto-pickup-admission.js";
 
 export { AUTO_PICKUP_ATTEMPT_FACTOR, NOT_REJECTED_BEFORE_RUN };
@@ -52,9 +53,11 @@ export interface AutoPickupSettings {
 	maxPerDay: number;
 	/** The iteration ceiling an auto-picked run starts with. */
 	maxIterations: number;
+	/** Unsuccessful attempts on ONE issue before it alone is stopped (#1336); counted per owner + repo + issue across instances. */
+	maxAttemptsPerIssue: number;
 }
 
-export const AUTO_PICKUP_DEFAULTS: AutoPickupSettings = { enabled: false, priorityLabels: [...DEFAULT_PRIORITY_LABELS], excludeLabels: [], maxPerDay: 10, maxIterations: 30 };
+export const AUTO_PICKUP_DEFAULTS: AutoPickupSettings = { enabled: false, priorityLabels: [...DEFAULT_PRIORITY_LABELS], excludeLabels: [], maxPerDay: 10, maxIterations: 30, maxAttemptsPerIssue: ISSUE_ATTEMPT_THRESHOLD_DEFAULT };
 /** Two auto-picked runs ended failed or needing a human on an issue → it is passed over (#1233's loop guard). */
 export const MAX_AUTO_FAILURES = 2;
 const MAX_LABELS = 20;
@@ -73,12 +76,13 @@ export function autoPickupFrom(config: unknown): AutoPickupSettings {
 		excludeLabels: labelList(a.excludeLabels, AUTO_PICKUP_DEFAULTS.excludeLabels),
 		maxPerDay: intIn(a.maxPerDay, 1, 100, AUTO_PICKUP_DEFAULTS.maxPerDay),
 		maxIterations: intIn(a.maxIterations, 1, 100, AUTO_PICKUP_DEFAULTS.maxIterations),
+		maxAttemptsPerIssue: sanitizeAttemptThreshold(a.maxAttemptsPerIssue),
 	};
 }
 
 /** What is wrong with a settings patch, or null. Validated at the boundary, so a stored value is always usable. */
 export function autoPickupPatchProblem(patch: Record<string, unknown>): string | null {
-	const known = new Set(["enabled", "priorityLabels", "excludeLabels", "maxPerDay", "maxIterations"]);
+	const known = new Set(["enabled", "priorityLabels", "excludeLabels", "maxPerDay", "maxIterations", "maxAttemptsPerIssue"]);
 	const unknown = Object.keys(patch).filter((k) => !known.has(k));
 	if (unknown.length) return `Unknown auto-pickup setting(s): ${unknown.join(", ")}.`;
 	if ("enabled" in patch && typeof patch.enabled !== "boolean") return "enabled must be true or false.";
@@ -88,6 +92,7 @@ export function autoPickupPatchProblem(patch: Record<string, unknown>): string |
 	}
 	if ("maxPerDay" in patch && intIn(patch.maxPerDay, 1, 100, -1) < 0) return "maxPerDay must be a whole number from 1 to 100.";
 	if ("maxIterations" in patch && intIn(patch.maxIterations, 1, 100, -1) < 0) return "maxIterations must be a whole number from 1 to 100.";
+	if ("maxAttemptsPerIssue" in patch && intIn(patch.maxAttemptsPerIssue, ISSUE_ATTEMPT_THRESHOLD_MIN, ISSUE_ATTEMPT_THRESHOLD_MAX, -1) < 0) return `maxAttemptsPerIssue must be a whole number from ${ISSUE_ATTEMPT_THRESHOLD_MIN} to ${ISSUE_ATTEMPT_THRESHOLD_MAX}.`;
 	return null;
 }
 

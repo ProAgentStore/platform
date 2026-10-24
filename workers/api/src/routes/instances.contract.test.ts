@@ -323,6 +323,8 @@ const ROUTES = [
 	"PUT /:instanceId/coder-brain",
 	"GET /:instanceId/auto-pickup",
 	"PUT /:instanceId/auto-pickup",
+	"GET /:instanceId/issue-quarantines",
+	"POST /:instanceId/issue-quarantines/release",
 	"GET /:instanceId/coder-questions",
 	"GET /:instanceId/po-triage/reports",
 	"GET /:instanceId/description",
@@ -576,7 +578,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/gmail-scout/status",
 	"GET /:instanceId/gmail-scout/scan-log",
 	],
-	"instances-coder-brain.ts": ["GET /:instanceId/coder-brain", "PUT /:instanceId/coder-brain", "GET /:instanceId/auto-pickup", "PUT /:instanceId/auto-pickup", "GET /:instanceId/coder-questions", "GET /:instanceId/po-triage/reports"],
+	"instances-coder-brain.ts": ["GET /:instanceId/coder-brain", "PUT /:instanceId/coder-brain", "GET /:instanceId/auto-pickup", "PUT /:instanceId/auto-pickup", "GET /:instanceId/issue-quarantines", "POST /:instanceId/issue-quarantines/release", "GET /:instanceId/coder-questions", "GET /:instanceId/po-triage/reports"],
 	"instances-description.ts": ["GET /:instanceId/description"],
 	"instances-application-tailor.ts": [
 		"GET /:instanceId/application-tailor/settings",
@@ -923,6 +925,8 @@ const GATES: Record<string, [number, number]> = {
 	"PUT /:instanceId/coder-brain": [401, 404],
 	"GET /:instanceId/auto-pickup": [401, 404],
 	"PUT /:instanceId/auto-pickup": [401, 404],
+	"GET /:instanceId/issue-quarantines": [401, 404],
+	"POST /:instanceId/issue-quarantines/release": [401, 404],
 	"GET /:instanceId/coder-questions": [401, 404],
 	"GET /:instanceId/po-triage/reports": [401, 404],
 	// #1002's execution projection uses requireOwnedInstance before every dependent read.

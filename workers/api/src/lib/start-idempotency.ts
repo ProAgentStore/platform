@@ -22,19 +22,35 @@ import { clipMarked } from "./clip-marked.js";
 import { postIssueComment } from "./github-issues.js";
 import { namesOtherRepo, parseIssueCache } from "./issue-tickets.js";
 import { referencedIssue } from "./objective-dedupe.js";
+import { issueQuarantine } from "./issue-attempts.js";
 
 export const RECENTLY_DONE_DAYS = 7;
 
 export type StartIdempotencyRefusal = {
-	reason: "duplicate" | "issue_closed" | "already_done";
+	reason: "duplicate" | "issue_closed" | "already_done" | "quarantined";
 	error: string;
-	detail: { issue: number; repoId: string; duplicate_of?: string; run_id?: string; finished_at?: number; issue_url?: string };
+	detail: { issue: number; repoId: string; duplicate_of?: string; run_id?: string; finished_at?: number; issue_url?: string; incident_id?: string; attempts?: number; threshold?: number };
 };
 
 /** The issue a start is about: the explicit one, else the objective's subject unless it names another repo. */
 export function startIssueFor(input: { issue?: number | null; objective: string; githubRepo: string | null }): number | null {
 	if (typeof input.issue === "number" && Number.isInteger(input.issue) && input.issue > 0) return input.issue;
 	return namesOtherRepo(input.objective, input.githubRepo) ? null : referencedIssue(input.objective);
+}
+
+/**
+ * The per-issue hard stop (#1336): an issue with `threshold` unsuccessful attempts is refused on EVERY start path, `force`
+ * included — only a verified success or the owner's audited release lifts it. Other issues are untouched.
+ */
+export async function quarantineRefusal(env: Env, input: { userId: string; githubRepo: string | null; repoId: string; issue: number }): Promise<StartIdempotencyRefusal | null> {
+	if (!input.githubRepo) return null;
+	const q = await issueQuarantine(env, input.userId, input.githubRepo, input.issue);
+	if (!q) return null;
+	return {
+		reason: "quarantined",
+		error: `Issue #${input.issue} was stopped after ${q.attemptCount} unsuccessful attempts (limit ${q.threshold}) and will not be started again until its owner releases it or a run on it succeeds. Other issues are unaffected.`,
+		detail: { issue: input.issue, repoId: input.repoId, incident_id: q.incidentId ?? undefined, attempts: q.attemptCount, threshold: q.threshold },
+	};
 }
 
 export async function checkStartIdempotency(
@@ -58,6 +74,10 @@ export async function checkStartIdempotency(
 		   JOIN tickets t ON t.id = r.ticket_id
 		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND t.repo_id = ?3 AND t.issue_number = ?4 AND ${extra}`;
 	const base = [input.userId, input.instanceId, input.repo.id, issue] as const;
+
+	// Before the force branch: a quarantine is the owner's to lift, not a caller's to override.
+	const stopped = await quarantineRefusal(env, { userId: input.userId, githubRepo, repoId: input.repo.id, issue });
+	if (stopped) return stopped;
 
 	const running = await env.DB.prepare(`${where("r.status = 'running' AND COALESCE(r.cancel_requested, 0) = 0")} ORDER BY r.started_at DESC LIMIT 1`).bind(...base).first<{ run_id: string }>();
 	if (running) {

@@ -759,6 +759,7 @@ export async function finishLoopRun(
 	if (run) {
 		await recordLifecycle(env, { userId: run.user_id, instanceId: run.instance_id, runId, sessionId: run.session_id, queueEntryId: run.queue_entry_id, requestId: run.request_id, event: "run_finished", reason: stopReason, actor: { kind: "platform" }, now: finishedAt });
 	}
+	await (await import("./issue-attempt-hooks.js")).recordRunForIssue(env, runId, stopReason, finishedAt); // #1336: one more attempt, or a verified success
 	return "applied";
 }
 

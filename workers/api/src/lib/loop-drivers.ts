@@ -45,7 +45,7 @@ import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivit
 import { checkJobCapabilityRequirements } from "./machine-capabilities.js";
 import { currentGateState, DEFAULT_GATE_STATE, describeRejection, rejectionFor } from "./runner-admission-gate.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
-import { checkStartIdempotency } from "./start-idempotency.js";
+import { checkStartIdempotency, quarantineRefusal, startIssueFor } from "./start-idempotency.js";
 import type { Env } from "../types.js";
 
 /**
@@ -196,7 +196,7 @@ export type LoopStartResult =
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "capability_missing" | "duplicate" | "issue_closed" | "already_done";
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "capability_missing" | "duplicate" | "issue_closed" | "already_done" | "quarantined";
 			/** Set with `duplicate` / `issue_closed` / `already_done` (#1253): the prior run, issue and times. */
 			detail?: Record<string, unknown>;
 			/**
@@ -341,6 +341,12 @@ const codingDriver: LoopDriver = {
 		if (input.repairCheckout !== true && !input.continueFromRunId) {
 			const refused = await checkStartIdempotency(env, { userId, instanceId, repo: { id: repo.id, githubRepo: repo.githubRepo ?? null }, objective, issue: input.issue, force: input.force, forceReason: input.forceReason });
 			if (refused) return { ok: false, status: 409, reason: refused.reason, error: refused.error, detail: refused.detail };
+		} else if (input.repairCheckout !== true) {
+			// A continue (auto-resume included) skips the duplicate/done checks, but not the per-issue hard stop (#1336).
+			const githubRepo = repo.githubRepo ?? null;
+			const issue = startIssueFor({ issue: input.issue, objective, githubRepo });
+			const stopped = issue == null ? null : await quarantineRefusal(env, { userId, githubRepo, repoId: repo.id, issue });
+			if (stopped) return { ok: false, status: 409, reason: stopped.reason, error: stopped.error, detail: stopped.detail };
 		}
 		// Connectivity FIRST, and from the same resolver delegation itself uses — so the refusal
 		// names the real blocker. The old code went straight to "no live session" and appended
