@@ -136,6 +136,17 @@ describe("callRunner (relay-only)", () => {
 		expect(isRunnerUnreachable(await callRunner(mockConn({ RELAY: hung }), "/test").catch((e) => e))).toBe(false);
 	});
 
+	it("a READ the relay timed out is a silent runner the guard can wait out; a mutating command keeps the plain error (#1341)", async () => {
+		const hung = mockRelay(async () => Response.json({ error: "Relay command timed out" }, { status: 504 }));
+		const capture = (await callRunner(mockConn({ RELAY: hung }), "/coding/capture", { sessionId: "s1" }).catch((e) => e)) as Error;
+		expect(isRunnerUnreachable(capture)).toBe(true);
+		expect(isRunnerUnreachable(new Error(capture.message))).toBe(true); // across a step boundary
+		expect(capture.message).toContain("/coding/capture → 504: Relay command timed out");
+		// A command that may have run is never re-sent on a guess (#1015).
+		const act = (await callRunner(mockConn({ RELAY: hung }), "/coding/act", { sessionId: "s1" }).catch((e) => e)) as Error;
+		expect(isRunnerUnreachable(act)).toBe(false);
+	});
+
 	it("throws when RELAY binding is absent", async () => {
 		const conn = mockConn({ RELAY: undefined });
 		await expect(callRunner(conn, "/test")).rejects.toThrow("RELAY binding not configured");

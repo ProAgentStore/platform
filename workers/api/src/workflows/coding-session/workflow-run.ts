@@ -405,6 +405,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			},
 			// The wait as run state: `runner_away` and the instant it gives up (#1177). A run without a loop-run row has no row to say it on.
 			state: event.payload.loopRunId ? runnerWaitState(env, runRetry, { runId: event.payload.loopRunId }) : undefined,
+			// After a command the runner did not answer, "back" means it answers `/health` (#1341) — journalled, and a
+			// failed check is a plain "not yet" rather than a step error the workflow would retry.
+			healthy: (label) =>
+				runRetry(label, async () => {
+					const live = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
+					if (!live) return false;
+					return callRunner(live, "/health", undefined, { timeoutMs: READ_TIMEOUT_MS }).then(() => true, () => false);
+				}) as Promise<boolean>,
 		},
 		// The runner restarted and lost the session the run still owns (#1053) — never one the owner ended.
 		sessionLost: async (e) =>

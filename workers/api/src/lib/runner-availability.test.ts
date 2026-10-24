@@ -400,3 +400,72 @@ describe("a runner that is connected but not answering pauses the run, not ends 
 	});
 });
 
+
+describe("a read the relay timed out waits for the runner to ANSWER, then resumes (#1341)", () => {
+	/** What `callRunner` now throws for a `/coding/capture` the relay timed out — built from the same marker. */
+	const timedOut = () => new RunnerUnreachableError(`Runner /coding/capture → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.`);
+	const stepper = (): RunStep => (async (_name: string, fn: () => Promise<unknown>) => fn()) as RunStep;
+	/** Health answers `false` `misses` times, then `true`. */
+	const health = (misses: number) => {
+		const asked: string[] = [];
+		return { asked, healthy: async (label: string) => { asked.push(label); return asked.length > misses; } };
+	};
+
+	it("is classified as a silent runner, not an unknown failure, across a step boundary too", () => {
+		expect(isRunnerUnreachable(timedOut())).toBe(true);
+		expect(isRunnerUnresponsive(new Error(timedOut().message))).toBe(true);
+	});
+
+	it("a connected socket alone is not 'back': it keeps waiting until /health answers", async () => {
+		// The incident: the socket stayed listed while the runtime did not answer for minutes.
+		const h = health(2);
+		const wait = waitDeps([], { probe: async () => ONLINE, healthy: h.healthy });
+		const w = await waitForRunner(wait, { label: "s1", waitMs: RUNNER_WAIT_MS, unresponsive: true });
+		expect(w).toMatchObject({ returned: true, waitedMs: 3 * RUNNER_PROBE_INTERVAL_MS });
+		expect(h.asked).toEqual(["s1-h0", "s1-h1", "s1-h2"]);
+	});
+
+	it("an ordinary disconnect does not ask for health — connectivity alone still decides", async () => {
+		const h = health(99);
+		const wait = waitDeps([OFFLINE, ONLINE], { healthy: h.healthy });
+		expect(await waitForRunner(wait, { label: "s2", waitMs: RUNNER_WAIT_MS })).toMatchObject({ returned: true, waitedMs: RUNNER_PROBE_INTERVAL_MS });
+		expect(h.asked).toEqual([]);
+	});
+
+	it("the guard waits out a timed-out capture and re-runs it once the runner answers", async () => {
+		const h = health(3);
+		const wait = waitDeps([], { probe: async () => ONLINE, healthy: h.healthy });
+		const reconnect = vi.fn(async () => undefined);
+		const guard = makeRunnerGuard({ wait, reconnect });
+		let attempts = 0;
+		await expect(guard(stepper(), "s48-waitidle-c63", async () => { if (attempts++ === 0) throw timedOut(); return "pane"; })).resolves.toBe("pane");
+		expect(wait.slept).toHaveLength(4);
+		expect(reconnect).toHaveBeenCalledTimes(1);
+	});
+
+	it("a runner wedged past the poll PARKS the run (work intact) and resumes when it answers again — not runner_gone", async () => {
+		let clock = 0;
+		let healthyNow = false;
+		const wait = waitDeps([], { probe: async () => ONLINE, healthy: async () => healthyNow });
+		const park = {
+			now: async () => clock,
+			begin: vi.fn(async () => undefined),
+			// The machine's supervisor restarts it within the first park check.
+			waitForBack: async (_label: string, ms: number) => { clock += ms; healthyNow = true; return true; },
+			end: vi.fn(async () => undefined),
+		};
+		const guard = makeRunnerGuard({ wait, reconnect: async () => undefined, park, waitMsPerLoss: RUNNER_PROBE_INTERVAL_MS });
+		let attempts = 0;
+		await expect(guard(stepper(), "s9", async () => { if (attempts++ === 0) throw timedOut(); return "pane"; })).resolves.toBe("pane");
+		expect(park.begin).toHaveBeenCalledTimes(1);
+		expect(park.end).toHaveBeenCalledTimes(1);
+	});
+
+	it("without a health check, a silent runner past the poll still ends as before (no park it could never leave)", async () => {
+		const wait = waitDeps([], { probe: async () => ONLINE });
+		const park = { now: async () => 0, begin: vi.fn(async () => undefined), waitForBack: async () => false, end: async () => undefined };
+		const guard = makeRunnerGuard({ wait, reconnect: async () => { throw timedOut(); }, park, waitMsPerLoss: RUNNER_PROBE_INTERVAL_MS, totalWaitMs: RUNNER_PROBE_INTERVAL_MS });
+		await expect(guard(stepper(), "s10", async () => { throw timedOut(); })).rejects.toThrow();
+		expect(park.begin).not.toHaveBeenCalled();
+	});
+});

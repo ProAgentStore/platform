@@ -160,6 +160,12 @@ export interface RunnerWaitDeps {
 	tick?: (waitedMs: number, label?: string) => Promise<void>;
 	/** The wait as run state (#1177). */
 	state?: RunnerWaitState;
+	/**
+	 * Did the runner ANSWER its health check (#1341)? A connected-but-wedged runner keeps its relay socket, so after an unanswered
+	 * command `relayConnected` alone reads "back" at once and the run re-sends into the same silence. Given a `label`, journalled like
+	 * `probe`. Absent: connectivity alone decides, the pre-#1341 behaviour.
+	 */
+	healthy?: (label: string) => Promise<boolean>;
 }
 
 export interface RunnerWaitResult {
@@ -287,7 +293,7 @@ export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string;
 		const waited = (i + 1) * RUNNER_PROBE_INTERVAL_MS;
 		await deps.tick?.(waited, `${opts.label}-k${i}`);
 		facts = await deps.probe(`${opts.label}-q${i}`);
-		if (facts.relayConnected) {
+		if (facts.relayConnected && (await answers(deps, opts.unresponsive, `${opts.label}-h${i}`))) {
 			await deps.state?.end(`${opts.label}-w1`);
 			await deps.announce(resumeMessage(facts.node, waited), `${opts.label}-back`);
 			return { returned: true, waitedMs: waited, state: "attached", message: "", remedy: null };
@@ -301,6 +307,12 @@ export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string;
 	}
 	const d = describeFacts(facts);
 	return { returned: false, waitedMs: waited, state: d.state, message: runnerGoneMessage(d, waited), remedy: d.remedy };
+}
+
+/** After an unanswered command, "back" means the runner answers its health check, not only that its socket is listed (#1341). */
+async function answers(deps: RunnerWaitDeps, unresponsive: boolean | undefined, label: string): Promise<boolean> {
+	if (!unresponsive || !deps.healthy) return true;
+	return deps.healthy(label).catch(() => false);
 }
 
 // ── The guard ───────────────────────────────────────────────────────────────
@@ -380,10 +392,12 @@ export function makeRunnerGuard(cfg: {
 			const budget = Math.min(perLoss, Math.max(0, total - spent));
 			const w = await waitForRunner(cfg.wait, { label: `${name}-w${tag}`, waitMs: budget, unresponsive, extraMs: cfg.park ? Math.max(0, parkTotal - parked) : 0 });
 			spent += w.waitedMs;
-			// A machine that went AWAY parks the run (#1160). One still connected but silent does not: it is
-			// registered, so no re-registration would ever wake the park, and the honest answer is the one below.
-			if (!w.returned && cfg.park && w.state !== "attached") {
-				await parkUntilBack(cfg.park, `${name}-w${tag}`);
+			// A machine that went AWAY parks the run (#1160). One still connected but silent parks too when its
+			// health can be asked (#1341): the park's own periodic check then sees it answer again — a wedged
+			// runner is usually restarted by its supervisor within minutes — rather than the run ending on work
+			// that is intact. Without a health check it cannot tell "back" from "still silent", so it ends below.
+			if (!w.returned && cfg.park && (w.state !== "attached" || (unresponsive && cfg.wait.healthy))) {
+				await parkUntilBack(cfg.park, `${name}-w${tag}`, unresponsive);
 			} else if (!w.returned) {
 				throw new RunnerGoneError(
 					budget <= 0
@@ -409,7 +423,7 @@ export function makeRunnerGuard(cfg: {
 	 * relay is asked, and a runner that registered but whose socket is not up yet gets a short poll.
 	 * Returns when the runner is connected; throws {@link RunnerGoneError} with the bound named otherwise.
 	 */
-	async function parkUntilBack(p: RunnerParkDeps, label: string): Promise<void> {
+	async function parkUntilBack(p: RunnerParkDeps, label: string, unresponsive = false): Promise<void> {
 		const start = await p.now(`${label}-pk`);
 		const left = parkTotal - parked;
 		let facts = await cfg.wait.probe(`${label}-pk-q`);
@@ -429,9 +443,9 @@ export function makeRunnerGuard(cfg: {
 			const woken = await p.waitForBack(`${label}-pk${i}`, Math.min(RUNNER_PARK_CHECK_MS, until - at));
 			const now = await p.now(`${label}-pk${i}-t`);
 			await cfg.wait.tick?.(now - start, `${label}-pk${i}-k`);
-			const back = woken ? await waitForRunner(quiet, { label: `${label}-pk${i}-w`, waitMs: RUNNER_WAKE_POLL_MS }) : null;
+			const back = woken ? await waitForRunner(quiet, { label: `${label}-pk${i}-w`, waitMs: RUNNER_WAKE_POLL_MS, unresponsive }) : null;
 			facts = await cfg.wait.probe(`${label}-pk${i}-q`);
-			if (back?.returned || facts.relayConnected) {
+			if (back?.returned || (facts.relayConnected && (await answers(cfg.wait, unresponsive, `${label}-pk${i}-h`)))) {
 				parked += now - start;
 				await p.end(`${label}-pk-end`);
 				await cfg.wait.announce(resumeMessage(facts.node, now - start), `${label}-pk-back`);

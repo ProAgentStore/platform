@@ -344,10 +344,24 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 				{ dispatched: res.status !== 503 },
 			);
 		}
+		// A CAPTURE that timed out at the relay is a runner connected but not answering (#1341) — the same state as
+		// the 503 above, met one step later. Typed the same way so the runner guard waits for it instead of ending a
+		// long run as `unknown`. A capture never touches the checkout or the engine, so re-sending it cannot duplicate
+		// an act. It is not free of effects, though: the Pilot's capture also drains the runner's usage and act
+		// records, so if the timed-out one DID run, that one batch is not recorded. Losing a batch of records is the
+		// accepted price of not losing the run. Every other path keeps the plain error: a mutating command that timed
+		// out may have run (#1015).
+		if (res.status === 504 && detail.includes("Relay command timed out") && READ_ONLY_RUNNER_PATHS.has(path)) {
+			await recordUnresponsive(conn, path);
+			throw new RunnerUnreachableError(`Runner ${path} → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.`, { dispatched: true });
+		}
 		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
 	}
 	return (await res.json()) as T;
 }
+
+/** Runner paths that never change the checkout or the engine, so a timed-out one is waited out and re-sent (#1341). */
+export const READ_ONLY_RUNNER_PATHS: ReadonlySet<string> = new Set(["/coding/capture", "/terminal/capture"]);
 
 /**
  * Stamp a "connected but not responding" dispatch with what the machine was doing (#924).

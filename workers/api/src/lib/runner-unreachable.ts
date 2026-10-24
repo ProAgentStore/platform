@@ -66,7 +66,9 @@ export function isRunnerUnreachable(e: unknown): boolean {
 	const err = e as { runnerUnreachable?: unknown; message?: unknown } | null;
 	if (err?.runnerUnreachable === true) return true;
 	const msg = typeof err?.message === "string" ? err.message : "";
-	return msg.includes(NO_SOCKET_MARKER) || DROPPED_REASONS.some((r) => msg.includes(r));
+	// UNRESPONSIVE_MARKER alone counts too (#1341): a timed-out read carries it without the no-socket
+	// marker — the socket IS there — and a step boundary leaves only the message to recognise it by.
+	return msg.includes(NO_SOCKET_MARKER) || msg.includes(UNRESPONSIVE_MARKER) || DROPPED_REASONS.some((r) => msg.includes(r));
 }
 
 /**
