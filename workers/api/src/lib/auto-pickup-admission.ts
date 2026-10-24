@@ -7,6 +7,11 @@ import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 import type { ProviderAccountIdentity } from "./provider-account-hold.js";
 import { RESERVATION_TTL_MS } from "./auto-pickup-legacy-reservations.js";
 
+/** Attempts (queue entries, whether or not a run followed) allowed per day, as a multiple of the run allowance (#1334). */
+export const AUTO_PICKUP_ATTEMPT_FACTOR = 3;
+/** SQL, for a row aliased `l`: its queue entry failed before any run existed — an attempt, never a started run (#1334). */
+export const NOT_REJECTED_BEFORE_RUN = "NOT EXISTS (SELECT 1 FROM instance_objective_queue rq WHERE rq.id = l.entry_id AND rq.status = 'failed' AND rq.run_id IS NULL)";
+
 export interface AutoPickupAdmission {
 	entryId: string;
 	instanceId: string;
@@ -35,11 +40,16 @@ export async function admitAutoPickup(env: Pick<Env, "DB">, a: AutoPickupAdmissi
 		 (queue_entry_id, instance_id, user_id, repo_id, repo, issue_number, objective, max_iterations, detail, created_at)
 		 SELECT ?1, i.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 FROM agent_instances i
 		 WHERE i.id = ?2 AND i.user_id = ?3 AND i.status = 'active' AND json_extract(i.config, '$.autoPickup.enabled') = 1
-		   AND (SELECT COUNT(*) FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'started' AND l.created_at > ?11)
+		   AND (SELECT COUNT(*) FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'started' AND l.created_at > ?11 AND ${NOT_REJECTED_BEFORE_RUN})
 		       < CASE WHEN json_type(i.config, '$.autoPickup.maxPerDay') IN ('integer', 'real')
 		              AND json_extract(i.config, '$.autoPickup.maxPerDay') = CAST(json_extract(i.config, '$.autoPickup.maxPerDay') AS INTEGER)
 		              AND json_extract(i.config, '$.autoPickup.maxPerDay') BETWEEN 1 AND 100
 		              THEN json_extract(i.config, '$.autoPickup.maxPerDay') ELSE 10 END
+		   AND (SELECT COUNT(*) FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'started' AND l.created_at > ?11)
+		       < (CASE WHEN json_type(i.config, '$.autoPickup.maxPerDay') IN ('integer', 'real')
+		              AND json_extract(i.config, '$.autoPickup.maxPerDay') = CAST(json_extract(i.config, '$.autoPickup.maxPerDay') AS INTEGER)
+		              AND json_extract(i.config, '$.autoPickup.maxPerDay') BETWEEN 1 AND 100
+		              THEN json_extract(i.config, '$.autoPickup.maxPerDay') ELSE 10 END) * ${AUTO_PICKUP_ATTEMPT_FACTOR}
 		   AND NOT EXISTS (SELECT 1 FROM auto_pickup_log legacy WHERE legacy.instance_id = i.id
 		     AND legacy.outcome = 'started' AND legacy.reserved = 1 AND legacy.created_at > ?15)
 		   AND (?13 IS NULL OR NOT EXISTS (SELECT 1 FROM provider_account_holds h WHERE h.user_id = ?3

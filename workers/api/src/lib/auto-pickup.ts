@@ -31,7 +31,10 @@ import { patchInstanceConfig, parseConfigBlob } from "./instance-config.js";
 import { issueJobKey } from "./issue-tickets.js";
 import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS } from "./label-vocabulary.js"; // the label vocabulary's single source (#1245)
 import { referencedIssue } from "./objective-dedupe.js";
-import { admitAutoPickup, autoPickupAdmissionCursor, pendingAutoPickupAdmission } from "./auto-pickup-admission.js";
+import { checkStartIdempotency } from "./start-idempotency.js";
+import { AUTO_PICKUP_ATTEMPT_FACTOR, admitAutoPickup, autoPickupAdmissionCursor, NOT_REJECTED_BEFORE_RUN, pendingAutoPickupAdmission } from "./auto-pickup-admission.js";
+
+export { AUTO_PICKUP_ATTEMPT_FACTOR, NOT_REJECTED_BEFORE_RUN };
 import { tryDequeueAndStart } from "./objective-queue-start.js";
 import { coderIsIdle, PO_TRIAGE_OFF, queueGate, wakePoTriageIfIdle } from "./po-triage-wake.js";
 import { notifyUser } from "../routes/push.js";
@@ -148,11 +151,10 @@ export function exclusionReason(c: PickCandidate, settings: Pick<AutoPickupSetti
 	return null;
 }
 
-/** The next issue to start, deterministically. Pure: every decision worth a test is here. */
-export function pickNextIssue(candidates: PickCandidate[], settings: Pick<AutoPickupSettings, "priorityLabels" | "excludeLabels">): PickVerdict {
-	const skippedFailed = candidates.filter((c) => exclusionReason(c, settings)?.includes("ended failed"));
+/** Every eligible issue, in the order the picker would start them. Pure. */
+export function rankEligible(candidates: PickCandidate[], settings: Pick<AutoPickupSettings, "priorityLabels" | "excludeLabels">): PickCandidate[] {
 	const eligible = candidates.filter((c) => exclusionReason(c, settings) === null);
-	eligible.sort(
+	return eligible.sort(
 		(a, b) =>
 			priorityRank(a.issue.labels, settings.priorityLabels) - priorityRank(b.issue.labels, settings.priorityLabels) ||
 			kindRank(a.issue.labels) - kindRank(b.issue.labels) ||
@@ -162,6 +164,12 @@ export function pickNextIssue(candidates: PickCandidate[], settings: Pick<AutoPi
 			a.issue.number - b.issue.number ||
 			a.repo.localeCompare(b.repo),
 	);
+}
+
+/** The next issue to start, deterministically. Pure: every decision worth a test is here. */
+export function pickNextIssue(candidates: PickCandidate[], settings: Pick<AutoPickupSettings, "priorityLabels" | "excludeLabels">): PickVerdict {
+	const skippedFailed = candidates.filter((c) => exclusionReason(c, settings)?.includes("ended failed"));
+	const eligible = rankEligible(candidates, settings);
 	if (eligible[0]) return { pick: eligible[0], skippedFailed };
 	return { pick: null, skippedFailed, reason: candidates.length ? `none of the ${candidates.length} open issue(s) qualifies` : "there are no open issues" };
 }
@@ -180,6 +188,20 @@ export interface AutoPickupDeps {
 }
 
 export type AutoPickupResult = { started: false; reason: string } | { started: true; repo: string; issue: number; entryId: string };
+
+/**
+ * "Started" means the drain made a run, not that the enqueue succeeded (#1334). A drain that refused the entry
+ * says so; one that kept it waiting says queued; a result with no evidence either way is not claimed as a start.
+ */
+export function settleStart(drain: unknown, work: { repo: string; issue: number; entryId: string }): AutoPickupResult {
+	const d = (drain ?? null) as { drained?: boolean; started?: boolean; requeued?: boolean; error?: string; held?: string } | null;
+	if (d?.drained === true && d.started === true) return { started: true, ...work };
+	if (d?.drained === true && d.started === false) {
+		return { started: false, reason: `#${work.issue} was queued but ${d.requeued ? "is waiting to start" : "was refused"}: ${d.error ?? "no reason given"}` };
+	}
+	if (d?.drained === false) return { started: false, reason: `#${work.issue} was queued; nothing started yet${d.held ? ` (${d.held})` : ""}` };
+	return { started: true, ...work }; // a caller-supplied starter that reports nothing (tests): trust the enqueue as before
+}
 
 type PickupOutcome = "started" | "none_eligible" | "skipped_failed" | "capped" | "skipped_gate" | "skipped_busy" | "error";
 
@@ -263,8 +285,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 				await logSkip(env, iid, uid, "skipped_gate", gate, now);
 				return { started: false, reason: gate };
 			}
-			await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(pendingAdmission.repoId);
-			return { started: true, ...pendingAdmission };
+			return settleStart(await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(pendingAdmission.repoId), pendingAdmission);
 		}
 		const observedAdmission = await autoPickupAdmissionCursor(env, iid);
 		if (!(await coderIsIdle(env, iid))) {
@@ -278,7 +299,18 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 			await logSkip(env, iid, uid, "skipped_gate", gate, now);
 			return { started: false, reason: gate };
 		}
-		const today = await env.DB.prepare("SELECT COUNT(*) AS n FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'started' AND created_at > ?2").bind(iid, now - 86_400_000).first<{ n: number }>();
+		// The cap counts runs that were really started, or are still on their way: a queue entry that failed admission
+		// before any run existed was an attempt, not a run (#1334). Attempts have their own, wider ceiling.
+		const window = now - 86_400_000;
+		const [today, attempts] = await Promise.all([
+			env.DB.prepare(`SELECT COUNT(*) AS n FROM auto_pickup_log l WHERE l.instance_id = ?1 AND l.outcome = 'started' AND l.created_at > ?2 AND ${NOT_REJECTED_BEFORE_RUN}`).bind(iid, window).first<{ n: number }>(),
+			env.DB.prepare("SELECT COUNT(*) AS n FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'started' AND created_at > ?2").bind(iid, window).first<{ n: number }>(),
+		]);
+		if ((attempts?.n ?? 0) >= settings.maxPerDay * AUTO_PICKUP_ATTEMPT_FACTOR) {
+			const reason = `${attempts?.n} auto-pickup attempts in 24h (limit ${settings.maxPerDay * AUTO_PICKUP_ATTEMPT_FACTOR}) — most were refused before a run existed, so the daily run allowance is untouched but the picker is pausing`;
+			await logSkip(env, iid, uid, "capped", reason, now);
+			return { started: false, reason };
+		}
 		if ((today?.n ?? 0) >= settings.maxPerDay) {
 			const reason = `the daily cap of ${settings.maxPerDay} auto-picked run(s) is reached`;
 			await logSkip(env, iid, uid, "capped", reason, now);
@@ -307,21 +339,34 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 
 		const verdict = pickNextIssue(candidates, settings);
 		await commentOnFailedOnce(env, iid, uid, verdict.skippedFailed, deps, now);
-		if (!verdict.pick) {
-			const reason = `${verdict.reason}${unreadable.length ? ` (could not read ${unreadable.join(", ")})` : ""}`;
+		// The same eligibility the start itself applies (#1253): recently done, closed or already running work is passed
+		// over BEFORE anything is queued, and the next candidate is tried — never queued only to be refused (#1334).
+		const passedOver: string[] = [];
+		let chosen: PickCandidate | null = null;
+		for (const c of rankEligible(candidates, settings)) {
+			const refusal = await checkStartIdempotency(env, { userId: uid, instanceId: iid, repo: { id: c.repoId, githubRepo: c.repo }, objective: autoPickupObjective(c.repo, c.issue), issue: c.issue.number, now });
+			if (!refusal) {
+				chosen = c;
+				break;
+			}
+			passedOver.push(`#${c.issue.number} (${refusal.reason})`);
+		}
+		if (!chosen) {
+			const base = verdict.pick ? `every eligible issue was refused by the start guard: ${passedOver.join(", ")}` : verdict.reason;
+			const reason = `${base}${unreadable.length ? ` (could not read ${unreadable.join(", ")})` : ""}`;
 			const last = await env.DB.prepare("SELECT outcome FROM auto_pickup_log WHERE instance_id = ?1 AND outcome IN ('started', 'none_eligible') ORDER BY created_at DESC, rowid DESC LIMIT 1").bind(iid).first<{ outcome: string }>();
-			await log(env, iid, uid, "none_eligible", reason, null, null, now);
+			await log(env, iid, uid, "none_eligible", clipMarked(reason, 300), null, null, now);
 			// Told once: a coder idling with nothing to do does not ping on every empty queue.
 			if (last?.outcome !== "none_eligible") await (deps.notify ?? defaultNotify(env, uid, iid))("Auto-pickup: nothing to start", `The queue is empty and ${reason}, so the coder is idle.`).catch(() => undefined);
 			return { started: false, reason };
 		}
 
-		const { repo, repoId, issue } = verdict.pick;
+		const { repo, repoId, issue } = chosen;
 		const providerAccount = await selectedProviderAccount(env, iid, uid);
 		const entryId = `objq-${crypto.randomUUID()}`;
 		const admitted = await admitAutoPickup(env, { entryId, instanceId: iid, userId: uid, repoId, repo, issue: issue.number,
 			objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations,
-			detail: `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}`, now, observedAdmission, providerAccount });
+			detail: `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}${passedOver.length ? ` — passed over ${passedOver.join(", ")}` : ""}`, now, observedAdmission, providerAccount });
 		if (!admitted) {
 			const gate = await queueGate(env, iid, uid); // includes a provider hold observed after the first gate (#1314)
 			if (gate) {
@@ -332,8 +377,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 			await logSkip(env, iid, uid, "skipped_busy", reason, now);
 			return { started: false, reason };
 		}
-		await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(repoId);
-		return { started: true, repo, issue: issue.number, entryId };
+		return settleStart(await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(repoId), { repo, issue: issue.number, entryId });
 	} catch (e) {
 		const reason = `auto-pickup failed: ${e instanceof Error ? e.message : String(e)}`;
 		await logSkip(env, iid, uid, "error", reason, now);
