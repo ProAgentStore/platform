@@ -240,7 +240,7 @@ describe.each(TREES)("%s holds its count of buttons that draw their own box", (n
 // −1 for #727: the Repo tab's "Add a repository" card moved to the Settings tab, and the panel it
 // became (components/RepoConnectPanel.tsx) is a <Card> — the hand-written `p-5` shape it used to
 // carry is gone rather than relocated, so the ground is recorded here instead of left as headroom.
-const PINNED_CARDS = { "store/console": 33, "store/admin": 3, "agents/coder/web": 9, "packages/blocks": 0 };
+const PINNED_CARDS = { "store/console": 32, "store/admin": 3, "agents/coder/web": 9, "packages/blocks": 2 };
 
 describe.each(TREES)("%s holds its count of hand-written cards", (name, root) => {
 	it("is exactly at its pin", () => {

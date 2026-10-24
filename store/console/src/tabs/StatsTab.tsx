@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { LineChart, Plus, RefreshCw } from "lucide-react";
+import { EmptyState } from "@proagentstore/blocks";
 import Button from "../components/Button";
 import StatsCard from "../components/StatsCard";
 import { historyNote, throughDayNote, windowLabel } from "../lib/stats-format";
@@ -197,7 +198,7 @@ export default function StatsTab({ instanceId }: { instanceId: string }) {
 				// failed card would be at card level.
 				<p className="text-sm text-muted-soft py-6">Nothing is shown because the request failed — not because this agent tracks nothing.</p>
 			) : cards.length === 0 ? (
-				<EmptyState onAdd={() => setAdding(true)} canAdd={sources.length > 0} />
+				<StatsEmptyState onAdd={() => setAdding(true)} canAdd={sources.length > 0} />
 			) : (
 				<div className="grid gap-3 sm:grid-cols-2">
 					{cards.map((card) => (
@@ -237,11 +238,19 @@ export default function StatsTab({ instanceId }: { instanceId: string }) {
  * here. It has to say what the tab is for and how to fill it — including the honest shortcut, that
  * `set_stats_card` is base-tier so the agent itself can add a card when asked in chat.
  */
-function EmptyState({ onAdd, canAdd }: { onAdd: () => void; canAdd: boolean }) {
+function StatsEmptyState({ onAdd, canAdd }: { onAdd: () => void; canAdd: boolean }) {
 	return (
-		<div className="text-center py-10 px-4 bg-panel border border-line rounded-xl">
-			<LineChart size={28} className="mx-auto text-muted-soft mb-2" />
-			<div className="font-semibold text-sm">No stats cards yet</div>
+		<EmptyState
+			icon={<LineChart size={28} />}
+			title="No stats cards yet"
+			action={
+				canAdd && (
+					<Button variant="primary" onClick={onAdd} className="mt-3">
+						<Plus size={13} /> Add a card
+					</Button>
+				)
+			}
+		>
 			<p className="text-sm text-muted mt-1 max-w-md mx-auto">
 				Cards show what this agent is doing — runs, spend, board items, or the size of a collection it fills. Nothing is
 				tracked until you add one.
@@ -250,12 +259,7 @@ function EmptyState({ onAdd, canAdd }: { onAdd: () => void; canAdd: boolean }) {
 				You can also just ask the agent in chat — “track how many leads you find each day” — and it will add the card
 				itself.
 			</p>
-			{canAdd && (
-				<Button variant="primary" onClick={onAdd} className="mt-3">
-					<Plus size={13} /> Add a card
-				</Button>
-			)}
-		</div>
+		</EmptyState>
 	);
 }
 

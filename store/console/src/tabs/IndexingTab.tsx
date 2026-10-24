@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { formatDateTime } from "@proagentstore/sdk/ui";
+import { StatusPill } from "@proagentstore/blocks";
 import Button from "../components/Button";
 import type { KnowledgeDoc, TriggerAction } from "../lib/types";
 
@@ -110,21 +111,6 @@ const payloadObject = (payload: unknown): SyncPayload => {
 };
 
 const eventTime = (event?: TriggerEvent) => event?.created_at ? formatDateTime(event.created_at) : "";
-
-function statusClasses(status: "indexed" | "pending" | "failed" | "running") {
-	if (status === "indexed") return "border-success-line bg-success-soft text-success";
-	if (status === "failed") return "border-danger-line bg-danger-soft text-danger";
-	if (status === "running") return "border-info-line bg-info-soft text-info";
-	return "border-warning-line bg-warning-soft text-warning";
-}
-
-function StatusPill({ status, label }: { status: "indexed" | "pending" | "failed" | "running"; label: string }) {
-	return (
-		<span className={`text-2xs px-2 py-0.5 rounded-full border font-semibold ${statusClasses(status)}`}>
-			{label}
-		</span>
-	);
-}
 
 function StatBox({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
 	return (

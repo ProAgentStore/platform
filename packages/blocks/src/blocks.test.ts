@@ -10,7 +10,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CopyButton, MessageHeader, TerminalPane, timeAgo } from "./index";
+import { CopyButton, EmptyState, MessageHeader, Modal, StatusPill, TerminalPane, timeAgo } from "./index";
 
 describe("timeAgo", () => {
 	const NOW = Date.parse("2026-10-14T12:00:00Z");
@@ -111,5 +111,46 @@ describe("MessageHeader", () => {
 
 	it("omits the stamp span when there is no time", () => {
 		expect(html({ speaker: "assistant", label: "Co-pilot" })).not.toContain("data-msg-stamp");
+	});
+});
+
+describe("StatusPill", () => {
+	it.each([
+		["indexed", "border-success-line bg-success-soft text-success"],
+		["failed", "border-danger-line bg-danger-soft text-danger"],
+		["running", "border-info-line bg-info-soft text-info"],
+		["pending", "border-warning-line bg-warning-soft text-warning"],
+	] as const)("%s keeps its colours", (status, classes) => {
+		const out = renderToStaticMarkup(createElement(StatusPill, { status, label: "L" }));
+		expect(out).toContain(classes);
+		expect(out).toContain(">L</span>");
+	});
+});
+
+describe("EmptyState", () => {
+	it("renders icon, title, body and action; omits the icon wrapper without one", () => {
+		const full = renderToStaticMarkup(
+			createElement(EmptyState, { icon: createElement("i"), title: "Nothing", action: createElement("span", null, "Add") }, createElement("p", null, "why")),
+		);
+		expect(full).toContain("Nothing");
+		expect(full).toContain("<p>why</p>");
+		expect(full).toContain("<span>Add</span>");
+		expect(full).toContain("<i></i>");
+		expect(renderToStaticMarkup(createElement(EmptyState, { title: "T" }))).not.toContain("mb-2");
+	});
+});
+
+describe("Modal", () => {
+	it("renders nothing when closed, and a labelled dialog when open", () => {
+		expect(renderToStaticMarkup(createElement(Modal, { open: false, onClose: () => {}, title: "Hi" }))).toBe("");
+		const out = renderToStaticMarkup(createElement(Modal, { open: true, onClose: () => {}, title: "Hi" }, "body"));
+		expect(out).toContain('role="dialog"');
+		expect(out).toContain('aria-label="Hi"');
+		expect(out).toContain("body");
+	});
+
+	it("never calls alert or confirm", async () => {
+		const src = (await import("node:fs")).readFileSync(new URL("./Modal.tsx", import.meta.url), "utf8");
+		expect(src).not.toMatch(/\b(alert|confirm)\(/);
 	});
 });
