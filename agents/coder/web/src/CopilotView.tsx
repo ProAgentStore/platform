@@ -1,13 +1,13 @@
 import { type KeyboardEvent, type RefObject, useState, useEffect, useRef } from "react";
-import { renderMd, formatDateTime, classifyMessage, toolCallSummary, messageKey as sdkMessageKey } from "@proagentstore/sdk/ui";
+import { renderMd, formatDateTime, classifyMessage, messageKey as sdkMessageKey } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
-import { CopyButton, MessageHeader } from "@proagentstore/blocks";
+import { CopyButton, MessageHeader, ToolCallRow } from "@proagentstore/blocks";
 import { resolveComposer, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import type { LoopPreset } from "./types";
 import { LOOP_WATCH_BADGE_CLASS } from "./coding-loop-run";
 import BusyHoldNotice from "./BusyHoldNotice";
-import { Trash2, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
+import { Trash2, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
 import Button from "./Button";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
@@ -350,16 +350,7 @@ export default function CopilotView({
 					// Shared classification (SDK) — this heuristic was duplicated here and in the
 					// console's instance chat, character for character.
 					if (classifyMessage(m) === "tool") {
-						const summary = toolCallSummary(m.content);
-						return (
-							<details key={messageKey(m) || sdkMessageKey(m, i)} className="self-start max-w-[90%]">
-								<summary className="flex items-center gap-1.5 text-2xs text-muted cursor-pointer select-none py-0.5 px-2">
-									<Wrench size={11} className="shrink-0" />
-									<span>Used {summary}</span>
-								</summary>
-								<SafeHtmlView className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-2xs text-muted leading-relaxed msg-md" html={renderMd(m.content)} />
-							</details>
-						);
+						return <ToolCallRow key={messageKey(m) || sdkMessageKey(m, i)} content={m.content} />;
 					}
 					if (classifyMessage(m) === "system") {
 						return (

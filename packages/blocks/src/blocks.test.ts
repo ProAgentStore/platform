@@ -10,7 +10,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CopyButton, EmptyState, FilePreview, MessageHeader, Modal, PREVIEW_MAX_BYTES, previewKind, StatusPill, TerminalPane, timeAgo } from "./index";
+import { CopyButton, EmptyState, FilePreview, MessageHeader, Modal, PREVIEW_MAX_BYTES, previewKind, StatusPill, TerminalPane, timeAgo, ToolCallRow } from "./index";
 
 describe("timeAgo", () => {
 	const NOW = Date.parse("2026-10-14T12:00:00Z");
@@ -189,5 +189,20 @@ describe("FilePreview", () => {
 
 	it("a previewable file starts in the loading state", () => {
 		expect(render({ id: "1", name: "a.pdf" })).toContain("Loading preview…");
+	});
+});
+
+describe("ToolCallRow", () => {
+	it("collapses to 'Used <summary>' with the output rendered inside a details", () => {
+		const out = renderToStaticMarkup(createElement(ToolCallRow, { content: "**ran** `ls`" }));
+		expect(out).toContain('<details class="self-start max-w-[90%]">');
+		expect(out).toContain("Used ");
+		expect(out).toContain("msg-md");
+		expect(out).toContain("<strong>ran</strong>");
+	});
+
+	it("keeps raw markup in the output inert", () => {
+		const out = renderToStaticMarkup(createElement(ToolCallRow, { content: "<img src=x onerror=alert(1)>" }));
+		expect(out).not.toContain("<img");
 	});
 });

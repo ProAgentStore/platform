@@ -4,12 +4,11 @@ import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Message, RunnerPresence } from "../lib/types";
 import { identityFor } from "../lib/identity";
 import { mergeOlderMessages, nextOlderCursor, resolveHasMore, type MessagePageResponse } from "../lib/messagePaging";
-import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
+import { classifyMessage, messageKey } from "@proagentstore/sdk/ui";
 import Button from "../components/Button";
 import ErrorBoundary from "../components/ErrorBoundary";
-import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
-import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
-import { MessageHeader } from "@proagentstore/blocks";
+import { formatDateTime } from "@proagentstore/sdk/ui";
+import { MessageHeader, ToolCallRow } from "@proagentstore/blocks";
 import PlaybackIcon from "../components/PlaybackIcon";
 import InstanceMissing from "../components/InstanceMissing";
 import RetiredNotice, { RetiredBadge } from "../components/RetiredNotice";
@@ -17,7 +16,7 @@ import { retirementOf } from "../lib/retirement";
 import { useInstanceRecord } from "../hooks/useInstanceRecord";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus, resolveComposer } from "@proagentstore/sdk/hooks";
-import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
+import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { useConversation, useConversationSwitch } from "../lib/ConversationContext";
 import { parseChatTransfer, type ChatTransfer } from "../lib/transfer";
@@ -1119,16 +1118,7 @@ function InstancePage() {
 								// times (here, the Coder Co-pilot, the agent page) and three copies of a
 								// heuristic is three chances to drift, invisibly.
 								if (classifyMessage(m) === "tool") {
-									const summary = toolCallSummary(m.content);
-										return (
-											<details key={messageKey(m, i)} className="self-start max-w-[90%]">
-												<summary className="flex items-center gap-1.5 text-2xs text-muted cursor-pointer select-none py-0.5 px-2">
-													<Wrench size={11} className="shrink-0" />
-													<span>Used {summary}</span>
-												</summary>
-												<SafeHtmlView className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-2xs text-muted leading-relaxed msg-md" html={renderMd(m.content)} />
-											</details>
-										);
+									return <ToolCallRow key={messageKey(m, i)} content={m.content} />;
 								}
 								// Regular system messages (loop status, etc.) — deliberately NOT collapsed.
 								// The shape, and the stamp these rows never had (#336), live in the component.
