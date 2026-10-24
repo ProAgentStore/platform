@@ -19,7 +19,7 @@ export interface MachineResources {
 	activeSessions: number | null;
 	recommendedMaxSessions: number;
 	disk: { usedPct: number; inodesUsedPct: number } | null;
-	runner: { uptimeSec: number; starts24h: number; relayReconnects: number } | null;
+	runner: { uptimeSec: number; starts24h: number; relayReconnects: number; /** How `pags up` was started (`tty|tmux|service|headless|background`). */ launch?: string } | null;
 	relayRttMs: number | null;
 	/** High-water marks crossed, each a sentence. `[]` when the machine looks fine. */
 	warnings: string[];
@@ -51,7 +51,16 @@ export function resourceFacts(r: MachineResources): string[] {
 	if (r.activeSessions !== null) facts.push(`${r.activeSessions} of ~${r.recommendedMaxSessions} sessions`);
 	if (r.relayRttMs !== null) facts.push(`relay ${r.relayRttMs} ms`);
 	if (r.runner) facts.push(`up ${duration(r.runner.uptimeSec)}${r.runner.starts24h > 1 ? `, ${r.runner.starts24h} starts today` : ""}`);
+	const mode = r.runner ? launchLabel(r.runner.launch) : null;
+	if (mode) facts.push(mode);
 	return facts;
+}
+
+/** Runs with no terminal open (#499) — said on the card, because nobody is watching a window to notice it misbehave. Null for an attended or unreported start. */
+export function launchLabel(launch: string | undefined): string | null {
+	if (launch === "background") return "background — no terminal";
+	if (launch === "service") return "background service";
+	return null;
 }
 
 /** Said when the sample is old, so a stopped heartbeat never reads as an idle machine. Null when fresh. */

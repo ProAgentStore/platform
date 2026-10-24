@@ -33,6 +33,14 @@ describe("machine resources on the console (#929 finding 6)", () => {
 		expect(resourceFacts(res({ disk: null, runner: null, relayRttMs: null, activeSessions: null }))).toEqual(["load 0.4/core (8 cores)", "memory 63.5%"]);
 	});
 
+	it("says when a runner has no terminal — background or service — and nothing for an attended one (#499)", () => {
+		const run = (launch?: string) => res({ runner: { uptimeSec: 120, starts24h: 1, relayReconnects: 0, launch } });
+		expect(resourceFacts(run("background"))).toContain("background — no terminal");
+		expect(resourceFacts(run("service"))).toContain("background service");
+		expect(resourceFacts(run("tty")).join()).not.toMatch(/background/);
+		expect(resourceFacts(run()).join()).not.toMatch(/background/);
+	});
+
 	it("says when the sample is old — a stopped heartbeat is not an idle machine", () => {
 		expect(staleSample(res(), NOW)).toBeNull();
 		expect(staleSample(res({ sampledAt: new Date(NOW - 12 * 60_000).toISOString() }), NOW)).toBe("Last sample 12m ago — the heartbeat stopped, so these numbers are old.");
