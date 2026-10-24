@@ -2,9 +2,9 @@
  * Release notes for a coder run that shipped to the trunk (#1216).
  *
  * At the end of a run that pushed to the repository's default branch (or merged a pull request into
- * it), ONE plain-language note goes to every messaging channel the owner granted this instance. It
- * covers what changed, the issues closed (by title) and the commit range. One note per run, not per
- * commit: every push the run made is batched into it.
+ * it), ONE plain-language note goes to every selected messaging channel. An opt-in workflow gate
+ * queues a direct push until the exact pushed SHA passes each required workflow. It covers the
+ * delivered commit range and issues closed by those commits.
  *
  * Channels: the instance's granted Discord and Slack channels, filtered by its release-notes setting
  * (#1217, lib/release-notes-settings.ts) — off, or a chosen subset of the granted channels. A new
@@ -13,9 +13,8 @@
  * What the note claims:
  *   • The push is read from the run's own recorded acts (`act.consequential`, lib/engine-acts.ts),
  *     never inferred. A run with no trunk push or merge gets no note.
- *   • CI/deploy is reported as GitHub reports it for the head commit at the moment the note is built.
- *     A run still going is "pending, not yet verified", and one GitHub could not answer is "not
- *     verified". The note never says the change is live.
+ *   • Ungated notes report CI/deploy as GitHub reports it at build time and never say the change
+ *     is live. Gated notes claim production only after durable exact-SHA workflow verification.
  *   • No grant means no post, recorded as `release_note_skipped_no_grants`, and nothing fails.
  *   • A failed delivery is logged (`error_log`), traced (`release_note_failed`) and surfaced to the
  *     owner as an in-app alert. It never throws: one channel's failure does not stop the next.
@@ -83,7 +82,9 @@ export interface ReleaseNoteInput {
 	sessionId: string;
 }
 
-export type Deliver = (channel: ReleaseChannel, text: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+export type Deliver = (channel: ReleaseChannel, text: string) => Promise<{ ok: true; permalink?: string } | { ok: false; error: string }>;
+
+const slackPermalink = (channelId: string, ts: string | null): string | undefined => ts && /^\d+\.\d+$/.test(ts) ? `https://app.slack.com/archives/${channelId}/p${ts.replace(".", "")}` : undefined;
 
 export interface ReleaseNoteDeps {
 	/** GET a GitHub REST path (`/repos/…`). Null when it cannot be read. */
@@ -94,9 +95,38 @@ export interface ReleaseNoteDeps {
 
 
 export interface ReleaseNoteOutcome {
-	status: "not_shipped" | "disabled" | "no_channels" | "posted";
+	status: "not_shipped" | "disabled" | "no_channels" | "posted" | "queued" | "unverified";
 	sent: string[];
 	failed: { grantId: string; error: string }[];
+}
+
+/** The contiguous commit range from this run's push results, never the branch head guessed later. */
+async function runPushedShaPrefix(env: Env, input: { instanceId: string; userId: string; runId: string }): Promise<{ prefix: string; basePrefix: string; branch: string } | null> {
+	const rows = await env.DB.prepare("SELECT context FROM agent_events WHERE instance_id = ?1 AND user_id = ?2 AND trace_id = ?3 AND event = 'act.consequential' ORDER BY ts DESC, rowid DESC")
+		.bind(input.instanceId, input.userId, input.runId).all<{ context: string | null }>();
+	let newest: string | null = null;
+	let base: string | null = null;
+	let branchName: string | null = null;
+	let expectedPriorNew: string | null = null;
+	for (const row of rows.results ?? []) {
+		try {
+			const act = JSON.parse(row.context ?? "{}") as { act?: unknown; ok?: unknown; pushedSha?: unknown; pushedFromSha?: unknown; command?: unknown; target?: unknown };
+			if (act.act !== "push.trunk" && act.act !== "pr.merge") continue;
+			if (act.ok === false) continue; // A refused push changed no remote ref.
+			// An unknown act or merge cannot be attributed to the range of direct pushes.
+			if (act.act !== "push.trunk" || act.ok !== true || deriveAct("push.trunk", String(act.command ?? "")).phrase !== "pushed directly to the trunk") return null;
+			const parts = typeof act.target === "string" ? act.target.split(/\s+/) : [];
+			const branch = parts[1]?.replace(/^HEAD:/, "").replace(/^refs\/heads\//, "");
+			if (parts[0] !== "origin" || !branch || typeof act.pushedSha !== "string" || !/^[0-9a-f]{7,40}$/.test(act.pushedSha) || typeof act.pushedFromSha !== "string" || !/^[0-9a-f]{7,40}$/.test(act.pushedFromSha)) return null;
+			if (branchName && branchName !== branch) return null;
+			if (expectedPriorNew && !(act.pushedSha.startsWith(expectedPriorNew) || expectedPriorNew.startsWith(act.pushedSha))) return null;
+			newest ??= act.pushedSha;
+			base = act.pushedFromSha;
+			branchName = branch;
+			expectedPriorNew = act.pushedFromSha;
+		} catch { return null; /* An unreadable act cannot authorize a release. */ }
+	}
+	return newest && base && branchName ? { prefix: newest, basePrefix: base, branch: branchName } : null;
 }
 
 const SHA = /^[0-9a-f]{7}/;
@@ -137,14 +167,17 @@ function ciFrom(raw: unknown): CiStatus {
 }
 
 /** Gather what the note says: the commits this run put on the branch, the issues they close, CI for the head. */
-export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: ReleaseNoteDeps): Promise<ReleaseNoteContext> {
+export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: ReleaseNoteDeps, pinnedSha?: string, baseSha?: string): Promise<ReleaseNoteContext> {
 	const row = await getRepo(input.env, input.instanceId, input.userId, input.repoId).catch(() => null);
 	const githubRepo = row?.githubRepo ?? null;
 	// `branch` '' is the repository's default branch (migration 0020): ask GitHub for its name.
 	let branch = row?.branch ?? "";
-	if (!branch && githubRepo) {
+	let invalidBranch = false;
+	if ((!branch || pinnedSha) && githubRepo) {
 		const meta = (await deps.githubGet(`/repos/${githubRepo}`)) as { default_branch?: unknown } | null;
-		branch = typeof meta?.default_branch === "string" ? meta.default_branch : "";
+		const reported = typeof meta?.default_branch === "string" ? meta.default_branch : "";
+		invalidBranch = !!pinnedSha && (!reported || !!branch && branch !== reported);
+		branch = reported;
 	}
 	const base: ReleaseNoteContext = {
 		instanceId: input.instanceId,
@@ -159,14 +192,39 @@ export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: R
 		headSha: null,
 		pushedAt: new Date(deps.now()).toISOString(),
 	};
-	if (!githubRepo) return base;
+	if (!githubRepo || invalidBranch) return base;
 	const repo = githubRepo;
+	if (pinnedSha) {
+		if (!baseSha) return base;
+		// Compare names the exact ref transition reported by git push. Unlike a `since`
+		// query, it includes older commits that this run delivered to the branch.
+		const raw = await deps.githubGet(`/repos/${repo}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(pinnedSha)}?per_page=${RELEASE_NOTE_MAX_COMMITS}`) as { status?: unknown; base_commit?: { sha?: unknown }; commits?: Array<{ sha?: unknown; commit?: { message?: unknown } }>; total_commits?: unknown } | null;
+		const commits = raw?.commits;
+		const matches = (sha: unknown, prefix: string) => typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha) && sha.toLowerCase().startsWith(prefix.toLowerCase());
+		if (raw?.status !== "ahead" || !matches(raw.base_commit?.sha, baseSha) || !Array.isArray(commits) || !commits.length || !Number.isSafeInteger(raw.total_commits) || Number(raw.total_commits) !== commits.length || commits.length > RELEASE_NOTE_MAX_COMMITS || !matches(commits[commits.length - 1]?.sha, pinnedSha) || commits.some((c) => !matches(c.sha, "") || typeof c.commit?.message !== "string" || !c.commit.message.trim())) return base;
+		const messages = commits.map((c) => String(c.commit?.message ?? ""));
+		const head = String(commits[commits.length - 1].sha);
+		const closedIssues = await Promise.all(closedIssueNumbers(messages).map(async (number) => {
+			const issue = (await deps.githubGet(`/repos/${repo}/issues/${number}`)) as { title?: unknown } | null;
+			return { number, title: typeof issue?.title === "string" ? issue.title : null };
+		}));
+		return {
+			...base,
+			commitRange: commits.length === 1 ? `${shortSha(head)} (1 commit)` : `${shortSha(String(commits[0].sha))}…${shortSha(head)} (${commits.length} commits)`,
+			changes: messages.reverse().map((m) => m.split("\n")[0].trim()).filter(Boolean),
+			changesCapped: false,
+			closedIssues,
+			headSha: head,
+			ciStatus: "pending",
+		};
+	}
 	const since = new Date(input.runStartedAt).toISOString();
-	const raw = await deps.githubGet(`/repos/${repo}/commits?${branch ? `sha=${encodeURIComponent(branch)}&` : ""}since=${encodeURIComponent(since)}&per_page=${RELEASE_NOTE_MAX_COMMITS}`);
+	const raw = await deps.githubGet(`/repos/${repo}/commits?${pinnedSha ? `sha=${encodeURIComponent(pinnedSha)}&` : branch ? `sha=${encodeURIComponent(branch)}&` : ""}since=${encodeURIComponent(since)}&per_page=${RELEASE_NOTE_MAX_COMMITS}`);
 	const commits = Array.isArray(raw) ? (raw as Array<{ sha?: unknown; commit?: { message?: unknown } }>).filter((c) => typeof c.sha === "string") : null;
 	if (!commits?.length) return base;
 	const messages = commits.map((c) => String(c.commit?.message ?? ""));
 	const head = String(commits[0].sha);
+	if (pinnedSha && (!/^[0-9a-f]{40}$/i.test(head) || !head.toLowerCase().startsWith(pinnedSha.toLowerCase()))) return base;
 	const oldest = String(commits[commits.length - 1].sha);
 	const closedIssues = await Promise.all(
 		closedIssueNumbers(messages).map(async (number) => {
@@ -181,7 +239,7 @@ export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: R
 		changesCapped: commits.length >= RELEASE_NOTE_MAX_COMMITS,
 		closedIssues,
 		headSha: head,
-		ciStatus: ciFrom(await deps.githubGet(`/repos/${repo}/actions/runs?head_sha=${head}&per_page=30`)),
+		ciStatus: pinnedSha ? "pending" : ciFrom(await deps.githubGet(`/repos/${repo}/actions/runs?head_sha=${head}&per_page=30`)),
 	};
 }
 
@@ -241,9 +299,16 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 		if (!settings?.effective.enabled) return { disabled: true, channels: [], repo: input.repoLabel, text: "" };
 		const channels: ReleaseChannel[] = settings.effective.channels.filter((c) => c.selected).map(({ selected: _s, ...c }) => c);
 		if (!channels.length) return { channels, repo: input.repoLabel, text: "" };
+		if (settings.instance.requiredWorkflows?.length) {
+			const pushed = await runPushedShaPrefix(env, { instanceId, userId, runId });
+			if (!pushed) return { channels, repo: input.repoLabel, text: "", unverified: "The push result did not identify its new commit." };
+			const ctx = await collectReleaseNoteContext(input, deps, pushed.prefix, pushed.basePrefix);
+			if (!ctx.headSha?.startsWith(pushed.prefix) || ctx.defaultBranch !== pushed.branch) return { channels, repo: input.repoLabel, text: "", unverified: "GitHub could not verify the pushed commit on its default branch." };
+			return { channels, repo: ctx.repo, text: "", queued: { context: ctx, workflows: settings.instance.requiredWorkflows } };
+		}
 		const ctx = await collectReleaseNoteContext(input, deps);
 		return { channels, repo: ctx.repo, text: buildReleaseNoteText(ctx) };
-	})) as { disabled?: true; channels: ReleaseChannel[]; repo: string; text: string } | null;
+	})) as { disabled?: true; channels: ReleaseChannel[]; repo: string; text: string; unverified?: string; queued?: { context: ReleaseNoteContext; workflows: NonNullable<import("../agent-types.js").InstanceReleaseNotes["requiredWorkflows"]> } } | null;
 	if (!plan) return { status: "not_shipped", sent: [], failed: [] };
 	if (plan.disabled) {
 		await logEvent(env, { ...trace, event: "release_note_skipped_disabled", message: "Release note not posted: release notes are turned off for this instance." }).catch(() => undefined);
@@ -252,6 +317,26 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 	if (!plan.channels.length) {
 		await logEvent(env, { ...trace, event: "release_note_skipped_no_grants", message: "Release note not posted: no messaging channel is granted to this instance, or none is chosen to receive release notes." }).catch(() => undefined);
 		return { status: "no_channels", sent: [], failed: [] };
+	}
+	if (plan.unverified) {
+		await logEvent(env, { ...trace, event: "release_note_unverified", level: "warn", message: `Release note held: ${plan.unverified}` }).catch(() => undefined);
+		await notifyUser(env, userId, "coding", "⚠️ Release note held", `${plan.repo}: ${plan.unverified}`, deepLinkFor({ kind: "coding-session", instanceId, sessionId: input.sessionId }), { key: `release-note-unverified:${runId}`, kind: "alert", instanceId }).catch(() => undefined);
+		return { status: "unverified", sent: [], failed: [] };
+	}
+	if (plan.queued) {
+		for (const channel of plan.channels) {
+			await runStep(`release-note-queue:${channel.grantId}`, async () => {
+				const ctx = plan.queued?.context;
+				if (!ctx?.headSha) return;
+				const now = Date.now();
+				await env.DB.prepare(`INSERT OR IGNORE INTO release_note_queue
+					(id,user_id,instance_id,repo_id,github_repo,default_branch,run_id,session_id,sha,grant_id,context_json,workflows_json,status,created_at,updated_at)
+					VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'pending',?13,?13)`)
+					.bind(crypto.randomUUID(), userId, instanceId, input.repoId, ctx.repo, ctx.defaultBranch, runId, input.sessionId, ctx.headSha, channel.grantId, JSON.stringify(ctx), JSON.stringify(plan.queued?.workflows), now).run();
+			});
+		}
+		await logEvent(env, { ...trace, event: "release_note_queued", message: `Release note queued for ${plan.queued.context.headSha}: waiting for required GitHub workflows.` }).catch(() => undefined);
+		return { status: "queued", sent: [], failed: [] };
 	}
 	const outcome: ReleaseNoteOutcome = { status: "posted", sent: [], failed: [] };
 	for (const channel of plan.channels) {
@@ -316,7 +401,7 @@ export function liveDeliver(env: Env, userId: string): Deliver {
 			const bot = await getUserProviderKey(env, userId, "slack");
 			if (!bot) return { ok: false, error: SLACK_NOT_CONNECTED };
 			const sent = await postSlackMessage(bot, channel.channelId, text);
-			return sent.ok ? { ok: true } : { ok: false, error: sent.message };
+			return sent.ok ? { ok: true, ...(slackPermalink(channel.channelId, sent.ts) ? { permalink: slackPermalink(channel.channelId, sent.ts) } : {}) } : { ok: false, error: sent.message };
 		}
 		const bot = await connectorClient(env, "discord", { userId }).token().catch(() => null);
 		if (!bot) return { ok: false, error: DISCORD_NOT_CONNECTED };
@@ -331,7 +416,7 @@ export function liveDeliver(env: Env, userId: string): Deliver {
  * or not the channel is chosen: it tests the channel, not the setting. Refused (404) for a grant
  * this instance does not hold; a failed post is a 502 with the provider's reason.
  */
-export async function sendTestReleaseNote(env: Env, userId: string, instanceId: string, grantId: string, deliver: Deliver = liveDeliver(env, userId)): Promise<{ sent: true; channel: ReleaseChannel }> {
+export async function sendTestReleaseNote(env: Env, userId: string, instanceId: string, grantId: string, deliver: Deliver = liveDeliver(env, userId)): Promise<{ sent: true; channel: ReleaseChannel; permalink?: string }> {
 	const channel = (await grantedReleaseChannels(env, instanceId, userId)).find((c) => c.grantId === grantId);
 	if (!channel) throw new HttpError(404, `This instance holds no Discord or Slack grant "${grantId}" — it was revoked or belongs to another instance. GET /v1/instances/${instanceId}/release-notes lists its channels.`);
 	const text = `🧪 Test release note from ProAgentStore\n\nThis channel (${channel.name}) is set up to receive release notes. When a coder run on this agent ships to its repository's default branch, one note per run arrives here: what changed, the issues it closed, and CI/deploy status.`;
@@ -342,7 +427,7 @@ export async function sendTestReleaseNote(env: Env, userId: string, instanceId: 
 		result = { ok: false, error: e instanceof Error ? e.message : String(e) };
 	}
 	const context = { provider: channel.provider, grantId, channelId: channel.channelId };
-	await logEvent(env, { source: "coding", event: result.ok ? "release_note_test_sent" : "release_note_test_failed", level: result.ok ? "info" : "warn", userId, instanceId, message: `Test release note to ${channel.provider} ${channel.name}: ${result.ok ? "sent" : result.error}`, context }).catch(() => undefined);
+	await logEvent(env, { source: "coding", event: result.ok ? "release_note_test_sent" : "release_note_test_failed", level: result.ok ? "info" : "warn", userId, instanceId, message: `Test release note to ${channel.provider} ${channel.name}: ${result.ok ? "sent" : result.error}`, context: { ...context, ...(result.ok && result.permalink ? { permalink: result.permalink } : {}) } }).catch(() => undefined);
 	if (!result.ok) throw new HttpError(502, `The test release note was not delivered to ${channel.provider} ${channel.name}: ${result.error}`);
-	return { sent: true, channel };
+	return { sent: true, channel, ...(result.permalink ? { permalink: result.permalink } : {}) };
 }

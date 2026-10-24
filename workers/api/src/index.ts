@@ -32,6 +32,7 @@ import { calendarRoutes } from "./routes/calendar.js";
 import { discordRoutes } from "./routes/discord.js";
 import { slackRoutes } from "./routes/slack.js";
 import { instanceReleaseNotesRoutes } from "./routes/instances-release-notes.js";
+import { runReleaseNoteQueue } from "./lib/release-note-queue.js";
 import { instanceActionsRunnerRoutes } from "./routes/instances-actions-runner.js";
 import { workdriveRoutes } from "./routes/workdrive.js";
 import { errorRoutes } from "./routes/errors.js";
@@ -491,6 +492,7 @@ export default {
 		ctx.waitUntil(
 			runDeployWatch(env).catch((err) => logUnhandled(env, err, { path: "scheduled:deploy-watch", method: "CRON" })),
 		);
+		ctx.waitUntil(runReleaseNoteQueue(env).catch((err) => logUnhandled(env, err, { path: "scheduled:release-note-queue", method: "CRON" })));
 		// Close an issue a default-branch commit named with a closing keyword (#816). A seventh
 		// independent failure domain, and the one with the weakest claim on the tick: GitHub already
 		// performs this close natively on a direct push, so the expected yield is zero and a missed

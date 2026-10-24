@@ -701,6 +701,7 @@ const READBACK: Record<string, string | null> = {
 	"set_account_preferences.releaseNotes": "get_account_preferences",
 	"set_instance_release_notes.enabled": "get_instance_release_notes",
 	"set_instance_release_notes.channels": "get_instance_release_notes",
+	"set_instance_release_notes.requiredWorkflows": "get_instance_release_notes",
 	// A test note is a message posted to a channel, not stored state — the channel's own history is where it is read.
 	"send_test_release_note.grant_id": "get_instance_release_notes",
 	// The bot token itself is never returned — `slack_bot_status` reports which workspace's bot it is, not the token.

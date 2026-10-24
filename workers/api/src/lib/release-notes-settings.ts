@@ -32,6 +32,23 @@ export type { AccountReleaseNotes, InstanceReleaseNotes, ReleaseChannel, Release
 
 const CHANNELS_MAX = 50;
 
+export function validateRequiredWorkflows(raw: unknown): NonNullable<InstanceReleaseNotes["requiredWorkflows"]> {
+	if (!Array.isArray(raw) || raw.length < 2 || raw.length > 10) throw new HttpError(400, "requiredWorkflows must contain 2–10 workflow files");
+	const paths = new Set<string>();
+	let deploys = 0;
+	const workflows = raw.map((value) => {
+		if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "Each required workflow needs path and role");
+		const item = value as Record<string, unknown>;
+		if (Object.keys(item).some((key) => key !== "path" && key !== "role") || typeof item.path !== "string" || !/^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/.test(item.path) || (item.role !== "check" && item.role !== "production_deploy")) throw new HttpError(400, "Each required workflow needs an exact .github/workflows/*.yml path and check or production_deploy role");
+		if (paths.has(item.path)) throw new HttpError(400, "requiredWorkflows cannot repeat a workflow path");
+		paths.add(item.path);
+		if (item.role === "production_deploy") deploys++;
+		return { path: item.path, role: item.role as "check" | "production_deploy" };
+	});
+	if (deploys !== 1) throw new HttpError(400, "requiredWorkflows needs exactly one production_deploy workflow");
+	return workflows;
+}
+
 /** Strict on write: an unknown field or a wrong type is refused rather than dropped. */
 export function validateAccountReleaseNotes(raw: unknown): AccountReleaseNotes {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "releaseNotes must be an object: { enabled: boolean }");
@@ -50,10 +67,16 @@ export function readInstanceReleaseNotes(config: string | null | undefined): Ins
 	} catch {
 		return {}; // malformed config is no setting, as every other config reader treats it
 	}
-	const o = (raw && typeof raw === "object" ? raw : {}) as { enabled?: unknown; channels?: unknown };
+	const o = (raw && typeof raw === "object" ? raw : {}) as { enabled?: unknown; channels?: unknown; requiredWorkflows?: unknown };
+	let requiredWorkflows: InstanceReleaseNotes["requiredWorkflows"];
+	if (o.requiredWorkflows !== undefined) {
+		try { requiredWorkflows = validateRequiredWorkflows(o.requiredWorkflows); }
+		catch { return { enabled: false }; } // A corrupted gate may never fall back to immediate posting.
+	}
 	return {
 		...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}),
 		...(Array.isArray(o.channels) ? { channels: o.channels.filter((c): c is string => typeof c === "string") } : {}),
+		...(requiredWorkflows ? { requiredWorkflows } : {}),
 	};
 }
 
@@ -63,10 +86,10 @@ export function readInstanceReleaseNotes(config: string | null | undefined): Ins
  * `channels` must name grants this instance holds — the grant check.
  */
 export function applyInstanceReleaseNotesPatch(current: InstanceReleaseNotes, patch: unknown, granted: readonly ReleaseChannel[]): InstanceReleaseNotes {
-	if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new HttpError(400, "Body must be an object: { enabled?: boolean | null, channels?: string[] | null }");
-	const extra = Object.keys(patch).filter((k) => k !== "enabled" && k !== "channels");
-	if (extra.length) throw new HttpError(400, `Unknown field ${extra.map((k) => `\`${k}\``).join(", ")} — the fields are \`enabled\` and \`channels\`.`);
-	const p = patch as { enabled?: unknown; channels?: unknown };
+	if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new HttpError(400, "Body must be an object: { enabled?, channels?, requiredWorkflows? }");
+	const extra = Object.keys(patch).filter((k) => k !== "enabled" && k !== "channels" && k !== "requiredWorkflows");
+	if (extra.length) throw new HttpError(400, `Unknown field ${extra.map((k) => `\`${k}\``).join(", ")} — the fields are \`enabled\`, \`channels\` and \`requiredWorkflows\`.`);
+	const p = patch as { enabled?: unknown; channels?: unknown; requiredWorkflows?: unknown };
 	const next: InstanceReleaseNotes = { ...current };
 	if (p.enabled === null) delete next.enabled;
 	else if (p.enabled !== undefined) {
@@ -85,6 +108,8 @@ export function applyInstanceReleaseNotesPatch(current: InstanceReleaseNotes, pa
 		}
 		next.channels = ids;
 	}
+	if (p.requiredWorkflows === null) delete next.requiredWorkflows;
+	else if (p.requiredWorkflows !== undefined) next.requiredWorkflows = validateRequiredWorkflows(p.requiredWorkflows);
 	return next;
 }
 

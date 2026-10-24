@@ -64,6 +64,8 @@ export interface EngineActReport {
 	kind: string;
 	command: string;
 	target: string | null;
+	pushedSha?: string;
+	pushedFromSha?: string;
 	irreversible: boolean;
 	ok: boolean | null;
 	at: string;
@@ -538,6 +540,8 @@ export function sanitizeEngineActs(raw: unknown): EngineActReport[] {
 			kind,
 			command,
 			target: typeof r.target === "string" && r.target.trim() ? r.target.trim().slice(0, 120) : null,
+			...(kind === "push.trunk" && r.ok === true && typeof r.pushedSha === "string" && /^[0-9a-f]{7,40}$/i.test(r.pushedSha) ? { pushedSha: r.pushedSha.toLowerCase() } : {}),
+			...(kind === "push.trunk" && r.ok === true && typeof r.pushedFromSha === "string" && /^[0-9a-f]{7,40}$/i.test(r.pushedFromSha) ? { pushedFromSha: r.pushedFromSha.toLowerCase() } : {}),
 			irreversible: deriveAct(kind, command).irreversible,
 			// Anything that is not literally true/false is UNKNOWN. Coercing a missing value to
 			// `true` would be the platform inventing a successful merge.
@@ -647,6 +651,8 @@ export async function recordEngineActs(
 				act: act.kind,
 				command: act.command,
 				target: act.target,
+				...(act.pushedSha ? { pushedSha: act.pushedSha } : {}),
+				...(act.pushedFromSha ? { pushedFromSha: act.pushedFromSha } : {}),
 				irreversible: act.irreversible,
 				ok: act.ok,
 				sessionId: ctx.sessionId,

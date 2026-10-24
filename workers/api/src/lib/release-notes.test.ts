@@ -152,6 +152,31 @@ describe("the instance's release-notes setting decides who receives the note (#1
 		expect(d.posts.map((p) => p.channel.grantId)).toEqual([chosen.id]);
 	});
 
+	it("a gated note is queued for the push result's own SHA and does not post while checks are pending", async () => {
+		const sha = "b".repeat(40);
+		await pushes({ ...act("p1", "push.trunk", "git push origin main"), target: "origin main", pushedFromSha: "0".repeat(7), pushedSha: "a".repeat(7) }, { ...act("p2", "push.trunk", "git push origin main"), target: "origin main", pushedFromSha: "a".repeat(7), pushedSha: sha.slice(0, 7) });
+		await grant("111111111111111111", "#releases");
+		setInstance({ requiredWorkflows: [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy" }] });
+		const d = deps();
+		d.githubGet = async (path) => path === "/repos/acme/platform" ? { default_branch: "main" } : path.includes("compare/0000000...bbbbbbb?") ? { status: "ahead", base_commit: { sha: "0".repeat(40) }, total_commits: 2, commits: [{ sha: "a".repeat(40), commit: { message: "feat: earlier delivered commit" } }, { sha, commit: { message: "fix: delivered change" } }] } : null;
+		expect((await postReleaseNotes(input(), d)).status).toBe("queued");
+		expect(d.posts).toHaveLength(0);
+		const queued = await d1.DB.prepare("SELECT sha, status, context_json FROM release_note_queue").all<{ sha: string; status: string; context_json: string }>();
+		expect(queued.results).toHaveLength(1);
+		expect(queued.results?.[0]).toMatchObject({ sha, status: "pending" });
+		expect(JSON.parse(queued.results?.[0]?.context_json ?? "{}").changes).toEqual(["fix: delivered change", "feat: earlier delivered commit"]);
+	});
+
+	it("holds the note if a later trunk push has no verifiable SHA", async () => {
+		await pushes({ ...act("p1", "push.trunk", "git push origin main"), target: "origin main", pushedFromSha: "0".repeat(7), pushedSha: "a".repeat(7) }, { ...act("p2", "push.trunk", "git push origin main"), target: "origin main" });
+		await grant("111111111111111111", "#releases");
+		setInstance({ requiredWorkflows: [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy" }] });
+		const d = deps();
+		expect((await postReleaseNotes(input(), d)).status).toBe("unverified");
+		expect(d.posts).toHaveLength(0);
+		expect((await d1.DB.prepare("SELECT id FROM release_note_queue").all()).results).toEqual([]);
+	});
+
 	it("a granted Slack channel receives it beside Discord, through the same delivery", async () => {
 		await pushes(act("a1", "push.trunk", "git push origin main"));
 		await grant("111111111111111111", "#releases");

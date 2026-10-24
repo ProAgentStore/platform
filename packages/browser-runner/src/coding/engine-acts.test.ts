@@ -6,12 +6,23 @@ import {
 	commandFromToolInput,
 	type EngineActRecord,
 	fillTargetFromResult,
+	fillPushedShaFromResult,
 	redactCommand,
 	resultText,
 	splitSegments,
 	toolCallOk,
 	toolResultMark,
 } from "./engine-acts.js";
+
+describe("trunk push attribution for release notes", () => {
+	it("takes the new SHA only from the matching command result", () => {
+		const acts = classifyCommand("tool-1", "git push origin main");
+		expect(fillPushedShaFromResult(acts, "To github.com:x/y.git\n   aaaaaaa..bbbbbbb  main -> main")[0]).toMatchObject({ pushedFromSha: "aaaaaaa", pushedSha: "bbbbbbb" });
+		expect(fillPushedShaFromResult([{ ...acts[0], target: "origin HEAD:main" }], "   aaaaaaa..bbbbbbb  HEAD -> main")[0].pushedSha).toBe("bbbbbbb");
+		expect(fillPushedShaFromResult(acts, "Everything up-to-date")[0].pushedSha).toBeUndefined();
+		expect(fillPushedShaFromResult(acts, "   aaaaaaa..bbbbbbb  other -> other")[0].pushedSha).toBeUndefined();
+	});
+});
 
 describe("classifySegment — the acts a supervisor must not miss", () => {
 	it("names a PR merge, which is the act that opened #294", () => {

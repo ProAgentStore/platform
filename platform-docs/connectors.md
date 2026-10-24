@@ -87,6 +87,18 @@ agent's **Permissions** tab → *Release notes* (or `get_instance_release_notes`
 the `releaseNotes` section of `set_account_preferences`), and which granted channels. *Send test*
 (`send_test_release_note`) posts a test note to one channel.
 
+For repos that require verified production evidence, `set_instance_release_notes` accepts
+`requiredWorkflows`: 2–10 exact `.github/workflows/*.yml` paths, one marked `production_deploy`
+and the others `check`. This opt-in gate queues the note for the SHA printed by the successful
+trunk push itself. The per-minute release queue posts only after the latest run of every required
+workflow succeeded on that identical SHA and default branch. A missing or failed run waits for a
+rerun, up to 48 hours. An unidentifiable push SHA holds the note and records
+`release_note_unverified`; it never guesses from current branch HEAD. The queue rechecks the channel
+grant and setting before posting. A claimed send is never retried automatically after an uncertain
+Slack response, preventing duplicate announcements. Successful Slack sends retain a permalink in
+the queue and trace; test sends return their permalink. The coder's older immediate status note
+remains the default for instances without a gate.
+
 **Discord for a coder (#1218).** A coder declares no Discord tools, so the ordinary channel grant is
 refused for it. Grant the channel *for release notes* instead — the picker on the Release notes panel, or
 `grant_instance_discord_channel` with `purpose: "release_notes"`. Everything else is still checked (you own

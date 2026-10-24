@@ -37,20 +37,22 @@ export function registerReleaseNotesTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"set_instance_release_notes",
-		"Coding agents only — any other instance answers with an unsupported-feature error (#1286). Set whether one instance posts release notes, and to which of its granted channels. Patch per field: omit a field to keep it. `enabled` true/false sets it for this instance; null returns it to the account default. `channels` is a list of `grantId`s from get_instance_release_notes (Discord and Slack alike); null means every granted channel. A grant id this instance does not hold is refused and nothing is saved. Returns the same shape as get_instance_release_notes. Call with dry_run first.",
+		"Coding agents only. Set release note channels and optional exact-SHA release gate. `requiredWorkflows` is 2–10 exact .github/workflows/*.yml paths, exactly one with role production_deploy and the rest check. With a gate, notes wait until every workflow succeeds for the pushed SHA; null clears the gate. Call with dry_run first.",
 		{
 			token: tokenArg,
 			instance_id: instanceId,
 			enabled: z.boolean().nullable().optional().describe("true/false for this instance; null follows the account default; omit to keep."),
 			channels: z.array(z.string()).nullable().optional().describe("Grant ids that receive the notes; null for every granted channel; omit to keep."),
+			requiredWorkflows: z.array(z.object({ path: z.string(), role: z.enum(["check", "production_deploy"]) })).nullable().optional().describe("Exact GitHub workflow file paths required to succeed on one SHA; one role must be production_deploy. Null clears."),
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, instance_id, enabled, channels, dry_run }) => {
+		async ({ token, instance_id, enabled, channels, requiredWorkflows, dry_run }) => {
 			const session = tokenFor(token);
 			if (!session) return authRequired();
 			const body: Record<string, unknown> = {};
 			if (enabled !== undefined) body.enabled = enabled;
 			if (channels !== undefined) body.channels = channels;
+			if (requiredWorkflows !== undefined) body.requiredWorkflows = requiredWorkflows;
 			const input = { instance_id, ...body };
 			const denied = await requirePermission(safetyFor(token), "write", "set_instance_release_notes", input);
 			if (denied) return denied;

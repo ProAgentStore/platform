@@ -404,6 +404,8 @@ export interface InstanceReleaseNotes {
 	enabled?: boolean;
 	/** Grant ids. Absent: every channel granted to the instance. */
 	channels?: string[];
+	/** When set, delivery waits for these exact GitHub workflow files on the pushed SHA. */
+	requiredWorkflows?: { path: string; role: "check" | "production_deploy" }[];
 }
 
 export interface ResolvedReleaseNotes {
@@ -428,6 +430,7 @@ export interface InstanceReleaseNotesResponse {
 export interface ReleaseNoteTestResponse {
 	sent: true;
 	channel: ReleaseChannel;
+	permalink?: string;
 }
 
 /**

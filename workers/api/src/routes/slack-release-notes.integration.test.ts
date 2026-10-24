@@ -119,7 +119,7 @@ describe("a Slack channel is connected, granted to ONE instance, and receives a 
 
 		const sent = await call("/v1/instances/inst-a/release-notes/test", { method: "POST", body: { grantId: grant.id } });
 		expect(sent.status).toBe(200);
-		expect(sent.body).toMatchObject({ sent: true, channel: { provider: "slack", channelId: CH_ENG } });
+		expect(sent.body).toMatchObject({ sent: true, channel: { provider: "slack", channelId: CH_ENG }, permalink: `https://app.slack.com/archives/${CH_ENG}/p1700000000000100` });
 		expect(posts).toHaveLength(1);
 		expect(posts[0]).toMatchObject({ channel: CH_ENG, auth: `Bearer ${BOT}` });
 		expect(posts[0].text).toContain("Test release note");
@@ -210,6 +210,15 @@ describe("release-notes settings: readable, writable, inherited (#1217 acceptanc
 		expect((chosen.body.effective as { channels: Array<{ grantId: string; selected: boolean }> }).channels.map((c) => [c.grantId, c.selected])).toEqual(expect.arrayContaining([[eng.id, false], [ops.id, true]]));
 		expect((await put("inst-a", { enabled: false })).body.settings).toEqual({ enabled: false, channels: [ops.id] }); // channels kept
 		expect((await put("inst-a", { channels: null })).body.settings).toEqual({ enabled: false });
+	});
+
+	it("stores an exact-SHA workflow gate and refuses one without a production deploy", async () => {
+		const workflows = [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/e2e-full.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy" }];
+		expect((await put("inst-a", { requiredWorkflows: workflows })).body.settings).toMatchObject({ requiredWorkflows: workflows });
+		const bad = await put("inst-a", { requiredWorkflows: workflows.slice(0, 2) });
+		expect(bad.status).toBe(400);
+		expect(bad.body.error).toMatch(/exactly one production_deploy/);
+		expect((await settings("inst-a")).body.settings).toMatchObject({ requiredWorkflows: workflows });
 	});
 
 	it("the grant checks: a choice or a test send naming another instance's grant is refused, and nothing is saved or sent", async () => {

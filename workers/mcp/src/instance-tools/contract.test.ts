@@ -671,7 +671,7 @@ const TABLE: Record<string, Row> = {
 	revoke_instance_discord_grant: ["discord", "destructive", "revoke_instance_discord_grant", "envelope", "confirm,dry_run,grant_id,instance_id,token"],
 	// #1217 — who receives release notes, a test send, and the Slack bot's owner lifecycle + per-instance channel grants.
 	get_instance_release_notes: ["releaseNotes", "read", null, null, "instance_id,token"],
-	set_instance_release_notes: ["releaseNotes", "write", null, "envelope", "channels,dry_run,enabled,instance_id,token"],
+	set_instance_release_notes: ["releaseNotes", "write", null, "envelope", "channels,dry_run,enabled,instance_id,requiredWorkflows,token"],
 	send_test_release_note: ["releaseNotes", "write", null, "envelope", "dry_run,grant_id,instance_id,token"],
 	slack_bot_status: ["releaseNotes", "read", null, null, "token"],
 	connect_slack_bot: ["releaseNotes", "write", null, "envelope", "bot_token,dry_run,token"],

@@ -68,6 +68,10 @@ export interface EngineActRecord {
 	command: string;
 	/** Best-effort subject: the PR number, the branch, the remote. Null when it isn't stated. */
 	target: string | null;
+	/** New commit from this push's own successful Git output; abbreviated, resolved by GitHub before release. */
+	pushedSha?: string;
+	/** Previous remote commit from the same push result; bounds the delivered commit range. */
+	pushedFromSha?: string;
 	/** Is this act one that cannot simply be undone? Drives how loudly it is surfaced. */
 	irreversible: boolean;
 	/**
@@ -256,6 +260,20 @@ export function fillTargetFromResult(acts: EngineActRecord[], content: unknown):
 	if (!m) return acts;
 	const target = `#${m[1]}`;
 	return acts.map((a) => (wantsPrNumber(a) ? { ...a, target } : a));
+}
+
+/** Attribute a trunk push to the new commit printed by THAT command's result. Silence is safer than a guessed HEAD. */
+export function fillPushedShaFromResult(acts: EngineActRecord[], content: unknown): EngineActRecord[] {
+	const lines = resultText(content).split(/\r?\n/);
+	return acts.map((act) => {
+		if (act.kind !== "push.trunk" || !act.target) return act;
+		const ref = act.target.split(/\s+/)[1]?.replace(/^HEAD:/, "").replace(/^refs\/heads\//, "");
+		if (!ref || !/^[A-Za-z0-9._/-]+$/.test(ref)) return act;
+		const escaped = ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const line = new RegExp(`^\\s*[0-9a-f]{7,40}\\.\\.[0-9a-f]{7,40}\\s+(?:${escaped}|HEAD)\\s+->\\s+${escaped}\\s*$`, "i");
+		const match = lines.find((l) => line.test(l))?.match(/\b([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})\b/i);
+		return match ? { ...act, pushedFromSha: match[1].toLowerCase(), pushedSha: match[2].toLowerCase() } : act;
+	});
 }
 
 function pushTarget(segment: string): string | null {

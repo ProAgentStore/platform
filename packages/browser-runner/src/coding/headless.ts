@@ -3,7 +3,7 @@ import type { CleanupManager } from "./cleanup.js";
 import { spawnTarget, unwrapLauncher } from "./launcher-wrapper.js";
 import { type ObjectiveOrigin, runObjectiveBlock } from "./run-objective.js";
 import { type ChildProcess, spawn } from "node:child_process";
-import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
+import { classifyCommand, commandFromToolInput, type EngineActRecord, fillPushedShaFromResult, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
@@ -1073,7 +1073,7 @@ export class HeadlessSession {
 		if (!acts) return;
 		this.awaitingResult.delete(id);
 		const ok = toolCallOk(block);
-		for (const a of fillTargetFromResult(acts, block.content)) this.publishAct({ ...a, ok });
+		for (const a of fillPushedShaFromResult(fillTargetFromResult(acts, block.content), block.content)) this.publishAct({ ...a, ok });
 	}
 
 	/** Publish everything still waiting, with an unknown outcome. */
