@@ -203,7 +203,7 @@ describe("local supervisor status and explicit recovery (#1367)", () => {
 	});
 
 	it("targets one scope and returns the machine's durable receipt without minting a token", async () => {
-		const d = deps({ call: async <T>(_conn, path, _body) => {
+		const d = deps({ call: async <T>(_conn: RunnerConn, path: string, _body: unknown) => {
 			if (path === "/coding/actions-runner/recover") return { id: "rec-1", state: "deferred_active_job", requestedAt: 123 } as T;
 			return { job: null, installed: [] } as T;
 		} });
