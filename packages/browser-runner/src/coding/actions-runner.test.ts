@@ -4,9 +4,11 @@
  * job reports back.
  */
 import { join } from "node:path";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it } from "vitest";
 import { fakeMachine } from "./windows-runner.fixture.js";
-import { type ActionsRunnerDeps, type ActionsRunnerJob, CAPABILITY_TOOLS, clearRunnerJobs, detectCapabilities, detectCapabilityLabels, macosTierLabels, readInstalledRunner, routeActionsRunner, runnerAsset, runnerDir, runnerJob, startRunnerJob } from "./actions-runner.js";
+import { type ActionsRunnerDeps, type ActionsRunnerJob, CAPABILITY_TOOLS, clearRunnerJobs, detectCapabilities, detectCapabilityLabels, macosTierLabels, readInstalledRunner, requestLocalActionsRecovery, routeActionsRunner, runnerAsset, runnerDir, runnerJob, startRunnerJob } from "./actions-runner.js";
 
 const TOKEN = "AABBCCDDEEFF00112233445566778899";
 const HOME = "/Users/pags";
@@ -23,6 +25,7 @@ function fake(over: Partial<ActionsRunnerDeps> = {}): Fake {
 		ran: [],
 		downloads: [],
 		files: new Set(),
+		readText: () => JSON.stringify({ agentName: ORG.name, gitHubUrl: ORG.url }),
 		platform: "darwin",
 		arch: "arm64",
 		home: HOME,
@@ -56,19 +59,19 @@ const ORG = { url: "https://github.com/proappstore-online", token: TOKEN, name: 
 beforeEach(() => clearRunnerJobs());
 
 describe("install (#1209)", () => {
-	it("macOS: downloads this CPU's release, configures with the pags labels, installs and starts the service — and never reports the token", async () => {
+	it("macOS: configures this CPU's runner, then gives the exact local system-service step without a login-only service", async () => {
 		const d = fake();
 		const job = await settle(startRunnerJob("install", { ...ORG, runnerGroup: "pags-pink-laptop" }, d));
 		const dir = join(HOME, ".proagentstore", "actions-runner", "proappstore-online");
-		expect(job).toMatchObject({ state: "done", service: "installed", dir, runsAs: "serge" });
+		expect(job).toMatchObject({ state: "done", service: "needs_admin", dir, runsAs: "serge", serviceNote: expect.stringContaining(`pags actions service install --dir ${dir}`) });
 		expect(d.downloads).toEqual(["https://github.com/actions/runner/releases/download/v2.329.0/actions-runner-osx-arm64-2.329.0.tar.gz"]);
-		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh", "svc.sh", "svc.sh"]);
+		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh"]);
 		const config = d.ran[1].args;
 		expect(config).toEqual(expect.arrayContaining(["--unattended", "--url", ORG.url, "--name", "pink-laptop", "--labels", "pags,pags-pink-laptop", "--runnergroup", "pags-pink-laptop"]));
 		expect(config[config.indexOf("--token") + 1]).toBe(TOKEN); // config needs it…
 		expect(JSON.stringify(job)).not.toContain(TOKEN); // …and nothing reported back carries it
 		expect(job.steps.find((s) => s.includes("config.sh"))).toContain("--token ***");
-		expect(d.ran.slice(2).map((r) => r.args[0])).toEqual(["install", "start"]);
+		expect(d.ran.slice(2)).toEqual([]);
 	});
 
 	it("reports a missing prerequisite instead of assuming it", async () => {
@@ -136,9 +139,17 @@ describe("install (#1209)", () => {
 		const d = fake();
 		d.files.add(join(runnerDir(HOME, ORG.url), ".runner"));
 		const job = await settle(startRunnerJob("install", ORG, d));
-		expect(job).toMatchObject({ state: "done", service: "installed" });
+		expect(job).toMatchObject({ state: "done", service: "needs_admin" });
 		expect(d.ran).toEqual([]);
 		expect(d.downloads).toEqual([]);
+	});
+
+	it("refuses adoption when .runner belongs to a different name or GitHub scope", async () => {
+		const d = fake({ readText: () => JSON.stringify({ agentName: "other", gitHubUrl: ORG.url }) });
+		d.files.add(join(runnerDir(HOME, ORG.url), ".runner"));
+		const job = await settle(startRunnerJob("install", ORG, d));
+		expect(job).toMatchObject({ state: "failed", error: expect.stringContaining("does not match") });
+		expect(d.ran).toEqual([]);
 	});
 
 	it("asking again while a job runs joins it rather than starting a second", () => {
@@ -169,12 +180,12 @@ describe("install (#1209)", () => {
 });
 
 describe("remove (#1209)", () => {
-	it("stops and uninstalls the service, then deregisters with the removal token", async () => {
+	it("macOS requires exact local PAGS service removal before deregistration", async () => {
 		const d = fake();
 		d.files.add(join(runnerDir(HOME, ORG.url), ".runner"));
 		const job = await settle(startRunnerJob("remove", ORG, d));
-		expect(job).toMatchObject({ state: "done", service: "removed" });
-		expect(d.ran.map((r) => `${r.file.split("/").pop()} ${r.args[0]}`)).toEqual(["svc.sh stop", "svc.sh uninstall", "config.sh remove"]);
+		expect(job).toMatchObject({ state: "done", service: "needs_admin", serviceNote: expect.stringContaining("pags actions service remove --dir") });
+		expect(d.ran).toEqual([]);
 		expect(JSON.stringify(job)).not.toContain(TOKEN);
 	});
 
@@ -212,6 +223,29 @@ describe("routes (#1209)", () => {
 		expect(routeActionsRunner("/coding/actions-runner/install", { ...ORG, url: "nope" }, () => d)).toMatchObject({ status: 400, body: { error: expect.stringContaining("github.com") } });
 		expect((routeActionsRunner("/coding/actions-runner/status", { jobId: id }, () => d).body as { job: ActionsRunnerJob }).job.id).toBe(id);
 		expect(routeActionsRunner("/coding/actions-runner/other", {}, () => d).status).toBe(404);
+	});
+});
+
+describe("explicit recovery request (#1367)", () => {
+	it("queues one tokenless request for the exact managed scope and preserves it on a repeat call", () => {
+		const home = mkdtempSync(join(tmpdir(), "pags-actions-recover-"));
+		try {
+			const dir = runnerDir(home, ORG.url);
+			const local = join(dir, ".pags-supervisor");
+			mkdirSync(local, { recursive: true });
+			writeFileSync(join(dir, ".runner"), JSON.stringify({ gitHubUrl: ORG.url, agentName: ORG.name }));
+			writeFileSync(join(dir, ".credentials"), "private");
+			writeFileSync(join(dir, "runsvc.sh"), "#!/bin/sh\n");
+			writeFileSync(join(local, "config.json"), JSON.stringify({ version: 1, acRecoveryEnabled: true }));
+			writeFileSync(join(local, "status.json"), JSON.stringify({ updatedAt: Date.now(), supervisorPid: process.pid, activeJob: false }));
+			const deps = { home, exists: (path: string) => { try { readFileSync(path); return true; } catch { return false; } } };
+			const first = requestLocalActionsRecovery(ORG.url, deps);
+			const again = requestLocalActionsRecovery(ORG.url, deps);
+			expect(first).toMatchObject({ reason: "manual", state: "queued" });
+			expect(again.id).toBe(first.id);
+			expect(JSON.parse(readFileSync(join(local, "recover.json"), "utf8"))).toEqual({ id: first.id, reason: "manual", requestedAt: first.requestedAt });
+			expect(() => requestLocalActionsRecovery("https://github.com/other", deps)).toThrow(/fully configured/);
+		} finally { rmSync(home, { recursive: true, force: true }); }
 	});
 });
 

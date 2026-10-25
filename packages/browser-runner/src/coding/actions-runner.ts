@@ -23,7 +23,7 @@
  */
 import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -49,6 +49,8 @@ export interface ActionsRunnerRequest {
 	labels?: string[];
 	/** Install only, org scope only: the runner group to join. */
 	runnerGroup?: string;
+	/** Internal tokenless path: may reconcile a configured runner, never register one. */
+	reconcileOnly?: boolean;
 }
 
 export interface Prerequisite {
@@ -89,6 +91,7 @@ export interface ActionsRunnerDeps {
 	/** Root or not (Linux `svc.sh install` needs root). */
 	isRoot: boolean;
 	exists: (path: string) => boolean;
+	readText?: (path: string) => string;
 	mkdir: (path: string) => void;
 	which: (bin: string) => boolean;
 	/** The newest actions/runner version, e.g. "2.329.0". */
@@ -295,10 +298,18 @@ export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerReques
 			job.runsAs = root.identity;
 		}
 		if (deps.exists(join(job.dir, ".runner"))) {
+			const raw = (deps.readText ?? ((path: string) => readFileSync(path, "utf8")))(join(job.dir, ".runner"));
+			let record: { agentName?: unknown; gitHubUrl?: unknown };
+			try { record = JSON.parse(raw.replace(/^﻿/, "")) as typeof record; } catch { throw new Error("Configured .runner is unreadable; refusing service adoption."); }
+			if (record.agentName !== req.name || typeof record.gitHubUrl !== "string" || record.gitHubUrl.replace(/\/$/, "").toLowerCase() !== req.url.toLowerCase()) throw new Error("Configured .runner name or GitHub scope does not match this setup request; refusing service adoption.");
 			job.steps.push(`already configured in ${job.dir} — not reinstalled (remove it first to re-register)`);
-			job.service = "installed";
+			if (deps.platform === "darwin") {
+				job.service = "needs_admin";
+				job.serviceNote = `Reconcile this configured runner as a pre-login PAGS system service on the machine: pags actions service install --dir ${job.dir}`;
+			} else job.service = "installed";
 			return finish(job, deps);
 		}
+		if (req.reconcileOnly) throw new Error("The runner was removed while reconciliation started; no registration was attempted.");
 		deps.mkdir(job.dir);
 		const version = await deps.latestVersion();
 		const asset = runnerAsset(deps.platform, deps.arch, version);
@@ -330,6 +341,11 @@ export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerReques
 			job.service = "installed";
 			return finish(job, deps);
 		}
+		if (deps.platform === "darwin") {
+			job.service = "needs_admin";
+			job.serviceNote = `The runner is configured. Install its pre-login PAGS system service on the machine: pags actions service install --dir ${job.dir}`;
+			return finish(job, deps);
+		}
 		if (deps.platform === "linux" && !deps.isRoot) {
 			job.service = "needs_admin";
 			job.serviceNote = `The runner is configured but its service needs root on Linux. On this machine run: cd ${job.dir} && sudo ./svc.sh install ${deps.user} && sudo ./svc.sh start`;
@@ -349,11 +365,35 @@ export async function runRemove(job: ActionsRunnerJob, req: ActionsRunnerRequest
 	const win = deps.platform === "win32";
 	try {
 		if (!deps.exists(join(job.dir, ".runner"))) {
+			if (deps.platform === "darwin") {
+				const label = `online.proagentstore.actions.${job.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
+				if (deps.exists(`/Library/LaunchDaemons/${label}.plist`)) throw new Error("The runner record is missing but its PAGS system LaunchDaemon still exists. Inspect and remove that exact service locally before treating this runner as removed.");
+			}
 			job.steps.push(`no runner configured in ${job.dir} — nothing to remove`);
 			job.service = "removed";
 			return finish(job, deps);
 		}
 		if (!win) {
+			if (deps.platform === "darwin") {
+				const proof = join(job.dir, ".pags-supervisor", "removal-approved.json");
+				let approved = false;
+				if (deps.exists(proof)) {
+					try {
+						const r = JSON.parse((deps.readText ?? ((path: string) => readFileSync(path, "utf8")))(proof)) as { name?: unknown; url?: unknown; at?: unknown };
+						approved = r.name === req.name && r.url === req.url && typeof r.at === "number" && Date.now() - r.at < 24 * 60 * 60_000;
+					} catch { /* no approval */ }
+				}
+				if (!approved) {
+					job.service = "needs_admin";
+					job.serviceNote = `Remove this runner's exact service on the machine, then ask again to deregister: pags actions service remove --dir ${job.dir}`;
+					return finish(job, deps);
+				}
+				job.steps.push("local administrator-approved service removal verified");
+				await step(job, deps, join(job.dir, "config.sh"), ["remove", "--token", req.token], req.token);
+				rmSync(proof, { force: true });
+				job.service = "removed";
+				return finish(job, deps);
+			}
 			if (deps.platform === "linux" && !deps.isRoot) {
 				job.service = "needs_admin";
 				job.serviceNote = `Stopping the service needs root on Linux. On this machine run: cd ${job.dir} && sudo ./svc.sh stop && sudo ./svc.sh uninstall — then ask again to deregister.`;
@@ -380,6 +420,11 @@ export interface InstalledRunner {
 	url: string | null;
 	/** A Windows runner still in the user profile (#1272): it is migrated to the machine root, never repaired in place. */
 	legacy?: boolean;
+	/** Local OS service domain, derived from the exact generated unit where available. */
+	serviceMode?: "macos_system" | "macos_user" | "linux_system" | "windows_system" | "unknown";
+	/** Supervisor's persisted observation; freshness is checked by consumers. */
+	supervisor?: Record<string, unknown> | null;
+	supervisorNote?: string;
 }
 
 export function readInstalledRunner(dir: string, managed: boolean, readText: (path: string) => string | null): InstalledRunner | null {
@@ -406,6 +451,7 @@ export function liveRunnerDeps(): ActionsRunnerDeps {
 		user: userInfo().username,
 		isRoot: typeof process.getuid === "function" && process.getuid() === 0,
 		exists: existsSync,
+		readText: (path) => readFileSync(path, "utf8"),
 		mkdir: (path) => mkdirSync(path, { recursive: true }),
 		which: (bin) => spawnSync(win ? "where" : "which", [bin], { stdio: "ignore" }).status === 0,
 		probe: (file, args) => {
@@ -444,7 +490,60 @@ export function installedRunners(home = homedir(), programData = process.platfor
 	// The machine root (#1272) and, on Windows, any profile-scoped install still waiting to be migrated (`legacy`).
 	const machine = programData ? scan(join(programData, "ProAgentStore", "actions-runner"), false) : [];
 	const profile = scan(join(home, ".proagentstore", "actions-runner"), process.platform === "win32");
-	return [...machine, ...profile, readInstalledRunner(join(home, "actions-runner"), false, readText)].filter((r): r is InstalledRunner => r !== null);
+	return [...machine, ...profile, readInstalledRunner(join(home, "actions-runner"), false, readText)].filter((r): r is InstalledRunner => r !== null).map((r) => {
+		if (process.platform === "win32") return { ...r, serviceMode: r.legacy ? "unknown" : "windows_system" };
+		if (process.platform === "linux") return { ...r, serviceMode: "linux_system" };
+		if (process.platform !== "darwin" || !r.managed) return r;
+		const label = `online.proagentstore.actions.${r.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
+		const system = `/Library/LaunchDaemons/${label}.plist`;
+		let mode: InstalledRunner["serviceMode"] = existsSync(system) ? "macos_system" : "unknown";
+		if (mode === "unknown") for (const [base, candidate] of [["/Library/LaunchDaemons", "macos_system"], [join(home, "Library", "LaunchAgents"), "macos_user"]] as const) {
+			if (!existsSync(base)) continue;
+			for (const name of readdirSync(base)) {
+				if (!name.endsWith(".plist")) continue;
+				const plist = spawnSync("plutil", ["-convert", "json", "-o", "-", join(base, name)], { encoding: "utf8", timeout: 5000 });
+				if (plist.status !== 0) continue;
+				try {
+					const value = JSON.parse(plist.stdout) as { WorkingDirectory?: unknown; ProgramArguments?: unknown };
+					if (value.WorkingDirectory === r.dir || (Array.isArray(value.ProgramArguments) && value.ProgramArguments.some((arg) => arg === r.dir || arg === join(r.dir, "runsvc.sh")))) mode = candidate;
+				} catch { /* other software's plist */ }
+			}
+		}
+		const status = readText(join(r.dir, ".pags-supervisor", "status.json"));
+		let supervisor: Record<string, unknown> | null = null;
+		try { if (status) supervisor = JSON.parse(status) as Record<string, unknown>; } catch { /* reported below */ }
+		return { ...r, serviceMode: mode, supervisor, ...(!supervisor ? { supervisorNote: status ? "Supervisor status is unreadable" : "No supervisor status sample" } : {}) };
+	});
+}
+
+/** Queue one explicit restart for this exact managed runner; the supervisor enforces active-job deferral. */
+export function requestLocalActionsRecovery(url: string, deps: Pick<ActionsRunnerDeps, "home" | "exists">): { id: string; reason: "manual"; state: "queued" | "deferred_active_job"; requestedAt: number } {
+	const dir = runnerDir(deps.home, url);
+	if (!deps.exists(join(dir, ".runner")) || !deps.exists(join(dir, ".credentials")) || !deps.exists(join(dir, "runsvc.sh"))) throw new Error("This managed Actions runner is not fully configured.");
+	const rawRunner = readFileSync(join(dir, ".runner"), "utf8").replace(/^﻿/, "");
+	const record = JSON.parse(rawRunner) as { gitHubUrl?: unknown };
+	if (typeof record.gitHubUrl !== "string" || record.gitHubUrl.replace(/\/$/, "").toLowerCase() !== url.toLowerCase()) throw new Error("The configured runner scope does not match the requested scope.");
+	const local = join(dir, ".pags-supervisor");
+	const cfg = JSON.parse(readFileSync(join(local, "config.json"), "utf8")) as { version?: unknown; acRecoveryEnabled?: unknown };
+	if (cfg.version !== 1 || typeof cfg.acRecoveryEnabled !== "boolean") throw new Error("The PAGS supervisor configuration is invalid.");
+	const status = JSON.parse(readFileSync(join(local, "status.json"), "utf8")) as { updatedAt?: unknown; supervisorPid?: unknown; activeJob?: unknown };
+	if (typeof status.updatedAt !== "number" || Date.now() - status.updatedAt > 90_000 || typeof status.supervisorPid !== "number") throw new Error("The PAGS supervisor has no current health sample.");
+	try { process.kill(status.supervisorPid, 0); } catch { throw new Error("The PAGS supervisor is not running."); }
+	const target = join(local, "recover.json");
+	const lock = join(local, "recover-write-lock");
+	mkdirSync(lock); // exclusive: two remote calls cannot replace each other's request during rename
+	try {
+		if (deps.exists(target)) {
+			const prior = JSON.parse(readFileSync(target, "utf8")) as { id?: unknown; requestedAt?: unknown; reason?: unknown };
+			if (typeof prior.id === "string" && typeof prior.requestedAt === "number" && prior.reason === "manual") return { id: prior.id, requestedAt: prior.requestedAt, reason: "manual", state: status.activeJob ? "deferred_active_job" : "queued" };
+			throw new Error("An unknown recovery request already exists; refusing to overwrite it.");
+		}
+		const request = { id: randomUUID(), reason: "manual" as const, requestedAt: Date.now() };
+		const temp = join(local, `recover.${request.id}.tmp`);
+		writeFileSync(temp, JSON.stringify(request) + "\n", { mode: 0o600, flag: "wx" });
+		try { renameSync(temp, target); } finally { rmSync(temp, { force: true }); }
+		return { ...request, state: status.activeJob ? "deferred_active_job" : "queued" };
+	} finally { rmSync(lock, { recursive: true, force: true }); }
 }
 
 /**
@@ -455,6 +554,18 @@ export function routeActionsRunner(path: string, body: Record<string, unknown>, 
 	try {
 		if (path === "/coding/actions-runner/install" || path === "/coding/actions-runner/remove") {
 			return { status: 202, body: startRunnerJob(path.endsWith("install") ? "install" : "remove", body as unknown as ActionsRunnerRequest, deps()) };
+		}
+		if (path === "/coding/actions-runner/reconcile") {
+			const d = deps();
+			const req = body as unknown as Omit<ActionsRunnerRequest, "token">;
+			if (!URL_SHAPE.test(req.url ?? "") || !/^[A-Za-z0-9._-]{1,64}$/.test(req.name ?? "")) throw new Error("A valid GitHub runner URL and name are required.");
+			const dir = d.platform === "win32" && d.windows ? windowsRunnerDir(d.windows.programData, req.url) : runnerDir(d.home, req.url);
+			if (!d.exists(join(dir, ".runner"))) throw new Error("The runner is no longer configured on this machine; setup needs a registration token.");
+			return { status: 202, body: startRunnerJob("install", { ...req, token: "reconcile-only", reconcileOnly: true }, d) };
+		}
+		if (path === "/coding/actions-runner/recover") {
+			if (typeof body.url !== "string") throw new Error("A GitHub runner scope URL is required.");
+			return { status: 200, body: requestLocalActionsRecovery(body.url, deps()) };
 		}
 		if (path === "/coding/actions-runner/capabilities") {
 			const d = deps();

@@ -308,6 +308,15 @@ export async function startActionsRunner(
 		const present = status?.installed?.find((r) => (r.name === label || r.name === `${label}-m`) && sameScope(r));
 		if (present?.name) {
 			const synced = await syncRunnerLabels(input.scope, present.name, labels, deps, [PAGS_RUNNER_LABEL, label, RUNNER_UNAVAILABLE_LABEL]);
+			// Registration already exists, but the local service may be absent or still a login-only LaunchAgent.
+			// Reconcile without minting a registration token or touching .runner/.credentials (#1209).
+			let serviceJob: RunnerJobView;
+			try {
+				serviceJob = await deps.call<RunnerJobView>(conn, "/coding/actions-runner/reconcile", { url, name: present.name });
+			} catch (e) {
+				if (oldRunner(e)) throw new HttpError(409, `This machine's runner cannot reconcile its Actions service. Update it with runner_update, then ask again.`);
+				throw e;
+			}
 			await logEvent(env, {
 				source: "runner",
 				event: "actions_runner.labels_refreshed",
@@ -316,17 +325,7 @@ export async function startActionsRunner(
 				message: `Refreshed the capability labels of ${node}'s GitHub Actions runner for ${url}`,
 				context: { node, url, labels, changed: synced.changed },
 			}).catch(() => undefined);
-			const job: RunnerJobView = {
-				id: `labels-${node}`,
-				action: "install",
-				url,
-				name: label,
-				state: "done",
-				steps: [synced.changed ? `relabelled at GitHub: ${synced.before.join(",") || "(none)"} → ${synced.after.join(",")}` : "labels already match what the machine reports — nothing changed"],
-				prerequisites: [],
-				runsAs: "",
-				service: "installed",
-			};
+			const job: RunnerJobView = { ...serviceJob, steps: [synced.changed ? `relabelled at GitHub: ${synced.before.join(",") || "(none)"} → ${synced.after.join(",")}` : "labels already match what the machine reports", ...serviceJob.steps] };
 			return { job, node, labels, capabilities: caps, preflight, refreshed: { changed: synced.changed, before: synced.before, after: synced.after } };
 		}
 	}

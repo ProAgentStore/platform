@@ -298,7 +298,7 @@ describe("refreshing the labels of a runner that is already registered (#1260)",
 	}
 	const base = [{ name: "self-hosted", type: "read-only" }, { name: "macOS", type: "read-only" }, { name: "ARM64", type: "read-only" }];
 
-	it("re-running setup on an installed runner relabels it at GitHub: stale capability labels go, current ones come, a hand-added label stays — no token minted, nothing installed", async () => {
+	it("re-running setup relabels at GitHub and reconciles the local service without minting a token", async () => {
 		const gh = github([...base, { name: "pags", type: "custom" }, { name: "pags-pink-laptop", type: "custom" }, { name: "has-jq", type: "custom" }, { name: "macos-12+", type: "custom" }, { name: "team-ios", type: "custom" }]);
 		const d = machine({ installed });
 		d.fetch = gh.fetch;
@@ -307,10 +307,10 @@ describe("refreshing the labels of a runner that is already registered (#1260)",
 		expect(put?.url).toBe(`https://api.github.com/orgs/${ORG}/actions/runners/77/labels`);
 		expect(put?.body).toEqual({ labels: ["team-ios", "pags", "pags-pink-laptop", "has-brew", "has-git", "has-node", "macos-11+", "macos-12+", "macos-13+", "macos-14+"] });
 		expect(out.refreshed).toMatchObject({ changed: true });
-		expect(out.job).toMatchObject({ state: "done", service: "installed" });
+		expect(out.job).toMatchObject({ state: "running" });
 		expect(out.job.steps[0]).toMatch(/relabelled at GitHub/);
 		expect(gh.calls.some((c) => c.url.endsWith("registration-token"))).toBe(false);
-		expect(changing(d)).toEqual([]);
+		expect(changing(d)).toEqual([{ path: "/coding/actions-runner/reconcile", body: { url: `https://github.com/${ORG}`, name: "pags-pink-laptop" } }]);
 		expect(JSON.stringify(out)).not.toContain(APP_TOKEN);
 	});
 
