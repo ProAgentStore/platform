@@ -114,9 +114,12 @@ describe("leaveForRestart (#860)", () => {
 	it("a restart command: starts it detached — it outlives this process — then exits cleanly", () => {
 		process.env[RESTART_COMMAND_ENV] = "tmux send-keys -t pags 'pags runner connect i1 --watch-instances' Enter";
 		try {
-			const d = deps();
+			const d = { ...deps(), guard: vi.fn() };
 			leaveForRestart("command", d as never);
 			expect(d.spawn).toHaveBeenCalledWith(process.env[RESTART_COMMAND_ENV], expect.objectContaining({ shell: true, detached: true, stdio: "ignore" }));
+			// and a guard is started to check it produced a runner (#1151), before this process leaves
+			expect(d.guard).toHaveBeenCalledWith(process.env[RESTART_COMMAND_ENV], process.pid);
+			expect(d.guard.mock.invocationCallOrder[0]).toBeLessThan(d.exit.mock.invocationCallOrder[0]);
 			expect(d.exit).toHaveBeenCalledWith(0);
 		} finally {
 			delete process.env[RESTART_COMMAND_ENV];

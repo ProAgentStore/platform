@@ -444,3 +444,14 @@ A failure prints which stage and what was missing, with the tail of the runner's
 out of scope: other operating systems and Node versions, an update mid-turn, a supervisor-managed start, a broken
 candidate's automatic rollback, relay reconnects, packaging checks and a post-publish canary — this was the first
 incident, and the issue asked for this one test.
+
+## A restart started by a command is checked, and started again (#1151)
+
+The `pags up` launcher and a service manager outlive the runner they restart, so they retry a start that dies. The other
+restarter does not: `pags up --background` and anything run with `PAGS_RESTART_COMMAND` restart after a remote update by
+starting a detached command and exiting, and on 2026-10-17 that shape lost three machines with nothing left to notice. The
+leaving runner now also starts a small detached **guard** (`pags-restart-guard.mjs`, beside `update.log`; Node builtins
+only, so it works even when the release it restarts onto is broken). It waits for the old runner to exit, then watches the
+lock directory for a live runner that is not the old one. If none appears within 150 seconds it runs the command again —
+up to three starts in all — and every step, including `GAVE UP … it needs starting at the machine` when none comes up, is
+a line in `update.log`. If the guard itself cannot start, the update log says the restart is unverified.

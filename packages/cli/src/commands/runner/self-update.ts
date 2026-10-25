@@ -21,6 +21,7 @@ import { spawn } from "node:child_process";
 import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, payloadRoot, runNpm } from "../../bootstrap/payload.js";
 import { probePayload } from "../../bootstrap/start-probe.js";
 import { installGlobalWithRollback } from "./global-install.js";
+import { startRestartGuard } from "./restart-guard.js";
 import { beginTrial, markBad } from "../../bootstrap/trial.js";
 import { logUpdateStep } from "../../bootstrap/update-log.js";
 import type { SessionStateCounts } from "./runner-work-observation.js";
@@ -138,10 +139,12 @@ export function deferredUpdateLeaseActive(lease: DeferredUpdateLease, now = Date
  * Leave so {@link Restarter} starts this process again on the new release (#860): the restart code for
  * `pags up` or a service manager; for a {@link RESTART_COMMAND_ENV} the command, started detached first.
  */
-export function leaveForRestart(restarter: Restarter, deps: { spawn: typeof spawn; exit: (code: number) => void } = { spawn, exit: (code) => process.exit(code) }): void {
+export function leaveForRestart(restarter: Restarter, deps: { spawn: typeof spawn; exit: (code: number) => void; guard?: (command: string, oldPid: number) => unknown } = { spawn, exit: (code) => process.exit(code) }): void {
 	logUpdateStep(`restart: leaving for the ${restarter} restarter (${restarter === "command" ? "restart command started, exit 0" : `exit ${RUNNER_RESTART_EXIT_CODE}`})`);
 	if (restarter === "command") {
 		deps.spawn(process.env[RESTART_COMMAND_ENV] as string, { shell: true, detached: true, stdio: "ignore", env: process.env }).unref();
+		// Nothing outlives this process to check the command produced a runner — a guard does (#1151).
+		(deps.guard ?? startRestartGuard)(process.env[RESTART_COMMAND_ENV] as string, process.pid);
 		deps.exit(0);
 		return;
 	}
