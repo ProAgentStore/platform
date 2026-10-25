@@ -123,12 +123,15 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 		  WHERE r.status = 'running' AND r.waiting_reason = 'decision' AND r.workflow_instance_id IS NOT NULL
 		    AND ((r.cancel_requested = 1 AND COALESCE(r.cancel_requested_at, 0) < ?1)
 		      OR (q.applied_at IS NULL AND ((q.answered_at IS NOT NULL AND q.answered_at < ?1) OR (q.state = 'unresolved' AND q.resolved_at < ?1))))
-		    -- #1077: a run that released its checkout is not re-woken while something else holds that
-		    -- repo (a run, or an open session) — it could only find it busy again. The holder's end wakes it.
+		    -- #1077: a run that released its checkout is not re-woken while something else holds that repo —
+		    -- it could only find it busy again. The holder's end wakes it. "Holds" is the ownership model's
+		    -- (repoOwners: a running unreleased run, a driver, a direct turn), NOT "another session is open" (#1323):
+		    -- an idle active session with no run never ends, so it never woke anyone and deadlocked the answer.
 		    AND NOT (r.checkout_released_at IS NOT NULL AND r.cancel_requested = 0 AND EXISTS (
 		          SELECT 1 FROM coding_sessions mine JOIN coding_sessions other ON other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
 		           WHERE mine.id = r.session_id
-		             AND (other.status = 'active' OR EXISTS (SELECT 1 FROM agent_loop_runs o WHERE o.session_id = other.id AND o.status = 'running' AND o.checkout_released_at IS NULL))))
+		             AND (other.driver_id IS NOT NULL OR other.direct_turn_id IS NOT NULL
+		                  OR EXISTS (SELECT 1 FROM agent_loop_runs o WHERE o.session_id = other.id AND o.status = 'running' AND o.checkout_released_at IS NULL))))
 		    -- #1242: a run resumes only on the machine it parked on. While that machine is quiet, a wake could
 		    -- only find it away again (each costing Workflow steps); its registration wakes it instead.
 		    AND NOT (r.parked_machine_id IS NOT NULL AND r.cancel_requested = 0 AND NOT EXISTS (

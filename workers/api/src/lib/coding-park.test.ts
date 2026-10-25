@@ -235,6 +235,40 @@ describe("a run that released its checkout is not an owner of its repo (#1077)",
 		expect(await runDueParkWakes(env)).toBe(1);
 	});
 
+	it("an idle `active` session with no run does not hold the repo: the answer is applied (#1323)", async () => {
+		released();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console", now: Date.now() - 2 * PARK_WAKE_BACKSTOP_MS });
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type) VALUES ('s-idle', 'i1', 'r1', 'u1', 'active', 'codex')");
+		expect(await repoOwners(env, scope)).toEqual([]);
+		expect(await runDueParkWakes(env)).toBe(1);
+		expect(sent).toEqual([{ instance: "wf-1", type: answerEventType("q1"), why: "backstop" }]);
+	});
+
+	it("a session with a live driver or direct turn still holds the repo (#1323)", async () => {
+		released();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console", now: Date.now() - 2 * PARK_WAKE_BACKSTOP_MS });
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, driver_id) VALUES ('s-drv', 'i1', 'r1', 'u1', 'active', 'claude', 'drv-1')");
+		expect(await runDueParkWakes(env)).toBe(0);
+		d1.exec("UPDATE coding_sessions SET driver_id = NULL, direct_turn_id = 't1' WHERE id = 's-drv'");
+		expect(await runDueParkWakes(env)).toBe(0);
+		d1.exec("UPDATE coding_sessions SET direct_turn_id = NULL WHERE id = 's-drv'");
+		expect(await runDueParkWakes(env)).toBe(1);
+	});
+
+	it("two answered parked runs on one repo, both released, are both woken (#1323)", async () => {
+		released();
+		const at = Date.now() - 10 * DAY;
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type) VALUES ('s2', 'i1', 'r1', 'u1', 'suspended', 'claude')`);
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id, last_alive_at, waiting_reason, waiting_until, parked_since, workflow_instance_id, checkout_released_at)
+		  VALUES ('run-2', 'u1', 'i1', 'x', 'running', 10, ${at}, 's2', ${at}, 'decision', ${at + DECISION_PARK_MS}, ${at}, 'wf-2', ${Date.now()})`);
+		d1.exec(`INSERT INTO coder_questions (id, instance_id, user_id, session_id, run_id, task_id, question, state, asked_at, expires_at) VALUES ('q2', 'i1', 'u1', 's2', 'run-2', 'csess-s2', 'Ship?', 'waiting_human', ${at}, ${at + 15 * 60_000})`);
+		const old = Date.now() - 2 * PARK_WAKE_BACKSTOP_MS;
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console", now: old });
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s2", value: "yes", via: "console", now: old });
+		expect(await runDueParkWakes(env)).toBe(2);
+		expect(sent.map((e) => e.instance).sort()).toEqual(["wf-1", "wf-2"]);
+	});
+
 	// ── #1228: a parked decision never holds the queue ──────────────────────────────────────────────
 	const queueStatus = () => (d1.sqlite.prepare("SELECT status FROM instance_objective_queue").get() as { status: string }).status;
 	const wakeAt = () => (d1.sqlite.prepare("SELECT checkout_wake_at FROM agent_loop_runs WHERE run_id = 'run-1'").get() as { checkout_wake_at: number | null }).checkout_wake_at;
