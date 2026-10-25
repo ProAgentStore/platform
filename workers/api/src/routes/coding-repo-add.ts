@@ -5,7 +5,7 @@
 import type { Context } from "hono";
 import { CONFIRMATION_WINDOW_MS } from "../lib/confirmation-window.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
-import { NO_SOCKET_MARKER, RunnerUnreachableError } from "../lib/runner-unreachable.js";
+import { RunnerUnreachableError, runnerErrorCode } from "../lib/runner-unreachable.js";
 import { attachGithubIdentity, attachWorkdir, findRepoByWorkdir } from "../lib/coding-repo-folder.js";
 import { createRepo, findExistingRepoBinding, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia } from "../lib/coding-workdir.js";
@@ -248,7 +248,9 @@ function runnerTrouble(e: unknown): string | null {
 
 /** An explicit runner rejection is definitive; a lost dispatch reply is not. */
 function dispatchUnconfirmed(message: string): boolean {
-	if (message.includes(NO_SOCKET_MARKER)) return false;
+	// The relay's reason (#1355): sent and no answer is unconfirmed; refused, never sent or answered is definitive.
+	const code = runnerErrorCode(message);
+	if (code && code !== "RUNNER_HTTP") return code === "RELAY_TIMEOUT" || code === "DROPPED";
 	const status = /→ (\d{3}):/.exec(message)?.[1];
 	if (status && status !== "502" && status !== "504") return false;
 	return /timed out|disconnected|WebSocket error|fetch failed|network/i.test(message);

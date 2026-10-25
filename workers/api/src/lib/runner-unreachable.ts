@@ -61,13 +61,71 @@ export class RunnerGoneError extends Error {
 	}
 }
 
+// ── Why it failed, as data (#1355) ───────────────────────────────────────────
+//
+// A runner failure used to be identified by matching its WORDS ("Relay command timed out", "the relay has no live
+// socket", "Runner disconnected", …) in half a dozen files, and #1344 fixed four bugs that came from it. The relay
+// now answers with a code, `callRunner` puts it in the message as ONE tag a step boundary keeps, and every reader asks
+// `runnerErrorCode`. The tag also carries the disposition: `[runner-unreachable:…]` is safe to wait out (the old
+// `RunnerUnreachableError` class, now readable from a flattened message too), `[runner-error:…]` is not.
+
+/** Why a runner command failed. */
+export type RunnerErrorCode =
+	| "NO_SOCKET" // the relay held no socket for this agent at dispatch — nothing was sent
+	| "UNRESPONSIVE" // a socket, but the runner answered neither the relay's ping nor (for a read) the command
+	| "RELAY_TIMEOUT" // the relay sent the command and no reply came within its timeout
+	| "DROPPED" // the socket went away with the command in flight
+	| "REPLACED" // the owner's own takeover or a stale-socket eviction ended it on purpose
+	| "RELAY_FAILED" // the relay could not send it for another reason (the socket refused the write)
+	| "DRAINING" // the runner refused new work while it drains for a safe automatic update — nothing ran
+	| "RUNNER_HTTP"; // the runner itself answered with an error status
+
+/** The relay's wire codes (`relay-do.ts` answers with these), as the codes above. */
+export const RELAY_WIRE_CODES: Readonly<Record<string, RunnerErrorCode>> = {
+	RUNNER_RELAY_NO_SOCKET: "NO_SOCKET",
+	RUNNER_RELAY_UNRESPONSIVE: "UNRESPONSIVE",
+	RUNNER_RELAY_TIMEOUT: "RELAY_TIMEOUT",
+	RUNNER_RELAY_DROPPED: "DROPPED",
+	RUNNER_RELAY_REPLACED: "REPLACED",
+	RUNNER_RELAY_FAILED: "RELAY_FAILED",
+};
+
+/** The tag `callRunner` appends to a message. At the END, so patterns anchored on `Runner /path → status:` still hold. */
+export function runnerErrorTag(code: RunnerErrorCode, unreachable: boolean): string {
+	return ` [${unreachable ? "runner-unreachable" : "runner-error"}:${code}]`;
+}
+
+const TAG = /\[(runner-unreachable|runner-error):([A-Z_]+)\]/;
+
+/** The message without its tag — for a reader that parses the runner's body out of it. */
+export function withoutRunnerErrorTag(msg: string): string {
+	return msg.replace(/ ?\[(?:runner-unreachable|runner-error):[A-Z_]+\]$/, "");
+}
+
+/**
+ * The code of a runner failure, from its tag — or, for a message written before tags existed (a run in flight across
+ * the deploy), from the words it used to be recognised by. Null when it is not a runner failure this module knows.
+ */
+export function runnerErrorCode(e: unknown): RunnerErrorCode | null {
+	const msg = typeof (e as { message?: unknown } | null)?.message === "string" ? ((e as { message: string }).message) : typeof e === "string" ? e : "";
+	const tagged = TAG.exec(msg);
+	if (tagged) return tagged[2] as RunnerErrorCode;
+	if (msg.includes(DRAINING_MARKER) || msg.includes("draining for an automatic update")) return "DRAINING"; // the runner's words, then callRunner's
+	if (msg.includes(UNRESPONSIVE_MARKER)) return "UNRESPONSIVE";
+	if (msg.includes(NO_SOCKET_MARKER)) return "NO_SOCKET";
+	if (DROPPED_REASONS.some((r) => msg.includes(r))) return "DROPPED";
+	if (msg.includes("Relay command timed out")) return "RELAY_TIMEOUT";
+	return null;
+}
+
 export function isRunnerUnreachable(e: unknown): boolean {
 	if (e instanceof RunnerUnreachableError) return true;
 	const err = e as { runnerUnreachable?: unknown; message?: unknown } | null;
 	if (err?.runnerUnreachable === true) return true;
 	const msg = typeof err?.message === "string" ? err.message : "";
-	// UNRESPONSIVE_MARKER alone counts too (#1341): a timed-out read carries it without the no-socket
-	// marker — the socket IS there — and a step boundary leaves only the message to recognise it by.
+	const tagged = TAG.exec(msg);
+	if (tagged) return tagged[1] === "runner-unreachable";
+	// Untagged (written before #1355): the words it used to be recognised by. UNRESPONSIVE_MARKER alone counts too (#1341).
 	return msg.includes(NO_SOCKET_MARKER) || msg.includes(UNRESPONSIVE_MARKER) || DROPPED_REASONS.some((r) => msg.includes(r));
 }
 
@@ -77,8 +135,9 @@ export function isRunnerUnreachable(e: unknown): boolean {
  * counts as connected — so a wait that asks it first ends at once on a machine still not answering.
  */
 export function isRunnerUnresponsive(e: unknown): boolean {
-	const msg = (e as { message?: unknown } | null)?.message;
-	return isRunnerUnreachable(e) && typeof msg === "string" && msg.includes(UNRESPONSIVE_MARKER);
+	if (!isRunnerUnreachable(e)) return false;
+	const code = runnerErrorCode(e);
+	return code === "UNRESPONSIVE" || code === "RELAY_TIMEOUT" || code === "DRAINING";
 }
 
 export function isRunnerGone(e: unknown): boolean {
@@ -93,8 +152,17 @@ export function isRunnerGone(e: unknown): boolean {
  * connected runner as having no socket.
  */
 export function relayFailureIsDisconnect(status: number, body: string): boolean {
-	if (status === 503) return /RUNNER_RELAY_NO_SOCKET|RUNNER_RELAY_UNRESPONSIVE|"No runner connected"/.test(body);
+	const code = relayWireCode(body);
+	if (code) return code === "NO_SOCKET" || code === "UNRESPONSIVE" || code === "DROPPED";
+	// A relay that predates its codes (a deploy in progress): the words it answered with.
+	if (status === 503) return /"No runner connected"/.test(body);
 	return status === 504 && DROPPED_REASONS.some((r) => body.includes(r));
+}
+
+/** The relay's own code in a response body, or null — a runner's body (`origin: "runner"`) never carries one. */
+export function relayWireCode(body: string): RunnerErrorCode | null {
+	const m = /"code"\s*:\s*"(RUNNER_RELAY_[A-Z_]+)"/.exec(body);
+	return m ? (RELAY_WIRE_CODES[m[1]] ?? null) : null;
 }
 
 /** The runner refusing new work while it drains for a safe automatic update (packages/cli relay) — refused before anything ran. */

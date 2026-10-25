@@ -23,6 +23,7 @@ import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
+import { withoutRunnerErrorTag } from "./runner-unreachable.js";
 
 export type RepoOwner =
 	| { kind: "run"; sessionId: string | null; runId: string; since: number }
@@ -215,7 +216,7 @@ export function runnerEngineProbe(env: Env, instanceId: string, userId: string):
  * Anything else is not that answer.
  */
 export function captureSaysSessionAbsent(e: unknown, sessionId: string): boolean {
-	const msg = e instanceof Error ? e.message : "";
+	const msg = e instanceof Error ? withoutRunnerErrorTag(e.message) : "";
 	const prefix = ["Runner /coding/capture → 404: ", "Runner /coding/capture → 500: "].find((p) => msg.startsWith(p));
 	if (!prefix) return false;
 	try {

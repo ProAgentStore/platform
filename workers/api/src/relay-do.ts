@@ -41,6 +41,14 @@ const REPLACED = "Runner replaced by new connection";
 const EVICTED = "Stale runner socket evicted";
 /** Rejections the owner caused on purpose (`pags up --force`, an eviction) — not failures to record (#1134). */
 const DELIBERATE_REJECTIONS = new Set([REPLACED, EVICTED]);
+const RELAY_TIMEOUT = "Relay command timed out";
+/** The wire code of a 504 (#1355) — `runner-unreachable.ts` `RELAY_WIRE_CODES` reads it. */
+function relayFailureCode(message: string): string {
+	if (message === RELAY_TIMEOUT) return "RUNNER_RELAY_TIMEOUT";
+	if (DELIBERATE_REJECTIONS.has(message)) return "RUNNER_RELAY_REPLACED";
+	if (message === "Runner disconnected" || message === "Runner WebSocket error") return "RUNNER_RELAY_DROPPED";
+	return "RUNNER_RELAY_FAILED";
+}
 
 /** Accept the upgrade only to close it immediately with a code the client can read. A rejected
  *  upgrade surfaces as 1006 with no reason; an accepted-then-closed socket carries both. */
@@ -245,7 +253,7 @@ export class RelayDO extends DurableObject<Env> {
 			result = await new Promise<CommandResponse>((resolve, reject) => {
 				const timer = setTimeout(() => {
 					this.pending.delete(id);
-					reject(new Error("Relay command timed out"));
+					reject(new Error(RELAY_TIMEOUT));
 				}, timeoutMs);
 
 				this.pending.set(id, { resolve, reject, timer });
@@ -265,7 +273,7 @@ export class RelayDO extends DurableObject<Env> {
 			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : "Relay command failed";
-			const outcome = message === "Relay command timed out" ? "timeout" : "failed";
+			const outcome = message === RELAY_TIMEOUT ? "timeout" : "failed";
 			this.emitDispatchObservation({ path: body.path, timeoutMs, outcome, dispatchStartedAt });
 			// The 504 its caller gets, recorded (#1134) — unless the owner's own action ended it: a forced
 			// takeover or a stale-socket eviction rejects pending commands on purpose. The runner path is
@@ -277,8 +285,9 @@ export class RelayDO extends DurableObject<Env> {
 				runnerPath: clipMarked(String(body.path ?? "").split("?")[0], 200),
 				outcome,
 			});
+			// The reason as a code beside its words (#1355), so the caller reads WHY instead of matching the text.
 			return Response.json(
-				{ error: message },
+				{ error: message, code: relayFailureCode(message) },
 				{ status: 504 },
 			);
 		}

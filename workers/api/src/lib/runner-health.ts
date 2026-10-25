@@ -24,7 +24,7 @@
 //
 // Pure and import-light so the route and its tests agree on one rule.
 
-import { isRunnerUnreachable } from "./runner-unreachable.js";
+import { isRunnerUnreachable, runnerErrorCode } from "./runner-unreachable.js";
 
 /** What the `/health` probe found. `not_attempted` = there was no relay socket to ask through. */
 export type HealthCheckState = "ok" | "timeout" | "unresponsive" | "disconnected" | "failed" | "not_attempted";
@@ -59,9 +59,10 @@ const FAILURE_ERRORS: Record<HealthCheckFailure["state"], string> = {
 /** Classify a `/health` probe failure into a stable state + message. */
 export function classifyHealthProbeFailure(e: unknown): HealthCheckFailure {
 	const detail = e instanceof Error ? e.message : String(e);
-	const state: HealthCheckFailure["state"] = detail.includes("Relay command timed out")
+	const code = runnerErrorCode(e); // the relay's reason (#1355), not its words
+	const state: HealthCheckFailure["state"] = code === "RELAY_TIMEOUT"
 		? "timeout"
-		: detail.includes("connected but not responding")
+		: code === "UNRESPONSIVE" || code === "DRAINING"
 			? "unresponsive"
 			: isRunnerUnreachable(e) || /send\(\) after close/i.test(detail)
 				? "disconnected"

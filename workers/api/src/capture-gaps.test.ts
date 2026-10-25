@@ -27,6 +27,8 @@ vi.mock("cloudflare:workers", () => {
 });
 
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./lib/d1-sqlite.js";
+import { callRunner } from "./lib/runner-client.js";
+import { isRunnerUnreachable, isRunnerUnresponsive, runnerErrorCode } from "./lib/runner-unreachable.js";
 import { resetServerBuildForTests } from "./lib/error-log.js";
 import { logReturnedFailure } from "./lib/on-error.js";
 import { withRequestId } from "./lib/request-context.js";
@@ -194,7 +196,7 @@ describe("3. RelayDO (#1134)", () => {
 		const { r } = relay("iA:node:macbook");
 		const res = await command(r, { path: "/coding/capture?session=abc", timeoutMs: 20 });
 		expect(res.status).toBe(504);
-		expect(await res.json()).toEqual({ error: "Relay command timed out" });
+		expect(await res.json()).toEqual({ error: "Relay command timed out", code: "RUNNER_RELAY_TIMEOUT" });
 		expect(rows()).toEqual([expect.objectContaining({ source: "relay", level: "warn", user_id: "u1", instance_id: "iA", message: "Relay command timed out after 20 ms" })]);
 		// The runner path without its query: an id is not a label.
 		expect(JSON.parse(rows()[0].context as string)).toMatchObject({ endpoint: "/command", runnerPath: "/coding/capture", outcome: "timeout", node: "macbook" });
@@ -205,7 +207,9 @@ describe("3. RelayDO (#1134)", () => {
 		const pending = command(cut.r, { path: "/tasks", timeoutMs: 5_000 });
 		await vi.waitFor(() => expect(cut.sent.some((s) => s.includes('"path":"/tasks"'))).toBe(true));
 		await cut.r.webSocketClose(cut.socket as unknown as WebSocket);
-		expect((await pending).status).toBe(504);
+		const res = await pending;
+		expect(res.status).toBe(504);
+		expect(await res.json()).toEqual({ error: "Runner disconnected", code: "RUNNER_RELAY_DROPPED" });
 		expect(rows()).toEqual([expect.objectContaining({ source: "relay", level: "warn", message: "Relay command failed: Runner disconnected" })]);
 
 		const evicted = relay("iA:node:desk");
@@ -214,7 +218,9 @@ describe("3. RelayDO (#1134)", () => {
 		evicted.goSilent();
 		const verdict = (await (await evicted.r.fetch(new Request("https://relay/evict-stale", { method: "POST" }))).json()) as { evicted: number };
 		expect(verdict.evicted).toBe(1);
-		expect((await waiting).status).toBe(504);
+		const gone = await waiting;
+		expect(gone.status).toBe(504);
+		expect(await gone.json()).toEqual({ error: "Stale runner socket evicted", code: "RUNNER_RELAY_REPLACED" });
 		expect(rows()).toHaveLength(1);
 	});
 
@@ -240,6 +246,29 @@ describe("3. RelayDO (#1134)", () => {
 		await vi.waitFor(() => expect(sent.some((s) => s.includes('"path":"/tasks"'))).toBe(true));
 		await r.webSocketClose(socket as unknown as WebSocket);
 		expect((await second).status).toBe(504);
+	});
+
+	it("callRunner reads the relay's own answers by their code, and the code survives a step boundary (#1355)", async () => {
+		const through = (r: InstanceType<typeof RelayDO>) => ({ env: { RELAY: { idFromName: () => "id", get: () => ({ fetch: (q: Request) => r.fetch(q) }) }, DB: env.DB }, instanceId: "iA", relayName: "iA" }) as unknown as Parameters<typeof callRunner>[0];
+		// A mutating command the runner never answered: a real failure, not one to wait out — and still a timeout.
+		const hung = relay("iA:node:macbook");
+		const act = (await callRunner(through(hung.r), "/coding/act", {}, { timeoutMs: 20 }).catch((e) => e)) as Error;
+		expect(runnerErrorCode(act)).toBe("RELAY_TIMEOUT");
+		expect(isRunnerUnreachable(act)).toBe(false);
+		// A read the runner never answered: waited out, and readable as such once flattened to its message.
+		const read = (await callRunner(through(relay("iA:node:desk").r), "/coding/capture", {}, { timeoutMs: 20 }).catch((e) => e)) as Error;
+		const flat = new Error(read.message);
+		expect(runnerErrorCode(flat)).toBe("RELAY_TIMEOUT");
+		expect(isRunnerUnreachable(flat)).toBe(true);
+		expect(isRunnerUnresponsive(flat)).toBe(true);
+		// The socket dropping with the command in flight.
+		const cut = relay("iA:node:pink");
+		const pending = callRunner(through(cut.r), "/tasks", {}, { timeoutMs: 5_000 }).catch((e) => e);
+		await vi.waitFor(() => expect(cut.sent.some((s) => s.includes('"path":"/tasks"'))).toBe(true));
+		await cut.r.webSocketClose(cut.socket as unknown as WebSocket);
+		const dropped = new Error(((await pending) as Error).message);
+		expect(runnerErrorCode(dropped)).toBe("DROPPED");
+		expect(isRunnerUnreachable(dropped)).toBe(true);
 	});
 
 	it("a socket error is a warn row", async () => {

@@ -2,7 +2,7 @@ import { decryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
 import { latestResourceSample, resourceHistory, resourcesView } from "./runner-resources.js";
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
-import { DRAINING_MARKER, NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
+import { DRAINING_MARKER, NO_SOCKET_MARKER, relayFailureIsDisconnect, relayWireCode, runnerErrorCode, runnerErrorTag, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 import type { StaleSocketVerdict } from "./relay-liveness.js";
@@ -335,19 +335,20 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 			// A socket can still exist in the DO while the runner event loop is frozen. RelayDO
 			// verifies that with a bounded ping before accepting a command (#846); retain that
 			// distinction here so a coding-start failure says what actually needs attention.
-			const unresponsive = detail.includes("RUNNER_RELAY_UNRESPONSIVE");
+			const code = relayWireCode(detail) ?? (res.status === 503 ? "NO_SOCKET" : "DROPPED");
+			const unresponsive = code === "UNRESPONSIVE";
 			if (unresponsive) await recordUnresponsive(conn, path);
 			throw new RunnerUnreachableError(
-				unresponsive
+				(unresponsive
 					? `Runner relay is ${UNRESPONSIVE_MARKER} — ${NO_SOCKET_MARKER} for this agent.`
-					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`,
+					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`) + runnerErrorTag(code, true),
 				{ dispatched: res.status !== 503 },
 			);
 		}
 		// The runner draining for an update refused the command BEFORE it ran (#1344): retryable, and nothing was sent to the
 		// runtime — but it is a connected runner, so it says so instead of "no live socket".
 		if (res.status === 503 && detail.includes(DRAINING_MARKER)) {
-			throw new RunnerUnreachableError(`Runner ${path} → 503: the runner is draining for an automatic update and is ${UNRESPONSIVE_MARKER} to new work until it restarts.`, { dispatched: false });
+			throw new RunnerUnreachableError(`Runner ${path} → 503: the runner is draining for an automatic update and is ${UNRESPONSIVE_MARKER} to new work until it restarts.${runnerErrorTag("DRAINING", true)}`, { dispatched: false });
 		}
 		// A CAPTURE that timed out at the relay is a runner connected but not answering (#1341) — the same state as
 		// the 503 above, met one step later. Typed the same way so the runner guard waits for it instead of ending a
@@ -356,11 +357,13 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 		// records, so if the timed-out one DID run, that one batch is not recorded. Losing a batch of records is the
 		// accepted price of not losing the run. Every other path keeps the plain error: a mutating command that timed
 		// out may have run (#1015).
-		if (res.status === 504 && detail.includes("Relay command timed out") && READ_ONLY_RUNNER_PATHS.has(path)) {
+		// A relay that predates its codes (a deploy rolling) is read by its words — only on its own 504, never a runner's body.
+		const code = relayWireCode(detail) ?? (res.status === 504 ? runnerErrorCode(detail) : null) ?? "RUNNER_HTTP";
+		if (res.status === 504 && code === "RELAY_TIMEOUT" && READ_ONLY_RUNNER_PATHS.has(path)) {
 			await recordUnresponsive(conn, path);
-			throw new RunnerUnreachableError(`Runner ${path} → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.`, { dispatched: true });
+			throw new RunnerUnreachableError(`Runner ${path} → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.${runnerErrorTag(code, true)}`, { dispatched: true });
 		}
-		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
+		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}${runnerErrorTag(code, false)}`);
 	}
 	return (await res.json()) as T;
 }

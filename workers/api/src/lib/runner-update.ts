@@ -30,7 +30,7 @@ import {
 } from "./runner-update-ops.js";
 import { callRunner, relayConnected } from "./runner-client.js";
 import { attachAgentOnNode, liveCarriers, nodeRegistrations, type RepinDeps } from "./runner-repin.js";
-import { RunnerUnreachableError } from "./runner-unreachable.js";
+import { RunnerUnreachableError, runnerErrorCode } from "./runner-unreachable.js";
 import { clipMarked } from "./clip-marked.js";
 import { logError } from "./error-log.js";
 import { cliAtLeast } from "./runner-upgrade.js";
@@ -188,7 +188,7 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 					detail: `The \`pags\` CLI on ${node} predates runner_update, so it cannot update itself. Update it once at the machine — \`npm i -g @proagentstore/cli\` — and restart \`pags up\` there; that installs the self-updating stub (#862), so it is the last update anyone does by hand: every \`pags up\` then moves onto the latest release by itself, and runner_update does it remotely.`,
 				};
 			}
-			if (/→ 504:.*Relay command timed out/.test(message)) {
+			if (runnerErrorCode(e) === "RELAY_TIMEOUT") {
 				// A timed-out reply is not a failed update: on pink-laptop the install landed and the
 				// machine restarted on the new release while this said `failed` (#1034). Re-read the
 				// version the machine registers before concluding anything.
