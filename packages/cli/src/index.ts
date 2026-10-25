@@ -6,6 +6,7 @@
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { checkCommand } from "./commands/check.js";
+import { actionsCommand } from "./commands/actions.js";
 import { devicesCommand } from "./commands/devices.js";
 import { initCommand } from "./commands/init.js";
 import { loginCommand, logoutCommand, whoamiCommand } from "./commands/login.js";
@@ -42,6 +43,7 @@ program.addCommand(statusCommand);
 program.addCommand(logsCommand);
 program.addCommand(initCommand);
 program.addCommand(checkCommand);
+program.addCommand(actionsCommand);
 program.addCommand(publishCommand);
 program.addCommand(runnerCommand);
 program.addCommand(machinesCommand);
