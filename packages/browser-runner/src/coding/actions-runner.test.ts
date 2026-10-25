@@ -211,6 +211,16 @@ describe("remove (#1209)", () => {
 		expect(d.ran.map((r) => `${r.file.split("/").pop()} ${r.args[0]}`)).toEqual(["svc.sh stop", "svc.sh uninstall", "config.sh remove"]);
 	});
 
+	it("a prior PAGS supervisor config keeps removal on the administrator-approved path even if its plist is missing", async () => {
+		const d = fake();
+		const dir = runnerDir(HOME, ORG.url);
+		d.files.add(join(dir, ".runner"));
+		d.files.add(join(dir, ".pags-supervisor", "config.json"));
+		const job = await settle(startRunnerJob("remove", ORG, d));
+		expect(job).toMatchObject({ state: "done", service: "needs_admin" });
+		expect(d.ran).toEqual([]);
+	});
+
 	it("nothing configured: nothing to remove, and nothing is run", async () => {
 		const d = fake();
 		expect(await settle(startRunnerJob("remove", ORG, d))).toMatchObject({ state: "done", service: "removed" });

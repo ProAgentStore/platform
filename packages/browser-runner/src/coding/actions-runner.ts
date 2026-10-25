@@ -381,9 +381,10 @@ export async function runRemove(job: ActionsRunnerJob, req: ActionsRunnerRequest
 		if (!win) {
 			if (deps.platform === "darwin") {
 				const proof = join(job.dir, ".pags-supervisor", "removal-approved.json");
+				const supervisorConfig = join(job.dir, ".pags-supervisor", "config.json");
 				const label = `online.proagentstore.actions.${job.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
 				const systemPresent = deps.exists(`/Library/LaunchDaemons/${label}.plist`);
-				if (!systemPresent && req.serviceMode !== "macos_system" && !deps.exists(proof)) {
+				if (!systemPresent && !deps.exists(supervisorConfig) && req.serviceMode !== "macos_system" && !deps.exists(proof)) {
 					await step(job, deps, join(job.dir, "svc.sh"), ["stop"], req.token).catch(() => job.steps.push("svc.sh stop: was not running"));
 					await step(job, deps, join(job.dir, "svc.sh"), ["uninstall"], req.token);
 					await step(job, deps, join(job.dir, "config.sh"), ["remove", "--token", req.token], req.token);
