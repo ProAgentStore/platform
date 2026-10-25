@@ -279,7 +279,7 @@ export async function syncRunnerLabels(
  */
 export async function startActionsRunner(
 	env: Env,
-	input: { userId: string; instanceId: string; action: "install" | "remove"; scope: RunnerScope; runnerGroup?: string },
+	input: { userId: string; instanceId: string; action: "install" | "remove"; scope: RunnerScope; runnerGroup?: string; serviceMode?: "macos_system" },
 	deps: ProvisionDeps = liveProvisionDeps(env, input.userId),
 ): Promise<{ job: RunnerJobView; node: string; labels: string[]; capabilities?: RunnerCapabilities | null; preflight?: RunnerPreflight; refreshed?: { changed: boolean; before: string[]; after: string[] }; migration?: MigrationView }> {
 	const conn = await boundConn(deps, input.instanceId, input.userId);
@@ -316,7 +316,7 @@ export async function startActionsRunner(
 			// Reconcile without minting a registration token or touching .runner/.credentials (#1209).
 			let serviceJob: RunnerJobView;
 			try {
-				serviceJob = await deps.call<RunnerJobView>(conn, "/coding/actions-runner/reconcile", { url, name: present.name });
+				serviceJob = await deps.call<RunnerJobView>(conn, "/coding/actions-runner/reconcile", { url, name: present.name, ...(input.serviceMode ? { serviceMode: input.serviceMode } : {}) });
 			} catch (e) {
 				if (oldRunner(e)) throw new HttpError(409, `This machine's runner cannot reconcile its Actions service. Update it with runner_update, then ask again.`);
 				throw e;
@@ -343,6 +343,7 @@ export async function startActionsRunner(
 			name: label,
 			labels,
 			...(input.runnerGroup && "org" in input.scope ? { runnerGroup: input.runnerGroup } : {}),
+			...(input.serviceMode ? { serviceMode: input.serviceMode } : {}),
 		});
 	} catch (e) {
 		if (oldRunner(e)) throw new HttpError(409, `This machine's runner cannot install the Actions runner (CLI ${ACTIONS_RUNNER_MIN_CLI} or newer). Update it with runner_update, then ask again.`);

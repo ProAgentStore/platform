@@ -365,6 +365,7 @@ const READBACK: Record<string, string | null> = {
 	"actions_runner_setup.scope": "actions_runner_status",
 	"actions_runner_setup.runner_group": "actions_runner_status",
 	"actions_runner_recover.scope": "actions_runner_status",
+	"actions_runner_setup.service_mode": "actions_runner_status",
 	"runner_restart.runner_node": "list_runner_nodes",
 	// A per-call choice for that one restart, not state anything keeps.
 	"runner_restart.force": null,

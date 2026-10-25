@@ -573,7 +573,7 @@ const TABLE: Record<string, Row> = {
 	stash_checkout: ["machineControl", "runtime", null, "envelope", "dry_run,instance_id,label,pull,repo_id,runner_node,token"],
 	discard_checkout: ["machineControl", "destructive", "discard_checkout", "envelope", "confirm,dry_run,instance_id,label,pull,repo_id,runner_node,token"],
 	set_auto_stash: ["machineControl", "write", null, "envelope", "dry_run,enabled,instance_id,token"],
-	actions_runner_setup: ["machineControl", "runtime", null, "envelope", "action,dry_run,instance_id,runner_group,scope,token"],
+	actions_runner_setup: ["machineControl", "runtime", null, "envelope", "action,dry_run,instance_id,runner_group,scope,service_mode,token"],
 	actions_runner_status: ["machineControl", "read", null, null, "instance_id,job_id,token"],
 	actions_runner_recover: ["machineControl", "runtime", null, "envelope", "dry_run,instance_id,scope,token"],
 	set_machine_policy: ["machineControl", "write", null, "envelope", "auto_update,cleanup_mode,cleanup_now,cleanup_overrides,display_name,dry_run,machine_id,token"],

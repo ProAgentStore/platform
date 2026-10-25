@@ -84,6 +84,12 @@ describe("the token is minted, delivered, and stored nowhere (#1208 acceptance)"
 		expect(lines.join("\n")).not.toContain(REG_TOKEN);
 	});
 
+	it("forwards an explicit macOS system-service opt-in without changing the default request", async () => {
+		const d = deps();
+		await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: "proappstore-online" }, serviceMode: "macos_system" }, d);
+		expect(changing(d)).toEqual([{ path: "/coding/actions-runner/install", body: expect.objectContaining({ serviceMode: "macos_system" }) }]);
+	});
+
 	it("a repo-scoped install mints at the repo, and a remove mints a REMOVAL token", async () => {
 		const d = deps();
 		await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { repo: "proappstore-online/interns" } }, d);
@@ -341,6 +347,14 @@ describe("refreshing the labels of a runner that is already registered (#1260)",
 		expect(gh.calls.some((c) => c.url.endsWith("registration-token"))).toBe(false);
 		expect(changing(d)).toEqual([{ path: "/coding/actions-runner/reconcile", body: { url: `https://github.com/${ORG}`, name: "pags-pink-laptop" } }]);
 		expect(JSON.stringify(out)).not.toContain(APP_TOKEN);
+	});
+
+	it("passes explicit system mode through existing .runner reconciliation", async () => {
+		const gh = github(base);
+		const d = machine({ installed });
+		d.fetch = gh.fetch;
+		await startActionsRunner(env, { userId: "u1", instanceId: "inst-1", action: "install", scope: { org: ORG }, serviceMode: "macos_system" }, d);
+		expect(changing(d)).toEqual([{ path: "/coding/actions-runner/reconcile", body: { url: `https://github.com/${ORG}`, name: "pags-pink-laptop", serviceMode: "macos_system" } }]);
 	});
 
 	it("labels that already match are left alone: no PUT", async () => {

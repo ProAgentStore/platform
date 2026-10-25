@@ -61,7 +61,7 @@ beforeEach(() => clearRunnerJobs());
 describe("install (#1209)", () => {
 	it("macOS: configures this CPU's runner, then gives the exact local system-service step without a login-only service", async () => {
 		const d = fake();
-		const job = await settle(startRunnerJob("install", { ...ORG, runnerGroup: "pags-pink-laptop" }, d));
+		const job = await settle(startRunnerJob("install", { ...ORG, runnerGroup: "pags-pink-laptop", serviceMode: "macos_system" }, d));
 		const dir = join(HOME, ".proagentstore", "actions-runner", "proappstore-online");
 		expect(job).toMatchObject({ state: "done", service: "needs_admin", dir, runsAs: "serge", serviceNote: expect.stringContaining(`pags actions service install --dir ${dir}`) });
 		expect(d.downloads).toEqual(["https://github.com/actions/runner/releases/download/v2.329.0/actions-runner-osx-arm64-2.329.0.tar.gz"]);
@@ -72,6 +72,13 @@ describe("install (#1209)", () => {
 		expect(JSON.stringify(job)).not.toContain(TOKEN); // …and nothing reported back carries it
 		expect(job.steps.find((s) => s.includes("config.sh"))).toContain("--token ***");
 		expect(d.ran.slice(2)).toEqual([]);
+	});
+
+	it("macOS default keeps GitHub's existing user LaunchAgent installation behavior", async () => {
+		const d = fake();
+		const job = await settle(startRunnerJob("install", ORG, d));
+		expect(job).toMatchObject({ state: "done", service: "installed" });
+		expect(d.ran.slice(-2).map((r) => `${r.file.split("/").pop()} ${r.args[0]}`)).toEqual(["svc.sh install", "svc.sh start"]);
 	});
 
 	it("reports a missing prerequisite instead of assuming it", async () => {
@@ -85,6 +92,13 @@ describe("install (#1209)", () => {
 		const job = await settle(startRunnerJob("install", ORG, d));
 		expect(job).toMatchObject({ state: "done", service: "needs_admin", serviceNote: expect.stringContaining("sudo ./svc.sh install serge") });
 		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh"]);
+	});
+
+	it("rejects macOS system mode on other hosts before installing", async () => {
+		const d = fake({ platform: "linux", arch: "x64" });
+		const job = await settle(startRunnerJob("install", { ...ORG, serviceMode: "macos_system" }, d));
+		expect(job).toMatchObject({ state: "failed", error: expect.stringContaining("requires macOS") });
+		expect(d.downloads).toEqual([]);
 	});
 
 	it("Windows: installs under ProgramData with the root's ACL set first, then expands the zip and has config.cmd install the service (#1272)", async () => {
@@ -138,7 +152,7 @@ describe("install (#1209)", () => {
 	it("is idempotent: a folder already configured is not reinstalled", async () => {
 		const d = fake();
 		d.files.add(join(runnerDir(HOME, ORG.url), ".runner"));
-		const job = await settle(startRunnerJob("install", ORG, d));
+		const job = await settle(startRunnerJob("install", { ...ORG, serviceMode: "macos_system" }, d));
 		expect(job).toMatchObject({ state: "done", service: "needs_admin" });
 		expect(d.ran).toEqual([]);
 		expect(d.downloads).toEqual([]);
@@ -183,10 +197,18 @@ describe("remove (#1209)", () => {
 	it("macOS requires exact local PAGS service removal before deregistration", async () => {
 		const d = fake();
 		d.files.add(join(runnerDir(HOME, ORG.url), ".runner"));
-		const job = await settle(startRunnerJob("remove", ORG, d));
+		const job = await settle(startRunnerJob("remove", { ...ORG, serviceMode: "macos_system" }, d));
 		expect(job).toMatchObject({ state: "done", service: "needs_admin", serviceNote: expect.stringContaining("pags actions service remove --dir") });
 		expect(d.ran).toEqual([]);
 		expect(JSON.stringify(job)).not.toContain(TOKEN);
+	});
+
+	it("macOS default still uninstalls GitHub's user service before deregistration", async () => {
+		const d = fake();
+		d.files.add(join(runnerDir(HOME, ORG.url), ".runner"));
+		const job = await settle(startRunnerJob("remove", ORG, d));
+		expect(job).toMatchObject({ state: "done", service: "removed" });
+		expect(d.ran.map((r) => `${r.file.split("/").pop()} ${r.args[0]}`)).toEqual(["svc.sh stop", "svc.sh uninstall", "config.sh remove"]);
 	});
 
 	it("nothing configured: nothing to remove, and nothing is run", async () => {

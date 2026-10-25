@@ -49,6 +49,8 @@ export interface ActionsRunnerRequest {
 	labels?: string[];
 	/** Install only, org scope only: the runner group to join. */
 	runnerGroup?: string;
+	/** Opt in to a pre-login PAGS system LaunchDaemon on macOS. Omitted keeps GitHub's user LaunchAgent behavior. */
+	serviceMode?: "macos_system";
 	/** Internal tokenless path: may reconcile a configured runner, never register one. */
 	reconcileOnly?: boolean;
 }
@@ -237,6 +239,7 @@ function validate(req: ActionsRunnerRequest, action: RunnerAction): void {
 	// `+` is allowed for the OS tier labels (`macos-14+`, #1260).
 	for (const l of req.labels ?? []) if (!/^[A-Za-z0-9._+-]{1,100}$/.test(l)) throw new Error(`label ${JSON.stringify(l)} is not a valid runner label`);
 	if (req.runnerGroup !== undefined && !/^[A-Za-z0-9 ._-]{1,100}$/.test(req.runnerGroup)) throw new Error("runnerGroup is not a valid runner group name");
+	if (req.serviceMode !== undefined && req.serviceMode !== "macos_system") throw new Error("serviceMode must be macos_system when set");
 }
 
 /**
@@ -290,6 +293,7 @@ async function step(job: ActionsRunnerJob, deps: ActionsRunnerDeps, file: string
 export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerRequest, deps: ActionsRunnerDeps): Promise<ActionsRunnerJob> {
 	const win = deps.platform === "win32";
 	try {
+		if (req.serviceMode === "macos_system" && deps.platform !== "darwin") throw new Error("macos_system service mode requires macOS");
 		// Convergence (#1272): every install and re-run sets AND verifies the root's ACL first, so `pags up`, a restart and a
 		// self-update all land on the same permissions. A failure here stops the install before anything is downloaded.
 		if (win && deps.windows) {
@@ -303,7 +307,7 @@ export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerReques
 			try { record = JSON.parse(raw.replace(/^﻿/, "")) as typeof record; } catch { throw new Error("Configured .runner is unreadable; refusing service adoption."); }
 			if (record.agentName !== req.name || typeof record.gitHubUrl !== "string" || record.gitHubUrl.replace(/\/$/, "").toLowerCase() !== req.url.toLowerCase()) throw new Error("Configured .runner name or GitHub scope does not match this setup request; refusing service adoption.");
 			job.steps.push(`already configured in ${job.dir} — not reinstalled (remove it first to re-register)`);
-			if (deps.platform === "darwin") {
+			if (deps.platform === "darwin" && req.serviceMode === "macos_system") {
 				job.service = "needs_admin";
 				job.serviceNote = `Reconcile this configured runner as a pre-login PAGS system service on the machine: pags actions service install --dir ${job.dir}`;
 			} else job.service = "installed";
@@ -341,7 +345,7 @@ export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerReques
 			job.service = "installed";
 			return finish(job, deps);
 		}
-		if (deps.platform === "darwin") {
+		if (deps.platform === "darwin" && req.serviceMode === "macos_system") {
 			job.service = "needs_admin";
 			job.serviceNote = `The runner is configured. Install its pre-login PAGS system service on the machine: pags actions service install --dir ${job.dir}`;
 			return finish(job, deps);
@@ -364,6 +368,7 @@ export async function runInstall(job: ActionsRunnerJob, req: ActionsRunnerReques
 export async function runRemove(job: ActionsRunnerJob, req: ActionsRunnerRequest, deps: ActionsRunnerDeps): Promise<ActionsRunnerJob> {
 	const win = deps.platform === "win32";
 	try {
+		if (req.serviceMode === "macos_system" && deps.platform !== "darwin") throw new Error("macos_system service mode requires macOS");
 		if (!deps.exists(join(job.dir, ".runner"))) {
 			if (deps.platform === "darwin") {
 				const label = `online.proagentstore.actions.${job.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
@@ -376,6 +381,15 @@ export async function runRemove(job: ActionsRunnerJob, req: ActionsRunnerRequest
 		if (!win) {
 			if (deps.platform === "darwin") {
 				const proof = join(job.dir, ".pags-supervisor", "removal-approved.json");
+				const label = `online.proagentstore.actions.${job.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
+				const systemPresent = deps.exists(`/Library/LaunchDaemons/${label}.plist`);
+				if (!systemPresent && req.serviceMode !== "macos_system" && !deps.exists(proof)) {
+					await step(job, deps, join(job.dir, "svc.sh"), ["stop"], req.token).catch(() => job.steps.push("svc.sh stop: was not running"));
+					await step(job, deps, join(job.dir, "svc.sh"), ["uninstall"], req.token);
+					await step(job, deps, join(job.dir, "config.sh"), ["remove", "--token", req.token], req.token);
+					job.service = "removed";
+					return finish(job, deps);
+				}
 				let approved = false;
 				if (deps.exists(proof)) {
 					try {

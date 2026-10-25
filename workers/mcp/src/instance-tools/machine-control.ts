@@ -453,17 +453,18 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 			action: z.enum(["install", "remove"]).describe("install: register and start the runner service. remove: stop, uninstall and deregister it."),
 			scope: z.object({ org: z.string().optional(), repo: z.string().optional() }).strict().describe('Exactly one of { "org": "<org>" } or { "repo": "<owner>/<name>" }.'),
 			runner_group: z.string().optional().describe("Org scope only: the runner group to join (needs GitHub Team for anything but Default)."),
+			service_mode: z.enum(["macos_system"]).optional().describe("Opt in on macOS to a pre-login PAGS system LaunchDaemon; requires local administrator approval. Omit to keep GitHub's user LaunchAgent mode."),
 			dry_run: z.boolean().optional().describe("Report what would be asked of the machine, without minting a token or contacting it."),
 		},
-		async ({ token, instance_id, action, scope, runner_group, dry_run }) => {
+		async ({ token, instance_id, action, scope, runner_group, service_mode, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, action, scope, runner_group };
+			const input = { instance_id, action, scope, runner_group, service_mode };
 			// `runtime`: it installs software and a service on the owner's machine.
 			const denied = await requirePermission(safetyFor(token), "runtime", "actions_runner_setup", input);
 			if (denied) return denied;
 			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/actions-runner`;
-			const body = { action, scope, ...(runner_group ? { runnerGroup: runner_group } : {}) };
+			const body = { action, scope, ...(runner_group ? { runnerGroup: runner_group } : {}), ...(service_mode ? { serviceMode: service_mode } : {}) };
 			if (dry_run) return dryRun(safetyFor(token), "actions_runner_setup", `${action} the GitHub Actions runner on this agent's pinned machine`, input, { endpoint, method: "POST", body });
 			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string; job?: { id?: string; state?: string } };
 			if (data.error) return text(`Error: ${data.error}`);
