@@ -10,6 +10,8 @@
 // Pure move — no behaviour changed.
 
 import { commandEngineParts, deriveClientType } from "./coding-command.js";
+import { HttpError } from "./auth.js";
+import { codingEngineModelProblem } from "./coding-engine-policy.js";
 import { writeEngineModel } from "./coding-engine-model.js";
 import { getUserProviderKey } from "./user-ai.js";
 import { parseAccountPreferences } from "./preferences.js";
@@ -31,6 +33,8 @@ export async function resolveEngineEnv(
 	uid: string,
 	session: CodingSessionRecord,
 ): Promise<Record<string, string> | undefined> {
+	const modelProblem = codingEngineModelProblem(session.launchCommand, undefined, session.clientType);
+	if (modelProblem) throw new HttpError(400, modelProblem);
 	const { engines, apiCodingOptIns } = await readEngines(env, instanceId, uid);
 	const engine = engineFor(engines, session.launchCommand);
 	const auth = engineAuthFor(engines, session.launchCommand);
@@ -432,6 +436,8 @@ export async function readEngines(
 export async function resolveEngine(env: Env, instanceId: string, userId: string, engineId: unknown): Promise<{ command: string; clientType: CodingClientType }> {
 	const { engines, defaultEngineId } = await readEngines(env, instanceId, userId);
 	const eng = engines.find((e) => e.id === engineId) ?? engines.find((e) => e.id === defaultEngineId) ?? engines[0];
+	const modelProblem = codingEngineModelProblem(eng.command, undefined, deriveClientType(eng.command));
+	if (modelProblem) throw new HttpError(400, modelProblem);
 	// Derive the client type from the command's real binary, so the runner knows
 	// whether to use the structured Claude engine or run the CLI raw.
 	return { command: eng.command, clientType: deriveClientType(eng.command) };

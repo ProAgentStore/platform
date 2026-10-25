@@ -14,7 +14,7 @@ import type { EngineTurnReport } from "./coding-turn-outcome.js";
 import type { ScopeConstraint } from "./coding-scope-constraints.js";
 
 export interface CodingGoal {
-	/** Explicit controller canary; separate from advisory Brain and the local coding engine. */
+	/** Coding controller policy; separate from advisory Brain and the local coding engine. */
 	pilotModel?: PilotModelId;
 	/** What the user wants done in this repo (the high-level task). */
 	objective: string;

@@ -5,6 +5,7 @@ import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { encryptKey } from "./crypto.js";
 import { automaticProviderHold, observeProviderAccount, providerCredentialId } from "./provider-account-hold.js";
 import { runUserWorkersAi } from "./user-ai.js";
+import { probeProviderKey } from "./credit-auto-resume.js";
 import { keysRoutes } from "../routes/keys.js";
 import { HttpError } from "./auth.js";
 import { signSession } from "./session.js";
@@ -34,6 +35,28 @@ beforeEach(async () => {
 afterEach(() => { d1.close(); vi.unstubAllGlobals(); });
 
 describe("the exact credential observed on the wire", () => {
+	it("probes the held Haiku model: its 403 stays held until that same model succeeds", async () => {
+		const model = "claude-haiku-5-5";
+		const requested: string[] = [];
+		let allowHaiku = false;
+		vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) => {
+			const sent = JSON.parse(init?.body as string) as { model: string };
+			requested.push(sent.model);
+			return sent.model === model && !allowHaiku
+				? Response.json({ error: { type: "permission_error", message: "Request not allowed for this model" } }, { status: 403 })
+				: success();
+		}));
+		await expect(runUserWorkersAi(env, "u1", model, body, undefined, { anthropicModel: model })).rejects.toThrow("Request not allowed for this model");
+		expect(holds()).toMatchObject([{ failure_class: "provider_credentials", cleared_at: null }]);
+		expect(await probeProviderKey(env, "u1", "anthropic", model)).toMatchObject({ ok: false, error: expect.stringContaining("Request not allowed for this model") });
+		expect(requested).toEqual([model, model]);
+		expect(holds()[0].cleared_at).toBeNull();
+		allowHaiku = true;
+		expect(await probeProviderKey(env, "u1", "anthropic", model)).toEqual({ ok: true });
+		expect(requested).toEqual([model, model, model]);
+		expect(holds()[0].cleared_at).toEqual(expect.any(Number));
+	});
+
 	it.each([[400, "Your credit balance is too low to access the Anthropic API.", "provider_credit"], [401, "invalid x-api-key", "provider_credentials"]] as const)("Anthropic %i persists the hold; the owner can explicitly verify that same key to recover", async (status, message, failureClass) => {
 		const fetch = vi.fn(async () => Response.json({ error: { message } }, { status })); vi.stubGlobal("fetch", fetch);
 		await expect(runUserWorkersAi(env, "u1", "claude-sonnet-4-6", body, undefined, { provider: "anthropic" })).rejects.toThrow(message);

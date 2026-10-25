@@ -30,3 +30,15 @@ as a start.
 
 Counting null-run admission failures toward the per-issue failure quarantine, a configurable five-attempt quarantine, and
 fleet-wide history are the linked follow-ups on #1334.
+
+## Model roles
+
+Coding never uses Haiku: the Pilot uses Sonnet, and coding engine selections and launch commands
+reject Haiku aliases and model ids. Obsolete saved Pilot canary selections resolve to the default
+coding policy; the API refuses new Haiku Pilot selections. The coding CLI's other model choices
+remain independent of the Pilot and advisory Brain.
+
+Ticket pickup, issue classification, priority ordering and queueing currently use deterministic
+rules and make no model calls. Haiku is allowed for non-coding ticket selection/queueing work
+where a model is needed; no artificial model call or live benchmark is required for those roles.
+Provider usage still reports actual calls and models; this policy does not claim measured savings.

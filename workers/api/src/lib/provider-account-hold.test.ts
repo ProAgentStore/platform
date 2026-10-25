@@ -87,35 +87,25 @@ describe("provider and credential scoping", () => {
 		expect(await automaticProviderHold(env, "coder", "u1")).toMatchObject({ provider: "anthropic" });
 	});
 
-	it("a legacy default Pilot with only Cloudflare checks that credential; explicit Haiku never substitutes it", async () => {
+	it("a saved Haiku policy uses the same Cloudflare credential as the default coding policy", async () => {
 		await key("cloudflare", JSON.stringify(CF));
 		d1.exec("DELETE FROM user_api_keys WHERE provider='anthropic'");
 		d1.exec("UPDATE agents SET config = '{\"capabilities\":{\"workflow\":\"CODING_SESSION\",\"surfaces\":[\"coding\"],\"runtime\":\"coding\"}}'");
 		await observeProviderAccount(env, "u1", "cloudflare", CF, "provider_credentials");
 		expect(await automaticProviderHold(env, "coder", "u1")).toMatchObject({ provider: "cloudflare" });
 		d1.exec("UPDATE agent_instances SET config=json_set(config,'$.pilot.model','claude-haiku-5-5')");
-		await expect(selectedProviderAccount(env, "coder", "u1")).rejects.toThrow(/requires an Anthropic API key/);
+		expect(await selectedProviderAccount(env, "coder", "u1")).toMatchObject({ provider: "cloudflare" });
 	});
 
-	it.each(["cloudflare-only", "no-keys"] as const)("an explicit Haiku Pilot with %s waits before automatic admission or a pending queue claim", async (availability) => {
+	it.each(["cloudflare-only", "no-keys"] as const)("an obsolete Haiku selection with %s cannot invent an Anthropic credential requirement", async (availability) => {
 		if (availability === "cloudflare-only") await key("cloudflare", JSON.stringify(CF));
 		d1.exec("DELETE FROM user_api_keys WHERE provider='anthropic'");
 		d1.exec("UPDATE agents SET config = '{\"capabilities\":{\"workflow\":\"CODING_SESSION\",\"surfaces\":[\"coding\"],\"runtime\":\"coding\"}}'");
 		d1.exec("UPDATE agent_instances SET config=json_set(config,'$.pilot.model','claude-haiku-5-5')");
-		const fetch = vi.fn(async () => { throw new Error("A provider must not be probed by admission"); }); vi.stubGlobal("fetch", fetch);
-		const list = vi.fn(async () => ({ issues: [ISSUE], unreadable: false }));
-		for (let i = 0; i < 3; i++) expect(await runAutoPickup(env, "coder", "u1", { listOpenIssues: list, startQueued: async () => start() }))
-			.toMatchObject({ started: false, reason: expect.stringContaining("requires an Anthropic API key") });
-		expect(list).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
-		expect(entries()).toEqual([]);
-		expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM auto_pickup_log WHERE outcome='started'").get()).toEqual({ n: 0 });
-		expect(d1.sqlite.prepare("SELECT COUNT(*) AS n FROM auto_pickup_admissions").get()).toEqual({ n: 0 });
-		const q = await enqueueObjective(env, { instanceId: "coder", userId: "u1", repoId: "repo1", objective: "Original objective" });
-		expect(await tryDequeueAndStart(env, "coder", "repo1", "u1")).toMatchObject({ drained: false, held: expect.stringContaining("Profile → API Keys") });
-		expect(entries()).toEqual([{ id: q.id, objective: "Original objective", status: "pending", deferral_count: 0 }]);
-		await key();
+		const fetch = vi.fn(async () => { throw new Error("Admission must not probe a provider"); }); vi.stubGlobal("fetch", fetch);
+		expect(await selectedProviderAccount(env, "coder", "u1")).toEqual(availability === "cloudflare-only"
+			? { provider: "cloudflare", credentialId: await providerCredentialId("cloudflare", CF) } : null);
 		expect(await automaticProviderHold(env, "coder", "u1")).toBeNull();
-		expect(await tryDequeueAndStart(env, "coder", "repo1", "u1")).toMatchObject({ started: true, entryId: q.id });
 		expect(fetch).not.toHaveBeenCalled();
 	});
 

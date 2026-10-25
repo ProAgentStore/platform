@@ -13,6 +13,7 @@
  * nothing here can judge. Each machine's list is cached for {@link ENGINE_MODELS_TTL_MS}.
  */
 import { HttpError } from "./auth.js";
+import { CODING_HAIKU_REFUSAL, isHaikuCodingModel } from "./coding-engine-policy.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import type { Env } from "../types.js";
 
@@ -26,12 +27,12 @@ export const ENGINE_MODELS_TTL_MS = 5 * 60_000;
 const MAX_LISTED = 40;
 
 /**
- * Claude Code's own model aliases (`opus`, `sonnet`, `haiku`, `fable`, `opusplan`, `default`, `best`, with an optional
+ * Claude Code's own model aliases (`opus`, `sonnet`, `fable`, `opusplan`, `default`, `best`, with an optional
  * `[1m]` context suffix) are not in Anthropic's `/v1/models`, which lists only full ids — so a list from the provider
  * must never refuse them.
  */
 export function isClaudeAlias(model: string): boolean {
-	return /^(?:opus|sonnet|haiku|fable|opusplan|default|best)(?:\[1m\])?$/i.test(model);
+	return /^(?:opus|sonnet|fable|opusplan|default|best)(?:\[1m\])?$/i.test(model);
 }
 
 export interface ModelCheck {
@@ -115,6 +116,7 @@ export async function checkEngineModel(
 	model: string,
 	deps: ModelListDeps = liveDeps(env, instanceId, userId),
 ): Promise<ModelCheck> {
+	if (isHaikuCodingModel(model)) throw new HttpError(400, CODING_HAIKU_REFUSAL);
 	const listed = await liveModelList(env, instanceId, userId, engine, deps);
 	if (!listed.models) return { validated: false, reason: `${listed.reason ?? "the CLI listed no models"}, so the id was saved unchecked` };
 	if (listed.models.includes(model) || (engine.clientType === "claude" && isClaudeAlias(model))) return { validated: true };

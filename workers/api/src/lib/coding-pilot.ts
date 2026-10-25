@@ -8,7 +8,7 @@
 import { askOwnerDecision } from "./coding-ask.js";
 import { systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
 import { DEFAULT_PILOT_MODEL } from "./pilot-model.js";
-import { routinePilotReply, runPilotInference } from "./pilot-routing.js";
+import { runPilotInference } from "./pilot-routing.js";
 import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction } from "./coding-authority.js";
 import { renderPaneForPilot, PILOT_PANE_CHARS } from "./coding-repetition.js";
@@ -317,7 +317,7 @@ export async function decideCodingAction(
 					{ label: "pilot.tools", value: CODING_TOOLS },
 				],
 			}
-			: undefined, (reply) => routinePilotReply(reply, params.goal));
+			: undefined);
 
 	const truncated = hitOutputCap(res.stopReason);
 	const call = res.tool_calls?.[0];
@@ -384,13 +384,10 @@ async function decideCapSummary(
 					],
 				}
 				: undefined,
-		() => false,
-		{ anthropicOnly: params.goal.pilotModel !== undefined && params.goal.pilotModel !== DEFAULT_PILOT_MODEL },
 	);
 
 	const capSummary = toCapSummary(res.tool_calls?.[0]);
-	const pilotRouting = { ...res.pilotRouting, requestedModel: params.goal.pilotModel ?? DEFAULT_PILOT_MODEL, model: res.inference?.model ?? DEFAULT_PILOT_MODEL,
-		...(params.goal.pilotModel && params.goal.pilotModel !== DEFAULT_PILOT_MODEL ? { fallbackReason: "Cap reports use Sonnet." } : {}) };
+	const pilotRouting = res.pilotRouting;
 	return capSummary ? { capSummary, usage: res.usage, thought: res.response, pilotRouting } : { thought: res.response, usage: res.usage, pilotRouting };
 }
 

@@ -1,4 +1,5 @@
 import { confineWorkDir } from "./workdir-guard.js";
+import { codingEngineModelProblem } from "./engine-model-policy.js";
 import { actDigest, type EngineInputs } from "./input-ledger.js";
 import { cleanCheckout, type CheckoutCleanAction } from "./checkout-clean.js";
 import { parkRestore, parkSnapshot } from "./park-snapshot.js";
@@ -489,6 +490,8 @@ export class CodingRuntime {
 	/** Start (or return the existing) session and report its first snapshot. */
 	start(input: StartCodingInput): StartCodingResult {
 		let session = this.sessions.get(input.sessionId);
+		const modelProblem = codingEngineModelProblem(session?.config.command ?? input.command, { ...process.env, ...(session?.config.env ?? input.env) }, session?.config.clientType ?? input.clientType);
+		if (modelProblem) throw new RunnerInputError(modelProblem);
 		if (!session) {
 			// Resolve the working dir and ensure the repo is present (clone on first
 			// start). A user-supplied local path may use ~ — expand it; otherwise

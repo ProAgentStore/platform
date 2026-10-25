@@ -11,9 +11,14 @@ const { getBoundRunnerConn, callRunner } = vi.hoisted(() => ({ getBoundRunnerCon
 vi.mock("./runner-client.js", async (orig) => ({ ...(await orig<typeof import("./runner-client.js")>()), getBoundRunnerConn, callRunner }));
 
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { readEngines } from "./coding-engines.js";
+import { readEngines, resolveEngine, resolveEngineEnv } from "./coding-engines.js";
+import type { CodingSessionRecord } from "./coding-types.js";
+import { Hono } from "hono";
+import { HttpError } from "./auth.js";
+import { signSession } from "./session.js";
+import { registerSessionOpenRoutes } from "../routes/coding-sessions-open.js";
 import { readEngineChoice, writeEngineChoice } from "./coding-engine-choice.js";
-import { checkEngineModel, clearEngineModelCache, ENGINE_MODELS_TTL_MS, type ModelListDeps } from "./engine-model-check.js";
+import { checkEngineModel, clearEngineModelCache, ENGINE_MODELS_TTL_MS, isClaudeAlias, type ModelListDeps } from "./engine-model-check.js";
 import type { Env } from "../types.js";
 
 /** `grok models` on a real machine. */
@@ -145,7 +150,7 @@ describe("Claude Code, Codex and Gemini ids are checked against the provider's l
 		expect(err?.status).toBe(400);
 		expect(err?.message).toContain("claude-sonnet-5-5");
 		expect(await checkEngineModel(env, "inst-1", "u1", claude, "claude-opus-5-5", d)).toEqual({ validated: true });
-		for (const alias of ["opus", "sonnet", "haiku", "fable", "opusplan", "sonnet[1m]"]) expect(await checkEngineModel(env, "inst-1", "u1", claude, alias, d)).toEqual({ validated: true });
+		for (const alias of ["opus", "sonnet", "fable", "opusplan", "sonnet[1m]"]) expect(await checkEngineModel(env, "inst-1", "u1", claude, alias, d)).toEqual({ validated: true });
 	});
 
 	it("Codex and Gemini ids are checked the same way", async () => {
@@ -181,5 +186,51 @@ describe("Claude Code, Codex and Gemini ids are checked against the provider's l
 	it("Claude's dropdown keeps its documented aliases — only Grok's suggestions come from the machine", async () => {
 		const claude = (await readEngineChoice(env, "inst-1", "u1")).engines.find((e) => e.id === "claude");
 		expect(claude).toMatchObject({ suggestionsFrom: "documented" });
+	});
+});
+
+
+describe("Haiku coding engine policy", () => {
+	it("refuses aliases/full ids before asking either an available or unavailable provider list", async () => {
+		const models = ["haiku", "haiku[1m]", "claude-haiku-5-5", "anthropic/haiku", "anthropic:claude-haiku-4-5"];
+		for (const available of [true, false]) {
+			const ask = vi.fn(async () => available ? { node: "n1", models } : null);
+			for (const model of models) await expect(checkEngineModel(env, "inst-1", "u1", { clientType: "claude", command: "claude", label: "Claude" }, model, { ask, now: () => 1 })).rejects.toMatchObject({ status: 400, message: expect.stringContaining("not permitted for coding engines") });
+			expect(ask).not.toHaveBeenCalled();
+		}
+		expect(isClaudeAlias("haiku")).toBe(false);
+	});
+
+	it("refuses a selected Haiku model before persistence, model probing or API-coding acknowledgement", async () => {
+		const before = d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id='inst-1'").get();
+		for (const model of ["haiku", "haiku[1m]", "claude-haiku-5-5"]) await expect(writeEngineChoice(env, "inst-1", "u1", { engineId: "claude", model })).rejects.toMatchObject({ status: 400 });
+		expect(d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id='inst-1'").get()).toEqual(before);
+		const apiConfig = JSON.stringify({ codingEngines: [{ id: "paid", label: "API-key Claude", command: "claude", auth: "api-key" }] });
+		d1.sqlite.prepare("UPDATE agent_instances SET config=? WHERE id='inst-1'").run(apiConfig);
+		await expect(writeEngineChoice(env, "inst-1", "u1", { engineId: "paid", model: "haiku", acknowledgeApiCoding: true })).rejects.toMatchObject({ status: 400 });
+		expect(d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id='inst-1'").get()).toMatchObject({ config: apiConfig });
+		expect(callRunner).not.toHaveBeenCalled();
+		expect(getBoundRunnerConn).not.toHaveBeenCalled();
+	});
+
+	it("revalidates saved commands and persisted session overrides before launch", async () => {
+		d1.sqlite.prepare("UPDATE agent_instances SET config=? WHERE id='inst-1'").run(JSON.stringify({ codingEngines: [{ id: "old", label: "Legacy", command: "claude --model anthropic/haiku" }], defaultEngineId: "old" }));
+		await expect(resolveEngine(env, "inst-1", "u1", undefined)).rejects.toMatchObject({ status: 400 });
+		await expect(resolveEngineEnv(env, "inst-1", "u1", { clientType: "claude", launchCommand: "claude --model opus --fallback-model haiku" } as CodingSessionRecord)).rejects.toMatchObject({ status: 400 });
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("the raw engine-preset route refuses Haiku before writing the stored list", async () => {
+		const app = new Hono<{ Bindings: Env }>();
+		const routes = new Hono<{ Bindings: Env }>();
+		registerSessionOpenRoutes(routes);
+		app.route("/v1/instances", routes);
+		app.onError((e, c) => { if (e instanceof HttpError) return c.json({ error: e.message }, e.status as 400); throw e; });
+		const before = d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id='inst-1'").get();
+		const res = await app.request("/v1/instances/inst-1/coding/engines", { method: "PUT", headers: { Authorization: `Bearer ${await signSession("u1", "engine-policy", { roles: [] })}`, "Content-Type": "application/json" }, body: JSON.stringify({ engines: [{ id: "bad", label: "Bad", command: "claude --model haiku" }], defaultEngineId: "bad" }) }, { ...env, SESSION_SIGNING_KEY: "engine-policy" });
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: expect.stringContaining("not permitted for coding engines") });
+		expect(d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id='inst-1'").get()).toEqual(before);
+		expect(callRunner).not.toHaveBeenCalled();
 	});
 });

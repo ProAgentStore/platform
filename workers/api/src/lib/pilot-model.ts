@@ -7,7 +7,7 @@ import { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, type PilotModelId } from "./p
 export { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, type PilotModelId, type PilotModelResponse } from "./pilot-model-contract.js";
 
 export function pilotModelProblem(model: unknown): string | null {
-	return PILOT_MODEL_OPTIONS.some((m) => m.id === model) ? null : "pilotModel must be claude-sonnet-4-6 or claude-haiku-5-5.";
+	return PILOT_MODEL_OPTIONS.some((m) => m.id === model) ? null : "The coding Pilot uses claude-sonnet-4-6. Haiku is not permitted for coding.";
 }
 
 export function pilotModelFrom(config: unknown): PilotModelId {

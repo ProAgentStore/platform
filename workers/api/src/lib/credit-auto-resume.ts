@@ -36,8 +36,7 @@ import { readProviderAccountHealth } from "./provider-account-health.js";
 import { providerCredentialId, selectedProviderAccount, type HeldProvider } from "./provider-account-hold.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import { decryptKey } from "./crypto.js";
-import { pilotModelProblem } from "./pilot-model.js";
-import type { PilotModelId } from "./pilot-model-contract.js";
+import { anthropicModelProblem, type AnthropicModelId } from "./anthropic-model-routing.js";
 import { readInstanceConfigPair } from "./instance-config.js";
 import { parseAccountPreferences } from "./preferences.js";
 
@@ -230,7 +229,7 @@ export interface ProbeOutcome { ok: boolean; error?: string }
  * real call does; a failure is "not yet", with the provider's words for the record.
  */
 export async function probeProviderKey(env: Env, userId: string, provider: HeldProvider, model?: string | null): Promise<ProbeOutcome> {
-	const anthropicModel = provider === "anthropic" && model && !pilotModelProblem(model) ? (model as PilotModelId) : undefined;
+	const anthropicModel = provider === "anthropic" && model && !anthropicModelProblem(model) ? (model as AnthropicModelId) : undefined;
 	try {
 		await runUserWorkersAi(env, userId, model && provider === "cloudflare" ? model : PROBE_MODEL[provider], { messages: [{ role: "system", content: "Reply with exactly: ok" }, { role: "user", content: "verify" }], max_tokens: 4, maxTokens: 4 }, undefined, { provider, ...(anthropicModel ? { anthropicModel } : {}) });
 		return { ok: true };

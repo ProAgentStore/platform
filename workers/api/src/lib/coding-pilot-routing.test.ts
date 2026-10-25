@@ -10,7 +10,6 @@ const SONNET = "claude-sonnet-4-6";
 const HAIKU = "claude-haiku-5-5";
 const KEK = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const routine = "Inspect src/build.ts and report the cause of the failing test.";
-const fallback = "Read the test failure and explain what needs fixing.";
 const snapshot = { pane: "Ready for instructions.", runState: "idle" as const, ready: true, alive: true };
 const ctx = { kind: "coding" as const, instanceId: "coder-1", traceId: "run-1" };
 
@@ -90,92 +89,52 @@ async function provider(answers: Answer[], opts: { afterUsage?: (calls: number) 
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("Pilot model canary qualification through real provider requests (#1316)", () => {
-	it("keeps an unconfigured Pilot on Sonnet and accepts a valid routine canary instruction without a second call", async () => {
-		const p = await provider([{ tools: [send()] }, { tools: [send()] }]);
+describe("Haiku never drives coding, including obsolete selections (#1316)", () => {
+	it.each([SONNET, HAIKU, "haiku", "claude-haiku-4-5", "invalid-model"])("routes an in-memory selection %s through the coding policy exactly once", async (pilotModel) => {
+		const p = await provider([{ tools: [send()] }]);
 		Object.defineProperty(p.env, "AGENT", { get() { throw new Error("Pilot must not inspect the advisory Brain"); } });
-		const ordinary = await p.decide();
-		expect(ordinary.action).toMatchObject({ kind: "message", text: routine });
-		expect(ordinary.pilotRouting).toMatchObject({ requestedModel: SONNET, model: SONNET });
-		const canary = await p.decide({ pilotModel: HAIKU });
-		expect(canary.action).toMatchObject({ kind: "message", text: routine });
-		expect(canary.pilotRouting).toMatchObject({ requestedModel: HAIKU, model: HAIKU });
-		expect(p.requests.map((r) => r.model)).toEqual([SONNET, HAIKU]);
-		expect(p.usage.map((r) => r.model)).toEqual([SONNET, HAIKU]);
-	});
-
-	it.each([
-		["owner choice", { tools: [{ name: "ask_owner", input: { question: "Which layout?", options: ["A", "B"] } }] }, {}],
-		["completion", { tools: [{ name: "finish", input: { status: "done", detail: "Complete" } }] }, {}],
-		["human takeover", { tools: [{ name: "request_human", input: { why: "Sign in" } }] }, {}],
-		["usage-window wait", { tools: [{ name: "wait_for_reset", input: { why: "Limit reached" } }] }, {}],
-		["unknown tool", { tools: [{ name: "invented_tool", input: {} }] }, {}],
-		["multiple calls", { tools: [send(), send("Also inspect another file.")] }, {}],
-		["missing instruction", { tools: [{ name: "send_message", input: {} }] }, {}],
-		["wrong argument type", { tools: [{ name: "send_message", input: { text: 42 } }] }, {}],
-		["blank instruction", { tools: [send("   ")] }, {}],
-		["prose without a call", { text: "I think the work is done." }, {}],
-		["wrong learned type", { tools: [{ name: "send_message", input: { text: routine, learned: 42 } }] }, {}],
-		["oversized learned note", { tools: [{ name: "send_message", input: { text: routine, learned: "x".repeat(301) } }] }, {}],
-		["output cap", { tools: [send()], stop: "max_tokens" }, {}],
-		["merge authority refusal", { tools: [send("Run git push origin main now.")] }, { mergePolicy: "none" }],
-		["scope refusal", { tools: [send("Edit src/build.ts to implement the fix.")] }, { scopeConstraints: [{ kind: "read_only", source: "owner directive" }] }],
-	] as Array<[string, Answer, Partial<CodingGoal>]>)("gets one Sonnet decision for a canary %s", async (_name, answer, goal) => {
-		const p = await provider([answer, { tools: [send(fallback)] }]);
-		const result = await p.decide({ pilotModel: HAIKU, ...goal });
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU, SONNET]);
-		expect(result.action).toMatchObject({ kind: "message", text: fallback });
-		expect(p.usage).toHaveLength(2);
-		expect(p.usage.map((r) => r.model)).toEqual([HAIKU, SONNET]);
-		expect(p.usage.map((r) => [r.trace, r.phase])).toEqual([["run-1", "pilot_decide"], ["run-1", "pilot_decide_fallback"]]);
-		expect(result.pilotRouting).toMatchObject({ requestedModel: HAIKU, model: SONNET, fallbackReason: expect.any(String) });
-		expect(result.usage).toMatchObject({ input: 200, output: 20 });
-	});
-
-	it("uses Sonnet for cap reports even when routine decisions opted into Haiku", async () => {
-		const p = await provider([{ tools: [{ name: "report_cap_status", input: { did: "Read the issue", blocker: "Test still failing", plan: "Fix it", steps: 2, reason: "One edit and one test" } }] }]);
-		const result = await p.decide({ pilotModel: HAIKU }, true);
+		// Simulate a goal journalled by an older worker, before Haiku was removed from the contract.
+		const goal = JSON.parse(JSON.stringify({ pilotModel })) as Partial<CodingGoal>;
+		const result = await p.decide(goal);
+		expect(result.action).toMatchObject({ kind: "message", text: routine });
+		expect(result.pilotRouting).toMatchObject({ requestedModel: SONNET, model: SONNET });
 		expect(p.requests.map((r) => r.model)).toEqual([SONNET]);
-		expect(result.capSummary).toMatchObject({ blocker: "Test still failing", steps: 2 });
-		expect(result.pilotRouting).toMatchObject({ requestedModel: HAIKU, model: SONNET, fallbackReason: expect.any(String) });
+		expect(p.usage.map((r) => r.model)).toEqual([SONNET]);
+		expect(p.usage.map((r) => r.phase)).toEqual(["pilot_decide"]);
+	});
+
+	it("uses one Sonnet request for owner decisions, without a canary or fallback bill", async () => {
+		const p = await provider([{ tools: [{ name: "ask_owner", input: { question: "Choose the layout?", options: ["A", "B"] } }] }]);
+		await p.decide();
+		expect(p.requests.map((r) => r.model)).toEqual([SONNET]);
 		expect(p.usage).toHaveLength(1);
 	});
 
-	it("records each fallback call once with its actual model and keeps both token totals", async () => {
-		const p = await provider([{ tools: [{ name: "finish", input: { status: "done", detail: "Complete" } }] }, { tools: [send(fallback)] }]);
-		const result = await p.decide({ pilotModel: HAIKU });
-		expect(p.usage.map(({ model, input, output, read, write }) => ({ model, input, output, read, write }))).toEqual([
-			{ model: HAIKU, input: 100, output: 10, read: 50, write: 20 },
-			{ model: SONNET, input: 100, output: 10, read: 50, write: 20 },
-		]);
-		expect(result.usage).toMatchObject({ input: 200, output: 20, cacheRead: 100, cacheWrite: 40 });
+	it("uses Sonnet for cap reports even with an obsolete journalled Haiku selection", async () => {
+		const p = await provider([{ tools: [{ name: "report_cap_status", input: { did: "Read the issue", blocker: "Test still failing", plan: "Fix it", steps: 2, reason: "One edit and one test" } }] }]);
+		const result = await p.decide(JSON.parse(JSON.stringify({ pilotModel: HAIKU })), true);
+		expect(p.requests.map((r) => r.model)).toEqual([SONNET]);
+		expect(result.capSummary).toMatchObject({ blocker: "Test still failing", steps: 2 });
+		expect(result.pilotRouting).toMatchObject({ requestedModel: SONNET, model: SONNET });
+		expect(p.usage).toHaveLength(1);
 	});
 
-	it("falls back once when the canary model is unavailable, without inventing a paid call for the 404", async () => {
-		const p = await provider([{ status: 404, error: "model not found" }, { tools: [send(fallback)] }]);
-		expect((await p.decide({ pilotModel: HAIKU })).action).toMatchObject({ text: fallback });
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU, SONNET]);
-		expect(p.usage.map((r) => r.model)).toEqual([SONNET]);
-	});
-
-	it.each([
-		[401, "Invalid API key"], [403, "Forbidden"], [400, "Your credit balance is too low to access the Anthropic API."], [529, "Overloaded"],
-	])("does not turn provider error %s into another model's bill", async (status, error) => {
-		const p = await provider([{ status, error }]);
-		await expect(p.decide({ pilotModel: HAIKU })).rejects.toThrow();
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU]);
+	it.each([[401, "Invalid API key"], [403, "Forbidden"], [404, "model unavailable"], [400, "Your credit balance is too low"], [529, "Overloaded"]])("does not multiply provider error %s into another paid model call", async (status, error) => {
+		const p = await provider([{ status: Number(status), error: String(error) }]);
+		await expect(p.decide()).rejects.toThrow();
+		expect(p.requests.map((r) => r.model)).toEqual([SONNET]);
 		expect(p.usage).toHaveLength(0);
 	});
 
-	it("does not turn a dropped provider connection into a Sonnet fallback", async () => {
+	it("leaves transport recovery to the existing outer policy", async () => {
 		const p = await provider([new Error("Network connection lost")]);
-		await expect(p.decide({ pilotModel: HAIKU })).rejects.toThrow();
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU]);
+		await expect(p.decide()).rejects.toThrow();
+		expect(p.requests.map((r) => r.model)).toEqual([SONNET]);
 	});
 
-	it("preserves Cloudflare-only default routing and reports the model that actually answered", async () => {
+	it.each([undefined, HAIKU])("preserves Cloudflare-only routing for legacy selection %s without using Haiku", async (pilotModel) => {
 		const p = await provider([{ tools: [send()] }], { anthropic: false, cloudflare: true });
-		const result = await p.decide();
+		const result = await p.decide(JSON.parse(JSON.stringify({ pilotModel })));
 		expect(result.action).toMatchObject({ text: routine });
 		expect(p.urls).toHaveLength(1);
 		expect(decodeURIComponent(p.urls[0])).toContain("/ai/run/@cf/meta/llama-4-scout-17b-16e-instruct");
@@ -183,75 +142,54 @@ describe("Pilot model canary qualification through real provider requests (#1316
 		expect(result.pilotRouting).toMatchObject({ requestedModel: SONNET, model: "@cf/meta/llama-4-scout-17b-16e-instruct" });
 	});
 
-	it("an explicit Haiku canary requires Anthropic instead of silently using stored Cloudflare credentials", async () => {
-		const p = await provider([], { anthropic: false, cloudflare: true });
-		await expect(p.decide({ pilotModel: HAIKU })).rejects.toThrow("Anthropic API key");
+	it("refuses explicit Haiku in coding transport before provider or ledger writes", async () => {
+		const p = await provider([]);
+		await expect(runUserWorkersAi(p.env, "owner", HAIKU, { messages: [] }, ctx, { anthropicModel: HAIKU })).rejects.toThrow("Haiku is not permitted for coding");
 		expect(p.requests).toHaveLength(0);
 		expect(p.usage).toHaveLength(0);
 	});
 
-	it("preserves the legacy Anthropic model unless the Pilot explicitly chooses another", async () => {
-		const p = await provider([{ text: "Legacy answer" }, { text: "Pilot answer" }]);
-		await runUserWorkersAi(p.env, "owner", "unconfigured-advisory-label", { messages: [{ role: "user", content: "Hi" }] });
-		await runUserWorkersAi(p.env, "owner", HAIKU, { messages: [{ role: "user", content: "Hi" }] }, ctx, { anthropicModel: HAIKU });
-		expect(p.requests.map((r) => r.model)).toEqual([SONNET, HAIKU]);
+	it("leaves explicit Haiku transport available for non-coding ticket work", async () => {
+		const p = await provider([{ text: "Ticket summary" }]);
+		await runUserWorkersAi(p.env, "owner", HAIKU, { messages: [{ role: "user", content: "Summarize this ticket." }] }, undefined, { anthropicModel: HAIKU });
+		expect(p.requests.map((r) => r.model)).toEqual([HAIKU]);
 	});
 });
 
-
-describe("Pilot shared deadline and journalled model read (#1316)", () => {
+describe("Coding deadline and journalled policy read (#1316)", () => {
 	const body = { messages: [{ role: "user", content: "Choose the next instruction." }], tools: [], maxTokens: 128,
-		streamDeadlines: { totalMs: 10_000, preContentMs: 6_000, silenceMs: 4_000, attempt: 1 } };
+		streamDeadlines: { totalMs: 1000, preContentMs: 900, silenceMs: 800 } };
 
-	it("gives fallback only the remaining total budget and clamps both phase timers", async () => {
-		let clock = 0;
-		let timerBoundary = 0;
-		const p = await provider([{ text: "Needs qualification" }, { tools: [send()] }], { afterUsage: (calls) => { if (calls === 1) { clock = 8_000; timerBoundary = timers.mock.calls.length; } } });
-		vi.spyOn(Date, "now").mockImplementation(() => clock);
-		const timers = vi.spyOn(globalThis, "setTimeout");
-		await runPilotInference(p.env, "owner", HAIKU, body, ctx, () => false);
-		const fallbackDelays = timers.mock.calls.slice(timerBoundary).map((call) => Number(call[1]));
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU, SONNET]);
-		expect(fallbackDelays.length).toBeGreaterThan(0);
-		expect(fallbackDelays.every((delay) => delay > 0 && delay <= 2_000)).toBe(true);
+	it("refuses an expired decision before sending any provider request", async () => {
+		const p = await provider([]);
+		await expect(runPilotInference(p.env, "owner", HAIKU, { ...body, streamDeadlines: { ...body.streamDeadlines, totalMs: 0 } }, ctx)).rejects.toMatchObject({ status: 504 });
+		expect(p.requests).toHaveLength(0);
 	});
 
-	it("does not start or ledger fallback after the shared budget expires", async () => {
-		let clock = 0;
-		const p = await provider([{ text: "Needs qualification" }], { afterUsage: () => { clock = 10_001; } });
-		vi.spyOn(Date, "now").mockImplementation(() => clock);
-		await expect(runPilotInference(p.env, "owner", HAIKU, body, ctx, () => false)).rejects.toMatchObject({ status: 504 });
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU]);
-		expect(p.usage.map((r) => r.model)).toEqual([HAIKU]);
-	});
-
-	it("skips a fresh canary/fallback pair on outer recovery attempts", async () => {
+	it("uses one Sonnet request on outer recovery attempts", async () => {
 		const p = await provider([{ tools: [send()] }]);
-		const accept = vi.fn(() => true);
-		const result = await runPilotInference(p.env, "owner", HAIKU, { ...body, streamDeadlines: { ...body.streamDeadlines, attempt: 2 } }, ctx, accept);
+		await runPilotInference(p.env, "owner", HAIKU, { ...body, streamDeadlines: { ...body.streamDeadlines, attempt: 2 } }, ctx);
 		expect(p.requests.map((r) => r.model)).toEqual([SONNET]);
-		expect(accept).not.toHaveBeenCalled();
-		expect(result.pilotRouting).toMatchObject({ requestedModel: HAIKU, model: SONNET, fallbackReason: "Recovery attempts use Sonnet." });
 	});
 
-	it("leaves an incomplete transport reply to outer recovery, which retries directly on Sonnet", async () => {
+	it("retries an incomplete transport reply on Sonnet even when the stored selection is Haiku", async () => {
 		const p = await provider([{ text: "A partial reply", eof: true }, { tools: [send()] }], { pilotModel: HAIKU });
 		const sleep = vi.fn(async () => {});
 		const outcome = await pilotDecide(p.env, { userId: "owner", instanceId: "coder-1", repoId: "repo-1", sessionId: "session-1", runStartedAt: Date.now(), params: { goal: { objective: "Fix the build", repo: "owner/repo", clientType: "claude" }, actionLog: [], snapshot } }, { sleep });
 		expect(sleep).toHaveBeenCalledTimes(1);
 		expect(unwrapPilotDecide(outcome).action).toMatchObject({ text: routine });
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU, SONNET]);
+		expect(p.requests.map((r) => r.model)).toEqual([SONNET, SONNET]);
 		expect(p.usage.map((r) => r.model)).toEqual([SONNET]);
 	});
 
-	it("reads the owned instance's Pilot choice inside the real decision path", async () => {
+	it("normalizes the owned instance's saved Haiku selection before a real decision", async () => {
 		const p = await provider([{ tools: [send()] }], { pilotModel: HAIKU });
 		const outcome = await pilotDecide(p.env, { userId: "owner", instanceId: "coder-1", repoId: "repo-1", sessionId: "session-1", runStartedAt: Date.now(), params: { goal: { objective: "Fix the build", repo: "owner/repo", clientType: "claude" }, actionLog: [], snapshot } });
 		expect(unwrapPilotDecide(outcome).action).toMatchObject({ text: routine });
-		expect(p.requests.map((r) => r.model)).toEqual([HAIKU]);
+		expect(p.requests.map((r) => r.model)).toEqual([SONNET]);
 	});
 
-	it("refuses an unowned/missing instance before making any model request", async () => {
+	it("refuses an unowned instance before making any model request", async () => {
 		const p = await provider([], { owned: false });
 		await expect(pilotDecide(p.env, { userId: "owner", instanceId: "coder-1", repoId: "repo-1", sessionId: "session-1", runStartedAt: Date.now(), params: { goal: { objective: "Fix the build", repo: "owner/repo", clientType: "claude" }, actionLog: [], snapshot } })).rejects.toThrow("instance not found");
 		expect(p.requests).toHaveLength(0);

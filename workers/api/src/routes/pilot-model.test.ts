@@ -44,23 +44,36 @@ describe("Pilot configuration is an owner-scoped policy, separate from Brain and
 			const r = await call("GET", undefined, path);
 			expect(r.status).toBe(200);
 			expect(r.body.pilot).toMatchObject({ model: SONNET, fallbackModel: SONNET });
-			expect(r.body.pilot?.options.map((o) => o.id)).toEqual([SONNET, HAIKU]);
+			expect(r.body.pilot?.options.map((o) => o.id)).toEqual([SONNET]);
 		}
 	});
 
 	it("writes only pilot.model, preserving raw brain flags, existing schedules, advisory state and CLI config", async () => {
 		const before = config(); const schedules = triggers();
-		const r = await call("PUT", { pilotModel: HAIKU });
-		expect(r).toMatchObject({ status: 200, body: { pilot: { model: HAIKU, fallbackModel: SONNET } } });
-		expect(config()).toEqual({ ...before, pilot: { model: HAIKU } });
+		const r = await call("PUT", { pilotModel: SONNET });
+		expect(r).toMatchObject({ status: 200, body: { pilot: { model: SONNET, fallbackModel: SONNET } } });
+		expect(config()).toEqual({ ...before, pilot: { model: SONNET } });
 		expect(triggers()).toEqual(schedules);
 		expect(stateWrites).toBe(0);
-		expect((await call("GET")).body.pilot?.model).toBe(HAIKU);
+		expect((await call("GET")).body.pilot?.model).toBe(SONNET);
 	});
 
-	it.each(["claude-haiku-4-5", "haiku", "", null, 42])("refuses unsupported Pilot %j before any requested brain mutation", async (pilotModel) => {
+	it.each([HAIKU, "claude-haiku-4-5", "haiku", "", null, 42])("refuses unsupported Pilot %j before any requested brain mutation", async (pilotModel) => {
 		const before = config(); const schedules = triggers();
 		expect((await call("PUT", { pilotModel, enabled: true })).status).toBe(400);
+		expect(config()).toEqual(before);
+		expect(triggers()).toEqual(schedules);
+		expect(stateWrites).toBe(0);
+	});
+
+	it("reads an obsolete saved Haiku policy as Sonnet without changing Brain, CLI or schedules", async () => {
+		db.exec("UPDATE agent_instances SET config=json_set(config,'$.pilot.model','claude-haiku-5-5') WHERE id='i1'");
+		const before = config(); const schedules = triggers();
+		for (const path of ["coder-brain", "po-triage/reports"]) {
+			const r = await call("GET", undefined, path);
+			expect(r.body.pilot?.model).toBe(SONNET);
+			expect(r.body.pilot?.options.map((o) => o.id)).toEqual([SONNET]);
+		}
 		expect(config()).toEqual(before);
 		expect(triggers()).toEqual(schedules);
 		expect(stateWrites).toBe(0);

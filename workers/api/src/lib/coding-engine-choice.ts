@@ -10,6 +10,7 @@
 // choosing one rewrites that command and nothing else.
 
 import { HttpError } from "./auth.js";
+import { codingEngineModelProblem } from "./coding-engine-policy.js";
 import { deriveClientType } from "./coding-command.js";
 import { readEngines, type CodingEngine } from "./coding-engines.js";
 import { MODEL_SUGGESTIONS, isValidModelId, modelFlagEngine, readEngineModel, writeEngineModel, type ModelSuggestion } from "./coding-engine-model.js";
@@ -132,6 +133,10 @@ export async function writeEngineChoice(
 	const { engines, apiCodingOptIns } = await readEngines(env, instanceId, userId);
 	const engine = engines.find((e) => e.id === input.engineId);
 	if (!engine) throw new HttpError(400, `No engine "${String(input.engineId ?? "")}" on this agent — choose one of: ${engines.map((e) => e.id).join(", ")}.`);
+	const selectedModel = input.model === undefined ? undefined : input.model === null || input.model === "" ? null : input.model;
+	const selectedCommand = selectedModel === undefined || (selectedModel !== null && !isValidModelId(selectedModel)) ? engine.command : writeEngineModel(engine.command, selectedModel as string | null);
+	const modelProblem = codingEngineModelProblem(selectedCommand, undefined, deriveClientType(selectedCommand));
+	if (modelProblem) throw new HttpError(400, modelProblem);
 	// #1042: an API-key engine may be chosen only as the owner confirmed it — for exactly the command it
 	// will run. A new model on it is a new billing choice: the console confirms it again; MCP never can.
 	if (engine.auth === "api-key") {

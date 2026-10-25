@@ -25,7 +25,7 @@ import { isWorkersAiModel } from "./brain-models.js";
 import { redactCloudflareUpstream } from "./cloudflare-redact.js";
 import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
-import { DEFAULT_PILOT_MODEL, pilotModelProblem, type PilotModelId } from "./pilot-model.js";
+import { DEFAULT_ANTHROPIC_MODEL, anthropicModelProblem, type AnthropicModelId } from "./anthropic-model-routing.js";
 
 export class UserAiCredentialsError extends Error {
 	constructor(
@@ -123,10 +123,11 @@ export async function runUserWorkersAi(
 	/** `honorModel`: the owner PICKED this model (#852) — a Workers AI pick runs on Workers AI even
 	 *  when an Anthropic key is also stored. Without it the long-standing order below applies.
 	 *  `provider`: the provider this TURN already ran on (#853 finding 9) — it continues there or fails. */
-	opts?: { honorModel?: boolean; provider?: AiProvider; anthropicModel?: PilotModelId },
+	opts?: { honorModel?: boolean; provider?: AiProvider; anthropicModel?: AnthropicModelId },
 ): Promise<unknown> {
-	// Explicit controller routing never silently substitutes a model or another provider (#1316).
-	if (opts?.anthropicModel !== undefined && pilotModelProblem(opts.anthropicModel)) throw new UserAiProviderError(pilotModelProblem(opts.anthropicModel) as string, 400);
+	// Explicit provider routing is independent of the role policy: Haiku may handle ticket work, never coding.
+	if (opts?.anthropicModel !== undefined && anthropicModelProblem(opts.anthropicModel)) throw new UserAiProviderError(anthropicModelProblem(opts.anthropicModel) as string, 400);
+	if (opts?.anthropicModel === "claude-haiku-5-5" && (ctx?.kind === "coding" || ctx?.promptSource === "coding")) throw new UserAiProviderError("Haiku is not permitted for coding.", 400);
 	if (ctx) ctx = { ...ctx, attempt: (body as { streamDeadlines?: StreamDeadlines } | null)?.streamDeadlines?.attempt ?? ctx.attempt }; // #1040: retries on the ledger
 	if (ctx?.promptSections?.length) {
 		await logPromptSectionEstimates(env, {
@@ -145,7 +146,7 @@ export async function runUserWorkersAi(
 	// pointed at that moment — a removed or unreadable key flipped the turn mid-way.
 	if (opts?.provider === "anthropic" || opts?.anthropicModel !== undefined) {
 		const key = await getUserProviderKey(env, userId, "anthropic");
-		if (!key) throw new UserAiCredentialsError(opts?.anthropicModel ? "The Pilot uses your Anthropic API key. Add it in Profile → API Keys." : midTurnLoss("Anthropic", "the Anthropic key"));
+		if (!key) throw new UserAiCredentialsError(opts?.anthropicModel ? "The selected model uses your Anthropic API key. Add it in Profile → API Keys." : midTurnLoss("Anthropic", "the Anthropic key"));
 		return runAnthropic(env, userId, key, body as Parameters<typeof runAnthropic>[3], ctx, opts.anthropicModel);
 	}
 	if (opts?.provider === "cloudflare") {
@@ -357,7 +358,7 @@ async function runAnthropic(
 	apiKey: string,
 	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number; streamDeadlines?: StreamDeadlines },
 	ctx?: UsageContext,
-	model: PilotModelId = DEFAULT_PILOT_MODEL,
+	model: AnthropicModelId = DEFAULT_ANTHROPIC_MODEL,
 ): Promise<unknown> {
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
 	// The system prompt's breakpoints first, then the messages' — one budget, in request order (#914).

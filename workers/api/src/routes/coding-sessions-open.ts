@@ -1,4 +1,6 @@
 import type { Hono } from "hono";
+import { codingEngineModelProblem } from "../lib/coding-engine-policy.js";
+import { deriveClientType } from "../lib/coding-command.js";
 import { maskPaneText } from "../lib/pane-mask.js";
 import { HttpError } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
@@ -70,6 +72,8 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			const label = String(e.label ?? "").trim().slice(0, 60);
 			const command = String(e.command ?? "").trim().slice(0, 400);
 			if (!label || !command) continue;
+			const modelProblem = codingEngineModelProblem(command, undefined, deriveClientType(command));
+			if (modelProblem) throw new HttpError(400, modelProblem);
 			let id = String(e.id ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 			if (!id) id = label.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "engine";
 			while (seen.has(id)) id = `${id}-2`;

@@ -8,7 +8,6 @@ import { decryptKey } from "./crypto.js";
 import { readInstanceBrain } from "./instance-brain.js";
 import { deepLinkFor } from "./console-links.js";
 import { notifyUser } from "../routes/push.js";
-import { readPilotModel, DEFAULT_PILOT_MODEL } from "./pilot-model.js";
 import type { Env } from "../types.js";
 
 import { providerCredentialId, type HeldProvider, type ProviderAccountFailure } from "./provider-account-observation.js";
@@ -16,27 +15,18 @@ export { observeProviderAccount, providerCredentialId, type HeldProvider, type P
 export interface ProviderAccountIdentity { provider: HeldProvider; credentialId: string }
 interface HoldRow { failure_class: ProviderAccountFailure; failed_at: number }
 export interface ProviderHold extends ProviderAccountIdentity { reason: string }
-class MissingProviderCredential extends Error {
-	constructor(public readonly provider: HeldProvider) {
-		super("Automatic runs are paused because the selected Haiku Pilot requires an Anthropic API key. Add an Anthropic key in Profile → API Keys. No queued objective or automatic-start allowance has been consumed.");
-	}
-}
 const UNREADABLE = "Automatic runs are waiting because the provider-account hold or selected credential could not be checked. Retry after account storage is available, or explicitly continue the original run.";
 
 interface KeyRow { key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }
-/** The provider an automatic run will actually use. A selected Haiku Pilot is explicitly Anthropic.
- * The legacy Sonnet Pilot keeps BYOK priority, independently of its advisory Brain. Chat loops honour a picked Brain. */
+/** The coding Pilot keeps BYOK priority, independently of its advisory Brain. Chat loops honour a picked Brain. */
 export async function selectedProviderAccount(env: Env, instanceId: string, userId: string): Promise<ProviderAccountIdentity | null> {
 	const { results } = await env.DB.prepare("SELECT provider FROM user_api_keys WHERE user_id = ?1 AND provider IN ('anthropic', 'cloudflare')")
 		.bind(userId).all<{ provider: HeldProvider }>();
 	const keys = results ?? [];
 	const caps = await capabilitiesForInstance(env, instanceId, userId);
 	const brain = caps?.workflow === "CODING_SESSION" ? null : await readInstanceBrain(env, instanceId);
-	const explicitPilot = caps?.workflow === "CODING_SESSION" && await readPilotModel(env, instanceId, userId) !== DEFAULT_PILOT_MODEL;
-	if (explicitPilot && !keys.some((k) => k.provider === "anthropic")) throw new MissingProviderCredential("anthropic");
 	if (!keys.length) return null;
-	const provider: HeldProvider = explicitPilot ? "anthropic"
-		: brain?.modelChosen && isWorkersAiModel(brain.model) ? "cloudflare"
+	const provider: HeldProvider = brain?.modelChosen && isWorkersAiModel(brain.model) ? "cloudflare"
 		: keys.some((k) => k.provider === "anthropic") ? "anthropic" : "cloudflare";
 	// Match the inference layer's provider-row lookup, including legacy named slots. Do not
 	// prefer another account here: that would check a credential the request will not use.
@@ -67,8 +57,7 @@ export async function automaticProviderHold(env: Env, instanceId: string, userId
 			.bind(userId, account.provider, account.credentialId, Date.now()).run();
 		if ((claim.meta?.changes ?? 0) > 0) await (notify ? notify(reason) : notifyUser(env, userId, "coding", "Automatic runs are paused", reason, deepLinkFor({ kind: "profile" }), { kind: "update", instanceId, key: `provider-hold:${account.provider}:${h.failed_at}` })).catch(() => undefined);
 		return { ...account, reason };
-	} catch (error) {
-		if (error instanceof MissingProviderCredential) return { provider: error.provider, credentialId: "", reason: error.message };
+	} catch {
 		// Admission fails closed. No secrets or raw database errors enter the notice/queue result.
 		return { provider: "anthropic", credentialId: "", reason: UNREADABLE };
 	}
