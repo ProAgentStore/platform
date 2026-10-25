@@ -441,6 +441,60 @@ export interface InstanceReleaseNotesResponse {
 	gate: ReleaseGateState;
 }
 
+/**
+ * What an owner sees for one queued release note (#1348). `status` is the stored row status; `state` is the
+ * answer to "what is happening to it": `outcome_uncertain` is a send claimed but never confirmed (a crash or
+ * an unreadable provider reply) and is never retried automatically.
+ */
+export type ReleaseDeliveryState = "waiting_for_checks" | "configuration_required" | "configuration_changed" | "sending" | "outcome_uncertain" | "delivery_failed" | "sent" | "expired" | "abandoned";
+
+export interface ReleaseDeliveryAttempt {
+	id: string;
+	kind: "send" | "retry" | "reconcile_delivered" | "reconcile_abandoned" | "reconcile_retry";
+	outcome: string;
+	reason: string | null;
+	permalink: string | null;
+	at: number;
+}
+
+export interface ReleaseDelivery {
+	id: string;
+	repo: string;
+	sha: string;
+	runId: string;
+	sessionId: string;
+	/** The channel it goes to. The provider's channel id is not exposed. */
+	destination: { provider: ReleaseNoteProvider; name: string } | null;
+	status: string;
+	state: ReleaseDeliveryState;
+	reason: string | null;
+	permalink: string | null;
+	createdAt: number;
+	updatedAt: number;
+	/** Which owner actions apply right now. */
+	actions: { retry: boolean; reconcile: boolean };
+	evidence: { workflowRuns: string[]; deployJob: string | null };
+	links: { codingRun: string; permalink: string | null; workflowRuns: string[]; deployJob: string | null };
+	attempts: ReleaseDeliveryAttempt[];
+}
+
+/** `GET /v1/instances/:id/release-notes/deliveries`. */
+export interface ReleaseDeliveriesResponse {
+	deliveries: ReleaseDelivery[];
+	hasMore: boolean;
+	nextCursor: string | null;
+	retention: { days: number; horizon: string };
+}
+
+/** `POST …/deliveries/:id/retry` and `…/reconcile`. */
+export interface ReleaseDeliveryActionResponse {
+	delivery: ReleaseDelivery;
+	/** True when the same idempotency key had already been applied; nothing changed this time. */
+	replayed: boolean;
+	/** Reconcile-retry only: the duplicate risk the owner accepted. */
+	warning?: string;
+}
+
 /** `POST /v1/instances/:id/release-notes/test`. */
 export interface ReleaseNoteTestResponse {
 	sent: true;

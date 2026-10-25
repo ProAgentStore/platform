@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**391 tool registrations.** 364 are always registered; 27 are gated to the console
+**394 tool registrations.** 367 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -606,6 +606,9 @@ immediately instead of a whole transcript.
 | `get_instance_release_notes` | Who receives an instance's release notes: its own setting, the account default, and each granted Discord/Slack channel marked `selected` (#1217) | read | | |
 | `set_instance_release_notes` | Turn an instance's release notes on/off (null = follow the account) and choose which granted channels receive them; an ungranted grant id is refused (#1217) | write | yes | |
 | `send_test_release_note` | Post a test release note to one channel granted to the instance (#1217) | write | yes | |
+| `list_release_note_deliveries` | Every queued release note, newest first (pages of ≤50 over 90 days): state, reason, destination name, permalink, workflow and deploy-job evidence, attempt history; never a credential (#1348) | read | | |
+| `retry_release_note_delivery` | Re-queue a FAILED release note once the cause is fixed, after rechecking grant, bot, gate and same-SHA evidence; sent, uncertain, cancelled and expired rows are refused (#1348) | write | yes | |
+| `reconcile_release_note_delivery` | Settle an uncertain send: mark it delivered with its permalink, abandon it, or (duplicate risk, confirmed) send once more (#1348) | destructive | yes | `reconcile_release_note_delivery` |
 | `slack_bot_status` | Is a Slack bot connected, does its token still work (checked live), which workspace, how many grants depend on it — never the token (#1217) | read | | |
 | `connect_slack_bot` | Connect or rotate the Slack bot token (xoxb-), verified with Slack first; another workspace's bot revokes old grants; never returned (#1217) | write | yes | |
 | `disconnect_slack_bot` | Remove the Slack bot token and every Slack channel grant on every instance (#1217) | destructive | yes | `disconnect_slack_bot` |

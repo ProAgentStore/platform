@@ -704,6 +704,15 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_release_notes.requiredWorkflows": "get_instance_release_notes",
 	// A test note is a message posted to a channel, not stored state — the channel's own history is where it is read.
 	"send_test_release_note.grant_id": "get_instance_release_notes",
+	// #1348: retry and reconcile act on a delivery row; list_release_note_deliveries reads back its state, attempts and permalink.
+	"retry_release_note_delivery.delivery_id": "list_release_note_deliveries",
+	"retry_release_note_delivery.idempotency_key": null, // a replay key: it keys the attempt receipt, which is listed but not echoed as an argument
+	"reconcile_release_note_delivery.delivery_id": "list_release_note_deliveries",
+	"reconcile_release_note_delivery.action": "list_release_note_deliveries",
+	"reconcile_release_note_delivery.permalink": "list_release_note_deliveries",
+	"reconcile_release_note_delivery.channel_checked": null, // an attestation recorded in the audit attempt, not a stored setting
+	"reconcile_release_note_delivery.retry_confirmation": null, // the typed confirmation phrase; never stored
+	"reconcile_release_note_delivery.idempotency_key": null,
 	// The bot token itself is never returned — `slack_bot_status` reports which workspace's bot it is, not the token.
 	"connect_slack_bot.bot_token": null,
 	"grant_instance_slack_channel.channel_id": "list_instance_slack_grants",

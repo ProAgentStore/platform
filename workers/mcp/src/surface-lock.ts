@@ -1247,4 +1247,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.178": "sha256:a243461e2324f0925ea54de46c3b044744b1d80d940f5184f309b9914ad66821", // #1318: get/set_instance_auto_resume; coding.autoResumeOnCredit on set_account_preferences; check_instance_loop text.
 	"0.1.179": "sha256:e15a66eee9e101da3697d8f6d9722d6729b15c6e7b1db1a02c4c68c04413f201", // set_instance_release_notes.requiredWorkflows configures the exact-SHA production release gate.
 	"0.1.180": "sha256:8003ca2a382b091d28bdd7a93a09ba13f1453651af07f3bb1c8bf689e00497d7", // #1346: set_instance_release_notes.requiredWorkflows items gain jobName/stepName (the production_deploy item's job and step proof).
+	"0.1.181": "sha256:2285924831b5140ec310340d4f8c919e4fae15126e63ec554d4c816d453b647f", // #1348: list_release_note_deliveries, retry_release_note_delivery, reconcile_release_note_delivery (the owner-visible delivery trail and its two safe recoveries).
 };

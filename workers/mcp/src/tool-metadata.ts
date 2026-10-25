@@ -337,6 +337,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_instance_discord_grants: "read",
 	// #1217: an instance's release-notes setting, and the Slack bot's status, channels and an instance's grants. Never the token.
 	get_instance_release_notes: "read",
+	// #1348: the delivery trail is read-only; a retry re-queues a FAILED note once; reconcile settles an uncertain send and may duplicate it.
+	list_release_note_deliveries: "read",
 	// #1208/#1209: the GitHub Actions runners on an agent's pinned machine.
 	actions_runner_status: "read",
 	slack_bot_status: "read",
@@ -450,6 +452,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.
 	set_instance_release_notes: "write",
 	send_test_release_note: "write",
+	retry_release_note_delivery: "write",
+	reconcile_release_note_delivery: "destructive",
 	connect_slack_bot: "write",
 	grant_instance_slack_channel: "write",
 

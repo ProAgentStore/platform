@@ -398,6 +398,12 @@ function liveDeps(input: ReleaseNoteInput): ReleaseNoteDeps {
 	};
 }
 
+/** Is the owner's bot for this provider connected? A lookup, never a post: the retry recheck (#1348) must not send anything. */
+export async function deliveryBotConnected(env: Env, userId: string, provider: ReleaseChannel["provider"]): Promise<boolean> {
+	if (provider === "slack") return !!(await getUserProviderKey(env, userId, "slack").catch(() => null));
+	return !!(await connectorClient(env, "discord", { userId }).token().catch(() => null));
+}
+
 /** Post to a granted channel with the owner's own bot for that provider. */
 export function liveDeliver(env: Env, userId: string): Deliver {
 	return async (channel, text) => {

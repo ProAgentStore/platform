@@ -83,6 +83,76 @@ export function registerReleaseNotesTools(server: McpServer, ctx: InstanceToolsC
 	);
 
 	server.tool(
+		"list_release_note_deliveries",
+		"Coding agents only. Every release note this instance has queued, newest first, so \"was SHA X announced to channel Y?\" is answerable without the database. Each delivery has `state` — waiting_for_checks | configuration_required | configuration_changed | sending | outcome_uncertain | delivery_failed | sent | expired | abandoned — plus `reason`, the destination (name and provider only), the Slack/Discord `permalink` once known, workflow and deploy-job evidence links, a link to the coding run, `actions` (which of retry/reconcile apply now) and its attempt history. `outcome_uncertain` is a send that may or may not have posted; it is never retried automatically. Pages of up to 50 (default 20) over the last 90 days; pass the previous `nextCursor` as `cursor`. Never returns a credential. Read-only.",
+		{ token: tokenArg, instance_id: instanceId, cursor: z.string().optional().describe('"newest" or a previous nextCursor.'), limit: z.coerce.number().int().min(1).max(50).optional().describe("Page size, 1–50 (default 20).") },
+		async ({ token, instance_id, cursor, limit }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "list_release_note_deliveries", { instance_id });
+			if (denied) return denied;
+			const query = new URLSearchParams();
+			if (cursor !== undefined) query.set("cursor", cursor);
+			if (limit !== undefined) query.set("limit", String(limit));
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/release-notes/deliveries${query.size ? `?${query}` : ""}`, session, {}, env);
+			return err(data) ? text(`Error: ${err(data)}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"retry_release_note_delivery",
+		"Coding agents only. Send a FAILED release note again once the cause is fixed (for example the Slack bot was invited to the channel). Only `delivery_failed` rows qualify: a `sent` note, an `outcome_uncertain` one (use reconcile_release_note_delivery), and cancelled, expired or abandoned ones are refused with the reason. Before the row goes back to the queue the platform rechecks ownership, that release notes are on, the channel grant, that the bot is connected, that the release gate is complete and unchanged, and that the required workflows and deploy job succeeded on the same SHA; the queue checks them again before posting. Repeating the same idempotency_key changes nothing. Call with dry_run first.",
+		{ token: tokenArg, instance_id: instanceId, delivery_id: z.string().describe("Delivery id from list_release_note_deliveries."), idempotency_key: z.string().min(8).max(120).optional().describe("Makes a repeated call harmless; 8–120 characters of letters, digits and . _ : -"), dry_run: z.boolean().optional() },
+		async ({ token, instance_id, delivery_id, idempotency_key, dry_run }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const body: Record<string, unknown> = idempotency_key ? { idempotencyKey: idempotency_key } : {};
+			const input = { instance_id, delivery_id, ...body };
+			const denied = await requirePermission(safetyFor(token), "write", "retry_release_note_delivery", input);
+			if (denied) return denied;
+			const path = `/v1/instances/${encodeURIComponent(instance_id)}/release-notes/deliveries/${encodeURIComponent(delivery_id)}/retry`;
+			if (dry_run) return dryRun(safetyFor(token), "retry_release_note_delivery", "send a failed release note again", input, { endpoint: path, method: "POST", body });
+			const data = await authedCall(path, session, { method: "POST", body: JSON.stringify(body) }, env);
+			if (err(data)) return text(`Error: ${err(data)}`);
+			await audit(safetyFor(token), { tool: "retry_release_note_delivery", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"reconcile_release_note_delivery",
+		"Coding agents only. Settle a release note whose send is `outcome_uncertain` (claimed, never confirmed; at least 10 minutes old). It is never retried by itself. action `mark_delivered` needs the `permalink` of the message you saw in that channel and records it as sent without posting; `abandon` gives the note up; `retry_after_channel_check` posts ONE more time and may DUPLICATE the announcement, so it needs channel_checked=true (you looked and no post exists) and retry_confirmation set to exactly \"no post exists in the channel; send it again\". The original attempt is kept and every choice is audited. DESTRUCTIVE: requires confirm. Call with dry_run first.",
+		{
+			token: tokenArg,
+			instance_id: instanceId,
+			delivery_id: z.string().describe("Delivery id from list_release_note_deliveries (state outcome_uncertain)."),
+			action: z.enum(["mark_delivered", "abandon", "retry_after_channel_check"]),
+			permalink: z.string().optional().describe("mark_delivered: the observed message's Slack or Discord link."),
+			channel_checked: z.boolean().optional().describe("retry_after_channel_check: true only if you checked the channel and the note is not there."),
+			retry_confirmation: z.string().optional().describe('retry_after_channel_check: exactly "no post exists in the channel; send it again".'),
+			idempotency_key: z.string().min(8).max(120).optional(),
+			confirm: z.string().optional().describe('Must be "reconcile_release_note_delivery" to proceed.'),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, delivery_id, action, permalink, channel_checked, retry_confirmation, idempotency_key, confirm, dry_run }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const body: Record<string, unknown> = { action, ...(permalink !== undefined ? { permalink } : {}), ...(channel_checked !== undefined ? { channelChecked: channel_checked } : {}), ...(retry_confirmation !== undefined ? { confirm: retry_confirmation } : {}), ...(idempotency_key ? { idempotencyKey: idempotency_key } : {}) };
+			const input = { instance_id, delivery_id, ...body };
+			const denied = await requirePermission(safetyFor(token), "destructive", "reconcile_release_note_delivery", input);
+			if (denied) return denied;
+			const path = `/v1/instances/${encodeURIComponent(instance_id)}/release-notes/deliveries/${encodeURIComponent(delivery_id)}/reconcile`;
+			if (dry_run) return dryRun(safetyFor(token), "reconcile_release_note_delivery", "settle an uncertain release note send", input, { endpoint: path, method: "POST", body });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "reconcile_release_note_delivery", confirm, "reconcile_release_note_delivery", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(path, session, { method: "POST", body: JSON.stringify(body) }, env);
+			if (err(data)) return text(`Error: ${err(data)}`);
+			await audit(safetyFor(token), { tool: "reconcile_release_note_delivery", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"slack_bot_status",
 		"Is a Slack bot connected to your account, does its token still work (checked live against Slack), and which workspace is it in (`bot.team`, `bot.teamId`)? `oauthConfigured` says whether \"Add to Slack\" is available here; `reach` counts the channel grants that depend on the bot. Never returns the token. Read-only.",
 		{ token: tokenArg },

@@ -134,7 +134,7 @@ src/
 ├── gmail-identity.ts   2 tools — an instance's verified Gmail send-as sender and inbound recipient scope: read the pin, live aliases and named blockers; set/clear it with dry_run (#1279). No tool takes or returns a credential
 ├── email-worker.ts   6 tools — an instance's worker-backed (Cloudflare) mail: state with named blockers, SECURE enrollment (the owner types the bridge secret in the console; no tool carries one), connection test, pin and sender/reply-identity approval (#1277)
 ├── discord.ts        8 tools — the native Discord bot: status, connect/rotate (verified with Discord, never returned), disconnect, guilds, channels, and per-instance channel grants list/grant/revoke (#1132)
-├── release-notes.ts  10 tools — who receives an instance's release notes (get/set), a test note to one granted channel, and the Slack bot: status, connect/rotate (verified with Slack, never returned), disconnect, channels, and per-instance channel grants list/grant/revoke (#1217)
+├── release-notes.ts  13 tools — who receives an instance's release notes (get/set), a test note to one granted channel, the delivery trail and its retry/reconcile (#1348), and the Slack bot: status, connect/rotate (verified with Slack, never returned), disconnect, channels, and per-instance channel grants list/grant/revoke (#1217)
 ├── coder-brain.ts    5 tools — the coder brain switch and knobs (#1025, #1027), its questions (#1025), triage reports (#1027) and brain-free auto-pickup (#1233)
     ├── applications.ts  27 tools — the job-application queue across Scout → Tailor → Runner (#958):
     │                     list/get/trace, and the typed decisions (triage, tailor, fill, review, retry,
@@ -154,13 +154,13 @@ src/
                           + 3 deprecated aliases of the run tools: start/check/stop_instance_loop (#1243, src/deprecated-alias.ts)
 ```
 
-**391 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**394 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 13 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all seventeen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 337 across `instance-tools/`. 364 are always registered; 27 are
+`storage-tools.ts`, and 340 across `instance-tools/`. 367 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 13 + 2 + 1 + 1 + 15 + 337 = 391. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 13 + 2 + 1 + 1 + 15 + 340 = 394. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

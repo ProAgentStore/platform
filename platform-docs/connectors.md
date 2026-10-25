@@ -105,7 +105,45 @@ hours; a successful rerun on the same SHA releases it once.
 A gate saved before the job and step existed is not downgraded and not discarded: GET/PUT answer
 `gate: { state: "configuration_required", message }`, its queued rows are held as
 `configuration_required` (never posted), and its channels are kept. Saving the same workflows again
-with `jobName` and `stepName` resumes the held rows. An unidentifiable push SHA holds the note and records
+with `jobName` and `stepName` resumes the held rows.
+
+### Delivery state and recovery (#1348)
+
+Every queued note is visible to its owner without database access: the coder's **Release notes** panel
+(*Recent release notes*), `GET /v1/instances/:id/release-notes/deliveries`, and the MCP tool
+`list_release_note_deliveries`. A page is newest first, 20 rows by default and at most 50, keyset-paged on the
+immutable creation time (`nextCursor`; a note queued mid-walk never shifts a page), over the last 90 days of rows.
+Each delivery carries its `state`, `reason`, destination name and provider (never the channel id or any
+credential), the Slack/Discord `permalink` once known, links to the coding run, the workflow runs and the deploy
+job, and its attempt history from the append-only `release_note_attempts` table (migration 0290; the database
+refuses any UPDATE or DELETE of an attempt). The `release_note_sent` / `release_note_failed` events carry the
+`queueId` and `attemptId` of that receipt.
+
+| `state` | Meaning |
+|---|---|
+| `waiting_for_checks` | Queued; posts when every required workflow and the deploy step succeed on the SHA |
+| `configuration_required` | The gate has no deploy job and step; held until it is saved with them |
+| `configuration_changed` | Cancelled: the setting or channel grant changed. Never reopened by Retry |
+| `sending` | Claimed less than 10 minutes ago; may still be in flight |
+| `outcome_uncertain` | Claimed, never confirmed (crash or unreadable reply). **Never retried automatically** |
+| `delivery_failed` | The provider said no |
+| `sent` | Delivered; never retried |
+| `expired` | The 48-hour evidence window passed |
+| `abandoned` | The owner gave up an uncertain send |
+
+**Retry** (`POST …/deliveries/:id/retry`, MCP `retry_release_note_delivery`) applies to `delivery_failed` only,
+once the cause is fixed (for example the bot was invited). It rechecks ownership, that release notes are on, the
+channel grant and selection, that the provider bot is connected (a lookup, not a post), that the stored gate is
+complete and unchanged, and the same-SHA workflow and deploy-job evidence, then moves the row to `pending` with a
+compare-and-swap, so concurrent requests re-queue once; the queue repeats every check before it posts. A repeated
+`idempotencyKey` returns the first result. A note past the 48-hour window cannot be retried.
+
+**Reconcile** (`POST …/deliveries/:id/reconcile`, MCP `reconcile_release_note_delivery`, destructive) applies to a
+`sending` row older than 10 minutes: `mark_delivered` with the observed message link (checked against the note's
+channel) records it as sent without posting; `abandon` gives it up; `retry_after_channel_check` needs
+`channelChecked: true` and the exact phrase `no post exists in the channel; send it again`, repeats the Retry checks,
+shows the duplicate-risk warning, keeps the original attempt, and releases the row for one more send.
+ An unidentifiable push SHA holds the note and records
 `release_note_unverified`; it never guesses from current branch HEAD. The queue rechecks the channel
 grant and setting before posting. A claimed send is never retried automatically after an uncertain
 Slack response, preventing duplicate announcements. Successful Slack sends retain a permalink in

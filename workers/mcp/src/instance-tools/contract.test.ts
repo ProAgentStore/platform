@@ -673,6 +673,10 @@ const TABLE: Record<string, Row> = {
 	get_instance_release_notes: ["releaseNotes", "read", null, null, "instance_id,token"],
 	set_instance_release_notes: ["releaseNotes", "write", null, "envelope", "channels,dry_run,enabled,instance_id,requiredWorkflows,token"],
 	send_test_release_note: ["releaseNotes", "write", null, "envelope", "dry_run,grant_id,instance_id,token"],
+	// #1348 — the owner-visible delivery trail, and the two safe recoveries.
+	list_release_note_deliveries: ["releaseNotes", "read", null, null, "cursor,instance_id,limit,token"],
+	retry_release_note_delivery: ["releaseNotes", "write", null, "envelope", "delivery_id,dry_run,idempotency_key,instance_id,token"],
+	reconcile_release_note_delivery: ["releaseNotes", "destructive", "reconcile_release_note_delivery", "envelope", "action,channel_checked,confirm,delivery_id,dry_run,idempotency_key,instance_id,permalink,retry_confirmation,token"],
 	slack_bot_status: ["releaseNotes", "read", null, null, "token"],
 	connect_slack_bot: ["releaseNotes", "write", null, "envelope", "bot_token,dry_run,token"],
 	disconnect_slack_bot: ["releaseNotes", "destructive", "disconnect_slack_bot", "envelope", "confirm,dry_run,token"],

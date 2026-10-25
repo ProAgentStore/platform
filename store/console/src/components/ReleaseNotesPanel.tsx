@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import type { DiscordChannel, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse } from "../lib/discordTypes";
-import type { InstanceReleaseNotesResponse, ReleaseNoteTestResponse, SlackBotConnectResponse, SlackBotStatusResponse, SlackChannelListResponse, SlackGrantResponse, SlackOauthStartResponse } from "../lib/types";
+import ReleaseDeliveriesList from "./ReleaseDeliveriesList";
+import { appendPage, needsAttention, type ReconcileForm, reconcileBody, replaceDelivery } from "../lib/releaseDeliveries";
+import type { InstanceReleaseNotesResponse, ReleaseDeliveriesResponse, ReleaseDelivery, ReleaseDeliveryActionResponse, ReleaseNoteTestResponse, SlackBotConnectResponse, SlackBotStatusResponse, SlackChannelListResponse, SlackGrantResponse, SlackOauthStartResponse } from "../lib/types";
 
 interface Props {
 	instanceId: string;
@@ -35,11 +37,16 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 	const [message, setMessage] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState("");
+	const [deliveries, setDeliveries] = useState<ReleaseDelivery[]>([]);
+	const [deliveriesNext, setDeliveriesNext] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
 		setError("");
 		try {
 			setView(await api<InstanceReleaseNotesResponse>(`/v1/instances/${instanceId}/release-notes`));
+			const recent = await api<ReleaseDeliveriesResponse>(`/v1/instances/${instanceId}/release-notes/deliveries?limit=10`).catch(() => null);
+			setDeliveries(recent?.deliveries ?? []);
+			setDeliveriesNext(recent?.hasMore ? recent.nextCursor : null);
 			const s = await api<SlackBotStatusResponse>("/v1/slack/bot");
 			setSlack(s);
 			const dg = await api<DiscordGrantListResponse>(`/v1/discord/instances/${instanceId}/grants`).catch(() => null);
@@ -101,6 +108,28 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 		run(`test:${grantId}`, async () => {
 			const d = await api<ReleaseNoteTestResponse>(`/v1/instances/${instanceId}/release-notes/test`, { method: "POST", body: JSON.stringify({ grantId }) });
 			setMessage(`Test note sent to ${d.channel.provider} ${d.channel.name}.`);
+		});
+
+	const olderDeliveries = () =>
+		run("deliveries-more", async () => {
+			if (!deliveriesNext) return;
+			const page = await api<ReleaseDeliveriesResponse>(`/v1/instances/${instanceId}/release-notes/deliveries?limit=10&cursor=${encodeURIComponent(deliveriesNext)}`);
+			setDeliveries((rows) => appendPage(rows, page.deliveries));
+			setDeliveriesNext(page.hasMore ? page.nextCursor : null);
+		});
+
+	const retryDelivery = (d: ReleaseDelivery) =>
+		run(`retry:${d.id}`, async () => {
+			const res = await api<ReleaseDeliveryActionResponse>(`/v1/instances/${instanceId}/release-notes/deliveries/${encodeURIComponent(d.id)}/retry`, { method: "POST", body: JSON.stringify({ idempotencyKey: `console-${crypto.randomUUID()}` }) });
+			setDeliveries((rows) => replaceDelivery(rows, res.delivery));
+			setMessage("Queued to send again. It posts once its checks still pass.");
+		});
+
+	const reconcileDelivery = (d: ReleaseDelivery, form: ReconcileForm) =>
+		run(`reconcile:${d.id}`, async () => {
+			const res = await api<ReleaseDeliveryActionResponse>(`/v1/instances/${instanceId}/release-notes/deliveries/${encodeURIComponent(d.id)}/reconcile`, { method: "POST", body: JSON.stringify(reconcileBody(form, `console-${crypto.randomUUID()}`)) });
+			setDeliveries((rows) => replaceDelivery(rows, res.delivery));
+			setMessage(res.warning ? `Queued to send once more. ${res.warning}` : form.choice === "abandon" ? "Gave that note up." : "Marked delivered.");
 		});
 
 	const grantDiscord = () =>
@@ -286,6 +315,9 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 						</Button>
 					</div>
 				) : null}
+
+				<div className="text-xs text-muted mb-1 mt-3">Recent release notes{needsAttention(deliveries).length > 0 ? ` · ${needsAttention(deliveries).length} need attention` : ""}</div>
+				<ReleaseDeliveriesList deliveries={deliveries} hasMore={deliveriesNext !== null} busy={busy} onRetry={(d) => void retryDelivery(d)} onReconcile={(d, form) => void reconcileDelivery(d, form)} onMore={() => void olderDeliveries()} />
 
 				{error && <p className="text-xs text-danger mt-1">{error}</p>}
 				{message && <p className="text-xs text-muted mt-1">{message}</p>}

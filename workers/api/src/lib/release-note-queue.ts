@@ -3,6 +3,7 @@ import { resolveGithubRead } from "./github-cache.js";
 import { clipMarked } from "./clip-marked.js";
 import { logEvent } from "./events.js";
 import { logError } from "./error-log.js";
+import { recordAttempt } from "./release-note-attempts.js";
 import { gateIsComplete, loadReleaseNotes, releaseGateState } from "./release-notes-settings.js";
 import { liveDeliver, type Deliver, type ReleaseNoteContext } from "./release-notes.js";
 import { safeFetch } from "./ssrf.js";
@@ -13,7 +14,7 @@ import type { Env } from "../types.js";
 
 type RequiredWorkflows = NonNullable<InstanceReleaseNotes["requiredWorkflows"]>;
 type Run = { id?: number; path?: string; name?: string; head_sha?: string; head_branch?: string; status?: string; conclusion?: string | null; updated_at?: string; run_attempt?: number; html_url?: string };
-type Row = { id: string; user_id: string; instance_id: string; session_id: string; github_repo: string; default_branch: string; run_id: string; sha: string; grant_id: string; context_json: string; workflows_json: string; created_at: number };
+export type Row = { id: string; user_id: string; instance_id: string; session_id: string; github_repo: string; default_branch: string; run_id: string; sha: string; grant_id: string; context_json: string; workflows_json: string; created_at: number };
 type Step = { name?: string; number?: number; status?: string; conclusion?: string | null };
 type Job = { id?: number; name?: string; status?: string; conclusion?: string | null; run_id?: number; run_attempt?: number; head_sha?: string; steps?: Step[] };
 type JobsPage = { total_count?: number; jobs?: Job[] };
@@ -96,10 +97,20 @@ export function verifiedReleaseText(ctx: ReleaseNoteContext, required: RequiredW
 	return clipMarked(text, 1800, { within: true });
 }
 
+/** The workflow runs GitHub reports for the row's SHA. Throws when they cannot be read. */
+export async function liveWorkflowRuns(env: Env, row: Row): Promise<Run[]> {
+	const { token } = await resolveGithubRead(env, row.user_id, row.github_repo.split("/")[0]);
+	const response = await safeFetch(`https://api.github.com/repos/${row.github_repo}/actions/runs?head_sha=${row.sha}&per_page=100`, { headers: { Accept: "application/vnd.github+json", "User-Agent": "ProAgentStore", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+	if (!response.ok) throw new Error(`GitHub workflow read returned ${response.status}`);
+	const body = await response.json() as { workflow_runs?: Run[] };
+	if (!Array.isArray(body.workflow_runs)) throw new Error("GitHub returned no workflow_runs list");
+	return body.workflow_runs;
+}
+
 /** Same workflow files and roles, ignoring the deploy selectors the owner has since added. */
 const sameGateShape = (a: RequiredWorkflows, b: RequiredWorkflows) => a.length === b.length && a.every((x, i) => x.path === b[i].path && x.role === b[i].role);
 
-async function liveJobsPage(env: Env, row: Row, run: Run, page: number): Promise<JobsPage> {
+export async function liveJobsPage(env: Env, row: Row, run: Run, page: number): Promise<JobsPage> {
 	const { token } = await resolveGithubRead(env, row.user_id, row.github_repo.split("/")[0]);
 	const response = await safeFetch(`https://api.github.com/repos/${row.github_repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=${JOBS_PER_PAGE}&page=${page}`, { headers: { Accept: "application/vnd.github+json", "User-Agent": "ProAgentStore", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
 	if (!response.ok) throw new Error(`GitHub job read returned ${response.status}`);
@@ -142,14 +153,7 @@ export async function runReleaseNoteQueue(env: Env, deps: ReleaseQueueDeps = {})
 				}
 			}
 			if (!settings?.effective.enabled || !channel || JSON.stringify(settings.instance.requiredWorkflows) !== JSON.stringify(required)) { await setStatus(env, row.id, "cancelled", "Release note setting or channel grant changed"); continue; }
-			const runs = deps.readRuns ? await deps.readRuns(row) : await (async () => {
-				const { token } = await resolveGithubRead(env, row.user_id, row.github_repo.split("/")[0]);
-				const response = await safeFetch(`https://api.github.com/repos/${row.github_repo}/actions/runs?head_sha=${row.sha}&per_page=100`, { headers: { Accept: "application/vnd.github+json", "User-Agent": "ProAgentStore", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
-				if (!response.ok) throw new Error(`GitHub workflow read returned ${response.status}`);
-				const body = await response.json() as { workflow_runs?: Run[] };
-				if (!Array.isArray(body.workflow_runs)) throw new Error("GitHub returned no workflow_runs list");
-				return body.workflow_runs;
-			})();
+			const runs = deps.readRuns ? await deps.readRuns(row) : await liveWorkflowRuns(env, row);
 			const evidence = completedReleaseEvidence(runs, row.sha, row.default_branch, required);
 			if (!evidence) { await env.DB.prepare("UPDATE release_note_queue SET updated_at=?1 WHERE id=?2 AND status='pending'").bind(Date.now(), row.id).run(); continue; }
 			const deployIndex = required.findIndex((item) => item.role === "production_deploy");
@@ -159,10 +163,16 @@ export async function runReleaseNoteQueue(env: Env, deps: ReleaseQueueDeps = {})
 			const claim = await env.DB.prepare("UPDATE release_note_queue SET status='sending', reason=NULL, evidence_json=?1, updated_at=?2 WHERE id=?3 AND status='pending'").bind(JSON.stringify(deploy.proof), Date.now(), row.id).run();
 			if (!claim.meta.changes) continue;
 			claimed = true;
+			// The receipt trail is best effort around the send: it must never turn a claim into a failure, or stop the post.
+			const claimAttemptId = crypto.randomUUID();
+			const runUrls = evidence.map((run) => `https://github.com/${row.github_repo}/actions/runs/${run.id}`);
+			await recordAttempt(env, { id: claimAttemptId, queueId: row.id, userId: row.user_id, instanceId: row.instance_id, kind: "send", outcome: "claimed", evidence: { channel: { provider: channel.provider, name: channel.name, channelId: channel.channelId }, workflowRuns: runUrls, deployJob: deploy.proof.jobUrl, deployProof: deploy.proof }, key: `send:${claimAttemptId}:claimed` }).catch(() => undefined);
 			const ctx = JSON.parse(row.context_json) as ReleaseNoteContext;
 			const result = await (deps.deliver ?? liveDeliver)(env, row.user_id)(channel, verifiedReleaseText(ctx, required, evidence, deploy.proof));
 			await setStatus(env, row.id, result.ok ? "sent" : "failed", result.ok ? null : result.error, result.ok ? result.permalink ?? null : null);
-			await logEvent(env, { source: "coding", userId: row.user_id, instanceId: row.instance_id, traceId: row.run_id, event: result.ok ? "release_note_sent" : "release_note_failed", level: result.ok ? "info" : "error", message: result.ok ? `Verified release note posted to ${channel.provider} ${channel.name} for ${row.sha}` : `Verified release note failed: ${result.error}`, context: { sha: row.sha, grantId: row.grant_id, evidence: evidence.map((run) => `https://github.com/${row.github_repo}/actions/runs/${run.id}`), deployProof: deploy.proof, ...(result.ok && result.permalink ? { permalink: result.permalink } : {}) } });
+			const resultAttemptId = crypto.randomUUID();
+			await recordAttempt(env, { id: resultAttemptId, queueId: row.id, userId: row.user_id, instanceId: row.instance_id, kind: "send", outcome: result.ok ? "sent" : "failed", reason: result.ok ? null : result.error, permalink: result.ok ? result.permalink ?? null : null, key: `send:${claimAttemptId}:result` }).catch(() => undefined);
+			await logEvent(env, { source: "coding", userId: row.user_id, instanceId: row.instance_id, traceId: row.run_id, event: result.ok ? "release_note_sent" : "release_note_failed", level: result.ok ? "info" : "error", message: result.ok ? `Verified release note posted to ${channel.provider} ${channel.name} for ${row.sha}` : `Verified release note failed: ${result.error}`, context: { sha: row.sha, grantId: row.grant_id, queueId: row.id, attemptId: resultAttemptId, evidence: evidence.map((run) => `https://github.com/${row.github_repo}/actions/runs/${run.id}`), deployProof: deploy.proof, ...(result.ok && result.permalink ? { permalink: result.permalink } : {}) } });
 			if (!result.ok) await notifyUser(env, row.user_id, "coding", "⚠️ Release note not delivered", `${row.github_repo}: ${result.error}`, deepLinkFor({ kind: "coding-session", instanceId: row.instance_id, sessionId: row.session_id }), { key: `release-note-failed:${row.id}`, kind: "alert", instanceId: row.instance_id }).catch(() => undefined);
 		} catch (error) {
 			await logError(env, { source: "release-note-queue", userId: row.user_id, message: `Release note ${row.id}: ${error instanceof Error ? error.message : String(error)}`, context: { instanceId: row.instance_id, sha: row.sha } }).catch(() => undefined);
