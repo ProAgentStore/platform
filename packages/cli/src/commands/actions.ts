@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { serviceCommand } from "../actions-service-command.js";
 import { readSupervisorConfig, readSupervisorStatus, requestSupervisorRecovery, runActionsSupervisor } from "../actions-supervisor.js";
 import { writeLine } from "../output.js";
 
@@ -21,4 +22,5 @@ export const actionsCommand = new Command("actions")
   .description("Manage this machine's GitHub Actions runner services")
   .addCommand(supervise)
   .addCommand(recover)
-  .addCommand(status);
+  .addCommand(status)
+  .addCommand(serviceCommand);
