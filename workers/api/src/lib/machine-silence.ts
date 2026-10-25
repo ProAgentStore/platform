@@ -101,7 +101,7 @@ export async function notifySilentMachines(env: Env, now = Date.now()): Promise<
 	for (const m of silent) {
 		const claimed = await env.DB.prepare(
 			`INSERT INTO machine_silence_alerts (user_id, machine_key, last_seen_at, notified_at) VALUES (?1, ?2, ?3, ?4)
-			 ON CONFLICT(user_id, machine_key) DO UPDATE SET last_seen_at = excluded.last_seen_at, notified_at = excluded.notified_at
+			 ON CONFLICT(user_id, machine_key) DO UPDATE SET last_seen_at = excluded.last_seen_at, notified_at = excluded.notified_at, resolved_at = NULL
 			  WHERE machine_silence_alerts.last_seen_at <> excluded.last_seen_at`,
 		)
 			.bind(m.user_id, m.machine_key, m.last_seen_at, now)

@@ -90,6 +90,7 @@ import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { failSilentUpdates } from "./lib/machine-policy.js";
 import { notifySilentMachines } from "./lib/machine-silence.js";
+import { notifyMachineWarnings, notifyRecoveredMachines } from "./lib/machine-warnings.js";
 import { expireStaleTakeovers } from "./lib/browser-takeovers.js";
 import { runLeadBrowserVerification } from "./lib/job-lead-browser-verification.js";
 import { dispatchQueuedRunnerUpdates } from "./lib/runner-update.js";
@@ -450,6 +451,10 @@ export default {
 		ctx.waitUntil(failSilentUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-auto-updates", method: "CRON" })));
 		// #1162: and the OWNER is told — once per silence, mid-update or not — instead of finding a grey dot by looking.
 		ctx.waitUntil(notifySilentMachines(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-machines", method: "CRON" })));
+		// #1191: what a machine that IS reporting says about itself — a crash loop or rollback, a sign-in about to lapse, CPU /
+		// memory / disk pressure — once per episode; and the all-clear after a silence the owner was told about.
+		ctx.waitUntil(notifyMachineWarnings(env).catch((err) => logUnhandled(env, err, { path: "scheduled:machine-warnings", method: "CRON" })));
+		ctx.waitUntil(notifyRecoveredMachines(env).catch((err) => logUnhandled(env, err, { path: "scheduled:machine-back-online", method: "CRON" })));
 		// #1174: machine registrations unseen for 30 days are expired, so lookups stop probing abandoned hostnames.
 		ctx.waitUntil(pruneStaleRuntimeNodes(env).catch((err) => logUnhandled(env, err, { path: "scheduled:prune-runtime-nodes", method: "CRON" })));
 		// #1031: a takeover nobody answered before its expiry becomes `expired`, not open forever.

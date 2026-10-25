@@ -143,9 +143,11 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 	},
 	{
 		// #1162: a runner machine that stopped reporting — once per silence, with its last report and the fix.
+		// #1191: and what a machine that IS reporting says about itself, once per episode — crash-looping or a rolled-back
+		// release, a sign-in about to lapse, CPU / memory / disk pressure — plus the all-clear when a silent one is back.
 		id: "machine",
 		label: "Machines",
-		description: "A machine running `pags up` going silent — including mid-update. Once each time it goes quiet.",
+		description: "A machine running `pags up` going silent (including mid-update) and coming back, a runner crash-looping or rolling back a release, its sign-in about to expire, or CPU, memory or disk running out. Once per episode, not per check.",
 		alerts: false,
 	},
 	{
