@@ -26,6 +26,7 @@ export interface SupervisorStatus {
   activeJob: boolean;
   updatedAt: number;
   lastRecovery?: RecoveryReceipt;
+  lastManualRequestId?: string;
 }
 export interface SupervisorConfig { version: 1; acRecoveryEnabled: boolean }
 export interface RecoveryRequest { id: string; reason: "manual"; requestedAt: number }
@@ -61,11 +62,20 @@ export function requestSupervisorRecovery(dir: string): RecoveryReceipt {
   const status = readSupervisorStatus(dir);
   if (!status || !isAlive(status.supervisorPid) || Date.now() - status.updatedAt > 90_000) throw new Error("runner supervisor is not reporting; start its service before requesting recovery");
   const paths = supervisorPaths(dir);
-  const existing = readJson(paths.recover) as RecoveryRequest | null;
-  if (existing?.reason === "manual" && typeof existing.id === "string" && status.lastRecovery?.id !== existing.id) return { ...existing, state: "queued" };
-  const req: RecoveryRequest = { id: randomUUID(), reason: "manual", requestedAt: Date.now() };
-  writeJson(paths.recover, req);
-  return { ...req, state: status.activeJob ? "deferred_active_job" : "queued" };
+  const writeLock = join(paths.base, "recover-write-lock");
+  mkdirSync(writeLock); // Shared with the browser-runner route: only one writer can replace a request.
+  try {
+    const existing = readJson(paths.recover) as RecoveryRequest | null;
+    if (existsSync(paths.recover) && (existing?.reason !== "manual" || typeof existing.id !== "string" || typeof existing.requestedAt !== "number")) throw new Error("unknown recovery request already exists; refusing to overwrite it");
+    if (existing) {
+      const receipt = status.lastRecovery;
+      if (status.lastManualRequestId !== existing.id) return { ...existing, state: status.activeJob ? "deferred_active_job" : "queued" };
+      if (receipt?.id === existing.id && receipt.state !== "ready" && receipt.state !== "error") return receipt;
+    }
+    const req: RecoveryRequest = { id: randomUUID(), reason: "manual", requestedAt: Date.now() };
+    writeJson(paths.recover, req);
+    return { ...req, state: status.activeJob ? "deferred_active_job" : "queued" };
+  } finally { rmSync(writeLock, { recursive: true, force: true }); }
 }
 function isAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -165,7 +175,7 @@ export async function runActionsSupervisor(dir: string, runtime: SupervisorRunti
     unlock();
     throw new Error(`previous listener process ${old.listenerPid} is still alive; refusing duplicate service`);
   }
-  const status: SupervisorStatus = { version: 1, runnerDir: dir, supervisorPid: process.pid, health: "starting", acPower: old?.acPower ?? "unknown", lastAcReturnAt: old?.lastAcReturnAt, lastRestartAt: old?.lastRestartAt, lastRestartReason: old?.lastRestartReason, lastReadyAt: old?.lastReadyAt, lastError: undefined, activeJob: false, updatedAt: runtime.now(), lastRecovery: old?.lastRecovery };
+  const status: SupervisorStatus = { version: 1, runnerDir: dir, supervisorPid: process.pid, health: "starting", acPower: old?.acPower ?? "unknown", lastAcReturnAt: old?.lastAcReturnAt, lastRestartAt: old?.lastRestartAt, lastRestartReason: old?.lastRestartReason, lastReadyAt: old?.lastReadyAt, lastError: undefined, activeJob: false, updatedAt: runtime.now(), lastRecovery: old?.lastRecovery, lastManualRequestId: old?.lastManualRequestId };
   const save = () => { status.updatedAt = runtime.now(); writeJson(paths.status, status); };
   let child: ChildProcessWithoutNullStreams | undefined;
   let childExit = false;
@@ -234,7 +244,8 @@ export async function runActionsSupervisor(dir: string, runtime: SupervisorRunti
         status.lastRecovery = pending;
       }
       const request = readJson(paths.recover) as Partial<RecoveryRequest> | null;
-      if (request?.reason === "manual" && typeof request.id === "string" && status.lastRecovery?.id !== request.id) {
+      if (request?.reason === "manual" && typeof request.id === "string" && status.lastManualRequestId !== request.id) {
+        status.lastManualRequestId = request.id;
         pending = { id: request.id, reason: "manual", state: "queued", requestedAt: typeof request.requestedAt === "number" ? request.requestedAt : now };
         status.lastRecovery = pending;
       }

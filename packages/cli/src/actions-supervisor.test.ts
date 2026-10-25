@@ -91,6 +91,21 @@ describe("PAGS Actions supervisor", () => {
     abort.abort(); await f.tick(); await loop;
   });
 
+  it("does not replay a consumed manual request after an AC event", async () => {
+    const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
+    writeFileSync(supervisorPaths(dir).recover, JSON.stringify({ id: "manual-once", reason: "manual", requestedAt: 1000 }));
+    const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
+    await new Promise((r) => setImmediate(r));
+    f.child.stdout.emit("data", Buffer.from("Listening for Jobs\n"));
+    expect(readSupervisorStatus(dir)?.lastManualRequestId).toBe("manual-once");
+    f.power = "battery"; await f.tick();
+    f.power = "ac"; f.busy = true; await f.tick();
+    expect(readSupervisorStatus(dir)?.lastRecovery?.reason).toBe("ac_return");
+    await f.tick();
+    expect(readSupervisorStatus(dir)?.lastRecovery?.reason).toBe("ac_return");
+    f.busy = false; abort.abort(); await f.tick(); await loop;
+  });
+
   it("restarts an exited child with increasing bounded delays", async () => {
     const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
     const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
@@ -122,5 +137,9 @@ describe("PAGS Actions supervisor", () => {
     expect(receipt.state).toBe("deferred_active_job");
     expect(JSON.parse(readFileSync(supervisorPaths(dir).recover, "utf8")).id).toBe(receipt.id);
     expect(requestSupervisorRecovery(dir).id).toBe(receipt.id);
+    writeFileSync(supervisorPaths(dir).status, JSON.stringify({ version: 1, runnerDir: dir, supervisorPid: process.pid, health: "recovering", acPower: "ac", activeJob: false, updatedAt: Date.now(), lastRecovery: { ...receipt, state: "restarting" }, lastManualRequestId: receipt.id }));
+    expect(requestSupervisorRecovery(dir).id).toBe(receipt.id);
+    writeFileSync(supervisorPaths(dir).status, JSON.stringify({ version: 1, runnerDir: dir, supervisorPid: process.pid, health: "ready", acPower: "ac", activeJob: false, updatedAt: Date.now(), lastRecovery: { ...receipt, state: "ready", completedAt: Date.now() }, lastManualRequestId: receipt.id }));
+    expect(requestSupervisorRecovery(dir).id).not.toBe(receipt.id);
   });
 });
