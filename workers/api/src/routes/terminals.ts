@@ -1,4 +1,7 @@
 import { Hono } from "hono";
+import { installationTokenForOwner } from "../lib/github-app.js";
+import { ciRunnersForForget } from "../lib/runner-forget-ci.js";
+import { safeFetch } from "../lib/ssrf.js";
 import { requireUser } from "../lib/auth.js";
 import { COARSE_RETENTION_MS, DENSE_RETENTION_MS, type HistoryTier, parseResourceSample, resourceHistory, type RunnerResourceSample, type RunnerResourcesView, resourcesView } from "../lib/runner-resources.js";
 import { relayConnected } from "../lib/runner-client.js";
@@ -816,7 +819,12 @@ terminalRoutes.get("/nodes/:node/forget-preflight", async (c) => {
 	const session = await requireUser(c);
 	const preflight = await preflightForgetNode(c.env, session.uid, c.req.param("node"));
 	if (!preflight.ok) return c.json({ error: preflight.error, ...(preflight.reason ? { reason: preflight.reason } : {}) }, preflight.status);
-	return c.json(preflight);
+	// The CI runners a forget would orphan on GitHub (#1211): read-only and best effort, so it never fails the preflight. Not part of the
+	// DELETE's refusal, which is about what still points at the machine.
+	const repos = (await c.env.DB.prepare("SELECT DISTINCT github_repo FROM coding_repos WHERE user_id = ?1 AND github_repo IS NOT NULL").bind(session.uid).all<{ github_repo: string }>().catch(() => ({ results: [] }))).results ?? [];
+	const orgs = [...new Set(repos.map((r) => r.github_repo.split("/")[0]).filter(Boolean))];
+	const ci = await ciRunnersForForget(preflight.names, orgs, { installationToken: (o) => installationTokenForOwner(c.env, session.uid, o), fetch: (url, init) => safeFetch(url, init) }).catch(() => ({ runners: [], unreadable: [] }));
+	return c.json({ ...preflight, ciRunners: ci.runners, ciRunnersUnreadable: ci.unreadable });
 });
 
 /**

@@ -102,6 +102,7 @@ import { runDueGmailScoutScans } from "./lib/gmail-scout/scan.js";
 import { runDueCoderQuestions } from "./lib/coder-question-sweep.js";
 import { runCreditAutoResume } from "./lib/credit-auto-resume.js";
 import { runFleetHealth } from "./lib/fleet-health.js";
+import { runRunnerReconcile } from "./lib/runner-reconcile-run.js";
 import { failExpiredOfflineWaits, runDueOverloadRetries } from "./lib/objective-queue-start.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
@@ -418,6 +419,10 @@ export default {
 			ctx.waitUntil(
 				runFleetHealth(env).catch((err) => logUnhandled(env, err, { path: "scheduled:fleet-health", method: "CRON" })),
 			);
+		}
+		// Runner reconciliation (#1211): off unless RUNNER_RECONCILE is "plan" or "apply". Its own failure domain.
+		if (env.RUNNER_RECONCILE && new Date(_event.scheduledTime).getUTCMinutes() % 5 === 0) {
+			ctx.waitUntil(runRunnerReconcile(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-reconcile", method: "CRON" })));
 		}
 		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.
