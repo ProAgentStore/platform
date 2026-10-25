@@ -148,8 +148,9 @@ Acceptance requires:
 
 ## Delivery order
 
-The [epic issue](https://github.com/ProAgentStore/platform/issues) carries
-the ordered checklist. First finalize the service/supervisor contract and
+The [epic #1365](https://github.com/ProAgentStore/platform/issues/1365) and
+[issue queue](issues/1365-unattended-actions-recovery.md) carry the ordered
+checklist. First finalize the service/supervisor contract and
 macOS implementation, then make setup/adoption/removal converge on it. Expose
 status and explicit control against that contract. Last, migrate tiny and
 pink, repeat the physical test, and remove the temporary watchers. The
