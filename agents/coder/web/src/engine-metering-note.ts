@@ -44,10 +44,9 @@ export interface EngineMeteringNote {
  */
 export function engineMeteringNote(command: string): EngineMeteringNote | null {
 	if (!command.trim()) return null;
-	// Grok reads structured since #1187, but its turn-end usage is not parsed into the ledger yet — structured is
-	// not the same claim as measured, so it is said as unmeasured until it is.
-	const grok = /(?:^|[\\/])grok$/.test(command.trim().split(/\s+/)[0] ?? "");
-	return engineInvocationMode(command) === "structured" && !grok
+	// Grok reads structured since #1187 and its `end` event's usage and cost are parsed into the ledger since #1197, so it is measured
+	// like the other structured engines. (Structured alone was not that claim until the usage was read.)
+	return engineInvocationMode(command) === "structured"
 		? {
 				metered: true,
 				label: "Spend is measured",

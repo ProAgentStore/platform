@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseEngineUsage } from "./engine-usage.js";
 
@@ -125,5 +126,57 @@ describe("parseEngineUsage", () => {
 			outputTokens: 4,
 			costUsd: 0,
 		});
+	});
+});
+
+/**
+ * #1197 — Grok's spend, from the `end` event of `--output-format streaming-json`. The event is the last line of the captured run in
+ * fixtures/grok-streaming-json-1.0.62 (Grok CLI 1.0.62, 2026-10-19), read from the file so a change to the shape fails here.
+ */
+const GROK_FIXTURE = new URL("./fixtures/grok-streaming-json-1.0.62/command-success-and-failure.ndjson", import.meta.url);
+const grokEnd = (): Record<string, unknown> => {
+	const last = readFileSync(GROK_FIXTURE, "utf8").split("\n").filter(Boolean).at(-1) as string;
+	return JSON.parse(last) as Record<string, unknown>;
+};
+
+describe("parseEngineUsage — a Grok `end` event (#1197)", () => {
+	it("reads the captured turn: provider xai, the CLI's own cost, its tokens, the model it ran", () => {
+		const u = parseEngineUsage(grokEnd(), "fallback");
+		expect(u).toMatchObject({
+			provider: "xai",
+			model: "grok-4.7-build",
+			inputTokens: 25912,
+			outputTokens: 387,
+			cacheReadTokens: 71936,
+			cacheWriteTokens: 0,
+			costUsd: 0.03063876,
+		});
+		expect(typeof u?.at).toBe("string");
+	});
+	it("does not add reasoning tokens on top: they are part of the output (311 of 387)", () => {
+		expect(parseEngineUsage(grokEnd(), "f")?.outputTokens).toBe(387);
+	});
+	it("keys the turn by its request id, so reporting it twice is the same row; without one it falls back", () => {
+		const a = parseEngineUsage(grokEnd(), "fallback-1");
+		const b = parseEngineUsage(grokEnd(), "fallback-2");
+		expect(a?.id).toBe(b?.id);
+		expect(a?.id).toBe("grok:ad96b997-57be-4625-9aab-e6207d5c5c5f");
+		expect(parseEngineUsage({ ...grokEnd(), requestId: undefined }, "fallback-1")?.id).toBe("fallback-1");
+		expect(parseEngineUsage({ ...grokEnd(), requestId: "bad id with spaces" }, "fallback-1")?.id).toBe("fallback-1");
+	});
+	it("picks the most expensive model when a turn spanned more than one", () => {
+		const u = parseEngineUsage({ ...grokEnd(), modelUsage: { "grok-cheap": { costUSD: 0.001 }, "grok-big": { costUSD: 0.02 } } }, "f");
+		expect(u?.model).toBe("grok-big");
+		expect(parseEngineUsage({ ...grokEnd(), modelUsage: undefined }, "f")?.model).toBe("unknown");
+	});
+	it("an errored or aborted turn that still burned tokens is recorded; one with nothing to report is null, never a zeroed row", () => {
+		expect(parseEngineUsage({ ...grokEnd(), stopReason: "cancelled" }, "f")).not.toBeNull();
+		expect(parseEngineUsage({ type: "end", stopReason: "end_turn", usage: {}, total_cost_usd: 0 }, "f")).toBeNull();
+		expect(parseEngineUsage({ type: "end" }, "f")).toBeNull();
+		expect(parseEngineUsage({ type: "end", usage: { input_tokens: -5, output_tokens: "x" }, total_cost_usd: Number.NaN }, "f")).toBeNull();
+	});
+	it("leaves the other engines' shapes alone", () => {
+		expect(parseEngineUsage(RESULT, "f")?.provider).toBe("anthropic");
+		expect(parseEngineUsage({ type: "usage", usage: { input_tokens: 5 } }, "f")).toBeNull(); // Grok's mid-turn `usage` event is not the total
 	});
 });

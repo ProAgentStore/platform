@@ -81,6 +81,7 @@ export function parseEngineUsage(ev: unknown, fallbackId: string): EngineUsageRe
 	if (!ev || typeof ev !== "object") return null;
 	const e = ev as Record<string, unknown>;
 	if (e.type === "turn.completed") return parseCodexUsage(e, fallbackId);
+	if (e.type === "end") return parseGrokUsage(e, fallbackId);
 	if (e.type !== "result") return null;
 
 	const usage = (e.usage && typeof e.usage === "object" ? e.usage : {}) as Record<string, unknown>;
@@ -96,6 +97,40 @@ export function parseEngineUsage(ev: unknown, fallbackId: string): EngineUsageRe
 	return {
 		id: uuid || fallbackId,
 		provider: "anthropic",
+		model: pickModel(e.modelUsage),
+		inputTokens,
+		outputTokens,
+		cacheReadTokens,
+		cacheWriteTokens,
+		costUsd,
+		at: new Date().toISOString(),
+	};
+}
+
+/**
+ * Grok's `--output-format streaming-json` ends each turn with an `end` event (#1197). Captured from xAI's Grok CLI 1.0.62:
+ *
+ *   {"type":"end","stopReason":"end_turn","sessionId":"…","requestId":"…",
+ *    "usage":{"input_tokens":25912,"cache_read_input_tokens":71936,"cache_creation_input_tokens":0,"output_tokens":387,
+ *             "reasoning_tokens":311,"total_tokens":98235},
+ *    "num_turns":3,"total_cost_usd":0.03063876,"modelUsage":{"grok-4.7-build":{…,"costUSD":0.03063876}}}
+ *
+ * `total_cost_usd` is the CLI's own figure, carried as reported like Claude's. Reasoning tokens are a part of `output_tokens`
+ * (311 of 387 here), so they are not added on top. The turn is keyed by the request id, so a record reported twice is the same row.
+ * An `end` with neither tokens nor cost (an aborted turn) is null, never a zeroed row.
+ */
+function parseGrokUsage(e: Record<string, unknown>, fallbackId: string): EngineUsageRecord | null {
+	const usage = (e.usage && typeof e.usage === "object" ? e.usage : {}) as Record<string, unknown>;
+	const inputTokens = num(usage.input_tokens);
+	const outputTokens = num(usage.output_tokens);
+	const cacheReadTokens = num(usage.cache_read_input_tokens);
+	const cacheWriteTokens = num(usage.cache_creation_input_tokens);
+	const costUsd = num(e.total_cost_usd);
+	if (!inputTokens && !outputTokens && !cacheReadTokens && !cacheWriteTokens && !costUsd) return null;
+	const request = typeof e.requestId === "string" && /^[A-Za-z0-9._-]{8,80}$/.test(e.requestId) ? e.requestId : "";
+	return {
+		id: request ? `grok:${request}` : fallbackId,
+		provider: "xai",
 		model: pickModel(e.modelUsage),
 		inputTokens,
 		outputTokens,

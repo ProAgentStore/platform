@@ -70,9 +70,10 @@ const AI_CLI_COMMANDS = new Set([
  * Engines that end a turn with a structured event carrying token counts.
  *
  * Claude Code also reports a cost estimate. Codex reports token counts through `exec --json` but
- * no dollar figure on the observed 0.151.0 schema, so its cost source stays absent.
+ * no dollar figure on the observed 0.151.0 schema, so its cost source stays absent. Grok's `streaming-json` `end` event carries
+ * tokens and `total_cost_usd` (#1197), recorded under provider `xai`.
  */
-const STRUCTURED_ENGINES = new Set(["claude", "claude-code", "codex"]);
+const STRUCTURED_ENGINES = new Set(["claude", "claude-code", "codex", "grok"]);
 
 /**
  * The bare binary name behind whatever the runner reported.

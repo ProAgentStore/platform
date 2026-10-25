@@ -18,7 +18,7 @@ import { type ClientType, handlerFor } from "./handlers.js";
 import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
 import { buildCodexResumeArgs, engineAdapterFor, engineInvocationModeFromAdapter, engineInvocationWarning, genericRawEngineAdapter, type EngineAdapter, type EngineInvocationMode, type EngineMode } from "./engine-adapter.js";
 import { isCodexThreadId, readCodexState, readState, writeState } from "./headless-state.js";
-import { afterGrokTurn, type GrokConversation, grokRejectedContinuity, grokTurnArgs, isGrokConversationId, newGrokConversation } from "./grok-continuity.js";
+import { afterGrokTurn, type GrokConversation, grokRejectedContinuity, grokTurnArgs, isGrokConversationId, newGrokConversation, reportedGrokSession } from "./grok-continuity.js";
 
 export { buildClaudeArgs } from "./engine-adapter.js";
 export { defaultStatePath } from "./headless-state.js";
@@ -175,6 +175,8 @@ export class HeadlessSession {
 	private claudeSessionId: string | null = null;
 	/** Codex's thread id from `thread.started` — used only by the explicit-ID resume path (#848). */
 	private codexThreadId: string | null = null;
+	/** The session id Grok's last `end` event reported (#1197), until the turn's outcome has been judged against the one asked for. */
+	private grokReportedSession: string | null = null;
 	/** Grok's own conversation across one-shot turns (#1156, grok-continuity.ts); null = the next turn starts one. */
 	private grokConversation: GrokConversation | null = null;
 	/** Off once this machine's CLI refused the continuity flags: the session then runs as before, turn by turn. */
@@ -819,7 +821,9 @@ export class HeadlessSession {
 				return;
 			}
 			if (grokConversation) {
-				const after = afterGrokTurn(grokConversation, { code, rejected: grokRejectedContinuity(this.turnTail) });
+				const after = afterGrokTurn(grokConversation, { code, rejected: grokRejectedContinuity(this.turnTail), reported: this.grokReportedSession });
+				this.grokReportedSession = null;
+				if (after.adopted) this.push(`[grok holds this conversation as ${after.adopted}, not the id this runner asked for; resuming that one]`);
 				this.grokConversation = after.next;
 				writeState(this.config.statePath, this.config.id, after.persist, "grok");
 				// The flags were refused before anything ran (an argument error): the same turn again, without them.
@@ -1018,6 +1022,8 @@ export class HeadlessSession {
 				// parsed and thrown away, which is why Engine spend was absent from the ledger.
 				// An errored turn still burned tokens, so this is recorded regardless of is_error.
 				const usage = parseEngineUsage(ev.raw, `${this.config.id}:${this.usageRunId}:${this.usageSeq++}`);
+				// Grok's `end` event names the session it ran in (#1197): kept to be cross-checked against the id this runner asked for.
+				this.grokReportedSession = reportedGrokSession(ev.raw);
 				if (usage) {
 					this.pendingUsage.push(usage);
 					if (this.pendingUsage.length > MAX_PENDING_USAGE) this.pendingUsage.shift();

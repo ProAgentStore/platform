@@ -132,3 +132,57 @@ describe("a Grok session renders its calls into the pane the evidence check read
 		s.stop();
 	}, 30_000);
 });
+
+/**
+ * #1197 — a Grok FILE CHANGE is an `Edit`, so the evidence check's "files changed after the last green run" sees it.
+ *
+ * The stream below is SYNTHETIC: written from the shape of ACP tool calls (`kind`, `locations: [{path}]`, both present on the captured
+ * terminal call), NOT captured from a Grok edit — no signed-in Grok was on hand. The captured stream above stays the only
+ * evidence of Grok's own output; this pins the mapping so a real capture can replace it.
+ */
+describe("a non-terminal Grok tool (#1197)", () => {
+	const call = (extra: Record<string, unknown>) => JSON.stringify({ type: "tool_call", toolCallId: "call-edit-0", title: "search_replace", status: "pending", content: [], ...extra });
+	const first = (line: string) => {
+		const events = createGrokEngineAdapter().parseLine(line);
+		return events.find((e) => e.kind === "tool_use") as Extract<NormalizedEngineEvent, { kind: "tool_use" }>;
+	};
+
+	it("an edit (ACP kind `edit`) is an Edit with the path ACP names in `locations`", () => {
+		const use = first(call({ kind: "edit", toolName: "search_replace", rawInput: { old_string: "a", new_string: "b" }, locations: [{ path: "/work/app/src/index.ts", line: 3 }] }));
+		expect(use.name).toBe("Edit");
+		expect(use.input).toEqual({ file_path: "/work/app/src/index.ts" });
+	});
+	it("falls back to a path-like field of the raw input, and keeps the Edit even when no path can be found", () => {
+		expect(first(call({ kind: "edit", toolName: "search_replace", rawInput: { file_path: "src/a.ts", old_string: "x" }, locations: [] })).input).toEqual({ file_path: "src/a.ts" });
+		expect(first(call({ kind: "edit", toolName: "search_replace", rawInput: { path: "src/b.ts" } })).input).toEqual({ file_path: "src/b.ts" });
+		const none = first(call({ kind: "edit", toolName: "search_replace", rawInput: { weird: 1 } }));
+		expect(none.name).toBe("Edit");
+		expect(none.input).toEqual({});
+	});
+	it("the edit tool is recognised by name too, in case a build reports it with another kind; a delete or move is a file change", () => {
+		expect(first(call({ kind: "other", toolName: "search_replace", rawInput: { file_path: "src/c.ts" } })).name).toBe("Edit");
+		expect(first(call({ kind: "delete", toolName: "x", locations: [{ path: "/w/old.ts" }] })).input).toEqual({ file_path: "/w/old.ts" });
+		expect(first(call({ kind: "move", toolName: "x", locations: [{ path: "/w/moved.ts" }] })).name).toBe("Edit");
+	});
+	it("never puts the old and new text in the pane line: the path alone is the evidence", () => {
+		const use = first(call({ kind: "edit", toolName: "search_replace", rawInput: { file_path: "a.ts", old_string: "SECRET_OLD".repeat(30), new_string: "SECRET_NEW".repeat(30) } }));
+		expect(JSON.stringify(use.input)).not.toContain("SECRET");
+	});
+	it("a read, a search and a listing are passed through under their own name, unchanged", () => {
+		for (const [kind, toolName] of [["read", "read_file"], ["search", "grep"], ["search", "list_dir"]] as const) {
+			const use = first(call({ kind, toolName, rawInput: { path: "src" } }));
+			expect(use.name).toBe(toolName);
+			expect(use.input).toEqual({ path: "src" });
+		}
+	});
+	it("the terminal tool is still a Bash call", () => {
+		expect(first(call({ kind: "execute", toolName: "run_terminal_command", rawInput: { command: "npm test" } })).name).toBe("Bash");
+	});
+	it("an edit's result still settles the call, and a failed edit is an error", () => {
+		const adapter = createGrokEngineAdapter();
+		adapter.parseLine(call({ kind: "edit", toolName: "search_replace", rawInput: { file_path: "a.ts" } }));
+		const done = adapter.parseLine(JSON.stringify({ type: "tool_call_update", toolCallId: "call-edit-0", status: "failed", content: [{ type: "content", content: { type: "text", text: "no match" } }], rawOutput: null }));
+		expect(done[0]).toMatchObject({ kind: "tool_result", toolUseId: "call-edit-0", content: "no match" });
+		expect((done[0] as { block: { is_error: boolean } }).block.is_error).toBe(true);
+	});
+});

@@ -21,8 +21,13 @@
  *   {"type":"end","stopReason":"end_turn","sessionId":"…","usage":{…},"total_cost_usd":0.03,…}
  *
  * plus `thought`, `usage` and `available_commands`, which say nothing a reader of the pane needs. Only the
- * terminal tool was exercised; a non-terminal tool (an edit, a read) is passed through under its own name with
- * its raw input, and its result still settles the call.
+ * terminal tool has been CAPTURED. The stream is ACP ("one ACP session update per line"), whose tool calls carry a
+ * `kind` (`edit`, `read`, `search`, `execute`, …) and `locations: [{path}]` — the fixture's `tool_call` has both fields — so a
+ * call of kind `edit` (or the `search_replace` tool, the one edit tool `available_commands` names) is mapped onto `Edit` with
+ * its path, which is what the evidence check's "files changed after the last green run" reads (#1197). That mapping rests on
+ * the protocol's schema and is exercised by a synthetic stream, NOT a captured Grok edit: capture one when a signed-in Grok
+ * is on hand. Any other non-terminal tool (a read, a search) is passed through under its own name with its raw input, and
+ * its result still settles the call.
  */
 import type { EngineAdapter, NormalizedEngineEvent } from "./engine-adapter.js";
 
@@ -62,10 +67,33 @@ function toolOutput(ev: Record<string, unknown>, raw: Record<string, unknown> | 
 	return prompt.replace(/^exit: -?\d+\n/, "");
 }
 
-/** A Grok call as the tool the rest of the runner knows: its terminal tool IS a Bash call. */
+/** The file an edit touched: ACP's own `locations[0].path`, else a path-like field of the raw input. */
+function editedPath(ev: Record<string, unknown>, rawInput: Record<string, unknown>): string | null {
+	const loc = (Array.isArray(ev.locations) ? ev.locations : []).map((l) => record(l)?.path).find((p): p is string => typeof p === "string" && p !== "");
+	if (loc) return loc;
+	for (const key of ["file_path", "path", "filePath", "file", "target_file", "filename"]) {
+		const v = rawInput[key];
+		if (typeof v === "string" && v) return v;
+	}
+	return null;
+}
+
+/** ACP tool kinds that change a file. */
+const EDIT_KINDS = new Set(["edit", "delete", "move"]);
+/** The one non-terminal Grok tool whose name is known from `available_commands` (1.0.62): the edit tool. */
+const EDIT_TOOL_NAMES = new Set(["search_replace"]);
+
+/** A Grok call as the tool the rest of the runner knows: its terminal tool IS a Bash call, and a file change IS an Edit. */
 function asTool(ev: Record<string, unknown>): { name: string; input: unknown } {
 	const rawInput = record(ev.rawInput) ?? {};
 	if (ev.kind === "execute" && typeof rawInput.command === "string") return { name: "Bash", input: { command: rawInput.command } };
+	// The evidence check's edit detection looks for Edit / Write / MultiEdit with a `file_path` (coding-completion-evidence.ts),
+	// so a Grok file change is named and shaped that way — the path only: the old and new text are not evidence and would be
+	// cut from the pane line anyway.
+	if ((typeof ev.kind === "string" && EDIT_KINDS.has(ev.kind)) || EDIT_TOOL_NAMES.has(String(ev.toolName ?? ""))) {
+		const path = editedPath(ev, rawInput);
+		return { name: "Edit", input: path ? { file_path: path } : {} };
+	}
 	return { name: typeof ev.toolName === "string" && ev.toolName ? ev.toolName : String(ev.title ?? "tool"), input: rawInput };
 }
 

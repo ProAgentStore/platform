@@ -29,7 +29,7 @@ const MAX_RECORDS = 200;
 /** A single turn costing more than this is not a turn; refuse it rather than poison the total. */
 const MAX_COST_USD = 1000;
 const MAX_TOKENS = 1_000_000_000;
-const PROVIDERS = new Set(["anthropic", "openai"]);
+const PROVIDERS = new Set(["anthropic", "openai", "xai"]); // xai: Grok's `end` event (#1197)
 
 const posInt = (v: unknown, cap: number): number => {
 	const n = Math.floor(Number(v));

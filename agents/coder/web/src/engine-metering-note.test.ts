@@ -23,8 +23,17 @@ describe("engineMeteringNote — what the engines panel says about a preset's sp
 	it("covers every raw engine the platform ships as a default, not just codex", () => {
 		// `DEFAULT_ENGINES` offers all of these as equals; two thirds of that list is unmeasurable
 		// and the panel said so about none of it.
-		for (const cmd of ["grok --permission-mode bypassPermissions -p", "gemini --approval-mode yolo --prompt", "my-wrapper.sh"]) {
+		for (const cmd of ["gemini --approval-mode yolo --prompt", "my-wrapper.sh"]) {
 			expect(engineMeteringNote(cmd)?.metered).toBe(false);
+		}
+	});
+
+	it("states the positive case for Grok too, now that its end event's usage and cost are read (#1197)", () => {
+		for (const cmd of ["grok --permission-mode bypassPermissions -p", "grok", "/Users/me/.grok/bin/grok --output-format streaming-json -p"]) {
+			const note = engineMeteringNote(cmd);
+			expect(note?.metered, cmd).toBe(true);
+			expect(note?.label, cmd).toMatch(/measured/i);
+			expect(note?.label, cmd).not.toMatch(/not measured/i);
 		}
 	});
 

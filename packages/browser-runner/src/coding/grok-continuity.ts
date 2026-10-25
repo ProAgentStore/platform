@@ -53,11 +53,32 @@ export function grokRejectedContinuity(lines: readonly string[]): boolean {
 	return lines.some((l) => REJECTED_RE.test(l));
 }
 
-/** What a finished turn means for the conversation. Pure. */
-export function afterGrokTurn(conversation: GrokConversation, outcome: { code: number | null; rejected: boolean }): { next: GrokConversation | null; persist: string | null; disable: boolean } {
+/**
+ * The session id Grok's `end` event reports, if it is one the CLI could be resumed by (#1197). Checked, not trusted: it reaches
+ * argv on the next turn, so only a UUID passes.
+ */
+export function reportedGrokSession(end: unknown): string | null {
+	const id = end && typeof end === "object" ? (end as { sessionId?: unknown }).sessionId : undefined;
+	return isGrokConversationId(id) ? id : null;
+}
+
+/**
+ * What a finished turn means for the conversation. Pure.
+ *
+ * `reported` is the session id the CLI's own `end` event named. The runner asks for one by id (`-s`), so on a CLI that honours it the
+ * two are the same and nothing changes. When they differ, the CLI holds the conversation under ITS id — resuming ours would
+ * error ("session not found") and lose the thread — so the next turn resumes the one it reported (`adopted`).
+ */
+export function afterGrokTurn(
+	conversation: GrokConversation,
+	outcome: { code: number | null; rejected: boolean; reported?: string | null },
+): { next: GrokConversation | null; persist: string | null; disable: boolean; adopted?: string } {
 	// The flags themselves were refused before anything ran: run without continuity from now on.
 	if (outcome.code && outcome.rejected) return { next: null, persist: null, disable: true };
 	// Done: the CLI holds the conversation now. Remember it, so the next turn — and the next runner start — resume it.
+	if (outcome.code === 0 && outcome.reported && outcome.reported !== conversation.id) {
+		return { next: { id: outcome.reported, started: true }, persist: outcome.reported, disable: false, adopted: outcome.reported };
+	}
 	if (outcome.code === 0) return { next: { ...conversation, started: true }, persist: conversation.id, disable: false };
 	// Any other failure: the conversation may be half-made or unknown. Forget it, so the next turn starts a clean one.
 	return { next: null, persist: null, disable: false };
