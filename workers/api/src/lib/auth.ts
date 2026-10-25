@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { deviceCredentialRefused } from "./device-credentials.js";
+import { RUNNER_SCOPE_DENIED, runnerRouteAllowed } from "./runner-scope.js";
 import type { Env, SessionPayload } from "../types.js";
 import { verifySession } from "./session.js";
 
@@ -41,6 +42,10 @@ export async function requireUser(
 	}
 	if (await isSuspended(c, session.uid)) {
 		throw new HttpError(403, "Account suspended");
+	}
+	// A runner-only sign-in (#1192) reaches only the routes a runner calls.
+	if (session.scope === "runner" && !runnerRouteAllowed(c.req.method, c.req.path)) {
+		throw new HttpError(403, RUNNER_SCOPE_DENIED);
 	}
 	// A machine's sign-in (#1184) can be withdrawn on its own: its credential is checked, browser sessions are not.
 	if (session.did && (await deviceCredentialRefused(c.env, session.did, session.uid))) {

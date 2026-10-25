@@ -20,6 +20,8 @@ export interface DeviceView {
 	lifetimeDays: number;
 	expiresAt: string;
 	status: "active" | "expired" | "revoked";
+	/** `runner`: a runner-only sign-in (#1192). */
+	scope?: "runner" | null;
 }
 
 /** The list as lines. Pure so the wording is asserted without a server. */
@@ -27,7 +29,7 @@ export function deviceLines(devices: readonly DeviceView[], lifetimeDays: number
 	if (!devices.length) return [`No machines are signed in by device login yet. New sign-ins last ${lifetimeDays} days (change with \`pags devices lifetime\`).`];
 	return [
 		`New machine sign-ins last ${lifetimeDays} days (\`pags devices lifetime 30|90|180\`).`,
-		...devices.map((d) => `${d.status.padEnd(7)}  ${(d.node ?? "(unnamed)").padEnd(28)} ${d.id}  ${d.status === "revoked" ? "revoked" : `until ${d.expiresAt.slice(0, 10)}`} (${d.lifetimeDays}-day sign-in)`),
+		...devices.map((d) => `${d.status.padEnd(7)}  ${(d.node ?? "(unnamed)").padEnd(28)} ${d.id}  ${d.status === "revoked" ? "revoked" : `until ${d.expiresAt.slice(0, 10)}`} (${d.lifetimeDays}-day sign-in${d.scope === "runner" ? ", runner-only" : ""})`),
 	];
 }
 

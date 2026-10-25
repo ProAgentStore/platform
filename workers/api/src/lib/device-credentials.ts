@@ -23,6 +23,8 @@ export interface DeviceCredentialView {
 	expiresAt: string;
 	lastRefreshedAt: string | null;
 	revokedAt: string | null;
+	/** `runner`: a runner-only sign-in (#1192); null: a full one. */
+	scope: "runner" | null;
 	/** active | expired | revoked — what the credential is right now. */
 	status: "active" | "expired" | "revoked";
 }
@@ -36,6 +38,7 @@ interface Row {
 	expires_at: number;
 	last_refreshed_at: number | null;
 	revoked_at: number | null;
+	scope?: string | null;
 }
 
 const iso = (s: number | null) => (s === null ? null : new Date(s * 1000).toISOString());
@@ -48,6 +51,7 @@ function view(r: Row, now: number): DeviceCredentialView {
 		lifetimeDays: r.lifetime_days,
 		createdAt: iso(r.created_at) as string,
 		expiresAt: iso(r.expires_at) as string,
+		scope: r.scope === "runner" ? "runner" : null,
 		lastRefreshedAt: iso(r.last_refreshed_at),
 		revokedAt: iso(r.revoked_at),
 		status: r.revoked_at !== null ? "revoked" : r.expires_at <= secs(now) ? "expired" : "active",
@@ -65,11 +69,11 @@ export async function setAccountLifetime(env: Pick<Env, "DB">, userId: string, d
 }
 
 /** A new credential for an approved machine. */
-export async function createDeviceCredential(env: Pick<Env, "DB">, userId: string, node: string | null, days: RunnerSessionDays, now = Date.now()): Promise<{ id: string; expiresAt: number }> {
+export async function createDeviceCredential(env: Pick<Env, "DB">, userId: string, node: string | null, days: RunnerSessionDays, now = Date.now(), scope: "runner" | null = null): Promise<{ id: string; expiresAt: number }> {
 	const id = `dev_${crypto.randomUUID().replace(/-/g, "")}`;
 	const expiresAt = secs(now) + days * DAY_SECONDS;
-	await env.DB.prepare("INSERT INTO device_credentials (id, user_id, node, lifetime_days, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
-		.bind(id, userId, node, days, secs(now), expiresAt)
+	await env.DB.prepare("INSERT INTO device_credentials (id, user_id, node, lifetime_days, created_at, expires_at, scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
+		.bind(id, userId, node, days, secs(now), expiresAt, scope)
 		.run();
 	return { id, expiresAt };
 }
@@ -103,10 +107,10 @@ export async function revokeDeviceCredential(env: Pick<Env, "DB">, userId: strin
 }
 
 /** A refresh of a device session: the same credential, a new expiry of its own length. Null when it is revoked, expired or not theirs. */
-export async function renewDeviceCredential(env: Pick<Env, "DB">, userId: string, did: string, now = Date.now()): Promise<{ expiresAt: number; lifetimeDays: number } | null> {
-	const row = await env.DB.prepare("SELECT lifetime_days FROM device_credentials WHERE id = ?1 AND user_id = ?2 AND revoked_at IS NULL AND expires_at > ?3").bind(did, userId, secs(now)).first<{ lifetime_days: number }>();
+export async function renewDeviceCredential(env: Pick<Env, "DB">, userId: string, did: string, now = Date.now()): Promise<{ expiresAt: number; lifetimeDays: number; scope: "runner" | null } | null> {
+	const row = await env.DB.prepare("SELECT lifetime_days, scope FROM device_credentials WHERE id = ?1 AND user_id = ?2 AND revoked_at IS NULL AND expires_at > ?3").bind(did, userId, secs(now)).first<{ lifetime_days: number; scope: string | null }>();
 	if (!row) return null;
 	const expiresAt = secs(now) + row.lifetime_days * DAY_SECONDS;
 	const res = await env.DB.prepare("UPDATE device_credentials SET expires_at = ?1, last_refreshed_at = ?2 WHERE id = ?3 AND revoked_at IS NULL").bind(expiresAt, secs(now), did).run();
-	return (res.meta?.changes ?? 0) > 0 ? { expiresAt, lifetimeDays: row.lifetime_days } : null;
+	return (res.meta?.changes ?? 0) > 0 ? { expiresAt, lifetimeDays: row.lifetime_days, scope: row.scope === "runner" ? "runner" : null } : null;
 }

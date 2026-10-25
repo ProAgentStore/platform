@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import { writeLine, writeError } from "../output.js";
-import { chooseLoginFlow, deviceLogin, sessionExpiresAt } from "./login-device.js";
+import { chooseLoginFlow, deviceLogin, sessionExpiresAt, sessionScope } from "./login-device.js";
 import { expiryLine, expiryWarning } from "../session-expiry.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "proagentstore");
@@ -27,9 +27,20 @@ export function loadSession(): StoredSession | null {
 	} catch { return null; }
 }
 
+/**
+ * The session is a credential, so it is kept private to the owner: the directory 0700 and the file 0600 (#1192). That is hygiene,
+ * not a defence against a coding engine — it runs as the same user and can read it — which is why a machine that runs engines should
+ * hold a runner-only sign-in (`pags login --device --runner-only`), worth little if it is read. (No-ops on Windows.)
+ */
 export function saveSession(session: StoredSession): void {
-	mkdirSync(CONFIG_DIR, { recursive: true });
-	writeFileSync(TOKEN_FILE, JSON.stringify(session, null, 2));
+	mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+	writeFileSync(TOKEN_FILE, JSON.stringify(session, null, 2), { mode: 0o600 });
+	try {
+		chmodSync(CONFIG_DIR, 0o700);
+		chmodSync(TOKEN_FILE, 0o600); // a file that already existed keeps its old mode through writeFileSync
+	} catch {
+		/* a filesystem without modes: nothing to tighten */
+	}
 }
 
 /** Resolve who `token` signs in as and store it — the end of every sign-in, browser or device. */
@@ -84,12 +95,13 @@ export const loginCommand = new Command("login")
 	.option("--github", "Use GitHub instead of Google")
 	.option("--device", "Sign in from another device: show a link and a code to approve on your phone (SSH, no display)")
 	.option("--browser", "Open a browser on this machine, even over SSH")
-	.action(async (opts: { github?: boolean; device?: boolean; browser?: boolean }) => {
-		const choice = chooseLoginFlow(opts);
+	.option("--runner-only", "With --device: ask for a sign-in that can run `pags up` but not manage the account (for an unattended machine)")
+	.action(async (opts: { github?: boolean; device?: boolean; browser?: boolean; runnerOnly?: boolean }) => {
+		const choice = chooseLoginFlow(opts.runnerOnly ? { ...opts, device: true } : opts);
 		if (choice.flow === "device") {
 			if (choice.why !== "--device") writeLine(`Signing in from another device, because ${choice.why} (use --browser to open one here instead).`);
 			try {
-				const session = await storeSession(await deviceLogin({ apiBase: API_BASE, node: hostname(), log: writeLine }));
+				const session = await storeSession(await deviceLogin({ apiBase: API_BASE, node: hostname(), log: writeLine, ...(opts.runnerOnly ? { scope: "runner" as const } : {}) }));
 				writeLine(`Signed in as ${session.user.login}. Token stored at ${TOKEN_FILE}`);
 			} catch (err) {
 				writeError(err instanceof Error ? err.message : String(err));
@@ -189,7 +201,7 @@ export const whoamiCommand = new Command("whoami")
 	.action(() => {
 		const session = loadSession();
 		if (session) {
-			writeLine(`${session.user.login} (${session.user.id})`);
+			writeLine(`${session.user.login} (${session.user.id})${sessionScope(session.token) === "runner" ? " — runner-only sign-in (runs pags up, cannot manage the account)" : ""}`);
 			// When this sign-in runs out, and a warning at 30, 7 and 1 days before (#1184).
 			const until = sessionExpiresAt(session.token) ?? session.expiresAt;
 			writeLine(expiryLine(until, Date.now()));

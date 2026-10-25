@@ -5,6 +5,8 @@ export interface DeviceRequestView {
 	node: string | null;
 	ip: string | null;
 	country: string | null;
+	/** What the machine asked for: `runner` = a runner-only sign-in (#1192); null = a full one. */
+	requestedScope: "runner" | null;
 	createdAt: string;
 	expiresAt: string;
 }

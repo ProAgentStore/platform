@@ -32,8 +32,20 @@ export function sessionExpiresAt(token: string): number | null {
 	}
 }
 
+/** `runner` when a PAGS session token is a runner-only sign-in (#1192), read from its own payload; null for a full one or an unreadable token. */
+export function sessionScope(token: string): "runner" | null {
+	try {
+		const payload = JSON.parse(Buffer.from(token.split(".")[0] ?? "", "base64url").toString("utf8")) as { scope?: unknown };
+		return payload.scope === "runner" ? "runner" : null;
+	} catch {
+		return null;
+	}
+}
+
 export interface DeviceLoginDeps {
 	apiBase: string;
+	/** Ask for a runner-only sign-in (#1192): the owner can still approve it as a full one or not at all. */
+	scope?: "runner";
 	/** This machine's name, shown on the approval page so the owner can tell it is theirs. */
 	node: string;
 	fetch?: typeof fetch;
@@ -58,7 +70,7 @@ export async function deviceLogin(deps: DeviceLoginDeps): Promise<string> {
 	const now = deps.now ?? Date.now;
 	const post = (path: string, body: unknown) => fetchFn(`${deps.apiBase}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-	const res = await post("/v1/auth/device/start", { node: deps.node });
+	const res = await post("/v1/auth/device/start", { node: deps.node, ...(deps.scope ? { scope: deps.scope } : {}) });
 	if (!res.ok) throw new Error(`Could not start a device sign-in (HTTP ${res.status}).`);
 	const started = (await res.json()) as Started;
 	deps.log("To sign this machine in, open this link on your phone or any device where you are signed in to ProAgentStore:");

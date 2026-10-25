@@ -5091,6 +5091,7 @@ paths:
               type: object
               properties:
                 node: { type: string, description: "This machine's name, shown on the approval page." }
+                scope: { type: string, enum: [runner], description: "Ask for a runner-only sign-in (#1192): it may call only the routes a runner itself calls. Shown on the approval page; the owner decides." }
       responses:
         "200":
           description: The codes and where to approve them
@@ -5162,6 +5163,7 @@ paths:
               required: [approve]
               properties:
                 approve: { type: boolean }
+                runnerOnly: { type: boolean, description: "Approve as a runner-only sign-in (#1192): the machine can run `pags up` (list its agents, register, heartbeat, relay tokens, crash reports, its watchdog) and every other route answers 403. The owner's answer is what counts, whatever the machine asked for. Default false (a full sign-in)." }
                 lifetimeDays: { type: integer, enum: [30, 90, 180], description: "How long this machine stays signed in (#1184). Omit for the owner's own default for new machines (30 unless changed with PUT /v1/auth/device/lifetime)." }
       responses:
         "200": { description: The request, decided }
@@ -5198,6 +5200,7 @@ paths:
                         lastRefreshedAt: { type: string, format: date-time, nullable: true }
                         revokedAt: { type: string, format: date-time, nullable: true }
                         status: { type: string, enum: [active, expired, revoked] }
+                        scope: { type: string, enum: [runner], nullable: true, description: "runner = a runner-only sign-in (#1192); null = a full one." }
                   lifetimeDays: { type: integer }
                   allowedLifetimeDays: { type: array, items: { type: integer } }
         "401": { $ref: "#/components/responses/Unauthorized" }

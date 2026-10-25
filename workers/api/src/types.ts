@@ -163,4 +163,6 @@ export interface SessionPayload {
 	exp: number;
 	/** A device credential (#1184): the session is one machine's, and is refused once that credential is revoked or expired. */
 	did?: string;
+	/** `runner` (#1192): a sign-in that may call only the routes a runner itself calls (lib/runner-scope.ts). Absent = the full session. */
+	scope?: "runner";
 }

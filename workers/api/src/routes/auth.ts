@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { deviceCredentialRefused } from "../lib/device-credentials.js";
+import { RUNNER_SCOPE_DENIED, runnerRouteAllowed } from "../lib/runner-scope.js";
 import { isSubscriptionActive, subFromUserRow } from "../lib/billing.js";
 import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
 import { isAllowedReturnTo } from "../lib/origins.js";
@@ -493,6 +494,7 @@ authRoutes.put("/me", async (c) => {
 	// suspension gate has to be applied explicitly — without it a suspended account
 	// could still edit its public profile (#273).
 	if (await isSuspended(c, session.uid)) return c.json({ error: "Account suspended" }, 403);
+	if (session.scope === "runner" && !runnerRouteAllowed(c.req.method, c.req.path)) return c.json({ error: RUNNER_SCOPE_DENIED }, 403);
 	// A revoked or expired machine sign-in (#1184) stops working here too: the MCP worker gates on this route.
 	if (session.did && (await deviceCredentialRefused(c.env, session.did, session.uid))) return c.json({ error: "This machine's sign-in was revoked or has expired" }, 401);
 
@@ -570,6 +572,7 @@ authRoutes.get("/me", async (c) => {
 	);
 	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
 	if (await isSuspended(c, session.uid)) return c.json({ error: "Account suspended" }, 403);
+	if (session.scope === "runner" && !runnerRouteAllowed(c.req.method, c.req.path)) return c.json({ error: RUNNER_SCOPE_DENIED }, 403);
 	// A revoked or expired machine sign-in (#1184) stops working here too: the MCP worker gates on this route.
 	if (session.did && (await deviceCredentialRefused(c.env, session.did, session.uid))) return c.json({ error: "This machine's sign-in was revoked or has expired" }, 401);
 

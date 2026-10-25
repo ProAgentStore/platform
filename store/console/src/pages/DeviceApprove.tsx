@@ -21,6 +21,8 @@ export default function DeviceApprove() {
 	const [busy, setBusy] = useState(false);
 	// How long this machine stays signed in (#1184): "" = the owner's own default for new machines (30 days unless changed).
 	const [lifetime, setLifetime] = useState("");
+	// Runner only (#1192): the machine's sign-in can run `pags up` but not manage the account. Pre-ticked when the machine asked.
+	const [runnerOnly, setRunnerOnly] = useState<boolean | null>(null);
 
 	const load = useCallback(async () => {
 		if (!code) return;
@@ -41,7 +43,7 @@ export default function DeviceApprove() {
 	const decide = async (approve: boolean) => {
 		setBusy(true);
 		try {
-			const res = await api<DeviceDecisionResponse>(`/v1/auth/device/requests/${encodeURIComponent(code)}`, { method: "POST", body: JSON.stringify({ approve, ...(approve && lifetime ? { lifetimeDays: Number(lifetime) } : {}) }) });
+			const res = await api<DeviceDecisionResponse>(`/v1/auth/device/requests/${encodeURIComponent(code)}`, { method: "POST", body: JSON.stringify({ approve, ...(approve && lifetime ? { lifetimeDays: Number(lifetime) } : {}), ...(approve ? { runnerOnly: runnerOnly ?? request?.requestedScope === "runner" } : {}) }) });
 			if (res.request) setRequest(res.request);
 			else setRequest((r) => (r ? { ...r, status: approve ? "approved" : "denied" } : r));
 		} catch (e) {
@@ -103,6 +105,14 @@ export default function DeviceApprove() {
 										<option value="180">180 days</option>
 									</select>
 									<span className="text-xs text-muted">A running machine renews itself; you can revoke it any time with <code>pags devices revoke</code>.</span>
+								</label>
+								<label className="text-sm flex items-start gap-2" htmlFor="device-runner-only">
+									<input id="device-runner-only" type="checkbox" className="mt-1" checked={runnerOnly ?? request.requestedScope === "runner"} onChange={(e) => setRunnerOnly(e.target.checked)} data-testid="device-runner-only" />
+									<span>
+										<strong>Runner only</strong> — this machine can run <code>pags up</code> but cannot manage your account. Recommended for an unattended machine:
+										a coding engine on it can read the sign-in file, and a runner-only one is worth little if it does.
+										{request.requestedScope === "runner" && <em className="text-muted"> (The machine asked for this.)</em>}
+									</span>
 								</label>
 								<div className="flex gap-2">
 									<Button variant="primary" onClick={() => void decide(true)} disabled={busy} data-testid="device-approve-button">

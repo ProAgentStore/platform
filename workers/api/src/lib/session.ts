@@ -29,7 +29,7 @@ function unb64url(s: string): Uint8Array {
 export async function signSession(
 	uid: string,
 	signingKey: string,
-	opts?: { roles?: string[]; ttl?: number; did?: string },
+	opts?: { roles?: string[]; ttl?: number; did?: string; scope?: "runner" },
 ): Promise<string> {
 	const now = Math.floor(Date.now() / 1000);
 	const payload: SessionPayload = {
@@ -38,6 +38,7 @@ export async function signSession(
 		iat: now,
 		exp: now + (opts?.ttl ?? THIRTY_DAYS),
 		...(opts?.did ? { did: opts.did } : {}),
+		...(opts?.scope === "runner" ? { scope: "runner" as const } : {}),
 	};
 	const data = b64url(
 		new TextEncoder().encode(JSON.stringify(payload)).buffer as ArrayBuffer,

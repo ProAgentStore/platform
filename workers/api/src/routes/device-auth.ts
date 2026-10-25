@@ -24,11 +24,11 @@ export const deviceAuthRoutes = new Hono<{ Bindings: Env }>();
 export const sessionRoutes = new Hono<{ Bindings: Env }>();
 
 /** A session for `uid` with its live roles, or null when the account is gone or suspended. */
-async function mintFor(c: Context<{ Bindings: Env }>, uid: string, device?: { did: string; ttl: number }): Promise<{ session: string; expiresAt: string } | null> {
+async function mintFor(c: Context<{ Bindings: Env }>, uid: string, device?: { did: string; ttl: number; scope?: "runner" | null }): Promise<{ session: string; expiresAt: string } | null> {
 	const row = await c.env.DB.prepare("SELECT roles FROM users WHERE id = ?1").bind(uid).first<{ roles: string | null }>();
 	if (!row || (await isSuspended(c, uid))) return null;
 	const roles = rolesOf(row.roles);
-	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles: roles.length ? roles : ["user"], ...(device ? { did: device.did, ttl: device.ttl } : {}) });
+	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles: roles.length ? roles : ["user"], ...(device ? { did: device.did, ttl: device.ttl, ...(device.scope === "runner" ? { scope: "runner" as const } : {}) } : {}) });
 	const payload = await verifySession(session, c.env.SESSION_SIGNING_KEY);
 	return { session, expiresAt: new Date((payload?.exp ?? 0) * 1000).toISOString() };
 }
@@ -40,9 +40,9 @@ const userCodeParam = (c: Context<{ Bindings: Env }>) => {
 };
 
 deviceAuthRoutes.post("/start", async (c) => {
-	const body = (await c.req.json().catch(() => ({}))) as { node?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { node?: unknown; scope?: unknown };
 	const cf = (c.req.raw as { cf?: { country?: unknown } }).cf;
-	const started = await startDeviceAuthorization(c.env, { node: body.node, ip: c.req.header("CF-Connecting-IP"), country: cf?.country });
+	const started = await startDeviceAuthorization(c.env, { node: body.node, ip: c.req.header("CF-Connecting-IP"), country: cf?.country, scope: body.scope });
 	const verificationUri = `${CONSOLE_ORIGIN}${deviceApprovalLink()}`;
 	c.header("Cache-Control", "no-store");
 	return c.json({
@@ -62,13 +62,13 @@ deviceAuthRoutes.post("/token", async (c) => {
 	if (poll.kind !== "approved") return c.json({ error: poll.kind }, 400);
 	// The machine's own credential (#1184): per machine, revocable, of the length chosen at approval (else the owner's default).
 	const days = isLifetimeDays(poll.lifetimeDays) ? poll.lifetimeDays : await getAccountLifetime(c.env, poll.userId);
-	const credential = await createDeviceCredential(c.env, poll.userId, poll.node, days);
-	const minted = await mintFor(c, poll.userId, { did: credential.id, ttl: days * DAY_SECONDS });
+	const credential = await createDeviceCredential(c.env, poll.userId, poll.node, days, Date.now(), poll.scope);
+	const minted = await mintFor(c, poll.userId, { did: credential.id, ttl: days * DAY_SECONDS, scope: poll.scope });
 	if (!minted) {
 		await revokeDeviceCredential(c.env, poll.userId, credential.id).catch(() => false);
 		return c.json({ error: "access_denied" }, 400);
 	}
-	return c.json({ session: minted.session, expires_at: minted.expiresAt, device_id: credential.id, lifetime_days: days });
+	return c.json({ session: minted.session, expires_at: minted.expiresAt, device_id: credential.id, lifetime_days: days, scope: poll.scope });
 });
 
 // ── The owner's machines (#1184) ─────────────────────────────────────────────────────────────────────────────
@@ -103,11 +103,14 @@ deviceAuthRoutes.get("/requests/:userCode", async (c) => {
 
 deviceAuthRoutes.post("/requests/:userCode", async (c) => {
 	const s = await requireUser(c);
-	const body = (await c.req.json().catch(() => ({}))) as { approve?: unknown; lifetimeDays?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { approve?: unknown; lifetimeDays?: unknown; runnerOnly?: unknown };
 	if (typeof body.approve !== "boolean") throw new HttpError(400, "approve must be true or false.");
 	if (body.lifetimeDays !== undefined && !isLifetimeDays(body.lifetimeDays)) throw new HttpError(400, `lifetimeDays must be one of ${RUNNER_SESSION_DAYS.join(", ")}.`);
+	if (body.runnerOnly !== undefined && typeof body.runnerOnly !== "boolean") throw new HttpError(400, "runnerOnly must be true or false.");
+	// A runner-only approval (#1192) is the OWNER's call: the machine can ask for it, but it is what the approver says that counts.
+	// (Approving from a runner-only session is refused above by requireUser's scope check, so a stolen one cannot mint a full one.)
 	const code = userCodeParam(c);
-	if ((await decideDeviceRequest(c.env, s.uid, code, body.approve, Date.now(), body.lifetimeDays ?? null)) === "gone") {
+	if ((await decideDeviceRequest(c.env, s.uid, code, body.approve, Date.now(), body.lifetimeDays ?? null, body.runnerOnly === true ? "runner" : null)) === "gone") {
 		throw new HttpError(409, "This sign-in was already decided, or it has expired. Run `pags login --device` again for a new code.");
 	}
 	return c.json({ request: await getDeviceRequest(c.env, code) } satisfies DeviceDecisionResponse);
@@ -121,10 +124,10 @@ sessionRoutes.post("/refresh", async (c) => {
 	if (did) {
 		const renewed = await renewDeviceCredential(c.env, s.uid, did);
 		if (!renewed) throw new HttpError(401, "This machine's sign-in was revoked or has expired. Sign it in again with `pags login --device`.");
-		const device = await mintFor(c, s.uid, { did, ttl: renewed.lifetimeDays * DAY_SECONDS });
+		const device = await mintFor(c, s.uid, { did, ttl: renewed.lifetimeDays * DAY_SECONDS, scope: renewed.scope });
 		if (!device) throw new HttpError(403, "This account cannot be signed in.");
 		c.header("Cache-Control", "no-store");
-		return c.json({ ...device, device_id: did, lifetime_days: renewed.lifetimeDays });
+		return c.json({ ...device, device_id: did, lifetime_days: renewed.lifetimeDays, scope: renewed.scope });
 	}
 	const minted = await mintFor(c, s.uid);
 	if (!minted) throw new HttpError(403, "This account cannot be signed in.");

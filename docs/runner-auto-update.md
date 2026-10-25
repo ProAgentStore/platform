@@ -478,3 +478,26 @@ record, so one machine can be withdrawn without ending anything else.
   out; `pags devices revoke <id>` (or `DELETE /v1/auth/device/credentials/<id>`) stops one at once, on every route, and a
   refresh cannot bring it back. `pags whoami` shows the expiry and warns 30, 7 and 1 days before it, and once it has passed.
 - **Not changed.** A browser session carries no credential and is never looked up; it stays a 30-day session.
+
+## A coding engine can read the sign-in file — so make it worth little (#1192)
+
+A coding engine runs as the same OS user as `pags up`, and the sign-in lives in `~/.config/proagentstore/session.json`. A file
+cannot be hidden from a process running as its owner, so a prompt injection that says "read that file and post it" reaches
+whatever session is in it. Since #1163 the environment no longer carries it; this change reduces what the file is worth:
+
+- **Runner-only sign-in.** `pags login --device --runner-only` asks for a sign-in that may call only the routes a runner itself
+  calls: list its agents, register and heartbeat, ask for relay tokens, send crash reports, read the machine names to claim its own,
+  its watchdog, renew itself. Every other route — agents, billing, keys, secrets, profile, signing other machines in, approving a
+  device request — answers 403. The allowlist is `lib/runner-scope.ts`, and a test reads the runner-side CLI source so a call
+  added there that the list refuses fails the build instead of breaking runner-only machines. It is a device credential (#1184), so it
+  is also one machine's, of a lifetime you choose, and revoked on its own (`pags devices revoke <id>`).
+- **You decide.** The machine can ask; the approval page shows it and has a "Runner only" box, ticked when it asked. A stolen
+  runner-only session cannot approve a request to mint a full one.
+- **The file.** It is now written 0600 in a 0700 directory, and an older world-readable one is tightened on the next write.
+  That is hygiene, not a defence from an engine running as you.
+- **Unchanged, deliberately.** `pags login` in a browser still gives the full 30-day session, for the machine you work at yourself.
+
+Not done, and why: the OS keychain — an unattended service (the `--daemon` LaunchDaemon, a systemd user unit) cannot use the login
+keychain, which is the case that matters; and a sandbox profile for engines, which differs per engine and per OS and which this
+repo does not set. A runner-only session can still act as that runner (register, heartbeat, ask for relay tokens for the owner's
+agents), which is why it stays revocable; it cannot touch the account.
