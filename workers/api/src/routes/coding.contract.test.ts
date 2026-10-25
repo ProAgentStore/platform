@@ -247,6 +247,9 @@ const ROUTES = [
 	"GET /:instanceId/coding/github-repo-detail",
 	"GET /:instanceId/coding/diagnostics",
 	// The engine re-auth relay (#881), registered last.
+	"POST /:instanceId/coding/engine-install",
+	"GET /:instanceId/coding/engine-install",
+	"DELETE /:instanceId/coding/engine-install",
 	"POST /:instanceId/coding/engine-reauth",
 	"GET /:instanceId/coding/engine-reauth",
 	"POST /:instanceId/coding/engine-reauth/input",
@@ -350,6 +353,9 @@ const OWNERSHIP: Record<string, string[]> = {
 	// The engine re-auth relay (#881): its own module, because it drives a terminal on the runner
 	// rather than a coding session, and owns the record a parked run waits on.
 	"coding-reauth.ts": [
+		"POST /:instanceId/coding/engine-install",
+		"GET /:instanceId/coding/engine-install",
+		"DELETE /:instanceId/coding/engine-install",
 		"POST /:instanceId/coding/engine-reauth",
 		"GET /:instanceId/coding/engine-reauth",
 		"POST /:instanceId/coding/engine-reauth/input",

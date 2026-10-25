@@ -20,7 +20,7 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 395;
+export const MCP_TOOL_COUNT = 396;
 
 /** Registered for every connection, whatever the user is subscribed to. */
 export const MCP_TOOL_ALWAYS_ON = 367;
@@ -51,4 +51,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 391, issue: "#1318", date: "2026-10-23", reason: "get_instance_auto_resume / set_instance_auto_resume: the per-instance opt-out from continuing credit-stopped runs automatically once the key is funded again, and its read-back. Not siblings of set_instance_loop_limits (how long a run may be) or continue_instance_run (one explicit continue): this is the standing switch for the platform doing that continue itself, with the account default on set_account_preferences." },
 	{ count: 394, issue: "#1348", date: "2026-10-25", reason: "list_release_note_deliveries / retry_release_note_delivery / reconcile_release_note_delivery: the owner-visible delivery trail for release notes and the two safe recoveries (re-queue a FAILED send; settle an UNCERTAIN one). Not siblings of get_instance_release_notes (who receives notes) or send_test_release_note (a labelled test post): none of those can say whether SHA X was announced, and none can touch a queued row." },
 	{ count: 395, issue: "#1142", date: "2026-10-25", reason: "coding_repo_mirror: put a repo binding's checkout on every connected machine of an instance (background clones, per-machine checkout state in coding_repos_list). Not a sibling of coding_repo_add (binds ONE folder on the pinned machine) or set_instance_runner_node (moves the pin, touches no repo): neither can make a repo exist on the machines the instance may move to." },
+	{ count: 396, issue: "#1156", date: "2026-10-25", reason: "coding_engine_install: install a coding CLI (Grok from xAI's own installer; Claude, Codex, Gemini from npm) on the runner's machine, remotely. Not a sibling of coding_engine_reauth (signs an INSTALLED engine in), coding_engine_get (reads what is installed) or runner_update (updates the pags CLI, not an engine): none can put a missing engine on a machine, which is what stops an owner who is not at it from using Grok on a new runner." },
 ];

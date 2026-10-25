@@ -63,4 +63,41 @@ export function registerCodingReauthTools(
 			return jsonText(r);
 		},
 	);
+
+	// Put a coding CLI on the runner's machine (#1156) — the install half of the preflight's "install it, then sign it in".
+	server.tool(
+		"coding_engine_install",
+		"Install a coding CLI on the machine an instance's runner is on, remotely (#1156) — what coding_engine_get `machine` shows as `installed: false` or a `problem`. Fixed, never your command: Grok is xAI's own installer (`curl -fsSL https://x.ai/cli/install.sh | bash`, a native binary in ~/.grok/bin — not the community npm package of the same name, which bills an API key); Claude, Codex and Gemini are `npm i -g` of their official packages. `start` runs it in its own terminal on the runner (tmux required) and answers at once; `status` reads how it stands — `running`, `succeeded` or `failed` with `exitCode` and the installer's last output — and always includes `engine`, what the machine has for that CLI right now (`installed`, `path`, `version`, `login`, and for Grok `vendor`); `cancel` stops it. Afterwards the CLI still has to be signed in: coding_engine_reauth. Installs software on the owner's machine, so it needs the runtime scope; pass dry_run to see what would run without running it. The runner must be online. Windows machines have no tmux relay: install there by hand (`irm https://x.ai/cli/install.ps1 | iex` for Grok).",
+		{
+			instance_id: z.string().describe("Instance ID; its runner's machine is the one installed on."),
+			action: z.enum(["start", "status", "cancel"]).describe("start | status | cancel"),
+			client_type: z.enum(["claude", "codex", "gemini", "grok"]).describe("Which CLI to install."),
+			dry_run: z.boolean().optional().describe("For `start`: report what would run on the machine, without running it."),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ instance_id, action, client_type, dry_run, token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, action, client_type };
+			const base = `/v1/instances/${encodeURIComponent(instance_id)}/coding/engine-install`;
+			// `runtime` for every action: it installs software on the machine and drives a terminal there.
+			const denied = await requirePermission(safetyFor(token), "runtime", "coding_engine_install", input);
+			if (denied) return denied;
+			if (action === "status") return jsonText(await authedCall(`${base}?clientType=${encodeURIComponent(client_type)}`, sessionToken, {}, env));
+			if (dry_run && action === "start") {
+				return dryRun(safetyFor(token), "coding_engine_install", `install ${client_type} on the runner's machine`, input, {
+					endpoint: base,
+					method: "POST",
+					effect: `Would open a terminal on ${instance_id}'s runner and run the ${client_type} CLI's official installer there (${client_type === "grok" ? "curl -fsSL https://x.ai/cli/install.sh | bash" : `npm i -g ${{ claude: "@anthropic-ai/claude-code", codex: "@openai/codex", gemini: "@google/gemini-cli" }[client_type]}`}).`,
+				});
+			}
+			const r =
+				action === "start"
+					? await authedCall(base, sessionToken, { method: "POST", body: JSON.stringify({ clientType: client_type }) }, env)
+					: await authedCall(`${base}?clientType=${encodeURIComponent(client_type)}`, sessionToken, { method: "DELETE" }, env);
+			const err = (r as { error?: string } | null)?.error;
+			if (!err) await audit(safetyFor(token), { tool: "coding_engine_install", action: "completed", input, result: { status: (r as { status?: string }).status ?? null } });
+			return jsonText(r);
+		},
+	);
 }

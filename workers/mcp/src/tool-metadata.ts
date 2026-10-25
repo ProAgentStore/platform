@@ -530,6 +530,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #881: runs the engine's subscription login on the runner and relays it. `runtime` for every
 	// action, including `status` — it opens a terminal and drives a CLI on the machine.
 	coding_engine_reauth: "runtime",
+	// #1156: installs a coding CLI on the runner's machine with the vendor's own installer; `runtime` for every action.
+	coding_engine_install: "runtime",
 	register_instance_runtime: "runtime",
 	run_instance_task: "runtime",
 	run_instance_trigger: "runtime",

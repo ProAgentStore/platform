@@ -658,6 +658,9 @@ const READBACK: Record<string, string | null> = {
 	// #881: which engine a relay signs in is the relay record `coding_diagnostics` returns
 	// (`engineReauth.clientType`). The rest are COMMANDS to a live login CLI, never stored — and `text`
 	// is a one-time sign-in code, which no reader may ever return.
+	// #1156: which CLI to install reads back as `installed`/`version` per engine in coding_engine_get's `machine`; the action is an instruction.
+	"coding_engine_install.client_type": "coding_engine_get",
+	"coding_engine_install.action": null,
 	"coding_engine_reauth.client_type": "coding_diagnostics",
 	"coding_engine_reauth.action": null,
 	"coding_engine_reauth.text": null,

@@ -38,6 +38,8 @@ import {
 	subscriptionMenuChoice,
 } from "../lib/engine-reauth.js";
 import { deepLinkFor } from "../lib/console-links.js";
+import { installSessionName, planInstall, readInstallPane } from "../lib/engine-install.js";
+import { machineEngineChecks } from "../lib/engine-preflight.js";
 import { type EngineReauthState, readReauthState, signInSessionId, writeReauthState } from "../lib/engine-reauth-store.js";
 import type { EngineAuthResolved } from "../lib/usage-payer.js";
 import { logEvent } from "../lib/events.js";
@@ -71,18 +73,18 @@ const TMUX_MISSING_MESSAGE =
  * error" (#461). Old runners answer a missing tmux as a 500 carrying `spawnSync tmux ENOENT`; current
  * ones as a 424 `tmux_not_installed`. Both become the same actionable 409.
  */
-async function tmux<T>(conn: RunnerConn, path: string, body: unknown): Promise<T> {
+async function tmux<T>(conn: RunnerConn, path: string, body: unknown, what = "sign-in"): Promise<T> {
 	try {
 		return await callRunner<T>(conn, path, body, { timeoutMs: 20_000 });
 	} catch (e) {
 		if (e instanceof HttpError || e instanceof RunnerUnreachableError) throw e;
 		const msg = e instanceof Error ? e.message : String(e);
 		if (msg.includes(`${path} → 404`) && msg.includes("Not found")) {
-			throw new HttpError(409, "This runner predates the terminal connector the sign-in relay drives. Update the runner (runner_update), then try again.");
+			throw new HttpError(409, `This runner predates the terminal connector the ${what} relay drives. Update the runner (runner_update), then try again.`);
 		}
-		if (msg.includes("tmux_not_installed") || /\btmux ENOENT\b/.test(msg)) throw new HttpError(409, TMUX_MISSING_MESSAGE);
+		if (msg.includes("tmux_not_installed") || /\btmux ENOENT\b/.test(msg)) throw new HttpError(409, what === "sign-in" ? TMUX_MISSING_MESSAGE : TMUX_MISSING_MESSAGE.replaceAll("sign-in", what));
 		// Anything else the runner refused: say so, with the runner's own words, rather than a 500.
-		throw new HttpError(502, `The runner could not run the sign-in step (${path}): ${clipMarked(msg.replace(/^Runner \S+ → \d+:\s*/, ""), 200)}`);
+		throw new HttpError(502, `The runner could not run the ${what} step (${path}): ${clipMarked(msg.replace(/^Runner \S+ → \d+:\s*/, ""), 200)}`);
 	}
 }
 
@@ -235,7 +237,68 @@ function respond(c: Ctx, r: Awaited<ReturnType<typeof advance>>, extra: Record<s
 	});
 }
 
+const INSTALL_TAIL_LINES = 25;
+
+/** The engine-install relay's answer: how the install stands, plus what the machine has for that engine right now (#1156). */
+async function installAnswer(c: Ctx, conn: RunnerConn, instanceId: string, uid: string, clientType: CodingClientType, status: string, extra: Record<string, unknown> = {}) {
+	const checks = await machineEngineChecks(c.env, instanceId, uid, [{ id: clientType, command: clientType, clientType }], async () => conn).catch(() => null);
+	return c.json({ status, clientType, engine: checks?.engines[clientType] ?? null, unavailable: checks?.unavailable ?? null, ...extra });
+}
+
 export function registerReauthRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
+	// ── Install a coding CLI on the runner's machine (#1156) ────────────────────────────────────────────────────
+	// Fixed (lib/engine-install.ts), owner-only, one terminal per engine. POST starts it, GET reads how it ended and what the
+	// machine now has, DELETE stops it. The MCP tool in front of it asks for an explicit confirmation: this downloads and runs
+	// the vendor's installer on the owner's machine.
+	codingRoutes.post("/:instanceId/coding/engine-install", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const body = (await c.req.json().catch(() => ({}))) as { clientType?: unknown };
+		const plan = planInstall(body.clientType);
+		if (!plan.ok) throw new HttpError(400, plan.reason);
+		const conn = await requireConn(c, instanceId, uid);
+		const session = installSessionName(plan.clientType);
+		await tmux(conn, "/tmux/session", { action: "kill", session }, "install").catch(() => undefined);
+		await tmux(conn, "/tmux/session", { session, workDir: "~" }, "install");
+		const ran = await tmux<{ pane?: string }>(conn, "/tmux/run", { session, command: plan.typed }, "install");
+		await logEvent(c.env, { source: "coding", event: "coding.engine_install.started", message: `Installing ${plan.clientType} on ${conn.runnerNode ?? "the runner machine"}`, userId: uid, instanceId, context: { clientType: plan.clientType, node: conn.runnerNode ?? null, command: plan.command } }).catch(() => undefined);
+		return installAnswer(c, conn, instanceId, uid, plan.clientType, "running", {
+			installs: plan.what,
+			runs: plan.command,
+			runnerNode: conn.runnerNode ?? null,
+			nextStep: "Read progress with action status; sign the engine in afterwards with coding_engine_reauth.",
+			pane: redactPane(String(ran.pane ?? "")).split("\n").slice(-INSTALL_TAIL_LINES).join("\n").trim(),
+		});
+	});
+
+	codingRoutes.get("/:instanceId/coding/engine-install", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const planned = planInstall(c.req.query("clientType"));
+		if (!planned.ok) throw new HttpError(400, planned.reason);
+		const conn = await requireConn(c, instanceId, uid);
+		const session = installSessionName(planned.clientType);
+		const pane = await capture(conn, session);
+		if (pane === null) return installAnswer(c, conn, instanceId, uid, planned.clientType, "none", { nextStep: "No install is running for this engine. `engine` shows what the machine has now." });
+		const reading = readInstallPane(pane);
+		const tailText = redactPane(pane).split("\n").slice(-INSTALL_TAIL_LINES).join("\n").trim();
+		if (reading.state === "running") return installAnswer(c, conn, instanceId, uid, planned.clientType, "running", { pane: tailText });
+		// Finished: close the terminal, then ask the machine what it has — the install's exit status is not the same as a CLI that runs.
+		await callRunner(conn, "/tmux/session", { action: "kill", session }).catch(() => undefined);
+		return installAnswer(c, conn, instanceId, uid, planned.clientType, reading.state, {
+			exitCode: reading.exitCode,
+			nextStep: reading.state === "succeeded" ? "Installed. If `engine.login` is not found, sign it in with coding_engine_reauth." : "The installer failed — `pane` has its last output. Fix the cause on the machine, or start the install again.",
+			pane: tailText,
+		});
+	});
+
+	codingRoutes.delete("/:instanceId/coding/engine-install", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const planned = planInstall(c.req.query("clientType"));
+		if (!planned.ok) throw new HttpError(400, planned.reason);
+		const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
+		if (conn) await callRunner(conn, "/tmux/session", { action: "kill", session: installSessionName(planned.clientType) }).catch(() => undefined);
+		return c.json({ status: "cancelled", clientType: planned.clientType });
+	});
+
 	codingRoutes.post("/:instanceId/coding/engine-reauth", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
 		const body = (await c.req.json().catch(() => ({}))) as { clientType?: unknown };
