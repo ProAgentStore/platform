@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { actionsRunnerStatus, mintRunnerToken, type ProvisionDeps, parseRunnerScope, startActionsRunner } from "./actions-runner-provision.js";
+import { actionsRunnerStatus, mintRunnerToken, type ProvisionDeps, parseRunnerScope, scopeFromRunnerUrl, startActionsRunner } from "./actions-runner-provision.js";
 import type { RunnerConn } from "./runner-client.js";
 import type { Env } from "../types.js";
 
@@ -133,6 +133,49 @@ describe("refusals: nothing is minted, nothing reaches the machine", () => {
 		expect(parseRunnerScope({ repo: "proappstore-online/interns" })).toEqual({ repo: "proappstore-online/interns" });
 		expect(() => parseRunnerScope({ org: "a", repo: "a/b" })).toThrow(/scope must be/);
 		expect(() => parseRunnerScope({ repo: "no-slash" })).toThrow(/scope must be/);
+	});
+});
+
+describe("status shows GitHub's view of each runner (#1213)", () => {
+	const listing = (runner: Record<string, unknown> | null, status = 200) => async (url: string): Promise<Response> =>
+		url.includes("/actions/runners") ? (status === 200 ? Response.json({ runners: runner ? [runner] : [] }) : new Response("{}", { status })) : Response.json({});
+
+	it("online, busy and labels, and whether jobs can be routed to it", async () => {
+		const d = deps({ fetch: listing({ id: 7, name: "pink-laptop", status: "online", busy: true, labels: [{ name: "self-hosted", type: "read-only" }, { name: "pags", type: "custom" }, { name: "pags-pink-laptop", type: "custom" }] }) });
+		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, d);
+		expect(s.installed[0].ci).toMatchObject({ registered: true, online: true, busy: true, routable: true, labels: ["self-hosted", "pags", "pags-pink-laptop"] });
+		expect(s.installed[0].ciNote).toBeUndefined();
+	});
+
+	it("a runner GitHub has never heard of is registered: false, not an error", async () => {
+		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, deps({ fetch: listing(null) }));
+		expect(s.installed[0].ci).toMatchObject({ registered: false, routable: false });
+	});
+
+	it("GitHub refusing (the App lacks the runner permission, #1207) leaves the runner listed with the reason — the status does not fail", async () => {
+		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, deps({ fetch: listing(null, 403) }));
+		expect(s.installed[0]).toMatchObject({ name: "pink-laptop", managed: false });
+		expect(s.installed[0].ci).toBeUndefined();
+		expect(s.installed[0].ciNote).toMatch(/could not be read.*403/);
+	});
+
+	it("the App not installed on the owner: same, with the reason", async () => {
+		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, deps({ installationToken: async () => null }));
+		expect(s.installed[0].ciNote).toMatch(/not installed/);
+	});
+
+	it("a runner with no name or an unreadable URL is listed as the machine reported it, GitHub not asked", async () => {
+		const d = deps({ call: async <T>() => ({ job: null, installed: [{ dir: "/x", managed: false, name: null, url: null }] }) as T });
+		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, d);
+		expect(s.installed).toEqual([{ dir: "/x", managed: false, name: null, url: null }]);
+		expect(d.github).toEqual([]);
+	});
+
+	it("runner URLs map to their scope", () => {
+		expect(scopeFromRunnerUrl("https://github.com/proappstore-online")).toEqual({ org: "proappstore-online" });
+		expect(scopeFromRunnerUrl("https://github.com/proappstore-online/interns/")).toEqual({ repo: "proappstore-online/interns" });
+		expect(scopeFromRunnerUrl("https://example.com/x")).toBeNull();
+		expect(scopeFromRunnerUrl(null)).toBeNull();
 	});
 });
 

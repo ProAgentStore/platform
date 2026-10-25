@@ -17,6 +17,7 @@
  * need GitHub Team, and the orgs are on Free (checked 2026-10-19). A repo-scoped runner serves exactly
  * one repo, which isolates it by construction.
  */
+import { ciRunnerHealth, type CiRunnerHealth } from "./runner-ci-status.js";
 import { HttpError } from "./auth.js";
 import { installationTokenForOwner } from "./github-app.js";
 import { logEvent } from "./events.js";
@@ -212,7 +213,7 @@ interface GithubRunner {
 const ghBase = (scope: RunnerScope) => ("org" in scope ? `https://api.github.com/orgs/${scope.org}` : `https://api.github.com/repos/${scope.repo}`);
 
 /** One registered runner as GitHub reports it (its `status` is `online` or `offline`), or null when none has that name. Read-only. */
-export async function findGithubRunner(scope: RunnerScope, runnerName: string, deps: MintDeps): Promise<{ id: number; status: string; busy: boolean } | null> {
+export async function findGithubRunner(scope: RunnerScope, runnerName: string, deps: MintDeps): Promise<{ id: number; status: string; busy: boolean; labels: string[] } | null> {
 	const owner = scopeOwner(scope);
 	const app = await deps.installationToken(owner);
 	if (!app) throw new HttpError(409, `The ProAgentStore GitHub App is not installed on ${owner}, so it cannot see whether a runner is online there.`);
@@ -222,7 +223,7 @@ export async function findGithubRunner(scope: RunnerScope, runnerName: string, d
 		if (!res.ok) throw new HttpError(res.status === 403 || res.status === 404 ? 403 : 502, `GitHub returned ${res.status} listing runners for ${"org" in scope ? scope.org : scope.repo}.`);
 		const runners = ((await res.json().catch(() => null)) as { runners?: GithubRunner[] } | null)?.runners ?? [];
 		const found = runners.find((r) => r.name === runnerName);
-		if (found) return { id: found.id, status: found.status ?? "offline", busy: found.busy === true };
+		if (found) return { id: found.id, status: found.status ?? "offline", busy: found.busy === true, labels: (found.labels ?? []).map((l) => l.name) };
 		if (runners.length < 100) break;
 	}
 	return null;
@@ -355,18 +356,51 @@ export async function startActionsRunner(
 	return { job, node, labels, ...(input.action === "install" ? { capabilities: caps, preflight } : {}) };
 }
 
-/** One job (when `jobId` is given) and every runner configured on the agent's machine. */
+/** The scope a runner was registered under, from its URL (`https://github.com/<org>` or `.../<owner>/<repo>`); null when it is not one. */
+export function scopeFromRunnerUrl(url: string | null): RunnerScope | null {
+	const m = url ? /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)(?:\/([A-Za-z0-9_.-]+))?\/?$/.exec(url) : null;
+	if (!m) return null;
+	return m[2] ? { repo: `${m[1]}/${m[2]}` } : { org: m[1] };
+}
+
+export type InstalledRunner = {
+	dir: string;
+	managed: boolean;
+	name: string | null;
+	url: string | null;
+	/** GitHub's view of this runner (#1213): online, busy, its labels, whether jobs can be routed to it. Absent when it could not be read — see `ciNote`. */
+	ci?: CiRunnerHealth;
+	ciNote?: string;
+};
+
+/**
+ * One job (when `jobId` is given) and every runner configured on the agent's machine, each with what GitHub says about it (#1213).
+ * GitHub's side is best effort: a runner it cannot be asked about (the App is not installed there, or lacks the runner permission,
+ * #1207) is listed without it, with the reason — never a failed status.
+ */
 export async function actionsRunnerStatus(
 	env: Env,
 	input: { userId: string; instanceId: string; jobId?: string },
 	deps: ProvisionDeps = liveProvisionDeps(env, input.userId),
-): Promise<{ node: string; job: RunnerJobView | null; installed: Array<{ dir: string; managed: boolean; name: string | null; url: string | null }> }> {
+): Promise<{ node: string; job: RunnerJobView | null; installed: InstalledRunner[] }> {
 	const conn = await boundConn(deps, input.instanceId, input.userId);
+	let r: { job: RunnerJobView | null; installed: InstalledRunner[] };
 	try {
-		const r = await deps.call<{ job: RunnerJobView | null; installed: Array<{ dir: string; managed: boolean; name: string | null; url: string | null }> }>(conn, "/coding/actions-runner/status", input.jobId ? { jobId: input.jobId } : {});
-		return { node: conn.runnerNode, job: r.job ?? null, installed: r.installed ?? [] };
+		r = await deps.call<{ job: RunnerJobView | null; installed: InstalledRunner[] }>(conn, "/coding/actions-runner/status", input.jobId ? { jobId: input.jobId } : {});
 	} catch (e) {
 		if (oldRunner(e)) throw new HttpError(409, `This machine's runner cannot report Actions runners (CLI ${ACTIONS_RUNNER_MIN_CLI} or newer). Update it with runner_update.`);
 		throw e;
 	}
+	const installed = await Promise.all(
+		(r.installed ?? []).map(async (i): Promise<InstalledRunner> => {
+			const scope = scopeFromRunnerUrl(i.url);
+			if (!i.name || !scope) return i;
+			try {
+				return { ...i, ci: ciRunnerHealth(await findGithubRunner(scope, i.name, deps), conn.runnerNode) };
+			} catch (e) {
+				return { ...i, ciNote: `GitHub's view of this runner could not be read: ${e instanceof Error ? e.message : "unknown error"}` };
+			}
+		}),
+	);
+	return { node: conn.runnerNode, job: r.job ?? null, installed };
 }
