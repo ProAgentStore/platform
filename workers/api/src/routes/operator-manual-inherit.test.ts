@@ -68,10 +68,10 @@ describe("an instance inherits its template's operator manual (#1237)", () => {
 		await setTemplate(STANDARD);
 		await setInstance("stash", "Stash lives at ~/dev/stores/pas/apps/stash.");
 		const { body } = await read("stash");
-		expect(body.sections).toEqual({ inherited: STANDARD, instance: "Stash lives at ~/dev/stores/pas/apps/stash." });
+		expect(body.sections).toEqual({ account: null, inherited: STANDARD, instance: "Stash lives at ~/dev/stores/pas/apps/stash." });
 		expect(body.combined).toBe(`## Inherited from the agent template\n\n${STANDARD}\n\n## This instance's own manual (addendum — where it conflicts with the inherited text, this wins)\n\nStash lives at ~/dev/stores/pas/apps/stash.`);
 		// The other instance has no addendum: it shows the inherited layer alone.
-		expect((await read("clubs")).body.sections).toEqual({ inherited: STANDARD, instance: null });
+		expect((await read("clubs")).body.sections).toEqual({ account: null, inherited: STANDARD, instance: null });
 		// The agent's own read_operator_manual sees the same two layers, as data.
 		const r = await runRegistryTool("read_operator_manual", { env, instanceId: "stash", userId: "owner" }, {});
 		expect(r.success).toBe(true);
@@ -90,7 +90,7 @@ describe("an instance inherits its template's operator manual (#1237)", () => {
 		expect((await read("fresh")).body.inherited).toBe("v2: deliver to main; checkouts are home-relative.");
 		// Clearing it clears it everywhere.
 		await setTemplate("");
-		expect((await read("stash")).body.sections).toEqual({ inherited: null, instance: null });
+		expect((await read("stash")).body.sections).toEqual({ account: null, inherited: null, instance: null });
 	});
 
 	it("owner only: a stranger can neither read nor write the template's manual; the cap is a 400 naming the length", async () => {

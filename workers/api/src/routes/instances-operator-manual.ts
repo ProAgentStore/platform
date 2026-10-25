@@ -51,12 +51,13 @@ export function registerOperatorManualRoutes(router: Hono<{ Bindings: Env }>): v
 		// the owner's `manual` above is returned exactly as written.
 		const capabilities = await capabilitiesForInstance(c.env, instanceId, session.uid);
 		const context = buildOperatorGuidance({ instanceId, surfaces: capabilities?.surfaces ?? [], runtime: capabilities?.runtime ?? null, tools: await allowedToolRows(c.env, instanceId, session.uid, instance.config) });
-		// #1237: the template's manual, read LIVE (an edit reaches every instance on its next read), beside this one's own.
+		// #1237 / #1238: the owner's account manual and the template's, read LIVE (an edit reaches every instance on its next read), beside this one's own.
 		const layers = await operatorManualLayers(c.env, instanceId, session.uid);
 		const body: OperatorManualResponse = {
 			manual: row?.operator_manual ?? "",
+			account: layers.account,
 			inherited: layers.inherited,
-			sections: { inherited: layers.inherited || null, instance: layers.instance || null },
+			sections: { account: layers.account || null, inherited: layers.inherited || null, instance: layers.instance || null },
 			combined: combinedOperatorManual(layers),
 			rules,
 			context,

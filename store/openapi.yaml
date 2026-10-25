@@ -5323,6 +5323,39 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/preferences/operator-manual:
+    get:
+      summary: Read your account-level operator manual
+      description: |
+        The owner's account-level operator manual (#1238): caller-facing operating standards that apply to every template the
+        owner runs (the machine map, main-only, the checkout layout). Every instance the owner runs shows it first in its
+        operator-manual read (`account`, `sections.account`), ahead of the template's manual and its own, read live with no
+        resync. It is the instance OWNER's, never a template creator's, so one account cannot read or write another's.
+        Returns `{ manual, instances }` — the text ("" when none) and how many of the owner's instances read it.
+      operationId: getAccountOperatorManual
+      tags: [Preferences]
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      summary: Replace your account-level operator manual
+      description: |
+        Body `{ manual }`, at most `OPERATOR_MANUAL_MAX_CHARS` (16000); a longer one is refused with 400 naming its length.
+        "" clears it. Every instance the owner runs shows it on its next read.
+      operationId: putAccountOperatorManual
+      tags: [Preferences]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                manual: { type: string, maxLength: 16000 }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /v1/agents/{id}/operator-manual:
     get:
       summary: Read the template's operator manual
@@ -8413,11 +8446,12 @@ paths:
       summary: Read operator manual
       description: |
         Caller-facing guidance for how this instance is meant to be driven. NOT injected as an
-        agent instruction (that is Special Instructions). Returns `{ manual, inherited, sections, combined, rules, context }`:
-        `manual` is this instance's own stored document; `inherited` is the agent template's manual (#1237), read live on
-        every read so a template edit reaches every instance with no resync; `sections` is `{ inherited, instance }` (null
-        when a layer is empty); `combined` is both as one sectioned document, the instance text last as an addendum that
-        wins where they conflict. `rules` echoes the agent's Special Instructions so a
+        agent instruction (that is Special Instructions). Returns `{ manual, account, inherited, sections, combined, rules, context }`:
+        `manual` is this instance's own stored document; `account` is the owner's account-level manual (#1238) and `inherited`
+        the agent template's (#1237), both read live on every read so an edit reaches every instance with no resync;
+        `sections` is `{ account, inherited, instance }` in precedence order (null when a layer is empty); `combined` is all of
+        them as one sectioned document, account first and the instance text last, each later layer an addendum that wins
+        where they conflict. `rules` echoes the agent's Special Instructions so a
         caller reading the manual also sees the standing orders that will make the agent refuse
         things, and `context` is generated on every read (#1109): how to operate this instance and
         every tool it may run (purpose, arguments, read-only or not, and a `call_instance_tool` example

@@ -373,6 +373,8 @@ const READBACK: Record<string, string | null> = {
 	"set_agent_settings_schema.settings_schema": "get_agent_settings_schema",
 	// #1237: the template manual reads back through its own tool (and every instance's get_instance_operator_manual).
 	"set_agent_operator_manual.manual": "get_agent_operator_manual",
+	// #1238: the account manual reads back through its own tool (and every instance's get_instance_operator_manual).
+	"set_account_operator_manual.manual": "get_account_operator_manual",
 	"set_translation_config.enabled": "get_translation_config",
 	"set_translation_config.target": "get_translation_config",
 	"set_translation_config.transliterate": "get_translation_config",

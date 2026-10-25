@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 396;
+export const MCP_TOOL_COUNT = 398;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 367;
+export const MCP_TOOL_ALWAYS_ON = 369;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -52,4 +52,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 394, issue: "#1348", date: "2026-10-25", reason: "list_release_note_deliveries / retry_release_note_delivery / reconcile_release_note_delivery: the owner-visible delivery trail for release notes and the two safe recoveries (re-queue a FAILED send; settle an UNCERTAIN one). Not siblings of get_instance_release_notes (who receives notes) or send_test_release_note (a labelled test post): none of those can say whether SHA X was announced, and none can touch a queued row." },
 	{ count: 395, issue: "#1142", date: "2026-10-25", reason: "coding_repo_mirror: put a repo binding's checkout on every connected machine of an instance (background clones, per-machine checkout state in coding_repos_list). Not a sibling of coding_repo_add (binds ONE folder on the pinned machine) or set_instance_runner_node (moves the pin, touches no repo): neither can make a repo exist on the machines the instance may move to." },
 	{ count: 396, issue: "#1156", date: "2026-10-25", reason: "coding_engine_install: install a coding CLI (Grok from xAI's own installer; Claude, Codex, Gemini from npm) on the runner's machine, remotely. Not a sibling of coding_engine_reauth (signs an INSTALLED engine in), coding_engine_get (reads what is installed) or runner_update (updates the pags CLI, not an engine): none can put a missing engine on a machine, which is what stops an owner who is not at it from using Grok on a new runner." },
+	{ count: 398, issue: "#1238", date: "2026-10-26", reason: "get/set_account_operator_manual: the owner's account-level operator manual, applied across every template they run (machine map, main-only, checkout layout) and shown FIRST on every instance's get_instance_operator_manual. Not siblings of get/set_account_preferences (a different route and store: the preferences blob is kept off the manual by the 0143 / #739 rule that manuals never ride a config payload) or of get/set_agent_operator_manual (one TEMPLATE's manual, writable by that template's creator only: a creator's text must not reach other people's instances, which is why the account layer is the instance owner's)." },
 ];

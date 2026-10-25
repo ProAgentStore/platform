@@ -437,6 +437,46 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// ── The account-level operator manual (#1238) ───────────────────────────────
+
+	server.tool(
+		"get_account_operator_manual",
+		"Read YOUR account-level operator manual (#1238) — caller-facing operating standards that apply to EVERY template you run (the machine map, main-only with no PRs, the home-relative checkout layout…), kept once instead of copied into each template's manual. Returns { manual, instances }: the text (\"\" when none) and how many of your instances read it. Every instance's get_instance_operator_manual shows it live as the `account` section, FIRST — the precedence is account → template → instance, each later layer an addendum that wins where it conflicts. It is YOUR account's, as the instance's owner: a template creator's account manual never reaches other people's instances. Not an instruction to the agent.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_account_operator_manual", {});
+			if (denied) return denied;
+			const data = await authedCall("/v1/preferences/operator-manual", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_account_operator_manual",
+		"Replace YOUR account-level operator manual (#1238, max 16000 chars). Every instance you run, of any template, shows it on its next get_instance_operator_manual read as the first section — no resync, no per-template copy. Use it for standards that span templates; a template's manual (set_agent_operator_manual) and an instance's own (set_instance_operator_manual) stay as addenda after it and win where they conflict. Caller-facing guidance, NOT an agent instruction (that is set_instance_instructions). Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			manual: z.string().max(16000).describe("The full manual (replaces the old one; \"\" clears it)."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, manual, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { chars: manual.length };
+			const denied = await requirePermission(safetyFor(token), "write", "set_account_operator_manual", input);
+			if (denied) return denied;
+			const endpoint = "/v1/preferences/operator-manual";
+			if (dry_run) return dryRun(safetyFor(token), "set_account_operator_manual", "replace your account-level operator manual (shown on every instance you run)", input, { endpoint, method: "PUT" });
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ manual }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_account_operator_manual", action: "completed", input, result: { ok: true } });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"apply_account_coding_default",
 		"Apply your saved account-wide coding CLI default to reachable idle coder sessions now. This is the MCP equivalent of the Preferences page's Apply button: it restarts only coders that inherit the account default, have no active run or queued objective, are reachable, and are idle; it skips coders that are already on the default, offline, busy, running, queued, or explicitly pinned to another engine. Each coder is claimed atomically before its restart, so a run cannot start in between. Before a working session is stopped its machine is asked whether it can run the default engine: a missing binary or subscription login skips it as engine-unavailable, and a runner too old to answer as runner-outdated (call runner_update), each with a `detail` naming the engine and the fix. Never uses an API key.",

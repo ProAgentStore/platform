@@ -676,14 +676,22 @@ export interface GithubInstallationSyncResponse {
  */
 export interface OperatorManualResponse {
 	manual: string;
+	/** The owner's account-level manual (#1238), applied across every template. "" when none. */
+	account: string;
 	inherited: string;
-	sections: { inherited: string | null; instance: string | null };
+	/** In precedence order: account, then template, then instance — each later one wins where they conflict. */
+	sections: { account: string | null; inherited: string | null; instance: string | null };
 	combined: string;
 	rules: string;
 	context: string;
 }
 
 /** `GET /v1/agents/:id/operator-manual` (#1237): the template's manual and how many instances inherit it. */
+/** `GET`/`PUT /v1/preferences/operator-manual` (#1238): the owner's account-level manual, and how many live instances read it. */
+export interface AccountOperatorManualResponse {
+	manual: string;
+	instances: number;
+}
 export interface AgentOperatorManualResponse {
 	manual: string;
 	instances: number;

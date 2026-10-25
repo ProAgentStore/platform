@@ -29,11 +29,13 @@ import {
 	unknownVoiceField,
 	type AccountPreferences,
 } from "../lib/preferences.js";
+import { registerAccountOperatorManualRoutes } from "./account-operator-manual.js";
 import { validateAccountReleaseNotes } from "../lib/release-notes-settings.js";
 import { TRANSLATION_LANGUAGES } from "./instances-translation.js";
 import type { Env } from "../types.js";
 
 export const preferenceRoutes = new Hono<{ Bindings: Env }>();
+registerAccountOperatorManualRoutes(preferenceRoutes); // GET/PUT /v1/preferences/operator-manual (#1238)
 
 async function readPreferences(env: Env, userId: string): Promise<AccountPreferences> {
 	const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")

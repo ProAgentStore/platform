@@ -192,6 +192,7 @@ tools with no calls.
 | `billing_status` | `instance-tools/account.ts` | read | — | 24 | — | — | 0 | 0 | keep |
 | `email_status` | `instance-tools/account.ts` | read | — | 14 | — | — | 0 | 0 | keep — description under 20 words |
 | `get_account_preferences` | `instance-tools/account.ts` | read | — | 110 | — | y | 0 | 0 | keep |
+| `get_account_operator_manual` | `instance-tools/account.ts` | read | — | 92 | — | y | 0 | 0 | keep |
 | `get_budget_limits` | `instance-tools/account.ts` | read | — | 43 | — | y | 0 | 0 | keep |
 | `get_creator_dashboard` | `instance-tools/account.ts` | read | — | 32 | — | — | 0 | 0 | keep |
 | `get_usage_dashboard` | `instance-tools/account.ts` | read | — | 37 | — | y | 0 | 0 | keep |
@@ -201,6 +202,7 @@ tools with no calls.
 | `mark_notification_read` | `instance-tools/account.ts` | write | — | 53 | — | y | 0 | 0 | keep |
 | `platform_health` | `instance-tools/account.ts` | read | — | 156 | — | — | 0 | 0 | keep |
 | `set_account_preferences` | `instance-tools/account.ts` | write | — | 166 | y | y | 2 | 0 | keep |
+| `set_account_operator_manual` | `instance-tools/account.ts` | write | — | 83 | — | y | 0 | 0 | keep |
 | `set_budget_limits` | `instance-tools/account.ts` | write | — | 87 | — | y | 0 | 0 | keep |
 | `update_profile` | `instance-tools/account.ts` | write | — | 19 | — | y | 3 | 0 | keep — description under 20 words |
 | `usage_drivers` | `instance-tools/account.ts` | read | — | 155 | y | y | 0 | 0 | keep |

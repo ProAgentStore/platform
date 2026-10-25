@@ -11,6 +11,7 @@ import { useNotificationsStore } from "../lib/useNotificationsStore";
 import ApprovalGateSection from "../tabs/settings/ApprovalGateSection";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 import Card from "../components/Card";
+import OperatorManualCard from "../components/OperatorManualCard";
 import Button from "../components/Button";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, AttentionEventSpec, CodingEngineOption, NotificationTypeSpec } from "../lib/types";
 
@@ -225,6 +226,8 @@ export default function Preferences() {
 			</p>
 
 			<AccountConnections />
+
+			<OperatorManualCard account />
 
 			<NotificationPreferences
 				types={notificationTypes}

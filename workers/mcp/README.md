@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**396 tool registrations.** 367 are always registered; 29 are gated to the console
+**398 tool registrations.** 369 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -695,6 +695,8 @@ immediately instead of a whole transcript.
 | `mark_all_notifications_read` | Mark every unread notification read, account-wide | write | yes | |
 | `get_account_preferences` | Account-wide timezone, notification mutes/instance scope, voice and translation defaults, plus the type and language vocabularies a write needs | — | | |
 | `set_account_preferences` | Patch preferences by section — omitted sections keep their stored value; `notifications` replaces its section; an invalid timezone or unknown type is rejected | write | yes | |
+| `get_account_operator_manual` | Read your account-level operator manual, shown first on every instance you run (#1238) | read | | |
+| `set_account_operator_manual` | Replace your account-level operator manual (max 16000 chars); every instance shows it on its next read, no resync (#1238) | write | yes | |
 | `apply_account_coding_default` | Apply the saved account coding default to reachable idle coder sessions; skips running, queued, busy, offline, already-default, and explicitly overridden coders, and any whose machine cannot run the default engine (engine-unavailable / runner-outdated) | runtime | yes | |
 
 ### Tools with no dry run

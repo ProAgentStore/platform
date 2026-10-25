@@ -1251,4 +1251,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.182": "sha256:385d3eb521b86afe24bd5410112d2a986f69711ec394fc4ef778807c39b6f8c2", // #1142: coding_repo_mirror (a repo on every connected machine); coding_repos_list repos carry per-machine `checkouts`.
 	"0.1.183": "sha256:797e6d6422acd860da5890f58d7bb7b34d6fa013bf2ff10d61bb7ef93e3fb056", // #1150: runner_update gains retry_rolled_back (clear the rolled-back mark on the latest release and install it on trial again).
 	"0.1.184": "sha256:eadcdb6a2d1fd407a671f8058083f5319a7fa741f7f659bf55727a1ccdbf329b", // #1156: coding_engine_install (install a coding CLI on the runner's machine; Grok from xAI's own installer).
+	"0.1.185": "sha256:623be1d3431c32addc6b6dd50379b32c12602d61c13764edf07bea1fbb88ee00", // #1238: get_account_operator_manual + set_account_operator_manual (an account-level operator manual every instance of the owner reads first); get_instance_operator_manual returns `account` and `sections.account`.
 };

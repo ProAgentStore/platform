@@ -285,6 +285,7 @@ const TABLE: Record<string, Row> = {
 	ask_ticket: ["board", "write", null, "envelope", "dry_run,instance_id,question,task_id,token"],
 	billing_status: ["account", "none", null, null, "token"],
 	get_account_preferences: ["account", "none", null, null, "token"],
+	get_account_operator_manual: ["account", "read", null, null, "token"],
 	get_budget_limits: ["account", "none", null, null, "token"],
 	ingest_instance_knowledge_url: ["knowledge", "write", null, "envelope", "dry_run,instance_id,title,token,url"],
 	set_budget_limits: [
@@ -524,6 +525,7 @@ const TABLE: Record<string, Row> = {
 	set_instance_trigger: ["triggers", "write", null, "envelope", "config,dry_run,enabled,name,schedule,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
 	set_account_preferences: ["account", "write", null, "envelope", "attention,coding,dry_run,notifications,releaseNotes,timezone,token,translation,voice"],
+	set_account_operator_manual: ["account", "write", null, "envelope", "dry_run,manual,token"],
 	set_agent_capabilities: ["agentAuthoring", "destructive", "set_agent_capabilities", "envelope", "agent_id,confirm,custom_surfaces,dry_run,local_browser,runtime,surfaces,token,tools,workflow"],
 	set_agent_settings_schema: ["settings", "write", null, "envelope", "agent_id,dry_run,settings_schema,token"],
 	set_agent_operator_manual: ["settings", "write", null, "envelope", "agent_id,dry_run,manual,token"],
