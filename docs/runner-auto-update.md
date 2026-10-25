@@ -418,3 +418,29 @@ to `/v1/terminals/machines/{id}/watchdog/heartbeat` with the account session —
 - **Outage.** Heartbeats back off 5s → 300s; results of finished commands are carried until the platform acknowledges them.
 
 Rollback of a bad update itself is unchanged and needs no platform: trial period, bad-version memory, last-good kept (#1141).
+
+## The release gate: a smoke test before every publish (#1152)
+
+On 2026-10-17 a release that could not come back after an update went out because nothing started it before it was
+published. The "Publish to npm" workflow now has a blocking smoke test, on GitHub-hosted **Linux and Windows** runners
+(`smoke-linux`, `smoke-windows`; no macOS, for the minute cost). `publish` `needs` both, so a failure on either stops the
+SDK and the CLI from being published. Run it yourself with `pnpm --filter @proagentstore/cli build` and then
+`pnpm test:release-smoke`.
+
+It never touches the real platform or the real npm account. The candidate is `npm pack`ed from `packages/cli` and
+installed the way a user's machine gets it. One local server plays both the platform API (the sign-in, the agent list,
+runtime registration and heartbeats, and the owner's auto-update switch) and an npm registry (the candidate as `latest`;
+the previous release and every dependency passed through from the real registry). A preloaded hook
+(`scripts/release-smoke/redirect.mjs`) points the compiled-in API address at that server, so the previous release runs
+unmodified. Then:
+
+1. **Start.** The candidate runs `pags up --headless` under the bootstrap stub; it must register a runtime and then
+   heartbeat.
+2. **Update.** The newest earlier release does the same with auto-update ON; its own updater must find the candidate,
+   install it, leave, and the candidate must come back, registered and heartbeating. (With no earlier release this
+   stage is skipped and says so.)
+
+A failure prints which stage and what was missing, with the tail of the runner's `update.log` and output. Deliberately
+out of scope: other operating systems and Node versions, an update mid-turn, a supervisor-managed start, a broken
+candidate's automatic rollback, relay reconnects, packaging checks and a post-publish canary — this was the first
+incident, and the issue asked for this one test.

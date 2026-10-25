@@ -42,6 +42,7 @@
 		"typecheck": "pnpm --filter @proagentstore/sdk build && pnpm -r typecheck",
 		"test": "vitest run",
 		"test:full": "node scripts/test-full.mjs",
+		"test:release-smoke": "node scripts/release-smoke/run.mjs",
 		"test:unit": "vitest run --project unit",
 		"test:integration": "vitest run --project integration",
 		"test:coverage": "vitest run --coverage",
