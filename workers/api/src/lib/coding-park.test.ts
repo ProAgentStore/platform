@@ -15,7 +15,9 @@ import { getCoderQuestion, storedAnswer } from "./coder-question-store.js";
 import { listIdleSessions } from "./coding-sweep-queries.js";
 import { reconcileOrphanedSessions } from "./coding-store.js";
 import { sweepStaleRuns } from "./run-sweeper.js";
-import { repoFreeForRun, repoOwners } from "./coding-ownership.js";
+import { releaseStaleActiveSessions, repoFreeForRun, repoOwners } from "./coding-ownership.js";
+import { listBlockedOnAnswerWithHolder } from "./blocked-on-answer.js";
+import { duplicateCoderWarning } from "./coding-duplicate-coder.js";
 import { describeBusyHolder } from "./loop-busy.js";
 import { resumeSessionsForNode } from "./coding-store.js";
 import { CHECKOUT_WAKE_GRACE_MS, putBackWork, releasedRunAwaitingCheckout, takeBackCheckout } from "./coding-park.js";
@@ -269,6 +271,55 @@ describe("a run that released its checkout is not an owner of its repo (#1077)",
 		expect(sent.map((e) => e.instance).sort()).toEqual(["wf-1", "wf-2"]);
 	});
 
+	it("takeBackCheckout lets go of a stale idle active session so the answered run resumes, and names a fresh one (#1323)", async () => {
+		released();
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, runner_node, updated_at) VALUES ('s-idle', 'i1', 'r1', 'u1', 'active', 'codex', 'tiny-laptop', datetime('now'))");
+		const fresh = await takeBackCheckout(env, runScope);
+		expect(fresh).toMatchObject({ busy: expect.stringContaining("session s-idle on tiny-laptop") });
+		expect(fresh).toMatchObject({ busy: expect.stringContaining("will not end on its own") });
+		d1.exec("UPDATE coding_sessions SET updated_at = datetime('now', '-2 hours') WHERE id = 's-idle'");
+		expect(await takeBackCheckout(env, runScope)).toMatchObject({ ok: true });
+		const status = (id: string) => (d1.sqlite.prepare("SELECT status FROM coding_sessions WHERE id = ?").get(id) as { status: string }).status;
+		expect(status("s-idle")).toBe("suspended");
+		expect(status("s1")).toBe("active");
+	});
+
+	it("never releases a session that has a run, a driver or a direct turn (#1323)", async () => {
+		released();
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, driver_id, updated_at) VALUES ('s-drv', 'i1', 'r1', 'u1', 'active', 'claude', 'd1', datetime('now', '-2 hours'))");
+		expect(await releaseStaleActiveSessions(env, scope)).toEqual([]);
+	});
+
+	it("status names the actual holder of an answered run, and says whether it ends on its own (#1323)", async () => {
+		released();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
+		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, runner_node) VALUES ('s-idle', 'i1', 'r1', 'u1', 'active', 'codex', 'tiny-laptop')");
+		const idleHolder = (await listBlockedOnAnswerWithHolder(env, "i1", "u1"))[0];
+		expect(idleHolder.answered).toBe(true);
+		expect(idleHolder.waitingOn).toMatchObject({ endsOnItsOwn: false, text: expect.stringContaining("s-idle") });
+		d1.exec("UPDATE coding_sessions SET status = 'ended' WHERE id = 's-idle'");
+		holder();
+		const runHolder = (await listBlockedOnAnswerWithHolder(env, "i1", "u1"))[0];
+		expect(runHolder.waitingOn).toMatchObject({ endsOnItsOwn: true, text: expect.stringContaining("run-2") });
+		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-2'; UPDATE coding_sessions SET status = 'ended' WHERE id = 's2'");
+		expect((await listBlockedOnAnswerWithHolder(env, "i1", "u1"))[0].waitingOn).toBeNull();
+	});
+
+	it("an answered run is found for auto-pickup across the whole instance, not one repo (#1323)", async () => {
+		released();
+		expect(await releasedRunAwaitingCheckout(env, "i1", null)).toBeNull();
+		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
+		expect(await releasedRunAwaitingCheckout(env, "i1", null)).toBe("run-1");
+	});
+
+	it("warns when a second coder registers a repo another already has (#1323)", async () => {
+		d1.exec("INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo) VALUES ('r-a', 'i1', 'u1', 'a', 'Owner/Repo')");
+		expect(await duplicateCoderWarning(env, "u1", "i1", "owner/repo")).toBeUndefined();
+		expect(await duplicateCoderWarning(env, "u1", "i2", "owner/repo")).toMatch(/also registered on another coder \(i1\)/);
+		expect(await duplicateCoderWarning(env, "u1", "i2", "other/thing")).toBeUndefined();
+		expect(await duplicateCoderWarning(env, "u1", "i2", null)).toBeUndefined();
+	});
+
 	// ── #1228: a parked decision never holds the queue ──────────────────────────────────────────────
 	const queueStatus = () => (d1.sqlite.prepare("SELECT status FROM instance_objective_queue").get() as { status: string }).status;
 	const wakeAt = () => (d1.sqlite.prepare("SELECT checkout_wake_at FROM agent_loop_runs WHERE run_id = 'run-1'").get() as { checkout_wake_at: number | null }).checkout_wake_at;
@@ -291,7 +342,7 @@ describe("a run that released its checkout is not an owner of its repo (#1077)",
 		released();
 		holder();
 		await recordAnswer(env, { instanceId: "i1", userId: "u1", taskId: "csess-s1", value: "yes", via: "console" });
-		expect(await takeBackCheckout(env, runScope)).toEqual({ busy: "another run is working on the repository" });
+		expect(await takeBackCheckout(env, runScope)).toEqual({ busy: expect.stringContaining("is being worked by run run-2 on session s2") });
 		expect((d1.sqlite.prepare("SELECT status FROM coding_sessions WHERE id = 's1'").get() as { status: string }).status).toBe("suspended");
 		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-2'; UPDATE coding_sessions SET status = 'ended' WHERE id = 's2'");
 		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toEqual({ drained: false }); // the holder's end wakes it first

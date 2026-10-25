@@ -13,7 +13,7 @@ import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
 import { storedHandoff } from "../lib/coding-handoff-store.js";
-import { listBlockedOnAnswer } from "../lib/agent-loop-store.js";
+import { listBlockedOnAnswerWithHolder } from "../lib/blocked-on-answer.js";
 import { cancelQueueEntry, getQueueEntry, listQueue, listQueueHistory } from "../lib/objective-queue.js";
 import { clientClaimFrom, listLifecycle, recordLifecycle } from "../lib/objective-lifecycle.js";
 import { cursorParam } from "../lib/keyset-cursor.js";
@@ -65,7 +65,7 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		const handoff = repoParam ? await storedHandoff(c.env, instanceId, session.uid, repoParam).catch(() => null) : null;
 		// Runs parked on a question with their checkout released (#1228): they hold nothing, so the queue
 		// runs past them. Listed apart from `activeRun` so a pending answer is never just "waiting".
-		const blockedOnAnswer = await listBlockedOnAnswer(c.env, instanceId, session.uid, repoParam || undefined).catch(() => []);
+		const blockedOnAnswer = await listBlockedOnAnswerWithHolder(c.env, instanceId, session.uid, repoParam || undefined).catch(() => []);
 		return c.json({
 			// Labelled (#1017): an entry leaves this list when it starts, is cancelled or fails admission —
 			// `status=all` and `/loop/lifecycle` say what became of it.

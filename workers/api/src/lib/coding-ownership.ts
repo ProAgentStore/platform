@@ -73,6 +73,52 @@ export function describeOwner(owner: RepoOwner, repoName: string): string {
 	return `${repoName} is being driven on session ${owner.sessionId}.`;
 }
 
+/** An `active` session with no run, no driver and no direct turn, idle this long, no longer counts as holding its repo (#1323). */
+export const STALE_SESSION_IDLE_MS = 30 * 60_000;
+
+/**
+ * Suspend this repo's `active` sessions that hold nothing by the ownership model and have been quiet
+ * for {@link STALE_SESSION_IDLE_MS} (#1323). Such a session never ends on its own, and the one-active-session
+ * index made it block an answered run from taking its checkout back for ever. Returns the ids suspended.
+ */
+export async function releaseStaleActiveSessions(env: Env, scope: Scope & { exceptSessionId?: string }, now: number = Date.now()): Promise<string[]> {
+	const { results } = await env.DB.prepare(
+		`UPDATE coding_sessions SET status = 'suspended', driver_id = NULL, driver_at = NULL, updated_at = datetime('now')
+		  WHERE instance_id = ?1 AND user_id = ?2 AND repo_id = ?3 AND status = 'active' AND id <> ?4
+		    AND driver_id IS NULL AND direct_turn_id IS NULL
+		    AND updated_at < datetime(?5, 'unixepoch')
+		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.session_id = coding_sessions.id AND r.status = 'running' AND r.checkout_released_at IS NULL)
+		  RETURNING id`,
+	)
+		.bind(scope.instanceId, scope.userId, scope.repoId, scope.exceptSessionId ?? "", Math.floor((now - STALE_SESSION_IDLE_MS) / 1000))
+		.all<{ id: string }>();
+	return (results ?? []).map((r) => r.id);
+}
+
+/**
+ * Who a run waiting for this repo is waiting on, named (#1323): the owner that really holds it and will
+ * end by finishing, or an open session that holds nothing and will not end by itself (with when it is
+ * let go). Null when nothing holds it.
+ */
+export async function describeRepoHolder(env: Env, scope: Scope & { exceptSessionId?: string }, repoName: string, now: number = Date.now()): Promise<{ text: string; endsOnItsOwn: boolean } | null> {
+	const owner = (await repoOwners(env, scope)).find((o) => o.sessionId !== scope.exceptSessionId);
+	if (owner) return { text: describeOwner(owner, repoName), endsOnItsOwn: true };
+	const idle = await env.DB.prepare(
+		`SELECT id, client_type, runner_node, updated_at FROM coding_sessions
+		  WHERE instance_id = ?1 AND user_id = ?2 AND repo_id = ?3 AND status = 'active' AND id <> ?4 ORDER BY updated_at DESC LIMIT 1`,
+	)
+		.bind(scope.instanceId, scope.userId, scope.repoId, scope.exceptSessionId ?? "")
+		.first<{ id: string; client_type: string | null; runner_node: string | null; updated_at: string }>();
+	if (!idle) return null;
+	const since = Date.parse(`${String(idle.updated_at).replace(" ", "T")}Z`);
+	const releaseAt = Number.isFinite(since) ? since + STALE_SESSION_IDLE_MS : now;
+	const when = releaseAt <= now ? "it is let go the next time the run looks" : `it is let go at ${new Date(releaseAt).toISOString()}`;
+	return {
+		text: `${repoName} has an open ${idle.client_type ?? "coding"} session ${idle.id}${idle.runner_node ? ` on ${idle.runner_node}` : ""}, idle since ${Number.isFinite(since) ? new Date(since).toISOString() : "an unknown time"}, with no run attached. It holds nothing and will not end on its own; ${when}.`,
+		endsOnItsOwn: false,
+	};
+}
+
 /**
  * How long a reservation that never recorded a delivery is held through an idle engine (#1015).
  *

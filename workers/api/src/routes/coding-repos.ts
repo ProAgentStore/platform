@@ -36,7 +36,7 @@ import { patchInstanceConfig } from "../lib/instance-config.js";
 import { parseRepoRef } from "../lib/git-providers.js";
 import { sqlTime } from "../lib/sql-time.js";
 import { getSessionRunnerConn, pickNextIssue, requireOwned } from "./coding-shared.js";
-import { addPairedRepo, duplicateBinding, isUniqueViolation } from "./coding-repo-add.js";
+import { addPairedRepo, duplicateBinding, duplicateCoderWarning, isUniqueViolation } from "./coding-repo-add.js";
 import { registerRepoRetargetRoutes } from "./coding-repo-retarget.js";
 import type { Env } from "../types.js";
 
@@ -373,7 +373,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			const existing = githubRepo ? await findExistingRepoBinding(c.env, instanceId, githubRepo) : null;
 			return duplicateBinding(c, githubRepo ?? "", existing ?? { id: "", name: "" });
 		}
-		return c.json({ repo }, 201);
+		return c.json({ repo, warning: await duplicateCoderWarning(c.env, uid, instanceId, githubRepo) }, 201);
 	});
 
 	/**

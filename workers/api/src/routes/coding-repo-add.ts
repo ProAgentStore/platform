@@ -7,7 +7,9 @@ import { CONFIRMATION_WINDOW_MS } from "../lib/confirmation-window.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { RunnerUnreachableError, runnerErrorCode } from "../lib/runner-unreachable.js";
 import { attachGithubIdentity, attachWorkdir, findRepoByWorkdir } from "../lib/coding-repo-folder.js";
+import { duplicateCoderWarning } from "../lib/coding-duplicate-coder.js";
 import { createRepo, findExistingRepoBinding, updateRepoClone } from "../lib/coding-store.js";
+export { duplicateCoderWarning };
 import { checkWorkdirVia } from "../lib/coding-workdir.js";
 import { parseRepoRef } from "../lib/git-providers.js";
 import { RUNNER_CONTROL_MIN_CLI } from "../lib/runner-features.js";
@@ -198,7 +200,8 @@ export async function addPairedRepo(
 	}
 	// The folder was looked at a moment ago — record that look, as every other verified path does.
 	await updateRepoClone(c.env, created.id, { cloneStatus: "ready", cloneError: null, checkedNow: true });
-	return c.json({ repo: { ...created, cloneStatus: "ready", cloneCheckedAt: sqlTime() } }, 201);
+	const warning = await duplicateCoderWarning(c.env, uid, instanceId, ref.slug);
+	return c.json({ repo: { ...created, cloneStatus: "ready", cloneCheckedAt: sqlTime() }, ...(warning ? { warning } : {}) }, 201);
 }
 
 export type CloneProtocol = "auto" | "https" | "ssh";

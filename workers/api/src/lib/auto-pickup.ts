@@ -38,6 +38,7 @@ import { AUTO_PICKUP_ATTEMPT_FACTOR, admitAutoPickup, autoPickupAdmissionCursor,
 
 export { AUTO_PICKUP_ATTEMPT_FACTOR, NOT_REJECTED_BEFORE_RUN };
 import { tryDequeueAndStart } from "./objective-queue-start.js";
+import { markWokenForCheckout, releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
 import { coderIsIdle, PO_TRIAGE_OFF, queueGate, wakePoTriageIfIdle } from "./po-triage-wake.js";
 import { notifyUser } from "../routes/push.js";
 import { selectedProviderAccount } from "./provider-account-hold.js";
@@ -295,6 +296,15 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		}
 		const observedAdmission = await autoPickupAdmissionCursor(env, iid);
 		if (!(await coderIsIdle(env, iid))) {
+			// #1323: a run parked on a question and now answered is first in line. It counts as running work, so without
+			// this auto-pickup saw a busy coder for ever while the answer waited. Wake it; its own end drains next.
+			const answered = await releasedRunAwaitingCheckout(env, iid, null, now).catch(() => null);
+			if (answered && (await wakeParkedRun(env, answered, "checkout").catch(() => false))) {
+				await markWokenForCheckout(env, answered).catch(() => undefined);
+				const reason = `answered run ${answered} is resuming first`;
+				await logSkip(env, iid, uid, "skipped_busy", reason, now);
+				return { started: false, reason };
+			}
 			const reason = "the coder still has queued or running work";
 			await logSkip(env, iid, uid, "skipped_busy", reason, now);
 			return { started: false, reason };

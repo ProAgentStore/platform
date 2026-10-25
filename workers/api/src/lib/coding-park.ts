@@ -25,7 +25,7 @@ import { RESUME_WINDOW_MS, describeAge } from "./coding-session-continuity.js";
 import { startSessionOnRunnerConn, type RelaunchInput } from "./coding-session-relaunch.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { claimSessionDriver, getRepo, reassignSessionNode } from "./coding-store.js";
-import { repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
+import { describeOwner, describeRepoHolder, releaseStaleActiveSessions, repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
 import { machineDisplayNames } from "./machine-names.js";
 import { callRunner, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { normalizeMachineId, normalizeRunnerNode } from "./runtime-nodes.js";
@@ -277,12 +277,24 @@ export async function takeBackCheckout(env: Env, scope: ParkScope): Promise<{ ok
 	const run = await env.DB.prepare("SELECT checkout_released_at, checkout_snapshot FROM agent_loop_runs WHERE run_id = ?1").bind(scope.runId).first<{ checkout_released_at: number | null; checkout_snapshot: string | null }>();
 	if (!run?.checkout_released_at) return { ok: true, snapshot: null };
 	const free = await repoFreeForRun(env, { instanceId: scope.instanceId, userId: scope.userId, repoId: scope.repoId, sessionId: scope.sessionId }, runnerEngineProbe(env, scope.instanceId, scope.userId));
-	if (!free.free) return { busy: "another run is working on the repository" };
-	const reactivated = await env.DB.prepare("UPDATE coding_sessions SET status = 'active', ended_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'suspended'")
-		.bind(scope.sessionId, scope.instanceId, scope.userId)
-		.run()
-		.then((r) => (r.meta?.changes ?? 0) > 0, () => false);
-	if (!reactivated) return { busy: "another session is open on the repository" };
+	const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
+	const repoName = repo?.name || "the repository";
+	if (!free.free) return { busy: describeOwner(free.owner, repoName) };
+	const reactivate = () =>
+		env.DB.prepare("UPDATE coding_sessions SET status = 'active', ended_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'suspended'")
+			.bind(scope.sessionId, scope.instanceId, scope.userId)
+			.run()
+			.then((r) => (r.meta?.changes ?? 0) > 0, () => false);
+	let reactivated = await reactivate();
+	if (!reactivated) {
+		// #1323: the one-active-session index refuses while an idle session with no run is still `active`. It holds
+		// nothing, so once it has been quiet long enough it is suspended here rather than blocking the answer for ever.
+		if ((await releaseStaleActiveSessions(env, { instanceId: scope.instanceId, userId: scope.userId, repoId: scope.repoId, exceptSessionId: scope.sessionId }).catch(() => [])).length) reactivated = await reactivate();
+	}
+	if (!reactivated) {
+		const holder = await describeRepoHolder(env, { instanceId: scope.instanceId, userId: scope.userId, repoId: scope.repoId, exceptSessionId: scope.sessionId }, repoName).catch(() => null);
+		return { busy: holder?.text ?? "another session is open on the repository" };
+	}
 	return { ok: true, snapshot: run.checkout_snapshot };
 }
 
@@ -369,10 +381,10 @@ export const CHECKOUT_WAKE_GRACE_MS = 5 * 60_000;
  * that has not taken the checkout back is passed over, or one dead Workflow would hold the queue
  * forever. It keeps its answer and its set-aside work. The backstop wakes it once the repo is free.
  */
-export async function releasedRunAwaitingCheckout(env: Pick<Env, "DB">, instanceId: string, repoId: string, now = Date.now()): Promise<string | null> {
+export async function releasedRunAwaitingCheckout(env: Pick<Env, "DB">, instanceId: string, repoId: string | null, now = Date.now()): Promise<string | null> {
 	const row = await env.DB.prepare(
 		`SELECT r.run_id FROM agent_loop_runs r JOIN coding_sessions s ON s.id = r.session_id JOIN coder_questions q ON q.run_id = r.run_id
-		  WHERE r.instance_id = ?1 AND s.repo_id = ?2 AND r.status = 'running' AND r.checkout_released_at IS NOT NULL
+		  WHERE r.instance_id = ?1 AND (?2 IS NULL OR s.repo_id = ?2) AND r.status = 'running' AND r.checkout_released_at IS NOT NULL
 		    AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')
 		    AND (r.checkout_wake_at IS NULL OR r.checkout_wake_at > ?3)
 		  ORDER BY r.parked_since ASC LIMIT 1`,

@@ -139,7 +139,7 @@ describe("runner restart, a multi-day park, an answer while busy (#1242)", () =>
 		d1.exec("INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type) VALUES ('s2', 'i1', 'r1', 'u1', 'active', 'claude')");
 		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-2', 'u1', 'i1', 'y', 'running', 10, ${Date.now()}, 's2')`);
 		const r = await resumeFromPark(env, conn("pink-laptop"), resumeInput);
-		expect(r).toMatchObject({ busy: expect.stringMatching(/another (run|session)/) });
+		expect(r).toMatchObject({ busy: expect.stringMatching(/(being worked by run|being driven on session|open \w+ session|held by a direct)/) });
 		expect(commands.some((c) => c.path === "/coding/park-restore")).toBe(false);
 		expect(runRow()).toMatchObject({ checkout_snapshot: SNAP });
 	});
