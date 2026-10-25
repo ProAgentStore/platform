@@ -3,7 +3,11 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import type { DiscordChannel, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse } from "../lib/discordTypes";
 import ReleaseDeliveriesList from "./ReleaseDeliveriesList";
+import ReleaseGateEditor from "./ReleaseGateEditor";
+import ReleaseReadiness from "./ReleaseReadiness";
 import { appendPage, needsAttention, type ReconcileForm, reconcileBody, replaceDelivery } from "../lib/releaseDeliveries";
+import { readRunner, readiness, slackChannelsBotMissing, testSentText, type RunnerNodeRead } from "../lib/releaseGate";
+import type { Machine } from "../lib/runnerPanel";
 import type { InstanceReleaseNotesResponse, ReleaseDeliveriesResponse, ReleaseDelivery, ReleaseDeliveryActionResponse, ReleaseNoteTestResponse, SlackBotConnectResponse, SlackBotStatusResponse, SlackChannelListResponse, SlackGrantResponse, SlackOauthStartResponse } from "../lib/types";
 
 interface Props {
@@ -37,6 +41,9 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 	const [message, setMessage] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState("");
+	/** The runner reads the gate's readiness needs; `null` is a read that failed, which reads as unknown, never as fine. */
+	const [runnerNode, setRunnerNode] = useState<RunnerNodeRead | null>(null);
+	const [machines, setMachines] = useState<Machine[] | null>(null);
 	const [deliveries, setDeliveries] = useState<ReleaseDelivery[]>([]);
 	const [deliveriesNext, setDeliveriesNext] = useState<string | null>(null);
 
@@ -47,6 +54,8 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 			const recent = await api<ReleaseDeliveriesResponse>(`/v1/instances/${instanceId}/release-notes/deliveries?limit=10`).catch(() => null);
 			setDeliveries(recent?.deliveries ?? []);
 			setDeliveriesNext(recent?.hasMore ? recent.nextCursor : null);
+			setRunnerNode(await api<RunnerNodeRead>(`/v1/instances/${instanceId}/runner-node`).catch(() => null));
+			setMachines((await api<{ nodes: Machine[] }>("/v1/terminals/nodes").catch(() => null))?.nodes ?? null);
 			const s = await api<SlackBotStatusResponse>("/v1/slack/bot");
 			setSlack(s);
 			const dg = await api<DiscordGrantListResponse>(`/v1/discord/instances/${instanceId}/grants`).catch(() => null);
@@ -97,6 +106,13 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 			setMessage("Saved.");
 		});
 
+	/** The gate editor's write: `requiredWorkflows` alone. Rejects with the server's message and leaves `view` as it was. */
+	const saveGate = async (patch: { requiredWorkflows: unknown }) => {
+		setMessage("");
+		setView(await api<InstanceReleaseNotesResponse>(`/v1/instances/${instanceId}/release-notes`, { method: "PUT", body: JSON.stringify(patch) }));
+		setMessage("Saved.");
+	};
+
 	const toggleChannel = (grantId: string, on: boolean) => {
 		if (!view) return;
 		const current = view.effective.channels.filter((c) => c.selected).map((c) => c.grantId);
@@ -107,7 +123,7 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 	const sendTest = (grantId: string) =>
 		run(`test:${grantId}`, async () => {
 			const d = await api<ReleaseNoteTestResponse>(`/v1/instances/${instanceId}/release-notes/test`, { method: "POST", body: JSON.stringify({ grantId }) });
-			setMessage(`Test note sent to ${d.channel.provider} ${d.channel.name}.`);
+			setMessage(testSentText(d.channel, d.permalink));
 		});
 
 	const olderDeliveries = () =>
@@ -185,9 +201,11 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 		<div className="mb-4" data-testid="release-notes-panel">
 			<div className="text-sm mb-2">
 				<span className="font-semibold">Release notes</span>
-				<p className="text-2xs text-muted-soft mt-0.5">One note per coder run that ships to the default branch — what changed, the issues it closed, and CI/deploy status — posted to the channels below.</p>
+				<p className="text-2xs text-muted-soft mt-0.5">One note per coder run that ships to the default branch, posted to the channels below. Without a gate it is a status note; with one it is held until the deploy is verified for that commit.</p>
 			</div>
 			<div className="pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
+				{view && <ReleaseReadiness verdict={readiness({ view, botMissing: slackChannelsBotMissing(view.effective.channels, slackChannels?.channels), runner: readRunner(runnerNode, machines) })} />}
+				{view && <ReleaseGateEditor key={JSON.stringify(view.settings.requiredWorkflows ?? null)} saved={view.settings.requiredWorkflows} gate={view.gate} send={saveGate} />}
 				<label htmlFor="release-notes-enabled" className="text-xs text-muted block mb-1">Post release notes</label>
 				<select
 					id="release-notes-enabled"
@@ -233,6 +251,7 @@ export default function ReleaseNotesPanel({ instanceId, refreshKey = "" }: Props
 							</div>
 						))
 					)}
+					{eff && eff.channels.length > 0 && <p className="text-2xs text-muted-soft" data-testid="release-test-note">Send test posts a note labelled TEST and skips the workflow checks. It is never a release.</p>}
 					{eff && eff.missing.length > 0 && <p className="text-2xs text-muted-soft">{eff.missing.length} chosen channel(s) were since revoked and receive nothing.</p>}
 				</div>
 

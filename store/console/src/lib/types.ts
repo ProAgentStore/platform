@@ -3,7 +3,7 @@ import type { ScanSchedule, ScanTelemetry } from "./scanSchedule";
 import type { AccountReleaseNotes, ApplicationExecutionProjection } from "../../../../workers/api/src/agent-types";
 export type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, GithubInstallationCheckReason, GithubInstallationSyncResponse } from "../../../../workers/api/src/agent-types";
 // Release notes + the Slack bot (#1217): the Worker's own types, imported rather than copied.
-export type { AccountReleaseNotes, InstanceReleaseNotesResponse, ReleaseDeliveriesResponse, ReleaseDelivery, ReleaseDeliveryActionResponse, ReleaseDeliveryAttempt, ReleaseDeliveryState, ReleaseNoteTestResponse, SlackBotConnectResponse, SlackBotStatusResponse, SlackChannelListResponse, SlackGrantResponse, SlackOauthStartResponse } from "../../../../workers/api/src/agent-types";
+export type { AccountReleaseNotes, InstanceReleaseNotesResponse, ReleaseDeliveriesResponse, ReleaseDelivery, ReleaseDeliveryActionResponse, ReleaseDeliveryAttempt, ReleaseDeliveryState, ReleaseGateState, ReleaseNoteTestResponse, SlackBotConnectResponse, SlackBotStatusResponse, SlackChannelListResponse, SlackGrantResponse, SlackOauthStartResponse } from "../../../../workers/api/src/agent-types";
 
 export interface Agent {
 	id: string;

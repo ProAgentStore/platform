@@ -85,7 +85,7 @@ run** — the commit range, each change, the issues closed by title, and CI/depl
 agent's **Permissions** tab → *Release notes* (or `get_instance_release_notes` /
 `set_instance_release_notes`): on, off, or follow the account default (**Preferences → Release notes**,
 the `releaseNotes` section of `set_account_preferences`), and which granted channels. *Send test*
-(`send_test_release_note`) posts a test note to one channel.
+(`send_test_release_note`) posts a note labelled TEST to one channel; it skips the workflow gate and is never a release. The same tab edits the gate (workflow paths, deploy job and step), shows the delivery mode, and reports readiness: a missing channel, an unselected channel, a Slack bot outside the channel, an incomplete gate, or a runner older than CLI 0.4.179 each keep it from saying "ready".
 
 For repos that require verified production evidence, `set_instance_release_notes` accepts
 `requiredWorkflows`: 2–10 exact `.github/workflows/*.yml` paths, one marked `production_deploy`

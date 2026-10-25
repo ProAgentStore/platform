@@ -244,6 +244,53 @@ describe("release-notes settings: readable, writable, inherited (#1217 acceptanc
 		expect((await settings("inst-a")).body.settings).toEqual({});
 	});
 
+	it("the console's edits are field patches: workflows leave on/off and channels alone, and channels leave workflows alone (#1347)", async () => {
+		await connect();
+		const eng = (await grantTo("inst-a", CH_ENG)).body.grant as Grant;
+		const ops = (await grantTo("inst-a", CH_OPS)).body.grant as Grant;
+		await put("inst-a", { enabled: false, channels: [ops.id] });
+		const workflows = [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy", jobName: "deploy", stepName: "Upload to R2" }];
+		const gated = await put("inst-a", { requiredWorkflows: workflows });
+		expect(gated.body.settings).toEqual({ enabled: false, channels: [ops.id], requiredWorkflows: workflows });
+		const rechosen = await put("inst-a", { channels: [eng.id] });
+		expect(rechosen.body.settings).toEqual({ enabled: false, channels: [eng.id], requiredWorkflows: workflows });
+		expect(rechosen.body.gate).toEqual({ state: "ready" });
+		// Clearing the gate (null) is its own field too: on/off and channels survive it.
+		const cleared = await put("inst-a", { requiredWorkflows: null });
+		expect(cleared.body.settings).toEqual({ enabled: false, channels: [eng.id] });
+		expect(cleared.body.gate).toEqual({ state: "none" });
+	});
+
+	it("a refused gate edit changes nothing: the last saved gate is what GET still returns (#1347)", async () => {
+		const workflows = [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy", jobName: "deploy", stepName: "Upload to R2" }];
+		const saved = await put("inst-a", { requiredWorkflows: workflows });
+		expect(saved.status).toBe(200);
+		for (const bad of [
+			[workflows[0], { ...workflows[1], jobName: "" }],
+			[workflows[0], { path: ".github/workflows/deploy.yml", role: "production_deploy", stepName: "Upload to R2" }],
+			[workflows[0], workflows[0]],
+			[workflows[0]],
+		]) {
+			const refused = await put("inst-a", { requiredWorkflows: bad });
+			expect(refused.status).toBe(400);
+			expect(typeof refused.body.error).toBe("string");
+		}
+		const read = await settings("inst-a");
+		expect(read.body.settings).toEqual(saved.body.settings);
+		expect(read.body.gate).toEqual({ state: "ready" });
+	});
+
+	it("a reload reads back exactly what the save answered, gate and destination included (#1347)", async () => {
+		await connect();
+		const eng = (await grantTo("inst-a", CH_ENG)).body.grant as Grant;
+		const workflows = [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/e2e-full.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy", jobName: "deploy", stepName: "Upload to R2" }];
+		await put("inst-a", { channels: [eng.id] });
+		const saved = await put("inst-a", { requiredWorkflows: workflows });
+		const reloaded = await settings("inst-a");
+		expect(reloaded.body).toEqual(saved.body);
+		expect(reloaded.body.effective).toMatchObject({ channelsFrom: "instance", channels: [{ provider: "slack", grantId: eng.id, selected: true }] });
+	});
+
 	it("a stored old gate keeps its channels, is reported configuration_required with a migration message, and is completed by saving it again", async () => {
 		await connect();
 		const eng = (await grantTo("inst-a", CH_ENG)).body.grant as Grant;

@@ -258,7 +258,7 @@ export default function Preferences() {
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Release notes</h3>
 				<p className="text-xs text-muted mb-3">
-					When a coder run ships to a repository's default branch, it posts one release note to the Discord and Slack channels granted to that agent. This is the default for your coder agents only (other agents have no release notes); a coder can override it, and choose its channels, on its Permissions tab.
+					When a coder run ships to a repository's default branch, it posts one status note to the Discord and Slack channels granted to that agent. A status note does not verify a deploy: a coder with a release gate holds its note until the required workflows and the deploy step succeed for that commit. This is the on/off default for your coder agents only (other agents have no release notes); a coder can override it, and set its channels and gate, on its Permissions tab.
 				</p>
 				<label htmlFor="account-release-notes" className="text-xs text-muted block mb-1">Default</label>
 				<select

@@ -119,6 +119,11 @@ describe("release notes are a coder integration (#1286)", () => {
 		}
 	});
 
+	it("a non-coder gets none of the gate controls or the readiness verdict either (#1347)", () => {
+		const html = markup(false);
+		for (const id of ["release-gate", "release-readiness", "release-test-note"]) expect(html).not.toContain(`data-testid="${id}"`);
+	});
+
 	it("a coder keeps the panel", () => {
 		expect(markup(true)).toContain('data-testid="release-notes-panel"');
 	});
