@@ -36,6 +36,8 @@ interface Session {
 	/** Captures that show nothing after a wrong Enter before the rejection appears (ssh's delay). */
 	slow: number;
 	pendingRejection: number | null;
+	/** A runner older than #1144: it refuses iTerm2 key events. */
+	noKeys?: boolean;
 }
 
 let d1: RealSchemaD1;
@@ -66,6 +68,9 @@ beforeEach(async () => {
 		["ssh-pink", session({ pane: `$ ssh serge@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT })],
 		["sudo", session({ pane: `$ sudo systemctl restart pags-runner\n${SUDO_PROMPT}`, prompt: SUDO_PROMPT, rejection: "Sorry, try again." })],
 		["shell", session({ pane: "serge@dell-laptop:~$ " })],
+		["1:1:1", session({ pane: `$ ssh serge@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT })],
+		["1:1:2", session({ pane: "serge@dell-laptop:~$ " })],
+		["1:1:3", session({ pane: `$ ssh serge@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT, noKeys: true })],
 	]);
 	sent = [];
 	Object.assign(hiddenOutcomeTiming, { windowMs: 60, pollMs: 5 });
@@ -73,12 +78,13 @@ beforeEach(async () => {
 	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string, raw: { session?: string; target?: string; text?: string; keys?: string[]; value?: string }) => {
 		// The secret is typed over `/secure/type` (#1143): the same pane effect as a text send.
 		const body = path === "/secure/type" ? { target: raw.target, text: raw.value } : raw;
-		const name = path.startsWith("/terminal/") || path === "/secure/type" ? String(body.target).replace(/^tmux:/, "") : String(body.session);
+		const name = path.startsWith("/terminal/") || path === "/secure/type" ? String(body.target).replace(/^(?:tmux|iterm2):/, "") : String(body.session);
 		const s = machine.get(name);
 		if (!s) throw new Error(`Runner ${path} → 404: {"error":"No tmux session \\"${name}\\"."}`);
 		if (path.endsWith("/capture")) return { pane: capture(s) };
 		if (!path.endsWith("/send") && path !== "/secure/type") throw new Error(`unexpected ${path}`);
 		sent.push({ path, target: body.target ?? body.session, text: body.text, keys: body.keys });
+		if (s.noKeys && (body.keys ?? []).length > 0) throw new Error(`Runner ${path} → 400: {"error":"iTerm2 generic key events are not supported yet; send text or run a command."}`);
 		const before = s.pane;
 		const atPrompt = s.prompt !== null && s.pane.endsWith(s.prompt);
 		if (body.text != null) {
@@ -204,11 +210,34 @@ describe("a hidden prompt is verified by its outcome, not by echo (#1140)", () =
 });
 
 describe("terminal targets keep the terminal connector's limits (#1140)", () => {
-	it("iTerm2 is refused unconsumed — it cannot hold a value unsubmitted or take C-c", async () => {
+	it("iTerm2 (#1144): a hidden prompt is typed, submitted with Enter and judged by its outcome", async () => {
 		const id = await ready();
 		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "iterm2:1:1:1" });
-		expect(r.body).toMatchObject({ delivered: false, consumedValue: false, reason: expect.stringMatching(/iTerm2/) });
-		expect(callRunner).not.toHaveBeenCalled();
+		expect(r.body).toMatchObject({ delivered: true, verifiedBy: "outcome", submitted: true, consumedValue: true, target: "iterm2:1:1:1" });
+		expect(r.text).not.toContain(SECRET);
+		expect(sent.map((x) => x.keys ?? "text")).toEqual(["text", ["Enter"]]);
+		expect(machine.get("1:1:1")?.pane).toContain("Welcome to pink-laptop");
+	});
+
+	it("iTerm2: a rejected password is consumed and the prompt gets C-c", async () => {
+		const id = await ready("wrong-one");
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "iterm2:1:1:1" });
+		expect(r.body).toMatchObject({ delivered: false, consumedValue: true, reason: expect.stringMatching(/C-c was sent/) });
+		expect(sent.map((x) => x.keys ?? "text")).toEqual(["text", ["Enter"], ["C-c"]]);
+	});
+
+	it("iTerm2: echo delivery to a shell types, checks the line, then presses Enter", async () => {
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "iterm2:1:1:2", hiddenPrompt: false });
+		expect(r.body).toMatchObject({ delivered: true, verifiedBy: "echo", submitted: true });
+		expect(sent.map((x) => x.keys ?? "text")).toEqual(["text", ["Enter"]]);
+	});
+
+	it("iTerm2 on a runner that cannot send keys: the failure is reported, the value restored and the line cleared", async () => {
+		const id = await ready();
+		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "iterm2:1:1:3" });
+		expect(r.body).toMatchObject({ delivered: false, consumedValue: false, status: "ready", reason: expect.stringMatching(/pressing Enter failed/) });
+		expect(await statusOf(id)).toBe("ready");
 	});
 
 	it("a backend outside the agent's declared ceiling is refused before the runner is reached", async () => {

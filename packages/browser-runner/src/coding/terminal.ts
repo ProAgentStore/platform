@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { RunnerInputError } from "../errors.js";
-import { appleString, itermWriteScript } from "./apple-script.js";
+import { appleString, itermKeysScript, itermKeyCode, itermWriteScript } from "./apple-script.js";
 import { capturePane, createSession, killSession, listSessionsDetailed, runCommand as tmuxRunCommand, sendKey as tmuxSendKey, sendText as tmuxSendText, sessionExists, tmuxExec } from "./tmux.js";
 
 export type TerminalBackend = "tmux" | "kitty" | "iterm2";
@@ -263,7 +263,13 @@ export function sendTerminalKeys(target: string, opts: { backend?: TerminalBacke
 			for (const key of opts.keys ?? []) kittyExec(["@", "send-key", "--match", `id:${t.id}`, kittyKeyName(key)]);
 			return captureTerminalTarget(t.id, { backend: "kitty" });
 		case "iterm2":
-			if ((opts.keys ?? []).length > 0) throw new RunnerInputError("iTerm2 generic key events are not supported yet; send text or run a command.");
+			if ((opts.keys ?? []).length > 0) {
+				// Text WITH keys is typed as-is and the keys follow (#1144); text alone still presses Return, as it always did.
+				const bad = (opts.keys ?? []).find((k) => itermKeyCode(k) == null);
+				if (bad !== undefined) throw new RunnerInputError(`iTerm2 cannot send the key "${bad}" — supported: Enter, Escape, Tab, BSpace and C-a … C-z.`);
+				osascriptStdin(itermKeysScript(t.id, opts.text, opts.keys ?? []));
+				return captureTerminalTarget(t.id, { backend: "iterm2" });
+			}
 			osascriptStdin(itermWriteScript(t.id, opts.text ?? "", true));
 			return captureTerminalTarget(t.id, { backend: "iterm2" });
 	}

@@ -183,9 +183,6 @@ export async function injectSecureInputToTmux(
 	if (status.destinationScope !== "tmux") return refuse(`This request is for ${status.destinationScope}, and inject delivers to a terminal only. For a file, use tmux_secure_get with this request id as the handle.`);
 	if (!target) return refuse("Name the tmux session or terminal target to type into: `target` (see tmux_list_sessions or terminal_list_targets). Nothing was consumed.");
 	if (status.empty) return refuse("The submitted value is empty — ask the owner to enter it again.");
-	// iTerm2's `write text` always presses Return and takes no key events, so a value could be neither
-	// held unsubmitted for checking nor cleared off a wrong prompt.
-	if (/^iterm2:/i.test(target)) return refuse("iTerm2 targets cannot be typed into without submitting, or sent C-u/C-c — use a tmux or kitty target. Nothing was consumed.");
 
 	const denied = await consentRefusal(env, input.instanceId, target);
 	if (denied) return refuse(`${denied} Nothing was consumed.`);

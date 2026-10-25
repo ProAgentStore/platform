@@ -130,7 +130,7 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 		mutates: true,
 		untrustedOutput: true,
 		description:
-			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready). iTerm2 currently supports text only. To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `terminal_send_message` instead.",
+			"Send literal text and/or named keys to a local terminal target without necessarily pressing Enter — for key-level control: Escape, C-c, arrow keys, or multi-key sequences. WRITE: runs on the user's machine. For tmux targets, waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready). iTerm2 supports text, plus the keys Enter, Escape, Tab, BSpace and C-a … C-z (text sent with keys is typed without Return; text alone still presses Return). To send a message to an interactive CLI and submit it (type text + Enter + confirm landed), use `terminal_send_message` instead.",
 		jsonSchema: {
 			type: "object",
 			properties: {

@@ -167,6 +167,27 @@ describe("behaviour is compatible", () => {
 		expect(secure?.input).toContain('write text "pw" newline NO');
 	});
 
+	it("iTerm2 keys (#1144): Enter, C-u and C-c are typed as their control characters, never as Return-adding text", () => {
+		terminal.sendTerminalKeys("iterm2:1:2:3", { keys: ["C-u"] });
+		terminal.sendTerminalKeys("iterm2:1:2:3", { keys: ["C-c", "Enter"] });
+		terminal.sendTerminalKeys("iterm2:1:2:3", { text: "ls", keys: ["Enter"] });
+		const osa = calls.filter((c) => c.file === "osascript" && c.input?.includes("write text")).map((c) => c.input ?? "");
+		expect(osa[0]).toContain("session 3 of tab 2 of window 1");
+		expect(osa[0]).toContain("write text (ASCII character 21) newline NO");
+		expect(osa[1]).toContain("write text (ASCII character 3) newline NO");
+		expect(osa[1]).toContain("write text (ASCII character 13) newline NO");
+		// Text alongside keys is typed WITHOUT Return; the key supplies it.
+		expect(osa[2]).toContain('write text "ls" newline NO');
+		expect(osa[2].indexOf('"ls"')).toBeLessThan(osa[2].indexOf("ASCII character 13"));
+	});
+
+	it("iTerm2 refuses a key it cannot type as a character, naming it", () => {
+		expect(() => terminal.sendTerminalKeys("iterm2:1:1:1", { keys: ["Up"] })).toThrow(/cannot send the key "Up"/);
+		expect(() => terminal.sendTerminalKeys("iterm2:1:1:1", { keys: ["C-u", "F5"] })).toThrow(/"F5"/);
+		// Nothing was sent for the refused call — the check precedes the script.
+		expect(calls.filter((c) => c.file === "osascript" && c.input?.includes("write text"))).toEqual([]);
+	});
+
 	it("appleString is exact for quotes, backslashes, newlines, control characters and Unicode", () => {
 		expect(appleString('a"b\\c\nd')).toBe('"a\\"b\\\\c\\nd"');
 		expect(appleString("é🔑")).toBe('"é🔑"');
