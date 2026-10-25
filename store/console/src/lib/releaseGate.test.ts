@@ -6,8 +6,8 @@
 import { describe, expect, it } from "vitest";
 import type { InstanceReleaseNotesResponse } from "./types";
 import {
-	chooseDeploy, clearPatch, compareVersions, draftChanged, draftFromSaved, draftIsValid, draftProblems, emptyRow, MIN_GATED_RUNNER, modeCopy, readiness, readRunner,
-	rowForServerError, runnerWarning, savePatch, slackChannelsBotMissing, testSentText, type GateRow, type RunnerReading,
+	chooseDeploy, clearPatch, compareVersions, draftChanged, draftFromSaved, draftIsValid, draftProblems, emptyRow, modeCopy, readiness, readRunner,
+	mergeRunnerNote, MIN_MERGE_RUNNER, rowForServerError, runnerWarning, savePatch, slackChannelsBotMissing, testSentText, type GateRow, type RunnerReading,
 } from "./releaseGate";
 
 const CHESS = [
@@ -27,7 +27,7 @@ const view = (over: Partial<InstanceReleaseNotesResponse> & { channels?: Instanc
 	gate: { state: "ready" },
 	...("gate" in over ? { gate: over.gate } : {}),
 } as InstanceReleaseNotesResponse);
-const okRunner: RunnerReading = { node: "mac", connected: true, version: MIN_GATED_RUNNER };
+const okRunner: RunnerReading = { node: "mac", connected: true, version: MIN_MERGE_RUNNER };
 
 describe("the draft", () => {
 	it("starts from what is saved, including the deploy job and step", () => {
@@ -156,7 +156,7 @@ describe("the runner warning", () => {
 describe("readiness", () => {
 	const ids = (v: InstanceReleaseNotesResponse, runner = okRunner, botMissing: string[] = []) => readiness({ view: v, botMissing, runner }).items.map((i) => i.id);
 	it("a selected channel, a complete gate and a current runner is ready, with no warnings", () => {
-		expect(readiness({ view: view(), botMissing: [], runner: okRunner })).toEqual({ ready: true, items: [] });
+		expect(readiness({ view: view(), botMissing: [], runner: okRunner })).toEqual({ ready: true, items: [], notes: [] });
 	});
 	it("no channel granted is not ready", () => {
 		expect(ids(view({ channels: [] }))).toEqual(["no_channel"]);
@@ -212,5 +212,39 @@ describe("the test-send message", () => {
 		expect(t).toMatch(/skips the workflow checks/);
 		expect(t).toContain("https://acme.slack.com/archives/C1/p1");
 		expect(testSentText({ provider: "discord", name: "#x" })).not.toContain("Message:");
+	});
+});
+
+describe("the PR-merge runner minimum (#1350)", () => {
+	const runner = (version: string | null): RunnerReading => ({ node: "mac", connected: true, version });
+	it("names CLI 0.4.180 as the first runner that reports what a merge delivered", () => {
+		expect(MIN_MERGE_RUNNER).toBe("0.4.180");
+	});
+	it("a 0.4.179 runner is still ready for direct pushes, and says its PR merges are held until it updates", () => {
+		const verdict = readiness({ view: view(), botMissing: [], runner: runner("0.4.179") });
+		expect(verdict.ready).toBe(true);
+		expect(verdict.items).toEqual([]);
+		expect(verdict.notes).toHaveLength(1);
+		expect(verdict.notes[0]).toMatch(/Pull request merges need CLI 0\.4\.180 or newer/);
+		expect(verdict.notes[0]).toMatch(/0\.4\.179/);
+		expect(verdict.notes[0]).toMatch(/pags update/);
+	});
+	it("a current runner has no merge note, and neither does an unknown or unpinned one (those already block as warnings)", () => {
+		expect(mergeRunnerNote(runner("0.4.180"))).toBeNull();
+		expect(mergeRunnerNote(runner("0.5.0"))).toBeNull();
+		expect(mergeRunnerNote(runner(null))).toBeNull();
+		expect(mergeRunnerNote({ node: null, connected: null, version: null })).toBeNull();
+		expect(mergeRunnerNote(runner("dev"))).toBeNull();
+		expect(readiness({ view: view(), botMissing: [], runner: runner(null) }).ready).toBe(false);
+	});
+	it("a runner older than the direct-push minimum is not ready (as before) and carries the merge note too", () => {
+		const verdict = readiness({ view: view(), botMissing: [], runner: runner("0.4.178") });
+		expect(verdict.ready).toBe(false);
+		expect(verdict.items.map((i) => i.id)).toEqual(["runner"]);
+		expect(verdict.notes).toHaveLength(1);
+	});
+	it("with no gate there is no gated delivery to warn about", () => {
+		const noGate = view({ gate: { state: "none" } });
+		expect(readiness({ view: noGate, botMissing: [], runner: runner("0.4.179") }).notes).toEqual([]);
 	});
 });

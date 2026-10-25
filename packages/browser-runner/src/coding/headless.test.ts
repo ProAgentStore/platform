@@ -238,6 +238,9 @@ async function until(cond: () => boolean, timeoutMs = 8000, description = "condi
 	if (!cond()) throw new Error(`Timed out waiting for ${description} after ${budget}ms`);
 }
 
+/** A `gh` that reads nothing: a completed merge is then published `unreadable`, with no network and no real `gh` (#1350). */
+const noGh = () => async () => ({ code: 1, stdout: "" });
+
 describe("HeadlessSession (stream-json engine)", () => {
 	let dir: string;
 	let bin: string;
@@ -952,6 +955,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			command: 'codex exec --sandbox danger-full-access -c model="o3"',
 			statePath,
 			env: { CODEX_RESUME_LOG: log, CODEX_THREAD_ID: threadId },
+			gh: noGh,
 		});
 
 		const first = new HeadlessSession(config("target", original));
@@ -960,6 +964,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => first.runState() === "idle" && first.snapshot().includes("argv:"), 8000, "initial structured Codex turn");
 		expect(readState(statePath, "codex:target")).toBe(original);
 		expect(first.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 2, outputTokens: 3, costUsd: 0 }]);
+		await first.settleActs();
 		expect(first.takeActs().map((a) => a.kind)).toEqual(["push", "pr.merge"]);
 		first.stop();
 
@@ -987,6 +992,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(argv.at(-1)).not.toContain("--sandbox");
 		expect(argv.at(-1)?.at(-1)).toBe("continue the original task");
 		expect(revived.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 2, outputTokens: 3, costUsd: 0 }]);
+		await revived.settleActs();
 		expect(revived.takeActs().map((a) => a.kind)).toEqual(["push", "pr.merge"]);
 		revived.stop();
 	});
@@ -1749,7 +1755,7 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		const bin = join(dir, `fake-merger-${id}.js`);
 		writeFileSync(bin, FAKE_MERGER);
 		chmodSync(bin, 0o755);
-		return new HeadlessSession({ id, workDir: dir, clientType: "claude", bin, env, statePath: defaultStatePath(dir) });
+		return new HeadlessSession({ id, workDir: dir, clientType: "claude", bin, env, statePath: defaultStatePath(dir), gh: noGh });
 	}
 
 	it("records the push AND the merge, with the outcome the tool_result reported", async () => {
@@ -1761,9 +1767,10 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		s.input("ship it");
 		await until(() => s.runState() === "idle" && s.snapshot().includes("merged"));
 
+		await s.settleActs(); // the merge is published once GitHub has been asked what it did (#1350)
 		const acts = s.takeActs();
 		expect(acts.map((a) => a.kind)).toEqual(["push", "pr.merge"]);
-		expect(acts[1]).toMatchObject({ kind: "pr.merge", target: "#42", irreversible: true, ok: true });
+		expect(acts[1]).toMatchObject({ kind: "pr.merge", target: "#42", irreversible: true, ok: true, mergeUnverified: "unreadable" });
 		// Draining is destructive, for the same reason as usage: /coding/capture polls every 3s and
 		// re-reporting would either duplicate the merge or force the cloud to diff a growing list.
 		expect(s.takeActs()).toEqual([]);
@@ -1789,11 +1796,12 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		const bin = join(dir, "fake-codex-merger.js");
 		writeFileSync(bin, FAKE_CODEX_MERGER);
 		chmodSync(bin, 0o755);
-		const s = new HeadlessSession({ id: "acts-codex", workDir: dir, clientType: "codex", command: "codex exec --sandbox danger-full-access", bin });
+		const s = new HeadlessSession({ id: "acts-codex", workDir: dir, clientType: "codex", command: "codex exec --sandbox danger-full-access", bin, gh: noGh });
 		s.start();
 		s.input("ship it");
 		await until(() => s.runState() === "idle" && s.snapshot().includes("merged"), 8000, "the codex structured turn to finish");
 
+		await s.settleActs();
 		const acts = s.takeActs();
 		expect(acts.map((a) => a.kind)).toEqual(["push", "pr.merge"]);
 		expect(acts[1]).toMatchObject({ kind: "pr.merge", target: "#42", irreversible: true, ok: true });

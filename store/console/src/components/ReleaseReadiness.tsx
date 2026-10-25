@@ -23,6 +23,15 @@ export default function ReleaseReadiness({ verdict }: { verdict: Readiness }) {
 					</ul>
 				</div>
 			)}
+			{verdict.notes.length > 0 && (
+				<ul className="list-disc pl-4 mt-1 flex flex-col gap-0.5" data-testid="release-readiness-notes">
+					{verdict.notes.map((n) => (
+						<li key={n} className="text-2xs text-muted break-words">
+							{n}
+						</li>
+					))}
+				</ul>
+			)}
 		</div>
 	);
 }

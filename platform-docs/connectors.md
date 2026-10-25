@@ -85,7 +85,7 @@ run** — the commit range, each change, the issues closed by title, and CI/depl
 agent's **Permissions** tab → *Release notes* (or `get_instance_release_notes` /
 `set_instance_release_notes`): on, off, or follow the account default (**Preferences → Release notes**,
 the `releaseNotes` section of `set_account_preferences`), and which granted channels. *Send test*
-(`send_test_release_note`) posts a note labelled TEST to one channel; it skips the workflow gate and is never a release. The same tab edits the gate (workflow paths, deploy job and step), shows the delivery mode, and reports readiness: a missing channel, an unselected channel, a Slack bot outside the channel, an incomplete gate, or a runner older than CLI 0.4.179 each keep it from saying "ready".
+(`send_test_release_note`) posts a note labelled TEST to one channel; it skips the workflow gate and is never a release. The same tab edits the gate (workflow paths, deploy job and step), shows the delivery mode, and reports readiness: a missing channel, an unselected channel, a Slack bot outside the channel, an incomplete gate, or a runner older than CLI 0.4.179 each keep it from saying "ready". A runner of 0.4.179 can still record a direct push, but a pull request merge needs CLI 0.4.180 or newer: the panel adds a note (it does not block "ready") and such a merge is held as `pr_merge_old_runner`.
 
 For repos that require verified production evidence, `set_instance_release_notes` accepts
 `requiredWorkflows`: 2–10 exact `.github/workflows/*.yml` paths, one marked `production_deploy`
@@ -106,6 +106,28 @@ A gate saved before the job and step existed is not downgraded and not discarded
 `gate: { state: "configuration_required", message }`, its queued rows are held as
 `configuration_required` (never posted), and its channels are kept. Saving the same workflows again
 with `jobName` and `stepName` resumes the held rows.
+
+### Pull request merges (#1350)
+
+A gated note can be delivered by a synchronous `gh pr merge` as well as by a direct push, with the same production
+gate, queue and at-most-once rules. The runner (CLI 0.4.180 or newer) reports a versioned claim, `merge.v === 1`, after
+the command's own result: repository, PR number, base branch, merge method, the prior branch tip (`beforeSha`), the
+result (`afterSha`), `mergedAt`, `mergedBy` and the account that ran the command. For a merge commit or a squash the
+prior tip is the first parent of the result (exact and atomic, never the branch head read later); for a rebase it is
+the parent of the first of the PR's rebased commits. The cloud treats this as a claim to check, not proof: the queue
+tick re-reads the pull request and the merge commit from GitHub with the owner's own credential and requires that it
+is merged into the pushed default branch of this repository, by the account that ran the command, with the merge
+commit the runner named; that the result has the shape its method produces (merge: two parents, the second the PR head;
+squash: one commit on the prior tip; rebase: exactly the PR's commits, one line on the prior tip, anything else is
+ambiguous); and that the merge commit lies inside the verified delivered range. A direct push and merges in one run
+combine only when each boundary meets the next; a gap, an overlap or a different branch is not one release.
+
+Held, with a typed code and a visible row in the delivery list (never inferred later from the branch head):
+`pr_merge_auto` (`--auto`, the merge queue, or output saying the merge is only scheduled),
+`pr_merge_old_runner` (a runner that predates the contract sent no evidence), `pr_merge_unverified` (not merged,
+wrong branch or repository, wrong or unknown method, merged by someone else, unreadable or malformed evidence, a merge
+never observed to finish, or a PR GitHub does not confirm) and `pr_range_not_contiguous`. A failed merge command
+ships nothing. Without a gate, only a merge known to have completed announces a status note.
 
 ### Evidence reads are paged and bounded (#1349)
 

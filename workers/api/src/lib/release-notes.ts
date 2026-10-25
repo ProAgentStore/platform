@@ -32,6 +32,7 @@ import { deriveAct } from "./engine-acts.js";
 import { logError } from "./error-log.js";
 import { logEvent } from "./events.js";
 import { resolveGithubRead } from "./github-cache.js";
+import { commandSchedulesMerge, isMergeUnverified, type MergeEvidence, parseMergeEvidence } from "./merge-evidence.js";
 import { grantedReleaseChannels, loadReleaseNotes, releaseGateState, type ReleaseChannel } from "./release-notes-settings.js";
 import type { RunStep } from "./runner-availability.js";
 import { postSlackMessage, SLACK_NOT_CONNECTED } from "./slack.js";
@@ -72,7 +73,7 @@ export interface ReleaseNoteContext {
 	 * Gated notes (#1349): the runner-recorded range, not yet read from GitHub. Present until the queue tick has paged the
 	 * whole `base...head` compare, verified it, and replaced this with the real commits; absent afterwards.
 	 */
-	pendingRange?: { base: string; head: string; branch: string };
+	pendingRange?: { base: string; head: string; branch: string; /** Synchronous PR merges inside the range, re-verified against GitHub by the tick (#1350). */ merges?: MergeEvidence[] };
 }
 
 export interface ReleaseNoteInput {
@@ -107,33 +108,80 @@ export interface ReleaseNoteOutcome {
 	failed: { grantId: string; error: string }[];
 }
 
-/** The contiguous commit range from this run's push results, never the branch head guessed later. */
-async function runPushedShaPrefix(env: Env, input: { instanceId: string; userId: string; runId: string }): Promise<{ prefix: string; basePrefix: string; branch: string } | null> {
+/** Why a run's delivery cannot be turned into one exact range. A code means a typed, owner-visible hold (#1350). */
+export type DeliveredRange =
+	| { ok: true; base: string; head: string; branch: string; merges: MergeEvidence[] }
+	| { ok: false; code: PrHoldCode | null; reason: string };
+export type PrHoldCode = "pr_merge_auto" | "pr_merge_old_runner" | "pr_merge_unverified" | "pr_range_not_contiguous";
+
+type Segment = { before: string; after: string; branch: string; merge: MergeEvidence | null };
+
+/** `a` and `b` name the same commit when one is a prefix of the other (a push prints abbreviations, a merge full SHAs). */
+const sameCommit = (a: string, b: string) => a.startsWith(b) || b.startsWith(a);
+
+const MERGE_UNVERIFIED_WORDS: Record<string, string> = {
+	auto: "the merge was only requested (--auto or the merge queue), not completed",
+	scheduled: "the merge was only scheduled, not completed",
+	unrecognized_output: "the merge command's output does not say the pull request was merged",
+	not_merged: "GitHub says the pull request is not merged",
+	wrong_branch: "the pull request did not merge into the repository's default branch",
+	method_unknown: "the merge method could not be read from the command",
+	method_mismatch: "the merge result is not what the stated merge method produces",
+	actor_mismatch: "the pull request was not merged by this run's account during this command",
+	unreadable: "GitHub could not be read to prove the merge",
+	malformed: "the runner's merge evidence is not valid for this contract version",
+};
+
+/**
+ * The contiguous range this run delivered to the trunk, from its own recorded acts: direct pushes (their printed
+ * `old..new`) and synchronous PR merges (the runner's v1 `merge` evidence), chained newest to oldest. Each boundary
+ * must meet the next: a gap or overlap is an intervening update this run did not make, and is held rather than
+ * summarized as one release. Never the branch HEAD, never inferred later.
+ */
+async function runDeliveredRange(env: Env, input: { instanceId: string; userId: string; runId: string }): Promise<DeliveredRange> {
 	const rows = await env.DB.prepare("SELECT context FROM agent_events WHERE instance_id = ?1 AND user_id = ?2 AND trace_id = ?3 AND event = 'act.consequential' ORDER BY ts DESC, rowid DESC")
 		.bind(input.instanceId, input.userId, input.runId).all<{ context: string | null }>();
-	let newest: string | null = null;
-	let base: string | null = null;
-	let branchName: string | null = null;
-	let expectedPriorNew: string | null = null;
+	const segments: Segment[] = [];
+	const merges: MergeEvidence[] = [];
+	let sawMerge = false;
+	const hold = (code: PrHoldCode | null, reason: string): DeliveredRange => ({ ok: false, code: code && (sawMerge || code.startsWith("pr_merge")) ? code : null, reason });
 	for (const row of rows.results ?? []) {
-		try {
-			const act = JSON.parse(row.context ?? "{}") as { act?: unknown; ok?: unknown; pushedSha?: unknown; pushedFromSha?: unknown; command?: unknown; target?: unknown };
-			if (act.act !== "push.trunk" && act.act !== "pr.merge") continue;
-			if (act.ok === false) continue; // A refused push changed no remote ref.
-			// An unknown act or merge cannot be attributed to the range of direct pushes.
-			if (act.act !== "push.trunk" || act.ok !== true || deriveAct("push.trunk", String(act.command ?? "")).phrase !== "pushed directly to the trunk") return null;
-			const parts = typeof act.target === "string" ? act.target.split(/\s+/) : [];
-			const branch = parts[1]?.replace(/^HEAD:/, "").replace(/^refs\/heads\//, "");
-			if (parts[0] !== "origin" || !branch || typeof act.pushedSha !== "string" || !/^[0-9a-f]{7,40}$/.test(act.pushedSha) || typeof act.pushedFromSha !== "string" || !/^[0-9a-f]{7,40}$/.test(act.pushedFromSha)) return null;
-			if (branchName && branchName !== branch) return null;
-			if (expectedPriorNew && !(act.pushedSha.startsWith(expectedPriorNew) || expectedPriorNew.startsWith(act.pushedSha))) return null;
-			newest ??= act.pushedSha;
-			base = act.pushedFromSha;
-			branchName = branch;
-			expectedPriorNew = act.pushedFromSha;
-		} catch { return null; /* An unreadable act cannot authorize a release. */ }
+		let act: { act?: unknown; ok?: unknown; pushedSha?: unknown; pushedFromSha?: unknown; command?: unknown; target?: unknown; merge?: unknown; mergeUnverified?: unknown; mergeDetail?: unknown };
+		try { act = JSON.parse(row.context ?? "{}"); } catch { return hold(null, "An unreadable act cannot authorize a release."); }
+		if (act.act !== "push.trunk" && act.act !== "pr.merge") continue;
+		if (act.ok === false) continue; // A refused push or a failed merge changed no remote ref.
+		if (act.act === "pr.merge") {
+			sawMerge = true;
+			if (act.ok !== true) return hold("pr_merge_unverified", "A pull request merge was started but never observed to finish, so what it delivered is unknown.");
+			// The command line alone says it only asked for a merge later; no attached evidence overrides that.
+			if (commandSchedulesMerge(String(act.command ?? ""))) return hold("pr_merge_auto", MERGE_UNVERIFIED_WORDS.auto);
+			const evidence = parseMergeEvidence(act.merge);
+			if (!evidence) {
+				if (isMergeUnverified(act.mergeUnverified)) {
+					const code = act.mergeUnverified === "auto" || act.mergeUnverified === "scheduled" ? "pr_merge_auto" : "pr_merge_unverified";
+					return hold(code, `${MERGE_UNVERIFIED_WORDS[act.mergeUnverified]}${typeof act.mergeDetail === "string" && act.mergeDetail ? ` (${act.mergeDetail})` : ""}`);
+				}
+				return hold("pr_merge_old_runner", "This pull request merge was recorded by a runner older than CLI 0.4.180, which does not report what a merge delivered. Update the runner (pags update); the merge cannot be proved from the branch head.");
+			}
+			segments.push({ before: evidence.beforeSha, after: evidence.afterSha, branch: evidence.baseRef, merge: evidence });
+			merges.push(evidence);
+			continue;
+		}
+		// An unknown push cannot be attributed to a range.
+		if (act.ok !== true || deriveAct("push.trunk", String(act.command ?? "")).phrase !== "pushed directly to the trunk") return hold(null, "A trunk push was not observed to finish.");
+		const parts = typeof act.target === "string" ? act.target.split(/\s+/) : [];
+		const branch = parts[1]?.replace(/^HEAD:/, "").replace(/^refs\/heads\//, "");
+		if (parts[0] !== "origin" || !branch || typeof act.pushedSha !== "string" || !/^[0-9a-f]{7,40}$/.test(act.pushedSha) || typeof act.pushedFromSha !== "string" || !/^[0-9a-f]{7,40}$/.test(act.pushedFromSha)) return hold(null, "The push result did not identify its new commit.");
+		segments.push({ before: act.pushedFromSha, after: act.pushedSha, branch, merge: null });
 	}
-	return newest && base && branchName ? { prefix: newest, basePrefix: base, branch: branchName } : null;
+	if (!segments.length) return hold(null, "The push result did not identify its new commit.");
+	for (let i = 1; i < segments.length; i++) {
+		const newer = segments[i - 1];
+		const older = segments[i];
+		if (older.branch !== newer.branch) return hold("pr_range_not_contiguous", `This run delivered to ${older.branch} and ${newer.branch}; separate releases are not summarized as one.`);
+		if (!sameCommit(older.after, newer.before)) return hold("pr_range_not_contiguous", `The delivered ranges are not contiguous: one ends at ${shortSha(older.after)} but the next starts at ${shortSha(newer.before)}, so another update landed between them and they are not one release.`);
+	}
+	return { ok: true, base: segments[segments.length - 1].before, head: segments[0].after, branch: segments[0].branch, merges: merges.reverse() };
 }
 
 const SHA = /^[0-9a-f]{7}/;
@@ -148,7 +196,7 @@ export function closedIssueNumbers(messages: readonly string[]): number[] {
 }
 
 /** Did this run push to the trunk, or merge into it? Read from its own recorded acts. */
-export async function runShippedToTrunk(env: Env, input: { instanceId: string; userId: string; runId: string }): Promise<boolean> {
+export async function runShippedToTrunk(env: Env, input: { instanceId: string; userId: string; runId: string }, mode: "attempted" | "completed" = "completed"): Promise<boolean> {
 	const rows = await env.DB.prepare("SELECT context FROM agent_events WHERE instance_id = ?1 AND user_id = ?2 AND trace_id = ?3 AND event = 'act.consequential'")
 		.bind(input.instanceId, input.userId, input.runId)
 		.all<{ context: string | null }>();
@@ -160,7 +208,15 @@ export async function runShippedToTrunk(env: Env, input: { instanceId: string; u
 			return false; // an unreadable act row is no evidence of a push
 		}
 		if (c.ok === false || typeof c.act !== "string") return false;
-		if (c.act === "pr.merge") return true;
+		// A merge counts as shipped only when it is known to have completed: observed to succeed, and not a request that
+		// is merely scheduled (--auto, the merge queue) or that GitHub says did not merge (#1350).
+		if (c.act === "pr.merge") {
+			// "attempted" is the gated path's question: did the run try to deliver by merge? An unproved merge must then become
+			// a visible HELD row, not silence. "completed" is the status note's: only a merge known to have happened announces.
+			if (mode === "attempted") return true;
+			const m = c as { mergeUnverified?: unknown };
+			return c.ok === true && !commandSchedulesMerge(String(c.command ?? "")) && m.mergeUnverified !== "auto" && m.mergeUnverified !== "scheduled" && m.mergeUnverified !== "not_merged";
+		}
 		return c.act === "push.trunk" && deriveAct(c.act, String(c.command ?? "")).phrase === "pushed directly to the trunk";
 	});
 }
@@ -273,28 +329,30 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 	const { env, userId, instanceId, runId } = input;
 	const trace = { source: "coding", userId, instanceId, traceId: runId };
 	const plan = (await runStep("release-notes-plan", async () => {
-		if (!(await runShippedToTrunk(env, { instanceId, userId, runId }))) return null;
+		if (!(await runShippedToTrunk(env, { instanceId, userId, runId }, "attempted"))) return null;
 		const settings = await loadReleaseNotes(env, instanceId, userId);
+		// Without a gate the note is a status note: it announces only a delivery that is known to have completed.
+		if (!settings?.instance.requiredWorkflows?.length && !(await runShippedToTrunk(env, { instanceId, userId, runId }))) return null;
 		if (!settings?.effective.enabled) return { disabled: true, channels: [], repo: input.repoLabel, text: "" };
 		const channels: ReleaseChannel[] = settings.effective.channels.filter((c) => c.selected).map(({ selected: _s, ...c }) => c);
 		if (!channels.length) return { channels, repo: input.repoLabel, text: "" };
 		if (settings.instance.requiredWorkflows?.length) {
-			const pushed = await runPushedShaPrefix(env, { instanceId, userId, runId });
-			if (!pushed) return { channels, repo: input.repoLabel, text: "", unverified: "The push result did not identify its new commit." };
+			const delivered = await runDeliveredRange(env, { instanceId, userId, runId });
+			if (!delivered.ok && !delivered.code) return { channels, repo: input.repoLabel, text: "", unverified: delivered.reason };
 			// The range itself is read, paged and verified by the queue tick (#1349), where a rate limit can be waited out. Here
-			// we only record what the runner proved: the repository, the branch it pushed to and the old and new commits.
+			// we only record what the runner proved: the repository, the branch it delivered to, and the old and new commits.
 			const repoRow = await getRepo(env, instanceId, userId, input.repoId).catch(() => null);
-			if (!repoRow?.githubRepo) return { channels, repo: input.repoLabel, text: "", unverified: "This repository is not a GitHub repository, so the pushed commit cannot be verified." };
-			if (repoRow.branch && repoRow.branch !== pushed.branch) return { channels, repo: input.repoLabel, text: "", unverified: "The run pushed to a branch other than the repository's configured default branch." };
-			const ctx: ReleaseNoteContext = {
-				instanceId, runId, repo: repoRow.githubRepo, defaultBranch: pushed.branch, commitRange: null, changes: [], changesCapped: false, closedIssues: [],
-				ciStatus: "pending", headSha: null, pushedAt: new Date(deps.now()).toISOString(), pendingRange: { base: pushed.basePrefix, head: pushed.prefix, branch: pushed.branch },
-			};
+			if (!repoRow?.githubRepo) return { channels, repo: input.repoLabel, text: "", unverified: "This repository is not a GitHub repository, so the delivered commit cannot be verified." };
+			const empty: ReleaseNoteContext = { instanceId, runId, repo: repoRow.githubRepo, defaultBranch: repoRow.branch || "default branch", commitRange: null, changes: [], changesCapped: false, closedIssues: [], ciStatus: "pending", headSha: null, pushedAt: new Date(deps.now()).toISOString() };
+			// A PR merge outcome that cannot be proved is held as a visible row, not just an event (#1350).
+			if (!delivered.ok) return { channels, repo: empty.repo, text: "", unverified: delivered.reason, held: { code: delivered.code, context: empty, workflows: settings.instance.requiredWorkflows } };
+			if (repoRow.branch && repoRow.branch !== delivered.branch) return { channels, repo: input.repoLabel, text: "", unverified: "The run delivered to a branch other than the repository's configured default branch." };
+			const ctx: ReleaseNoteContext = { ...empty, defaultBranch: delivered.branch, pendingRange: { base: delivered.base, head: delivered.head, branch: delivered.branch, ...(delivered.merges.length ? { merges: delivered.merges } : {}) } };
 			return { channels, repo: ctx.repo, text: "", queued: { context: ctx, workflows: settings.instance.requiredWorkflows } };
 		}
 		const ctx = await collectReleaseNoteContext(input, deps);
 		return { channels, repo: ctx.repo, text: buildReleaseNoteText(ctx) };
-	})) as { disabled?: true; channels: ReleaseChannel[]; repo: string; text: string; unverified?: string; queued?: { context: ReleaseNoteContext; workflows: NonNullable<import("../agent-types.js").InstanceReleaseNotes["requiredWorkflows"]> } } | null;
+	})) as { disabled?: true; channels: ReleaseChannel[]; repo: string; text: string; unverified?: string; held?: { code: PrHoldCode; context: ReleaseNoteContext; workflows: NonNullable<import("../agent-types.js").InstanceReleaseNotes["requiredWorkflows"]> }; queued?: { context: ReleaseNoteContext; workflows: NonNullable<import("../agent-types.js").InstanceReleaseNotes["requiredWorkflows"]> } } | null;
 	if (!plan) return { status: "not_shipped", sent: [], failed: [] };
 	if (plan.disabled) {
 		await logEvent(env, { ...trace, event: "release_note_skipped_disabled", message: "Release note not posted: release notes are turned off for this instance." }).catch(() => undefined);
@@ -305,6 +363,16 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 		return { status: "no_channels", sent: [], failed: [] };
 	}
 	if (plan.unverified) {
+		for (const channel of plan.held ? plan.channels : []) {
+			await runStep(`release-note-held:${channel.grantId}`, async () => {
+				if (!plan.held) return;
+				const now = Date.now();
+				await env.DB.prepare(`INSERT OR IGNORE INTO release_note_queue
+					(id,user_id,instance_id,repo_id,github_repo,default_branch,run_id,session_id,sha,grant_id,context_json,workflows_json,status,hold_code,reason,created_at,updated_at)
+					VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'held',?13,?14,?15,?15)`)
+					.bind(crypto.randomUUID(), userId, instanceId, input.repoId, plan.held.context.repo, plan.held.context.defaultBranch, runId, input.sessionId, `unverified:${runId}`, channel.grantId, JSON.stringify(plan.held.context), JSON.stringify(plan.held.workflows), plan.held.code, plan.unverified, now).run();
+			});
+		}
 		await logEvent(env, { ...trace, event: "release_note_unverified", level: "warn", message: `Release note held: ${plan.unverified}` }).catch(() => undefined);
 		await notifyUser(env, userId, "coding", "⚠️ Release note held", `${plan.repo}: ${plan.unverified}`, deepLinkFor({ kind: "coding-session", instanceId, sessionId: input.sessionId }), { key: `release-note-unverified:${runId}`, kind: "alert", instanceId }).catch(() => undefined);
 		return { status: "unverified", sent: [], failed: [] };

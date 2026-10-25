@@ -34,7 +34,11 @@ export type HoldCode =
 	| "commit_range_inconsistent"
 	| "commit_range_wrong_head"
 	| "default_branch_mismatch"
-	| "github_refused";
+	| "github_refused"
+	| "pr_merge_auto"
+	| "pr_merge_old_runner"
+	| "pr_merge_unverified"
+	| "pr_range_not_contiguous";
 
 export type GithubPage = { ok: true; body: unknown; next: string | null } | { ok: false; kind: "transient" | "permanent"; status: number; message: string };
 /** GET a GitHub REST path (`/repos/…`), classified. Injected in tests. */

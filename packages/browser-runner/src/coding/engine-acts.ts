@@ -36,6 +36,7 @@
  */
 
 import { splitHeredocs } from "./heredoc.js";
+import type { MergeEvidence, MergeUnverified } from "./merge-evidence.js";
 
 /** The kinds of act worth writing down. Anything not here is ordinary work and is not recorded. */
 export type EngineActKind =
@@ -72,6 +73,14 @@ export interface EngineActRecord {
 	pushedSha?: string;
 	/** Previous remote commit from the same push result; bounds the delivered commit range. */
 	pushedFromSha?: string;
+	/**
+	 * `gh pr merge` only (#1350): what GitHub says the merge did, read after the command's own result. Present only for
+	 * a synchronous, non-`--auto` merge the runner could prove; the cloud re-verifies every field and trusts none of it.
+	 */
+	merge?: MergeEvidence;
+	/** `gh pr merge` that succeeded as a command but could not be proved a completed merge, and why (code + short detail). */
+	mergeUnverified?: MergeUnverified;
+	mergeDetail?: string;
 	/** Is this act one that cannot simply be undone? Drives how loudly it is surfaced. */
 	irreversible: boolean;
 	/**

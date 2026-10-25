@@ -56,6 +56,7 @@ import { logEvent } from "./events.js";
 import { codingCardId } from "./coding-board.js";
 import { writeActionEntry } from "./task-action-log.js";
 import { splitHeredocs } from "./heredoc.js";
+import { isMergeUnverified, type MergeEvidence, type MergeUnverified, parseMergeEvidence } from "./merge-evidence.js";
 import type { Env } from "../types.js";
 
 /** One act as the runner reports it. Mirrors `EngineActRecord` in the browser-runner package. */
@@ -66,6 +67,11 @@ export interface EngineActReport {
 	target: string | null;
 	pushedSha?: string;
 	pushedFromSha?: string;
+	/** `pr.merge` (#1350): the runner's v1 claim about a completed synchronous merge. Re-verified against GitHub before use. */
+	merge?: MergeEvidence;
+	/** `pr.merge` the runner saw succeed but could not prove a completed merge, and why. Absent on a runner that predates the contract. */
+	mergeUnverified?: MergeUnverified;
+	mergeDetail?: string;
 	irreversible: boolean;
 	ok: boolean | null;
 	at: string;
@@ -513,6 +519,21 @@ export function deriveAct(kind: string, command: string): ActClaim {
  * THE COMMAND (#582) — see the module header for why deriving it from the kind alone was itself a
  * defect, and why reading the evidence field is not a return to trusting the runner's verdict.
  */
+/**
+ * The #1350 merge fields of a runner-reported `pr.merge`, and only of one that succeeded. A `merge` object that is not
+ * exactly the v1 contract is not dropped silently: it becomes `mergeUnverified: "malformed"`, so the hold says so.
+ */
+function mergeFields(kind: string, r: Record<string, unknown>): Pick<EngineActReport, "merge" | "mergeUnverified" | "mergeDetail"> {
+	if (kind !== "pr.merge" || r.ok !== true) return {};
+	if (r.merge !== undefined) {
+		const merge = parseMergeEvidence(r.merge);
+		return merge ? { merge } : { mergeUnverified: "malformed" };
+	}
+	if (!isMergeUnverified(r.mergeUnverified)) return {};
+	const detail = typeof r.mergeDetail === "string" && r.mergeDetail.length <= 160 ? r.mergeDetail.trim() : "";
+	return { mergeUnverified: r.mergeUnverified, ...(detail ? { mergeDetail: detail } : {}) };
+}
+
 export function sanitizeEngineActs(raw: unknown): EngineActReport[] {
 	if (!Array.isArray(raw)) return [];
 	const out: EngineActReport[] = [];
@@ -542,6 +563,7 @@ export function sanitizeEngineActs(raw: unknown): EngineActReport[] {
 			target: typeof r.target === "string" && r.target.trim() ? r.target.trim().slice(0, 120) : null,
 			...(kind === "push.trunk" && r.ok === true && typeof r.pushedSha === "string" && /^[0-9a-f]{7,40}$/i.test(r.pushedSha) ? { pushedSha: r.pushedSha.toLowerCase() } : {}),
 			...(kind === "push.trunk" && r.ok === true && typeof r.pushedFromSha === "string" && /^[0-9a-f]{7,40}$/i.test(r.pushedFromSha) ? { pushedFromSha: r.pushedFromSha.toLowerCase() } : {}),
+			...mergeFields(kind, r),
 			irreversible: deriveAct(kind, command).irreversible,
 			// Anything that is not literally true/false is UNKNOWN. Coercing a missing value to
 			// `true` would be the platform inventing a successful merge.
@@ -653,6 +675,9 @@ export async function recordEngineActs(
 				target: act.target,
 				...(act.pushedSha ? { pushedSha: act.pushedSha } : {}),
 				...(act.pushedFromSha ? { pushedFromSha: act.pushedFromSha } : {}),
+				...(act.merge ? { merge: act.merge } : {}),
+				...(act.mergeUnverified ? { mergeUnverified: act.mergeUnverified } : {}),
+				...(act.mergeDetail ? { mergeDetail: act.mergeDetail } : {}),
 				irreversible: act.irreversible,
 				ok: act.ok,
 				sessionId: ctx.sessionId,

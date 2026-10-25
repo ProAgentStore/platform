@@ -622,6 +622,12 @@ export class CodingRuntime {
 	 * what the engine authenticated with — not a guess derived from the preset (see
 	 * `usage-payer.ts`, and the alternative #554 rejected).
 	 */
+	/** `end()`, after any GitHub lookup for a just-completed merge has finished, so its evidence is in the final drain (#1350). */
+	async endAfterActs(sessionId: string): Promise<ReturnType<CodingRuntime["end"]>> {
+		await this.sessions.get(sessionId)?.settleActs();
+		return this.end(sessionId);
+	}
+
 	end(sessionId: string): { ok: true; usage: EngineUsageRecord[]; acts: EngineActRecord[]; authResolved: EngineAuthResolved | null } {
 		const session = this.sessions.get(sessionId);
 		const usage = session ? session.takeUsage() : [];

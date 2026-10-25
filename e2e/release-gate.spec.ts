@@ -64,7 +64,7 @@ async function mock(page: Page, opts: { stored?: Stored; runnerVersion?: string;
 		}
 		if (path === "/v1/instances/inst-1/release-notes/deliveries") return json({ deliveries: [], hasMore: false, nextCursor: null });
 		if (path === "/v1/instances/inst-1/runner-node") return json({ runnerNode: "mac", nodes: ["mac"], nodesDetail: [{ node: "mac", connected: true, nodeOnline: true }], resolvedNode: "mac" });
-		if (path === "/v1/terminals/nodes") return json({ nodes: [{ node: "mac", connected: true, runnerVersion: opts.runnerVersion ?? "0.4.179" }] });
+		if (path === "/v1/terminals/nodes") return json({ nodes: [{ node: "mac", connected: true, runnerVersion: opts.runnerVersion ?? "0.4.180" }] });
 		if (path === "/v1/slack/bot") return json({ connected: true, valid: true, bot: { team: "Acme" }, oauthConfigured: false });
 		if (path === "/v1/slack/channels") return json({ channels: [{ id: "C1", name: "release-notes", isMember: true }], hasMore: false });
 		if (path.startsWith("/v1/discord/")) return json({ error: "not connected" }, 404);

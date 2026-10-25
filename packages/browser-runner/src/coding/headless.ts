@@ -3,7 +3,9 @@ import type { CleanupManager } from "./cleanup.js";
 import { spawnTarget, unwrapLauncher } from "./launcher-wrapper.js";
 import { type ObjectiveOrigin, runObjectiveBlock } from "./run-objective.js";
 import { type ChildProcess, spawn } from "node:child_process";
-import { classifyCommand, commandFromToolInput, type EngineActRecord, fillPushedShaFromResult, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
+import { liveGh } from "./merge-gh.js";
+import { type GhRunner, settleMergeLookups, trackMergeLookups } from "./merge-evidence.js";
+import { classifyCommand, commandFromToolInput, type EngineActRecord, fillPushedShaFromResult, fillTargetFromResult, resultText, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
@@ -51,6 +53,8 @@ export interface HeadlessSessionConfig {
 	 * session behaves as it did before — the engine alone is signalled.
 	 */
 	cleanup?: CleanupManager;
+	/** The `gh` that proves a completed `gh pr merge` (#1350). Absent: the engine's own `gh`. Tests inject a fake. */
+	gh?: () => GhRunner;
 	/** Working directory the CLI runs in (the repo). */
 	workDir: string;
 	clientType: ClientType;
@@ -244,6 +248,8 @@ export class HeadlessSession {
 	 * damages the record exactly as much as missing a real one.
 	 */
 	private awaitingResult = new Map<string, EngineActRecord[]>();
+	/** GitHub lookups for completed `gh pr merge` acts that have not been published yet (#1350). */
+	private actLookups = new Set<Promise<void>>();
 	/**
 	 * `tool_use_id` → tool name, for the ONE decision the result event cannot make on its own: how
 	 * much of it reaches the pane (#700, `toolResultBudget` in `transcript-lines.ts`).
@@ -1073,7 +1079,14 @@ export class HeadlessSession {
 		if (!acts) return;
 		this.awaitingResult.delete(id);
 		const ok = toolCallOk(block);
-		for (const a of fillPushedShaFromResult(fillTargetFromResult(acts, block.content), block.content)) this.publishAct({ ...a, ok });
+		const settled = fillPushedShaFromResult(fillTargetFromResult(acts, block.content), block.content).map((a) => ({ ...a, ok }));
+		// A completed `gh pr merge` prints neither SHA: ask GitHub what it did (#1350) before publishing.
+		if (!trackMergeLookups(settled, resultText(block.content), () => this.config.gh?.() ?? liveGh(this.config.workDir, mergeEnv(process.env, this.config.env)), (a) => this.publishAct(a), this.actLookups)) for (const a of settled) this.publishAct(a);
+	}
+
+	/** Wait (bounded) for merge lookups still in flight, so the final drain keeps the evidence they are fetching (#1350). */
+	settleActs(): Promise<void> {
+		return settleMergeLookups(this.actLookups);
 	}
 
 	/** Publish everything still waiting, with an unknown outcome. */

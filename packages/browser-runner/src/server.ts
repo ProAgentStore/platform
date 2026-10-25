@@ -352,7 +352,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	if (req.method === "POST" && path === "/coding/end") {
 		const b = await readJson<{ sessionId: string }>(req);
-		return json(res, 200, runner.coding.end(b.sessionId));
+		return json(res, 200, await runner.coding.endAfterActs(b.sessionId));
 	}
 	if (req.method === "GET" && path === "/coding/sessions") {
 		// Each agent sees its own sessions (#1164); a local caller (the update controller) sees them all.

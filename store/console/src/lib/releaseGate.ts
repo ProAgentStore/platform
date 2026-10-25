@@ -10,6 +10,9 @@ import type { Machine, NodeDetail } from "./runnerPanel";
 /** A gated direct push needs the runner to report the old and new SHA of the push (#1345). */
 export const MIN_GATED_RUNNER = "0.4.179";
 
+/** A gated PR merge needs the runner to report what the merge delivered (#1350, `merge.v` 1): the first CLI that does. */
+export const MIN_MERGE_RUNNER = "0.4.180";
+
 /** The longest job or step name the server accepts (`SELECTOR_MAX`). */
 export const SELECTOR_MAX = 200;
 export const WORKFLOWS_MIN = 2;
@@ -189,6 +192,8 @@ export interface Readiness {
 	/** True only when nothing below applies. The panel says "ready" for no other state. */
 	ready: boolean;
 	items: Array<{ id: ReadinessId; text: string }>;
+	/** Advisory only: never keeps a gate from reading ready (a direct push still works), but is always shown. */
+	notes: string[];
 }
 
 export interface ReadinessInput {
@@ -210,6 +215,7 @@ export function slackChannelsBotMissing(channels: InstanceReleaseNotesResponse["
  */
 export function readiness({ view, botMissing, runner }: ReadinessInput): Readiness {
 	const items: Readiness["items"] = [];
+	const notes: string[] = [];
 	const { effective, gate } = view;
 	if (!effective.enabled) items.push({ id: "off", text: "Release notes are off for this agent, so nothing is posted." });
 	if (effective.channels.length === 0) items.push({ id: "no_channel", text: "No channel is granted. Grant a Slack or Discord channel below." });
@@ -220,8 +226,10 @@ export function readiness({ view, botMissing, runner }: ReadinessInput): Readine
 	if (gate.state !== "none") {
 		const warning = runnerWarning(runner);
 		if (warning) items.push({ id: "runner", text: warning });
+		const merge = mergeRunnerNote(runner);
+		if (merge) notes.push(merge);
 	}
-	return { ready: items.length === 0, items };
+	return { ready: items.length === 0, items, notes };
 }
 
 /** The runner half: a gated push needs CLI 0.4.179+, and an old one's missing SHA cannot be recovered from branch HEAD. */
@@ -234,6 +242,18 @@ export function runnerWarning(r: RunnerReading): string | null {
 	if (r.version === null) return `The runner on ${r.node} does not report its version. ${update}`;
 	if (cmp === null) return `The runner on ${r.node} reports version "${r.version}", which cannot be compared with ${MIN_GATED_RUNNER}. ${update}`;
 	return null;
+}
+
+/**
+ * The PR-merge half (#1350): a runner that can record a direct push (CLI 0.4.179) but not a merge (0.4.180) is fine for
+ * pushes and holds every PR merge, with code pr_merge_old_runner. Null when the version is unknown or already current: the
+ * unknown case is already a blocking item from {@link runnerWarning}.
+ */
+export function mergeRunnerNote(r: RunnerReading): string | null {
+	if (!r.node || !r.version) return null;
+	const cmp = compareVersions(r.version, MIN_MERGE_RUNNER);
+	if (cmp === null || cmp >= 0) return null;
+	return `Pull request merges need CLI ${MIN_MERGE_RUNNER} or newer. The runner on ${r.node} is ${r.version}: direct pushes are fine, but a PR merge it makes is held until you run \`pags update\`.`;
 }
 
 /** What the panel prints after a test send. It bypassed the gate, so it must not read as a release. */

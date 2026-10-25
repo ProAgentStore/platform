@@ -268,9 +268,9 @@ function github(state: { commits: ReturnType<typeof history>; runs?: Array<Recor
 }
 
 /** A gated row exactly as the run end leaves it: keyed by the pushed prefix, range recorded, nothing read from GitHub. */
-async function seedAwaiting(over: { workflows?: unknown[]; status?: string; ageMs?: number } = {}) {
+async function seedAwaiting(over: { workflows?: unknown[]; status?: string; ageMs?: number; merges?: unknown[] } = {}) {
 	const q = await seedQueue(over.workflows ?? required, over.workflows ?? required, over.status ?? "pending");
-	const ctx = { instanceId: "inst-1", runId: "run-1", repo: "acme/app", defaultBranch: "main", commitRange: null, changes: [], changesCapped: false, closedIssues: [], ciStatus: "pending", headSha: null, pushedAt: new Date().toISOString(), pendingRange: { base: BASE_SHA.slice(0, 7), head: SHA.slice(0, 7), branch: "main" } };
+	const ctx = { instanceId: "inst-1", runId: "run-1", repo: "acme/app", defaultBranch: "main", commitRange: null, changes: [], changesCapped: false, closedIssues: [], ciStatus: "pending", headSha: null, pushedAt: new Date().toISOString(), pendingRange: { base: BASE_SHA.slice(0, 7), head: SHA.slice(0, 7), branch: "main", ...(over.merges ? { merges: over.merges } : {}) } };
 	const created = Date.now() - (over.ageMs ?? 0);
 	await q.d1.DB.prepare("UPDATE release_note_queue SET sha=?1, context_json=?2, created_at=?3, updated_at=?3 WHERE id='q1'").bind(SHA.slice(0, 7), JSON.stringify(ctx), created).run();
 	const full = () => q.d1.DB.prepare("SELECT sha, status, reason, hold_code, context_json FROM release_note_queue WHERE id='q1'").first<{ sha: string; status: string; reason: string | null; hold_code: string | null; context_json: string }>();
@@ -446,6 +446,110 @@ describe("the queue tick reads the whole range and every workflow run (#1349)", 
 			await runReleaseNoteQueue(q.env, deps);
 			expect(q.deliver).toHaveBeenCalledTimes(1);
 			expect(await q.full()).toMatchObject({ sha: SHA, status: "sent" });
+		} finally { q.d1.close(); }
+	});
+});
+
+// ── #1350: the tick re-proves each reported PR merge from GitHub before a note can post ──
+
+const ev = (method: "merge" | "squash" | "rebase", over: Record<string, unknown> = {}) => ({ v: 1, repo: "acme/app", pr: 42, baseRef: "main", method, beforeSha: BASE_SHA, afterSha: SHA, mergedAt: "2026-10-25T10:00:05Z", mergedBy: "serge", actor: "serge", ...over });
+const prBody = (over: Record<string, unknown> = {}) => ({ merged: true, merged_at: "2026-10-25T10:00:05Z", merge_commit_sha: SHA, merged_by: { login: "serge" }, base: { ref: "main", repo: { full_name: "acme/app" } }, head: { sha: sha40(2) }, commits: 1, ...over });
+const c = (sha: string, parents: string[], message = "feat: change") => ({ sha, commit: { message }, parents: parents.map((p) => ({ sha: p })) });
+/** The three shapes GitHub produces for one PR: one squashed commit, N rebased commits, or the PR's commits plus a merge commit. */
+const SHAPES = {
+	squash: { commits: [c(SHA, [BASE_SHA], "feat: squashed (#42)")], pr: prBody({ commits: 3 }), parents: [BASE_SHA] },
+	rebase: { commits: [c(sha40(1), [BASE_SHA]), c(sha40(2), [sha40(1)]), c(SHA, [sha40(2)])], pr: prBody({ commits: 3 }), parents: [sha40(2)] },
+	merge: { commits: [c(sha40(1), [BASE_SHA]), c(sha40(2), [sha40(1)]), c(SHA, [BASE_SHA, sha40(2)], "Merge pull request #42")], pr: prBody({ commits: 2 }), parents: [BASE_SHA, sha40(2)] },
+};
+
+/** GitHub with the PR and its merge commit served beside the compare, and any path overridable. */
+function mergeGithub(shape: keyof typeof SHAPES, over: { pr?: Record<string, unknown> | null; parents?: string[]; commits?: ReturnType<typeof c>[]; fail?: (path: string) => GithubPage | null } = {}) {
+	const base = SHAPES[shape];
+	const gh = github({
+		commits: (over.commits ?? base.commits) as ReturnType<typeof history>,
+		runs: spread(),
+		fail: (path) => {
+			const forced = over.fail?.(path);
+			if (forced) return forced;
+			if (path === "/repos/acme/app/pulls/42") return over.pr === null ? ({ ok: false, kind: "permanent", status: 404, message: "GitHub answered 404" }) : ok(over.pr ?? base.pr);
+			const asked = /^\/repos\/acme\/app\/commits\/([0-9a-f]{40})$/.exec(path)?.[1];
+			if (asked) return ok({ sha: asked, parents: (over.parents ?? base.parents).map((sha) => ({ sha })) });
+			return null;
+		},
+	});
+	return gh;
+}
+const merged = async (shape: keyof typeof SHAPES, over: Parameters<typeof mergeGithub>[1] = {}, evidenceOver: Record<string, unknown> = {}, method: "merge" | "squash" | "rebase" = shape) => {
+	const q = await seedAwaiting({ merges: [ev(method, evidenceOver)] });
+	const gh = mergeGithub(shape, over);
+	await runReleaseNoteQueue(q.env, { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) });
+	return { q, gh, row: await q.full() };
+};
+
+describe("a reported PR merge is re-proved from GitHub, then the note posts once (#1350)", () => {
+	it.each(["merge", "squash", "rebase"] as const)("a %s merge: PR, merge commit and range all agree, so one note posts for the merge's own range", async (shape) => {
+		const { q, gh, row } = await merged(shape);
+		try {
+			expect(q.deliver).toHaveBeenCalledTimes(1);
+			expect(q.deliver.mock.calls[0]?.[1]).toContain(`Commit: ${SHA}`);
+			expect(row).toMatchObject({ status: "sent", sha: SHA, hold_code: null });
+			expect(gh.calls).toContain("/repos/acme/app/pulls/42");
+			expect(gh.calls).toContain(`/repos/acme/app/commits/${SHA}`);
+			expect(JSON.parse(row?.context_json ?? "{}").pendingRange).toBeUndefined();
+		} finally { q.d1.close(); }
+	});
+
+	const held = async (shape: keyof typeof SHAPES, over: Parameters<typeof mergeGithub>[1], evidenceOver: Record<string, unknown>, reason: RegExp, method?: "merge" | "squash" | "rebase") => {
+		const { q, row } = await merged(shape, over, evidenceOver, method);
+		try {
+			expect(row, JSON.stringify(row)).toMatchObject({ status: "held", hold_code: "pr_merge_unverified" });
+			expect(row?.reason).toMatch(reason);
+			expect(q.deliver).not.toHaveBeenCalled();
+		} finally { q.d1.close(); }
+	};
+	it("a PR GitHub says is not merged", async () => { await held("squash", { pr: prBody({ merged: false, merged_at: null }) }, {}, /not merged according to GitHub/); });
+	it("a PR that merged into another branch", async () => { await held("squash", { pr: prBody({ base: { ref: "release", repo: { full_name: "acme/app" } } }) }, {}, /did not merge into acme\/app:main/); });
+	it("a PR in another repository than the note's", async () => { await held("squash", { pr: prBody({ base: { ref: "main", repo: { full_name: "acme/other" } } }) }, {}, /did not merge into/); });
+	it("evidence reported for another branch or repository", async () => {
+		await held("squash", {}, { baseRef: "release" }, /was reported for acme\/app:release, not acme\/app:main/);
+		await held("squash", {}, { repo: "acme/other" }, /was reported for acme\/other/);
+	});
+	it("a merge commit that is not the one the runner named", async () => { await held("squash", { pr: prBody({ merge_commit_sha: sha40(9) }) }, {}, /merge commit on GitHub is not the one the runner reported/); });
+	it("a PR someone else merged", async () => { await held("squash", { pr: prBody({ merged_by: { login: "mallory" } }) }, {}, /not merged by the account that ran the command/); });
+	it("an actor that is not the merger", async () => { await held("squash", {}, { actor: "mallory" }, /not merged by the account that ran the command/); });
+	it("an unrelated branch update between the prior tip and the merge", async () => {
+		await held("squash", { parents: [sha40(9)] }, {}, /was made on .{7}, not the .{7} the runner reported/);
+	});
+	it("a merge commit outside the delivered range GitHub verified", async () => {
+		const other = sha40(77);
+		await held("squash", { pr: prBody({ merge_commit_sha: other }), parents: [BASE_SHA] }, { afterSha: other }, /not inside the verified delivered range/);
+	});
+	it("a 'merge' whose result is not a merge of the PR head", async () => {
+		await held("merge", { pr: prBody({ head: { sha: sha40(5) }, commits: 2 }) }, {}, /not a merge commit of the pull request's head/);
+		await held("merge", { parents: [BASE_SHA] }, {}, /not a merge commit of the pull request's head/);
+	});
+	it("a squash whose result has two parents", async () => { await held("merge", {}, {}, /squash result has 2 parents/, "squash"); });
+	it("a rebase that cannot be mapped to the PR's commits, or is not one line on the prior tip", async () => {
+		await held("rebase", { pr: prBody({ commits: 9 }) }, {}, /rebase cannot be mapped to its 9 commit/);
+		await held("rebase", { pr: prBody({ commits: 2 }) }, {}, /rebase is ambiguous: its 2 commit/);
+		const forked = [c(sha40(1), [BASE_SHA]), c(sha40(2), [BASE_SHA]), c(SHA, [sha40(2)])];
+		await held("rebase", { commits: forked }, {}, /rebase is ambiguous: its 3 commit/);
+	});
+	it("a PR GitHub cannot show is held", async () => { await held("squash", { pr: null }, {}, /could not be read from GitHub/); });
+
+	it("a rate limit reading the PR waits and tries again; it does not hold or post", async () => {
+		const q = await seedAwaiting({ merges: [ev("squash")] });
+		try {
+			let down = true;
+			const gh = mergeGithub("squash", { fail: (p) => (down && p === "/repos/acme/app/pulls/42" ? refused(429) : null) });
+			const deps = { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) };
+			await runReleaseNoteQueue(q.env, deps);
+			expect(await q.full()).toMatchObject({ status: "pending", hold_code: null, sha: SHA.slice(0, 7) });
+			expect((await q.full())?.reason).toMatch(/429.*retry/);
+			expect(q.deliver).not.toHaveBeenCalled();
+			down = false;
+			await runReleaseNoteQueue(q.env, deps);
+			expect(q.deliver).toHaveBeenCalledTimes(1);
 		} finally { q.d1.close(); }
 	});
 });
