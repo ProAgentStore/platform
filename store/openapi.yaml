@@ -18068,6 +18068,30 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/instances/{instanceId}/actions-runner/recover:
+    post:
+      summary: Request safe recovery of one managed GitHub Actions runner
+      description: The owner requests recovery of one runner scope on this instance's pinned machine. The local supervisor queues or defers the request while a job is active and records a durable outcome; read GET /v1/instances/{instanceId}/actions-runner to follow its lastRecovery. This does not restart the PAGS runtime. (#1367)
+      operationId: recoverInstanceActionsRunner
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope]
+              additionalProperties: false
+              properties:
+                scope: { type: object, properties: { org: { type: string }, repo: { type: string } } }
+      responses:
+        "202": { description: The node, scope and durable local recovery receipt (id, queued or deferred_active_job, requestedAt) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/instances/{instanceId}/release-notes:
     get:
       summary: Who receives this instance's release notes

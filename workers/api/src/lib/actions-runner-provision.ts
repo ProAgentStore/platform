@@ -147,10 +147,14 @@ async function repoVisibility(repo: string, deps: MintDeps): Promise<string | nu
  * repos. A repo-scoped runner only for a PRIVATE repo — a public repo's fork PRs would run code on
  * the owner's machine (#1113 security).
  */
-async function checkScope(scope: RunnerScope, instanceId: string, userId: string, deps: ProvisionDeps): Promise<void> {
+async function checkAgentScope(scope: RunnerScope, instanceId: string, userId: string, deps: ProvisionDeps): Promise<void> {
 	const repos = await deps.agentRepos(instanceId, userId);
 	const ok = "org" in scope ? repos.some((r) => r.split("/")[0].toLowerCase() === scope.org.toLowerCase()) : repos.some((r) => r.toLowerCase() === scope.repo.toLowerCase());
 	if (!ok) throw new HttpError(400, `${"org" in scope ? scope.org : scope.repo} is not ${"org" in scope ? "the owner of a repository" : "a repository"} this agent works on (${repos.join(", ") || "it has none"}).`);
+}
+
+async function checkScope(scope: RunnerScope, instanceId: string, userId: string, deps: ProvisionDeps): Promise<void> {
+	await checkAgentScope(scope, instanceId, userId, deps);
 	if ("repo" in scope) {
 		const visibility = await repoVisibility(scope.repo, deps);
 		try {
@@ -368,6 +372,13 @@ export type InstalledRunner = {
 	managed: boolean;
 	name: string | null;
 	url: string | null;
+	/** Local service facts from the machine. GitHub status below remains independent. */
+	serviceMode?: string;
+	serviceState?: string;
+	supervisor?: { updatedAt: number; health: string; [key: string]: unknown } | null;
+	supervisorNote?: string;
+	/** A stale sample is never evidence of current local readiness. */
+	localHealth?: "current" | "stale" | "unknown";
 	/** GitHub's view of this runner (#1213): online, busy, its labels, whether jobs can be routed to it. Absent when it could not be read — see `ciNote`. */
 	ci?: CiRunnerHealth;
 	ciNote?: string;
@@ -382,25 +393,52 @@ export async function actionsRunnerStatus(
 	env: Env,
 	input: { userId: string; instanceId: string; jobId?: string },
 	deps: ProvisionDeps = liveProvisionDeps(env, input.userId),
-): Promise<{ node: string; job: RunnerJobView | null; installed: InstalledRunner[] }> {
-	const conn = await boundConn(deps, input.instanceId, input.userId);
+): Promise<{ node: string | null; machineHealth: "current" | "unknown"; machineNote?: string; job: RunnerJobView | null; installed: InstalledRunner[] }> {
+	const conn = await deps.conn(input.instanceId, input.userId);
+	if (!conn?.runnerNode) return { node: conn?.runnerNode ?? null, machineHealth: "unknown", machineNote: "The pinned machine is not connected, so local Actions service and recovery status cannot be read.", job: null, installed: [] };
+	const node = conn.runnerNode;
 	let r: { job: RunnerJobView | null; installed: InstalledRunner[] };
 	try {
 		r = await deps.call<{ job: RunnerJobView | null; installed: InstalledRunner[] }>(conn, "/coding/actions-runner/status", input.jobId ? { jobId: input.jobId } : {});
 	} catch (e) {
-		if (oldRunner(e)) throw new HttpError(409, `This machine's runner cannot report Actions runners (CLI ${ACTIONS_RUNNER_MIN_CLI} or newer). Update it with runner_update.`);
-		throw e;
+		return { node, machineHealth: "unknown", machineNote: oldRunner(e)
+			? `This machine's CLI cannot report Actions runners (needs ${ACTIONS_RUNNER_MIN_CLI} or newer). Update it with runner_update.`
+			: `Local Actions service and recovery status could not be read: ${e instanceof Error ? e.message : "unknown relay error"}`, job: null, installed: [] };
 	}
 	const installed = await Promise.all(
 		(r.installed ?? []).map(async (i): Promise<InstalledRunner> => {
+			const localHealth = i.supervisor && typeof i.supervisor.updatedAt === "number"
+				? (Date.now() - i.supervisor.updatedAt <= 60_000 && i.supervisor.updatedAt <= Date.now() + 5_000 ? "current" : "stale")
+				: "unknown";
+			const local = { ...i, localHealth } as InstalledRunner;
 			const scope = scopeFromRunnerUrl(i.url);
-			if (!i.name || !scope) return i;
+			if (!i.name || !scope) return { ...local, ciNote: "GitHub's view is unknown because the local runner name or scope is missing." };
 			try {
-				return { ...i, ci: ciRunnerHealth(await findGithubRunner(scope, i.name, deps), conn.runnerNode) };
+				return { ...local, ci: ciRunnerHealth(await findGithubRunner(scope, i.name, deps), node) };
 			} catch (e) {
-				return { ...i, ciNote: `GitHub's view of this runner could not be read: ${e instanceof Error ? e.message : "unknown error"}` };
+				return { ...local, ciNote: `GitHub's view of this runner could not be read: ${e instanceof Error ? e.message : "unknown error"}` };
 			}
 		}),
 	);
-	return { node: conn.runnerNode, job: r.job ?? null, installed };
+	return { node, machineHealth: "current", job: r.job ?? null, installed };
+}
+
+/** Ask the pinned machine to recover one PAGS-managed Actions runner. The machine owns the
+ * active-worker guard and durable outcome; this never restarts `pags up` or kills a PID here. */
+export async function recoverActionsRunner(
+	env: Env,
+	input: { userId: string; instanceId: string; scope: RunnerScope },
+	deps: ProvisionDeps = liveProvisionDeps(env, input.userId),
+): Promise<{ node: string; scope: RunnerScope; recovery: { id: string; state: "queued" | "deferred_active_job"; requestedAt: number } }> {
+	const conn = await boundConn(deps, input.instanceId, input.userId);
+	await checkAgentScope(input.scope, input.instanceId, input.userId, deps);
+	const url = scopeUrl(input.scope);
+	const recovery = await deps.call<{ id: string; state: "queued" | "deferred_active_job"; requestedAt: number }>(conn, "/coding/actions-runner/recover", { url });
+	if (!recovery || typeof recovery.id !== "string" || (recovery.state !== "queued" && recovery.state !== "deferred_active_job") || !Number.isFinite(recovery.requestedAt)) throw new HttpError(502, "The machine did not return a valid Actions recovery receipt. Read actions_runner_status before asking again.");
+	await logEvent(env, {
+		source: "runner", event: "actions_runner.recovery_requested", userId: input.userId, instanceId: input.instanceId,
+		message: `Asked ${conn.runnerNode} to recover its GitHub Actions runner for ${url}`,
+		context: { node: conn.runnerNode, url, recoveryId: recovery.id, state: recovery.state },
+	}).catch(() => undefined);
+	return { node: conn.runnerNode, scope: input.scope, recovery };
 }

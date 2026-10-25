@@ -95,7 +95,7 @@ src/
     ├── shared.ts         TokenResolver/SafetyResolver, trigger config, board grouping
     │   ── ungated: every subscriber gets these ──
     ├── base.ts           10 tools — the connector-tool gate, describe/subscribe/pause/resume/cancel, chat
-    ├── machine-control.ts 17 tools — stable-machine policy read/write, the native-control preflight (#1057), plus force_runner_attach (#856), runner_update (#859) and its durable outcome, runner_update_status (#990), runner_restart (#1032), and the GitHub Actions runner on an agent's pinned machine: actions_runner_setup / actions_runner_status (#1208, #1209)
+    ├── machine-control.ts 18 tools — stable-machine policy read/write, the native-control preflight (#1057), plus force_runner_attach (#856), runner_update (#859) and its durable outcome, runner_update_status (#990), runner_restart (#1032), and the GitHub Actions runner on an agent's pinned machine: actions_runner_setup / actions_runner_status / actions_runner_recover (#1208, #1209, #1367)
     ├── runtime.ts        23 tools — the `pags up` runtime, its task queue, terminal state, safe
 │                     node forget, and a run's detail
 │                     view: one ticket, its deletion, the needs_input answer and the live
@@ -154,13 +154,13 @@ src/
                           + 3 deprecated aliases of the run tools: start/check/stop_instance_loop (#1243, src/deprecated-alias.ts)
 ```
 
-**402 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**403 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 14 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 2 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all nineteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 346 across `instance-tools/`. 373 are always registered; 29 are
+`storage-tools.ts`, and 347 across `instance-tools/`. 374 are always registered; 29 are
 surface-gated (apply=4, repo=3, coding=22).
 
-These counts add up to the headline: 21 + 1 + 14 + 2 + 2 + 1 + 15 + 346 = 402. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 14 + 2 + 2 + 1 + 15 + 347 = 403. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

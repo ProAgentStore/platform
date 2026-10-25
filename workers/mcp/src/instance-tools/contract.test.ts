@@ -575,6 +575,7 @@ const TABLE: Record<string, Row> = {
 	set_auto_stash: ["machineControl", "write", null, "envelope", "dry_run,enabled,instance_id,token"],
 	actions_runner_setup: ["machineControl", "runtime", null, "envelope", "action,dry_run,instance_id,runner_group,scope,token"],
 	actions_runner_status: ["machineControl", "read", null, null, "instance_id,job_id,token"],
+	actions_runner_recover: ["machineControl", "runtime", null, "envelope", "dry_run,instance_id,scope,token"],
 	set_machine_policy: ["machineControl", "write", null, "envelope", "auto_update,cleanup_mode,cleanup_now,cleanup_overrides,display_name,dry_run,machine_id,token"],
 	set_machine_thresholds: ["machineControl", "write", null, "envelope", "cpuLoad1PerCpu,cpuLoad5PerCpu,diskFreeMinBytes,diskUsedPctMax,dry_run,machine_id,maxSessions,memAvailableMinBytes,memUsedPctMax,recoveryBand,recoveryStreak,token"],
 	reset_machine_thresholds: ["machineControl", "write", null, "envelope", "dry_run,machine_id,token"],

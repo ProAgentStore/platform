@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**402 tool registrations.** 373 are always registered; 29 are gated to the console
+**403 tool registrations.** 374 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -463,6 +463,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `runner_update_status` | The DURABLE outcome of the latest CLI update on one machine (#990) — what to call after `runner_update`, and what to read when its reply was slow, interrupted or answered `outcome: unknown`. `state` is `running` while in flight, then `scheduled`, `restarting`, `restarted`, `up_to_date`, `would_update`, `refused`, `unsupported`, `unreachable` or `failed`, with the versions, the agents held/re-attached/missing, and the machine's own reason | read | | |
 | `actions_runner_setup` | Install or remove the GitHub Actions runner service on a coding agent's pinned machine; the registration token is minted server-side and never stored or returned (#1208, #1209) | runtime | yes | |
 | `actions_runner_status` | The Actions runners configured on that machine (managed or hand-installed) and an install job's progress (#1208, #1209) | read | | |
+| `actions_runner_recover` | Request safe recovery of one PAGS-managed Actions listener; returns a durable receipt, with the outcome in `actions_runner_status` (#1367) | runtime | yes | |
 | `native_preflight` | Is the machine running this instance's runner ready for native desktop / Maestro control (#1057)? Permissions, Maestro, devices, stable error codes. Refused with NATIVE_NOT_ENABLED until the owner opts the machine in; drives and installs nothing | read | | |
 | `get_machine_policy` | One stable physical machine's display name, owner-scoped Auto-update policy, versions and lifecycle state; existing machines resolve to OFF when no policy was saved | read | | |
 | `set_machine_policy` | Name a machine (`display_name`, unique per account) and/or enable or disable its Auto-update; policy survives aliases and reconnects, and an idle runner rechecks it before installing | write | yes | |

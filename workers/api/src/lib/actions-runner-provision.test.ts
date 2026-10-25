@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { actionsRunnerStatus, mintRunnerToken, type ProvisionDeps, parseRunnerScope, scopeFromRunnerUrl, startActionsRunner } from "./actions-runner-provision.js";
+import { actionsRunnerStatus, mintRunnerToken, type ProvisionDeps, parseRunnerScope, recoverActionsRunner, scopeFromRunnerUrl, startActionsRunner } from "./actions-runner-provision.js";
 import type { RunnerConn } from "./runner-client.js";
 import type { Env } from "../types.js";
 
@@ -167,7 +167,7 @@ describe("status shows GitHub's view of each runner (#1213)", () => {
 	it("a runner with no name or an unreadable URL is listed as the machine reported it, GitHub not asked", async () => {
 		const d = deps({ call: async <T>() => ({ job: null, installed: [{ dir: "/x", managed: false, name: null, url: null }] }) as T });
 		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, d);
-		expect(s.installed).toEqual([{ dir: "/x", managed: false, name: null, url: null }]);
+		expect(s.installed).toEqual([{ dir: "/x", managed: false, name: null, url: null, localHealth: "unknown", ciNote: expect.stringMatching(/GitHub's view is unknown/) }]);
 		expect(d.github).toEqual([]);
 	});
 
@@ -176,6 +176,35 @@ describe("status shows GitHub's view of each runner (#1213)", () => {
 		expect(scopeFromRunnerUrl("https://github.com/proappstore-online/interns/")).toEqual({ repo: "proappstore-online/interns" });
 		expect(scopeFromRunnerUrl("https://example.com/x")).toBeNull();
 		expect(scopeFromRunnerUrl(null)).toBeNull();
+	});
+});
+
+describe("local supervisor status and explicit recovery (#1367)", () => {
+	it("says unknown when the pinned machine cannot answer, without claiming an installed runner is healthy", async () => {
+		const offline = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, deps({ conn: async () => null }));
+		expect(offline).toMatchObject({ node: null, machineHealth: "unknown", installed: [], job: null });
+		const unreachable = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, deps({ call: async () => { throw new Error("relay timed out"); } }));
+		expect(unreachable).toMatchObject({ node: NODE, machineHealth: "unknown", installed: [], machineNote: expect.stringMatching(/relay timed out/) });
+	});
+
+	it("keeps the GitHub view separate and marks an old local sample stale", async () => {
+		const d = deps({
+			call: async <T>() => ({ job: null, installed: [{ dir: "/x", managed: true, name: "pink-laptop", url: "https://github.com/proappstore-online/interns", serviceMode: "macos_system", supervisor: { health: "ready", updatedAt: Date.now() - 120_000, lastReadyAt: Date.now() - 120_000 } }] }) as T,
+			fetch: async () => Response.json({ runners: [{ id: 7, name: "pink-laptop", status: "online", busy: false, labels: [{ name: "pags", type: "custom" }, { name: "pags-pink-laptop", type: "custom" }] }] }),
+		});
+		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, d);
+		expect(s.installed[0]).toMatchObject({ serviceMode: "macos_system", localHealth: "stale", supervisor: { health: "ready" }, ci: { online: true, busy: false } });
+	});
+
+	it("targets one scope and returns the machine's durable receipt without minting a token", async () => {
+		const d = deps({ call: async <T>(_conn, path, _body) => {
+			if (path === "/coding/actions-runner/recover") return { id: "rec-1", state: "deferred_active_job", requestedAt: 123 } as T;
+			return { job: null, installed: [] } as T;
+		} });
+		const r = await recoverActionsRunner(env, { userId: "u1", instanceId: "inst-1", scope: { org: "proappstore-online" } }, d);
+		expect(r).toMatchObject({ node: NODE, recovery: { id: "rec-1", state: "deferred_active_job" } });
+		expect(d.github).toEqual([]); // local recovery must work even when the GitHub App cannot be read
+		await expect(recoverActionsRunner(env, { userId: "u1", instanceId: "inst-1", scope: { org: "another-org" } }, d)).rejects.toThrow(/not the owner of a repository/);
 	});
 });
 

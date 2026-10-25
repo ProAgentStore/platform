@@ -474,7 +474,7 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 
 	server.tool(
 		"actions_runner_status",
-		"Read the GitHub Actions runners configured on one coding agent's pinned machine — the platform's own and any hand install (`managed: false`), each with its name and GitHub URL — and, with job_id, the progress of an actions_runner_setup job. Read-only.",
+		"Read the GitHub Actions runners configured on one coding agent's pinned machine, including local service mode, supervisor health/recovery samples, and GitHub online/busy/routability. Local samples carry freshness; an installed folder or live PID alone does not prove readiness. With job_id, read setup progress. Read-only.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID of the coding agent, from my_instances."),
@@ -487,6 +487,31 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 			if (denied) return denied;
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/actions-runner${job_id ? `?jobId=${encodeURIComponent(job_id)}` : ""}`, sessionToken, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"actions_runner_recover",
+		"Request safe recovery of one PAGS-managed GitHub Actions runner on this agent's pinned machine. The machine defers while a job is active and records a durable outcome; read actions_runner_status to follow it. This does not restart pags up or kill unrelated processes. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID of the coding agent whose pinned machine owns the runner."),
+			scope: z.object({ org: z.string().optional(), repo: z.string().optional() }).strict().describe('Exactly one of { "org": "<org>" } or { "repo": "<owner>/<name>" }.'),
+			dry_run: z.boolean().optional().describe("Show the exact scoped request without contacting the machine."),
+		},
+		async ({ token, instance_id, scope, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, scope };
+			const denied = await requirePermission(safetyFor(token), "runtime", "actions_runner_recover", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/actions-runner/recover`;
+			const body = { scope };
+			if (dry_run) return dryRun(safetyFor(token), "actions_runner_recover", "request recovery of one managed Actions runner when idle", input, { endpoint, method: "POST", body });
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string; recovery?: { id?: string; state?: string } };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "actions_runner_recover", action: "completed", input, result: { recoveryId: data.recovery?.id, state: data.recovery?.state } });
+			return jsonText(data);
 		},
 	);
 }

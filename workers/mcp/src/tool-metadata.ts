@@ -495,6 +495,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	runner_update: "runtime",
 	// #1209: installs (or removes) the actions/runner service on the owner's machine.
 	actions_runner_setup: "runtime",
+	actions_runner_recover: "runtime",
 	// Restarts a machine's runner on the CLI it has — the recovery for a wedged runtime (#1032).
 	runner_restart: "runtime",
 	// #1324: act on a checkout's local changes on the machine that holds it. A stash keeps every byte on a ref (`runtime`);

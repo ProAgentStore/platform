@@ -10,7 +10,7 @@
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { actionsRunnerStatus, parseRunnerScope, startActionsRunner } from "../lib/actions-runner-provision.js";
+import { actionsRunnerStatus, parseRunnerScope, recoverActionsRunner, startActionsRunner } from "../lib/actions-runner-provision.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -32,4 +32,13 @@ instanceActionsRunnerRoutes.get("/:id/actions-runner", async (c) => {
 	const session = await requireUser(c);
 	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
 	return c.json(await actionsRunnerStatus(c.env, { userId: session.uid, instanceId: instance.id, jobId: c.req.query("jobId") || undefined }));
+});
+
+instanceActionsRunnerRoutes.post("/:id/actions-runner/recover", async (c) => {
+	const session = await requireUser(c);
+	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const body = ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+	const extra = Object.keys(body).filter((k) => k !== "scope");
+	if (extra.length) throw new HttpError(400, `Unknown field ${extra.map((k) => `\`${k}\``).join(", ")} — only \`scope\` is accepted.`);
+	return c.json(await recoverActionsRunner(c.env, { userId: session.uid, instanceId: instance.id, scope: parseRunnerScope(body.scope) }), 202);
 });
