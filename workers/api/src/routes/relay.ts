@@ -2,6 +2,7 @@ import { drainPendingQueues } from "../lib/objective-queue-start.js";
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
+import { relayProbeResponse } from "../lib/relay-probe.js";
 import { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import { signRelayToken, verifyRelayToken } from "../lib/session.js";
 import type { Env } from "../types.js";
@@ -37,7 +38,8 @@ relayRoutes.post("/:instanceId/token", async (c) => {
  *
  * WebSocket upgrade: validates the bearer token from query param (WS upgrades
  * can't carry Authorization headers in all environments), verifies instance
- * ownership, then forwards to the per-instance RelayDO.
+ * ownership, then forwards to the per-instance RelayDO. `&probe=1` (#1148) is answered in the Worker instead: a socket that
+ * echoes round-trip probes and touches no relay slot, for a new CLI to prove it can connect before it replaces the running one.
  */
 relayRoutes.get("/:instanceId/connect", async (c) => {
 	const token = c.req.query("token");
@@ -63,6 +65,10 @@ relayRoutes.get("/:instanceId/connect", async (c) => {
 		.bind(instanceId, relay.uid)
 		.first<{ id: string }>();
 	if (!instance) return new Response("Instance not found", { status: 404 });
+
+	// A candidate CLI proving it can reach the relay (#1148): answered here, never handed to the instance's RelayDO, so it
+	// cannot take or disturb the running runner's socket. A request for a probe is never silently upgraded to a real connection.
+	if (c.req.query("probe") === "1") return relayProbeResponse();
 
 	const runnerNode = normalizeRunnerNode(c.req.query("node"));
 	// Forward to RelayDO. Legacy/default runners use the instance id; Coder runners

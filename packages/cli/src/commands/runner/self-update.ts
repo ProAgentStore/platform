@@ -19,7 +19,8 @@
  */
 import { spawn } from "node:child_process";
 import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, payloadRoot, runNpm } from "../../bootstrap/payload.js";
-import { beginTrial } from "../../bootstrap/trial.js";
+import { probePayload } from "../../bootstrap/start-probe.js";
+import { beginTrial, markBad } from "../../bootstrap/trial.js";
 import { logUpdateStep } from "../../bootstrap/update-log.js";
 import type { SessionStateCounts } from "./runner-work-observation.js";
 
@@ -224,7 +225,17 @@ export async function installVersion(version: string, current: string | null = n
 	logUpdateStep(`install: ${current ?? "?"} → ${version} starting (${bootstrapped ? "payload cache" : "npm i -g"})`);
 	try {
 		if (bootstrapped) {
-			await installPayload(version);
+			const payload = await installPayload(version);
+			// #1148: start the candidate beside this runner first. A release that cannot start, reach the API with this machine's
+			// sign-in or open a relay socket is marked bad (so no update retries it until the owner does) and never swapped in.
+			const probe = await probePayload(payload.entry, version);
+			logUpdateStep(`probe: ${version} ${probe.state} — ${probe.detail}`);
+			if (probe.state === "failed") {
+				// A release that will not start is marked bad, like a rollback (no update retries it until the owner does, #1150); one
+				// that merely could not reach the platform from here is not — that may clear, and the controller retries with backoff.
+				if (probe.permanent) markBad(payloadRoot(), version, `its start-up check failed: ${probe.detail}`, current, Date.now(), { notice: false });
+				throw new Error(`${version} failed its start-up check beside the running ${current ?? "CLI"} (${probe.detail}); it was not swapped in, and this machine stays on ${current ?? "its current release"}${probe.permanent ? "" : " — it will be tried again"}`);
+			}
 			beginTrial(payloadRoot(), version, current);
 		} else {
 			await runNpm(["i", "-g", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 }).catch((e: unknown) => {

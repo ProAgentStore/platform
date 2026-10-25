@@ -103,10 +103,11 @@ export function badDetails(root: string): Record<string, { to: string | null; at
  * Give up on `version`: never picked or fetched again, its trial ended, and a notice left for the
  * version that runs next to report (`to` is what the stub falls back to, when it knows).
  */
-export function markBad(root: string, version: string, reason: string, to: string | null, now = Date.now()): void {
+export function markBad(root: string, version: string, reason: string, to: string | null, now = Date.now(), opts: { notice?: boolean } = {}): void {
 	try {
 		writeJson(root, badPath(root), { versions: { ...badVersions(root), [version]: reason.slice(0, 300) }, details: { ...badDetails(root), [version]: { to, at: now } } });
-		writeJson(root, noticePath(root), { from: version, to, reason: reason.slice(0, 300), at: now } satisfies RollbackNotice);
+		// A release refused BEFORE it ever ran here (#1148) has nothing to roll back from: no notice for the next start to report.
+		if (opts.notice !== false) writeJson(root, noticePath(root), { from: version, to, reason: reason.slice(0, 300), at: now } satisfies RollbackNotice);
 		if (readTrial(root)?.version === version) rmSync(trialPath(root), { force: true });
 	} catch {
 		/* best-effort, as above */

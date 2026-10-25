@@ -9,8 +9,9 @@
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { drainPendingQueues } = vi.hoisted(() => ({ drainPendingQueues: vi.fn() }));
+const { drainPendingQueues, relayProbeResponse } = vi.hoisted(() => ({ drainPendingQueues: vi.fn(), relayProbeResponse: vi.fn() }));
 vi.mock("../lib/objective-queue-start.js", () => ({ drainPendingQueues }));
+vi.mock("../lib/relay-probe.js", () => ({ relayProbeResponse }));
 
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { signRelayToken } from "../lib/session.js";
@@ -30,15 +31,16 @@ function answer(status: number): Response {
 }
 
 function env(): Env {
-	const RELAY = { idFromName: (n: string) => n, get: () => ({ fetch: async () => answer(upgrade) }) };
+	const RELAY = { idFromName: (n: string) => n, get: (name: string) => ({ fetch: async () => { doCalls.push(name); return answer(upgrade); } }) };
 	return { DB: d1.DB, RELAY, SESSION_SIGNING_KEY: KEY } as unknown as Env;
 }
 
-async function connect(instanceId = "i1", uid = "u1") {
+const doCalls: string[] = [];
+async function connect(instanceId = "i1", uid = "u1", extra = "") {
 	const { token } = await signRelayToken(instanceId, uid, KEY);
 	const app = new Hono<{ Bindings: Env }>();
 	app.route("/v1/relay", relayRoutes);
-	return app.request(`/v1/relay/${instanceId}/connect?token=${encodeURIComponent(token)}&node=Sergeys-Mac-mini.local`, {}, env());
+	return app.request(`/v1/relay/${instanceId}/connect?token=${encodeURIComponent(token)}&node=Sergeys-Mac-mini.local${extra}`, {}, env());
 }
 
 beforeEach(() => {
@@ -46,6 +48,8 @@ beforeEach(() => {
 	seedTenant(d1, { userId: "u1", instanceIds: ["i1"] });
 	drainPendingQueues.mockReset().mockResolvedValue([]);
 	upgrade = 101;
+	doCalls.length = 0;
+	relayProbeResponse.mockReset().mockImplementation(() => answer(101));
 });
 afterEach(() => d1.close());
 
@@ -68,5 +72,30 @@ describe("the relay connecting drains the instance's queue (#1161)", () => {
 		drainPendingQueues.mockRejectedValue(new Error("D1 unavailable"));
 		const res = await connect();
 		expect(res.status).toBe(101);
+	});
+});
+
+describe("a probe connection never touches the instance's relay (#1148)", () => {
+	it("is answered by the Worker: no RelayDO is reached and nothing is drained", async () => {
+		const res = await connect("i1", "u1", "&probe=1");
+		expect(res.status).toBe(101);
+		expect(relayProbeResponse).toHaveBeenCalledTimes(1);
+		expect(doCalls).toEqual([]);
+		expect(drainPendingQueues).not.toHaveBeenCalled();
+	});
+	it("still needs a valid token for THIS instance, and an instance the token's owner has", async () => {
+		const { token } = await signRelayToken("i1", "u1", KEY);
+		const app = new Hono<{ Bindings: Env }>();
+		app.route("/v1/relay", relayRoutes);
+		expect((await app.request("/v1/relay/i1/connect?probe=1", {}, env())).status).toBe(401);
+		expect((await app.request(`/v1/relay/other/connect?probe=1&token=${encodeURIComponent(token)}`, {}, env())).status).toBe(401);
+		const stranger = await signRelayToken("i1", "u2", KEY);
+		expect((await app.request(`/v1/relay/i1/connect?probe=1&token=${encodeURIComponent(stranger.token)}`, {}, env())).status).toBe(404);
+		expect(relayProbeResponse).not.toHaveBeenCalled();
+	});
+	it("without probe=1 the connection is a real one: it reaches the DO", async () => {
+		await connect();
+		expect(doCalls).toHaveLength(1);
+		expect(relayProbeResponse).not.toHaveBeenCalled();
 	});
 });

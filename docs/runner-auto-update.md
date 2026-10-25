@@ -186,6 +186,20 @@ version, when any of these happens:
 - it has been started 6 times without registering (a crash loop). The `pags up` process and its
   runner each count as a start.
 
+**Probed before it is swapped in (#1148).** The rollback above moves onto the new release first and falls back if it
+fails. The install now also tries the new payload BESIDE the running `pags up` before anything is swapped: the running
+process starts the candidate's own entry point as `pags runner probe --expect <version>`, a short-lived child that
+checks that it loads as the release asked for, that the API accepts this machine's saved sign-in, and that it can open
+a relay socket and get a round trip back. The probe takes nothing the running runner holds — not the per-account
+runner lock, not any agent's relay slot (the socket is a `probe=1` connection the API answers itself, never the
+agent's relay), not the local runtime port — and registers and changes nothing. The swap happens only if it passes. A
+release that will not start, or is not the release asked for, is marked bad like a rollback (it shows on the machine
+page, and **Retry** or `retry_rolled_back` tries it again) but leaves no rollback notice, since it never ran here. A
+failure that may be the machine or the network (no sign-in, the API or relay unreachable, a timeout) is not remembered:
+the update fails with the reason and is tried again. The trial window stays as the second line of defence. The probe
+runs for the stub's payload cache only (a global `npm i -g` install has no payload to try), and
+`PAGS_NO_UPDATE_PROBE=1` skips it.
+
 A version that was given up on is not picked again. The stub's own check on `pags up` does not fetch it,
 and the updater refuses it as `failed` with the reason ("… was installed here and rolled back: …") until
 a newer release is published. The version that runs next reports the rollback in its first registration

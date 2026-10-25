@@ -19,7 +19,11 @@ vi.mock("node:child_process", () => ({
 	},
 }));
 
+const probePayload = vi.fn();
+vi.mock("../../bootstrap/start-probe.js", () => ({ probePayload: (...a: unknown[]) => probePayload(...a) }));
+
 const { installVersion } = await import("./self-update.js");
+const { badVersions, readTrial, peekRollbackNotice } = await import("../../bootstrap/trial.js");
 const { BOOTSTRAP_ENV, cachedPayloads } = await import("../../bootstrap/payload.js");
 
 let root: string;
@@ -27,6 +31,7 @@ beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "pags-update-"));
 	process.env.PAGS_CLI_CACHE = root;
 	npmCalls.length = 0;
+	probePayload.mockReset().mockResolvedValue({ state: "passed", detail: "ok" });
 });
 afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
@@ -47,5 +52,45 @@ describe("installVersion", () => {
 		await installVersion("0.4.70");
 		expect(npmCalls).toEqual([["i", "-g", "@proagentstore/cli@0.4.70"]]);
 		expect(cachedPayloads(root)).toEqual([]);
+	});
+});
+
+describe("installVersion probes the new payload before it is swapped in (#1148)", () => {
+	beforeEach(() => { process.env[BOOTSTRAP_ENV] = "/x/dist/bootstrap.js"; });
+
+	it("runs the candidate's own entry point, expecting exactly the installed version, and only then puts it on trial", async () => {
+		await installVersion("0.4.70", "0.4.69");
+		const [entry, version] = probePayload.mock.calls[0] as [string, string];
+		expect(entry.startsWith(root)).toBe(true);
+		expect(entry).toContain("0.4.70");
+		expect(version).toBe("0.4.70");
+		expect(readTrial(root)).toMatchObject({ version: "0.4.70", previous: "0.4.69" });
+	});
+
+	it("a candidate that will not start is marked bad — quietly, no rollback notice — and never put on trial or swapped in", async () => {
+		probePayload.mockResolvedValue({ state: "failed", permanent: true, detail: "it did not start: SyntaxError" });
+		await expect(installVersion("0.4.70", "0.4.69")).rejects.toThrow(/failed its start-up check beside the running 0\.4\.69.*SyntaxError.*not swapped in/);
+		expect(badVersions(root)["0.4.70"]).toMatch(/start-up check failed: it did not start/);
+		expect(readTrial(root)).toBeNull();
+		expect(peekRollbackNotice(root)).toBeNull();
+	});
+
+	it("a failure that may be the network (sign-in, API, relay) is not remembered: it is tried again", async () => {
+		probePayload.mockResolvedValue({ state: "failed", permanent: false, detail: "relay: could not open a relay socket: no answer within 10s" });
+		await expect(installVersion("0.4.70", "0.4.69")).rejects.toThrow(/will be tried again/);
+		expect(badVersions(root)).toEqual({});
+		expect(readTrial(root)).toBeNull();
+	});
+
+	it("a candidate with no probe to run (or probing switched off) proceeds exactly as before", async () => {
+		probePayload.mockResolvedValue({ state: "skipped", detail: "that release has no start-up check" });
+		await installVersion("0.4.70", "0.4.69");
+		expect(readTrial(root)).toMatchObject({ version: "0.4.70" });
+	});
+
+	it("a global npm install has no payload to probe", async () => {
+		delete process.env[BOOTSTRAP_ENV];
+		await installVersion("0.4.70");
+		expect(probePayload).not.toHaveBeenCalled();
 	});
 });
