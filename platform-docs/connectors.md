@@ -89,10 +89,23 @@ the `releaseNotes` section of `set_account_preferences`), and which granted chan
 
 For repos that require verified production evidence, `set_instance_release_notes` accepts
 `requiredWorkflows`: 2–10 exact `.github/workflows/*.yml` paths, one marked `production_deploy`
-and the others `check`. This opt-in gate queues the note for the SHA printed by the successful
-trunk push itself. The per-minute release queue posts only after the latest run of every required
-workflow succeeded on that identical SHA and default branch. A missing or failed run waits for a
-rerun, up to 48 hours. An unidentifiable push SHA holds the note and records
+and the others `check`. The `production_deploy` item must also name the exact `jobName` and
+`stepName` whose success proves the deploy ran (ChessClubs: job `deploy`, step `Upload to R2`); a
+`check` item may not carry either. This opt-in gate queues the note for the SHA printed by the
+successful trunk push itself. The per-minute release queue posts only after the latest run of every
+required workflow succeeded on that identical SHA and default branch, **and** the named job and step
+completed with `success` in that run's specific attempt (GitHub's run-attempt jobs endpoint, read up
+to 5 pages of 100 jobs). Exactly one job and one step must match by name, and the job must belong to
+the selected run, attempt and SHA; a skipped, neutral, failed, cancelled, pending, ambiguous or
+unreadable job or step holds the note and records why in the queue row's `reason`. The job id, step
+number and name and the run and job links are kept on the row (`evidence_json`), in the
+`release_note_sent` trace and in the posted note. A missing or failed run waits for a rerun, up to 48
+hours; a successful rerun on the same SHA releases it once.
+
+A gate saved before the job and step existed is not downgraded and not discarded: GET/PUT answer
+`gate: { state: "configuration_required", message }`, its queued rows are held as
+`configuration_required` (never posted), and its channels are kept. Saving the same workflows again
+with `jobName` and `stepName` resumes the held rows. An unidentifiable push SHA holds the note and records
 `release_note_unverified`; it never guesses from current branch HEAD. The queue rechecks the channel
 grant and setting before posting. A claimed send is never retried automatically after an uncertain
 Slack response, preventing duplicate announcements. Successful Slack sends retain a permalink in

@@ -404,8 +404,22 @@ export interface InstanceReleaseNotes {
 	enabled?: boolean;
 	/** Grant ids. Absent: every channel granted to the instance. */
 	channels?: string[];
-	/** When set, delivery waits for these exact GitHub workflow files on the pushed SHA. */
-	requiredWorkflows?: { path: string; role: "check" | "production_deploy" }[];
+	/**
+	 * When set, delivery waits for these exact GitHub workflow files on the pushed SHA. The
+	 * `production_deploy` item also names the job and step whose success proves the deploy ran
+	 * (#1346); a `check` item never carries them.
+	 */
+	requiredWorkflows?: { path: string; role: "check" | "production_deploy"; jobName?: string; stepName?: string }[];
+}
+
+/**
+ * Whether the stored gate can make the verified-production claim (#1346). `configuration_required`
+ * is an old gate without the deploy job and step: its notes are held, never posted on the weaker proof.
+ */
+export interface ReleaseGateState {
+	state: "none" | "ready" | "configuration_required";
+	/** Present for `configuration_required`: what to set. */
+	message?: string;
 }
 
 export interface ResolvedReleaseNotes {
@@ -424,6 +438,7 @@ export interface InstanceReleaseNotesResponse {
 	settings: InstanceReleaseNotes;
 	account: AccountReleaseNotes | null;
 	effective: ResolvedReleaseNotes;
+	gate: ReleaseGateState;
 }
 
 /** `POST /v1/instances/:id/release-notes/test`. */

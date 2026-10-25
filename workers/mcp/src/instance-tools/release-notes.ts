@@ -23,7 +23,7 @@ export function registerReleaseNotesTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"get_instance_release_notes",
-		"Coding agents only — any other instance answers with an unsupported-feature error (#1286). Read one instance's release-notes setting: `settings` (what the instance itself stored — `enabled` and `channels`, each absent when inherited), `account` (the account default from get_account_preferences), and `effective` — `enabled` with `enabledFrom` (instance | account | platform), and every Discord and Slack channel granted to the instance with `selected` (whether it receives the notes) and its `grantId`. `missing` lists chosen grant ids that were since revoked. Read-only.",
+		"Coding agents only — any other instance answers with an unsupported-feature error (#1286). Read one instance's release-notes setting: `settings` (what the instance itself stored — `enabled` and `channels`, each absent when inherited), `account` (the account default from get_account_preferences), `gate` (`state`: none | ready | configuration_required — an older gate without the deploy job and step is held, never posted, with a `message` saying what to set), and `effective` — `enabled` with `enabledFrom` (instance | account | platform), and every Discord and Slack channel granted to the instance with `selected` (whether it receives the notes) and its `grantId`. `missing` lists chosen grant ids that were since revoked. Read-only.",
 		{ token: tokenArg, instance_id: instanceId },
 		async ({ token, instance_id }) => {
 			const session = tokenFor(token);
@@ -37,13 +37,13 @@ export function registerReleaseNotesTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"set_instance_release_notes",
-		"Coding agents only. Set release note channels and optional exact-SHA release gate. `requiredWorkflows` is 2–10 exact .github/workflows/*.yml paths, exactly one with role production_deploy and the rest check. With a gate, notes wait until every workflow succeeds for the pushed SHA; null clears the gate. Call with dry_run first.",
+		"Coding agents only. Set release note channels and optional exact-SHA release gate. `requiredWorkflows` is 2–10 exact .github/workflows/*.yml paths, exactly one with role production_deploy and the rest check. The production_deploy item must also name the exact `jobName` and `stepName` whose success proves the deploy; a check item must not. With a gate, notes wait until every workflow succeeds for the pushed SHA AND that job and step succeeded in the selected run attempt; null clears the gate. Call with dry_run first.",
 		{
 			token: tokenArg,
 			instance_id: instanceId,
 			enabled: z.boolean().nullable().optional().describe("true/false for this instance; null follows the account default; omit to keep."),
 			channels: z.array(z.string()).nullable().optional().describe("Grant ids that receive the notes; null for every granted channel; omit to keep."),
-			requiredWorkflows: z.array(z.object({ path: z.string(), role: z.enum(["check", "production_deploy"]) })).nullable().optional().describe("Exact GitHub workflow file paths required to succeed on one SHA; one role must be production_deploy. Null clears."),
+			requiredWorkflows: z.array(z.object({ path: z.string(), role: z.enum(["check", "production_deploy"]), jobName: z.string().optional(), stepName: z.string().optional() })).nullable().optional().describe("Exact GitHub workflow file paths required to succeed on one SHA; one role must be production_deploy, and ONLY that one carries jobName and stepName (both required): the exact Actions job and step whose success proves the deploy ran. Null clears."),
 			dry_run: z.boolean().optional(),
 		},
 		async ({ token, instance_id, enabled, channels, requiredWorkflows, dry_run }) => {

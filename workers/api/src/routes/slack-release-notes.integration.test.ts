@@ -212,13 +212,53 @@ describe("release-notes settings: readable, writable, inherited (#1217 acceptanc
 		expect((await put("inst-a", { channels: null })).body.settings).toEqual({ enabled: false });
 	});
 
-	it("stores an exact-SHA workflow gate and refuses one without a production deploy", async () => {
-		const workflows = [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/e2e-full.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy" }];
-		expect((await put("inst-a", { requiredWorkflows: workflows })).body.settings).toMatchObject({ requiredWorkflows: workflows });
+	it("stores an exact-SHA workflow gate with the deploy job and step, and refuses one without a production deploy", async () => {
+		const workflows = [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/e2e-full.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy", jobName: "deploy", stepName: "Upload to R2" }];
+		const saved = await put("inst-a", { requiredWorkflows: workflows });
+		expect(saved.body.settings).toMatchObject({ requiredWorkflows: workflows });
+		expect(saved.body.gate).toEqual({ state: "ready" });
 		const bad = await put("inst-a", { requiredWorkflows: workflows.slice(0, 2) });
 		expect(bad.status).toBe(400);
 		expect(bad.body.error).toMatch(/exactly one production_deploy/);
-		expect((await settings("inst-a")).body.settings).toMatchObject({ requiredWorkflows: workflows });
+		const readBack = await settings("inst-a");
+		expect(readBack.body.settings).toMatchObject({ requiredWorkflows: workflows });
+		expect(readBack.body.gate).toEqual({ state: "ready" });
+	});
+
+	it("the deploy job and step are required on the production_deploy item and refused anywhere else, nothing saved", async () => {
+		const check = (extra: object = {}) => ({ path: ".github/workflows/ci.yml", role: "check", ...extra });
+		const deploy = (extra: object = {}) => ({ path: ".github/workflows/deploy.yml", role: "production_deploy", jobName: "deploy", stepName: "Upload to R2", ...extra });
+		for (const [why, gate] of [
+			["no jobName", [check(), { path: ".github/workflows/deploy.yml", role: "production_deploy", stepName: "Upload to R2" }]],
+			["no stepName", [check(), { path: ".github/workflows/deploy.yml", role: "production_deploy", jobName: "deploy" }]],
+			["an empty jobName", [check(), deploy({ jobName: "" })]],
+			["a blank stepName", [check(), deploy({ stepName: "   " })]],
+			["a padded jobName", [check(), deploy({ jobName: " deploy" })]],
+			["a non-string stepName", [check(), deploy({ stepName: 4 })]],
+			["a jobName on a check", [check({ jobName: "ci" }), deploy()]],
+			["a stepName on a check", [check({ stepName: "Test" }), deploy()]],
+		] as const) {
+			const refused = await put("inst-a", { requiredWorkflows: gate });
+			expect(refused.status, why).toBe(400);
+		}
+		expect((await settings("inst-a")).body.settings).toEqual({});
+	});
+
+	it("a stored old gate keeps its channels, is reported configuration_required with a migration message, and is completed by saving it again", async () => {
+		await connect();
+		const eng = (await grantTo("inst-a", CH_ENG)).body.grant as Grant;
+		const old = [{ path: ".github/workflows/ci.yml", role: "check" }, { path: ".github/workflows/deploy.yml", role: "production_deploy" }];
+		d1.exec(`UPDATE agent_instances SET config='${JSON.stringify({ releaseNotes: { enabled: true, channels: [eng.id], requiredWorkflows: old } })}' WHERE id='inst-a'`);
+		const read = await settings("inst-a");
+		expect(read.body.settings).toEqual({ enabled: true, channels: [eng.id], requiredWorkflows: old });
+		expect(read.body.gate).toMatchObject({ state: "configuration_required", message: expect.stringContaining("jobName and stepName") });
+		expect((read.body.effective as { enabled: boolean }).enabled).toBe(true);
+		// Unrelated edits keep the old gate and still report it.
+		expect((await put("inst-a", { enabled: true })).body.gate).toMatchObject({ state: "configuration_required" });
+		const fixed = [old[0], { ...old[1], jobName: "deploy", stepName: "Upload to R2" }];
+		const saved = await put("inst-a", { requiredWorkflows: fixed });
+		expect(saved.body.gate).toEqual({ state: "ready" });
+		expect(saved.body.settings).toEqual({ enabled: true, channels: [eng.id], requiredWorkflows: fixed });
 	});
 
 	it("the grant checks: a choice or a test send naming another instance's grant is refused, and nothing is saved or sent", async () => {

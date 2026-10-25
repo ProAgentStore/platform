@@ -4,8 +4,9 @@
  *   GET  /v1/instances/:id/release-notes        the stored setting, the account default, and the
  *                                                resolved effect: on/off, and each granted channel
  *                                                marked whether it receives the notes
- *   PUT  /v1/instances/:id/release-notes        `{ enabled?: boolean|null, channels?: string[]|null }`,
- *                                                patch per field; `null` returns a field to inherited
+ *   PUT  /v1/instances/:id/release-notes        `{ enabled?: boolean|null, channels?: string[]|null, requiredWorkflows? }`,
+ *                                                patch per field; `null` returns a field to inherited.
+ *                                                Both answer `gate`: none | ready | configuration_required (#1346)
  *   POST /v1/instances/:id/release-notes/test   `{ grantId }` — post a test note to one granted channel
  *
  * Coding agents only (#1286): any other instance answers 422 on all three. The account default is `releaseNotes` in `PUT /v1/preferences`. Resolution and validation live in
@@ -16,7 +17,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { requireReleaseNotesEligible } from "../lib/release-notes-eligibility.js";
 import { sendTestReleaseNote } from "../lib/release-notes.js";
-import { applyInstanceReleaseNotesPatch, loadReleaseNotes } from "../lib/release-notes-settings.js";
+import { applyInstanceReleaseNotesPatch, loadReleaseNotes, releaseGateState } from "../lib/release-notes-settings.js";
 import type { InstanceReleaseNotesResponse, ReleaseNoteTestResponse } from "../agent-types.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -26,7 +27,7 @@ export const instanceReleaseNotesRoutes = new Hono<{ Bindings: Env }>();
 async function view(env: Env, instanceId: string, userId: string): Promise<InstanceReleaseNotesResponse> {
 	const loaded = await loadReleaseNotes(env, instanceId, userId);
 	if (!loaded) throw new HttpError(404, "Instance not found");
-	return { settings: loaded.instance, account: loaded.account ?? null, effective: loaded.effective };
+	return { settings: loaded.instance, account: loaded.account ?? null, effective: loaded.effective, gate: releaseGateState(loaded.instance.requiredWorkflows) };
 }
 
 instanceReleaseNotesRoutes.get("/:id/release-notes", async (c) => {

@@ -18,7 +18,7 @@ import { HttpError } from "./auth.js";
 import { listConnectorGrants } from "./connector-grants.js";
 import { DISCORD_AGENT_GRANT, DISCORD_RELEASE_GRANT } from "./connectors/discord.js";
 import { parseAccountPreferences } from "./preferences.js";
-import type { AccountReleaseNotes, InstanceReleaseNotes, ReleaseChannel, ReleaseNoteProvider, ReleaseNotesEnabledFrom, ResolvedReleaseNotes } from "../agent-types.js";
+import type { AccountReleaseNotes, InstanceReleaseNotes, ReleaseChannel, ReleaseGateState, ReleaseNoteProvider, ReleaseNotesEnabledFrom, ResolvedReleaseNotes } from "../agent-types.js";
 import type { Env } from "../types.js";
 
 /** The messaging connectors whose granted channels can receive a release note. */
@@ -32,21 +32,51 @@ export type { AccountReleaseNotes, InstanceReleaseNotes, ReleaseChannel, Release
 
 const CHANNELS_MAX = 50;
 
-export function validateRequiredWorkflows(raw: unknown): NonNullable<InstanceReleaseNotes["requiredWorkflows"]> {
+const SELECTOR_MAX = 200;
+
+/**
+ * Strict on write. The `production_deploy` item must name the `jobName` and `stepName` whose success
+ * proves the deploy ran (#1346); a `check` item may not carry either. `legacy` is the READ path only:
+ * it accepts a stored deploy item without them, so an old gate survives as `configuration_required`
+ * instead of being thrown away.
+ */
+export function validateRequiredWorkflows(raw: unknown, legacy = false): NonNullable<InstanceReleaseNotes["requiredWorkflows"]> {
 	if (!Array.isArray(raw) || raw.length < 2 || raw.length > 10) throw new HttpError(400, "requiredWorkflows must contain 2–10 workflow files");
 	const paths = new Set<string>();
 	let deploys = 0;
 	const workflows = raw.map((value) => {
 		if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "Each required workflow needs path and role");
 		const item = value as Record<string, unknown>;
-		if (Object.keys(item).some((key) => key !== "path" && key !== "role") || typeof item.path !== "string" || !/^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/.test(item.path) || (item.role !== "check" && item.role !== "production_deploy")) throw new HttpError(400, "Each required workflow needs an exact .github/workflows/*.yml path and check or production_deploy role");
+		if (Object.keys(item).some((key) => key !== "path" && key !== "role" && key !== "jobName" && key !== "stepName") || typeof item.path !== "string" || !/^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/.test(item.path) || (item.role !== "check" && item.role !== "production_deploy")) throw new HttpError(400, "Each required workflow needs an exact .github/workflows/*.yml path and check or production_deploy role, plus jobName and stepName on the production_deploy one");
 		if (paths.has(item.path)) throw new HttpError(400, "requiredWorkflows cannot repeat a workflow path");
 		paths.add(item.path);
-		if (item.role === "production_deploy") deploys++;
-		return { path: item.path, role: item.role as "check" | "production_deploy" };
+		if (item.role === "check") {
+			if (item.jobName !== undefined || item.stepName !== undefined) throw new HttpError(400, "jobName and stepName belong only on the production_deploy workflow, not a check");
+			return { path: item.path, role: "check" as const };
+		}
+		deploys++;
+		const selector = (field: "jobName" | "stepName") => {
+			const v = item[field];
+			if (v === undefined && legacy) return undefined;
+			if (typeof v !== "string" || !v.trim() || v !== v.trim() || v.length > SELECTOR_MAX) throw new HttpError(400, `The production_deploy workflow needs an exact, non-empty ${field} (the GitHub Actions ${field === "jobName" ? "job" : "step"} name, at most ${SELECTOR_MAX} characters, no surrounding spaces)`);
+			return v;
+		};
+		const jobName = selector("jobName");
+		const stepName = selector("stepName");
+		return { path: item.path, role: "production_deploy" as const, ...(jobName !== undefined ? { jobName } : {}), ...(stepName !== undefined ? { stepName } : {}) };
 	});
 	if (deploys !== 1) throw new HttpError(400, "requiredWorkflows needs exactly one production_deploy workflow");
 	return workflows;
+}
+
+/** A gate is complete only when its deploy item names both the job and the step (#1346). */
+export const gateIsComplete = (workflows: InstanceReleaseNotes["requiredWorkflows"]): boolean =>
+	!!workflows?.some((w) => w.role === "production_deploy" && !!w.jobName && !!w.stepName);
+
+export function releaseGateState(workflows: InstanceReleaseNotes["requiredWorkflows"]): ReleaseGateState {
+	if (!workflows?.length) return { state: "none" };
+	if (gateIsComplete(workflows)) return { state: "ready" };
+	return { state: "configuration_required", message: "This release gate predates deploy-step proof, so its production notes are held, not posted. Set requiredWorkflows again with jobName and stepName on the production_deploy workflow (for ChessClubs: job `deploy`, step `Upload to R2`). Queued notes for it are kept and resume once it is saved." };
 }
 
 /** Strict on write: an unknown field or a wrong type is refused rather than dropped. */
@@ -70,7 +100,7 @@ export function readInstanceReleaseNotes(config: string | null | undefined): Ins
 	const o = (raw && typeof raw === "object" ? raw : {}) as { enabled?: unknown; channels?: unknown; requiredWorkflows?: unknown };
 	let requiredWorkflows: InstanceReleaseNotes["requiredWorkflows"];
 	if (o.requiredWorkflows !== undefined) {
-		try { requiredWorkflows = validateRequiredWorkflows(o.requiredWorkflows); }
+		try { requiredWorkflows = validateRequiredWorkflows(o.requiredWorkflows, true); }
 		catch { return { enabled: false }; } // A corrupted gate may never fall back to immediate posting.
 	}
 	return {

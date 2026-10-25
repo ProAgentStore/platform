@@ -32,7 +32,7 @@ import { deriveAct } from "./engine-acts.js";
 import { logError } from "./error-log.js";
 import { logEvent } from "./events.js";
 import { resolveGithubRead } from "./github-cache.js";
-import { grantedReleaseChannels, loadReleaseNotes, type ReleaseChannel } from "./release-notes-settings.js";
+import { grantedReleaseChannels, loadReleaseNotes, releaseGateState, type ReleaseChannel } from "./release-notes-settings.js";
 import type { RunStep } from "./runner-availability.js";
 import { postSlackMessage, SLACK_NOT_CONNECTED } from "./slack.js";
 import { safeFetch } from "./ssrf.js";
@@ -329,13 +329,17 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 				const ctx = plan.queued?.context;
 				if (!ctx?.headSha) return;
 				const now = Date.now();
+				// An old gate (no deploy job/step) is queued HELD, never `pending`: it may not make the production claim (#1346).
+				const gate = releaseGateState(plan.queued?.workflows);
+				const ready = gate.state === "ready";
 				await env.DB.prepare(`INSERT OR IGNORE INTO release_note_queue
-					(id,user_id,instance_id,repo_id,github_repo,default_branch,run_id,session_id,sha,grant_id,context_json,workflows_json,status,created_at,updated_at)
-					VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'pending',?13,?13)`)
-					.bind(crypto.randomUUID(), userId, instanceId, input.repoId, ctx.repo, ctx.defaultBranch, runId, input.sessionId, ctx.headSha, channel.grantId, JSON.stringify(ctx), JSON.stringify(plan.queued?.workflows), now).run();
+					(id,user_id,instance_id,repo_id,github_repo,default_branch,run_id,session_id,sha,grant_id,context_json,workflows_json,status,reason,created_at,updated_at)
+					VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)`)
+					.bind(crypto.randomUUID(), userId, instanceId, input.repoId, ctx.repo, ctx.defaultBranch, runId, input.sessionId, ctx.headSha, channel.grantId, JSON.stringify(ctx), JSON.stringify(plan.queued?.workflows), ready ? "pending" : "configuration_required", ready ? null : gate.message ?? null, now).run();
 			});
 		}
-		await logEvent(env, { ...trace, event: "release_note_queued", message: `Release note queued for ${plan.queued.context.headSha}: waiting for required GitHub workflows.` }).catch(() => undefined);
+		const held = releaseGateState(plan.queued.workflows).state !== "ready";
+		await logEvent(env, { ...trace, event: held ? "release_note_configuration_required" : "release_note_queued", ...(held ? { level: "warn" as const } : {}), message: held ? `Release note held for ${plan.queued.context.headSha}: the release gate has no deploy job and step. ${releaseGateState(plan.queued.workflows).message}` : `Release note queued for ${plan.queued.context.headSha}: waiting for required GitHub workflows.` }).catch(() => undefined);
 		return { status: "queued", sent: [], failed: [] };
 	}
 	const outcome: ReleaseNoteOutcome = { status: "posted", sent: [], failed: [] };
