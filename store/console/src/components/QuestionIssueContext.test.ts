@@ -48,4 +48,13 @@ describe("coding question issue context", () => {
 		expect(html).toContain("Investigate transient compare-read errors");
 		expect(html).not.toContain("href=");
 	});
+
+	it("renders source context markdown without visible asterisks", () => {
+		const fallback = renderToStaticMarkup(createElement(QuestionIssueContext, { issue: null, codingQuestion: true, objective: "Configure **alerts**" }));
+		expect(fallback).toContain("<strong>alerts</strong>");
+		expect(fallback).not.toContain("**");
+		const linked = renderToStaticMarkup(createElement(QuestionIssueContext, { issue: { ...issue, summary: "Check **every** page" } }));
+		expect(linked).toContain("<strong>every</strong>");
+		expect(linked).not.toContain("**");
+	});
 });

@@ -1,3 +1,5 @@
+import MarkdownText from "./MarkdownText";
+
 /** A question's issue is provided by the server or by the board's cached issue card. */
 export interface QuestionIssue {
 	repo?: string;
@@ -37,7 +39,7 @@ export default function QuestionIssueContext({ issue, codingQuestion = false, ob
 		<div className="mb-3 rounded-lg border border-line bg-panel/70 p-3" data-testid="question-source-unavailable">
 			<div className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-1">Source issue unavailable</div>
 			<p className="text-sm text-muted">No linked source issue is available for this coding run. Review the run and the agent’s reason below before answering.</p>
-			{objective?.trim() && <p className="text-sm text-ink mt-2 break-words line-clamp-4">Run: {objective.trim()}</p>}
+			{objective?.trim() && <MarkdownText text={`Run: ${objective.trim()}`} className="text-sm text-ink mt-2 line-clamp-4" />}
 		</div>
 	) : null;
 	return (
@@ -46,7 +48,7 @@ export default function QuestionIssueContext({ issue, codingQuestion = false, ob
 			<a href={issue.url} target="_blank" rel="noreferrer" className="font-semibold text-accent hover:underline break-words" title="Read the full issue and comments on GitHub">
 				{issue.repo}#{issue.number}: {issue.title} ↗
 			</a>
-			{issue.summary && <p className="text-sm text-muted mt-1 break-words line-clamp-3">{issue.summary}</p>}
+			{issue.summary && <MarkdownText text={issue.summary} className="text-sm text-muted mt-1 line-clamp-3" />}
 			<p className="text-xs text-muted-soft mt-1">Open the issue to read its requirements and discussion before answering.</p>
 		</div>
 	);
