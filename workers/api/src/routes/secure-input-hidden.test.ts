@@ -243,6 +243,42 @@ describe("reading a password prompt", () => {
 		}
 	});
 
+	it("recognises localised password prompts (#1146)", () => {
+		for (const p of ["Passwort:", "Passwort: ", "Mot de passe :", "[sudo] Mot de passe de serge : ", "Contraseña:", "[sudo] contraseña para serge: ", "Senha:", "Wachtwoord:", "Lösenord:", "Пароль:", "密码：", "Kennwort für serge: ", "Enter Passphrase für Schlüssel '/home/me/.ssh/id_rsa': "]) {
+			expect(trailingSecretPrompt(`$ ssh host\n${p}`), p).not.toBeNull();
+		}
+		// A localised word that is not asking, or not waiting, is not a prompt.
+		for (const p of ["Passwort geändert.", "Contraseña correcta\n$ ", "Mot de passe : \nWelcome", "passwordless login enabled:", "Passwortmanager:"]) {
+			expect(trailingSecretPrompt(p), p).toBeNull();
+		}
+	});
+
+	it("recognises a curses pinentry box (#1146)", () => {
+		const box = [
+			"$ gpg --sign x",
+			"┌──────────────────────────────────────────────┐",
+			"│ Please enter the passphrase to unlock the    │",
+			"│ OpenPGP secret key:                          │",
+			"│ \"Serge <serge@example.com>\"                 │",
+			"│                                              │",
+			"│ Passphrase: ________________________________ │",
+			"│                                              │",
+			"│        <OK>                      <Cancel>    │",
+			"└──────────────────────────────────────────────┘",
+		].join("\n");
+		expect(trailingSecretPrompt(box)).toMatch(/Please enter the passphrase/);
+		// The PIN variant, and the box drawn in plain ASCII.
+		expect(trailingSecretPrompt("+----+\n| Please enter the PIN for your card |\n| PIN: ______ |\n| <OK>   <Cancel> |\n+----+")).not.toBeNull();
+		// Not a box: the buttons alone, the title alone, or a title long gone up the scrollback.
+		expect(trailingSecretPrompt("│ <OK>  <Cancel> │")).toBeNull();
+		expect(trailingSecretPrompt("Please enter the passphrase to unlock the key")).toBeNull();
+		const stale = ["Please enter the passphrase", "<OK> <Cancel>", ...Array.from({ length: 14 }, (_, i) => `line ${i}`)].join("\n");
+		expect(trailingSecretPrompt(stale)).toBeNull();
+		// After Enter, a box that is still up is a re-prompt; one that has gone is progress.
+		expect(judgeHiddenOutcome("$ gpg\nline", `$ gpg\nline\n${box}`)).toMatchObject({ kind: "reprompted" });
+		expect(judgeHiddenOutcome(`$ gpg\n${box}`, `$ gpg\n${box}\n-----BEGIN PGP SIGNATURE-----`)).toEqual({ kind: "accepted" });
+	});
+
 	it("output after the prompt ignores what is on the prompt's own row and survives an earlier identical prompt", () => {
 		const before = `$ sudo x\n${SUDO_PROMPT}\nSorry, try again.\n${SUDO_PROMPT}`;
 		expect(outputAfterPrompt(before, `${before}********\n`)).toBe("");

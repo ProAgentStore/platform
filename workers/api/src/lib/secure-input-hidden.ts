@@ -11,9 +11,47 @@
  * pane text only; none of it ever sees the value, so nothing it returns can carry one.
  */
 
+/** The words for "password" a prompt may use. English first, then the languages `sudo`/`ssh`/`su` ship translations for.
+ *  Matched as whole words (Unicode-aware: `\b` does not see `ñ` or `ö`), so `passwordless` or `Passwortmanager` never qualify. */
+const SECRET_WORDS = [
+	"pass(?:word|phrase|code)",
+	"PIN",
+	"Passwort",
+	"Kennwort",
+	"Passphrase",
+	"mot de passe",
+	"phrase secr[eè]te",
+	"contrase[ñn]a",
+	"clave",
+	"senha",
+	"palavra-passe",
+	"wachtwoord",
+	"l[öo]senord",
+	"salasana",
+	"adgangskode",
+	"passord",
+	"hasło",
+	"heslo",
+	"jelszó",
+	"parola",
+	"пароль",
+	"密码",
+	"密碼",
+	"パスワード",
+	"비밀번호",
+].join("|");
+
 /** A line that is asking for a secret and waiting at its end: `Password:`, `[sudo] password for me:`,
- *  `me@host's password:`, `Enter passphrase for key '/home/me/.ssh/id_ed25519':`, `Enter PIN for …:`. */
-const SECRET_PROMPT = /\b(?:pass(?:word|phrase|code)|PIN)\b[^\n]{0,160}?[:：]\s*$/i;
+ *  `me@host's password:`, `Enter passphrase for key '/home/me/.ssh/id_ed25519':`, `Enter PIN for …:`,
+ *  and the localised forms: `Passwort:`, `Mot de passe :`, `Contraseña:`, `密码：`. */
+const SECRET_PROMPT = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${SECRET_WORDS})(?![\\p{L}\\p{N}_])[^\\n]{0,160}?[:：]\\s*$`, "iu");
+
+/** pinentry-curses draws a box instead of a prompt line: a title asking for the secret above `<OK>` and `<Cancel>` buttons. */
+const PINENTRY_TITLE = /\b(?:please\s+enter\s+the\s+(?:pass(?:phrase|word)|pin)|enter\s+(?:the\s+)?(?:pass(?:phrase|word)|pin)|passphrase:|pin:|please\s+unlock)\b/i;
+const PINENTRY_OK = /<\s*OK\s*>/i;
+const PINENTRY_CANCEL = /<\s*Cancel\s*>/i;
+/** How far up the screen the box's title may be from its buttons (the box is a handful of rows; the rest of the pane is shell history). */
+const PINENTRY_ROWS = 12;
 
 /** What a program prints when it rejected the secret — matched on the output AFTER the prompt only. */
 const REJECTIONS: Array<[RegExp, string]> = [
@@ -37,10 +75,21 @@ function nonEmptyLines(pane: string): string[] {
 		.filter((l) => l.trim() !== "");
 }
 
-/** The pane's last non-empty line, when it is a secret prompt waiting for input — else null. */
+/** A curses pinentry box on the screen's last rows — its title line when found, else null. Needs the title AND both buttons. */
+function pinentryBox(lines: string[]): string | null {
+	const tail = lines.slice(-PINENTRY_ROWS);
+	if (!tail.some((l) => PINENTRY_OK.test(l)) || !tail.some((l) => PINENTRY_CANCEL.test(l))) return null;
+	// The box borders (`│ … │`) are not part of the text.
+	const title = tail.find((l) => PINENTRY_TITLE.test(l));
+	return title ? title.replace(/[│┃|┌┐└┘─━]/g, " ").replace(/\s+/g, " ").trim() : null;
+}
+
+/** The pane's last non-empty line, when it is a secret prompt waiting for input — or a curses pinentry box — else null. */
 export function trailingSecretPrompt(pane: string): string | null {
-	const last = nonEmptyLines(pane).at(-1) ?? "";
-	return SECRET_PROMPT.test(last) ? last.trim() : null;
+	const lines = nonEmptyLines(pane);
+	const last = lines.at(-1) ?? "";
+	if (SECRET_PROMPT.test(last)) return last.trim();
+	return pinentryBox(lines);
 }
 
 /**
