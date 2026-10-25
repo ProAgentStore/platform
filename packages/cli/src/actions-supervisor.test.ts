@@ -133,6 +133,7 @@ describe("PAGS Actions supervisor", () => {
     const dir = runner();
     expect(() => requestSupervisorRecovery(dir)).toThrow(/not reporting/);
     writeFileSync(supervisorPaths(dir).status, JSON.stringify({ version: 1, runnerDir: dir, supervisorPid: process.pid, health: "ready", acPower: "ac", activeJob: true, updatedAt: Date.now() }));
+    writeFileSync(join(supervisorPaths(dir).base, "recover-write.lock"), JSON.stringify({ pid: -1, at: 1, nonce: "stale" }));
     const receipt = requestSupervisorRecovery(dir);
     expect(receipt.state).toBe("deferred_active_job");
     expect(JSON.parse(readFileSync(supervisorPaths(dir).recover, "utf8")).id).toBe(receipt.id);

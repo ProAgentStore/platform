@@ -3,7 +3,7 @@
  */
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { connect } from "node:net";
 
@@ -62,8 +62,29 @@ export function requestSupervisorRecovery(dir: string): RecoveryReceipt {
   const status = readSupervisorStatus(dir);
   if (!status || !isAlive(status.supervisorPid) || Date.now() - status.updatedAt > 90_000) throw new Error("runner supervisor is not reporting; start its service before requesting recovery");
   const paths = supervisorPaths(dir);
-  const writeLock = join(paths.base, "recover-write-lock");
-  mkdirSync(writeLock); // Shared with the browser-runner route: only one writer can replace a request.
+  const writeLock = join(paths.base, "recover-write.lock");
+  const nonce = randomUUID();
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    try {
+      const fd = openSync(writeLock, "wx", 0o600);
+      try { writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now(), nonce })); } finally { closeSync(fd); }
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let stale = false;
+      let ino: number | undefined;
+      try {
+        const stat = statSync(writeLock); ino = stat.ino;
+        const owner = JSON.parse(readFileSync(writeLock, "utf8")) as { pid?: unknown; at?: unknown };
+        const alive = typeof owner.pid === "number" && isAlive(owner.pid);
+        stale = !alive || (typeof owner.at === "number" && Date.now() - owner.at > 30_000);
+      } catch { try { stale = Date.now() - statSync(writeLock).mtimeMs > 30_000; } catch { /* another writer removed it */ } }
+      if (stale && ino !== undefined) try { if (statSync(writeLock).ino === ino) rmSync(writeLock); } catch { /* another writer won */ }
+      if (Date.now() > deadline) throw new Error("another recovery request is being written; retry shortly");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
   try {
     const existing = readJson(paths.recover) as RecoveryRequest | null;
     if (existsSync(paths.recover) && (existing?.reason !== "manual" || typeof existing.id !== "string" || typeof existing.requestedAt !== "number")) throw new Error("unknown recovery request already exists; refusing to overwrite it");
@@ -75,7 +96,12 @@ export function requestSupervisorRecovery(dir: string): RecoveryReceipt {
     const req: RecoveryRequest = { id: randomUUID(), reason: "manual", requestedAt: Date.now() };
     writeJson(paths.recover, req);
     return { ...req, state: status.activeJob ? "deferred_active_job" : "queued" };
-  } finally { rmSync(writeLock, { recursive: true, force: true }); }
+  } finally {
+    try {
+      const owner = JSON.parse(readFileSync(writeLock, "utf8")) as { nonce?: unknown };
+      if (owner.nonce === nonce) rmSync(writeLock);
+    } catch { /* a killed writer leaves a lock for the next request to recover */ }
+  }
 }
 function isAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
