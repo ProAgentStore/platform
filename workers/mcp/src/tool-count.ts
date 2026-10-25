@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 401;
+export const MCP_TOOL_COUNT = 402;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 372;
+export const MCP_TOOL_ALWAYS_ON = 373;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -54,4 +54,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 396, issue: "#1156", date: "2026-10-25", reason: "coding_engine_install: install a coding CLI (Grok from xAI's own installer; Claude, Codex, Gemini from npm) on the runner's machine, remotely. Not a sibling of coding_engine_reauth (signs an INSTALLED engine in), coding_engine_get (reads what is installed) or runner_update (updates the pags CLI, not an engine): none can put a missing engine on a machine, which is what stops an owner who is not at it from using Grok on a new runner." },
 	{ count: 398, issue: "#1238", date: "2026-10-26", reason: "get/set_account_operator_manual: the owner's account-level operator manual, applied across every template they run (machine map, main-only, checkout layout) and shown FIRST on every instance's get_instance_operator_manual. Not siblings of get/set_account_preferences (a different route and store: the preferences blob is kept off the manual by the 0143 / #739 rule that manuals never ride a config payload) or of get/set_agent_operator_manual (one TEMPLATE's manual, writable by that template's creator only: a creator's text must not reach other people's instances, which is why the account layer is the instance owner's)." },
 	{ count: 401, issue: "#1324", date: "2026-10-26", reason: "stash_checkout / discard_checkout / set_auto_stash: act on a repo checkout's local changes on the machine that holds it (a labelled stash, or a backed-up discard, each followed by a fast-forward) and approve runs stashing a dirty checkout by themselves. No existing tool reaches those routes: coding_session_message would shell out through a terminal pane, which is exactly the path that left run 0c59a0bf stuck when no one could reach the machine. Two tools rather than one because the scopes differ (a stash keeps every byte: runtime; a discard throws work away: destructive, confirmed)." },
+	{ count: 402, issue: "#1343", date: "2026-10-26", reason: "verify_provider_key: the console's Profile → API Keys → Verify (one four-token request against the stored Anthropic or Cloudflare key; a pass lifts an automatic-run pause). No existing tool reaches POST /v1/keys/:provider/verify: coding_diagnostics only reports the recorded providerAccount, so a client diagnosing a paused coder could not get a live answer. Not a sibling of keys_status (names only, no request)." },
 ];

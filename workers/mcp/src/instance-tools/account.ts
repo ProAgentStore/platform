@@ -172,6 +172,28 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 	);
 
 	server.tool(
+		"verify_provider_key",
+		"Verify a stored AI provider key LIVE (#1343) — the console's Profile → API Keys → Verify button. Sends ONE minimal four-token request to the provider with your stored `anthropic` or `cloudflare` key, so it spends a request; use it when a run stopped with `provider_credit` or `provider_credentials` (coding_diagnostics reports the recorded state, this answers now), not before every run. A pass returns `{ok:true, provider, checkedAt}` and lifts an automatic-run pause held on that key. A provider refusal is NOT an `API 400` error: it comes back as the classified body `{ok:false, provider, error, upstreamStatus, details, failureClass, remedy, checkedAt}` — `error` is the provider's own message with its error type and request id, `failureClass` the class a dead run files, `remedy` the sentence to act on. No stored key is a 404 naming where to add it. Reveals no key value. Call with dry_run first to see what would be sent.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			provider: z.enum(["anthropic", "cloudflare"]).describe("Which stored key to verify."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, provider, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { provider };
+			const denied = await requirePermission(safetyFor(token), "write", "verify_provider_key", input);
+			if (denied) return denied;
+			const endpoint = `/v1/keys/${encodeURIComponent(provider)}/verify`;
+			if (dry_run) return dryRun(safetyFor(token), "verify_provider_key", `send one four-token request to ${provider} with your stored key (spends a request; a pass lifts an automatic-run pause on that key)`, input, { endpoint, method: "POST" });
+			const data = await authedCall(endpoint, sessionToken, { method: "POST" }, env);
+			await audit(safetyFor(token), { tool: "verify_provider_key", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"email_status",
 		"Report whether your Gmail account is connected for the email-access tool. Use it before relying on an agent that reads or sends mail; connecting and disconnecting happen in the console, not here. For a Job Search Scout's mailbox use gmail_scout_status instead; keys_status covers AI provider keys. Takes no arguments besides the optional `token`. Example: {}. Returns `{connected, email, connectedAt, configured, canSend, accounts:[{accountId, label, connectedAt, canSend}]}`; `configured:false` means the platform has no Google OAuth client, so nothing can connect. `email` and `connectedAt` are filled only when exactly one account is connected.",
 		{

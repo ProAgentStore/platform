@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**401 tool registrations.** 372 are always registered; 29 are gated to the console
+**402 tool registrations.** 373 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -690,6 +690,7 @@ immediately instead of a whole transcript.
 | `usage_summary` | Token usage + estimated cost by agent/model/activity | — | | |
 | `usage_drivers` | What drives spend — top instances, models, phases, objectives, days; retries, duplicates, cache share, estimated savings opportunities — or (`view: savings`) a baseline window against the current one, per objective (#1040) | — | | |
 | `keys_status` | Which providers have a BYOK key — **names only** | — | | |
+| `verify_provider_key` | Verify a stored `anthropic` or `cloudflare` key LIVE (#1343) — the console's Verify button: one four-token provider request. A pass returns `{ok:true}` and lifts an automatic-run pause on that key; a provider refusal returns the classified body (`error`, `failureClass`, `remedy`), not `API 400`. `write` scope; takes `dry_run`. | — | | |
 | `email_status` | Gmail configured/connected | — | | |
 | `get_budget_limits` | Effective daily AI-spend ceilings, which tier each came from, 24h consumption, and distance to limit | — | | |
 | `set_budget_limits` | Patch per-account budget limits — the two daily ceilings plus the four per-tree/loop knobs and the daily spend alert (#1040); omitted fields keep their stored value, null clears an override; returns re-resolved effective limits | write | yes | |

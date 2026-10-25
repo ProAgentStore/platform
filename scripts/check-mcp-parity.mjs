@@ -221,10 +221,6 @@ const EXCLUSIONS = [
 // nothing fails. Each group carries the issue tracking it where one exists.
 // ─────────────────────────────────────────────────────────────────────────────
 const KNOWN_GAPS = [
-	{
-		label: "Profile → API Keys → Verify (#1326) — tool tracked in #1343",
-		match: /^POST \/v1\/keys\/\{\}\/verify$/,
-	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

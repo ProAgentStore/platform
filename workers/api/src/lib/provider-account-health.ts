@@ -91,7 +91,7 @@ function classOf(row: FailureRow): CodingFailureClass | null {
 	return null;
 }
 
-export const VERIFY_HINT = "POST /v1/keys/anthropic/verify — one four-token request against the stored key, on demand";
+export const VERIFY_HINT = "verify_provider_key (MCP) or POST /v1/keys/anthropic/verify — one four-token request against the stored key, on demand";
 
 /**
  * Read the record. Never throws: it runs on the page a user opens when everything else is broken.

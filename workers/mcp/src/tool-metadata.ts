@@ -450,6 +450,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #1132: connecting/rotating the bot (verified with Discord first) and granting one channel — reversible owner state.
 	grant_instance_calendar: "write",
 	set_instance_auto_resume: "write",
+	verify_provider_key: "write", // #1343 — spends one small provider request and a pass lifts an automatic-run pause on that key; changes no stored key, deletes nothing
 	connect_discord_bot: "write",
 	grant_instance_discord_channel: "write",
 	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.

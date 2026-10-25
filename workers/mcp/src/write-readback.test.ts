@@ -554,6 +554,8 @@ const READBACK: Record<string, string | null> = {
 	// Appended to the new run's OBJECTIVE, which is what `coding_loop_status` returns for it.
 	"continue_instance_run.note": "coding_loop_status",
 	"set_instance_auto_resume.mode": "get_instance_auto_resume",
+	// #1343: names which stored key to probe; the verdict is read back from the call itself, and keys_status lists only provider names.
+	"verify_provider_key.provider": null,
 	"set_instance_loop_limits.min_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_objective_chars": "get_instance_loop_limits",

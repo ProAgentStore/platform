@@ -1253,4 +1253,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.184": "sha256:eadcdb6a2d1fd407a671f8058083f5319a7fa741f7f659bf55727a1ccdbf329b", // #1156: coding_engine_install (install a coding CLI on the runner's machine; Grok from xAI's own installer).
 	"0.1.185": "sha256:623be1d3431c32addc6b6dd50379b32c12602d61c13764edf07bea1fbb88ee00", // #1238: get_account_operator_manual + set_account_operator_manual (an account-level operator manual every instance of the owner reads first); get_instance_operator_manual returns `account` and `sections.account`.
 	"0.1.186": "sha256:c5849187353fdff1f73a191743863c3985c9611f8886033b5f8c49448ca839d4", // #1324: stash_checkout, discard_checkout, set_auto_stash (stash or back-up-and-discard a checkout's local changes on the machine that holds it, then fast-forward; approve runs stashing a dirty checkout themselves).
+	"0.1.187": "sha256:9659ba1dfcae122f6fa13eb1986a910e352f110a7fc3c1404b98e67e6b71574b", // #1343: verify_provider_key (the console's key Verify over MCP: one four-token request against the stored Anthropic or Cloudflare key; a refusal returns the classified body).
 };

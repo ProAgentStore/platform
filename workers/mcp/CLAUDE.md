@@ -118,7 +118,7 @@ src/
 │                     and the in-place change of one (#980: enable/disable, move a cadence)
     ├── composition.ts   18 tools — supervision (#183), connections (#182) with the delivery outbox,
 │                     replay and delete that complete them (#613), loops, loop presets
-    ├── account.ts        20 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
+    ├── account.ts        21 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
 │                     notifications, account preferences (#613), creator and subscriber dashboards
     ├── connectors.ts    14 tools — connector status, folder grants, browsing and importing a
     │                             granted folder's files, which account an instance uses
@@ -154,13 +154,13 @@ src/
                           + 3 deprecated aliases of the run tools: start/check/stop_instance_loop (#1243, src/deprecated-alias.ts)
 ```
 
-**401 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**402 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 14 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 2 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all nineteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 345 across `instance-tools/`. 372 are always registered; 29 are
+`storage-tools.ts`, and 346 across `instance-tools/`. 373 are always registered; 29 are
 surface-gated (apply=4, repo=3, coding=22).
 
-These counts add up to the headline: 21 + 1 + 14 + 2 + 2 + 1 + 15 + 345 = 401. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 14 + 2 + 2 + 1 + 15 + 346 = 402. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

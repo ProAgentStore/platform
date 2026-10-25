@@ -399,6 +399,7 @@ const TABLE: Record<string, Row> = {
 	instance_runtime_status: ["runtime", "none", null, null, "instance_id,probe,token"],
 	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,offset,token"],
 	keys_status: ["account", "none", null, null, "token"],
+	verify_provider_key: ["account", "write", null, "envelope", "dry_run,provider,token"],
 	list_connections: ["composition", "read", null, null, "instance_id,token"],
 	list_agent_tasks: ["agentTasks", "none", null, null, "instance_id,token"],
 	agent_messages: ["agentAuthoring", "none", null, null, "agent_id,before,limit,token"],
