@@ -23,7 +23,8 @@ import { deepLinkFor } from "./console-links.js";
 import { logEvent } from "./events.js";
 import { keysetBefore, keysetPage, type CursorQuery } from "./history-page.js";
 import { recordAttempt, type AttemptKind } from "./release-note-attempts.js";
-import { completedReleaseEvidence, liveJobsPage, liveWorkflowRuns, verifyDeployProof, type ReleaseQueueDeps, type Row } from "./release-note-queue.js";
+import { collectWorkflowRuns, liveFetcher } from "./github-evidence.js";
+import { completedReleaseEvidence, liveJobsPage, verifyDeployProof, type ReleaseQueueDeps, type Row } from "./release-note-queue.js";
 import { deliveryBotConnected } from "./release-notes.js";
 import { gateIsComplete, grantedReleaseChannels, loadReleaseNotes } from "./release-notes-settings.js";
 import type { InstanceReleaseNotes, ReleaseChannel, ReleaseDeliveriesResponse, ReleaseDelivery, ReleaseDeliveryActionResponse, ReleaseDeliveryAttempt, ReleaseDeliveryState, ReleaseNoteProvider } from "../agent-types.js";
@@ -42,11 +43,11 @@ const ATTEMPTS_SHOWN = 20;
 export const RECONCILE_RETRY_CONFIRM = "no post exists in the channel; send it again";
 export const DUPLICATE_WARNING = "Duplicate risk: the first send may have reached the channel. Check the channel for this release note first. If it is there, mark it delivered with its permalink instead. Sending again can post the same announcement twice.";
 
-type QueueRow = Row & { instance_id: string; status: string; reason: string | null; permalink: string | null; updated_at: number; evidence_json: string | null };
+type QueueRow = Row & { instance_id: string; status: string; hold_code: string | null; reason: string | null; permalink: string | null; updated_at: number; evidence_json: string | null };
 type AttemptRow = { id: string; queue_id: string; kind: ReleaseDeliveryAttempt["kind"]; outcome: string; reason: string | null; permalink: string | null; evidence_json: string | null; created_at: number };
 type AttemptEvidence = { channel?: { provider?: ReleaseNoteProvider; name?: string; channelId?: string }; workflowRuns?: string[]; deployJob?: string | null };
 
-export interface DeliveryDeps extends Pick<ReleaseQueueDeps, "readRuns" | "readJobsPage"> {
+export interface DeliveryDeps extends Pick<ReleaseQueueDeps, "readRuns" | "readJobsPage" | "fetchPage"> {
 	now?: () => number;
 	botConnected?: (env: Env, userId: string, provider: ReleaseNoteProvider) => Promise<boolean>;
 }
@@ -55,9 +56,15 @@ const parseEvidence = (json: string | null): AttemptEvidence => {
 	try { return JSON.parse(json ?? "{}") as AttemptEvidence; } catch { return {}; }
 };
 
-export function deriveState(row: Pick<QueueRow, "status" | "updated_at">, now: number): ReleaseDeliveryState {
+/** A gated note whose commit range the queue has not read yet (#1349). */
+const awaitingRange = (contextJson: string | undefined): boolean => {
+	try { return !!(JSON.parse(contextJson ?? "{}") as { pendingRange?: unknown }).pendingRange; } catch { return false; }
+};
+
+export function deriveState(row: Pick<QueueRow, "status" | "updated_at"> & { context_json?: string }, now: number): ReleaseDeliveryState {
 	switch (row.status) {
-		case "pending": return "waiting_for_checks";
+		case "pending": return awaitingRange(row.context_json) ? "awaiting_commit_range" : "waiting_for_checks";
+		case "held": return "evidence_held";
 		case "configuration_required": return "configuration_required";
 		case "cancelled": return "configuration_changed";
 		case "sending": return now - row.updated_at >= UNCERTAIN_AFTER_MS ? "outcome_uncertain" : "sending";
@@ -93,6 +100,7 @@ function toDelivery(row: QueueRow, attempts: AttemptRow[], grants: ReleaseChanne
 		status: row.status,
 		state: deriveState(row, now),
 		reason: row.reason,
+		holdCode: row.hold_code ?? null,
 		permalink: row.permalink,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
@@ -151,11 +159,14 @@ async function recheckBeforeResend(env: Env, userId: string, row: QueueRow, deps
 	const connected = await (deps.botConnected ?? deliveryBotConnected)(env, userId, channel.provider);
 	if (!connected) throw new HttpError(409, `The ${channel.provider} bot is not connected for this account; connect it first.`);
 	const required = JSON.parse(row.workflows_json) as NonNullable<InstanceReleaseNotes["requiredWorkflows"]>;
-	let runs: Awaited<ReturnType<typeof liveWorkflowRuns>>;
-	try {
-		runs = await (deps.readRuns ? deps.readRuns(row) : liveWorkflowRuns(env, row));
-	} catch (e) {
-		throw new HttpError(503, `GitHub workflow evidence could not be read just now (${e instanceof Error ? e.message : String(e)}). Try again shortly.`);
+	let runs: NonNullable<Awaited<ReturnType<NonNullable<ReleaseQueueDeps["readRuns"]>>>>;
+	if (deps.readRuns) {
+		try { runs = await deps.readRuns(row); } catch (e) { throw new HttpError(503, `GitHub workflow evidence could not be read just now (${e instanceof Error ? e.message : String(e)}). Try again shortly.`); }
+	} else {
+		const collected = await collectWorkflowRuns(deps.fetchPage ?? liveFetcher(env, userId, row.github_repo.split("/")[0]), row.github_repo, row.sha);
+		if (!collected.ok && collected.kind === "transient") throw new HttpError(503, `GitHub workflow evidence could not be read just now (${collected.message}). Try again shortly.`);
+		if (!collected.ok) throw new HttpError(409, `The workflow evidence for this commit is incomplete: ${collected.message}`);
+		runs = collected.value;
 	}
 	const evidence = completedReleaseEvidence(runs, row.sha, row.default_branch, required);
 	if (!evidence) throw new HttpError(409, `The required workflows have not all succeeded on ${row.sha} and ${row.default_branch}, so the note cannot be sent.`);
@@ -172,6 +183,8 @@ const notRetryable = (row: QueueRow, now: number): HttpError => {
 		case "configuration_changed": return new HttpError(409, "This note was cancelled because the setting or channel grant changed. Retry only applies to a failed delivery.");
 		case "expired": return new HttpError(409, "This note expired after the 48-hour evidence window. Retry only applies to a failed delivery.");
 		case "abandoned": return new HttpError(409, "The owner abandoned this note. Retry only applies to a failed delivery.");
+		case "evidence_held": return new HttpError(409, "This note is held because its GitHub evidence is permanently incomplete or inconsistent (see the reason). Retry only applies to a failed delivery.");
+		case "awaiting_commit_range": return new HttpError(409, "The queue is still reading this note's commit range from GitHub; it continues by itself. Retry only applies to a failed delivery.");
 		case "configuration_required": return new HttpError(409, "This note is held until the release gate has its deploy job and step; it resumes by itself once the gate is saved.");
 		default: return new HttpError(409, "This note is still waiting for its checks; the queue will send it. Retry only applies to a failed delivery.");
 	}

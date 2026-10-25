@@ -10,7 +10,7 @@ import ReleaseDeliveriesList from "./ReleaseDeliveriesList";
 
 const base: ReleaseDelivery = {
 	id: "q1", repo: "acme/app", sha: "b".repeat(40), runId: "run-1", sessionId: "sess-1",
-	destination: { provider: "slack", name: "#release-notes" }, status: "failed", state: "delivery_failed", reason: "The bot is not in that channel.",
+	destination: { provider: "slack", name: "#release-notes" }, status: "failed", state: "delivery_failed", reason: "The bot is not in that channel.", holdCode: null,
 	permalink: null, createdAt: 1, updatedAt: 1, actions: { retry: true, reconcile: false },
 	evidence: { workflowRuns: ["https://github.com/acme/app/actions/runs/1"], deployJob: "https://github.com/acme/app/actions/runs/2/job/9" },
 	links: { codingRun: "/instances/i/coding", permalink: null, workflowRuns: ["https://github.com/acme/app/actions/runs/1"], deployJob: "https://github.com/acme/app/actions/runs/2/job/9" },
@@ -61,6 +61,17 @@ describe("the delivery list", () => {
 		expect(html).toContain("Cancelled: settings changed");
 		expect(html).not.toContain("Delivery failed");
 		expect(html).not.toContain("Retry send");
+	});
+	it("a held note shows its typed code and no action; a note still reading its range says it continues by itself", () => {
+		const held = render([{ ...base, status: "held", state: "evidence_held", holdCode: "commit_range_over_limit", reason: "The commit range has 300 commits, more than the 250 that can be verified.", actions: { retry: false, reconcile: false } }]);
+		expect(held).toContain("Held: evidence incomplete");
+		expect(held).toContain("commit_range_over_limit");
+		expect(held).toContain("more than the 250");
+		expect(held).not.toContain("Retry send");
+		const waiting = render([{ ...base, status: "pending", state: "awaiting_commit_range", reason: "GitHub answered 429; will retry", actions: { retry: false, reconcile: false } }]);
+		expect(waiting).toContain("Reading commit range");
+		expect(waiting).toContain("continues by itself");
+		expect(waiting).toContain("GitHub answered 429; will retry");
 	});
 	it("shows 'Show older' only when the server says there is more", () => {
 		expect(render([base], { hasMore: true })).toContain("Show older");

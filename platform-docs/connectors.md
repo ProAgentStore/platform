@@ -107,6 +107,32 @@ A gate saved before the job and step existed is not downgraded and not discarded
 `configuration_required` (never posted), and its channels are kept. Saving the same workflows again
 with `jobName` and `stepName` resumes the held rows.
 
+### Evidence reads are paged and bounded (#1349)
+
+A gated note is judged on two GitHub reads, and neither is judged from its first page.
+
+- **At run end** only what the runner proved is recorded: the repository, the branch it pushed to, and the old and
+  new commits (`pendingRange` in the row's context; the row is keyed by the pushed prefix). Nothing is read from
+  GitHub in the workflow step. A rate limit there can no longer lose the note.
+- **The queue tick reads the range** (`compare/<base>...<head>`, 50 commits a page, at most **250 commits**) and
+  verifies every page: a stable base commit, status and total; the exact expected number of commits on each page;
+  full 40-character SHAs, messages and parents; no duplicates; no commit listed before one of its own in-range
+  parents; the range attaches to the pushed base; and the last commit is the pushed head. The branch's current HEAD
+  is never substituted. It also checks the push went to GitHub's default branch. Closing-issue references
+  (`closes #N`) come from the complete verified range; the stored summary is the newest 50 subjects and the note
+  says how many more there are. Only the first 25 referenced issues get a title lookup.
+- **Workflow runs** for the commit are read across pages of 100, at most **10 pages (1,000 runs)**. All of them are
+  collected before the latest attempt of each required workflow path is chosen, so a newer failed, cancelled or
+  pending attempt on a later page beats an older success on page 1. The same reader serves the owner's Retry recheck.
+
+Every read answers one of three things. **Transient** (HTTP 408, 429, 5xx, a 403 that GitHub marks as a rate limit,
+or a network error): the row stays as it is, shows why it waits in `reason`, and the next tick tries again; the
+48-hour window is unchanged. **Permanent** (over a bound, an inconsistent or malformed answer, a wrong head, a push
+to another branch, a 401/403/404/410/422): the row becomes `held` with a typed `hold_code`, an event
+`release_note_evidence_held`, and an owner notification. Codes: `commit_range_over_limit`,
+`commit_range_inconsistent`, `commit_range_wrong_head`, `workflow_runs_over_limit`, `workflow_runs_incomplete`,
+`default_branch_mismatch`, `github_refused`. A held note is not retried or reopened.
+
 ### Delivery state and recovery (#1348)
 
 Every queued note is visible to its owner without database access: the coder's **Release notes** panel
@@ -121,6 +147,7 @@ refuses any UPDATE or DELETE of an attempt). The `release_note_sent` / `release_
 
 | `state` | Meaning |
 |---|---|
+| `awaiting_commit_range` | A gated push was recorded (base and head only); the queue is reading and verifying the commit range from GitHub, retrying after a rate limit |
 | `waiting_for_checks` | Queued; posts when every required workflow and the deploy step succeed on the SHA |
 | `configuration_required` | The gate has no deploy job and step; held until it is saved with them |
 | `configuration_changed` | Cancelled: the setting or channel grant changed. Never reopened by Retry |
@@ -130,6 +157,7 @@ refuses any UPDATE or DELETE of an attempt). The `release_note_sent` / `release_
 | `sent` | Delivered; never retried |
 | `expired` | The 48-hour evidence window passed |
 | `abandoned` | The owner gave up an uncertain send |
+| `evidence_held` | GitHub's evidence is permanently incomplete or inconsistent; `holdCode` says why. Never sent, never reopened by Retry |
 
 **Retry** (`POST …/deliveries/:id/retry`, MCP `retry_release_note_delivery`) applies to `delivery_failed` only,
 once the cause is fixed (for example the bot was invited). It rechecks ownership, that release notes are on, the

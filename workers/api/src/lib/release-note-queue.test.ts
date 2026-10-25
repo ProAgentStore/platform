@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { upsertConnectorGrant } from "./connector-grants.js";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
+import { classifyStatus, type GithubPage, type PageFetcher } from "./github-evidence.js";
 import { completedReleaseEvidence, JOBS_PAGES_MAX, runReleaseNoteQueue, verifyDeployProof } from "./release-note-queue.js";
 import type { Env } from "../types.js";
 
@@ -227,5 +228,224 @@ describe("an old gate without deploy job and step is held, never posted (#1346)"
 			expect(deliver).not.toHaveBeenCalled();
 			expect((await state())?.status).toBe("cancelled");
 		} finally { d1.close(); }
+	});
+});
+
+// ── #1349: the tick reads the runner-recorded range and every workflow run, page by page ──
+
+const BASE_SHA = "0".repeat(40);
+const sha40 = (n: number) => `${(n + 0x1000000).toString(16)}${"c".repeat(33)}`;
+type Msg = (i: number, n: number) => string;
+/** `n` linear commits on BASE_SHA, oldest first; the newest is exactly SHA (the pushed head). */
+function history(n: number, message: Msg = (i) => `feat: change ${i}`) {
+	return Array.from({ length: n }, (_x, i) => ({ sha: i === n - 1 ? SHA : sha40(i + 1), commit: { message: message(i, n) }, parents: [{ sha: i === 0 ? BASE_SHA : i === n - 1 ? sha40(n - 1) : sha40(i) }] }));
+}
+const ok = (body: unknown): GithubPage => ({ ok: true, body, next: null });
+const refused = (status: number): GithubPage => ({ ok: false, kind: classifyStatus(status, { get: () => null }), status, message: `GitHub answered ${status}` });
+
+/** GitHub for repo acme/app: its default branch, the paged compare, issue titles, and the paged workflow runs of SHA. */
+function github(state: { commits: ReturnType<typeof history>; runs?: Array<Record<string, unknown>>; branch?: string; fail?: (path: string) => GithubPage | null; total?: number }) {
+	const calls: string[] = [];
+	const fetchPage: PageFetcher = async (path) => {
+		calls.push(path);
+		const forced = state.fail?.(path);
+		if (forced) return forced;
+		const pageNo = Number(/[?&]page=(\d+)/.exec(path)?.[1] ?? 1);
+		if (path === "/repos/acme/app") return ok({ default_branch: state.branch ?? "main" });
+		if (path.includes("/compare/")) {
+			const all = state.commits;
+			return ok({ status: "ahead", base_commit: { sha: BASE_SHA }, total_commits: state.total ?? all.length, commits: all.slice((pageNo - 1) * 50, pageNo * 50) });
+		}
+		const issue = /\/issues\/(\d+)$/.exec(path);
+		if (issue) return ok({ title: `Issue ${issue[1]}` });
+		if (path.includes("/actions/runs")) {
+			const all = state.runs ?? required.map((x) => run(x.path));
+			return ok({ total_count: all.length, workflow_runs: all.slice((pageNo - 1) * 100, pageNo * 100) });
+		}
+		return { ok: false, kind: "permanent", status: 404, message: "GitHub answered 404" };
+	};
+	return { fetchPage, calls, compareCalls: () => calls.filter((c) => c.includes("/compare/")), runCalls: () => calls.filter((c) => c.includes("/actions/runs")) };
+}
+
+/** A gated row exactly as the run end leaves it: keyed by the pushed prefix, range recorded, nothing read from GitHub. */
+async function seedAwaiting(over: { workflows?: unknown[]; status?: string; ageMs?: number } = {}) {
+	const q = await seedQueue(over.workflows ?? required, over.workflows ?? required, over.status ?? "pending");
+	const ctx = { instanceId: "inst-1", runId: "run-1", repo: "acme/app", defaultBranch: "main", commitRange: null, changes: [], changesCapped: false, closedIssues: [], ciStatus: "pending", headSha: null, pushedAt: new Date().toISOString(), pendingRange: { base: BASE_SHA.slice(0, 7), head: SHA.slice(0, 7), branch: "main" } };
+	const created = Date.now() - (over.ageMs ?? 0);
+	await q.d1.DB.prepare("UPDATE release_note_queue SET sha=?1, context_json=?2, created_at=?3, updated_at=?3 WHERE id='q1'").bind(SHA.slice(0, 7), JSON.stringify(ctx), created).run();
+	const full = () => q.d1.DB.prepare("SELECT sha, status, reason, hold_code, context_json FROM release_note_queue WHERE id='q1'").first<{ sha: string; status: string; reason: string | null; hold_code: string | null; context_json: string }>();
+	return { ...q, full };
+}
+const deployPath = required[2].path;
+const filler = (from: number, to: number) => Array.from({ length: to - from }, (_x, i) => ({ id: 1000 + from + i, path: `.github/workflows/noise-${from + i}.yml`, head_sha: SHA, head_branch: "main", status: "completed", conclusion: "success", run_attempt: 1 }));
+/** 250 runs where each required workflow sits on a different page: ci on page 1, e2e-full on page 2, deploy on page 3. */
+const spread = (extra: Array<Record<string, unknown>> = []) => {
+	const all = [...filler(0, 250), ...extra];
+	all[5] = run(required[0].path);
+	all[150] = run(required[1].path);
+	all[220] = run(deployPath);
+	return all;
+};
+
+describe("the queue tick reads the whole range and every workflow run (#1349)", () => {
+	it("verifies a 51-commit range to the true pushed head, keeps every closing reference, labels the subjects it omits, finds workflows on pages 2 and 3, and posts once", async () => {
+		const q = await seedAwaiting();
+		try {
+			const commits = history(51, (i, n) => (i === 2 ? "fix: early one\n\ncloses #12" : i === n - 1 ? "feat: newest\n\nfixes #34" : `feat: change ${i}`));
+			const gh = github({ commits, runs: spread() });
+			const deps = { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) };
+			await runReleaseNoteQueue(q.env, deps);
+			await runReleaseNoteQueue(q.env, deps);
+			expect(q.deliver).toHaveBeenCalledTimes(1);
+			const text = q.deliver.mock.calls[0]?.[1] ?? "";
+			expect(text).toContain(`Commit: ${SHA}`);
+			expect(text).toContain("…and 43 more changes"); // 51 verified subjects, 8 shown
+			const row = await q.full();
+			expect(row).toMatchObject({ sha: SHA, status: "sent", hold_code: null, reason: null });
+			const ctx = JSON.parse(row?.context_json ?? "{}");
+			expect(ctx.pendingRange).toBeUndefined();
+			expect(ctx).toMatchObject({ headSha: SHA, commitRange: `${sha40(1).slice(0, 7)}…${SHA.slice(0, 7)} (51 commits)`, changesOmitted: 1 });
+			expect(ctx.changes).toHaveLength(50);
+			expect(ctx.changes[0]).toBe("feat: newest");
+			expect(ctx.closedIssues).toEqual([{ number: 12, title: "Issue 12" }, { number: 34, title: "Issue 34" }]); // #12 is in the OLDEST, omitted-from-summary commits
+			expect(gh.compareCalls()).toHaveLength(2);
+			expect(gh.runCalls()).toHaveLength(3); // pages 1, 2 and 3 of the 250 runs
+		} finally { q.d1.close(); }
+	});
+
+	it("a failed rerun on page 3 blocks a note that page 1 alone would have allowed, and a later green run releases it once", async () => {
+		const q = await seedAwaiting();
+		try {
+			const failedRerun = { id: 900, path: deployPath, head_sha: SHA, head_branch: "main", status: "completed", conclusion: "failure", run_attempt: 2, updated_at: "2026-10-24T12:00:00Z" };
+			const state = { commits: history(3), runs: spread([failedRerun]) as Array<Record<string, unknown>> };
+			const gh = github(state);
+			const deps = { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job({ run_attempt: 2 })) };
+			await runReleaseNoteQueue(q.env, deps);
+			expect(q.deliver).not.toHaveBeenCalled();
+			expect(gh.runCalls().some((c) => /[?&]page=3\b/.test(c))).toBe(true);
+			expect((await q.full())?.status).toBe("pending");
+			// The deploy workflow is rerun and succeeds (later than the failure).
+			state.runs = spread([{ ...failedRerun, id: 901, conclusion: "success", run_attempt: 3, updated_at: "2026-10-24T13:00:00Z" }]);
+			const deps2 = { ...deps, readJobsPage: pages(job({ id: 778, run_id: 901, run_attempt: 3 })) };
+			await runReleaseNoteQueue(q.env, deps2);
+			await runReleaseNoteQueue(q.env, deps2);
+			expect(q.deliver).toHaveBeenCalledTimes(1);
+		} finally { q.d1.close(); }
+	});
+
+	it.each([["a rate limit (429)", 429], ["a server error (503)", 503]])("%s while reading the range leaves the row pending with the reason, posts nothing, and succeeds on a later tick", async (_name, status) => {
+		const q = await seedAwaiting();
+		try {
+			let down = true;
+			const gh = github({ commits: history(60), runs: spread(), fail: (path) => (down && path.includes("/compare/") && /[?&]page=2\b/.test(path) ? refused(status) : null) });
+			const deps = { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) };
+			await runReleaseNoteQueue(q.env, deps);
+			const waiting = await q.full();
+			expect(waiting).toMatchObject({ sha: SHA.slice(0, 7), status: "pending", hold_code: null });
+			expect(waiting?.reason).toMatch(new RegExp(`${status}.*retry`));
+			expect(q.deliver).not.toHaveBeenCalled();
+			down = false;
+			await runReleaseNoteQueue(q.env, deps);
+			expect(q.deliver).toHaveBeenCalledTimes(1);
+			expect(await q.full()).toMatchObject({ sha: SHA, status: "sent", reason: null });
+		} finally { q.d1.close(); }
+	});
+
+	it("a rate limit while reading the workflow runs also waits, then succeeds", async () => {
+		const q = await seedAwaiting();
+		try {
+			let down = true;
+			const gh = github({ commits: history(3), runs: spread(), fail: (path) => (down && path.includes("/actions/runs") && /[?&]page=2\b/.test(path) ? refused(429) : null) });
+			const deps = { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) };
+			await runReleaseNoteQueue(q.env, deps);
+			expect((await q.full())?.reason).toMatch(/429.*retry/);
+			expect(q.deliver).not.toHaveBeenCalled();
+			down = false;
+			await runReleaseNoteQueue(q.env, deps);
+			expect(q.deliver).toHaveBeenCalledTimes(1);
+		} finally { q.d1.close(); }
+	});
+
+	it("a range over 250 commits is held with a typed reason after one read, never posts, and is not read again", async () => {
+		const q = await seedAwaiting();
+		try {
+			const gh = github({ commits: history(251), runs: spread() });
+			const deps = { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) };
+			await runReleaseNoteQueue(q.env, deps);
+			const held = await q.full();
+			expect(held).toMatchObject({ status: "held", hold_code: "commit_range_over_limit" });
+			expect(held?.reason).toMatch(/251 commits, more than the 250/);
+			expect(gh.compareCalls()).toHaveLength(1);
+			const before = gh.calls.length;
+			await runReleaseNoteQueue(q.env, deps);
+			expect(gh.calls.length).toBe(before);
+			expect(q.deliver).not.toHaveBeenCalled();
+			const event = await q.d1.DB.prepare("SELECT context FROM agent_events WHERE event='release_note_evidence_held'").first<{ context: string }>();
+			expect(JSON.parse(event?.context ?? "{}")).toMatchObject({ queueId: "q1", holdCode: "commit_range_over_limit" });
+		} finally { q.d1.close(); }
+	});
+
+	it.each([
+		["a range that ends at another commit", { commits: history(60).map((c, i, all) => (i === all.length - 1 ? { ...c, sha: sha40(7777) } : c)) }, "commit_range_wrong_head"],
+		["a total that disagrees with the pages", { commits: history(120), total: 121 }, "commit_range_inconsistent"],
+		["a repository whose default branch is not the pushed branch", { commits: history(3), branch: "develop" }, "default_branch_mismatch"],
+		["a repository GitHub refuses to show", { commits: history(3), fail: (p: string) => (p === "/repos/acme/app" ? refused(404) : null) }, "github_refused"],
+	])("%s is held with its own code and never posts", async (_name, state, code) => {
+		const q = await seedAwaiting();
+		try {
+			const gh = github(state as Parameters<typeof github>[0]);
+			await runReleaseNoteQueue(q.env, { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) });
+			expect(await q.full()).toMatchObject({ status: "held", hold_code: code });
+			expect(q.deliver).not.toHaveBeenCalled();
+		} finally { q.d1.close(); }
+	});
+
+	it("more workflow runs than the documented bound holds the note, after reading exactly the bounded pages", async () => {
+		const q = await seedAwaiting();
+		try {
+			const gh = github({ commits: history(3), runs: filler(0, 1500) });
+			await runReleaseNoteQueue(q.env, { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) });
+			const held = await q.full();
+			expect(held).toMatchObject({ status: "held", hold_code: "workflow_runs_over_limit", sha: SHA });
+			expect(held?.reason).toContain("1000 workflow runs");
+			expect(gh.runCalls()).toHaveLength(10);
+			expect(q.deliver).not.toHaveBeenCalled();
+		} finally { q.d1.close(); }
+	});
+
+	it("a row whose verified commit already has a note for that channel is cancelled, not sent twice", async () => {
+		const q = await seedAwaiting();
+		try {
+			await q.d1.DB.prepare("INSERT INTO release_note_queue (id,user_id,instance_id,repo_id,github_repo,default_branch,run_id,session_id,sha,grant_id,context_json,workflows_json,status,created_at,updated_at) SELECT 'other',user_id,instance_id,repo_id,github_repo,default_branch,run_id,session_id,?1,grant_id,context_json,workflows_json,'sent',created_at,updated_at FROM release_note_queue WHERE id='q1'").bind(SHA).run();
+			const gh = github({ commits: history(3), runs: spread() });
+			await runReleaseNoteQueue(q.env, { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) });
+			expect(await q.full()).toMatchObject({ status: "cancelled", reason: expect.stringContaining("already exists") });
+			expect(q.deliver).not.toHaveBeenCalled();
+		} finally { q.d1.close(); }
+	});
+
+	it("the 48-hour expiry is unchanged: an old awaiting row expires without any GitHub read", async () => {
+		const q = await seedAwaiting({ ageMs: 49 * 3_600_000 });
+		try {
+			const gh = github({ commits: history(3), runs: spread() });
+			await runReleaseNoteQueue(q.env, { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) });
+			expect((await q.full())?.status).toBe("expired");
+			expect(gh.calls).toEqual([]);
+		} finally { q.d1.close(); }
+	});
+
+	it("an old gate keeps an awaiting row held without reading GitHub; completing the gate resumes the range read", async () => {
+		const q = await seedAwaiting({ workflows: legacy });
+		try {
+			const gh = github({ commits: history(3), runs: spread() });
+			const deps = { deliver: () => q.deliver, fetchPage: gh.fetchPage, readJobsPage: pages(job()) };
+			await runReleaseNoteQueue(q.env, deps);
+			expect((await q.full())?.status).toBe("configuration_required");
+			expect(gh.calls).toEqual([]);
+			await q.configure(required);
+			await runReleaseNoteQueue(q.env, deps);
+			expect(q.deliver).toHaveBeenCalledTimes(1);
+			expect(await q.full()).toMatchObject({ sha: SHA, status: "sent" });
+		} finally { q.d1.close(); }
 	});
 });

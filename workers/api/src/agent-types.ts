@@ -446,7 +446,7 @@ export interface InstanceReleaseNotesResponse {
  * answer to "what is happening to it": `outcome_uncertain` is a send claimed but never confirmed (a crash or
  * an unreadable provider reply) and is never retried automatically.
  */
-export type ReleaseDeliveryState = "waiting_for_checks" | "configuration_required" | "configuration_changed" | "sending" | "outcome_uncertain" | "delivery_failed" | "sent" | "expired" | "abandoned";
+export type ReleaseDeliveryState = "waiting_for_checks" | "configuration_required" | "configuration_changed" | "sending" | "outcome_uncertain" | "delivery_failed" | "sent" | "expired" | "abandoned" | "awaiting_commit_range" | "evidence_held";
 
 export interface ReleaseDeliveryAttempt {
 	id: string;
@@ -468,6 +468,8 @@ export interface ReleaseDelivery {
 	status: string;
 	state: ReleaseDeliveryState;
 	reason: string | null;
+	/** Why a held note is held (`commit_range_over_limit`, `workflow_runs_over_limit`, …); null for every other state. */
+	holdCode: string | null;
 	permalink: string | null;
 	createdAt: number;
 	updatedAt: number;

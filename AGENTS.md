@@ -127,6 +127,15 @@ not what you saved. A save that fails or saves nothing still lets a chained `pop
 work, and zsh does not split `$SRC="a.ts b.ts"`, so an unquoted path variable is ONE pathspec and the save
 fails. Never apply or pop a stash you did not just verifiably create.
 
+## Release-note evidence (#1346, #1348, #1349)
+
+A production release note posts only on complete, exact evidence for the pushed commit, and every uncertainty holds.
+Work here keeps these rules: the range and the workflow runs are read page by page up to documented bounds (250
+commits, 10 pages of 100 runs) in `lib/github-evidence.ts`; transient GitHub errors leave the row pending, permanent
+ones hold it with a typed `hold_code`; the branch HEAD is never substituted for the pushed head; and the queue's
+claim-before-send and 48-hour window do not change. Tests drive paginated GitHub fixtures and assert behavior:
+`lib/github-evidence.test.ts`, `lib/release-note-queue.test.ts`, `routes/release-note-deliveries.integration.test.ts`.
+
 ## Local git hooks
 
 `pnpm install` activates them in every checkout (husky's `prepare`, #1103) — no manual step, so they

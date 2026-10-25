@@ -66,6 +66,13 @@ export interface ReleaseNoteContext {
 	/** The head commit CI was read for, when there is one. */
 	headSha: string | null;
 	pushedAt: string;
+	/** Gated notes: subjects left out of `changes` because the verified range was longer than the rendered summary (#1349). */
+	changesOmitted?: number;
+	/**
+	 * Gated notes (#1349): the runner-recorded range, not yet read from GitHub. Present until the queue tick has paged the
+	 * whole `base...head` compare, verified it, and replaced this with the real commits; absent afterwards.
+	 */
+	pendingRange?: { base: string; head: string; branch: string };
 }
 
 export interface ReleaseNoteInput {
@@ -167,17 +174,14 @@ function ciFrom(raw: unknown): CiStatus {
 }
 
 /** Gather what the note says: the commits this run put on the branch, the issues they close, CI for the head. */
-export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: ReleaseNoteDeps, pinnedSha?: string, baseSha?: string): Promise<ReleaseNoteContext> {
+export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: ReleaseNoteDeps): Promise<ReleaseNoteContext> {
 	const row = await getRepo(input.env, input.instanceId, input.userId, input.repoId).catch(() => null);
 	const githubRepo = row?.githubRepo ?? null;
 	// `branch` '' is the repository's default branch (migration 0020): ask GitHub for its name.
 	let branch = row?.branch ?? "";
-	let invalidBranch = false;
-	if ((!branch || pinnedSha) && githubRepo) {
+	if (!branch && githubRepo) {
 		const meta = (await deps.githubGet(`/repos/${githubRepo}`)) as { default_branch?: unknown } | null;
-		const reported = typeof meta?.default_branch === "string" ? meta.default_branch : "";
-		invalidBranch = !!pinnedSha && (!reported || !!branch && branch !== reported);
-		branch = reported;
+		branch = typeof meta?.default_branch === "string" ? meta.default_branch : "";
 	}
 	const base: ReleaseNoteContext = {
 		instanceId: input.instanceId,
@@ -192,39 +196,14 @@ export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: R
 		headSha: null,
 		pushedAt: new Date(deps.now()).toISOString(),
 	};
-	if (!githubRepo || invalidBranch) return base;
+	if (!githubRepo) return base;
 	const repo = githubRepo;
-	if (pinnedSha) {
-		if (!baseSha) return base;
-		// Compare names the exact ref transition reported by git push. Unlike a `since`
-		// query, it includes older commits that this run delivered to the branch.
-		const raw = await deps.githubGet(`/repos/${repo}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(pinnedSha)}?per_page=${RELEASE_NOTE_MAX_COMMITS}`) as { status?: unknown; base_commit?: { sha?: unknown }; commits?: Array<{ sha?: unknown; commit?: { message?: unknown } }>; total_commits?: unknown } | null;
-		const commits = raw?.commits;
-		const matches = (sha: unknown, prefix: string) => typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha) && sha.toLowerCase().startsWith(prefix.toLowerCase());
-		if (raw?.status !== "ahead" || !matches(raw.base_commit?.sha, baseSha) || !Array.isArray(commits) || !commits.length || !Number.isSafeInteger(raw.total_commits) || Number(raw.total_commits) !== commits.length || commits.length > RELEASE_NOTE_MAX_COMMITS || !matches(commits[commits.length - 1]?.sha, pinnedSha) || commits.some((c) => !matches(c.sha, "") || typeof c.commit?.message !== "string" || !c.commit.message.trim())) return base;
-		const messages = commits.map((c) => String(c.commit?.message ?? ""));
-		const head = String(commits[commits.length - 1].sha);
-		const closedIssues = await Promise.all(closedIssueNumbers(messages).map(async (number) => {
-			const issue = (await deps.githubGet(`/repos/${repo}/issues/${number}`)) as { title?: unknown } | null;
-			return { number, title: typeof issue?.title === "string" ? issue.title : null };
-		}));
-		return {
-			...base,
-			commitRange: commits.length === 1 ? `${shortSha(head)} (1 commit)` : `${shortSha(String(commits[0].sha))}…${shortSha(head)} (${commits.length} commits)`,
-			changes: messages.reverse().map((m) => m.split("\n")[0].trim()).filter(Boolean),
-			changesCapped: false,
-			closedIssues,
-			headSha: head,
-			ciStatus: "pending",
-		};
-	}
 	const since = new Date(input.runStartedAt).toISOString();
-	const raw = await deps.githubGet(`/repos/${repo}/commits?${pinnedSha ? `sha=${encodeURIComponent(pinnedSha)}&` : branch ? `sha=${encodeURIComponent(branch)}&` : ""}since=${encodeURIComponent(since)}&per_page=${RELEASE_NOTE_MAX_COMMITS}`);
+	const raw = await deps.githubGet(`/repos/${repo}/commits?${branch ? `sha=${encodeURIComponent(branch)}&` : ""}since=${encodeURIComponent(since)}&per_page=${RELEASE_NOTE_MAX_COMMITS}`);
 	const commits = Array.isArray(raw) ? (raw as Array<{ sha?: unknown; commit?: { message?: unknown } }>).filter((c) => typeof c.sha === "string") : null;
 	if (!commits?.length) return base;
 	const messages = commits.map((c) => String(c.commit?.message ?? ""));
 	const head = String(commits[0].sha);
-	if (pinnedSha && (!/^[0-9a-f]{40}$/i.test(head) || !head.toLowerCase().startsWith(pinnedSha.toLowerCase()))) return base;
 	const oldest = String(commits[commits.length - 1].sha);
 	const closedIssues = await Promise.all(
 		closedIssueNumbers(messages).map(async (number) => {
@@ -239,7 +218,7 @@ export async function collectReleaseNoteContext(input: ReleaseNoteInput, deps: R
 		changesCapped: commits.length >= RELEASE_NOTE_MAX_COMMITS,
 		closedIssues,
 		headSha: head,
-		ciStatus: pinnedSha ? "pending" : ciFrom(await deps.githubGet(`/repos/${repo}/actions/runs?head_sha=${head}&per_page=30`)),
+		ciStatus: ciFrom(await deps.githubGet(`/repos/${repo}/actions/runs?head_sha=${head}&per_page=30`)),
 	};
 }
 
@@ -302,8 +281,15 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 		if (settings.instance.requiredWorkflows?.length) {
 			const pushed = await runPushedShaPrefix(env, { instanceId, userId, runId });
 			if (!pushed) return { channels, repo: input.repoLabel, text: "", unverified: "The push result did not identify its new commit." };
-			const ctx = await collectReleaseNoteContext(input, deps, pushed.prefix, pushed.basePrefix);
-			if (!ctx.headSha?.startsWith(pushed.prefix) || ctx.defaultBranch !== pushed.branch) return { channels, repo: input.repoLabel, text: "", unverified: "GitHub could not verify the pushed commit on its default branch." };
+			// The range itself is read, paged and verified by the queue tick (#1349), where a rate limit can be waited out. Here
+			// we only record what the runner proved: the repository, the branch it pushed to and the old and new commits.
+			const repoRow = await getRepo(env, instanceId, userId, input.repoId).catch(() => null);
+			if (!repoRow?.githubRepo) return { channels, repo: input.repoLabel, text: "", unverified: "This repository is not a GitHub repository, so the pushed commit cannot be verified." };
+			if (repoRow.branch && repoRow.branch !== pushed.branch) return { channels, repo: input.repoLabel, text: "", unverified: "The run pushed to a branch other than the repository's configured default branch." };
+			const ctx: ReleaseNoteContext = {
+				instanceId, runId, repo: repoRow.githubRepo, defaultBranch: pushed.branch, commitRange: null, changes: [], changesCapped: false, closedIssues: [],
+				ciStatus: "pending", headSha: null, pushedAt: new Date(deps.now()).toISOString(), pendingRange: { base: pushed.basePrefix, head: pushed.prefix, branch: pushed.branch },
+			};
 			return { channels, repo: ctx.repo, text: "", queued: { context: ctx, workflows: settings.instance.requiredWorkflows } };
 		}
 		const ctx = await collectReleaseNoteContext(input, deps);
@@ -327,7 +313,9 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 		for (const channel of plan.channels) {
 			await runStep(`release-note-queue:${channel.grantId}`, async () => {
 				const ctx = plan.queued?.context;
-				if (!ctx?.headSha) return;
+				// Until the tick has read the range the row is keyed by the pushed prefix; it takes the full SHA once verified.
+				const rowSha = ctx?.headSha ?? ctx?.pendingRange?.head;
+				if (!ctx || !rowSha) return;
 				const now = Date.now();
 				// An old gate (no deploy job/step) is queued HELD, never `pending`: it may not make the production claim (#1346).
 				const gate = releaseGateState(plan.queued?.workflows);
@@ -335,11 +323,11 @@ export async function postReleaseNotes(input: ReleaseNoteInput, deps: ReleaseNot
 				await env.DB.prepare(`INSERT OR IGNORE INTO release_note_queue
 					(id,user_id,instance_id,repo_id,github_repo,default_branch,run_id,session_id,sha,grant_id,context_json,workflows_json,status,reason,created_at,updated_at)
 					VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)`)
-					.bind(crypto.randomUUID(), userId, instanceId, input.repoId, ctx.repo, ctx.defaultBranch, runId, input.sessionId, ctx.headSha, channel.grantId, JSON.stringify(ctx), JSON.stringify(plan.queued?.workflows), ready ? "pending" : "configuration_required", ready ? null : gate.message ?? null, now).run();
+					.bind(crypto.randomUUID(), userId, instanceId, input.repoId, ctx.repo, ctx.defaultBranch, runId, input.sessionId, rowSha, channel.grantId, JSON.stringify(ctx), JSON.stringify(plan.queued?.workflows), ready ? "pending" : "configuration_required", ready ? null : gate.message ?? null, now).run();
 			});
 		}
 		const held = releaseGateState(plan.queued.workflows).state !== "ready";
-		await logEvent(env, { ...trace, event: held ? "release_note_configuration_required" : "release_note_queued", ...(held ? { level: "warn" as const } : {}), message: held ? `Release note held for ${plan.queued.context.headSha}: the release gate has no deploy job and step. ${releaseGateState(plan.queued.workflows).message}` : `Release note queued for ${plan.queued.context.headSha}: waiting for required GitHub workflows.` }).catch(() => undefined);
+		await logEvent(env, { ...trace, event: held ? "release_note_configuration_required" : "release_note_queued", ...(held ? { level: "warn" as const } : {}), message: held ? `Release note held for ${plan.queued.context.pendingRange?.head}: the release gate has no deploy job and step. ${releaseGateState(plan.queued.workflows).message}` : `Release note queued for ${plan.queued.context.pendingRange?.head}: its commit range and required GitHub workflows are read by the release queue.` }).catch(() => undefined);
 		return { status: "queued", sent: [], failed: [] };
 	}
 	const outcome: ReleaseNoteOutcome = { status: "posted", sent: [], failed: [] };

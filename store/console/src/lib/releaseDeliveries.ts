@@ -15,6 +15,8 @@ export const STATE_LABEL: Record<ReleaseDeliveryState, string> = {
 	sent: "Delivered",
 	expired: "Expired",
 	abandoned: "Abandoned",
+	awaiting_commit_range: "Reading commit range",
+	evidence_held: "Held: evidence incomplete",
 };
 
 export type Tone = "ok" | "wait" | "warn" | "bad" | "muted";
@@ -29,6 +31,8 @@ export const STATE_TONE: Record<ReleaseDeliveryState, Tone> = {
 	sent: "ok",
 	expired: "muted",
 	abandoned: "muted",
+	awaiting_commit_range: "wait",
+	evidence_held: "warn",
 };
 
 /** What the owner can do next, in words. */
@@ -42,6 +46,8 @@ export const STATE_HINT: Record<ReleaseDeliveryState, string> = {
 	sent: "",
 	expired: "The 48-hour evidence window passed before every check succeeded.",
 	abandoned: "You gave this note up; it is not sent.",
+	awaiting_commit_range: "The queue is reading the commits this push delivered from GitHub. It continues by itself, including after a rate limit.",
+	evidence_held: "GitHub's evidence for this note is permanently incomplete or inconsistent (see the reason), so it will not be sent. It is not reopened by Retry.",
 };
 
 export const shortSha = (sha: string) => sha.slice(0, 7);
@@ -90,4 +96,4 @@ export function appendPage(shown: ReleaseDelivery[], page: ReleaseDelivery[]): R
 export const replaceDelivery = (rows: ReleaseDelivery[], next: ReleaseDelivery): ReleaseDelivery[] => rows.map((d) => (d.id === next.id ? next : d));
 
 /** The blockers worth surfacing above the list: notes that will not send until the owner acts. */
-export const needsAttention = (rows: ReleaseDelivery[]): ReleaseDelivery[] => rows.filter((d) => d.state === "delivery_failed" || d.state === "outcome_uncertain" || d.state === "configuration_required");
+export const needsAttention = (rows: ReleaseDelivery[]): ReleaseDelivery[] => rows.filter((d) => d.state === "delivery_failed" || d.state === "outcome_uncertain" || d.state === "configuration_required" || d.state === "evidence_held");

@@ -11,7 +11,7 @@ const delivery = (id: string, state: ReleaseDeliveryState, over: Partial<Release
 	id, repo: "acme/app", sha: "b".repeat(40), runId: "run-1", sessionId: "sess-1",
 	destination: { provider: "slack", name: "#release-notes" }, status: state, state, reason: null, permalink: null,
 	createdAt: 1, updatedAt: 1, actions: { retry: false, reconcile: false },
-	evidence: { workflowRuns: [], deployJob: null }, links: { codingRun: "/c", permalink: null, workflowRuns: [], deployJob: null }, attempts: [], ...over,
+	evidence: { workflowRuns: [], deployJob: null }, links: { codingRun: "/c", permalink: null, workflowRuns: [], deployJob: null }, attempts: [], ...over, holdCode: over.holdCode ?? null,
 });
 
 describe("every state has its own words, and the four blockers are not conflated", () => {
@@ -62,7 +62,7 @@ describe("the list", () => {
 		expect(replaceDelivery([a, b, c], fixed).map((d) => d.state)).toEqual(["sent", "waiting_for_checks", "sent"]);
 	});
 	it("surfaces only the notes that wait on the owner", () => {
-		const rows = [delivery("1", "sent"), delivery("2", "delivery_failed"), delivery("3", "outcome_uncertain"), delivery("4", "waiting_for_checks"), delivery("5", "configuration_required"), delivery("6", "expired")];
-		expect(needsAttention(rows).map((d) => d.id)).toEqual(["2", "3", "5"]);
+		const rows = [delivery("1", "sent"), delivery("2", "delivery_failed"), delivery("3", "outcome_uncertain"), delivery("4", "waiting_for_checks"), delivery("5", "configuration_required"), delivery("6", "expired"), delivery("7", "evidence_held", { holdCode: "commit_range_over_limit" }), delivery("8", "awaiting_commit_range")];
+		expect(needsAttention(rows).map((d) => d.id)).toEqual(["2", "3", "5", "7"]);
 	});
 });

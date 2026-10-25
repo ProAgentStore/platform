@@ -69,7 +69,7 @@ function github(url: URL): Response {
 	if (url.pathname.endsWith("/actions/runs")) {
 		const runs = [{ id: 1, path: REQ[0].path, head_sha: SHA, head_branch: "main", status: "completed", conclusion: "success", run_attempt: 1 }];
 		if (githubMode !== "no_deploy") runs.push({ id: 2, path: REQ[1].path, head_sha: SHA, head_branch: "main", status: "completed", conclusion: "success", run_attempt: 1 });
-		return json({ workflow_runs: runs });
+		return json({ total_count: runs.length, workflow_runs: runs });
 	}
 	if (url.pathname.endsWith("/attempts/1/jobs")) return json({ total_count: 1, jobs: [jobFor(githubMode === "skipped_step" ? "skipped" : "success")] });
 	return json({ message: "not found" }, 404);
@@ -177,6 +177,24 @@ describe("the owner can answer 'was SHA X announced to channel Y?' (#1348)", () 
 		const byId = Object.fromEntries((await list()).body.deliveries.map((d: { id: string }) => [d.id, d]));
 		expect(byId.young).toMatchObject({ state: "sending", actions: { retry: false, reconcile: false } });
 		expect(byId.old).toMatchObject({ state: "outcome_uncertain", actions: { retry: false, reconcile: true } });
+	});
+});
+
+describe("held and range-pending notes are visible and distinct (#1349)", () => {
+	it("shows a held note with its typed code and reason, and a note still waiting for its range, neither retryable", async () => {
+		const grantId = await setup(CH_ENG);
+		await seed("held", grantId, { status: "held", reason: "The commit range 0000000...bbbbbbb has 300 commits, more than the 250 that can be verified, so the note is held", sha: "c".repeat(40) });
+		await d1.DB.prepare("UPDATE release_note_queue SET hold_code='commit_range_over_limit' WHERE id='held'").run();
+		await seed("waiting", grantId, { reason: "The commit range could not be read: GitHub answered 429; will retry", sha: "bbbbbbb" });
+		await d1.DB.prepare("UPDATE release_note_queue SET context_json=?1 WHERE id='waiting'").bind(JSON.stringify({ repo: "acme/app", pendingRange: { base: "0000000", head: "bbbbbbb", branch: "main" }, changes: [], closedIssues: [], headSha: null })).run();
+		const byId = Object.fromEntries((await list()).body.deliveries.map((d: { id: string }) => [d.id, d]));
+		expect(byId.held).toMatchObject({ status: "held", state: "evidence_held", holdCode: "commit_range_over_limit", actions: { retry: false, reconcile: false } });
+		expect(byId.held.reason).toContain("more than the 250");
+		expect(byId.waiting).toMatchObject({ status: "pending", state: "awaiting_commit_range", holdCode: null, actions: { retry: false, reconcile: false } });
+		expect(byId.waiting.reason).toMatch(/429.*retry/);
+		expect((await retry("held")).body.error).toMatch(/permanently incomplete or inconsistent/);
+		expect((await retry("waiting")).body.error).toMatch(/still reading this note's commit range/);
+		expect(await row("held")).toMatchObject({ status: "held" });
 	});
 });
 

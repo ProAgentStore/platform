@@ -6,6 +6,8 @@ import { logError } from "./error-log.js";
 import { recordAttempt } from "./release-note-attempts.js";
 import { gateIsComplete, loadReleaseNotes, releaseGateState } from "./release-notes-settings.js";
 import { liveDeliver, type Deliver, type ReleaseNoteContext } from "./release-notes.js";
+import { collectWorkflowRuns, liveFetcher, type HoldCode, type PageFetcher } from "./github-evidence.js";
+import { resolvePendingRange } from "./release-note-range.js";
 import { safeFetch } from "./ssrf.js";
 import { deepLinkFor } from "./console-links.js";
 import { notifyUser } from "../routes/push.js";
@@ -20,7 +22,7 @@ type Job = { id?: number; name?: string; status?: string; conclusion?: string | 
 type JobsPage = { total_count?: number; jobs?: Job[] };
 /** The deploy job and step that proved the production claim, bound to one run attempt and SHA. */
 export interface DeployProof { runId: number; runAttempt: number; jobId: number; jobName: string; stepNumber: number; stepName: string; runUrl: string; jobUrl: string }
-export interface ReleaseQueueDeps { readRuns?: (row: Row) => Promise<Run[]>; readJobsPage?: (row: Row, run: Run, page: number) => Promise<JobsPage>; deliver?: (env: Env, userId: string) => Deliver }
+export interface ReleaseQueueDeps { readRuns?: (row: Row) => Promise<Run[]>; /** Paged GitHub reads (workflow runs, the compare, the repository). Live by default; injected in tests. */ fetchPage?: PageFetcher; readJobsPage?: (row: Row, run: Run, page: number) => Promise<JobsPage>; deliver?: (env: Env, userId: string) => Deliver }
 
 /** The run-attempt jobs are read at most this many pages of 100; a run with more jobs is unreadable evidence. */
 export const JOBS_PAGES_MAX = 5;
@@ -87,7 +89,9 @@ export function verifiedReleaseText(ctx: ReleaseNoteContext, required: RequiredW
 	if (proof) lines.push(`• Deploy proof: job ${proof.jobName}, step ${proof.stepNumber} ${proof.stepName} — ${proof.jobUrl}`);
 	if (ctx.changes.length) {
 		lines.push("", "What changed:", ...ctx.changes.filter((_x, index) => index < 8).map((x) => `• ${clipMarked(x, 160, { within: true })}`));
-		if (ctx.changes.length > 8) lines.push(`…and ${ctx.changes.length - 8} more changes`);
+		// The summary is a window on a verified range that can be longer: say how many subjects are not shown (#1349).
+		const total = ctx.changes.length + (ctx.changesOmitted ?? 0);
+		if (total > 8) lines.push(`…and ${total - 8} more changes`);
 	}
 	if (ctx.closedIssues.length) {
 		lines.push("", "Issues:", ...ctx.closedIssues.filter((_x, index) => index < 8).map((x) => `• #${x.number} ${clipMarked(x.title ?? "", 160, { within: true })}`));
@@ -97,15 +101,16 @@ export function verifiedReleaseText(ctx: ReleaseNoteContext, required: RequiredW
 	return clipMarked(text, 1800, { within: true });
 }
 
-/** The workflow runs GitHub reports for the row's SHA. Throws when they cannot be read. */
-export async function liveWorkflowRuns(env: Env, row: Row): Promise<Run[]> {
-	const { token } = await resolveGithubRead(env, row.user_id, row.github_repo.split("/")[0]);
-	const response = await safeFetch(`https://api.github.com/repos/${row.github_repo}/actions/runs?head_sha=${row.sha}&per_page=100`, { headers: { Accept: "application/vnd.github+json", "User-Agent": "ProAgentStore", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
-	if (!response.ok) throw new Error(`GitHub workflow read returned ${response.status}`);
-	const body = await response.json() as { workflow_runs?: Run[] };
-	if (!Array.isArray(body.workflow_runs)) throw new Error("GitHub returned no workflow_runs list");
-	return body.workflow_runs;
+/** Hold a row for good: its evidence is permanently incomplete or inconsistent. Visible to the owner with a typed code. */
+async function holdRow(env: Env, row: Row, code: HoldCode, message: string): Promise<void> {
+	const held = await env.DB.prepare("UPDATE release_note_queue SET status='held', hold_code=?1, reason=?2, updated_at=?3 WHERE id=?4 AND status IN ('pending','configuration_required')").bind(code, message, Date.now(), row.id).run();
+	if (!held.meta.changes) return;
+	await logEvent(env, { source: "coding", userId: row.user_id, instanceId: row.instance_id, traceId: row.run_id, event: "release_note_evidence_held", level: "warn", message: `Release note held for ${row.sha}: ${message}`, context: { queueId: row.id, holdCode: code, sha: row.sha } });
+	await notifyUser(env, row.user_id, "coding", "⚠️ Release note held", `${row.github_repo}: ${message}`, deepLinkFor({ kind: "coding-session", instanceId: row.instance_id, sessionId: row.session_id }), { key: `release-note-held:${row.id}`, kind: "alert", instanceId: row.instance_id }).catch(() => undefined);
 }
+
+/** A transient GitHub failure: the row stays as it is and the next tick tries again; the owner can see why it waits. */
+const waitRow = (env: Env, row: Row, reason: string) => env.DB.prepare("UPDATE release_note_queue SET reason=?1, updated_at=?2 WHERE id=?3 AND status='pending'").bind(reason, Date.now(), row.id).run();
 
 /** Same workflow files and roles, ignoring the deploy selectors the owner has since added. */
 const sameGateShape = (a: RequiredWorkflows, b: RequiredWorkflows) => a.length === b.length && a.every((x, i) => x.path === b[i].path && x.role === b[i].role);
@@ -153,7 +158,33 @@ export async function runReleaseNoteQueue(env: Env, deps: ReleaseQueueDeps = {})
 				}
 			}
 			if (!settings?.effective.enabled || !channel || JSON.stringify(settings.instance.requiredWorkflows) !== JSON.stringify(required)) { await setStatus(env, row.id, "cancelled", "Release note setting or channel grant changed"); continue; }
-			const runs = deps.readRuns ? await deps.readRuns(row) : await liveWorkflowRuns(env, row);
+			const fetchPage = deps.fetchPage ?? liveFetcher(env, row.user_id, row.github_repo.split("/")[0]);
+			// A gated push is recorded at run end as base/head only. The whole compare is paged and verified here, where a
+			// rate limit just means "try again next tick" (#1349).
+			let ctxNow = JSON.parse(row.context_json) as ReleaseNoteContext;
+			if (ctxNow.pendingRange) {
+				const range = await resolvePendingRange(fetchPage, ctxNow);
+				if (!range.ok && range.kind === "transient") { await waitRow(env, row, range.message); continue; }
+				if (!range.ok) { await holdRow(env, row, range.code, range.message); continue; }
+				try {
+					const upgraded = await env.DB.prepare("UPDATE release_note_queue SET sha=?1, context_json=?2, reason=NULL, updated_at=?3 WHERE id=?4 AND status='pending'").bind(range.value.sha, JSON.stringify(range.value.context), Date.now(), row.id).run();
+					if (!upgraded.meta.changes) continue;
+				} catch {
+					await setStatus(env, row.id, "cancelled", "A release note for this exact commit and channel already exists");
+					continue;
+				}
+				row.sha = range.value.sha;
+				row.context_json = JSON.stringify(range.value.context);
+				ctxNow = range.value.context;
+			}
+			let runs: Run[];
+			if (deps.readRuns) runs = await deps.readRuns(row);
+			else {
+				const collected = await collectWorkflowRuns(fetchPage, row.github_repo, row.sha);
+				if (!collected.ok && collected.kind === "transient") { await waitRow(env, row, collected.message); continue; }
+				if (!collected.ok) { await holdRow(env, row, collected.code, collected.message); continue; }
+				runs = collected.value;
+			}
 			const evidence = completedReleaseEvidence(runs, row.sha, row.default_branch, required);
 			if (!evidence) { await env.DB.prepare("UPDATE release_note_queue SET updated_at=?1 WHERE id=?2 AND status='pending'").bind(Date.now(), row.id).run(); continue; }
 			const deployIndex = required.findIndex((item) => item.role === "production_deploy");
@@ -167,7 +198,7 @@ export async function runReleaseNoteQueue(env: Env, deps: ReleaseQueueDeps = {})
 			const claimAttemptId = crypto.randomUUID();
 			const runUrls = evidence.map((run) => `https://github.com/${row.github_repo}/actions/runs/${run.id}`);
 			await recordAttempt(env, { id: claimAttemptId, queueId: row.id, userId: row.user_id, instanceId: row.instance_id, kind: "send", outcome: "claimed", evidence: { channel: { provider: channel.provider, name: channel.name, channelId: channel.channelId }, workflowRuns: runUrls, deployJob: deploy.proof.jobUrl, deployProof: deploy.proof }, key: `send:${claimAttemptId}:claimed` }).catch(() => undefined);
-			const ctx = JSON.parse(row.context_json) as ReleaseNoteContext;
+			const ctx = ctxNow;
 			const result = await (deps.deliver ?? liveDeliver)(env, row.user_id)(channel, verifiedReleaseText(ctx, required, evidence, deploy.proof));
 			await setStatus(env, row.id, result.ok ? "sent" : "failed", result.ok ? null : result.error, result.ok ? result.permalink ?? null : null);
 			const resultAttemptId = crypto.randomUUID();

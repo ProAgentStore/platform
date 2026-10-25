@@ -27,7 +27,7 @@ function Row({ d, busy, onRetry, onReconcile, defaultOpen }: { d: ReleaseDeliver
 				<span className={`font-medium ${TONE[tone]}`}>{headline(d)}</span>
 				<span className="text-muted-soft shrink-0">{d.repo} @ {shortSha(d.sha)}</span>
 			</div>
-			{d.reason && <p className="text-muted mt-1 break-words">{d.reason}</p>}
+			{d.reason && <p className="text-muted mt-1 break-words">{d.holdCode ? <code className="text-2xs mr-1">{d.holdCode}</code> : null}{d.reason}</p>}
 			{hint && <p className="text-2xs text-muted-soft mt-1">{hint}</p>}
 			<div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-2xs">
 				<a className="underline" href={d.links.codingRun}>Coding run</a>

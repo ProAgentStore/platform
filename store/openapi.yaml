@@ -18012,7 +18012,7 @@ paths:
   /v1/instances/{instanceId}/release-notes/deliveries:
     get:
       summary: This instance's release notes and what became of each
-      description: Every queued release note, newest first — state (waiting_for_checks, configuration_required, configuration_changed, sending, outcome_uncertain, delivery_failed, sent, expired, abandoned), reason, destination name and provider (never a channel id or credential), the message permalink once known, workflow and deploy-job evidence links, and the attempt history. Keyset-paged on the immutable creation time (nextCursor; a note queued mid-walk never shifts a page), at most 50 per page (default 20), over the last 90 days. Owner-scoped. (#1348)
+      description: Every queued release note, newest first — state (awaiting_commit_range, waiting_for_checks, configuration_required, configuration_changed, sending, outcome_uncertain, delivery_failed, sent, expired, abandoned, evidence_held), reason and holdCode, destination name and provider (never a channel id or credential), the message permalink once known, workflow and deploy-job evidence links, and the attempt history. Keyset-paged on the immutable creation time (nextCursor; a note queued mid-walk never shifts a page), at most 50 per page (default 20), over the last 90 days. Owner-scoped. (#1348)
       operationId: listInstanceReleaseDeliveries
       tags: [Instances]
       parameters:
