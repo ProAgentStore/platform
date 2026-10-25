@@ -16,6 +16,7 @@
  *     directive's `"ubuntu-latest"` would override their pin (#1266), so going back deletes the variable.
  *   • **Every flip is traced and notified.** A change to the route calls `onFlip`; a write that failed does not claim it happened.
  */
+import { GRANT_ALL_HINT } from "./github-app-permissions.js";
 import { logEvent } from "./events.js";
 import type { MintDeps } from "./actions-runner-provision.js";
 import { createNotification } from "../routes/notifications.js";
@@ -70,7 +71,7 @@ export async function readOrgMinutes(org: string, deps: Pick<RouteSyncDeps, "ins
 		if (!included) return unreadable(`${org}'s plan could not be read, so the share of included minutes is unknown.`);
 	}
 	const res = await deps.fetch(`https://api.github.com/organizations/${org}/settings/billing/usage`, { headers: ghHeaders(token) });
-	if (!res.ok) return unreadable(res.status === 403 || res.status === 404 ? `GitHub refused ${org}'s billing usage (${res.status}); the App needs "Administration: Read-only" on the org, see #1207.` : `GitHub returned ${res.status} for ${org}'s billing usage.`);
+	if (!res.ok) return unreadable(res.status === 403 || res.status === 404 ? `GitHub refused ${org}'s billing usage (${res.status}); the App needs "Administration: Read-only" on the org. ${GRANT_ALL_HINT}` : `GitHub returned ${res.status} for ${org}'s billing usage.`);
 	const items = ((await res.json().catch(() => null)) as { usageItems?: unknown } | null)?.usageItems;
 	if (!Array.isArray(items)) return unreadable(`GitHub's billing usage for ${org} had no usage items.`);
 	const usedMinutes = actionsMinutesUsed(items as UsageItem[]);
@@ -89,7 +90,7 @@ export async function readRouteVariable(repo: string, deps: Pick<RouteSyncDeps, 
 	return { value: typeof v === "string" ? v : null };
 }
 
-const variablesDenied = (repo: string) => `GitHub refused the ${PAGS_RUNNER_VARIABLE} variable on ${repo}. The ProAgentStore App needs "Variables: Read and write" on the repository, accepted on the org's installation — see #1207.`;
+const variablesDenied = (repo: string) => `GitHub refused the ${PAGS_RUNNER_VARIABLE} variable on ${repo}. The ProAgentStore App needs "Variables: Read and write" on the repository, accepted on the org's installation. ${GRANT_ALL_HINT}`;
 
 /** Set the variable (create or update) or, with `value` null, remove it. `denied` carries the permission to grant. */
 export async function writeRouteVariable(repo: string, value: string | null, existed: boolean, deps: Pick<RouteSyncDeps, "installationToken" | "fetch">): Promise<{ ok: true } | { denied: string }> {

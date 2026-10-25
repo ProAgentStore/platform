@@ -59,6 +59,16 @@ The three to add, named as GitHub's "Permissions required for GitHub Apps" refer
 `Administration: read` is the only App permission GitHub lists for the billing usage report. It also
 reads other org settings; nothing here uses it for anything but usage.
 
+**Where the list lives and how to check it.** `scripts/lib/github-app-permissions.mjs` holds `REQUIRED_APP_PERMISSIONS` — the five the
+platform already used (`actions: read`, `contents: read`, `issues: write`, `members: read`, `metadata: read`) plus the three above — and
+`workers/api/src/lib/github-app-permissions.ts` mirrors it for error messages (a test keeps them equal). `node scripts/check-github-app-permissions.mjs [org ...]`
+reads the App's configured permissions (`GET /apps/proagentstore`) and what each org's installation has accepted
+(`GET /orgs/{org}/installations`, needs an org-admin `gh` login), prints what is missing and where, and exits 1 until nothing is. It is read-only
+and not part of CI. Every 403 the runner code gets from GitHub names all three permissions, not only the one that failed.
+
+State on 2026-10-26: the App has `organization_self_hosted_runners: write` configured; `proappstore-online` has accepted it; `ProAgentStore`
+has accepted none of the new ones (and not `members: read`); `actions_variables` and `organization_administration` are not configured on the App yet.
+
 Granting is two steps, both the owner's:
 1. Change the App: https://github.com/organizations/ProAgentStore/settings/apps/proagentstore/permissions
    — set the three above and save.

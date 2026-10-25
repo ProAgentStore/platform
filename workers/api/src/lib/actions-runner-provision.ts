@@ -19,6 +19,7 @@
  */
 import { ciRunnerHealth, type CiRunnerHealth } from "./runner-ci-status.js";
 import { HttpError } from "./auth.js";
+import { GRANT_ALL_HINT } from "./github-app-permissions.js";
 import { installationTokenForOwner } from "./github-app.js";
 import { logEvent } from "./events.js";
 import { migrateLegacyRunner, type MigrationView } from "./actions-runner-migrate.js";
@@ -70,7 +71,7 @@ export async function mintRunnerToken(scope: RunnerScope, kind: RunnerTokenKind,
 	});
 	if (res.status === 403 || res.status === 404) {
 		const permission = "org" in scope ? '"Self-hosted runners: Read and write" (organization)' : '"Administration: Read and write" (repository)';
-		throw new HttpError(403, `GitHub refused to mint a runner ${kind} token for ${"org" in scope ? scope.org : scope.repo} (${res.status}). The ProAgentStore App needs ${permission}, accepted on ${owner}'s installation — see #1207.`);
+		throw new HttpError(403, `GitHub refused to mint a runner ${kind} token for ${"org" in scope ? scope.org : scope.repo} (${res.status}). The ProAgentStore App needs ${permission}, accepted on ${owner}'s installation. ${GRANT_ALL_HINT}`);
 	}
 	if (!res.ok) throw new HttpError(502, `GitHub returned ${res.status} minting a runner ${kind} token.`);
 	const body = (await res.json().catch(() => null)) as { token?: unknown; expires_at?: unknown } | null;
@@ -246,7 +247,7 @@ export async function syncRunnerLabels(
 	const app = await deps.installationToken(owner);
 	if (!app) throw new HttpError(409, `The ProAgentStore GitHub App is not installed on ${owner}, so it cannot update a runner's labels there.`);
 	const headers = { Authorization: `Bearer ${app}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ProAgentStore" };
-	const denied = (status: number) => new HttpError(403, `GitHub refused to ${status === 403 || status === 404 ? "list or relabel" : "read"} runners for ${"org" in scope ? scope.org : scope.repo} (${status}). The ProAgentStore App needs ${"org" in scope ? '"Self-hosted runners: Read and write" (organization)' : '"Administration: Read and write" (repository)'}, accepted on ${owner}'s installation — see #1207.`);
+	const denied = (status: number) => new HttpError(403, `GitHub refused to ${status === 403 || status === 404 ? "list or relabel" : "read"} runners for ${"org" in scope ? scope.org : scope.repo} (${status}). The ProAgentStore App needs ${"org" in scope ? '"Self-hosted runners: Read and write" (organization)' : '"Administration: Read and write" (repository)'}, accepted on ${owner}'s installation. ${GRANT_ALL_HINT}`);
 	let found: GithubRunner | null = null;
 	for (let page = 1; page <= 5 && !found; page++) {
 		const res = await deps.fetch(`${ghBase(scope)}/actions/runners?per_page=100&page=${page}`, { headers });

@@ -6,6 +6,7 @@
  * Read-only. Best effort: an org the App cannot list (not installed, or the runner permission is not accepted, #1207) is named in
  * `unreadable` with why, never skipped silently and never a failed preflight.
  */
+import { GRANT_ALL_HINT } from "./github-app-permissions.js";
 import { nodeRunnerLabel } from "./runner-routing.js";
 import type { MintDeps } from "./actions-runner-provision.js";
 
@@ -50,7 +51,7 @@ export async function ciRunnersForForget(names: readonly string[], orgs: readonl
 			}
 			const res = await deps.fetch(`https://api.github.com/orgs/${org}/actions/runners?per_page=100`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ProAgentStore" } });
 			if (!res.ok) {
-				report.unreadable.push({ org, detail: res.status === 403 || res.status === 404 ? `GitHub refused to list ${org}'s runners (${res.status}); the App needs "Self-hosted runners: Read and write", see #1207.` : `GitHub returned ${res.status} listing ${org}'s runners.` });
+				report.unreadable.push({ org, detail: res.status === 403 || res.status === 404 ? `GitHub refused to list ${org}'s runners (${res.status}); the App needs "Self-hosted runners: Read and write". ${GRANT_ALL_HINT}` : `GitHub returned ${res.status} listing ${org}'s runners.` });
 				continue;
 			}
 			const runners = ((await res.json().catch(() => null)) as { runners?: Array<{ id?: number; name?: string; status?: string; busy?: boolean; labels?: Array<{ name?: string }> }> } | null)?.runners ?? [];
