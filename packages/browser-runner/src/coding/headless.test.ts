@@ -220,10 +220,22 @@ rl.on("line", (line) => {
 `;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The least any `until` here waits (#1360). Every wait in this file is an UPPER BOUND on a real node process starting,
+ * printing or exiting — none asserts a deadline (timing claims use `wait()` + `expect`) — and the per-call numbers were
+ * sized on a quiet machine. `vitest.config.ts` measured a deliberately loaded run at ~9x slower and set the integration
+ * floor to 120s for that reason; at full-suite load averages over 100 these 4–8s bounds failed one case or another on
+ * most runs. A floor costs a passing run nothing (`until` returns the moment the condition holds) and a real hang still
+ * fails, inside the project's 120s test budget.
+ */
+const UNTIL_FLOOR_MS = 45_000;
+
 async function until(cond: () => boolean, timeoutMs = 8000, description = "condition"): Promise<void> {
+	const budget = Math.max(timeoutMs, UNTIL_FLOOR_MS);
 	const start = Date.now();
-	while (!cond() && Date.now() - start < timeoutMs) await wait(25);
-	if (!cond()) throw new Error(`Timed out waiting for ${description} after ${timeoutMs}ms`);
+	while (!cond() && Date.now() - start < budget) await wait(25);
+	if (!cond()) throw new Error(`Timed out waiting for ${description} after ${budget}ms`);
 }
 
 describe("HeadlessSession (stream-json engine)", () => {
@@ -638,7 +650,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			// The owner reading the pane is told what happened, in one line per turn.
 			expect(pane.split("keeps no memory between turns").length - 1).toBe(2);
 			s.stop();
-		}, 30_000);
+		});
 
 		it("a raw engine reads the objective after the replay and before the instruction (#1019)", async () => {
 			// Gemini, not Grok: Grok reads structured since #1187.
@@ -651,7 +663,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			expect(pane).toContain(block);
 			expect(pane.indexOf("thinking about: REPLAY: earlier turns")).toBeLessThan(pane.indexOf(block));
 			s.stop();
-		}, 20_000);
+		});
 
 		it("the replay supersedes the one-shot session brief — both are the record; the replay is the later composition", async () => {
 			const s = new HeadlessSession({ id: "replay-seed", workDir: dir, clientType: "codex", command: "codex", bin: codexBin, seed: "SEED: from session start" });
@@ -661,7 +673,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			expect(s.snapshot()).not.toContain("SEED: from session start");
 			expect(s.seededConversation).toBe(false);
 			s.stop();
-		}, 20_000);
+		});
 
 		it("an older cloud that sends no replay changes nothing: the session brief still leads turn one, and turn two is bare", async () => {
 			const s = new HeadlessSession({ id: "replay-none", workDir: dir, clientType: "codex", command: "codex", bin: codexBin, seed: "SEED: only once" });
@@ -674,7 +686,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			expect(pane).toMatch(/^thinking about: two$/m); // turn two reached the engine bare
 			expect(pane).not.toContain("keeps no memory between turns");
 			s.stop();
-		}, 30_000);
+		});
 
 		it("reconnect: a runner restart loses nothing a raw engine had — the next turn carries the record again", async () => {
 			const before = new HeadlessSession({ id: "replay-restart", workDir: dir, clientType: "grok", command: "grok", bin: codexBin });
@@ -687,7 +699,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			await until(() => after.runState() === "idle" && after.snapshot().includes("done: "), 12_000, "post-restart turn");
 			expect(after.snapshot()).toContain("thinking about: REPLAY: the platform still has it");
 			after.stop();
-		}, 30_000);
+		});
 
 		it("cross-engine: structured Codex spends the replay until it has a thread, then its own resume wins", async () => {
 			const statePath = defaultStatePath(join(dir, "codex-replay-state"));
@@ -712,7 +724,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			expect(argv[1].slice(0, 2)).toEqual(["exec", "resume"]);
 			expect(argv[1].at(-1)).toBe("second");
 			s.stop();
-		}, 20_000);
+		});
 	});
 
 	it("reports NO usage — an unmeasurable engine must leave a gap, not a zero", async () => {
@@ -726,7 +738,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => s.snapshot().includes("done: hi"), 12_000, "raw stdout to include final line");
 		expect(s.takeUsage()).toEqual([]);
 		s.stop();
-	}, 20_000);
+	});
 
 	it("a RAW engine is told who wrote the turn too — the one-shot path is not exempt (#505)", async () => {
 		// `runOneShot` appends the turn as the final argv element, a completely separate send from
@@ -742,7 +754,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(pane).toContain("bump the version in pubspec.yaml");
 		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] \(pilot\) bump the version in pubspec\.yaml/);
 		s.stop();
-	}, 20_000);
+	});
 
 	it("captures raw stdout (ANSI-stripped) into the transcript and settles to idle", async () => {
 		const s = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", command: "codex", bin: codexBin });
@@ -766,7 +778,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => s.runState() === "idle", 6000, "raw session to settle idle"); // the process exited → idle
 		expect(s.runState()).toBe("idle");
 		s.stop();
-	}, 20_000);
+	});
 
 	it("a slow first token does NOT flip to idle mid-turn", async () => {
 		const s = new HeadlessSession({ id: "raw2", workDir: dir, clientType: "codex", command: "codex", bin: slowBin });
@@ -776,7 +788,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.runState()).toBe("thinking");
 		await until(() => s.snapshot().includes("late: go"), 6000, "slow raw first output");
 		s.stop();
-	}, 15_000);
+	});
 
 	it("a >1.5s output pause is NOT the end of the turn — only the process's exit is (#391)", async () => {
 		// The defect this replaces: a one-shot turn was judged idle after 1.5s of quiet, so a build
@@ -799,7 +811,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => s.runState() === "idle", 8000, "the engine process to exit");
 		expect(s.alive).toBe(true); // a resting one-shot session is not a dead one
 		s.stop();
-	}, 25_000);
+	});
 
 	it("ends a turn whose engine never exits, and says so (#391)", async () => {
 		// Exit being authoritative needs a ceiling, or a wedged process reports "thinking" forever
@@ -809,18 +821,19 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		//
 		// The ceiling timer starts at SPAWN and kills the process when it fires, so it must outlast a
 		// slow spawn: at 700ms a loaded machine (the full suite) killed the fake engine before its
-		// first write, and the output this test waits for never came. 3s is still a ceiling this
-		// test watches fire — that is the behaviour #391 pins — just not one a node startup can beat.
-		const s = new HeadlessSession({ id: "raw-wedged", workDir: dir, clientType: "codex", command: "codex", bin: wedgedBin, maxTurnMs: 3000 });
+		// first write, and the output this test waits for never came. 3s then failed the same way at
+		// full-suite load averages over 100 (#1360), so 8s: still a ceiling this test watches fire —
+		// the behaviour #391 pins — with headroom over a node startup on a loaded machine.
+		const s = new HeadlessSession({ id: "raw-wedged", workDir: dir, clientType: "codex", command: "codex", bin: wedgedBin, maxTurnMs: 8000 });
 		s.start();
 		s.input("hang");
-		await until(() => s.snapshot().includes("wedged: hang"), 6000, "the wedged engine's output");
+		await until(() => s.snapshot().includes("wedged: hang"), 8000, "the wedged engine's output");
 		expect(s.runState()).toBe("thinking");
-		await until(() => s.runState() === "idle", 10_000, "the turn ceiling to end the turn");
+		await until(() => s.runState() === "idle", 20_000, "the turn ceiling to end the turn");
 		expect(s.snapshot()).toMatch(/turn ended after .* the engine never exited/);
 		expect(s.alive).toBe(true); // the SESSION survives; only the turn was ended
 		s.stop();
-	}, 20_000);
+	});
 
 	it("is ALIVE between turns — a resting one-shot engine is not a dead session", async () => {
 		// The Pilot opens every iteration with
@@ -844,7 +857,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		s.start();
 		expect(s.alive).toBe(true); // ...and a restart brings it back
 		s.stop();
-	}, 25_000);
+	});
 
 	it("spawns the engine with the `gh` guard ahead of the real binary on PATH (#679)", async () => {
 		// The wiring assertion. `installGhGuard` is unit-tested on its own; what this pins is that
@@ -869,7 +882,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.ghGuard).toMatchObject({ installed: true, scope: ["proagentstore/platform"] });
 		expect(s.ghGuard.gaps.join(" ")).toContain("git push");
 		s.stop();
-	}, 20_000);
+	});
 
 	it("spawns UNGUARDED when the platform named no scope, and says which way it failed (#679)", async () => {
 		// An older cloud sends no scope. The guard must fail OPEN: a runner that could not install
@@ -882,7 +895,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.snapshot()).not.toContain(guardRoot);
 		expect(s.ghGuard).toMatchObject({ installed: false, reason: "no-scope" });
 		s.stop();
-	}, 20_000);
+	});
 
 	it("passes EVERY preset param through to a raw engine, with the turn text last", async () => {
 		// "It should launch with any params provided" — the preset command is a prefix and the
@@ -899,11 +912,12 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		});
 		s.start();
 		s.input("fix the failing test");
-		await until(() => s.snapshot().includes("argv:"), 8000, "engine argv echo");
+		// An upper bound on a node startup, not a timing under test: generous so full-suite load cannot fail it (#1360).
+		await until(() => s.snapshot().includes("argv:"), 25_000, "engine argv echo");
 		const argv = JSON.parse(/argv: (\[.*\])/.exec(s.snapshot())?.[1] ?? "[]") as string[];
 		expect(argv).toEqual(["--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
 		s.stop();
-	}, 15_000);
+	});
 
 	it("adds --json to codex exec without dropping preset params", async () => {
 		const s = new HeadlessSession({
@@ -923,7 +937,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(argv).toEqual(["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
 		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 1, outputTokens: 1, costUsd: 0 }]);
 		s.stop();
-	}, 15_000);
+	});
 
 	it("persists Codex thread.started and resumes that exact ID after a same-CWD unrelated session (#848)", async () => {
 		const statePath = defaultStatePath(join(dir, "codex-resume-state"));
@@ -975,7 +989,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(revived.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 2, outputTokens: 3, costUsd: 0 }]);
 		expect(revived.takeActs().map((a) => a.kind)).toEqual(["push", "pr.merge"]);
 		revived.stop();
-	}, 20_000);
+	});
 
 	it("falls back to a fresh Codex turn when its stored resume state is malformed or invalid (#848)", async () => {
 		const stateDir = join(dir, "codex-invalid-resume-state");
@@ -999,7 +1013,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => s.runState() === "idle", 8000, "fresh Codex turn after invalid state");
 		expect(JSON.parse(readFileSync(log, "utf8").trim())).toEqual(["exec", "--json", "--sandbox", "danger-full-access", "start safely"]);
 		s.stop();
-	}, 15_000);
+	});
 
 	it("retries an older Codex CLI as raw only when it explicitly rejects --json", async () => {
 		const log = join(dir, "old-codex-argv.jsonl");
@@ -1023,7 +1037,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.engineModeWarning).toMatch(/running raw/i);
 		expect(s.takeUsage()).toEqual([]);
 		s.stop();
-	}, 15_000);
+	});
 
 	it("with NO command/bin, a non-Claude engine spawns ITS OWN binary (not `claude`)", async () => {
 		// Regression: the constructor fell back to a hard-coded "claude" when no command was
@@ -1052,7 +1066,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// …and the spend is attributed to the engine that actually ran.
 		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex" }]);
 		s.stop();
-	}, 15_000);
+	});
 
 	// ── #983: the release gate was blocked by the assertion above, not by the production code ──
 	//
@@ -1097,7 +1111,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// And the turn's own output is still there: ending the turn does not rewrite the pane.
 		expect(s.snapshot()).toContain("argv:");
 		s.stop();
-	}, 15_000);
+	});
 
 	// ── #545: a non-zero exit was prose in the pane and nothing else ─────────────────────────
 	//
@@ -1127,7 +1141,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.ready).toBe(true);
 		expect(s.runState()).toBe("idle");
 		s.stop();
-	}, 15_000);
+	});
 
 	it("a turn that SUCCEEDS reports ok, and replaces the previous failure (#545)", async () => {
 		// The bound the cloud applies is CONSECUTIVE failures, so a session that recovers has to be
@@ -1146,7 +1160,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(ok.lastTurn?.detail).toContain("done: hi"); // the engine's last line, whatever it was
 		s.stop();
 		ok.stop();
-	}, 25_000);
+	});
 
 	it("a turn WE ended is `killed`, not a failure — the wedge ceiling is not evidence about the engine (#545)", async () => {
 		// The ceiling SIGTERMs a process that never exits. That says something about this platform's
@@ -1160,7 +1174,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.lastTurn?.signal).not.toBeNull();
 		expect(s.alive).toBe(true);
 		s.stop();
-	}, 15_000);
+	});
 
 	it("a turn ABORTED by its successor does not overwrite the successor's report (#545)", async () => {
 		// `runOneShot` kills a turn still running when a new instruction arrives, and that dead
@@ -1178,7 +1192,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// first turn produced a SIGTERM close that arrived while the second was still running.
 		expect(s.lastTurn?.verdict).toBe("ok");
 		s.stop();
-	}, 25_000);
+	});
 });
 
 /**
@@ -1251,7 +1265,7 @@ describe("HeadlessSession — a completed turn reports which inputs it consumed 
 			if (prev === undefined) delete process.env.TURN_GATE;
 			else process.env.TURN_GATE = prev;
 		}
-	}, 20_000);
+	});
 
 	it("an input sent with no id holds its place, so a later id is never credited to the earlier turn", async () => {
 		const prev = process.env.TURN_GATE;
@@ -1263,7 +1277,7 @@ describe("HeadlessSession — a completed turn reports which inputs it consumed 
 			s.input("pilot turn"); // no id: the Pilot's own instruction
 			await until(() => s.runState() !== "idle", 4000, "the first turn to start");
 			s.input("owner steer", { inputId: "dir-steer" });
-			await until(() => s.lastTurn !== null, 300, "never").catch(() => undefined);
+			await wait(300); // a moment for a wrong credit to land, if it would — the gate holds the turn open
 			expect(s.consumedInputs).toEqual([]);
 			writeFileSync(join(dir, "gate-2"), "");
 			await until(() => s.consumedInputs.length === 1, 8000, "the steer's own turn to end");
@@ -1273,7 +1287,7 @@ describe("HeadlessSession — a completed turn reports which inputs it consumed 
 			if (prev === undefined) delete process.env.TURN_GATE;
 			else process.env.TURN_GATE = prev;
 		}
-	}, 20_000);
+	});
 
 	it("a one-shot turn killed by its successor consumed nothing; the successor's turn consumed its own input", async () => {
 		const s = new HeadlessSession({ id: "consumed-raw", workDir: dir, clientType: "codex", command: "codex", bin: pauser });
@@ -1284,7 +1298,7 @@ describe("HeadlessSession — a completed turn reports which inputs it consumed 
 		await until(() => s.lastTurn !== null, 12_000, "the second turn to finish");
 		expect(s.consumedInputs).toEqual(["dir-second"]);
 		s.stop();
-	}, 25_000);
+	});
 });
 
 /**
@@ -1326,25 +1340,27 @@ describe("HeadlessSession — a replaced process cannot speak for its replacemen
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("old A's late result neither credits new B's input, nor files B's turn report, nor marks B idle", async () => {
+		// Every wait below is an upper bound on a node process starting or answering, not a timing under test — generous so
+		// full-suite load cannot fail it (#1360). They return as soon as the condition holds.
 		const s = new HeadlessSession({ id: "stale-a-b", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
 		s.start();
-		await until(() => s.runState() === "idle", 8000, "A to initialise");
+		await until(() => s.runState() === "idle", 20_000, "A to initialise");
 		s.input("turn A", { inputId: "dir-a" });
-		await until(() => s.snapshot().includes("holding turn A"), 4000, "A to read its turn");
+		await until(() => s.snapshot().includes("holding turn A"), 20_000, "A to read its turn");
 		s.stop(); // A gets SIGTERM and answers late
 		s.start(); // B replaces it before A's late output arrives
-		await until(() => s.runState() === "idle", 8000, "B to initialise");
+		await until(() => s.runState() === "idle", 20_000, "B to initialise");
 		s.input("turn B", { inputId: "dir-b" });
-		await until(() => s.snapshot().includes("holding turn B"), 4000, "B to read its turn");
+		await until(() => s.snapshot().includes("holding turn B"), 20_000, "B to read its turn");
 		// A really did speak late (its marker), and only then is the absence of its effect meaningful.
-		await until(() => readdirSync(dir).some((f) => f.startsWith("late-")), 4000, "A's late result");
+		await until(() => readdirSync(dir).some((f) => f.startsWith("late-")), 20_000, "A's late result");
 		await new Promise((r) => setTimeout(r, 300)); // the bytes follow the marker; let them arrive
 		expect(s.consumedInputs).toEqual([]);
 		expect(s.lastTurn).toBeNull();
 		expect(s.runState()).not.toBe("idle");
 		expect(s.snapshot()).not.toContain("late: turn A");
 		s.stop();
-	}, 25_000);
+	});
 
 	it("control: the live process's own result still ends its turn and credits its input", async () => {
 		const s = new HeadlessSession({ id: "stale-control", workDir: dir, clientType: "claude", bin, statePath: join(dir, "state-control.json") });
@@ -1359,7 +1375,7 @@ describe("HeadlessSession — a replaced process cannot speak for its replacemen
 		expect(s.consumedInputs).toEqual(["dir-only"]);
 		expect(s.lastTurn).toMatchObject({ verdict: "ok" });
 		s.stop();
-	}, 25_000);
+	});
 });
 
 describe("HeadlessSession — a stream-json turn reports its own error (#545)", () => {
@@ -1389,7 +1405,7 @@ describe("HeadlessSession — a stream-json turn reports its own error (#545)", 
 		expect(s.lastTurn).toMatchObject({ verdict: "failed", exitCode: null, signal: null });
 		expect(s.lastTurn?.detail).toContain("could not complete the turn");
 		s.stop();
-	}, 15_000);
+	});
 });
 
 /**
@@ -1457,7 +1473,7 @@ describe("HeadlessSession — how much of a file reaches the pane (#700)", () =>
 		expect(block.length).toBeLessThanOrEqual(RESULT_RENDERED_MAX);
 		expect(RESULT_RENDERED_MAX * 3).toBeLessThanOrEqual(6000);
 		s.stop();
-	}, 15_000);
+	});
 
 	it("a status-string tool keeps the old 240, so the widening is paid for only where it buys something", async () => {
 		// Same pane, different tool: `FAKE_CLAUDE_TOOLS` answers a `Bash` and a `Read`. The point is
@@ -1490,7 +1506,7 @@ describe("HeadlessSession — how much of a file reaches the pane (#700)", () =>
 		expect(pane.length).toBeLessThan(6000);
 		expect(pane.length).toBeGreaterThan(4000);
 		s.stop();
-	}, 15_000);
+	});
 });
 
 describe("parseCommand", () => {
@@ -1592,7 +1608,7 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 		await wait(600); // long enough for the stale close, far short of the 1.5s idle threshold
 		expect(s.runState()).toBe("thinking");
 		s.stop();
-	}, 20_000);
+	});
 
 	it("aborts a still-running turn before spawning its replacement, and RECORDS the abort", async () => {
 		// Two engine processes editing the same repo concurrently is worse than a lost turn — and
@@ -1611,7 +1627,7 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 		expect(s.snapshot()).toMatch(/turn aborted — a new instruction arrived/);
 		s.stop();
 		expect(s.alive).toBe(false);
-	}, 20_000);
+	});
 });
 
 describe("HeadlessSession.key — a no-op that READS as success is worse than an error", () => {
@@ -1666,7 +1682,7 @@ describe("HeadlessSession — a one-shot engine that cannot SPAWN is not alive",
 		await until(() => !s.alive, 8000, "the spawn failure to be reported");
 		expect(s.alive).toBe(false);
 		expect(s.snapshot()).toMatch(/failed to start/i);
-	}, 15_000);
+	});
 
 	it("a restart clears the failure — it is also a retry of the command", async () => {
 		const s = new HeadlessSession({ id: "missing2", workDir: tmpdir(), clientType: "codex", bin: join(tmpdir(), "no-such-engine-xyz") });
@@ -1676,7 +1692,7 @@ describe("HeadlessSession — a one-shot engine that cannot SPAWN is not alive",
 		s.start();
 		expect(s.alive).toBe(true);
 		s.stop();
-	}, 15_000);
+	});
 });
 
 /**
@@ -1752,7 +1768,7 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		// re-reporting would either duplicate the merge or force the cloud to diff a growing list.
 		expect(s.takeActs()).toEqual([]);
 		s.stop();
-	}, 20_000);
+	});
 
 	it("marks a REFUSED merge as failed, so the trail never claims a merge that did not happen", async () => {
 		// A `gh pr merge` blocked by branch protection, published as a merge, would put an unattended
@@ -1767,7 +1783,7 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		expect(acts).toHaveLength(2);
 		expect(acts.every((a) => a.ok === false)).toBe(true);
 		s.stop();
-	}, 20_000);
+	});
 
 	it("records Codex command_execution acts through the structured adapter", async () => {
 		const bin = join(dir, "fake-codex-merger.js");
@@ -1783,7 +1799,7 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		expect(acts[1]).toMatchObject({ kind: "pr.merge", target: "#42", irreversible: true, ok: true });
 		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 1, outputTokens: 1, costUsd: 0 }]);
 		s.stop();
-	}, 20_000);
+	});
 
 	it("records nothing for a raw engine — a gap, never a false all-clear", async () => {
 		// Nothing parses a Codex/Grok session's stdout, so it can report no acts. An empty list must
@@ -1798,7 +1814,7 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 		await until(() => s.snapshot().includes("gh pr merge"), 8000, "the raw engine's output");
 		expect(s.takeActs()).toEqual([]);
 		s.stop();
-	}, 20_000);
+	});
 });
 
 /**
@@ -1854,7 +1870,7 @@ describe("HeadlessSession — a `--fill` PR names its number in its own result (
 		expect(acts).toHaveLength(1);
 		expect(acts[0]).toMatchObject({ kind: "pr.open", target: "#123", ok: true });
 		s.stop();
-	}, 20_000);
+	});
 
 	it("ignores a PR URL from ANOTHER tool_use_id — attribution is correlated, not nearby", async () => {
 		// The one failure this module exists to avoid is a confident wrong number. The result is only
@@ -1871,7 +1887,7 @@ describe("HeadlessSession — a `--fill` PR names its number in its own result (
 		// Flushed at end-of-turn with an UNKNOWN outcome: no result was ever addressed to it.
 		expect(acts[0]).toMatchObject({ kind: "pr.open", target: null, ok: null });
 		s.stop();
-	}, 20_000);
+	});
 });
 
 describe("parseCommand — apostrophes must not pair ACROSS tokens", () => {
@@ -1932,7 +1948,7 @@ describe("HeadlessSession — a tool result records whether the call FAILED (#59
 		// "not observed", and a new runner emitting it would report every call as unknown forever.
 		expect(pane).not.toContain("  ↳ ");
 		s.stop();
-	}, 15_000);
+	});
 });
 
 /**
@@ -1985,7 +2001,7 @@ setTimeout(() => process.exit(1), 30);
 		// …and the pane shows what the report says, rather than nothing at all.
 		expect(s.snapshot()).toContain("ERROR codex_api");
 		s.stop();
-	}, 15_000);
+	});
 
 	it("an engine that dies printing NOTHING reports an EMPTY tail — measured, not missing", async () => {
 		const s = new HeadlessSession({ id: "tail-silent", workDir: dir, clientType: "codex", command: "codex exec --json", bin: join(dir, "codex-silent") });
@@ -1995,5 +2011,5 @@ setTimeout(() => process.exit(1), 30);
 		expect(s.lastTurn).toMatchObject({ verdict: "failed", exitCode: 1, tail: [] });
 		expect(s.lastTurn?.detail).toBeUndefined();
 		s.stop();
-	}, 15_000);
+	});
 });

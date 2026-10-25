@@ -13,13 +13,23 @@ import { HeadlessSession } from "./headless.js";
  * is how a machine ended up at load 283. Every other case asserts the child is gone.
  */
 
+/**
+ * How the fake engines write what the test reads (#1360): to a temporary name, then renamed into place, so the file appears
+ * whole. A plain `writeFileSync` creates the file before it writes it, and under full-suite load the test — which waits for
+ * the file to EXIST — read it empty: "SyntaxError: Unexpected end of JSON input". The temporary file is a dot-name in the
+ * same directory, so it never matches the `<prefix>` / `<prefix>.*` names the test scans for, and the rename stays atomic.
+ */
+const ATOMIC_WRITE = `const path = require("node:path");
+const write = (f, data) => { const t = path.join(path.dirname(f), ".writing-" + process.pid + "-" + path.basename(f)); fs.writeFileSync(t, data); fs.renameSync(t, f); };`;
+
 /** Persistent (stream-json) engine: leaks `sleep 300`, records its pid and its environment, then waits on stdin. */
 const LEAKY_PERSISTENT = `#!/usr/bin/env node
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const child = spawn("sleep", ["300"], { stdio: "ignore" });
-fs.writeFileSync(process.env.LEAK_FILE, String(child.pid));
-fs.writeFileSync(process.env.ENV_FILE, JSON.stringify({ session: process.env.PAGS_SESSION_ID || null, tmp: process.env.TMPDIR || null }));
+${ATOMIC_WRITE}
+write(process.env.LEAK_FILE, String(child.pid));
+write(process.env.ENV_FILE, JSON.stringify({ session: process.env.PAGS_SESSION_ID || null, tmp: process.env.TMPDIR || null }));
 process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "s" }) + "\\n");
 process.stdin.resume();
 setInterval(() => {}, 1000);
@@ -31,8 +41,9 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const child = spawn("sleep", ["300"], { stdio: "ignore" });
 const file = process.env.LEAK_FILE + "." + Date.now() + "-" + process.pid;
-fs.writeFileSync(file, String(child.pid));
-fs.writeFileSync(process.env.ENV_FILE, JSON.stringify({ session: process.env.PAGS_SESSION_ID || null, tmp: process.env.TMPDIR || null }));
+${ATOMIC_WRITE}
+write(file, String(child.pid));
+write(process.env.ENV_FILE, JSON.stringify({ session: process.env.PAGS_SESSION_ID || null, tmp: process.env.TMPDIR || null }));
 process.stdout.write("working\\n");
 setInterval(() => {}, 1000);
 `;
@@ -46,10 +57,18 @@ const alive = (pid: number): boolean => {
 	}
 };
 
+/**
+ * The least any `until` here waits (#1360) — every wait is an upper bound on a real process starting, leaking or dying,
+ * never a deadline under test. Sized for a loaded machine as `vitest.config.ts`'s 120s integration floor is (runs there
+ * measured ~9x slower); a passing run is not slowed, a real hang still fails inside that budget.
+ */
+const UNTIL_FLOOR_MS = 45_000;
+
 async function until(cond: () => boolean, timeoutMs = 10_000, what = "condition"): Promise<void> {
+	const budget = Math.max(timeoutMs, UNTIL_FLOOR_MS);
 	const start = Date.now();
 	while (!cond()) {
-		if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
+		if (Date.now() - start > budget) throw new Error(`timed out waiting for ${what}`);
 		await new Promise((r) => setTimeout(r, 50));
 	}
 }
@@ -128,7 +147,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 			expect(alive(child)).toBe(true);
 			s.stop();
 			await until(() => !alive(child), 8000, `${mode}: the leaked child to be ended`);
-		}, 20_000);
+		});
 
 		it(`${mode}: the turn timeout ends the engine AND what it started`, async () => {
 			// 8s, not 1.5s (#1342): the ceiling starts at spawn, and under full-suite load a 1.5s ceiling fired before the fake
@@ -140,7 +159,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 			const [child] = leaked(`to-${mode}`);
 			await until(() => !alive(child), 20_000, `${mode}: the timeout to end the leaked child`);
 			s.stop();
-		}, 40_000);
+		});
 
 		it(`${mode}: aborting a turn for its successor ends what the aborted turn started`, async () => {
 			const { s } = session({ id: `ab-${mode}`, tag: `ab-${mode}`, bin: oneshot, client: "codex", cleanup: manager(mode) });
@@ -155,7 +174,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 			expect(alive(second)).toBe(true); // the live turn's own child is untouched
 			s.stop();
 			await until(() => !alive(second), 8000, "stop to end the second turn's child");
-		}, 30_000);
+		});
 	}
 
 	it("CONTROL — without cleanup the engine dies and its child lives on (the defect #1265 fixes)", async () => {
@@ -167,7 +186,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		await new Promise((r) => setTimeout(r, 1500));
 		expect(alive(child)).toBe(true); // the leak
 		process.kill(child, "SIGKILL");
-	}, 20_000);
+	});
 
 	it("the engine runs with the session marker and a per-run TMPDIR, and ending the session deletes that folder", async () => {
 		const cleanup = manager("gentle");
@@ -181,7 +200,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		s.stop();
 		await cleanup.endSession("env-1", new Set(), []);
 		expect(existsSync(seen.tmp)).toBe(false);
-	}, 20_000);
+	});
 
 	it("two sessions get two different temp folders", async () => {
 		const cleanup = manager("harsh");
@@ -200,7 +219,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		b.s.stop();
 		await cleanup.endSession("iso-b", new Set(), []);
 		expect(existsSync(tb)).toBe(false);
-	}, 25_000);
+	});
 
 	it("with cleanup attached, an engine group never contains the runner (the runner survives its own cleanup)", async () => {
 		const { s } = session({ id: "self", tag: "self", bin: persistent, client: "claude", cleanup: manager("harsh") });
@@ -210,5 +229,5 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		await until(() => !alive(leaked("self")[0]), 8000, "the child to end");
 		expect(alive(process.pid)).toBe(true); // this very test process is the "runner" here
 		mkdirSync(join(dir, "ok"), { recursive: true });
-	}, 20_000);
+	});
 });

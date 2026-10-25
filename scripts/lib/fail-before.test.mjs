@@ -14,9 +14,14 @@ import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readF
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as helper from "./fail-before.mjs";
 import { EXIT, failBefore, pendingJournals, quoteForShell, restoreFromJournal } from "./fail-before.mjs";
+
+// Real `git` and `node` PROCESSES, several per test and some chained (the CLI route spawns node, which runs the command),
+// so the unit project's 5s default — chosen for pure functions — is not this file's budget: the CLI EACCES case blew it at
+// full-suite load (#1360). 60s, as objective-composition.test.ts sets for its real processes; a real hang still fails.
+vi.setConfig({ testTimeout: 60_000 });
 
 /** The helper's test seam; a stand-in when it has none, so this file still loads against an older helper. */
 const _io = helper._io ?? { writeSync: (...a) => writeSyncFs(...a), lstatSync: (...a) => lstatSync(...a) };
