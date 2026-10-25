@@ -912,3 +912,24 @@ If an agent cannot see a document:
 - Confirm the provider account itself can access the document.
 - Confirm the grant belongs to the same ProAgentStore account and private instance.
 - Disconnect and reconnect only when OAuth refresh fails; missing grants should be fixed through folder access.
+
+## Coder questions: source and freshness (#1363)
+
+A coding run that stops to ask its owner a question carries the issue it is about. The repository and issue number come
+from the run's bound session and ticket, the title, state and summary from the ticket's issue cache that the issue sync
+keeps, and the link is built from the registered repository and that number: never from the question's wording, and
+never by calling GitHub when the question is served (a question is delivered whether or not GitHub is reachable).
+
+- **Where it shows.** The answer card (an "Open issue" link, the title and a short excerpt, with the question, options
+  and why unchanged), the push and the thread announcement (`repo#N — title`, the link, the reason, a short context),
+  the run's `waitingAsk.issue` (`coding_loop_status`, the activity reads) and `coder_questions`.
+- **Three source states.** `linked`; `none` (nothing is bound, the push says "No issue is linked to this run"); and
+  `unavailable` (the lookup itself failed, the push says the source issue could not be loaded). The last two are never
+  conflated, and neither blocks the question.
+- **Freshness.** A cached issue is a snapshot, so the platform flags a premise that may be out of date, from facts it
+  holds: `issue_closed` (the issue is no longer open), `issue_changed_since_asked` (GitHub updated it after the question
+  was asked) or `context_old` (the cache was last refreshed more than a day ago). The flag, its reason and the cache age
+  appear on the card, in the push and thread, and on every API and MCP surface, and a waiting question is judged again on
+  each read. It is a flag: the question is not rewritten and nothing is answered on the owner's behalf. A dependency the
+  question merely mentions (for example another issue number in its text) is not looked up.
+- **Older parked questions** gain the link and the verdict from the bound session and the board's cached card.

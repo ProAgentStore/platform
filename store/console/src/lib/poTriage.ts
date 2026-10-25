@@ -78,6 +78,18 @@ export interface CoderQuestionView {
 	decision: string | null;
 	confidence: number | null;
 	reason: string | null;
+	/** The source issue, as the server resolved it from the run's bound session (#1363); never read from the question's words. */
+	issueUrl?: string;
+	issueTitle?: string;
+	issueSummary?: string;
+	issueState?: string;
+	issueUpdatedAt?: string;
+	cacheAge?: number;
+	/** `none` (nothing bound) and `unavailable` (the lookup failed) are different answers. */
+	issueStatus?: "linked" | "none" | "unavailable";
+	stale?: boolean;
+	staleReason?: "issue_closed" | "issue_changed_since_asked" | "context_old";
+	staleDetail?: string;
 }
 
 const STATE_WORDS: Record<CoderQuestionView["state"], string> = {
@@ -94,7 +106,8 @@ const STATE_WORDS: Record<CoderQuestionView["state"], string> = {
 export function questionSummary(q: CoderQuestionView): string {
 	const where = q.repo && q.issueNumber ? ` (${q.repo}#${q.issueNumber})` : "";
 	const decided = q.state === "answered_brain" && q.decision ? `: ${q.decision}${q.confidence !== null ? ` (${q.confidence.toFixed(2)})` : ""}` : q.state === "escalated" && q.reason ? ` (${q.reason})` : "";
-	return `${q.question}${where} — ${STATE_WORDS[q.state]}${decided}`;
+	const refresh = q.stale ? " — needs refresh: check the issue first" : q.issueStatus === "unavailable" ? " — source issue could not be loaded" : "";
+	return `${q.question}${where} — ${STATE_WORDS[q.state]}${decided}${refresh}`;
 }
 
 /** `GET /v1/instances/:id/coder-questions` (#1025). */

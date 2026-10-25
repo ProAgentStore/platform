@@ -14,6 +14,7 @@
  * person; a decision already in flight is discarded by its failed compare-and-swap only if a person
  * answered first, so the off switch is honoured at the NEXT tick.
  */
+import { codingQuestionSource, questionSourceTail } from "./coding-question-source.js";
 import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { readCoderBrain, type CoderBrainSettings } from "./coder-brain.js";
@@ -62,7 +63,9 @@ export function defaultEffects(env: Env): CoderQuestionEffects {
 		postComment: (q, body) => (q.repo && q.issueNumber ? postIssueComment(env, q.userId, q.repo, q.issueNumber, body) : Promise.resolve(false)),
 		notify: async (q, title, body, alert) => {
 			const url = q.taskId ? deepLinkFor({ kind: "task", instanceId: q.instanceId, taskId: q.taskId }) : deepLinkFor({ kind: "coding-session", instanceId: q.instanceId, sessionId: q.sessionId });
-			await notifyUser(env, q.userId, "coder_question", title, q.issueUrl ? `${body} ${q.issueUrl}` : body, url, { kind: alert ? "alert" : "update", instanceId: q.instanceId, key: `coder-question:${q.id}:${title}` }).catch(() => undefined);
+			// Where the question comes from, in words and as a link, and whether that context needs a refresh (#1363). DB only.
+			const source = await codingQuestionSource(env, { instanceId: q.instanceId, userId: q.userId, sessionId: q.sessionId, runId: q.runId }, { askedAt: q.askedAt });
+			await notifyUser(env, q.userId, "coder_question", title, `${body}${questionSourceTail(source)}`, url, { kind: alert ? "alert" : "update", instanceId: q.instanceId, key: `coder-question:${q.id}:${title}` }).catch(() => undefined);
 		},
 		// A run parked on the question (#1076) reads the value from the row once woken; the runner push is
 		// only for a run still in a live wait, and is not needed (or possible) for a parked one.

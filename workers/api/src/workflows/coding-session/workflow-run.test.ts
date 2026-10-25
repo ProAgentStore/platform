@@ -612,6 +612,7 @@ describe("a question parks the run on `decision`, on its card, and the answer co
 			why: "breaking change",
 			field: "Keep the old API or drop it?",
 			taskId: "csess-s1",
+			issueStatus: "none", // no issue is bound to this run, and the stored ask says so rather than staying silent (#1363)
 		});
 		// The console's RunDetail reads this exact shape off `/task-events` for its tap-to-answer box.
 		const ev = rows<{ task_id: string; type: string; payload: string }>("SELECT task_id, type, payload FROM instance_runtime_task_events WHERE type = 'agent.needs_input'");

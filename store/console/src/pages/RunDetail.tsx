@@ -373,8 +373,9 @@ export default function RunDetail() {
 	// `data: { field, why }` from `request_user_info` — the field name is exactly what the brain
 	// already knew it needed. Fall back to scraping the message only for events from an older runner
 	// that predates the structured payload.
-	const needsInputData = needsInputEv?.data as { field?: string; why?: string; options?: unknown; parts?: unknown; fullQuestion?: unknown; issue?: unknown } | undefined;
-	const questionIssue = resolveQuestionIssue(needsInputData?.issue, boardIssue);
+	const needsInputData = needsInputEv?.data as { field?: string; why?: string; options?: unknown; parts?: unknown; fullQuestion?: unknown; issue?: unknown; issueStatus?: unknown } | undefined;
+	const questionIssue = resolveQuestionIssue(needsInputData?.issue, boardIssue, needsInputEv?.createdAt);
+	const sourceStatus = needsInputData?.issueStatus === "unavailable" ? "unavailable" : needsInputData?.issueStatus === "none" ? "none" : undefined;
 	const questionObjective = [task?.input?.objective, task?.description, task?.title].find((v): v is string => typeof v === "string" && !!v.trim());
 	const field = needsInputData?.field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
 	const why = needsInputData?.why ?? "";
@@ -494,7 +495,7 @@ export default function RunDetail() {
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
 					<div className="text-lg font-bold text-ink">✏️ The agent needs one answer to continue</div>
 					<div className="text-sm text-muted mt-0.5 mb-3">Review the context, then answer once and it keeps going.</div>
-					<QuestionIssueContext issue={questionIssue} codingQuestion={codingCard} objective={questionObjective} />
+					<QuestionIssueContext issue={questionIssue} codingQuestion={codingCard} objective={questionObjective} status={sourceStatus} />
 					{/* The question is the agent's text: markdown, so bold and numbered decisions read as written (#1129). */}
 					<div id={fieldLabelId}>
 						<MarkdownText text={fullOpen ? fullQuestion : field} className="text-base font-semibold text-ink" />

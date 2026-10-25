@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { type CoderBrainSettings, PO_TRIAGE_ACTION, coderBrainPatchProblem, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
 import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-question-store.js";
+import { withQuestionSources } from "../lib/coding-question-source.js";
 import { brainModelRefusal, writeInstanceBrain } from "../lib/instance-brain.js";
 import { DEFAULT_PILOT_MODEL, PILOT_MODEL_OPTIONS, type PilotModelResponse, pilotModelProblem, readPilotModel, setPilotModel } from "../lib/pilot-model.js";
 import { autoPickupPatchProblem, readAutoPickup, setAutoPickup } from "../lib/auto-pickup.js";
@@ -130,7 +131,7 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		const q = new URL(c.req.url).searchParams;
 		const state = q.get("state");
 		if (state && !(QUESTION_STATES as readonly string[]).includes(state)) throw new HttpError(400, `state must be one of ${QUESTION_STATES.join(", ")}.`);
-		return c.json({ settings: await readCoderBrain(c.env, instanceId, uid), questions: await listCoderQuestions(c.env, instanceId, uid, { state: (state as CoderQuestionState) || undefined, limit: Number(q.get("limit")) || 20 }) });
+		return c.json({ settings: await readCoderBrain(c.env, instanceId, uid), questions: await withQuestionSources(c.env, await listCoderQuestions(c.env, instanceId, uid, { state: (state as CoderQuestionState) || undefined, limit: Number(q.get("limit")) || 20 })) });
 	});
 
 	router.get("/:instanceId/po-triage/reports", async (c) => {

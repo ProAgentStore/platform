@@ -7747,6 +7747,11 @@ paths:
         reason and model, and the full state history. Plus the brain settings. `state` filters; `limit` 1-100.
         #1075: `answeredVia` (console, mcp, brain), `answeredAt`, and `appliedAt` / `appliedRunId` — when and by which
         run the answer was consumed (null while it still waits to be used, including a late answer kept for a resume).
+        #1363: each question names its source, resolved from the run's bound session and ticket and never from the
+        question's words: `issueUrl`, `issueTitle`, `issueSummary`, `issueState` and `issueUpdatedAt` as last synced,
+        `cacheAge` (ms), and `issueStatus` (`linked`, `none` when nothing is bound, `unavailable` when the lookup failed).
+        `stale` with `staleReason` (`issue_closed`, `issue_changed_since_asked`, `context_old`) and `staleDetail` says its
+        premise needs a refresh before it is trusted. The question is never rewritten or answered for the owner.
       operationId: listCoderQuestions
       tags: [Instances]
       parameters:

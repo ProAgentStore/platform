@@ -362,3 +362,141 @@ describe("a run at its iteration cap asks the owner instead of failing (#1236, #
 		expect(parkedRun?.waitingAsk?.fullQuestion).toContain("Its last steps:");
 	});
 });
+
+describe("a parked coding question carries its trusted source end to end (#1363)", () => {
+	const ASK = () => toDecision({ name: "ask_owner", arguments: { question: "Issue #1349 item 6: where should transient compare-read errors be handled?", options: ["retry in the step", "queue and read in the tick"], why: "the compare runs before any queue row exists" } });
+	const cache = (over: Record<string, unknown> = {}) => JSON.stringify({ number: 1349, repo: "owner/repo", title: "Page GitHub workflow and commit-range evidence safely", state: "open", stateReason: null, labels: [], assignees: [], url: "https://github.com/owner/repo/issues/1349", updatedAt: "2026-01-01T00:00:00Z", closedAt: null, summary: "Read every page of the release evidence before posting.", ...over });
+
+	/** Bind the run to issue 1349 through its session and ticket, with the issue sync's cache. */
+	function bindIssue(over: Record<string, unknown> = {}) {
+		d1.exec("UPDATE coding_repos SET github_repo = 'owner/repo' WHERE id = 'r1'");
+		d1.exec("UPDATE coding_sessions SET issue_number = 1349 WHERE id = 's1'");
+		d1.exec(`INSERT INTO tickets (id, instance_id, user_id, job_key, title, created_by, issue_number, repo_id, issue_cache) VALUES ('t1','i1','u1','issue:r1#1349','t','agent',1349,'r1','${cache(over).replace(/'/g, "''")}')`);
+		d1.exec("UPDATE agent_loop_runs SET ticket_id = 't1' WHERE run_id = 'run-1'");
+	}
+
+	/** Run the real workflow to its park and read every surface an owner or a client sees, while it waits. */
+	// biome-ignore lint/suspicious/noExplicitAny: the event payload is JSON read field by field in assertions.
+	type Seen = { run: Awaited<ReturnType<typeof getLoopRun>>; data: Record<string, any>; notes: Array<{ title: string; body: string; url: string | null }>; answered: Awaited<ReturnType<typeof post>> | null };
+	async function parked(opts: { answer?: string; env?: Env; decision?: CodingDecision } = {}): Promise<Seen> {
+		decisions = [opts.decision ?? ASK()];
+		const e = opts.env ?? env;
+		const box: { seen?: Seen } = {};
+		await runCodingSessionWorkflow(
+			e,
+			{ payload: params(), instanceId: "wf-run-1" } as unknown as WorkflowEvent<CodingSessionParams>,
+			step(
+				async () => undefined,
+				async () => {
+					const ev = d1.sqlite.prepare("SELECT payload FROM instance_runtime_task_events WHERE task_id = 'csess-s1' AND type = 'agent.needs_input'").get() as { payload: string };
+					box.seen = {
+						run: await getLoopRun(e, "u1", "run-1"),
+						data: JSON.parse(ev.payload).data,
+						notes: d1.sqlite.prepare("SELECT title, body, url FROM notifications WHERE user_id = 'u1' ORDER BY created_at, rowid").all() as Array<{ title: string; body: string; url: string | null }>,
+						answered: opts.answer ? await post("csess-s1", opts.answer) : null,
+					};
+					return "timeout";
+				},
+			),
+		);
+		if (!box.seen) throw new Error("the run never parked on its question");
+		return box.seen;
+	}
+
+	it("linked: the run, the card's event and the push all carry the exact issue, and the push still opens the same card", async () => {
+		bindIssue();
+		const { run, data, notes } = await parked();
+		const issue = { repo: "owner/repo", number: 1349, title: "Page GitHub workflow and commit-range evidence safely", url: "https://github.com/owner/repo/issues/1349", summary: "Read every page of the release evidence before posting.", issueState: "open" };
+		expect(run?.waitingAsk).toMatchObject({ issueStatus: "linked", issue, question: expect.stringContaining("transient compare-read errors") });
+		expect(run?.waitingAsk?.issue?.stale).toBeUndefined();
+		expect(data).toMatchObject({ issueStatus: "linked", issue, options: ["retry in the step", "queue and read in the tick"] });
+		expect(data.why).toContain("the compare runs before any queue row exists");
+		const push = notes.find((n) => /question/i.test(n.title));
+		expect(push?.body).toContain("owner/repo#1349 — Page GitHub workflow and commit-range evidence safely. https://github.com/owner/repo/issues/1349");
+		expect(push?.body).toContain("Context: Read every page of the release evidence before posting.");
+		expect(push?.body).not.toContain("Needs refresh");
+		expect(push?.url).toBe("/console/instances/i1/tasks/csess-s1");
+	});
+
+	it("stale (the issue is closed): flagged on the run, the event and the push, the question and options untouched, and still answerable", async () => {
+		bindIssue({ state: "closed", closedAt: "2026-10-24T10:00:00Z" });
+		const { run, data, notes, answered } = await parked({ answer: "queue and read in the tick" });
+		expect(run?.waitingAsk?.issue).toMatchObject({ stale: true, staleReason: "issue_closed", issueState: "closed" });
+		expect(data.issue).toMatchObject({ stale: true, staleReason: "issue_closed" });
+		const push = notes.find((n) => /question/i.test(n.title));
+		expect(push?.body).toContain("Needs refresh: the source issue is closed");
+		expect(data.options).toEqual(["retry in the step", "queue and read in the tick"]); // never rewritten
+		expect(answered).toMatchObject({ status: 200, body: { ok: true, outcome: "delivered" } }); // never answered for the owner, but answerable
+	});
+
+	it("stale (the issue changed after it was asked): flagged with its own reason", async () => {
+		bindIssue({ updatedAt: new Date(Date.now() + 3_600_000).toISOString() });
+		const { run, data } = await parked();
+		expect(run?.waitingAsk?.issue).toMatchObject({ stale: true, staleReason: "issue_changed_since_asked" });
+		expect(data.issue).toMatchObject({ stale: true, staleReason: "issue_changed_since_asked" });
+	});
+
+	it("the run view judges freshness again when read: an issue that closes while the question waits is flagged on the run, not just at ask time", async () => {
+		bindIssue();
+		const { data } = await parked();
+		expect(data.issue.stale).toBeUndefined(); // fresh when asked
+		d1.exec(`UPDATE tickets SET issue_cache = '${cache({ state: "closed", closedAt: "2026-10-25T01:00:00Z" })}' WHERE id = 't1'`);
+		expect((await getLoopRun(env, "u1", "run-1"))?.waitingAsk?.issue).toMatchObject({ stale: true, staleReason: "issue_closed" });
+	});
+
+	it("a question parked before this shipped (no issue in its stored ask) gains the link and the verdict from the bound session", async () => {
+		bindIssue({ state: "closed", closedAt: "2026-10-24T10:00:00Z" });
+		const { run } = await parked();
+		const stored = JSON.parse((d1.sqlite.prepare("SELECT waiting_ask FROM agent_loop_runs WHERE run_id = 'run-1'").get() as { waiting_ask: string }).waiting_ask);
+		delete stored.issue;
+		delete stored.issueStatus;
+		d1.sqlite.prepare("UPDATE agent_loop_runs SET waiting_ask = ?1, waiting_reason = 'decision', status = 'running' WHERE run_id = 'run-1'").run(JSON.stringify(stored));
+		expect(run?.waitingAsk?.issue?.url).toBe("https://github.com/owner/repo/issues/1349");
+		expect((await getLoopRun(env, "u1", "run-1"))?.waitingAsk).toMatchObject({ issueStatus: "linked", issue: { url: "https://github.com/owner/repo/issues/1349", stale: true, staleReason: "issue_closed" } });
+	});
+
+	it("missing: no bound issue is 'none' everywhere, no link exists, the push says so, and the question is answerable", async () => {
+		const { run, data, notes, answered } = await parked({ answer: "retry in the step" });
+		expect(run?.waitingAsk?.issueStatus).toBe("none");
+		expect(run?.waitingAsk?.issue).toBeUndefined();
+		expect(data.issueStatus).toBe("none");
+		expect(data.issue).toBeUndefined();
+		const push = notes.find((n) => /question/i.test(n.title));
+		expect(push?.body).toContain("No issue is linked to this run.");
+		expect(JSON.stringify([run?.waitingAsk, data, notes])).not.toMatch(/github\.com\/[^"]*\/issues\//);
+		expect(answered).toMatchObject({ status: 200, body: { ok: true } });
+	});
+
+	it("the lookup failing is 'unavailable' (not 'none'), the question is still delivered and answerable", async () => {
+		bindIssue();
+		const failing = Object.create(d1.DB) as Env["DB"];
+		failing.prepare = (sql: string) => {
+			if (sql.includes("t.issue_cache, t.updated_at AS synced")) throw new Error("D1 timeout"); // only the source lookup fails
+			return d1.DB.prepare(sql);
+		};
+		const { run, data, notes, answered } = await parked({ env: { ...env, DB: failing } as Env, answer: "retry in the step" });
+		expect(data.issueStatus).toBe("unavailable");
+		expect(data.issue).toBeUndefined();
+		expect(notes.find((n) => /question/i.test(n.title))?.body).toContain("The source issue could not be loaded");
+		expect(notes.find((n) => /question/i.test(n.title))?.body).not.toContain("No issue is linked");
+		expect(run?.waitingAsk?.question).toContain("transient compare-read errors");
+		expect(answered).toMatchObject({ status: 200, body: { ok: true } });
+	});
+
+	it("unsafe: a repository that is not a plain owner/name builds no link, and issue-looking text in the question never does", async () => {
+		d1.exec("UPDATE coding_repos SET github_repo = '../evil' WHERE id = 'r1'");
+		d1.exec("UPDATE coding_sessions SET issue_number = 9 WHERE id = 's1'");
+		const { run, data, notes } = await parked({ decision: toDecision({ name: "ask_owner", arguments: { question: "Issue #9 at https://evil.example/owner/repo/issues/9 — which?", options: ["A", "B"], why: "see https://evil.example/x" } }) });
+		expect(run?.waitingAsk?.issue).toBeUndefined();
+		expect(data.issue).toBeUndefined();
+		expect(data.issueStatus).toBe("none");
+		expect(JSON.stringify(notes)).not.toContain("https://github.com/");
+		expect(run?.waitingAsk?.question).toContain("Issue #9"); // the words stay as the agent wrote them; they just are not a link
+	});
+
+	it("access control is unchanged: another account cannot read this run's question or its source", async () => {
+		bindIssue();
+		await parked();
+		expect(await getLoopRun(env, "u2", "run-1")).toBeNull();
+	});
+});

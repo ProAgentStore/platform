@@ -461,6 +461,74 @@ describe("resolvePause — a question the coder brain holds stays parked past 15
 		expect(s.announced[0]).toContain(`[${issue.repo}#${issue.number} — ${issue.title}](${issue.url})`);
 	});
 
+	describe("source context in the push and thread (#1363)", () => {
+		const linked = { repo: "ProAgentStore/platform", number: 1347, title: "Configure and inspect the exact-SHA gate", url: "https://github.com/ProAgentStore/platform/issues/1347", summary: "The console renders the gate." };
+		const run = async (sourceIssue?: PauseDeps["sourceIssue"]) => {
+			const s = spy({ resolveAfter: 1, taskId: "csess-s1" });
+			if (sourceIssue) s.deps.sourceIssue = sourceIssue;
+			let asked: Parameters<NonNullable<PauseDeps["ask"]>>[0] | null = null;
+			s.deps.ask = async (a) => { asked = a; return undefined; };
+			await resolvePause(s.deps, { round: 1, result: question, state: { waits: 0, spentMs: 0 } });
+			return { s, asked: asked as unknown as Parameters<NonNullable<PauseDeps["ask"]>>[0] };
+		};
+
+		it("a stale source says so in the push, the thread and the card's event, and the question text is untouched", async () => {
+			const issue = { ...linked, issueState: "closed", stale: true as const, staleReason: "issue_closed" as const, staleDetail: "the source issue is closed (since 2026-10-24), so what this question assumes may no longer hold" };
+			const { s, asked } = await run(async () => ({ status: "linked", issue }));
+			expect(s.notified[0].body).toContain(`${linked.repo}#${linked.number} — ${linked.title}. ${linked.url}`);
+			expect(s.notified[0].body).toContain("Needs refresh: the source issue is closed");
+			expect(s.notified[0].body).toContain("Which table layout?");
+			expect(s.announced[0]).toContain("⚠️ Needs refresh: the source issue is closed");
+			expect(s.announced[0]).toContain(`[${linked.repo}#${linked.number} — ${linked.title}](${linked.url})`);
+			expect(asked).toMatchObject({ issue: { stale: true, staleReason: "issue_closed" }, issueStatus: "linked", question: "Which table layout?" });
+			expect(s.notified[0].url).toBe("/console/instances/test-instance/tasks/csess-s1");
+		});
+
+		it("a fresh source carries no refresh warning", async () => {
+			const { s } = await run(async () => ({ status: "linked", issue: linked }));
+			expect(s.notified[0].body).not.toContain("Needs refresh");
+			expect(s.announced[0]).not.toContain("Needs refresh");
+			expect(s.notified[0].body).not.toContain("No issue is linked");
+		});
+
+		it("a failed lookup says the source could not be loaded, still asks, and is not reported as 'no issue linked'", async () => {
+			const { s, asked } = await run(async () => { throw new Error("D1 is down"); });
+			expect(s.notified[0].body).toContain("The source issue could not be loaded");
+			expect(s.announced[0]).toContain("The source issue could not be loaded");
+			expect(s.notified[0].body).not.toContain("No issue is linked");
+			expect(asked).toMatchObject({ issueStatus: "unavailable", question: "Which table layout?" });
+			expect(asked.issue).toBeUndefined();
+			expect(s.notified).toHaveLength(1); // delivery was not blocked
+		});
+
+		it("a status that says the lookup failed is honoured the same way", async () => {
+			const { s, asked } = await run(async () => ({ status: "unavailable", issue: null }));
+			expect(s.notified[0].body).toContain("could not be loaded");
+			expect(asked.issueStatus).toBe("unavailable");
+		});
+
+		it("a run with no linked issue says so plainly, with no link and no warning", async () => {
+			for (const source of [async () => null, async () => ({ status: "none" as const, issue: null }), undefined]) {
+				const { s, asked } = await run(source);
+				expect(s.notified[0].body).toContain("No issue is linked to this run.");
+				expect(s.notified[0].body).not.toContain("http");
+				expect(s.notified[0].body).not.toContain("could not be loaded");
+				expect(s.announced[0]).toContain("No issue is linked to this run.");
+				expect(asked).toMatchObject({ issueStatus: "none" });
+			}
+		});
+
+		it("text in the question that looks like an issue never becomes a link", async () => {
+			const s = spy({ resolveAfter: 1, taskId: "csess-s1" });
+			s.deps.ask = async () => undefined;
+			const sneaky = { outcome: "needs_input", detail: "see https://evil.example/ProAgentStore/platform/issues/1", fieldNeeded: "Issue #1349 item 6: which?", options: ["A", "B"] } as CodingResult;
+			await resolvePause(s.deps, { round: 1, result: sneaky, state: { waits: 0, spentMs: 0 } });
+			expect(s.notified[0].body).toContain("Issue #1349 item 6: which?");
+			expect(s.notified[0].body).toContain("No issue is linked to this run.");
+			expect(s.notified[0].body).not.toContain("github.com/");
+		});
+	});
+
 	it("brain on: polls 15 minutes at 5s, then once a minute up to the question's own bound — and the push goes out before the first sleep", async () => {
 		const s = withAsk(spy(), { waitMs: 100 * 60_000, humanMs: 30 * 60_000, brain: true });
 		const order: string[] = [];

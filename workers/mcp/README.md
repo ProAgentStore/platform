@@ -362,7 +362,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_coder_brain` | Turn a coder's brain and its scheduled product-owner triage on or off (#1027); on creates a live `run_po_triage` trigger (`po_dry_run: true` for a dry run, #1061), off disables them | write | yes | |
 | `get_auto_pickup` | Read brain-free auto-pickup (#1233): its settings, which picker an empty queue wakes, and its last ten decisions | read | | |
 | `set_auto_pickup` | Turn brain-free auto-pickup on or off and set its rules (#1233): when the queue empties, start the next open issue by priority label, bug before enhancement, board order, then oldest — zero model calls; skips needs-human/blocked/assigned/queued issues and one failed twice | write | yes | |
-| `coder_questions` | Read the questions a coder's runs stopped on, each with its state, who answered, the brain's decision and the full history (#1025) | read | | |
+| `coder_questions` | Read the questions a coder's runs stopped on, each with its state, who answered, the brain's decision and the full history (#1025), and its source issue (link, title, summary, state, `issueStatus`) with a `stale` flag and reason when the premise needs a refresh (#1363) | read | | |
 | `po_triage_reports` | Read the brain switch, the triage triggers and recent triage reports (per-issue category, reason, action) | read | | |
 | `get_instance_local_browser_settings` | A local browser research agent's chosen settings, the effective run policy, the agent's ceilings and the runner pin; no credentials | read | | |
 | `set_instance_local_browser_settings` | Patch engine, sign-in mode, workspace, browser profile, sites, limits, retention and result collection; refuses anything outside the agent's ceiling | write | yes | |

@@ -162,7 +162,7 @@ describe("the pause publishes a question as a question (#960)", () => {
 	it("hands the ask to the publisher, links the push to that card, and feeds the answer back as an answer", async () => {
 		const d = pauseDeps();
 		const v = await resolvePause(d, { round: 3, result: asked, state: { waits: 0, spentMs: 0 } });
-		expect(d.asks).toEqual([{ question: "Keep the old API or drop it?", options: ["keep it", "drop it"], why: "breaking change", field: "Keep the old API or drop it?", taskId: "csess-csess_s1" }]);
+		expect(d.asks).toEqual([{ question: "Keep the old API or drop it?", options: ["keep it", "drop it"], why: "breaking change", field: "Keep the old API or drop it?", taskId: "csess-csess_s1", issueStatus: "none" }]); // no issue is bound to this test run, and the ask says so (#1363)
 		expect(d.notes[0].title).toBe("❓ Coder has a question");
 		expect(d.notes[0].body).toContain("Options: keep it | drop it.");
 		expect(d.notes[0].url).toContain("csess-csess_s1");

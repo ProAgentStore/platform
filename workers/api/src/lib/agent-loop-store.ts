@@ -7,7 +7,7 @@ import { type ParkedWork, parkedWork } from "./parked-work.js";
 import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
 import type { AskPart } from "./coding-ask.js";
-import { codingQuestionIssue, codingQuestionIssueUrl, type CodingQuestionIssue } from "./coding-question-source.js";
+import { codingQuestionSource, isQuestionSourceStatus, type CodingQuestionIssue, type QuestionSourceStatus, sanitizeQuestionIssue } from "./coding-question-source.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import { RESUMABLE_STOP_REASONS, type ResumableStopReason } from "./stop-reasons.js";
 import type { Env } from "../types.js";
@@ -144,6 +144,8 @@ export interface WaitingAsk {
 	parts?: AskPart[];
 	/** Trusted source issue, when this run is linked to one. */
 	issue?: CodingQuestionIssue;
+	/** Whether a source issue is linked, none is, or looking it up failed; "none" and "unavailable" are different answers (#1363). */
+	issueStatus?: QuestionSourceStatus;
 }
 
 export function parseWaitingAsk(raw: string | null | undefined): WaitingAsk | null {
@@ -160,9 +162,8 @@ export function parseWaitingAsk(raw: string | null | undefined): WaitingAsk | nu
 			// Stored with the park all along, and dropped HERE on read (#1224) — so coding_loop_status showed a headline.
 			...(typeof o.fullQuestion === "string" && o.fullQuestion ? { fullQuestion: o.fullQuestion } : {}),
 			...(Array.isArray(o.parts) && o.parts.length ? { parts: o.parts } : {}),
-			...(o.issue && codingQuestionIssueUrl(o.issue.repo, o.issue.number) === o.issue.url
-				? { issue: { repo: o.issue.repo, number: o.issue.number, title: typeof o.issue.title === "string" ? o.issue.title : `Issue #${o.issue.number}`, url: o.issue.url, ...(typeof o.issue.summary === "string" ? { summary: o.issue.summary } : {}) } }
-				: {}),
+			...(sanitizeQuestionIssue(o.issue) ? { issue: sanitizeQuestionIssue(o.issue) as CodingQuestionIssue } : {}),
+			...(isQuestionSourceStatus(o.issueStatus) ? { issueStatus: o.issueStatus } : {}),
 		};
 	} catch {
 		return null;
@@ -353,12 +354,19 @@ export async function getLoopRun(env: Env, userId: string, runId: string): Promi
 	return row ? withQuestionSource(env, row) : null;
 }
 
-/** Older parked questions predate stored issue metadata. Resolve their bound session on read. */
+/**
+ * A waiting question's source issue is re-read from the bound session/ticket cache on every read (#1363): an older park
+ * predates stored metadata, and a stored one was judged when it was asked, so its freshness is judged again now. Only the
+ * database is read (never GitHub). When the lookup finds nothing new, the stored issue is kept rather than dropped.
+ */
 async function withQuestionSource(env: Env, row: LoopRunRow): Promise<LoopRunView> {
 	const view = toLoopRunView(row);
-	if (!view.waitingAsk || view.waitingAsk.issue || !row.session_id) return view;
-	const issue = await codingQuestionIssue(env, { instanceId: row.instance_id, userId: row.user_id, sessionId: row.session_id, runId: row.run_id }).catch(() => null);
-	return issue ? { ...view, waitingAsk: { ...view.waitingAsk, issue } } : view;
+	if (!view.waitingAsk || !row.session_id) return view;
+	const source = await codingQuestionSource(env, { instanceId: row.instance_id, userId: row.user_id, sessionId: row.session_id, runId: row.run_id }, { askedAt: row.parked_since ?? null });
+	const stored = view.waitingAsk.issue;
+	if (source.issue) return { ...view, waitingAsk: { ...view.waitingAsk, issue: source.issue, issueStatus: "linked" } };
+	if (stored) return view;
+	return { ...view, waitingAsk: { ...view.waitingAsk, issueStatus: source.status } };
 }
 
 export async function listLoopRuns(env: Env, userId: string, instanceId: string, limit = 50, offset = 0): Promise<LoopRunView[]> {

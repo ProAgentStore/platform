@@ -98,7 +98,7 @@ export function registerCoderBrainTools(server: McpServer, ctx: InstanceToolsCtx
 	);
 	server.tool(
 		"coder_questions",
-		"Read the questions a coder instance's runs stopped on (#1025), newest first, each with its state (`waiting_human`, `brain_deciding`, `answered_human`, `answered_brain`, `escalated`, `unresolved`, `expired`), who answered, the brain's decision, confidence, reason and model, and the full state history — the audit trail. Plus the brain settings. Answer a waiting one with answer_instance_input. Read-only.",
+		"Read the questions a coder instance's runs stopped on (#1025), newest first, each with its state (`waiting_human`, `brain_deciding`, `answered_human`, `answered_brain`, `escalated`, `unresolved`, `expired`), who answered, the brain's decision, confidence, reason and model, and the full state history — the audit trail. Each question also names its source so no client has to guess from the text (#1363): `issueUrl` (the canonical GitHub link, built from the run's bound repo and issue, never from the question wording), `issueTitle`, `issueSummary` (a short excerpt), `issueState` and `issueUpdatedAt` as last synced, `cacheAge` (ms since that snapshot), and `issueStatus` — `linked`, `none` (nothing is bound) or `unavailable` (the lookup failed; check the run). `stale` with `staleReason` (`issue_closed`, `issue_changed_since_asked`, `context_old`) and `staleDetail` say the premise needs a refresh before it is trusted; the question itself is never rewritten or answered for you. Plus the brain settings. Answer a waiting one with answer_instance_input. Read-only.",
 		{
 			token: z.string().optional(),
 			instance_id: z.string(),

@@ -4,11 +4,14 @@
  * only fakes — the timers are rows, and every tick below is a fresh sweep call (no memory between).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { notifyUser } = vi.hoisted(() => ({ notifyUser: vi.fn() }));
+vi.mock("../routes/push.js", async (orig) => ({ ...(await orig<typeof import("../routes/push.js")>()), notifyUser }));
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { coderBrainFrom, readCoderBrain, setCoderBrain } from "./coder-brain.js";
 import { type DecisionContext, GUARDRAILS, brainPrompt, declineAfterModel, declineBeforeModel, decideCoderQuestion, parseBrainReply } from "./coder-brain-decide.js";
 import { getCoderQuestion, recordAnswer } from "./coder-question-store.js";
-import { codingQuestionIssue, codingQuestionIssueUrl } from "./coding-question-source.js";
+import { codingQuestionIssue, codingQuestionIssueUrl, withQuestionSources } from "./coding-question-source.js";
 import { getLoopRun, recordLiveness } from "./agent-loop-store.js";
 import { type CoderQuestionEffects, HUMAN_ONLY_WAIT_MS, captureAndAnnounceQuestion, defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
 import type { Env } from "../types.js";
@@ -328,5 +331,59 @@ describe("§5 inputs: the brain also sees where the work stands — pane tail an
 	it("a prompt without them is unchanged in shape: no empty sections", () => {
 		const { user } = brainPrompt({ ...CTX, paneTail: null, recentCommits: [] });
 		expect(user).not.toMatch(/Recent commits|terminal output/);
+	});
+});
+
+describe("source context on the coder_questions surface and the sweep push (#1363)", () => {
+	const cacheJson = (over: Record<string, unknown> = {}) => JSON.stringify({ number: 7, repo: "acme/app", title: "Denser fixtures list", state: "open", stateReason: null, labels: [], assignees: [], url: "https://github.com/acme/app/issues/7", updatedAt: "2000-01-01T00:00:00Z", closedAt: null, summary: "Show more rows per screen.", ...over });
+	const bindTicket = (cache: string) => {
+		d1.exec(`INSERT INTO tickets (id, instance_id, user_id, job_key, title, created_by, issue_number, repo_id, issue_cache) VALUES ('t1','coder','u1','issue:repo-1#7','t','agent',7,'repo-1','${cache.replace(/'/g, "''")}')`);
+		d1.exec("INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, iteration, max_iterations, started_at, session_id, ticket_id) VALUES ('run-1','u1','coder','work issue 7','running',1,10,1,'s1','t1')");
+	};
+	beforeEach(() => notifyUser.mockReset().mockResolvedValue(undefined));
+
+	it("lists a question with its issue title, summary, state and a fresh verdict", async () => {
+		bindTicket(cacheJson());
+		const { question } = await ask(fakes().effects);
+		const [row] = await withQuestionSources(env, [question]);
+		expect(row).toMatchObject({ id: question.id, issueUrl: "https://github.com/acme/app/issues/7", issueStatus: "linked", issueTitle: "Denser fixtures list", issueSummary: "Show more rows per screen.", issueState: "open" });
+		expect(row.stale).toBeUndefined();
+	});
+
+	it("flags the question when its issue closed after it was asked, without touching the question", async () => {
+		bindTicket(cacheJson({ state: "closed", closedAt: "2000-01-02T00:00:00Z" }));
+		const { question } = await ask(fakes().effects);
+		const [row] = await withQuestionSources(env, [question]);
+		expect(row).toMatchObject({ stale: true, staleReason: "issue_closed", question: "Which table layout?", options: ["compact", "comfortable"] });
+		expect(await state(question.id)).toBe("waiting_human"); // flagged, never answered or changed
+	});
+
+	it("a question whose session is bound to nothing reports 'none', not a link", async () => {
+		d1.exec("UPDATE coding_sessions SET issue_number = NULL WHERE id = 's1'");
+		const { question } = await ask(fakes().effects);
+		const [row] = await withQuestionSources(env, [question]);
+		expect(row.issueStatus).toBe("none");
+		expect(row).not.toHaveProperty("issueTitle");
+	});
+
+	it("the escalation push names the repo, number, title and link, and says when the context needs a refresh", async () => {
+		bindTicket(cacheJson({ state: "closed", closedAt: "2000-01-02T00:00:00Z" }));
+		const { question } = await ask(fakes().effects);
+		await defaultEffects(env).notify(question, "⚠️ Coder still needs your answer", "acme/app#7: Which table layout?", true);
+		const [, , type, , body, url] = notifyUser.mock.calls[0] as [unknown, unknown, string, string, string, string];
+		expect(type).toBe("coder_question");
+		expect(body).toContain("Source: acme/app#7 — Denser fixtures list. https://github.com/acme/app/issues/7");
+		expect(body).toContain("Needs refresh: the source issue is closed");
+		expect(url).toBe("/console/instances/coder/tasks/csess-s1");
+	});
+
+	it("a push for a run with no linked issue says so, and one whose lookup failed says it could not be loaded", async () => {
+		d1.exec("UPDATE coding_sessions SET issue_number = NULL WHERE id = 's1'");
+		const { question } = await ask(fakes().effects);
+		await defaultEffects(env).notify(question, "t", "body", false);
+		expect(notifyUser.mock.calls[0][4]).toContain("No issue is linked to this run.");
+		const broken = { DB: { prepare: () => { throw new Error("D1 down"); } } } as unknown as Env;
+		await defaultEffects(broken).notify(question, "t", "body", false);
+		expect(notifyUser.mock.calls[1][4]).toContain("could not be loaded");
 	});
 });

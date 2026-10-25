@@ -31,4 +31,10 @@ describe("questionSummary (#1025)", () => {
 		expect(questionSummary({ ...q, state: "escalated", reason: "it is an owner-only choice" })).toBe("Which layout? (acme/app#7) — escalated — waiting on you (it is an owner-only choice)");
 		expect(questionSummary({ ...q, state: "waiting_human" })).toBe("Which layout? (acme/app#7) — waiting on you");
 	});
+	it("says when a question's source needs a refresh or could not be loaded, and nothing when it is fine (#1363)", () => {
+		expect(questionSummary({ ...q, state: "waiting_human" as const, stale: true, staleReason: "issue_closed" })).toMatch(/needs refresh: check the issue first$/);
+		expect(questionSummary({ ...q, state: "waiting_human" as const, issueStatus: "unavailable" })).toMatch(/source issue could not be loaded$/);
+		expect(questionSummary({ ...q, state: "waiting_human" as const, issueStatus: "none" })).not.toMatch(/refresh|could not be loaded/);
+		expect(questionSummary({ ...q, state: "waiting_human" as const, issueStatus: "linked" })).not.toMatch(/refresh|could not be loaded/);
+	});
 });
