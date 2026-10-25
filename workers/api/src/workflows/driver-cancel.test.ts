@@ -66,6 +66,10 @@ const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
 	"coding-session/index.ts": "a dispatcher; the driver is coding-session/workflow-run.ts",
+	"coding-session/coding-capture.ts": "one capture of the pane, split out of coding-session/workflow-run.ts (#1359) — the driver calls it each round",
+	"coding-session/pause-effects.ts": "the pause machine's side effects, split out of coding-session/workflow-run.ts (#1359) — the driver hands them to resolvePause",
+	"coding-session/runner-guard.ts": "the runner guard, split out of coding-session/workflow-run.ts (#1359) — the driver wraps its steps in it",
+	"coding-session/step-retry-presets.ts": "retry and timeout options for the driver's steps, split out of coding-session/workflow-run.ts (#1359) — data only",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
 };
 
@@ -77,6 +81,12 @@ interface CancelPath {
 	/** Worst-case latency between the ask and the driver noticing, and what bounds it. */
 	latency: string;
 }
+
+/** Modules a driver's code was split into (#1359): what they call, the driver reaches — so a cancel read there still counts. */
+const DRIVER_PARTS: Record<string, string[]> = {
+	"coding-session/workflow-run.ts": ["coding-session/coding-capture.ts", "coding-session/pause-effects.ts", "coding-session/runner-guard.ts"],
+};
+const driverSource = (file: string): string => [file, ...(DRIVER_PARTS[file] ?? [])].map(callableSource).join("\n");
 
 /**
  * How each driver is stopped — and every `reads` value is checked against that file below, so an
@@ -167,7 +177,7 @@ describe("every durable driver can be stopped", () => {
 	it.each(Object.keys(CANCEL_PATHS))("%s CALLS the cancellation the registry credits it with", (file) => {
 		const { reads } = CANCEL_PATHS[file];
 		// A call, not a mention — an import or a comment naming the symbol proves nothing.
-		expect(callableSource(file).includes(`${reads}(`), `${file} never calls ${reads}() — ${CANCEL_PATHS[file].latency}`).toBe(true);
+		expect(driverSource(file).includes(`${reads}(`), `${file} never calls ${reads}() — ${CANCEL_PATHS[file].latency}`).toBe(true);
 	});
 
 	it.each(Object.keys(NO_CANCEL_PATH))("%s is a RECORDED gap, and still genuinely has no cancel path", (file) => {

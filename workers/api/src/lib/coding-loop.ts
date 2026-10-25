@@ -8,7 +8,7 @@ import { EMPTY_STREAK, engineErrorEnding, foldTurn, type TurnCarry } from "./cod
 import { CompletionEvidence, evidenceNote, finishRefusalNote, judgeCompletion } from "./coding-completion-evidence.js";
 import { describeWriteRefusal } from "./write-scope-refusals.js";
 import { LEARNED_PREFIX } from "./coding-pilot.js";
-import { newLoopCounters, PILOT_DEFAULT_MAX_STEPS, type LoopEffect } from "./coding-loop-state.js";
+import { newLoopCounters, LOOP_FALLBACK_MAX_STEPS, type LoopEffect } from "./coding-loop-state.js";
 import { screenAction } from "./coding-screens.js";
 import type { CapSummary, CodingActionKind, CodingDecision, CodingGoal, CodingOutcome, CodingPaneSnapshot } from "./coding-loop-types.js";
 
@@ -59,7 +59,7 @@ export interface CodingDeps {
 }
 
 export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number; evidence?: CompletionEvidence; turnCarry?: TurnCarry } = {}): Promise<CodingResult> {
-	const maxSteps = opts.maxSteps ?? PILOT_DEFAULT_MAX_STEPS;
+	const maxSteps = opts.maxSteps ?? LOOP_FALLBACK_MAX_STEPS;
 	// The run's observed tool calls (#1019) — held by the workflow ACROSS rounds, so a claim is judged on the whole run.
 	const evidence = opts.evidence ?? new CompletionEvidence();
 	const counters = newLoopCounters();

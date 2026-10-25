@@ -6,8 +6,13 @@
  * without importing each other.
  */
 
-/** The step budget `runCodingLoop` uses when its caller names none. */
-export const PILOT_DEFAULT_MAX_STEPS = 30;
+/**
+ * The step budget `runCodingLoop` falls back to when its caller passes no `maxSteps` (30, unchanged).
+ *
+ * Not `PILOT_DEFAULT_MAX_STEPS` (`loop-limits.ts`, 40): that is the coding WORKFLOW's per-round cap when a run names none, which
+ * the workflow clamps and then passes to the loop as `maxSteps`. This one only matters to a caller that runs the loop directly.
+ */
+export const LOOP_FALLBACK_MAX_STEPS = 30;
 
 /**
  * How many refusals the merge-authority screen may issue before the run finishes.

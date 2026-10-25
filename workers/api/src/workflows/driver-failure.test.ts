@@ -59,6 +59,10 @@ const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
 	"coding-session/index.ts": "a dispatcher; the driver is coding-session/workflow-run.ts",
+	"coding-session/coding-capture.ts": "one capture of the pane, split out of coding-session/workflow-run.ts (#1359) — the driver calls it each round",
+	"coding-session/pause-effects.ts": "the pause machine's side effects, split out of coding-session/workflow-run.ts (#1359) — the driver hands them to resolvePause",
+	"coding-session/runner-guard.ts": "the runner guard, split out of coding-session/workflow-run.ts (#1359) — the driver wraps its steps in it",
+	"coding-session/step-retry-presets.ts": "retry and timeout options for the driver's steps, split out of coding-session/workflow-run.ts (#1359) — data only",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
 };
 

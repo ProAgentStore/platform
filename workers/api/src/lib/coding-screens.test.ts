@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MAX_EMPTY_INSTRUCTIONS, MAX_REFUSALS, newLoopCounters, PILOT_DEFAULT_MAX_STEPS } from "./coding-loop-state.js";
+import { PILOT_DEFAULT_MAX_STEPS } from "./loop-limits.js";
+import { MAX_EMPTY_INSTRUCTIONS, MAX_REFUSALS, newLoopCounters, LOOP_FALLBACK_MAX_STEPS } from "./coding-loop-state.js";
 import type { CodingGoal } from "./coding-loop-types.js";
 import { screenAction } from "./coding-screens.js";
 
@@ -12,7 +13,9 @@ describe("the loop's bookkeeping", () => {
 	it("starts every run clean, and the default step budget is the one the loop always used", () => {
 		expect(newLoopCounters()).toEqual({ scopeRefusals: 0, finishPushedBack: false, refusals: 0, askSentBack: false, emptyInstructions: 0, sentKeys: [], sentReads: [], repeatedInstruction: null });
 		expect(newLoopCounters().sentKeys).not.toBe(newLoopCounters().sentKeys);
-		expect(PILOT_DEFAULT_MAX_STEPS).toBe(30);
+		expect(LOOP_FALLBACK_MAX_STEPS).toBe(30);
+		// a different number from the workflow's per-round cap, on purpose: the loop's own fallback is not that cap
+		expect(LOOP_FALLBACK_MAX_STEPS).not.toBe(PILOT_DEFAULT_MAX_STEPS);
 	});
 });
 

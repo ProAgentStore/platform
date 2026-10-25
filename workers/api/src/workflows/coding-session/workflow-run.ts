@@ -1,10 +1,4 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
-import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-question-sweep.js";
-import { markAnswerApplied } from "../../lib/coder-question-store.js";
-import { codingPauseStatus } from "../../lib/coding-answer.js";
-import { answerEventType, recordParkedWorkflow, recordParkMachine, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
-import { askAnnouncement } from "../../lib/coding-ask.js";
-import { codingQuestionSource } from "../../lib/coding-question-source.js";
 import {
 	runCodingLoop,
 	type CodingActionKind,
@@ -16,8 +10,11 @@ import {
 import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../../lib/runner-client.js";
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
-import { isRunnerSessionAbsent, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
-import { runnerParkDeps, runnerWaitState } from "../../lib/runner-park.js";
+import { noRunnerDetail, } from "../../lib/runner-availability.js";
+import { DECIDE_RETRY, START_RETRY, stepRunners } from "./step-retry-presets.js";
+import { makeCodingRunnerGuard } from "./runner-guard.js";
+import { makeCapture } from "./coding-capture.js";
+import { makePauseEffects } from "./pause-effects.js";
 import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
 import { ObjectiveDelivery, type ObjectiveDeliveryState } from "../../lib/coding-objective-delivery.js";
 import { sendAct } from "../../lib/coding-act-send.js";
@@ -25,13 +22,12 @@ import { decideTurnRecovery, describeTurnRecovery, recoveryInstruction, turnReco
 import { activeConstraints, constraintLines, constraintSources, type ScopeConstraint } from "../../lib/coding-scope-constraints.js";
 import { refreshGoalConstraints } from "../../lib/coding-standing-constraints.js";
 import { postReleaseNotes } from "../../lib/release-notes.js";
-import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
-import { markDirectivesProcessed } from "../../lib/coding-ownership.js";
-import { pilotStopSignal, shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
+import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionDriver } from "../../lib/coding-store.js";
+import { shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
 import { startSessionOnRunnerConn } from "../../lib/coding-session-relaunch.js";
-import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../../lib/coding-pause.js";
-import { awaitEngineIdle, durableIdleDeps, idleWaitIsDurable, shouldTouchActivity } from "../../lib/coding-idle-poll.js";
+import { resolvePause, runSucceeded, stopReasonFor, } from "../../lib/coding-pause.js";
+import { awaitEngineIdle, durableIdleDeps, idleWaitIsDurable, } from "../../lib/coding-idle-poll.js";
 import { pendingCodingResumeNote } from "../../lib/coding-resume-note.js";
 import { accountTimeZone } from "../../lib/account-timezone.js";
 import type { EngineWaitState } from "../../lib/coding-wait.js";
@@ -62,9 +58,7 @@ import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSl
 import { recordWriteRefusal, type WriteRefusal } from "../../lib/write-scope-refusals.js";
 import { actsInWindow } from "../../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../../lib/run-attribution.js";
-import { finishLoopRun, settledRunStatus, grantRunIterations, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason, type WaitingAsk } from "../../lib/agent-loop-store.js";
-import { mirrorRuntimeEvent } from "../../routes/instances-runtime.js";
-import { reauthCompletedSince } from "../../lib/engine-reauth-store.js";
+import { finishLoopRun, settledRunStatus, grantRunIterations, recordIteration, type RunWaitReason, } from "../../lib/agent-loop-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
 import { wakeIdleCoder } from "../../lib/auto-pickup.js";
 import { type PilotDecideOutcome, pilotDecide, unwrapPilotDecide } from "../../lib/pilot-decide.js";
@@ -79,12 +73,7 @@ import { postSystemMessage } from "../../lib/instance-system-message.js";
 import { withTurnReplay } from "../../lib/coding-turn-replay.js";
 import type { Env } from "../../types.js";
 
-/**
- * How long one capture keeps the runner believing a platform run owns the session (#1178). The Pilot may spend up to 12 minutes
- * deciding between two captures (`decideRetry`), so the lease is longer than that; the next capture renews it and the closing
- * drain releases it. Capped by the runner at 20 minutes.
- */
-export const RUN_OWNERSHIP_LEASE_MS = 15 * 60_000;
+export { RUN_OWNERSHIP_LEASE_MS } from "./coding-capture.js";
 
 /**
  * The coding orchestrator's remote brain: a durable Cloudflare Workflow that
@@ -195,10 +184,6 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	 */
 	let crashReason: LoopStopReason | null = null;
 
-	/** When the activity heartbeat last cost a subrequest (#523) — see `shouldTouchActivity`. */
-	let lastActivityTouchAt = 0;
-	/** Owner-directive ids this run has already recorded as consumed (#1019) — so a poll writes only on news. */
-	const creditedInputs = new Set<string>();
 
 	/**
 	 * Put a line in the OWNER'S CHAT THREAD.
@@ -341,22 +326,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	// closure that ASSIGNS to a variable discards its narrowing at every other call site.
 	let conn: RunnerConn = startConn;
 
-	const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "3 minutes" as const };
-	// A decide may spend the whole per-decision recovery ceiling (max 10 min, #907) inside one step.
-	const decideRetry = { ...retry, timeout: "12 minutes" as const };
-	// waitIdle polls internally for minutes, so it needs a longer step budget than `retry`.
-	const idleRetry = { retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "10 minutes" as const };
-	const startRetry = { retries: { limit: 1, delay: "3 seconds" as const, backoff: "constant" as const }, timeout: "5 minutes" as const };
-	/**
-	 * `step.do` with its options pre-bound, as a plain callable the runner guard can drive.
-	 *
-	 * The cast is over Cloudflare's `Rpc.Serializable` constraint, which a generic wrapper cannot
-	 * carry through — the same reason every `step.do` result below already casts.
-	 */
-	type LooseDo = (name: string, opts: unknown, cb: () => Promise<unknown>) => Promise<unknown>;
-	const runWith = (opts: unknown): RunStep => (name, fn) => (step.do as unknown as LooseDo)(probe.at(name), opts, fn);
-	const runRetry = runWith(retry);
-	const runIdle = runWith(idleRetry);
+	const { runWith, runRetry, runIdle } = stepRunners(step, probe);
 	let n = 0;
 
 	// (Re)launch the engine on the machine `conn` points at. `lib/coding-session-relaunch.ts` —
@@ -375,207 +345,45 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	 * is live now, relaunches the engine, and resumes at the same step. Bounded per loss AND per
 	 * run — see lib/runner-availability.ts for the sizing and the whole argument.
 	 */
-	const guard = makeRunnerGuard({
-		wait: {
-			// JOURNALLED when labelled (#1177): the body replays after every `step.sleep`, and a live read there answers differently the second
-			// time (the machine is back), which made the replay take a different path than the original — a budget undercounted.
-			probe: (label) =>
-				label
-					? (runRetry(label, () => runtimeConnectivity(env, instanceId, userId)) as Promise<Awaited<ReturnType<typeof runtimeConnectivity>>>)
-					: runtimeConnectivity(env, instanceId, userId),
-			// step.sleep, so a ten-minute pause survives the workflow being evicted.
-			sleep: (label) => step.sleep(label, RUNNER_PROBE_INTERVAL),
-			// Posted once per label however often the body replays past it (#1177).
-			announce: async (message, label) => {
-				if (!label) return postToChat(message);
-				await runRetry(`say-${label}`, async () => {
-					await postToChat(message);
-					return null;
-				});
-			},
-			// The run still owns this session while it waits. Without the heartbeat a long pause
-			// would let its OWN single-flight claim go stale and a second Pilot could take the
-			// session out from under it — the collision the claim exists to prevent. And its LIVENESS stays current (#1177) while the run row
-			// says `runner_away`: alive and waiting, with no progress claimed.
-			tick: async (_waitedMs, label) => {
-				const beat = async () => {
-					if (event.payload.driverId) await touchSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId).catch(() => undefined);
-					await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
-					if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now()).catch(() => undefined);
-					return null;
-				};
-				if (label) await runRetry(label, beat);
-				else await beat();
-			},
-			// The wait as run state: `runner_away` and the instant it gives up (#1177). A run without a loop-run row has no row to say it on.
-			state: event.payload.loopRunId ? runnerWaitState(env, runRetry, { runId: event.payload.loopRunId }) : undefined,
-			// After a command the runner did not answer, "back" means it answers `/health` (#1341) — journalled, and a
-			// failed check is a plain "not yet" rather than a step error the workflow would retry.
-			healthy: (label) =>
-				runRetry(label, async () => {
-					const live = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
-					if (!live) return false;
-					return callRunner(live, "/health", undefined, { timeoutMs: READ_TIMEOUT_MS }).then(() => true, () => false);
-				}) as Promise<boolean>,
+	const guard = makeCodingRunnerGuard({
+		env,
+		step,
+		instanceId,
+		userId,
+		sessionId,
+		loopRunId: event.payload.loopRunId,
+		driverId: event.payload.driverId,
+		workflowInstanceId: event.instanceId,
+		runRetry,
+		runWith,
+		postToChat,
+		getConn: () => conn,
+		setConn: (c) => {
+			conn = c;
 		},
-		// The runner restarted and lost the session the run still owns (#1053) — never one the owner ended.
-		sessionLost: async (e) =>
-			isRunnerSessionAbsent(e) &&
-			(await env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(sessionId, instanceId, userId).first<{ status: string }>())?.status === "active",
-		// A machine away past the poll parks the run until it re-registers (#1160); only a run with a loop-run row can be woken.
-		park: event.payload.loopRunId ? runnerParkDeps(env, step, runRetry, { runId: event.payload.loopRunId, workflowInstanceId: event.instanceId ?? event.payload.loopRunId }) : undefined,
-		reconnect: async (label) => {
-			// The machine that comes back may not be the machine that went away — a user closing
-			// one laptop and opening another is the ordinary case. Re-resolve live (pin-aware),
-			// relocate the session's owning node, then relaunch the engine there.
-			const back = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
-			if (back) {
-				if (normalizeRunnerNode(back.runnerNode) !== normalizeRunnerNode(conn.runnerNode)) {
-					await reassignSessionNode(env, instanceId, userId, sessionId, back.runnerNode ?? null).catch(() => undefined);
-				}
-				conn = back;
-			}
-			const started = (await runWith(startRetry)(`restart-${label}`, startOnRunner)) as CodingPaneSnapshot | null;
-			lastEngine = started?.engine ?? lastEngine;
-			// The engine back may be the same process, a replacement or another machine's, which may not render the
-			// objective: re-read its capabilities (journalled per reconnect), and let its named identity decide (#1019).
-			if (objective) {
-				const caps = await runRetry(`objective-capabilities-${label}`, () => callRunner(conn, "/capabilities", {})).catch(() => null);
-				const settled = objective.capabilities(caps, { reconnected: true, runnerNode: conn.runnerNode ?? null });
-				objective.engine(started?.engine);
-				if (settled) await reportObjective(settled);
-			}
+		startOnRunner,
+		getLastEngine: () => lastEngine,
+		setLastEngine: (e) => {
+			lastEngine = e;
 		},
+		getObjective: () => objective,
+		// A lambda, not the function: `reportObjective` is declared further down and read only when the guard reconnects.
+		reportObjective: (state) => reportObjective(state),
 	});
-	/**
-	 * Read the pane AND whether the run should stop.
-	 *
-	 * `runCodingLoop` branches on `snap.cancelled` in two places and both workflow poll loops
-	 * test it — but nothing ever SET it: `CodingSnapshot` has no such field and neither the
-	 * runner nor the routes produce one. So the outcome "cancelled" was unreachable in
-	 * production, and a user who started a run with the wrong objective had no way to stop it
-	 * short of killing the session; the Pilot kept going for up to 12 rounds × 40 steps of
-	 * BYOK Claude decisions.
-	 *
-	 * The signal already exists and is already user-driven: Kill / End / Restart set the
-	 * `coding_sessions` row out of 'active'. Reading it here makes those buttons a clean stop
-	 * — the loop finishes its current step and returns `cancelled` — instead of the run only
-	 * ending indirectly when a later capture happens to fail.
-	 *
-	 * The SECOND signal is the loop run's own cancel flag (#374). `POST /loop/:runId/cancel`
-	 * has always written it and `AgentLoopWorkflow` has always read it; this workflow did not,
-	 * which was survivable only while the Coding tab's Loop ran in the browser and Stop meant
-	 * "stop scheduling the next setTimeout". Now that Stop reaches the Pilot, it has to be read
-	 * here or the button would be recorded and ignored. Which of the two wins, and what is
-	 * deliberately NOT a stop, is `pilotStopSignal`.
-	 */
-	const capture = async (): Promise<CodingPaneSnapshot & { sessionId: string }> => {
-		const [snap, row, cancelRequested] = await Promise.all([
-			// `drainUsage` — an autonomous Pilot run is exactly the case where no console is
-			// open, so this is the only path collecting the Engine's own spend (#267) for the
-			// longest and most expensive sessions the platform has.
-			callRunner<CodingPaneSnapshot & { sessionId: string; usage?: unknown; acts?: unknown }>(
-				conn,
-				"/coding/capture",
-				// `platformRun`: this run owns the session for the next decision (#1178). The lease outlives a Pilot decision (12 min) and is
-				// refreshed by the next capture, so the runner's update guard never reads the gap between turns as idle.
-				{ sessionId, drainUsage: true, platformRun: { leaseMs: RUN_OWNERSHIP_LEASE_MS } },
-				{ timeoutMs: READ_TIMEOUT_MS },
-			),
-			env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
-				.bind(sessionId, instanceId, userId)
-				.first<{ status: string }>()
-				.catch(() => null),
-			// Degrades to "not cancelled" on a read failure, for the same reason an unreadable
-			// session status does: a D1 blip must not abort a run that is working.
-			event.payload.loopRunId
-				? isCancelRequested(env, event.payload.loopRunId).catch(() => false)
-				: Promise.resolve(false),
-		]);
-		const { usage, acts, ...pane } = snap;
-		// The SAME snapshot carries how the engine authenticated (runtime.ts sets it on every
-		// capture), so the payer is in hand here exactly as it is on the route drain. Dropping
-		// it made the Pilot-driven sessions — the longest and most expensive the platform runs —
-		// the only ones recording an unknown payer (#356).
-		const pilotUsageRecords = sanitizeEngineUsage(usage);
-		await recordEngineUsage(
-			env,
-			{ userId, sessionId, instanceId, authResolved: (snap as { authResolved?: EngineAuthResolved | null }).authResolved ?? null },
-			pilotUsageRecords,
-		);
-		await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, pilotUsageRecords);
-		const reported = sanitizeEngineActs(acts);
-		// An owner directive the runner says a completed turn READ is processed (#1019) — the steer of a
-		// running Pilot otherwise never got past "queued", because only a direct turn's watcher marked any.
-		const fresh = (pane.consumedInputs ?? []).filter((id) => !creditedInputs.has(id));
-		if (fresh.length) {
-			await markDirectivesProcessed(env, { instanceId, userId, sessionId, consumed: fresh }).catch(() => 0);
-			for (const id of fresh) creditedInputs.add(id);
-		}
-		// What this run actually DID (#294). Stamped with the loop-run id when there is one, so
-		// `/trace?trace_id=<runId>` reconstructs exactly what a delegation did — the record whose
-		// absence let run 73ffc073 merge its own PRs to `main` and report only "done".
-		await recordEngineActs(
-			env,
-			{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null, cardId: traceCtx.cardId },
-			reported,
-		).catch(() => undefined);
-		// MERGE AUTHORITY, the enforcing half (#314). The instruction screen keeps the Pilot from
-		// ASKING for a merge; this catches one that happened anyway — the Engine's own initiative,
-		// or an engine that ignored the prompt. Protocol fact, not prose: the act came from a
-		// `tool_use` event carrying the literal command. The run HALTS on a hit, which is the whole
-		// difference from #294: 73ffc073 merged three times because nothing stopped it after the
-		// first. It cannot undo that first merge — it bounds the blast radius and asks the owner.
-		const stopReason = await recordAuthorityViolations(
-			env,
-			{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
-			mergePolicy,
-			reported,
-		).catch(() => null);
-		if (stopReason) return { ...pane, cancelled: true, stopReason };
-		// WRITE SCOPE (#676). The same shape as the merge gate above and independent of it: this
-		// asks WHERE the act landed, not what it was. Run `csess_f686f1ff` opened a pull request
-		// in another organisation and reported success, because nothing compared the repository
-		// it wrote to against the one it was registered for. Halting here cannot undo that first
-		// write — the Engine holds the machine's own `gh` login — but it stops the run and names
-		// the repository, instead of letting the run finish and claim the work landed.
-		const scopeStop = await recordRepoScopeViolations(
-			env,
-			{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
-			writeScope,
-			reported,
-		).catch(() => null);
-		if (scopeStop) return { ...pane, cancelled: true, stopReason: scopeStop };
-		// A Pilot capturing is the session being USED (#275). The claim heartbeat already says
-		// so on every action, but a single round can sit in `waitIdle` for minutes with no
-		// action at all — so the invariant "anything driving the engine keeps it alive" is
-		// stated here too rather than inferred from the loop's step budget. ASKED before it is
-		// paid for (#523): the store throttles the WRITE to once a minute in a WHERE clause,
-		// which left the SUBREQUEST unconditional — a quarter of every poll's cost buying a row
-		// update one time in thirty, against a ceiling spent for the life of the whole run.
-		// The RUN's heartbeat rides the same throttle (#580). A capture means the orchestrator is
-		// driving, so `last_alive_at` is true by construction here — and this is the only place a
-		// working run touches D1 at all, since `waitIdle` can poll for minutes with no action.
-		// Without it, liveness would only ever be written by the PAUSE tick, i.e. only by runs
-		// that stopped, and `isStalled` would read a healthy long turn as dead. `null` clears any
-		// park: a run that is capturing is by definition no longer waiting for anything.
-		if (shouldTouchActivity(lastActivityTouchAt, Date.now())) {
-			lastActivityTouchAt = Date.now();
-			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
-			// The CLAIM too (#1019): one engine turn can outlast STALE_DRIVER_MS with no action between it, and a stale claim is stolen and reported lost.
-			if (event.payload.driverId) await touchSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId).catch(() => undefined);
-			if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now(), null).catch(() => undefined);
-		}
-		// Which signals stop a run, which deliberately do not (`suspended`, an unreadable
-		// status), and which reason the human is given when both fire — all of it is the pure
-		// `pilotStopSignal`, so it can be stated as a table rather than as a comment defending
-		// an inline ternary nothing could execute.
-		//
-		// `pane`, not `snap`: the drained usage AND acts have been persisted and must not be
-		// carried into the workflow's step state, where a replay would drag them around forever.
-		const stop = pilotStopSignal({ sessionStatus: row?.status, cancelRequested });
-		return stop.stop ? { ...pane, cancelled: true, stopReason: stop.reason } : pane;
-	};
+	/** Read the pane AND whether the run should stop (see `coding-capture.ts`). */
+	const capture = makeCapture({
+		env,
+		instanceId,
+		userId,
+		sessionId,
+		loopRunId: event.payload.loopRunId,
+		driverId: event.payload.driverId,
+		repo: goal.repo,
+		mergePolicy,
+		writeScope,
+		cardId: traceCtx.cardId,
+		getConn: () => conn,
+	});
 
 	/**
 	 * Measure the pane on the way OUT of the durable step (#546).
@@ -704,7 +512,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// stall is returned across the step and raised here, so the step retry never multiplies it.
 		decide: async (p) =>
 			unwrapPilotDecide(
-				(await step.do(probe.at(`s${n++}-decide`), decideRetry, () =>
+				(await step.do(probe.at(`s${n++}-decide`), DECIDE_RETRY, () =>
 					pilotDecide(env, { userId, instanceId, repoId, sessionId, runStartedAt, loopRunId: event.payload.loopRunId ?? null, budgetId: event.payload.budgetId, depth: event.payload.depth, params: p }),
 				)) as PilotDecideOutcome,
 				p.goal,
@@ -792,135 +600,34 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 
 	/** This RUN's wait budget, held across rounds — a park is a property of the run, not a round. */
 	const waitState: EngineWaitState = { waits: 0, spentMs: 0 };
-	/** The pause machine's effects (#541). `conn` is read at call time: the guard re-points it. */
-	/** The question a `decision` park is waiting on (#960), set by `ask` and carried by every tick of that park. */
-	let parkedAsk: WaitingAsk | null = null;
-	/** The `coder_questions` row that park's answer is read from (#1075); null for a takeover with no question. */
-	let parkedQuestionId: string | null = null;
-	/** Resume attempts on a park (#1077): each its own step, since a busy checkout is a retry, not a journalled answer. */
-	let unparks = 0;
-	const pauseDeps = (round: number, wait: RunWaitReason): PauseDeps => ({
-		repo: goal.repo,
-		sourceIssue: () => codingQuestionSource(env, { instanceId, userId, sessionId, runId: event.payload.loopRunId ?? null }, { askedAt: Date.now() }),
-		timeZone: goal.timeZone,
+	const pauseEffects = makePauseEffects({
+		env,
+		step,
+		goal,
 		instanceId,
-		taskId: event.payload.boardTaskId,
+		userId,
 		sessionId,
-		now: () => Date.now(),
-		// Journalled (#1362): a park's plan must be the same plan on every replay — see `PauseDeps.stamp`.
-		stamp: (label) => runRetry(label, async () => Date.now()) as Promise<number>,
-		takeover: (label, reason) => {
-			parkedQuestionId = null;
-			return runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined);
+		repoId,
+		boardTaskId: event.payload.boardTaskId,
+		loopRunId: event.payload.loopRunId,
+		driverId: event.payload.driverId,
+		workflowInstanceId: event.instanceId,
+		cloneUrl,
+		branch,
+		token,
+		tokenUsername,
+		cardId: traceCtx.cardId,
+		runRetry,
+		postToChat,
+		getConn: () => conn,
+		setConn: (c) => {
+			conn = c;
 		},
-		// A QUESTION, published (#960): the `agent.needs_input` event on the card — the console's answer
-		// box reads it, options as a `from:` list — and the `decision` park with the ask on the run, at
-		// once rather than at the first tick, so coding_loop_status says what is being asked now.
-		ask: (ask) => {
-			// Set OUTSIDE the step: a replay returns a journalled step without re-running its body,
-			// and the ticks of this park read `parkedAsk` to keep the question on the run.
-			parkedAsk = ask;
-			return runRetry(`ask-${round}`, async () => {
-				const from = ask.options.length ? `from: ${ask.options.join(", ")}` : "";
-				const why = [ask.why, from].filter(Boolean).join(" — ");
-				await mirrorRuntimeEvent(env, instanceId, userId, {
-					id: `${ask.taskId}:needs_input:${round}`,
-					taskId: ask.taskId,
-					type: "agent.needs_input",
-					message: `Needs your input — ${ask.field}${why ? ` (${why})` : ""}`,
-					// The uncut question and a multi-part ask's decisions (#1129) ride beside the phone-sized
-					// field, for the ticket page's "show the full question" and its button group per decision.
-					data: { field: ask.field, why, options: ask.options, sessionId, ...(ask.fullQuestion ? { fullQuestion: ask.fullQuestion } : {}), ...(ask.parts?.length ? { parts: ask.parts } : {}), ...(ask.issue ? { issue: ask.issue } : {}), ...(ask.issueStatus ? { issueStatus: ask.issueStatus } : {}) },
-					createdAt: new Date().toISOString(),
-				});
-				if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now(), { reason: "decision", ask });
-				// #1025: the question, durably — posted on the issue, timed by the minute sweep. Inside
-				// the step, so a replay returns the journalled wait instead of capturing it twice.
-				const captured = await captureAndAnnounceQuestion(env, { instanceId, userId, sessionId, runId: event.payload.loopRunId ?? null, taskId: ask.taskId, question: askAnnouncement(ask), options: ask.options, why: ask.why || null }).catch(() => null);
-				return captured ? { waitMs: captured.waitMs, humanMs: captured.humanMs, brain: captured.waitMs > HUMAN_ONLY_WAIT_MS, questionId: captured.question.id } : null;
-			}).then((w) => {
-				parkedQuestionId = (w as { questionId?: string } | null)?.questionId ?? null; // journalled, so a replay knows the row too
-				return w;
-			});
-		},
-		// #1075: the answer is read from the question's ROW first, so it survives a runner restart.
-		takeoverStatus: () => runRetry(`hstatus-${round}-${n++}`, () => codingPauseStatus(env, conn, sessionId, parkedQuestionId)) as Promise<{ resolved: boolean; value?: string }>,
-		// #1076: a captured question parks at zero compute; only a run with a loop-run row can be woken.
-		park: event.payload.loopRunId
-			? {
-					begin: (_questionId, until, opts) =>
-						runRetry(`park-${round}`, async () => {
-							const runId = event.payload.loopRunId as string;
-							await recordParkedWorkflow(env, runId, event.instanceId ?? runId);
-							await recordLiveness(env, runId, Date.now(), { reason: "decision", until, ask: parkedAsk });
-							// The engine PROCESS stops; its session row and its resume key stay. Its last acts are drained like the terminal path's.
-							const ended = await callRunner<{ acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
-							await recordEngineActs(env, { userId, sessionId, instanceId, traceId: runId, cardId: traceCtx.cardId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
-							// #1242: where this park's work is — it resumes on that machine and nowhere else.
-							await recordParkMachine(env, { runId, instanceId, userId, sessionId, repoId }, conn);
-							if (opts?.keepCheckout) return { announce: "Its checkout and working tree stay exactly as they are while it waits for you.", released: false }; // #1236
-							// #1077: let go of the checkout (its work set aside first), so queued work runs while this waits.
-							const r = await releaseCheckout(env, conn, { runId, instanceId, userId, sessionId, repoId });
-							return { announce: r.line, onStop: r.onStop, released: r.released };
-						}).then(async (r) => {
-							const p = r as { announce?: string; onStop?: string; released?: boolean };
-							if (p.released) await runRetry(`park-drain-${round}`, async () => {
-								await tryDequeueAndStart(env, instanceId, repoId, userId);
-								return null;
-							});
-							return p;
-						}),
-					wait: (questionId, k, timeoutMs) => step.waitForEvent(`answer-${round}-${k}`, { type: answerEventType(questionId), timeout: timeoutMs }).then(() => true, () => false),
-					resumeEngine: async (parkedForMs) => {
-						// #1076–#1078, in order: take the checkout back, relaunch, re-sync onto upstream, put the work back (`resumeFromPark`).
-						const r = (await runRetry(`unpark-${round}-${unparks++}`, () =>
-							resumeFromPark(env, conn, { runId: event.payload.loopRunId as string, instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: event.payload.driverId ?? undefined, parkedForMs }),
-						)) as { resumed: boolean; line: string; moved: string | null; node?: string | null } | { busy: string } | { blocked: string };
-						if (!("line" in r)) return r;
-						// #1242: it resumed on the machine it parked on, which may not be the one this Workflow re-resolved on waking.
-						if (r.node && normalizeRunnerNode(r.node) !== normalizeRunnerNode(conn.runnerNode)) conn = (await getRunnerConnIgnoringLiveness(env, instanceId, userId, r.node).catch(() => null)) ?? conn;
-						await recordLiveness(env, event.payload.loopRunId as string, Date.now(), null).catch(() => undefined); // no longer parked, from this instant
-						if (!r.resumed) objective?.replaced(); // a fresh engine has read nothing: the objective is owed to it again (#1019)
-						return { line: r.line, moved: r.moved };
-					},
-				}
-			: undefined,
-		applied: async () => void (parkedQuestionId && (await runRetry(`applied-${round}`, () => markAnswerApplied(env, parkedQuestionId as string, event.payload.loopRunId ?? null)))),
-		endTakeover: () => runRetry(`resume-${round}`, () => callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {})).then(() => undefined),
-		reauthCompletedSince: (since) => reauthCompletedSince(env, instanceId, userId, since),
-		// An ended-and-started engine has read nothing its predecessor read: the objective is owed to it again (#1019).
-		restartEngine: () => runRetry(`reauth-end-${round}`, () => callRunner(conn, "/coding/end", { sessionId })).then(() => {
-				objective?.replaced();
-				return runRetry(`reauth-start-${round}`, () => startOnRunner());
-			}).then(() => undefined),
-		sleep: (label, ms) => step.sleep(label, ms),
-		notify: (title, body, key, alert, url, type) =>
-			runRetry(`notify-${key}-${round}`, async () => {
-				const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined, instanceId };
-				return await notifyUser(env, userId, type ?? "coding", title, body, url ?? deepLinkFor({ kind: "coding-session", instanceId, sessionId }), opts).then(() => null, () => null);
-			}).then(() => undefined),
-		announce: postToChat,
-		// The board, which is where the owner would look for "does anything want me?" (#553).
-		// Best-effort like every other card write: losing a card is a visibility bug, failing the
-		// handoff is a work bug. Not a `step.do` — an idempotent patch is cheaper to repeat than
-		// to journal, and a replay re-running it lands the same row.
-		card: (status) => setCodingSessionCardStatus(env, instanceId, userId, sessionId, status).catch(() => undefined),
-		// Outside `step.do`, like the runner guard's own tick: idempotent writes whose only job is to be
-		// recent. This called `recordIteration`, whose one statement wrote `last_progress_at` too —
-		// so a parked run's PROGRESS timestamp advanced every five minutes while the run sat on
-		// iteration 1 for hours (#580). The heartbeat was never wrong to exist: `sweepStaleRuns`
-		// closes a run at 3h and a usage-limit park may legitimately last six. It was writing the
-		// wrong column, and 0127 gives it its own — plus the reason, so the record can finally say
-		// "parked until X" instead of leaving a reader to infer work from a fresh number.
-		tick: async (park) => {
-			const { driverId, loopRunId } = event.payload;
-			if (driverId) await touchSessionDriver(env, instanceId, userId, sessionId, driverId).catch(() => undefined);
-			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
-			if (!loopRunId) return true;
-			await recordLiveness(env, loopRunId, Date.now(), { reason: wait, until: park?.until ?? null, ask: wait === "decision" ? parkedAsk : null }).catch(() => undefined);
-			return !(await isCancelRequested(env, loopRunId).catch(() => false));
-		},
+		nextN: () => n++,
+		startOnRunner,
+		getObjective: () => objective,
 	});
+	const pauseDeps = pauseEffects.deps;
 
 	/**
 	 * An interruption is resumed HERE, by the workflow (#855) — see `lib/coding-interrupt.ts` for why a
@@ -959,7 +666,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// Ensure the session is up and the CLI launched (clones the repo if the runner doesn't
 		// already have this session, e.g. after a runner restart). Guarded like every other
 		// runner call: a run queued while the machine was rebooting used to die here too.
-		await guard(runWith(startRetry), "start", startOnRunner);
+		await guard(runWith(START_RETRY), "start", startOnRunner);
 		// What state did the last run leave this checkout in? (#276)
 		//
 		// Delegated runs park repos wherever they stopped — one live Lead had a subordinate
@@ -1166,7 +873,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// A `stuck` asks a question too (#1234): a `human` park carried no ask — the blank question nobody could answer.
 			// A provider failing transiently is not the CLI's usage limit (#1344): it is an interruption with a retry scheduled.
 			const parkReason: RunWaitReason = result.outcome === "waiting" ? (result.waitKind === "transient" ? "platform_interrupt" : "engine_limit") : result.outcome === "needs_reauth" ? "engine_auth" : "decision";
-			parkedAsk = null;
+			pauseEffects.clearAsk();
 			// A new provider outage gets the whole short ladder again once the engine has worked since the last one (#1362).
 			// Both facts come from journalled snapshots, so a replay resets it identically.
 			if (result.outcome === "waiting" && result.waitKind === "transient") {
