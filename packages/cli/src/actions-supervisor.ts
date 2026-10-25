@@ -52,6 +52,16 @@ export function readSupervisorConfig(dir: string): SupervisorConfig | null {
   const data = readJson(supervisorPaths(dir).config) as Partial<SupervisorConfig> | null;
   return data?.version === 1 && typeof data.acRecoveryEnabled === "boolean" ? data as SupervisorConfig : null;
 }
+/** The local copy is the supervisor's source of truth; the loop re-reads it every cycle. */
+export function setSupervisorAcRecovery(dir: string, enabled: boolean): SupervisorConfig {
+  validDir(dir);
+  const config = readSupervisorConfig(dir);
+  if (!config) throw new Error("runner has no valid PAGS supervisor configuration");
+  const next: SupervisorConfig = { ...config, acRecoveryEnabled: enabled };
+  writeJson(supervisorPaths(dir).config, next);
+  return next;
+}
+
 export function readSupervisorStatus(dir: string): SupervisorStatus | null {
   const data = readJson(supervisorPaths(dir).status) as Partial<SupervisorStatus> | null;
   return data?.version === 1 && data.runnerDir === dir && typeof data.updatedAt === "number" ? data as SupervisorStatus : null;
