@@ -181,6 +181,13 @@ export interface PauseDeps {
 	tick: (park?: { until?: number | null }) => Promise<boolean>;
 	now: () => number;
 	/**
+	 * The current instant, JOURNALLED under `label` (#1362): the same value on every replay. A park plans its length from
+	 * the clock, and the workflow replays its body after every `step.sleep` — planned against a live `now()`, each replay
+	 * planned again later, and a reset the CLI printed as a clock time ("try again at 4:12 PM") read as tomorrow after the
+	 * last sleep and was refused, ending the run as the limit lifted. Optional for callers with no journal (tests).
+	 */
+	stamp?: (label: string) => Promise<number>;
+	/**
 	 * #1236: the round's step cap and the account's ceiling, for a run that reaches its cap. The owner is
 	 * asked to approve more iterations (the cap again, at most the ceiling) instead of the run failing.
 	 */
@@ -513,7 +520,8 @@ async function waitForEngineReset(
 	// A provider failing transiently parks on its own short ladder and never spends the usage-limit budget (#1344). Out of
 	// waits it ends as a continuable engine error saying so — not as "the CLI's usage limit", which it never was.
 	const transient = result.waitKind === "transient";
-	const plan = transient ? planTransientWait(state, deps.now()) : planEngineWait({ resetsAt: result.waitUntil, resetHint: result.resetHint, now: deps.now(), state, timeZone: deps.timeZone });
+	const now = deps.stamp ? await deps.stamp(`ewait-${round}-at`) : deps.now();
+	const plan = transient ? planTransientWait(state, now) : planEngineWait({ resetsAt: result.waitUntil, resetHint: result.resetHint, now, state, timeZone: deps.timeZone });
 	if (!plan.wait) {
 		if (transient) return { resume: false, result: { ...result, outcome: "engine_error", detail: `The coding CLI's AI provider kept failing and ${plan.why}. ${result.detail ?? ""}`.trim() } };
 		return { resume: false, result: { ...result, detail: engineWaitExhausted(result.detail, plan.why) } };

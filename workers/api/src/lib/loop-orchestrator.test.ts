@@ -7,7 +7,7 @@ vi.mock("./user-ai.js", async (importOriginal) => ({
 	runUserWorkersAi: (...a: unknown[]) => runUserWorkersAi(...a),
 }));
 
-import { nextStep, readAgentReply } from "./agent-loop.js";
+import { nextStep, readAgentReply, statusFor } from "./agent-loop.js";
 import { buildLoopUserContent, runLoopDecide, settledDecision } from "./loop-orchestrator.js";
 import { UserAiCredentialsError } from "./user-ai.js";
 import type { Env } from "../types.js";
@@ -64,6 +64,11 @@ describe("settledDecision — the one outcome the transcript already decides (#7
 		expect(settledDecision({ messages: failedTurn(BAD_KEY) })?.reason).toContain("the AI provider refused the key");
 	});
 
+	it("carries the provider stop reason, so the run is filed where auto-resume and Continue find it (#1362)", () => {
+		expect(settledDecision({ messages: failedTurn(CREDIT) })).toMatchObject({ decision: "escalate", stopReason: "provider_credit" });
+		expect(settledDecision({ messages: failedTurn(BAD_KEY) })).toMatchObject({ decision: "escalate", stopReason: "provider_credentials" });
+	});
+
 	it.each([
 		// A transport drop is retryable: the next act may well succeed, so the orchestrator decides.
 		["a provider stall", "Anthropic: the model stopped sending mid-reply"],
@@ -96,7 +101,9 @@ describe("settledDecision — the one outcome the transcript already decides (#7
 		if (!settled) throw new Error("expected a settled decision");
 		const verdict = nextStep({ iteration: 1, maxIterations: 10, recentInstructions: [] }, settled, failedTurn(CREDIT)[1].content);
 		expect(verdict.continue).toBe(false);
-		expect(verdict.stopReason).toBe("escalated");
+		// Its own reason since #1362 — it was `escalated`, which nothing continues — and still the needs-you column.
+		expect(verdict.stopReason).toBe("provider_credit");
+		expect(statusFor(verdict.stopReason as "provider_credit")).toBe("needs_human");
 	});
 });
 

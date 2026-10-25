@@ -795,6 +795,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		taskId: event.payload.boardTaskId,
 		sessionId,
 		now: () => Date.now(),
+		// Journalled (#1362): a park's plan must be the same plan on every replay — see `PauseDeps.stamp`.
+		stamp: (label) => runRetry(label, async () => Date.now()) as Promise<number>,
 		takeover: (label, reason) => {
 			parkedQuestionId = null;
 			return runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined);
@@ -1151,6 +1153,12 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// A provider failing transiently is not the CLI's usage limit (#1344): it is an interruption with a retry scheduled.
 			const parkReason: RunWaitReason = result.outcome === "waiting" ? (result.waitKind === "transient" ? "platform_interrupt" : "engine_limit") : result.outcome === "needs_reauth" ? "engine_auth" : "decision";
 			parkedAsk = null;
+			// A new provider outage gets the whole short ladder again once the engine has worked since the last one (#1362).
+			// Both facts come from journalled snapshots, so a replay resets it identically.
+			if (result.outcome === "waiting" && result.waitKind === "transient") {
+				if (turnCarry.okTurnSeen) waitState.transientWaits = 0;
+				turnCarry.okTurnSeen = false;
+			}
 			const pause = await resolvePause({ ...pauseDeps(round, parkReason), iterations: { cap: grantedSteps ?? stepCap, ceiling: stepCeiling } }, { round, result, state: waitState });
 			if (!pause.resume) {
 				result = pause.result;

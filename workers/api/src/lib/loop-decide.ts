@@ -12,6 +12,11 @@ export interface LoopDecisionResult {
 	decision: LoopDecision;
 	nextInstruction: string;
 	reason: string;
+	/**
+	 * On an `escalate` the platform settled without asking the model because the agent's AI provider refused its turn
+	 * (#1362): the stop reason to file instead of `escalated`, so the run lands where auto-resume and Continue look.
+	 */
+	stopReason?: "provider_credit" | "provider_credentials";
 }
 
 const VALID = new Set<LoopDecision>(["continue", "done", "escalate", "failed"]);

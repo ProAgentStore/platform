@@ -128,7 +128,7 @@ export function providerBillingDetail(e: EngineProviderError, repo: string): str
 	return `The coding CLI in ${repo} stopped because its AI provider account has no credit or quota left (${e.provider}): "${e.evidence}". This is the account the CLI is signed in with on the machine, not your PAGS API key. Top it up or switch plans at the provider, then continue the run. Waiting or retrying will not change it.`;
 }
 
-const UNIT_MS: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1_000 };
+const UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000 };
 
 /**
  * When the limit lifts, as the CLI printed it (#1344) — a hint the planner places in time, or null. Read without a clock
@@ -137,13 +137,16 @@ const UNIT_MS: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1_000 };
  */
 export function resetHintFromLine(line: string): ResetHint | null {
 	// Units as words ("2 hours") or single letters, which may run straight into the next number ("3h12m").
-	const rel = /\b(?:in|after)\s+((?:\d+\s*(?:(?:hours?|hrs?|minutes?|mins?|seconds?|secs?)\b|[hms](?=\d|\b))\s*(?:and\s*)?)+)/i.exec(line);
+	// Days count too (#1362): Codex's weekly limit prints "try again in 2 days 3 hours", which is beyond any run's wait.
+	const rel = /\b(?:in|after)\s+((?:\d+\s*(?:(?:days?|hours?|hrs?|minutes?|mins?|seconds?|secs?)\b|[dhms](?=\d|\b))\s*(?:and\s*|,\s*)?)+)/i.exec(line);
 	if (rel) {
 		let ms = 0;
-		for (const [, n, unit] of rel[1].matchAll(/(\d+)\s*([hms])/gi)) ms += Number(n) * UNIT_MS[unit.toLowerCase()];
+		for (const [, n, unit] of rel[1].matchAll(/(\d+)\s*([dhms])/gi)) ms += Number(n) * UNIT_MS[unit.toLowerCase()];
 		if (ms > 0) return { inMs: ms };
 	}
-	if (/\bresets?\s+(?:on\s+)?(?:mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i.test(line)) return { far: true };
+	// A named day or month only when a date or time follows it (#1362): "resets Aug 17", "resets Mon 9am" — never
+	// "resets monthly" or "resets may vary".
+	if (/\bresets?\s+(?:on\s+)?(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+\d|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d)/i.test(line)) return { far: true };
 	const clock = /\b(?:resets?|try again)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([A-Za-z]+\/[A-Za-z_/]+)\))?/i.exec(line);
 	if (clock) {
 		const h12 = Number(clock[1]) % 12;

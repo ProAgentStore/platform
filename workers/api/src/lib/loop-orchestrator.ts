@@ -114,6 +114,9 @@ export function settledDecision(input: Pick<LoopDecideInput, "messages">): LoopD
 		decision: "escalate",
 		nextInstruction: "",
 		reason: `The agent's AI provider refused its turn — ${DRIVER_RESUME_POLICY[cls].why}. Every further step would fail the same way, so the loop stopped without asking the orchestrator. (${failure.slice(0, 200)})`,
+		// Filed under its own reason (#1362): as `escalated` it was never auto-continued, and Continue answered "answered
+		// through its own handoff" — a chat loop has none — although the sentence above promises the platform continues it.
+		stopReason: cls,
 	};
 }
 

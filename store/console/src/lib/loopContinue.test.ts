@@ -163,3 +163,15 @@ describe("the run-history badge says how a run ENDED, from its stop reason (#101
 		expect(endingLabel({ stopReason: "some_future_reason", status: "failed" })).toBe("failed");
 	});
 });
+
+describe("Continue on an escalated run whose work is parked (#1362)", () => {
+	it("is offered when the run parked a snapshot — the server continues exactly that case (#1242)", () => {
+		expect(canContinueRun({ status: "needs_human", stopReason: "escalated", parked: { snapshot: "7cf5861" } })).toBe(true);
+	});
+
+	it("is not offered on an ordinary escalation, or a park with nothing set aside", () => {
+		expect(canContinueRun({ status: "needs_human", stopReason: "escalated" })).toBe(false);
+		expect(canContinueRun({ status: "needs_human", stopReason: "escalated", parked: { snapshot: null } })).toBe(false);
+		expect(canContinueRun({ status: "running", stopReason: "escalated", parked: { snapshot: "7cf5861" } })).toBe(false);
+	});
+});

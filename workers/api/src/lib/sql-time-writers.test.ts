@@ -315,6 +315,8 @@ describe("the writer census", () => {
 			[...new Set(found.map((f) => f.file))].sort(),
 			"a new writer of instance_runtime_tasks.updated_at — add it to the executable cases above, then update this list",
 		).toEqual([
+			// #1362: the chat loop's escalation card, moved out of workflows/agent-loop.ts unchanged (`datetime('now')`).
+			"lib/chat-loop-settle.ts",
 			"lib/loop-drivers.ts",
 			// #864: settles a ticket-queue run's `ticket.run` row when the run ends. Driven above.
 			"lib/run-events.ts",
@@ -323,7 +325,6 @@ describe("the writer census", () => {
 			"routes/instances-browse.ts",
 			"routes/instances-runtime.ts",
 			"routes/instances-tasks.ts",
-			"workflows/agent-loop.ts",
 			"workflows/job-apply.ts",
 		]);
 		expect(found).toHaveLength(13);

@@ -265,3 +265,35 @@ describe("runCodingLoop hands the planner what it needs, and keeps the streak ac
 		expect(await rounds(() => ({ turns: EMPTY_STREAK, transientStreak: 0 }))).toBe(2);
 	});
 });
+
+describe("reset times at the edges (#1362)", () => {
+	it("a clock reset just passed is today's — the planner's stale-deadline short wait, never ~24h out and refused", () => {
+		const now = Date.parse("2026-10-25T05:12:20Z"); // 16:12:20 in Melbourne (AEDT)
+		const at = resetInstantFromHint({ clock: { hour: 16, minute: 12 }, zone: "Australia/Melbourne" }, now);
+		expect(at).toBe(Date.parse("2026-10-25T05:12:00Z"));
+		expect(planEngineWait({ resetHint: { clock: { hour: 16, minute: 12 }, zone: "Australia/Melbourne" }, now, state: { waits: 0, spentMs: 0 } })).toMatchObject({ wait: true, source: "stale-deadline" });
+		// More than the grace window behind: tomorrow's.
+		expect(resetInstantFromHint({ clock: { hour: 9, minute: 0 }, zone: "Australia/Melbourne" }, now)).toBe(Date.parse("2026-10-25T22:00:00Z"));
+	});
+
+	it("places a reset across a daylight-saving change with the offset at the reset, not at now", () => {
+		// Melbourne moves to AEDT at 02:00 on 2026-10-04. At 01:00 AEST "resets 5am" is 5am AEDT = 18:00Z.
+		const now = Date.parse("2026-10-03T15:00:00Z");
+		expect(resetInstantFromHint({ clock: { hour: 5, minute: 0 }, zone: "Australia/Melbourne" }, now)).toBe(Date.parse("2026-10-03T18:00:00Z"));
+		// …and back: Melbourne returns to AEST at 03:00 on 2027-04-04. At 01:00 AEDT "resets 5am" is 5am AEST = 19:00Z.
+		const back = Date.parse("2027-04-03T14:00:00Z");
+		expect(resetInstantFromHint({ clock: { hour: 5, minute: 0 }, zone: "Australia/Melbourne" }, back)).toBe(Date.parse("2027-04-03T19:00:00Z"));
+	});
+
+	it("reads days, and a named day only before a date or time", () => {
+		expect(resetHintFromLine("You've hit your usage limit. Try again in 2 days 3 hours 10 minutes.")).toEqual({ inMs: 2 * 86_400_000 + 3 * 3_600_000 + 10 * 60_000 });
+		expect(resetHintFromLine("Try again in 1 day.")).toEqual({ inMs: 86_400_000 });
+		expect(planEngineWait({ resetHint: { inMs: 2 * 86_400_000 }, now: 0, state: { waits: 0, spentMs: 0 } })).toMatchObject({ wait: false });
+		expect(resetHintFromLine("Your quota resets monthly.")).toBeNull();
+		expect(resetHintFromLine("The allowance resets may vary by plan.")).toBeNull();
+		expect(resetHintFromLine("in 5 steps")).toBeNull();
+		expect(resetHintFromLine("in 3 dogs")).toBeNull();
+		expect(resetHintFromLine("You've hit your weekly limit · resets Aug 17 at 4pm")).toEqual({ far: true });
+		expect(resetHintFromLine("You hit your weekly limit · resets Mon 9am")).toEqual({ far: true });
+	});
+});

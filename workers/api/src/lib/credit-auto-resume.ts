@@ -34,7 +34,8 @@ import { getLoopRun, type LoopRunView } from "./agent-loop-store.js";
 import { startRefusalIsWaitable } from "./loop-drivers.js";
 import { readProviderAccountHealth } from "./provider-account-health.js";
 import { providerCredentialId, selectedProviderAccount, type HeldProvider } from "./provider-account-hold.js";
-import { getUserCloudflareAiCredentials, getUserProviderKey, runUserWorkersAi } from "./user-ai.js";
+import { runUserWorkersAi } from "./user-ai.js";
+import { decryptKey } from "./crypto.js";
 import { pilotModelProblem } from "./pilot-model.js";
 import type { PilotModelId } from "./pilot-model-contract.js";
 import { readInstanceConfigPair } from "./instance-config.js";
@@ -112,6 +113,19 @@ async function keyRecoveredSince(env: Env, userId: string, instanceId: string, s
 	const label = hint?.key_hint ? `…${hint.key_hint}` : "the stored key";
 	// Either class: a run stopped on credit whose key was later refused (or the other way round) recovers when THIS key works.
 	if (hold) return hold.cleared_at !== null && hold.cleared_at >= stoppedAt ? { recovered: true, label, at: hold.cleared_at } : { recovered: false, label, at: null };
+	// No hold on THIS key, but a REFUSED-key hold on a different key of this provider from before the stop, and this key was
+	// stored after it: the owner replaced the refused key, as that notice asks (#1362). Only for a refusal — a credit
+	// stop's remedy is a top-up, and its run still waits for a key that has actually worked (#1318). A new key has nothing against it, so the
+	// stopped run continues; if the new key is refused too, that run stops on a hold of its own. Before this a replaced
+	// Cloudflare key never continued anything, and an Anthropic one waited for a real call to succeed first.
+	const replaced = await env.DB.prepare(
+		`SELECT k.created_at AS at FROM user_api_keys k
+		  WHERE k.user_id = ?1 AND k.provider = ?2
+		    AND EXISTS (SELECT 1 FROM provider_account_holds h WHERE h.user_id = ?1 AND h.provider = ?2 AND h.credential_id <> ?3
+		                AND h.failure_class = 'provider_credentials' AND h.failed_at <= ?4)`,
+	).bind(userId, account.provider, account.credentialId, stoppedAt).first<{ at: string }>().catch(() => null);
+	const replacedAt = replaced ? Date.parse(`${replaced.at.replace(" ", "T")}Z`) : Number.NaN;
+	if (Number.isFinite(replacedAt) && replacedAt > stoppedAt) return { recovered: true, label, at: replacedAt };
 	if (account.provider !== "anthropic") return { recovered: false, label, at: null };
 	// No hold row: the key failed before holds were recorded. The older record says whether it has succeeded since.
 	const health = await readProviderAccountHealth(env, userId).catch(() => null);
@@ -190,9 +204,19 @@ export async function resumeRecoveredCreditRuns(env: Env, deps: CreditResumeDeps
 }
 
 /** The fingerprint of the key stored for `provider` now, or null when none is. A probe always spends the CURRENT key. */
+/**
+ * The fingerprint of the key stored for `provider` now; null ONLY when no key is stored. A key that cannot be read (a D1
+ * or decryption error) THROWS, so a caller can tell "removed" from "unknown" (#1362) — reading an error as "replaced"
+ * retired a refused key's hold. The same row and decryption as `selectedProviderAccount`, so the fingerprints match.
+ */
 async function currentCredentialId(env: Env, userId: string, provider: HeldProvider): Promise<string | null> {
-	const credential = provider === "anthropic" ? await getUserProviderKey(env, userId, "anthropic") : await getUserCloudflareAiCredentials(env, userId).catch(() => null);
-	return credential ? providerCredentialId(provider, credential) : null;
+	const row = await env.DB.prepare("SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2")
+		.bind(userId, provider)
+		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+	if (!row) return null;
+	if (!env.KEY_ENCRYPTION_KEY) throw new Error("key encryption is not configured");
+	const credential = await decryptKey(new Uint8Array(row.key_ciphertext), new Uint8Array(row.dek_wrapped), new Uint8Array(row.iv), env.KEY_ENCRYPTION_KEY);
+	return providerCredentialId(provider, credential);
 }
 
 /** The model each held provider's probe names when the hold recorded none — the same pair `POST /v1/keys/:provider/verify` uses. */
@@ -240,7 +264,13 @@ export async function probeFailingKeys(env: Env, deps: CreditResumeDeps = {}): P
 	for (const h of results ?? []) {
 		// A hold on a key since replaced (or removed) is retired, not probed: the probe would spend the NEW key, pass, and
 		// leave the old row due again on the next tick — a real provider call every minute (review of #1326).
-		if ((await currentCredentialId(env, h.user_id, h.provider).catch(() => null)) !== h.credential_id) {
+		let current: string | null;
+		try {
+			current = await currentCredentialId(env, h.user_id, h.provider);
+		} catch {
+			continue; // could not tell (#1362): leave the hold as it is and look again on the next tick
+		}
+		if (current !== h.credential_id) {
 			await env.DB.prepare("UPDATE provider_account_holds SET cleared_at = ?4 WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3 AND cleared_at IS NULL").bind(h.user_id, h.provider, h.credential_id, now).run();
 			continue;
 		}

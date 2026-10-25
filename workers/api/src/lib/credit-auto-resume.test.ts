@@ -425,3 +425,45 @@ describe("observeProviderAccount keeps the episode's start and the refused model
 		expect(row()).toEqual({ f: 9_000, ff: 9_000, m: "claude-haiku-5-5" });
 	});
 });
+
+describe("a refused key the owner REPLACED continues the stopped run (#1362)", () => {
+	const sqlTime = (ms: number) => new Date(ms).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+
+	it("the stored key is newer than the stop and the refused one was a different key: the run continues", async () => {
+		await hold(OTHER_KEY, null, NOW - 5 * H, "provider_credentials"); // the refused key, still held
+		d1.exec(`UPDATE user_api_keys SET created_at = '${sqlTime(NOW - H)}' WHERE user_id = 'u1'`); // KEY stored after the stop
+		run("r1", { stop: "provider_credentials" });
+		expect((await resumeRecoveredCreditRuns(env, deps())).resumed).toBe(1);
+		expect(row("r1")).toMatchObject({ state: "resumed" });
+	});
+
+	it("…only for a REFUSED key: after a credit stop the remedy is a top-up, and the run waits for a key that worked (#1318)", async () => {
+		await hold(OTHER_KEY, null, NOW - 5 * H); // a credit hold on the old key
+		d1.exec(`UPDATE user_api_keys SET created_at = '${sqlTime(NOW - H)}' WHERE user_id = 'u1'`);
+		run("r1");
+		expect((await resumeRecoveredCreditRuns(env, deps())).resumed).toBe(0);
+	});
+
+	it("a key stored BEFORE the stop is the one that was refused: nothing continues until it works", async () => {
+		await hold(OTHER_KEY, null, NOW - 5 * H, "provider_credentials");
+		d1.exec(`UPDATE user_api_keys SET created_at = '${sqlTime(NOW - 9 * H)}' WHERE user_id = 'u1'`);
+		run("r1", { stop: "provider_credentials" });
+		expect((await resumeRecoveredCreditRuns(env, deps())).resumed).toBe(0);
+	});
+
+	it("a key that cannot be READ is unknown — its hold is left alone, never retired as if replaced", async () => {
+		await hold(KEY, null, NOW - H, "provider_credentials");
+		const unreadable = { DB: d1.DB } as unknown as Env; // no key-encryption key: the stored key cannot be decrypted
+		let calls = 0;
+		expect((await probeFailingKeys(unreadable, { now: () => NOW, probe: async () => { calls++; return true; } })).probed).toBe(0);
+		expect(calls).toBe(0);
+		expect(d1.sqlite.prepare("SELECT cleared_at AS c FROM provider_account_holds").get()).toEqual({ c: null });
+	});
+
+	it("a key that was REMOVED is a definite answer: its hold is retired", async () => {
+		await hold(KEY, null, NOW - H, "provider_credentials");
+		d1.exec("DELETE FROM user_api_keys WHERE user_id = 'u1'");
+		await probeFailingKeys(env, { now: () => NOW, probe: async () => true });
+		expect(d1.sqlite.prepare("SELECT cleared_at AS c FROM provider_account_holds").get()).toEqual({ c: NOW });
+	});
+});

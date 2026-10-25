@@ -158,6 +158,9 @@ function zoneOffsetMs(at: number, zone: string): number {
 	return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - Math.floor(at / 1000) * 1000;
 }
 
+/** How far behind a printed clock reset may be and still be today's — past it, the reset is tomorrow's (#1362). */
+export const RESET_GRACE_MS = 60 * 60_000;
+
 /** The hint as an instant, or null when it cannot be placed (a clock time with no zone known, an unknown zone). */
 export function resetInstantFromHint(hint: ResetHint | undefined, now: number, ownerZone?: string): number | null {
 	if (!hint) return null;
@@ -166,15 +169,23 @@ export function resetInstantFromHint(hint: ResetHint | undefined, now: number, o
 	const zone = hint.zone ?? ownerZone;
 	if (!zone) return null;
 	try {
-		const offset = zoneOffsetMs(now, zone);
-		const wall = new Date(now + offset);
+		const wallNow = now + zoneOffsetMs(now, zone);
+		const wall = new Date(wallNow);
 		let target = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), hint.clock.hour, hint.clock.minute);
-		if (target <= now + offset) target += 24 * 60 * 60_000;
-		return target - offset;
+		// A clock time just passed is today's, not tomorrow's (#1362): the hint is to the minute and is read after the turn, so
+		// "resets 4:12 PM" read at 4:12:20 must reach the planner as a deadline in the past — its short stale-deadline wait —
+		// not as one ~24h out that it refuses. Only a time more than RESET_GRACE_MS behind is tomorrow's.
+		if (target <= wallNow - RESET_GRACE_MS) target += 24 * 60 * 60_000;
+		// The offset AT THE TARGET (#1362): across a daylight-saving change the offset at `now` is an hour off. Wall time →
+		// UTC by refining a guess against the zone's offset at the guess itself.
+		const guess = target - zoneOffsetMs(now, zone);
+		const refined = target - zoneOffsetMs(guess, zone);
+		return target - zoneOffsetMs(refined, zone);
 	} catch {
 		return null;
 	}
 }
+
 
 /** Parks for a provider failing transiently (#1344): short, because an overloaded provider recovers in minutes, not hours. */
 export const TRANSIENT_WAIT_MS = [2 * 60_000, 5 * 60_000, 15 * 60_000] as const;

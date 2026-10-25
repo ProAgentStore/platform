@@ -595,3 +595,30 @@ describe("resolvePause — a provider failing transiently is not the CLI's usage
 		expect(state.spentMs).toBe(90 * 60_000);
 	});
 });
+
+describe("resolvePause plans a park against a JOURNALLED instant, so every replay plans the same park (#1362)", () => {
+	it("a clock reset is still a wait after the replay that follows the last sleep — not a refusal", async () => {
+		// The workflow replays its body after every step.sleep. With a live clock the replay after the last sleep read
+		// "try again at 4:12 PM" at ~4:12:02, placed it tomorrow, and refused — ending the run as the limit lifted.
+		const T0 = Date.parse("2026-10-25T04:00:00Z"); // 15:00 in Melbourne
+		const result: CodingResult = { outcome: "waiting", waitKind: "limit", resetHint: { clock: { hour: 16, minute: 12 }, zone: "Australia/Melbourne" }, detail: "limit", steps: 0 };
+		const journal = new Map<string, number>();
+		const stamped = (live: number) => {
+			const s = spy();
+			s.deps.now = () => live;
+			s.deps.stamp = async (label) => {
+				if (!journal.has(label)) journal.set(label, live);
+				return journal.get(label) as number;
+			};
+			return s;
+		};
+		const first = stamped(T0);
+		const v1 = await resolvePause(first.deps, { round: 0, result, state: { waits: 0, spentMs: 0 } });
+		expect(v1.resume).toBe(true);
+		// The replay, after the 72-minute park: the live clock is past the reset, the journalled one is not.
+		const replay = stamped(T0 + 72 * 60_000 + 2_000);
+		const v2 = await resolvePause(replay.deps, { round: 0, result, state: { waits: 0, spentMs: 0 } });
+		expect(v2.resume).toBe(true);
+		expect(replay.slept).toEqual(first.slept);
+	});
+});

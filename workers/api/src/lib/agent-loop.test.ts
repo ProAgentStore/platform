@@ -76,6 +76,12 @@ describe("isStuck", () => {
 });
 
 describe("nextStep", () => {
+	it("an escalate the platform settled on a provider refusal is filed under that provider reason, not `escalated` (#1362)", () => {
+		expect(nextStep(state(), { ...dec("escalate", "", "the provider refused the key"), stopReason: "provider_credentials" })).toMatchObject({ continue: false, stopReason: "provider_credentials" });
+		expect(nextStep(state(), { ...dec("escalate", "", "no credit"), stopReason: "provider_credit" })).toMatchObject({ continue: false, stopReason: "provider_credit" });
+		expect(nextStep(state(), dec("escalate", "", "which branch?"))).toMatchObject({ continue: false, stopReason: "escalated" });
+	});
+
 	it("continues with the model's next instruction", () => {
 		const v = nextStep(state(), dec("continue", "run the tests"));
 		expect(v).toMatchObject({ continue: true, nextInstruction: "run the tests" });

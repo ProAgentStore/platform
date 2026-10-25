@@ -137,14 +137,14 @@ export function isCapabilityBlocked(recentErrorClasses: ReadonlyArray<string | n
  */
 export function nextStep(
 	state: LoopState,
-	decision: { decision: LoopDecision; nextInstruction: string; reason: string },
+	decision: { decision: LoopDecision; nextInstruction: string; reason: string; stopReason?: "provider_credit" | "provider_credentials" },
 	agentReply?: string,
 ): LoopVerdict {
 	if (decision.decision === "done") {
 		return { continue: false, stopReason: "done", message: decision.reason || "Objective met." };
 	}
 	if (decision.decision === "escalate") {
-		return { continue: false, stopReason: "escalated", message: decision.reason || "The agent needs your input." };
+		return { continue: false, stopReason: decision.stopReason ?? "escalated", message: decision.reason || "The agent needs your input." };
 	}
 	if (decision.decision === "failed") {
 		return { continue: false, stopReason: "failed", message: decision.reason || "The agent reported a failure." };

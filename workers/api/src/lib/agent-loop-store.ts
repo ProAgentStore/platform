@@ -705,9 +705,11 @@ export type FinishOutcome = "applied" | "already" | "superseded" | "missing";
 /**
  * Close a run out. `stopReason` carries WHY; `status` is derived so the two cannot disagree.
  *
- * MONOTONIC (#1015). A late write replaces only a `running` row, or a close the PLATFORM inferred
- * (`interrupted` — the sweeper's or `retireDisplacedRuns`' guess that the run had died, which the
- * run's own outcome is allowed to correct; `run-sweeper.ts` states that rule). A settled
+ * MONOTONIC (#1015). A late write replaces only a `running` row, or a close the PLATFORM inferred —
+ * `interrupted` (the park sweep's or `retireDisplacedRuns`' guess that the run had died) or the stale sweep's
+ * `failed` (#1362: identified by its `run.stalled` event, which only a platform close of a RUNNING row writes).
+ * The run's own outcome is allowed to correct either; `run-sweeper.ts` states that rule, and before #1362 a run
+ * the 3h sweep had closed could never record what it actually did — a credit stop never reached auto-resume. A settled
  * cancellation is never overwritten: a workflow that finished after the owner's stop had already
  * been recorded used to rewrite `cancelled` to `completed` and re-announce the end.
  */
@@ -721,7 +723,12 @@ export async function finishLoopRun(
 	const res = await env.DB.prepare(
 		`UPDATE agent_loop_runs
 		    SET status = ?2, stop_reason = ?3, detail = ?4, finished_at = ?5
-		  WHERE run_id = ?1 AND (status = 'running' OR (status <> 'cancelled' AND stop_reason = 'interrupted' AND ?3 <> 'interrupted'))`,
+		  WHERE run_id = ?1 AND (
+		    status = 'running'
+		    OR (status <> 'cancelled' AND stop_reason = 'interrupted' AND ?3 <> 'interrupted')
+		    OR (status = 'failed' AND stop_reason = 'failed' AND ?3 <> 'failed'
+		        AND EXISTS (SELECT 1 FROM run_events WHERE run_id = ?1 AND event_type = 'run.stalled'))
+		  )`,
 	)
 		.bind(runId, statusFor(stopReason), stopReason, clipMarked(detail, 2000), finishedAt) // marked, never silent (#898)
 		.run();

@@ -13,20 +13,17 @@
 // the pure policy in lib/agent-loop.ts.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { nextStep, instructionKey, needsHuman, readAgentReply, replyErrorClass, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
-import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness } from "../lib/agent-loop-store.js";
+import { nextStep, instructionKey, readAgentReply, replyErrorClass, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
+import { isCancelRequested, recordIteration, recordLiveness } from "../lib/agent-loop-store.js";
 import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import { classifyCodingFailure, driverResumePlan, MAX_PLATFORM_RESUMES } from "../lib/coding-failure.js";
 import { interruptedBy } from "../lib/coding-run-report.js";
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
-import { deepLinkFor } from "../lib/console-links.js";
 import { logEvent } from "../lib/events.js";
 import { logError } from "../lib/error-log.js";
-import { escalationNote, escalationTarget } from "../lib/escalation.js";
-import { loadGraph } from "../lib/supervision.js";
-import { notifyUser } from "../routes/push.js";
+import { settleChatLoopRun } from "../lib/chat-loop-settle.js";
 import type { Env } from "../types.js";
 
 export interface AgentLoopParams {
@@ -285,102 +282,8 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 			}
 		}
 
-		await step.do("finish", async () => {
-			const now = Date.now();
-			await finishLoopRun(this.env, runId, stop.reason, stop.message, now);
-			await logEvent(this.env, {
-				source: "loop",
-				event: stop.reason,
-				message: `Loop ${stop.reason}: ${stop.message}`.slice(0, 500),
-				userId,
-				instanceId,
-				traceId: runId,
-				level: needsHuman(stop.reason) ? "warn" : "info",
-			}).catch(() => undefined);
-			// #157: climb the ladder before waking anyone. Three subordinates under one Lead means
-			// three pings to the same person otherwise, each missing the context the Lead has —
-			// a hierarchy that amplifies interrupts instead of absorbing them.
-			if (needsHuman(stop.reason)) {
-				const graph = await loadGraph(this.env, userId).catch(() => []);
-				const target = escalationTarget(graph, instanceId, 0);
-				if (target.kind === "supervisor") {
-					const note = escalationNote({
-						subordinateName: instanceId,
-						objective,
-						reason: stop.reason,
-						detail: stop.message,
-					});
-					// Told, not triggered: a board card the supervisor can see plus a note in its
-					// thread. Auto-resolution would start spending unprompted and is a bigger
-					// decision than routing an interrupt.
-					// The card IS the escalation. Swallowing this INSERT and returning anyway meant a
-					// run that needed a human ended with NOBODY told — no supervisor card, and the
-					// `notifyUser` fallback below skipped by the early return. Silence is the one
-					// outcome #157 must never produce, so a failed card falls through to waking the
-					// human instead of pretending the ladder was climbed.
-					const escalated = await this.env.DB.prepare(
-						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
-						 VALUES (?1, ?2, ?3, 'escalation', 'needs_human', ?4, datetime('now'), datetime('now'))`,
-					)
-						.bind(
-							`esc-${runId}`,
-							target.instanceId,
-							userId,
-							JSON.stringify({
-								id: `esc-${runId}`,
-								type: "escalation",
-								status: "needs_human",
-								title: `A supervised agent needs a decision`,
-								reasoning: note,
-								createdAt: new Date().toISOString(),
-								updatedAt: new Date().toISOString(),
-							}),
-						)
-						.run()
-						.then(
-							() => true,
-							async (e: unknown) => {
-								await logError(this.env, {
-									source: "loop",
-									userId,
-									message: `escalation card for ${instanceId} → ${target.instanceId} could not be written; waking the human instead: ${e instanceof Error ? e.message : String(e)}`,
-									context: { instanceId, supervisorId: target.instanceId, runId },
-								}).catch(() => undefined);
-								return false;
-							},
-						);
-					if (escalated) {
-						await logEvent(this.env, {
-							source: "loop",
-							event: "escalated_to_supervisor",
-							message: `${instanceId} → ${target.instanceId} (hop ${target.hops})`,
-							userId,
-							instanceId: target.instanceId,
-							traceId: runId,
-							level: "warn",
-						}).catch(() => undefined);
-						return; // the human is NOT interrupted at this level
-					}
-				}
-			}
-			if (needsHuman(stop.reason)) {
-				// The Assistant, where the loop's own conversation is — and where a human answers it.
-				// This used to be `/console/#/instances/<id>`, a hash path on a BrowserRouter: the
-				// router never reads a fragment, so the tap opened the console and stopped at
-				// whatever screen the user had last (#344).
-				await notifyUser(
-					this.env,
-					userId,
-					"loop",
-					"Your agent needs you",
-					stop.message.slice(0, 200),
-					deepLinkFor({ kind: "assistant", instanceId }),
-					// One run stops once. `alert` because the run has STOPPED and only a human
-					// restarts it — never muted (#360).
-					{ key: `loop:${runId}:${stop.reason}`, kind: "alert", instanceId },
-				).catch(() => undefined);
-			}
-		});
+		// The terminal write, event, escalation and push — `settleChatLoopRun` (#1362), one durable step as before.
+		await step.do("finish", () => settleChatLoopRun(this.env, { runId, userId, instanceId, objective }, stop));
 
 		// Whatever was queued behind this run (#788), now that it has a terminal row.
 		//

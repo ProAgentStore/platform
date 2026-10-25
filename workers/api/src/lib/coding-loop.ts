@@ -307,6 +307,11 @@ export interface TurnCarry {
 	turns: TurnStreak;
 	/** Consecutive failed turns the engine's AI provider blamed on itself (#1326) — retried, not counted as strikes. */
 	transientStreak: number;
+	/**
+	 * A turn worked since the last transient park (#1362). The workflow resets the transient-wait ladder on it, so the
+	 * ladder bounds one outage: three short outages hours apart used to spend it, and the fourth ended the run.
+	 */
+	okTurnSeen?: boolean;
 }
 
 export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number; evidence?: CompletionEvidence; turnCarry?: TurnCarry } = {}): Promise<CodingResult> {
@@ -371,7 +376,10 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		// sightings of ONE turn, and counting sightings would trip the bound on a single failure.
 		const seen = observeTurn(carry.turns, snap.lastTurn);
 		// A NEW turn that worked ends a transient run of failures; a re-read of the same turn changes nothing.
-		if (seen.streak.lastAt !== carry.turns.lastAt && classifyTurn(snap.lastTurn) === "ok") carry.transientStreak = 0;
+		if (seen.streak.lastAt !== carry.turns.lastAt && classifyTurn(snap.lastTurn) === "ok") {
+			carry.transientStreak = 0;
+			carry.okTurnSeen = true;
+		}
 		carry.turns = seen.streak;
 		let retryingProvider = false;
 		if (seen.newFailure) {

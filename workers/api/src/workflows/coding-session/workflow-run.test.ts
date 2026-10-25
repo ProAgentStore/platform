@@ -1164,3 +1164,29 @@ describe("a run that ends with nothing queued wakes its coder's triage at once (
 		expect(rows("SELECT id FROM po_triage_reports")).toEqual([]);
 	});
 });
+
+describe("a transient provider outage gets the short wait ladder per OUTAGE, not per run (#1362)", () => {
+	it("four separate outages, each followed by a working turn, all wait and the run finishes", async () => {
+		// Each outage is two failed turns in a row (the first is a free retry, the second parks). A turn that works
+		// follows every outage. Before #1362 the third park spent the run's ladder and the fourth outage ended it.
+		const script: Array<"down" | "up"> = ["down", "down", "up", "down", "down", "up", "down", "down", "up", "down", "down", "up"];
+		let turn = 0;
+		let at = 1_000;
+		let lastTurn: Record<string, unknown> | undefined;
+		runner["/coding/act"] = () => {
+			const kind = script[turn++] ?? "up";
+			at += 1_000;
+			lastTurn = kind === "up" ? { verdict: "ok", exitCode: 0, signal: null, at } : { verdict: "failed", exitCode: 1, signal: null, at, detail: "API Error: 503 Service Unavailable", tail: ["API Error: 503 Service Unavailable"] };
+			return { ...IDLE, lastTurn };
+		};
+		runner["/coding/capture"] = () => ({ ...IDLE, ...(lastTurn ? { lastTurn } : {}) });
+		let n = 0;
+		decideCodingAction.mockImplementation(async () => (turn >= script.length ? { finish: { status: "done", detail: "all green" } } : { action: { kind: "message", text: `step ${++n}` } }));
+		seedLoopRun();
+		const { journal } = await run(params({ loopRunId: "run-1" } as Partial<CodingSessionParams>));
+		expect(loopRun().stop_reason).toBe("done");
+		// Four transient parks, each the FIRST rung (2 minutes): the ladder restarted after every working turn.
+		const parks = journal.sleeps.filter((s) => s.name.startsWith("ewait-"));
+		expect(parks.map((s) => s.ms)).toEqual([120_000, 120_000, 120_000, 120_000]);
+	});
+});

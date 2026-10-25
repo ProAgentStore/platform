@@ -25,6 +25,8 @@ export const CONTINUABLE_STOP_REASONS: readonly string[] = RESUMABLE_STOP_REASON
 export interface LoopRunContinueLike {
 	status: string;
 	stopReason?: string | null;
+	/** Where its parked work is (#1242) — only `snapshot` decides anything here. */
+	parked?: { snapshot: string | null } | null;
 }
 
 /**
@@ -35,7 +37,10 @@ export interface LoopRunContinueLike {
  */
 export function canContinueRun(run: LoopRunContinueLike | null | undefined): boolean {
 	if (!run || run.status === "running") return false;
-	return CONTINUABLE_STOP_REASONS.includes(run.stopReason ?? "");
+	if (CONTINUABLE_STOP_REASONS.includes(run.stopReason ?? "")) return true;
+	// The server's one exception (#1242, `continueRefusal`): a run that asked, was answered, and could not put its
+	// set-aside work back has no handoff left — Continue is the owner's only move, so the button must be offered (#1362).
+	return run.stopReason === "escalated" && Boolean(run.parked?.snapshot);
 }
 
 /**
