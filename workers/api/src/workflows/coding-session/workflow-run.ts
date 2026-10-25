@@ -21,7 +21,8 @@ import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
 import { ObjectiveDelivery, type ObjectiveDeliveryState } from "../../lib/coding-objective-delivery.js";
 import { sendAct } from "../../lib/coding-act-send.js";
 import { decideTurnRecovery, describeTurnRecovery, recoveryInstruction, turnRecoveryRecord, type InflightTurn } from "../../lib/coding-turn-recovery.js";
-import { activeConstraints, constraintLines, constraintSources } from "../../lib/coding-scope-constraints.js";
+import { activeConstraints, constraintLines, constraintSources, type ScopeConstraint } from "../../lib/coding-scope-constraints.js";
+import { refreshGoalConstraints } from "../../lib/coding-standing-constraints.js";
 import { postReleaseNotes } from "../../lib/release-notes.js";
 import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { markDirectivesProcessed } from "../../lib/coding-ownership.js";
@@ -655,6 +656,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// Every instruction carries its own id (#1019): deterministic per step, so a step retry or a
 			// guard re-attempt sends the SAME id, and a runner that already accepted it does not run it twice.
 			const withId: CodingActionKind = a.kind === "message" ? { ...a, inputId: a.inputId ?? `act:${runKey}:${label}` } : a;
+			// The constraints in force AT THE SEND (#1364), journalled like the decision's refresh (re-applied on replay): they were
+			// refreshed only when the run decided, so a send that followed a newer owner restriction — the one recovery turn above
+			// all, which goes to a replacement engine with the objective — stated "CONSTRAINTS IN FORCE NOW" without it.
+			const fresh = (await runRetry(`${label}-constraints`, async () => {
+				await refreshGoalConstraints(env, goal, { instanceId, userId, repoId, sessionId, runStartedAt });
+				return goal.scopeConstraints ?? null;
+			})) as ScopeConstraint[] | null;
+			if (fresh) goal.scopeConstraints = fresh;
 			// The constraints in force ride the objective WHOLE or nothing is sent; recomputed on replay, so it refuses again (#1019).
 			const lines = constraintLines(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)));
 			const block = objective?.blocks(lines);

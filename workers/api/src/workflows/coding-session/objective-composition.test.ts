@@ -61,6 +61,9 @@ rl.on("line", (line) => {
   if (m.type !== "user") return;
   const text = (m.message?.content || []).map((b) => b.text).join(" ");
   fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, text }) + "\\n");
+  // A turn that is READ and never answered (#1364): the kill then always lands before the turn's result, so the turn is
+  // LOST and the run sends its one recovery turn — the path that used to happen only when load delayed the result.
+  if (text.includes("HOLD-RESULT")) return;
   // An engine that cannot sign in says so and EXITS — the shape a lost login takes (#881).
   if (text.includes("NEEDS-LOGIN")) { process.stdout.write("Not logged in · Please run /login\\n", () => process.exit(1)); return; }
   process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "ok" }] } }) + "\\n");
@@ -101,7 +104,9 @@ const readBy = (m: Machine): Array<{ pid: number; text: string }> =>
 /** How many times ANY engine process on ANY machine read a turn carrying this (unique) instruction. */
 const executions = (text: string) => machines.flatMap(readBy).filter((t) => t.text.includes(text)).length;
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function until(cond: () => boolean, ms = 5_000) {
+// An upper bound on a real engine process starting or answering, never a deadline under test: 5s failed under full-suite
+// load (#1360) — `loseReplyOf` waited that long for a node process to read its first turn. Returns as soon as it holds.
+async function until(cond: () => boolean, ms = 30_000) {
 	const t0 = Date.now();
 	while (!cond() && Date.now() - t0 < ms) await wait(20);
 	if (!cond()) throw new Error("timed out");
@@ -457,6 +462,28 @@ describe("the objective envelope carries the precedence AND the constraints in f
 		// Objective first, its constraints beneath it, the Pilot's own instruction last.
 		expect(first.text.indexOf(OBJ)).toBeLessThan(first.text.search(/CONSTRAINTS IN FORCE NOW/));
 		expect(first.text.search(/CONSTRAINTS IN FORCE NOW/)).toBeLessThan(first.text.indexOf("summarise the export module"));
+	});
+
+	it("a restriction added since the last DECISION is in the RECOVERY turn the replacement engine reads (#1364)", async () => {
+		// The turn is read and never answered, so the kill lands before its result: the turn is lost and the run sends its
+		// one recovery turn to the replacement, with the objective. That envelope's constraints were the ones read at the
+		// last decision — before this restriction — though it says "CONSTRAINTS IN FORCE NOW".
+		loseReplyOf(1, (m) => {
+			d1.exec(`INSERT INTO coding_session_directives (id, session_id, instance_id, user_id, repo_id, run_id, kind, delivery, content, created_at)
+			  VALUES ('dir-rec', 's1', 'i1', 'u1', 'r1', NULL, 'steer', 'queued', 'Read-only from now on.', ${Date.now()})`);
+			return killEngine(m);
+		});
+		decisions = [SEND("look around HOLD-RESULT"), SEND("summarise"), FINISH];
+		await run();
+		const read = readBy(target);
+		const [first] = read;
+		expect(first.text).not.toMatch(/read-only/i);
+		const replacement = read.filter((t) => t.pid !== first.pid);
+		expect(replacement.length).toBeGreaterThan(0);
+		// The replacement's FIRST read is the recovery turn, and it carries the objective — with the newer restriction.
+		expect(replacement[0].text).toMatch(/previous turn/i);
+		expect(carriesObjective(replacement[0])).toBe(true);
+		expect(replacement[0].text).toMatch(/CONSTRAINTS IN FORCE NOW[\s\S]*read-only/i);
 	});
 
 	it("a NEWER restriction arriving mid-run is in the envelope the replacement engine reads", async () => {
