@@ -1,5 +1,8 @@
 # Self-hosted GitHub Actions runners on pinned Coder machines — design (#1113)
 
+For unattended macOS service recovery after long battery sleep, see
+[actions-runner-unattended-recovery.md](actions-runner-unattended-recovery.md).
+
 **Status:** slice 1 shipped. The routing rules live in `workers/api/src/lib/runner-routing.ts`, with
 tests in `workers/api/src/lib/runner-routing.test.ts`. **Nothing is enabled live:** no runner is
 registered, no `PAGS_RUNNER` variable is written, and the GitHub App has no new permissions yet (the exact set to grant is in §1). Everything
