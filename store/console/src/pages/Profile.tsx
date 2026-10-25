@@ -390,8 +390,11 @@ export default function Profile() {
 									    a fixed control. Let it truncate instead of widening the card. The
 									    usage line sits UNDER the name rather than beside it: at 320px the row
 									    is already a name, a status and a button, and a fourth inline element
-									    would take its width from the only part that carries a proper noun. */}
-									<div className="flex-1 min-w-0">
+									    would take its width from the only part that carries a proper noun. The
+									    name keeps a 10rem floor and the row wraps (#1326): with Verify and
+									    Replace beside Remove, the buttons drop to their own line at 320px
+									    rather than squeezing the name to nothing. */}
+									<div className="flex-1 min-w-[10rem]">
 										<span className="text-sm font-medium block truncate">{p.name}</span>
 										{usage ? (
 											<span className="text-xs flex items-center gap-1.5 min-w-0">
