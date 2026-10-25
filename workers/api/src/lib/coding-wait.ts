@@ -138,6 +138,53 @@ export interface EngineWaitState {
 	waits: number;
 	/** Milliseconds already spent parked by this run. */
 	spentMs: number;
+	/** Short parks taken for a provider that failed transiently (#1344) — counted apart, so they never spend the usage-limit budget. */
+	transientWaits?: number;
+}
+
+/**
+ * A reset read from the CLI's own words (#1344), kept as a HINT rather than an instant: the loop that reads it is replayed
+ * by the Workflow, so it must not read a clock. The planner turns it into an instant against its own journalled `now`.
+ *   - `inMs`  — a relative wait the CLI printed ("try again in 2 hours", "quota will reset after 3h12m");
+ *   - `clock` — a wall-clock reset ("resets 3am (Australia/Melbourne)", "try again at 4:12 PM"), in the zone printed or else the owner's;
+ *   - `far`   — a reset on a named day or date ("resets Aug 17", "resets Mon 9am"): days away, beyond what a run may wait.
+ */
+export type ResetHint = { inMs: number } | { clock: { hour: number; minute: number }; zone?: string } | { far: true };
+
+/** A zone's offset from UTC at an instant, in ms; throws on an unknown zone. */
+function zoneOffsetMs(at: number, zone: string): number {
+	const parts = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(at);
+	const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+	return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - Math.floor(at / 1000) * 1000;
+}
+
+/** The hint as an instant, or null when it cannot be placed (a clock time with no zone known, an unknown zone). */
+export function resetInstantFromHint(hint: ResetHint | undefined, now: number, ownerZone?: string): number | null {
+	if (!hint) return null;
+	if ("inMs" in hint) return now + hint.inMs;
+	if ("far" in hint) return null; // refused by the planner without inventing a date
+	const zone = hint.zone ?? ownerZone;
+	if (!zone) return null;
+	try {
+		const offset = zoneOffsetMs(now, zone);
+		const wall = new Date(now + offset);
+		let target = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), hint.clock.hour, hint.clock.minute);
+		if (target <= now + offset) target += 24 * 60 * 60_000;
+		return target - offset;
+	} catch {
+		return null;
+	}
+}
+
+/** Parks for a provider failing transiently (#1344): short, because an overloaded provider recovers in minutes, not hours. */
+export const TRANSIENT_WAIT_MS = [2 * 60_000, 5 * 60_000, 15 * 60_000] as const;
+
+/** One transient park, or a refusal once the short ladder is spent. */
+export function planTransientWait(state: EngineWaitState, now: number): EngineWaitPlan | EngineWaitRefusal {
+	const taken = state.transientWaits ?? 0;
+	if (taken >= TRANSIENT_WAIT_MS.length) return { wait: false, why: `the provider was still failing after ${taken} short waits` };
+	const ms = TRANSIENT_WAIT_MS[taken];
+	return { wait: true, ms, until: now + ms, source: "backoff", capped: false };
 }
 
 /**
@@ -165,7 +212,7 @@ export function parseResetInstant(raw: unknown): number | null {
  * UTC-when-absent for this module's standing reason: `formatLocal` says which zone it printed, and
  * a silently-assumed zone is the ten-hour error the whole file exists to avoid.
  */
-export function planEngineWait(input: { resetsAt?: unknown; now: number; state: EngineWaitState; timeZone?: string }): EngineWaitPlan | EngineWaitRefusal {
+export function planEngineWait(input: { resetsAt?: unknown; resetHint?: ResetHint; now: number; state: EngineWaitState; timeZone?: string }): EngineWaitPlan | EngineWaitRefusal {
 	const { now, state } = input;
 	if (state.waits >= MAX_ENGINE_WAITS) {
 		return { wait: false, why: `the run has already waited ${state.waits} times for this limit to clear` };
@@ -175,7 +222,12 @@ export function planEngineWait(input: { resetsAt?: unknown; now: number; state: 
 		return { wait: false, why: `the run has used its ${formatDuration(ENGINE_WAIT_TOTAL_MS)} of waiting` };
 	}
 
-	const at = parseResetInstant(input.resetsAt);
+	// A reset on another day is beyond any run's wait (#580's rule, reached from the CLI's own words, #1344).
+	if (input.resetHint && "far" in input.resetHint && parseResetInstant(input.resetsAt) === null) {
+		return { wait: false, why: `the limit resets on a later day, beyond the ${formatDuration(ENGINE_WAIT_TOTAL_MS)} a run may wait — no amount of waiting inside this run can clear it` };
+	}
+	// The Pilot's ISO instant first; else the reset the CLI printed, placed against this (journalled) `now` (#1344).
+	const at = parseResetInstant(input.resetsAt) ?? resetInstantFromHint(input.resetHint, now, input.timeZone);
 	// A DEADLINE THIS RUN CANNOT REACH IS A REFUSAL, NOT A PARK (#580).
 	//
 	// The clamp below is what produced the incident. Run 70ea298e's engine reported "You've hit your

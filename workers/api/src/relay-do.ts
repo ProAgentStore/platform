@@ -17,6 +17,8 @@ interface PendingRequest {
 	resolve: (value: CommandResponse) => void;
 	reject: (reason: Error) => void;
 	timer: ReturnType<typeof setTimeout>;
+	/** The socket the command was sent on (#1344): only ITS close fails the command, not a stale socket's. */
+	ws?: unknown; // identity only — compared, never used
 }
 
 interface CommandRequest {
@@ -173,12 +175,14 @@ export class RelayDO extends DurableObject<Env> {
 		pending.resolve(parsed);
 	}
 
-	async webSocketClose(_ws: WebSocket): Promise<void> {
-		this.rejectAll("Runner disconnected");
+	// A close fails only the commands sent on THAT socket (#1344). The liveness probe and `sendOnFirstOpen` close stale
+	// sockets themselves; their close used to reject a command running fine on the live one as "Runner disconnected".
+	async webSocketClose(ws: WebSocket): Promise<void> {
+		this.rejectSentOn(ws, "Runner disconnected");
 	}
 
-	async webSocketError(_ws: WebSocket, error?: unknown): Promise<void> {
-		this.rejectAll("Runner WebSocket error");
+	async webSocketError(ws: WebSocket, error?: unknown): Promise<void> {
+		this.rejectSentOn(ws, "Runner WebSocket error");
 		await this.record("warn", `Runner WebSocket error${error instanceof Error ? `: ${error.message}` : ""}`, { endpoint: "websocket" });
 	}
 
@@ -209,7 +213,8 @@ export class RelayDO extends DurableObject<Env> {
 	private async handleCommand(request: Request): Promise<Response> {
 		const sockets = this.ctx.getWebSockets("runner");
 		if (sockets.length === 0) {
-			return Response.json({ error: "No runner connected" }, { status: 503 });
+			// The code names the RELAY as the one answering (#1344): a runner's own 503 passes through with its own body.
+			return Response.json({ error: "No runner connected", code: "RUNNER_RELAY_NO_SOCKET" }, { status: 503 });
 		}
 
 		const body = (await request.json()) as { method?: string; path: string; body?: unknown; timeoutMs?: number };
@@ -248,10 +253,14 @@ export class RelayDO extends DurableObject<Env> {
 				// Send to the first socket that is still open (#880) — the probe above may have closed
 				// `sockets[0]`. None open is a disconnect, and says so in the words callers classify
 				// (`DROPPED_REASONS`), not the runtime's raw send-after-close text.
-				if (!sendOnFirstOpen(alive, JSON.stringify(cmd))) {
+				const sentOn = sendOnFirstOpen(alive, JSON.stringify(cmd));
+				if (!sentOn) {
 					clearTimeout(timer);
 					this.pending.delete(id);
 					reject(new Error("Runner disconnected"));
+				} else {
+					const entry = this.pending.get(id);
+					if (entry) entry.ws = sentOn;
 				}
 			});
 		} catch (err) {
@@ -283,6 +292,15 @@ export class RelayDO extends DurableObject<Env> {
 	}
 
 	// ── Helpers ──────────────────────────────────────────────────────────
+
+	private rejectSentOn(ws: WebSocket, reason: string): void {
+		for (const [id, pending] of this.pending) {
+			if (pending.ws !== ws) continue;
+			clearTimeout(pending.timer);
+			pending.reject(new Error(reason));
+			this.pending.delete(id);
+		}
+	}
 
 	private rejectAll(reason: string): void {
 		for (const pending of this.pending.values()) {

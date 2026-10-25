@@ -27,6 +27,7 @@
  */
 
 import { clipMarked } from "./clip-marked.js";
+import type { ResetHint } from "./coding-wait.js";
 
 export type EngineProviderErrorKind = "limit" | "transient" | "billing";
 
@@ -127,14 +128,54 @@ export function providerBillingDetail(e: EngineProviderError, repo: string): str
 	return `The coding CLI in ${repo} stopped because its AI provider account has no credit or quota left (${e.provider}): "${e.evidence}". This is the account the CLI is signed in with on the machine, not your PAGS API key. Top it up or switch plans at the provider, then continue the run. Waiting or retrying will not change it.`;
 }
 
+const UNIT_MS: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1_000 };
+
+/**
+ * When the limit lifts, as the CLI printed it (#1344) — a hint the planner places in time, or null. Read without a clock
+ * (the loop is replayed): Codex "try again in 2 hours", Gemini "quota will reset after 3h12m", Claude "resets 3am
+ * (Australia/Melbourne)", Codex "try again at 4:12 PM", and a reset on a named day ("resets Aug 17", "resets Mon 9am").
+ */
+export function resetHintFromLine(line: string): ResetHint | null {
+	// Units as words ("2 hours") or single letters, which may run straight into the next number ("3h12m").
+	const rel = /\b(?:in|after)\s+((?:\d+\s*(?:(?:hours?|hrs?|minutes?|mins?|seconds?|secs?)\b|[hms](?=\d|\b))\s*(?:and\s*)?)+)/i.exec(line);
+	if (rel) {
+		let ms = 0;
+		for (const [, n, unit] of rel[1].matchAll(/(\d+)\s*([hms])/gi)) ms += Number(n) * UNIT_MS[unit.toLowerCase()];
+		if (ms > 0) return { inMs: ms };
+	}
+	if (/\bresets?\s+(?:on\s+)?(?:mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i.test(line)) return { far: true };
+	const clock = /\b(?:resets?|try again)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([A-Za-z]+\/[A-Za-z_/]+)\))?/i.exec(line);
+	if (clock) {
+		const h12 = Number(clock[1]) % 12;
+		const hour = clock[3].toLowerCase() === "pm" ? h12 + 12 : h12;
+		const minute = clock[2] ? Number(clock[2]) : 0;
+		if (hour < 24 && minute < 60) return { clock: { hour, minute }, ...(clock[4] ? { zone: clock[4] } : {}) };
+	}
+	return null;
+}
+
 /**
  * What the loop does with a failed turn's provider reading. Null when the turn is not a provider failure — the ordinary
  * strike applies. A billing failure ends; a limit, or a transient failure on the turn after another, parks; a first
  * transient failure is retried. `transientStreak` is the count to carry to the next failed turn.
  */
-export function providerTurnVerdict(e: EngineProviderError | null, transientStreak: number, repo: string): { end?: string; park?: string; retry?: string; transientStreak: number } | null {
+export interface ProviderTurnVerdict {
+	end?: string;
+	park?: string;
+	/** A limit parks on the usage-limit budget; a repeated transient failure on its own short ladder (#1344). */
+	waitKind?: "limit" | "transient";
+	resetHint?: ResetHint;
+	retry?: string;
+	transientStreak: number;
+}
+
+export function providerTurnVerdict(e: EngineProviderError | null, transientStreak: number, repo: string): ProviderTurnVerdict | null {
 	if (!e) return null;
 	if (e.kind === "billing") return { end: providerBillingDetail(e, repo), transientStreak: 0 };
-	if (e.kind === "limit" || transientStreak >= 1) return { park: providerParkReason(e, e.kind === "transient"), transientStreak: 0 };
+	if (e.kind === "limit") {
+		const resetHint = resetHintFromLine(e.evidence);
+		return { park: providerParkReason(e, false), waitKind: "limit", ...(resetHint ? { resetHint } : {}), transientStreak: 0 };
+	}
+	if (transientStreak >= 1) return { park: providerParkReason(e, true), waitKind: "transient", transientStreak: 0 };
 	return { retry: transientProviderNote(e), transientStreak: transientStreak + 1 };
 }

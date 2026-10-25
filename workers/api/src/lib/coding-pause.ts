@@ -25,6 +25,7 @@ import {
 	engineWaitExhausted,
 	enginePauseMessage,
 	planEngineWait,
+	planTransientWait,
 	type EngineWaitState,
 } from "./coding-wait.js";
 import type { LoopStopReason } from "./agent-loop.js";
@@ -509,15 +510,19 @@ async function waitForEngineReset(
 	input: { round: number; result: CodingResult; state: EngineWaitState },
 ): Promise<PauseVerdict> {
 	const { result, round, state } = input;
-	const plan = planEngineWait({ resetsAt: result.waitUntil, now: deps.now(), state, timeZone: deps.timeZone });
+	// A provider failing transiently parks on its own short ladder and never spends the usage-limit budget (#1344). Out of
+	// waits it ends as a continuable engine error saying so — not as "the CLI's usage limit", which it never was.
+	const transient = result.waitKind === "transient";
+	const plan = transient ? planTransientWait(state, deps.now()) : planEngineWait({ resetsAt: result.waitUntil, resetHint: result.resetHint, now: deps.now(), state, timeZone: deps.timeZone });
 	if (!plan.wait) {
+		if (transient) return { resume: false, result: { ...result, outcome: "engine_error", detail: `The coding CLI's AI provider kept failing and ${plan.why}. ${result.detail ?? ""}`.trim() } };
 		return { resume: false, result: { ...result, detail: engineWaitExhausted(result.detail, plan.why) } };
 	}
 
 	await deps.announce(enginePauseMessage(plan, result.detail ?? "", deps.timeZone));
 	// `update`, not `alert`: nothing is being asked of the owner, and a park that pings like a
 	// question is how people learn to stop reading these.
-	await deps.notify("⏸ Coder is waiting on the CLI's usage limit", `${deps.repo}: resuming automatically`, `coding-wait:${round}`, false);
+	await deps.notify(transient ? "⏸ Coder is waiting for the AI provider to recover" : "⏸ Coder is waiting on the CLI's usage limit", `${deps.repo}: resuming automatically`, `coding-wait:${round}`, false);
 
 	// Chunked rather than one long sleep: the park has to out-tick three separate clocks (the driver
 	// claim at 15 min, the run sweeper at 3h, the idle-session reaper at 6h) and has to be
@@ -537,8 +542,11 @@ async function waitForEngineReset(
 		}
 	}
 
-	state.waits += 1;
-	state.spentMs += plan.ms;
+	if (transient) state.transientWaits = (state.transientWaits ?? 0) + 1;
+	else {
+		state.waits += 1;
+		state.spentMs += plan.ms;
+	}
 	await deps.announce(engineResumeMessage(plan));
 	return { resume: true, resumeNote: engineResumeNote(plan, deps.timeZone) };
 }

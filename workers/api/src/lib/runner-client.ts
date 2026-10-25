@@ -2,7 +2,7 @@ import { decryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
 import { latestResourceSample, resourceHistory, resourcesView } from "./runner-resources.js";
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
-import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
+import { DRAINING_MARKER, NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 import type { StaleSocketVerdict } from "./relay-liveness.js";
@@ -343,6 +343,11 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`,
 				{ dispatched: res.status !== 503 },
 			);
+		}
+		// The runner draining for an update refused the command BEFORE it ran (#1344): retryable, and nothing was sent to the
+		// runtime — but it is a connected runner, so it says so instead of "no live socket".
+		if (res.status === 503 && detail.includes(DRAINING_MARKER)) {
+			throw new RunnerUnreachableError(`Runner ${path} → 503: the runner is draining for an automatic update and is ${UNRESPONSIVE_MARKER} to new work until it restarts.`, { dispatched: false });
 		}
 		// A CAPTURE that timed out at the relay is a runner connected but not answering (#1341) — the same state as
 		// the 503 above, met one step later. Typed the same way so the runner guard waits for it instead of ending a

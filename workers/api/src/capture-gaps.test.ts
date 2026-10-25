@@ -226,6 +226,22 @@ describe("3. RelayDO (#1134)", () => {
 		expect(JSON.parse(row.context as string)).toMatchObject({ endpoint: "/command", stack: expect.any(String) });
 	});
 
+	it("a STALE socket closing does not fail a command running on the live one (#1344)", async () => {
+		const { r, sent, socket } = relay("iA:node:macbook");
+		const pending = command(r, { path: "/coding/capture", timeoutMs: 5_000 });
+		await vi.waitFor(() => expect(sent.some((s) => s.includes('"path":"/coding/capture"'))).toBe(true));
+		// Some other socket — the one the liveness probe just closed — reports its close.
+		await r.webSocketClose({ send() {}, close() {} } as unknown as WebSocket);
+		const id = (JSON.parse(sent.find((s) => s.includes('"path":"/coding/capture"')) as string) as { id: string }).id;
+		await r.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ id, status: 200, result: { pane: "ok" } }));
+		expect((await pending).status).toBe(200);
+		// …and the live socket's own close still fails what it was carrying.
+		const second = command(r, { path: "/tasks", timeoutMs: 5_000 });
+		await vi.waitFor(() => expect(sent.some((s) => s.includes('"path":"/tasks"'))).toBe(true));
+		await r.webSocketClose(socket as unknown as WebSocket);
+		expect((await second).status).toBe(504);
+	});
+
 	it("a socket error is a warn row", async () => {
 		const { r, socket } = relay("iA:node:macbook");
 		await r.webSocketError(socket as unknown as WebSocket, new Error("ECONNRESET"));

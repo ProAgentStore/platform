@@ -10,6 +10,7 @@ import {
 	type CodingDeps,
 	type CodingPaneSnapshot,
 	type CodingResult,
+	type TurnCarry,
 } from "../../lib/coding-loop.js";
 import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../../lib/runner-client.js";
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
@@ -1101,6 +1102,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 
 		// The run's observed tool calls (#1019), kept across rounds: a completion claim is judged on the whole run.
 		const evidence = new CompletionEvidence();
+		// The failed-turn streak, kept across rounds the same way (#1344): the turn a park or question stopped on is not new next round.
+		const turnCarry: TurnCarry = { turns: { lastAt: null, consecutive: 0 }, transientStreak: 0 };
 		// The objective goes to the engine only if this machine's runner can render it (#1019).
 		objective = await ObjectiveDelivery.create(runKey, goal.objective, goal.objectiveOrigin);
 		const caps = await guard(runRetry, "objective-capabilities", () => callRunner(conn, "/capabilities", {})).catch(() => null);
@@ -1114,7 +1117,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// An interruption is retried in place after a published backoff (#855); anything else — or
 			// one past the bound — is rethrown to the terminal catch below.
 			result = await roundThroughInterruptions(
-				() => runCodingLoop(deps, goal, { maxSteps: grantedSteps ?? stepCap, evidence }),
+				() => runCodingLoop(deps, goal, { maxSteps: grantedSteps ?? stepCap, evidence, turnCarry }),
 				roundDeps,
 				{ next: () => ++interruptions },
 			);
@@ -1145,7 +1148,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// a hands-on takeover, which is why the fleet, the board and the status report all called it
 			// hard-blocked.
 			// A `stuck` asks a question too (#1234): a `human` park carried no ask — the blank question nobody could answer.
-			const parkReason: RunWaitReason = result.outcome === "waiting" ? "engine_limit" : result.outcome === "needs_reauth" ? "engine_auth" : "decision";
+			// A provider failing transiently is not the CLI's usage limit (#1344): it is an interruption with a retry scheduled.
+			const parkReason: RunWaitReason = result.outcome === "waiting" ? (result.waitKind === "transient" ? "platform_interrupt" : "engine_limit") : result.outcome === "needs_reauth" ? "engine_auth" : "decision";
 			parkedAsk = null;
 			const pause = await resolvePause({ ...pauseDeps(round, parkReason), iterations: { cap: grantedSteps ?? stepCap, ceiling: stepCeiling } }, { round, result, state: waitState });
 			if (!pause.resume) {

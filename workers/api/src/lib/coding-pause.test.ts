@@ -564,3 +564,34 @@ describe("renderCapSummary — the iteration-cap report, in full (#1261)", () =>
 		expect(text).toMatch(/\[cut: showing the first \d+ of \d+ characters\]$/);
 	});
 });
+
+describe("resolvePause — a provider failing transiently is not the CLI's usage limit (#1344)", () => {
+	const transient: CodingResult = { outcome: "waiting", waitKind: "transient", detail: "The coding CLI's AI provider kept failing transiently (any): \"API Error: 503\".", steps: 0 };
+
+	it("parks on its own short ladder, says what it is waiting for, and leaves the usage-limit budget untouched", async () => {
+		const s = spy();
+		const state = { waits: 0, spentMs: 0, transientWaits: 0 };
+		const v = await resolvePause(s.deps, { round: 0, result: transient, state });
+		expect(v.resume).toBe(true);
+		expect(s.slept.reduce((a, b) => a + b, 0)).toBe(2 * 60_000);
+		expect(s.notified[0].title).toMatch(/AI provider to recover/);
+		expect(state).toEqual({ waits: 0, spentMs: 0, transientWaits: 1 });
+	});
+
+	it("out of short waits it ends as a continuable engine error saying the provider kept failing — never as engine_limit", async () => {
+		const s = spy();
+		const v = await resolvePause(s.deps, { round: 3, result: transient, state: { waits: 0, spentMs: 0, transientWaits: 3 } });
+		expect(v.resume).toBe(false);
+		expect(v.resume === false && v.result.outcome).toBe("engine_error");
+		expect(v.resume === false && v.result.detail).toMatch(/kept failing/);
+		expect(s.slept).toEqual([]);
+	});
+
+	it("a limit whose reset the CLI printed parks until then (the hint is placed against the planner's own clock)", async () => {
+		const s = spy({ timeZone: "Australia/Sydney" });
+		const state = { waits: 0, spentMs: 0 };
+		const v = await resolvePause(s.deps, { round: 0, result: { outcome: "waiting", waitKind: "limit", resetHint: { inMs: 90 * 60_000 }, detail: "limit", steps: 0 }, state });
+		expect(v.resume).toBe(true);
+		expect(state.spentMs).toBe(90 * 60_000);
+	});
+});

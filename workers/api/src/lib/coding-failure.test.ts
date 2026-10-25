@@ -631,3 +631,29 @@ describe("the probe measures what a REPLAY re-measures (#546)", () => {
 		expect(probe.paneChars, "the size came from the journalled result, not the callback").toBe(4_096);
 	});
 });
+
+describe("a status or a rate limit is the PROVIDER's only in the provider's voice (#1344)", () => {
+	it("a git, GitHub or runner 403 / rate limit is not the AI provider refusing the key", () => {
+		for (const msg of [
+			"run error: Runner /coding/git → 500: git push failed (403) remote: Permission to org/repo.git denied",
+			"fatal: unable to access 'https://github.com/org/repo.git/': The requested URL returned error: 403 (403)",
+			"gh: API rate limit exceeded for installation ID 123",
+			"Runner /coding/act → 401: {\"error\":\"unauthorized\"}",
+		]) {
+			const c = classifyCodingFailure(new Error(msg)).class;
+			expect(["provider_credentials", "provider_rate_limit", "provider_credit"], msg).not.toContain(c);
+		}
+	});
+
+	it("the provider's own framing still classifies, in process and after a step boundary", () => {
+		expect(classifyCodingFailure(new Error("Anthropic (403): Request not allowed [permission_error; request-id req_1]")).class).toBe("provider_credentials");
+		expect(classifyCodingFailure(new Error("coding run 1 failed at s1: UserAiProviderError: Anthropic (401): invalid x-api-key")).class).toBe("provider_credentials");
+		expect(classifyCodingFailure(new Error("Cloudflare Workers AI request failed with HTTP 403: Authentication error")).class).toBe("provider_credentials");
+		expect(classifyCodingFailure(new Error("Anthropic (429): rate limited")).class).toBe("provider_rate_limit");
+		expect(classifyCodingFailure(Object.assign(new Error("refused"), { upstreamStatus: 403 })).class).toBe("provider_credentials");
+	});
+
+	it("402 is Payment Required: the account, not the key", () => {
+		expect(classifyCodingFailure(new Error("Anthropic (402): payment required")).class).toBe("provider_credit");
+	});
+});

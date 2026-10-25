@@ -373,7 +373,12 @@ export function makeRunnerGuard(cfg: {
 				// change is most likely to break. So when the error does not say it is a disconnect, ask
 				// the relay: a live socket means the runner is fine and this error is about something
 				// else. One cheap DO fetch buys the difference between waiting and mis-waiting.
-				if (!isRunnerUnreachable(e) && (await cfg.wait.probe(`${name}-chk${round}`).catch(() => null))?.relayConnected) throw e;
+				// A probe that could not be answered (a D1 or DO blip) is UNKNOWN, not "disconnected" (#1344): reading it as down
+				// sent a genuine non-runner failure into a ten-minute wait that could end in a 24-hour park.
+				if (!isRunnerUnreachable(e)) {
+					const facts = await cfg.wait.probe(`${name}-chk${round}`).catch(() => "unknown" as const);
+					if (facts === "unknown" || facts.relayConnected) throw e;
+				}
 				await recover(name, round, isRunnerUnresponsive(e));
 			}
 		}

@@ -445,7 +445,7 @@ async function runAnthropic(
 		const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 		const errObj = (errBody as { error?: { message?: string; type?: string } }).error;
 		const errMsg = errObj?.message || JSON.stringify(errBody);
-		if (res.status === 401 || res.status === 403 || isCreditBalanceMessage(errMsg)) await observeProviderAccount(env, userId, "anthropic", apiKey, isCreditBalanceMessage(errMsg) ? "provider_credit" : "provider_credentials");
+		if (res.status === 401 || res.status === 403 || isCreditBalanceMessage(errMsg)) await observeProviderAccount(env, userId, "anthropic", apiKey, isCreditBalanceMessage(errMsg) ? "provider_credit" : "provider_credentials", Date.now(), String(anthropicBody.model));
 		// An exhausted balance arrives as a 400 `invalid_request_error` — the same status and type as
 		// a malformed request — with the sentence as its only signature (#773). The vendor's text is
 		// kept verbatim (it is what `coding-failure.ts` classifies on) and the remedy is appended in
@@ -770,7 +770,7 @@ async function runCloudflareAi(
 	clearTimeout(timeout);
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
-		if (res.status === 401 || res.status === 403) await observeProviderAccount(env, userId, "cloudflare", credentials, "provider_credentials");
+		if (res.status === 401 || res.status === 403) await observeProviderAccount(env, userId, "cloudflare", credentials, "provider_credentials", Date.now(), model);
 		// `details` reaches the verify response and the error log; Cloudflare's errors quote the
 		// account path, which holds a token when the two were saved swapped (#893).
 		const redacted = redactCloudflareUpstream(data, credentials);

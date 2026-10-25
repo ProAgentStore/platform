@@ -215,20 +215,26 @@ function numeric(v: unknown): number | null {
 	return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/** `Anthropic (400): …` / `Cloudflare Workers AI request failed with HTTP 429` — the status in prose. */
-function statusFromMessage(message: string): number | null {
-	const paren = /\((\d{3})\)/.exec(message);
-	if (paren) return Number(paren[1]);
-	const http = /http (\d{3})/i.exec(message);
-	return http ? Number(http[1]) : null;
+/**
+ * `Anthropic (400): …` / `Cloudflare Workers AI request failed with HTTP 429` — the status in prose, read ONLY in a
+ * provider's own framing (#1344). Any "(403)" used to count, so "git push failed (403)" was filed as the AI provider
+ * refusing the key — and, since #1326, could be continued automatically as if the key had recovered.
+ */
+function providerStatusFromMessage(message: string): number | null {
+	const framed = /\banthropic \((\d{3})\)/i.exec(message) ?? /workers ai request failed with http (\d{3})/i.exec(message);
+	return framed ? Number(framed[1]) : null;
 }
+
+/** Does the message speak in a provider's own voice? The rate-limit phrase only counts then: GitHub says "rate limit" too. */
+const PROVIDER_VOICE = /\banthropic\b|workers ai request failed|cloudflare workers ai/i;
 
 /** Read the failure. Pure, total, and never throws — it runs on a path that is already failing. */
 export function classifyCodingFailure(err: unknown): CodingFailure {
 	const e = (err ?? {}) as ErrorLike;
 	const message = err instanceof Error ? err.message : typeof e.message === "string" ? e.message : String(err ?? "");
 	const m = message.toLowerCase();
-	const upstreamStatus = numeric(e.upstreamStatus) ?? statusFromMessage(message);
+	const upstreamStatus = numeric(e.upstreamStatus) ?? providerStatusFromMessage(message);
+	const providerVoice = upstreamStatus !== null || PROVIDER_VOICE.test(message);
 	const declared = typeof e.retryable === "boolean" ? e.retryable : null;
 	const at = (cls: CodingFailureClass, retryable: boolean | null = declared): CodingFailure => ({
 		class: cls,
@@ -258,10 +264,12 @@ export function classifyCodingFailure(err: unknown): CodingFailure {
 	// (400) would otherwise fall through to `provider_error`, and because an exhausted balance and a
 	// bad key send the owner to different pages (#773).
 	if (CREDIT_MARKERS.some((k) => m.includes(k))) return at("provider_credit", false);
-	if (CREDENTIAL_MARKERS.some((k) => m.includes(k)) || upstreamStatus === 401 || upstreamStatus === 402 || upstreamStatus === 403) {
+	// 402 is Payment Required: the account, not the key (#1344).
+	if (upstreamStatus === 402) return at("provider_credit", false);
+	if (CREDENTIAL_MARKERS.some((k) => m.includes(k)) || upstreamStatus === 401 || upstreamStatus === 403) {
 		return at("provider_credentials", false);
 	}
-	if (upstreamStatus === 429 || m.includes("rate_limit") || m.includes("rate limit")) return at("provider_rate_limit", false);
+	if (upstreamStatus === 429 || (providerVoice && (m.includes("rate_limit") || m.includes("rate limit")))) return at("provider_rate_limit", false);
 	if (OVERRUN_MARKERS.some((k) => m.includes(k))) return at("provider_overrun", false);
 	if (STALL_MARKERS.some((k) => m.includes(k))) return at("provider_stall", declared ?? true);
 	// A malformed/truncated stream reaches us as `Anthropic: <transport fact>` with `retryable`

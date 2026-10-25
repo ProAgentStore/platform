@@ -96,12 +96,15 @@ describe("a failing → recovered key continues exactly the matching runs, once 
 
 	it("writes one audit entry per resume (naming the key and the successor) and one summary per recovery", async () => {
 		await hold(KEY, NOW - H);
+		d1.exec("UPDATE user_api_keys SET key_hint = '8QAA' WHERE user_id = 'u1'");
 		run("r1");
 		run("r2", { repo: "repo-2" });
 		await resumeRecoveredCreditRuns(env, deps());
 		const per = events("credit_resume.resumed");
 		expect(per).toHaveLength(2);
-		expect(per[0].message).toMatch(new RegExp(`^auto-continued after key …${credId.slice(0, 4)} recovered at 2026-10-23T07:00:00.000Z; successor succ-r1`));
+		// The key's real last four (#1344) — it used to print the first four hex of the credential's HASH, which no owner could match.
+		expect(per[0].message).toMatch(/^auto-continued after key …8QAA recovered at 2026-10-23T07:00:00.000Z; successor succ-r1/);
+		expect(per[0].message).not.toContain(credId.slice(0, 4));
 		expect(per[0].instance_id).toBe("coder");
 		expect(events("credit_resume.summary")).toHaveLength(1);
 		expect(events("credit_resume.summary")[0].message).toMatch(/2 run\(s\) auto-continued, 0 deferred/);
@@ -381,5 +384,44 @@ describe("a refused key heals itself instead of pausing automatic runs forever (
 		run("r403", { stop: "provider_credentials" });
 		expect((await runCreditAutoResume(env, deps({ probe: async () => false }))).resumed).toBe(0);
 		expect(started).toEqual([]);
+	});
+});
+
+describe("a hold's episode and model (#1344)", () => {
+	const holdRow = () => d1.sqlite.prepare("SELECT probe_attempts AS a, next_probe_at AS n, cleared_at AS c FROM provider_account_holds").get() as { a: number; n: number | null; c: number | null };
+
+	it("gives up 7 days after the FIRST refusal, though every failed probe rewrote failed_at", async () => {
+		await hold(KEY, null, NOW - H, "provider_credentials");
+		d1.exec(`UPDATE provider_account_holds SET first_failed_at = ${NOW - PROBE_GIVE_UP_MS - H}`);
+		expect((await probeFailingKeys(env, { now: () => NOW, probe: async () => true })).probed).toBe(0);
+	});
+
+	it("probes on the model the refused request named", async () => {
+		await hold(KEY, null, NOW - H, "provider_credentials");
+		d1.exec("UPDATE provider_account_holds SET model = 'claude-haiku-5-5'");
+		const models: Array<string | null | undefined> = [];
+		await probeFailingKeys(env, { now: () => NOW, probe: async (_e, _u, _p, model) => { models.push(model); return false; } });
+		expect(models).toEqual(["claude-haiku-5-5"]);
+	});
+
+	it("records every probe, with the provider's words when it is still refused", async () => {
+		await hold(KEY, null, NOW - H, "provider_credentials");
+		await probeFailingKeys(env, { now: () => NOW, probe: async () => ({ ok: false, error: "Anthropic (403): Request not allowed [permission_error; request-id req_9]" }) });
+		const [e] = events("provider_hold.probe");
+		expect(e.message).toMatch(/still refused \(attempt 1, next re-check .*\): Anthropic \(403\): Request not allowed \[permission_error; request-id req_9\]/);
+		expect(holdRow().a).toBe(1);
+	});
+});
+
+describe("observeProviderAccount keeps the episode's start and the refused model (#1344)", () => {
+	it("a repeat failure keeps first_failed_at; a failure after the hold cleared opens a new episode", async () => {
+		const { observeProviderAccount } = await import("./provider-account-observation.js");
+		const row = () => d1.sqlite.prepare("SELECT failed_at AS f, first_failed_at AS ff, model AS m FROM provider_account_holds").get() as { f: number; ff: number; m: string | null };
+		await observeProviderAccount(env, "u1", "anthropic", KEY, "provider_credentials", 1_000, "claude-sonnet-4-6");
+		await observeProviderAccount(env, "u1", "anthropic", KEY, "provider_credentials", 5_000);
+		expect(row()).toEqual({ f: 5_000, ff: 1_000, m: "claude-sonnet-4-6" });
+		await observeProviderAccount(env, "u1", "anthropic", KEY, null, 6_000);
+		await observeProviderAccount(env, "u1", "anthropic", KEY, "provider_credentials", 9_000, "claude-haiku-5-5");
+		expect(row()).toEqual({ f: 9_000, ff: 9_000, m: "claude-haiku-5-5" });
 	});
 });

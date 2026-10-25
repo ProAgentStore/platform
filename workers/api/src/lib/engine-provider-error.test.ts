@@ -5,7 +5,10 @@
 import { describe, expect, it } from "vitest";
 import { stopReasonFor } from "./coding-pause.js";
 import { type CodingDecision, type CodingDeps, type CodingGoal, type CodingPaneSnapshot, runCodingLoop } from "./coding-loop.js";
-import { engineProviderError } from "./engine-provider-error.js";
+import { engineProviderError, resetHintFromLine } from "./engine-provider-error.js";
+import { planEngineWait, planTransientWait, resetInstantFromHint, TRANSIENT_WAIT_MS } from "./coding-wait.js";
+import { EMPTY_STREAK } from "./coding-turn-outcome.js";
+import type { TurnCarry } from "./coding-loop.js";
 
 describe("the table: what each engine's provider says, and what it means", () => {
 	// Strings read out of the installed CLIs (Claude Code 2.1.310, Codex 0.164.0, Gemini CLI 0.57.0, Grok 1.0.62), verbatim
@@ -134,8 +137,9 @@ describe("runCodingLoop: a provider failure is handled by kind, not spent as an 
 	it("after the park, the next round RETRIES — the turn that parked it is not read as a new limit", async () => {
 		// Review finding: a new round starts with an empty streak, and the first snapshot still carries the parked turn.
 		const { deps, sent } = engine([["Claude usage limit reached. Your limit will reset at 10pm."], null], [again, again, { finish: { status: "done", detail: "ok" } }]);
-		expect((await runCodingLoop(deps, GOAL, { maxSteps: 30 })).outcome).toBe("waiting");
-		const second = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		const turnCarry: TurnCarry = { turns: EMPTY_STREAK, transientStreak: 0 }; // held across rounds, as the workflow does
+		expect((await runCodingLoop(deps, GOAL, { maxSteps: 30, turnCarry })).outcome).toBe("waiting");
+		const second = await runCodingLoop(deps, GOAL, { maxSteps: 30, turnCarry });
 		expect(second.outcome).toBe("done");
 		expect(sent).toHaveLength(2);
 	});
@@ -179,5 +183,85 @@ describe("runCodingLoop: a provider failure is handled by kind, not spent as an 
 		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
 		expect(r.outcome).toBe("engine_error");
 		expect(sent).toHaveLength(3);
+	});
+});
+
+describe("the reset the CLI printed reaches the planner, without the loop reading a clock (#1344)", () => {
+	const NOW = Date.parse("2026-10-25T01:00:00Z"); // 12:00 in Melbourne (AEDT, +11)
+
+	it("reads relative, clock and named-day resets", () => {
+		expect(resetHintFromLine("You've hit your usage limit. Try again in 2 hours.")).toEqual({ inMs: 2 * 3_600_000 });
+		expect(resetHintFromLine("You have exhausted your capacity on this model. Your quota will reset after 3h12m.")).toEqual({ inMs: 3 * 3_600_000 + 12 * 60_000 });
+		expect(resetHintFromLine("You’ve hit your session limit · resets 3pm (Australia/Melbourne)")).toEqual({ clock: { hour: 15, minute: 0 }, zone: "Australia/Melbourne" });
+		expect(resetHintFromLine("Visit https://chatgpt.com/settings/usage or try again at 4:12 PM.")).toEqual({ clock: { hour: 16, minute: 12 } });
+		expect(resetHintFromLine("You've hit your weekly limit · resets Aug 17 at 4pm")).toEqual({ far: true });
+		expect(resetHintFromLine("You hit your weekly limit · resets Mon 9am")).toEqual({ far: true });
+		expect(resetHintFromLine("Claude usage limit reached.")).toBeNull();
+	});
+
+	it("places a clock reset in its zone (or the owner's), the next time that clock comes round", () => {
+		expect(resetInstantFromHint({ clock: { hour: 15, minute: 0 }, zone: "Australia/Melbourne" }, NOW)).toBe(Date.parse("2026-10-25T04:00:00Z"));
+		// 9am Melbourne has passed today, so tomorrow's.
+		expect(resetInstantFromHint({ clock: { hour: 9, minute: 0 } }, NOW, "Australia/Melbourne")).toBe(Date.parse("2026-10-25T22:00:00Z"));
+		expect(resetInstantFromHint({ clock: { hour: 9, minute: 0 } }, NOW)).toBeNull(); // no zone known: no guess
+		expect(resetInstantFromHint({ clock: { hour: 9, minute: 0 }, zone: "Not/AZone" }, NOW)).toBeNull();
+	});
+
+	it("parks until the printed reset, and refuses at once a reset on another day (#580's rule)", () => {
+		const state = { waits: 0, spentMs: 0 };
+		expect(planEngineWait({ resetHint: { inMs: 2 * 3_600_000 }, now: NOW, state })).toMatchObject({ wait: true, ms: 2 * 3_600_000, source: "deadline" });
+		const far = planEngineWait({ resetHint: { far: true }, now: NOW, state });
+		expect(far).toMatchObject({ wait: false });
+		expect((far as { why: string }).why).toMatch(/later day/);
+	});
+
+	it("transient waits climb a short ladder of their own and never spend the usage-limit budget", () => {
+		const state = { waits: 0, spentMs: 0, transientWaits: 0 };
+		expect(planTransientWait(state, NOW)).toMatchObject({ wait: true, ms: TRANSIENT_WAIT_MS[0] });
+		state.transientWaits = TRANSIENT_WAIT_MS.length;
+		expect(planTransientWait(state, NOW)).toMatchObject({ wait: false });
+		expect(state.waits).toBe(0);
+	});
+});
+
+describe("runCodingLoop hands the planner what it needs, and keeps the streak across rounds (#1344)", () => {
+	const GOAL: CodingGoal = { objective: "add a test", repo: "demo", clientType: "codex" };
+	const failing = (tail: string[], decisions: CodingDecision[]) => {
+		let at = 1_000;
+		let lastTurn: CodingPaneSnapshot["lastTurn"];
+		let i = 0;
+		const snap = (): CodingPaneSnapshot => ({ pane: "", runState: "idle", ready: true, alive: true, ...(lastTurn ? { lastTurn } : {}) });
+		const deps: CodingDeps = {
+			snapshot: async () => snap(),
+			waitIdle: async () => snap(),
+			act: async () => { at += 1000; lastTurn = { verdict: "failed", exitCode: 1, signal: null, at, detail: tail[tail.length - 1], tail }; return snap(); },
+			decide: async () => decisions[Math.min(i++, decisions.length - 1)],
+		};
+		return deps;
+	};
+	const run1: CodingDecision = { action: { kind: "message", text: "run the tests" } };
+
+	it("a limit with a printed reset carries it as a hint; a repeated transient parks as `transient`", async () => {
+		const limit = await runCodingLoop(failing(["You’ve hit your session limit · resets 3pm (Australia/Melbourne)"], [run1]), GOAL, { maxSteps: 30 });
+		expect(limit).toMatchObject({ outcome: "waiting", waitKind: "limit", resetHint: { clock: { hour: 15, minute: 0 }, zone: "Australia/Melbourne" } });
+		const transient = await runCodingLoop(failing(["API Error: 503 Service Unavailable"], [run1, { action: { kind: "message", text: "again" } }]), GOAL, { maxSteps: 30 });
+		expect(transient).toMatchObject({ outcome: "waiting", waitKind: "transient" });
+	});
+
+	it("a crash before a question is told to the Pilot ONCE, not again on the next round's first snapshot", async () => {
+		const REFUSAL = "Not inside a trusted directory and --skip-git-repo-check was not specified.";
+		const notes: string[] = [];
+		const ask: CodingDecision = { needsInput: { field: "Which branch?", why: "unclear" } };
+		const rounds = async (carry: () => TurnCarry | undefined) => {
+			notes.length = 0;
+			const deps = { ...failing([REFUSAL], [run1, ask, ask]), onEvent: (t: string, m: string) => { if (t === "engine_failed") notes.push(m); } } as CodingDeps;
+			await runCodingLoop(deps, GOAL, { maxSteps: 30, turnCarry: carry() });
+			await runCodingLoop(deps, GOAL, { maxSteps: 30, turnCarry: carry() });
+			return notes.length;
+		};
+		const shared: TurnCarry = { turns: EMPTY_STREAK, transientStreak: 0 };
+		expect(await rounds(() => shared)).toBe(1);
+		// What a fresh streak per round did: the old turn read as a second failure.
+		expect(await rounds(() => ({ turns: EMPTY_STREAK, transientStreak: 0 }))).toBe(2);
 	});
 });

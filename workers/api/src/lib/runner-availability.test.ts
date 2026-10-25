@@ -469,3 +469,24 @@ describe("a read the relay timed out waits for the runner to ANSWER, then resume
 		expect(park.begin).not.toHaveBeenCalled();
 	});
 });
+
+describe("a connectivity check that could not be answered is unknown, not 'disconnected' (#1344)", () => {
+	const stepper = (): RunStep => (async (_name: string, fn: () => Promise<unknown>) => fn()) as RunStep;
+
+	it("a genuine failure during a D1 blip fails at once instead of waiting for a runner that may be fine", async () => {
+		const wait = waitDeps([], { probe: async () => { throw new Error("D1_ERROR: Network connection lost."); } });
+		const reconnect = vi.fn(async () => undefined);
+		const guard = makeRunnerGuard({ wait, reconnect });
+		await expect(guard(stepper(), "s7", async () => { throw new Error("typecheck failed"); })).rejects.toThrow("typecheck failed");
+		expect(wait.slept).toEqual([]);
+		expect(reconnect).not.toHaveBeenCalled();
+	});
+
+	it("a failure the relay positively reports as disconnected still waits, as before", async () => {
+		const wait = waitDeps([OFFLINE, OFFLINE, ONLINE]);
+		const guard = makeRunnerGuard({ wait, reconnect: async () => undefined });
+		let attempts = 0;
+		await expect(guard(stepper(), "s8", async () => { if (attempts++ === 0) throw new Error("fetch failed"); return "ok"; })).resolves.toBe("ok");
+		expect(wait.slept.length).toBeGreaterThan(0);
+	});
+});

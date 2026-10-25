@@ -18,7 +18,7 @@ import {
 	rereads,
 	PILOT_PANE_CHARS,
 } from "./coding-repetition.js";
-import { clockLine } from "./coding-wait.js";
+import { clockLine, type ResetHint } from "./coding-wait.js";
 import { engineSignInBlock, type EngineAuthPrompt } from "./engine-auth-prompt.js";
 import { engineProviderError, providerTurnVerdict } from "./engine-provider-error.js";
 import { deadSessionDetail } from "./coding-dead-session.js";
@@ -256,6 +256,10 @@ export interface CodingResult {
 	parts?: AskPart[];
 	/** On `waiting`: the reset instant the Engine named, unvalidated — the planner decides what it is worth. */
 	waitUntil?: string;
+	/** On `waiting` read from the CLI's own words (#1344): when the limit lifts, placed in time by the planner. */
+	resetHint?: ResetHint;
+	/** On `waiting` (#1344): `transient` parks on a short ladder of its own, never the usage-limit budget. */
+	waitKind?: "limit" | "transient";
 	steps: number;
 	transcript?: string[];
 	/** On `max_steps`, when the brain answered the cap decision (#1261) — absent falls back to the generic ending. */
@@ -295,7 +299,17 @@ const MAX_REFUSALS = 3;
  */
 const MAX_EMPTY_INSTRUCTIONS = 3;
 
-export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number; evidence?: CompletionEvidence } = {}): Promise<CodingResult> {
+/**
+ * The failed-turn streak, held by the workflow ACROSS rounds like `evidence` (#1344). A round used to start from an empty
+ * streak, so the first snapshot after a park or a question re-read the turn before it as a new failure.
+ */
+export interface TurnCarry {
+	turns: TurnStreak;
+	/** Consecutive failed turns the engine's AI provider blamed on itself (#1326) — retried, not counted as strikes. */
+	transientStreak: number;
+}
+
+export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number; evidence?: CompletionEvidence; turnCarry?: TurnCarry } = {}): Promise<CodingResult> {
 	const maxSteps = opts.maxSteps ?? 30;
 	// The run's observed tool calls (#1019) — held by the workflow ACROSS rounds, so a claim is judged on the whole run.
 	const evidence = opts.evidence ?? new CompletionEvidence();
@@ -315,13 +329,8 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	const sentReads: string[][] = [];
 	/** The instruction this run was warned about repeating, if any — read by the `finish` branch. */
 	let repeatedInstruction: string | null = null;
-	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545). */
-	let turns: TurnStreak = EMPTY_STREAK;
-	// Consecutive failed turns the engine's AI provider blamed on itself (#1326) — retried, not counted as strikes.
-	let transientStreak = 0;
-	// Whether THIS round has sent a turn. The first snapshot after a park still carries the turn that parked it, and a new
-	// round starts with an empty streak, so that turn reads as new — re-parking on it would never retry (#1326).
-	let actedThisRound = false;
+	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545), carried across rounds (#1344). */
+	const carry: TurnCarry = opts.turnCarry ?? { turns: EMPTY_STREAK, transientStreak: 0 };
 
 	for (let step = 0; step < maxSteps; step++) {
 		let snap = await deps.snapshot();
@@ -360,10 +369,10 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		// Deduped on the turn's end-instant because the same report is re-read on every poll —
 		// the top-of-step snapshot, the `waitIdle` result and the next step's snapshot are three
 		// sightings of ONE turn, and counting sightings would trip the bound on a single failure.
-		const seen = observeTurn(turns, snap.lastTurn);
+		const seen = observeTurn(carry.turns, snap.lastTurn);
 		// A NEW turn that worked ends a transient run of failures; a re-read of the same turn changes nothing.
-		if (seen.streak.lastAt !== turns.lastAt && classifyTurn(snap.lastTurn) === "ok") transientStreak = 0;
-		turns = seen.streak;
+		if (seen.streak.lastAt !== carry.turns.lastAt && classifyTurn(snap.lastTurn) === "ok") carry.transientStreak = 0;
+		carry.turns = seen.streak;
 		let retryingProvider = false;
 		if (seen.newFailure) {
 			// A turn refused on a dead login is not one of three strikes — no instruction and no retry
@@ -372,10 +381,9 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			if (block) return reauthResult(block, goal, step, transcript);
 			// THE PROVIDER'S OWN WORDS (#1326): a usage window parks, a transient failure is retried, an empty account ends —
 			// none is the engine refusing to run, so none spends one of the three strikes below.
-			const reading = engineProviderError(turns.lastDetail, turns.lastTail);
-			const verdict = actedThisRound ? providerTurnVerdict(reading, transientStreak, goal.repo) : reading ? { transientStreak } : null;
-			transientStreak = verdict?.transientStreak ?? 0;
-			if (verdict) turns = { ...turns, consecutive: Math.max(0, turns.consecutive - 1) };
+			const verdict = providerTurnVerdict(engineProviderError(carry.turns.lastDetail, carry.turns.lastTail), carry.transientStreak, goal.repo);
+			carry.transientStreak = verdict?.transientStreak ?? 0;
+			if (verdict) carry.turns = { ...carry.turns, consecutive: Math.max(0, carry.turns.consecutive - 1) };
 			if (verdict?.end) {
 				transcript.push(`finish: engine_error — ${verdict.end}`);
 				return { outcome: "engine_error", detail: verdict.end, steps: step, transcript };
@@ -383,9 +391,8 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			if (verdict?.park) {
 				transcript.push(`waiting: ${verdict.park}`);
 				await deps.onEvent?.("waiting", verdict.park);
-				return { outcome: "waiting", detail: verdict.park, steps: step, transcript };
+				return { outcome: "waiting", detail: verdict.park, waitKind: verdict.waitKind, ...(verdict.resetHint ? { resetHint: verdict.resetHint } : {}), steps: step, transcript };
 			}
-			if (verdict && !actedThisRound) retryingProvider = true; // the parked turn: not a strike, and the next instruction is the retry
 			if (verdict?.retry) {
 				retryingProvider = true;
 				actionLog.push(verdict.retry);
@@ -394,7 +401,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			}
 		}
 		if (seen.newFailure && !retryingProvider) {
-			const note = engineFailureNote(turns);
+			const note = engineFailureNote(carry.turns);
 			actionLog.push(note);
 			transcript.push(note);
 			await deps.onEvent?.("engine_failed", note);
@@ -402,7 +409,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// invocation, and the production run's ending — a `request_human` nobody answered,
 			// timing out to "failed — stuck not resolved in time" fifteen minutes later — is the
 			// worst available one. The bound is CONSECUTIVE, so a run that recovers is untouched.
-			if (turns.consecutive >= MAX_ENGINE_FAILURES) return { ...engineErrorEnding(turns, goal.repo, transcript), steps: step, transcript };
+			if (carry.turns.consecutive >= MAX_ENGINE_FAILURES) return { ...engineErrorEnding(carry.turns, goal.repo, transcript), steps: step, transcript };
 		}
 
 		const decision = await deps.decide({ goal, actionLog, snapshot: snap });
@@ -450,7 +457,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			const block = engineSignInBlock(snap);
 			if (block) return reauthResult(block, goal, step, transcript);
 			// The turn it is looking at CRASHED (#1200): "ask a person" is the brain reading that off the pane — say what the CLI said.
-			if (turns.consecutive > 0) return { ...engineErrorEnding(turns, goal.repo, transcript), steps: step, transcript };
+			if (carry.turns.consecutive > 0) return { ...engineErrorEnding(carry.turns, goal.repo, transcript), steps: step, transcript };
 			return { outcome: "stuck", detail: decision.stuck.why, steps: step, transcript };
 		}
 		if (decision.needsInput?.incomplete && !askSentBack) {
@@ -471,7 +478,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		}
 		if (!decision.action) {
 			// No action and no terminal verdict → treat prose as a stuck signal — unless the last turn crashed (#1200).
-			if (turns.consecutive > 0) return { ...engineErrorEnding(turns, goal.repo, transcript), steps: step, transcript };
+			if (carry.turns.consecutive > 0) return { ...engineErrorEnding(carry.turns, goal.repo, transcript), steps: step, transcript };
 			return { outcome: "stuck", detail: decision.thought ?? "no action chosen", steps: step, transcript };
 		}
 
@@ -632,7 +639,6 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		await deps.onEvent?.("action", label, decision.action);
 		// An act the platform refused to send ends the run with ITS reason — on the last step too, not as max_steps (#1019).
 		const acted = await deps.act(decision.action);
-		actedThisRound = true;
 		if (acted?.cancelled) return { outcome: "cancelled", detail: acted.stopReason, steps: step + 1, transcript };
 		// After sending an instruction, let the CLI run to completion before the
 		// next decision — otherwise the brain reasons over a stale (pre-response)

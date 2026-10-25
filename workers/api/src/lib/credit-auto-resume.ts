@@ -34,6 +34,8 @@ import { startRefusalIsWaitable } from "./loop-drivers.js";
 import { readProviderAccountHealth } from "./provider-account-health.js";
 import { providerCredentialId, selectedProviderAccount, type HeldProvider } from "./provider-account-hold.js";
 import { getUserCloudflareAiCredentials, getUserProviderKey, runUserWorkersAi } from "./user-ai.js";
+import { pilotModelProblem } from "./pilot-model.js";
+import type { PilotModelId } from "./pilot-model-contract.js";
 import { readInstanceConfigPair } from "./instance-config.js";
 import { parseAccountPreferences } from "./preferences.js";
 
@@ -56,7 +58,7 @@ export interface CreditResumeDeps {
 	/** Start the successor. Defaults to the Continue path. */
 	start?: (env: Env, run: LoopRunView, userId: string) => Promise<{ ok: true; runId: string } | { ok: false; reason?: string; error: string }>;
 	/** The four-token probe of this owner's key on `provider`; true when it worked (which also clears the hold). */
-	probe?: (env: Env, userId: string, provider: HeldProvider) => Promise<boolean>;
+	probe?: (env: Env, userId: string, provider: HeldProvider, model?: string | null) => Promise<boolean | ProbeOutcome>;
 	windowMs?: number;
 }
 
@@ -104,7 +106,9 @@ async function keyRecoveredSince(env: Env, userId: string, instanceId: string, s
 	const hold = await env.DB.prepare("SELECT failure_class, failed_at, cleared_at FROM provider_account_holds WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3")
 		.bind(userId, account.provider, account.credentialId)
 		.first<{ failure_class: string; failed_at: number; cleared_at: number | null }>();
-	const label = `…${account.credentialId.substring(0, 4)}`;
+	// The key's real last four, as the owner sees it in Profile and at the provider — never a slice of the credential's hash (#1344).
+	const hint = await env.DB.prepare("SELECT key_hint FROM user_api_keys WHERE user_id = ?1 AND provider = ?2").bind(userId, account.provider).first<{ key_hint: string | null }>().catch(() => null);
+	const label = hint?.key_hint ? `…${hint.key_hint}` : "the stored key";
 	// Either class: a run stopped on credit whose key was later refused (or the other way round) recovers when THIS key works.
 	if (hold) return hold.cleared_at !== null && hold.cleared_at >= stoppedAt ? { recovered: true, label, at: hold.cleared_at } : { recovered: false, label, at: null };
 	if (account.provider !== "anthropic") return { recovered: false, label, at: null };
@@ -190,16 +194,23 @@ async function currentCredentialId(env: Env, userId: string, provider: HeldProvi
 	return credential ? providerCredentialId(provider, credential) : null;
 }
 
-/** The model each held provider's probe names — the same pair `POST /v1/keys/:provider/verify` uses. */
+/** The model each held provider's probe names when the hold recorded none — the same pair `POST /v1/keys/:provider/verify` uses. */
 const PROBE_MODEL: Record<HeldProvider, string> = { anthropic: "claude-sonnet-4-6", cloudflare: "@cf/meta/llama-3.2-3b-instruct" };
 
-/** The verify request: four tokens against the owner's key. A success clears the hold as any real call does; any failure is "not yet". */
-export async function probeProviderKey(env: Env, userId: string, provider: HeldProvider): Promise<boolean> {
+export interface ProbeOutcome { ok: boolean; error?: string }
+
+/**
+ * The verify request: four tokens against the owner's key, on the MODEL the refused request named (#1344) — a 403 that only
+ * one model gets used to pass a probe on the default model, clear the hold, and fail again. A success clears the hold as any
+ * real call does; a failure is "not yet", with the provider's words for the record.
+ */
+export async function probeProviderKey(env: Env, userId: string, provider: HeldProvider, model?: string | null): Promise<ProbeOutcome> {
+	const anthropicModel = provider === "anthropic" && model && !pilotModelProblem(model) ? (model as PilotModelId) : undefined;
 	try {
-		await runUserWorkersAi(env, userId, PROBE_MODEL[provider], { messages: [{ role: "system", content: "Reply with exactly: ok" }, { role: "user", content: "verify" }], max_tokens: 4, maxTokens: 4 }, undefined, { provider });
-		return true;
-	} catch {
-		return false;
+		await runUserWorkersAi(env, userId, model && provider === "cloudflare" ? model : PROBE_MODEL[provider], { messages: [{ role: "system", content: "Reply with exactly: ok" }, { role: "user", content: "verify" }], max_tokens: 4, maxTokens: 4 }, undefined, { provider, ...(anthropicModel ? { anthropicModel } : {}) });
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: clipMarked(e instanceof Error ? e.message : String(e), 400, { within: true }) };
 	}
 }
 
@@ -214,8 +225,8 @@ export async function probeFailingKeys(env: Env, deps: CreditResumeDeps = {}): P
 	const probe = deps.probe ?? probeProviderKey;
 	const out = { probed: 0, recovered: 0 };
 	const { results } = await env.DB.prepare(
-		`SELECT h.user_id, h.provider, h.credential_id, h.failed_at, h.probe_attempts FROM provider_account_holds h
-		  WHERE h.cleared_at IS NULL AND h.failed_at > ?1 AND (h.next_probe_at IS NULL OR h.next_probe_at <= ?2)
+		`SELECT h.user_id, h.provider, h.credential_id, h.failed_at, h.probe_attempts, h.model FROM provider_account_holds h
+		  WHERE h.cleared_at IS NULL AND COALESCE(h.first_failed_at, h.failed_at) > ?1 AND (h.next_probe_at IS NULL OR h.next_probe_at <= ?2)
 		    AND (
 		      (h.failure_class = 'provider_credit' AND h.provider = 'anthropic'
 		        AND EXISTS (SELECT 1 FROM agent_loop_runs r JOIN agent_instances i ON i.id = r.instance_id AND i.status = 'active'
@@ -224,7 +235,7 @@ export async function probeFailingKeys(env: Env, deps: CreditResumeDeps = {}): P
 		        AND EXISTS (SELECT 1 FROM agent_instances i WHERE i.user_id = h.user_id AND i.status = 'active'))
 		    )
 		  LIMIT 25`,
-	).bind(now - PROBE_GIVE_UP_MS, now, now - (deps.windowMs ?? AUTO_RESUME_WINDOW_MS)).all<{ user_id: string; provider: HeldProvider; credential_id: string; failed_at: number; probe_attempts: number }>();
+	).bind(now - PROBE_GIVE_UP_MS, now, now - (deps.windowMs ?? AUTO_RESUME_WINDOW_MS)).all<{ user_id: string; provider: HeldProvider; credential_id: string; failed_at: number; probe_attempts: number; model: string | null }>();
 	for (const h of results ?? []) {
 		// A hold on a key since replaced (or removed) is retired, not probed: the probe would spend the NEW key, pass, and
 		// leave the old row due again on the next tick — a real provider call every minute (review of #1326).
@@ -233,14 +244,25 @@ export async function probeFailingKeys(env: Env, deps: CreditResumeDeps = {}): P
 			continue;
 		}
 		out.probed++;
-		const ok = await probe(env, h.user_id, h.provider).catch(() => false);
-		if (ok) {
+		const raw = await probe(env, h.user_id, h.provider, h.model).catch((e: unknown): ProbeOutcome => ({ ok: false, error: String(e) }));
+		const res: ProbeOutcome = typeof raw === "boolean" ? { ok: raw } : raw;
+		const attempts = res.ok ? 0 : h.probe_attempts + 1;
+		const nextAt = res.ok ? null : now + probeDelayMs(attempts);
+		if (res.ok) {
 			out.recovered++;
 			await env.DB.prepare("UPDATE provider_account_holds SET probe_attempts = 0, next_probe_at = NULL WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3").bind(h.user_id, h.provider, h.credential_id).run();
 		} else {
-			const attempts = h.probe_attempts + 1;
-			await env.DB.prepare("UPDATE provider_account_holds SET probe_attempts = ?4, next_probe_at = ?5 WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3").bind(h.user_id, h.provider, h.credential_id, attempts, now + probeDelayMs(attempts)).run();
+			await env.DB.prepare("UPDATE provider_account_holds SET probe_attempts = ?4, next_probe_at = ?5 WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3").bind(h.user_id, h.provider, h.credential_id, attempts, nextAt).run();
 		}
+		// Every probe leaves a trace (#1344): a refused re-check was invisible, so "is the key still refused, and why" had no answer.
+		await logEvent(env, {
+			source: "auto-resume",
+			event: "provider_hold.probe",
+			level: res.ok ? "info" : "warn",
+			userId: h.user_id,
+			message: res.ok ? `${h.provider} key re-check passed — automatic runs resume` : `${h.provider} key still refused (attempt ${attempts}, next re-check ${new Date(nextAt as number).toISOString()}): ${res.error ?? "no detail"}`,
+			context: { provider: h.provider, ok: res.ok, attempt: attempts, nextAt, model: h.model, error: res.error ?? null },
+		}).catch(() => undefined);
 	}
 	return out;
 }

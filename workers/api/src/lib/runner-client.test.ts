@@ -10,7 +10,7 @@ import {
 	type RunnerConn,
 } from "./runner-client.js";
 import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
-import { isRunnerUnreachable } from "./runner-unreachable.js";
+import { isRunnerUnreachable, type RunnerUnreachableError } from "./runner-unreachable.js";
 import type { Env } from "../types.js";
 
 type MockRelay = {
@@ -134,6 +134,24 @@ describe("callRunner (relay-only)", () => {
 		expect(isRunnerUnreachable(await callRunner(mockConn({ RELAY: dropped }), "/test").catch((e) => e))).toBe(true);
 		const hung = mockRelay(async () => Response.json({ error: "Relay command timed out" }, { status: 504 }));
 		expect(isRunnerUnreachable(await callRunner(mockConn({ RELAY: hung }), "/test").catch((e) => e))).toBe(false);
+	});
+
+	it("only the RELAY's own 503 is 'no socket'; a runner's 503 is its own statement (#1344)", async () => {
+		const noSocket = mockRelay(async () => Response.json({ error: "No runner connected", code: "RUNNER_RELAY_NO_SOCKET" }, { status: 503 }));
+		const a = (await callRunner(mockConn({ RELAY: noSocket }), "/coding/act").catch((e) => e)) as RunnerUnreachableError;
+		expect(isRunnerUnreachable(a)).toBe(true);
+		expect(a.dispatched).toBe(false);
+		// The runner refusing new work while it drains for an update: refused before it ran, so still not dispatched —
+		// but a connected runner, said as such rather than "the relay has no live socket".
+		const draining = mockRelay(async () => Response.json({ error: "Runner is draining for a safe automatic update; retry shortly." }, { status: 503 }));
+		const d = (await callRunner(mockConn({ RELAY: draining }), "/coding/act").catch((e) => e)) as RunnerUnreachableError;
+		expect(isRunnerUnreachable(d)).toBe(true);
+		expect(d.dispatched).toBe(false);
+		expect(d.message).toContain("draining for an automatic update");
+		expect(d.message).not.toContain("no live socket");
+		// Any other runner 503 is an ordinary failure — never a false "nothing was sent, safe to re-send".
+		const other = mockRelay(async () => Response.json({ error: "Service Unavailable" }, { status: 503 }));
+		expect(isRunnerUnreachable(await callRunner(mockConn({ RELAY: other }), "/coding/act").catch((e) => e))).toBe(false);
 	});
 
 	it("a READ the relay timed out is a silent runner the guard can wait out; a mutating command keeps the plain error (#1341)", async () => {

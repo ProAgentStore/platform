@@ -85,8 +85,17 @@ export function isRunnerGone(e: unknown): boolean {
 	return e instanceof RunnerGoneError || (e as { runnerGone?: unknown } | null)?.runnerGone === true;
 }
 
-/** Classify a relay response. Exported so `runner-client.ts` and its tests agree on one rule. */
+/**
+ * Classify a relay response. Exported so `runner-client.ts` and its tests agree on one rule.
+ *
+ * A 503 is a disconnect only when the RELAY says so (#1344) — its no-socket or unresponsive answer. The relay passes a
+ * runner's own status through, so "any 503" also caught the runner's 503 while it drains for an update, and reported a
+ * connected runner as having no socket.
+ */
 export function relayFailureIsDisconnect(status: number, body: string): boolean {
-	if (status === 503) return true;
+	if (status === 503) return /RUNNER_RELAY_NO_SOCKET|RUNNER_RELAY_UNRESPONSIVE|"No runner connected"/.test(body);
 	return status === 504 && DROPPED_REASONS.some((r) => body.includes(r));
 }
+
+/** The runner refusing new work while it drains for a safe automatic update (packages/cli relay) — refused before anything ran. */
+export const DRAINING_MARKER = "draining for a safe automatic update";
