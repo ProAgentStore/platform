@@ -1,17 +1,18 @@
-import { type AskPart } from "./coding-ask.js";
-import { screenInstruction } from "./coding-authority.js";
-import { instructionKey, readTargets, repeatCaution, repeatNote, repeatStopDetail, repetitionVerdict, rereadNote, rereads } from "./coding-repetition.js";
-import { type ResetHint } from "./coding-wait.js";
+import type { AskPart } from "./coding-ask.js";
+import { repeatCaution } from "./coding-repetition.js";
+import type { ResetHint } from "./coding-wait.js";
 import { engineSignInBlock, type EngineAuthPrompt } from "./engine-auth-prompt.js";
-import { engineProviderError, providerTurnVerdict } from "./engine-provider-error.js";
 import { deadSessionDetail } from "./coding-dead-session.js";
 import { instructionAttributionNote } from "./run-attribution.js";
-import { classifyTurn, EMPTY_STREAK, engineErrorEnding, engineFailureNote, MAX_ENGINE_FAILURES, observeTurn, type TurnStreak } from "./coding-turn-outcome.js";
-import { activeConstraints, constraintSources, scopeRefusalNote, screenScopedInstruction } from "./coding-scope-constraints.js";
+import { EMPTY_STREAK, engineErrorEnding, foldTurn, type TurnCarry } from "./coding-turn-outcome.js";
 import { CompletionEvidence, evidenceNote, finishRefusalNote, judgeCompletion } from "./coding-completion-evidence.js";
 import { describeWriteRefusal } from "./write-scope-refusals.js";
 import { LEARNED_PREFIX } from "./coding-pilot.js";
-import type { CodingGoal, CodingPaneSnapshot, CodingActionKind, CodingOutcome, CodingDecision, CapSummary } from "./coding-loop-types.js";
+import { newLoopCounters, PILOT_DEFAULT_MAX_STEPS, type LoopEffect } from "./coding-loop-state.js";
+import { screenAction } from "./coding-screens.js";
+import type { CapSummary, CodingActionKind, CodingDecision, CodingGoal, CodingOutcome, CodingPaneSnapshot } from "./coding-loop-types.js";
+
+export type { TurnCarry } from "./coding-turn-outcome.js";
 
 /**
  * The coding orchestrator's brain loop.
@@ -57,63 +58,19 @@ export interface CodingDeps {
 	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
 }
 
-/**
- * How many refusals the merge-authority screen may issue before the run finishes.
- *
- * The screen is a heuristic over natural language (see coding-authority.ts), so it needs a bound:
- * a brain that keeps rephrasing the same forbidden instruction must not burn all 40 BYOK-Claude
- * decisions doing it. Three is enough for the brain to genuinely change course after reading the
- * refusal in its own step log, and small enough that a false positive costs a stopped run with a
- * clear reason rather than a long silent one.
- */
-const MAX_REFUSALS = 3;
-
-/**
- * How many empty instructions in a row end the run (#504).
- *
- * CONSECUTIVE, and reset by any instruction that is actually sent, because the production run this
- * comes from recovered on its own: eleven of nineteen steps were empty, but the brain went back to
- * a short instruction each time it was told nothing had been sent. Three in a row is the point at
- * which it is not recovering, and stopping there costs a named failure instead of the 4.6 minutes
- * of engine turns and BYOK decisions that run spent driving "" into a live coding CLI.
- */
-const MAX_EMPTY_INSTRUCTIONS = 3;
-
-/**
- * The failed-turn streak, held by the workflow ACROSS rounds like `evidence` (#1344). A round used to start from an empty
- * streak, so the first snapshot after a park or a question re-read the turn before it as a new failure.
- */
-export interface TurnCarry {
-	turns: TurnStreak;
-	/** Consecutive failed turns the engine's AI provider blamed on itself (#1326) — retried, not counted as strikes. */
-	transientStreak: number;
-	/**
-	 * A turn worked since the last transient park (#1362). The workflow resets the transient-wait ladder on it, so the
-	 * ladder bounds one outage: three short outages hours apart used to spend it, and the fourth ended the run.
-	 */
-	okTurnSeen?: boolean;
-}
-
 export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number; evidence?: CompletionEvidence; turnCarry?: TurnCarry } = {}): Promise<CodingResult> {
-	const maxSteps = opts.maxSteps ?? 30;
+	const maxSteps = opts.maxSteps ?? PILOT_DEFAULT_MAX_STEPS;
 	// The run's observed tool calls (#1019) — held by the workflow ACROSS rounds, so a claim is judged on the whole run.
 	const evidence = opts.evidence ?? new CompletionEvidence();
-	let scopeRefusals = 0;
-	let finishPushedBack = false;
+	const counters = newLoopCounters();
 	const transcript: string[] = [];
 	const actionLog: string[] = [];
-	let refusals = 0;
-	let askSentBack = false;
-	let emptyInstructions = 0;
-	/** Normalised key of every instruction actually driven into the engine, in order (#522). */
-	const sentKeys: string[] = [];
-	/**
-	 * Parallel to `sentKeys` (#807): the file a sent instruction READ, or `""` when it read nothing.
-	 * One entry per sent instruction so an index is an instruction ordinal, not a read ordinal.
-	 */
-	const sentReads: string[][] = [];
-	/** The instruction this run was warned about repeating, if any — read by the `finish` branch. */
-	let repeatedInstruction: string | null = null;
+	/** Say one effect a pure helper asked for: the Pilot's step log, the transcript, then the listener — in that order. */
+	const say = async (e: LoopEffect): Promise<void> => {
+		if (e.log !== undefined) actionLog.push(e.log);
+		if (e.transcript !== undefined) transcript.push(e.transcript);
+		if (e.event) await deps.onEvent?.(e.event.name, e.event.detail);
+	};
 	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545), carried across rounds (#1344). */
 	const carry: TurnCarry = opts.turnCarry ?? { turns: EMPTY_STREAK, transientStreak: 0 };
 
@@ -154,50 +111,13 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		// Deduped on the turn's end-instant because the same report is re-read on every poll —
 		// the top-of-step snapshot, the `waitIdle` result and the next step's snapshot are three
 		// sightings of ONE turn, and counting sightings would trip the bound on a single failure.
-		const seen = observeTurn(carry.turns, snap.lastTurn);
-		// A NEW turn that worked ends a transient run of failures; a re-read of the same turn changes nothing.
-		if (seen.streak.lastAt !== carry.turns.lastAt && classifyTurn(snap.lastTurn) === "ok") {
-			carry.transientStreak = 0;
-			carry.okTurnSeen = true;
-		}
-		carry.turns = seen.streak;
-		let retryingProvider = false;
-		if (seen.newFailure) {
-			// A turn refused on a dead login is not one of three strikes — no instruction and no retry
-			// changes it, and only the owner signing the engine in does (#881).
-			const block = engineSignInBlock(snap);
-			if (block) return reauthResult(block, goal, step, transcript);
-			// THE PROVIDER'S OWN WORDS (#1326): a usage window parks, a transient failure is retried, an empty account ends —
-			// none is the engine refusing to run, so none spends one of the three strikes below.
-			const verdict = providerTurnVerdict(engineProviderError(carry.turns.lastDetail, carry.turns.lastTail), carry.transientStreak, goal.repo);
-			carry.transientStreak = verdict?.transientStreak ?? 0;
-			if (verdict) carry.turns = { ...carry.turns, consecutive: Math.max(0, carry.turns.consecutive - 1) };
-			if (verdict?.end) {
-				transcript.push(`finish: engine_error — ${verdict.end}`);
-				return { outcome: "engine_error", detail: verdict.end, steps: step, transcript };
-			}
-			if (verdict?.park) {
-				transcript.push(`waiting: ${verdict.park}`);
-				await deps.onEvent?.("waiting", verdict.park);
-				return { outcome: "waiting", detail: verdict.park, waitKind: verdict.waitKind, ...(verdict.resetHint ? { resetHint: verdict.resetHint } : {}), steps: step, transcript };
-			}
-			if (verdict?.retry) {
-				retryingProvider = true;
-				actionLog.push(verdict.retry);
-				transcript.push(verdict.retry);
-				await deps.onEvent?.("engine_failed", verdict.retry);
-			}
-		}
-		if (seen.newFailure && !retryingProvider) {
-			const note = engineFailureNote(carry.turns);
-			actionLog.push(note);
-			transcript.push(note);
-			await deps.onEvent?.("engine_failed", note);
-			// `failed`, not `stuck`: no human takeover fixes a CLI that refuses on every
-			// invocation, and the production run's ending — a `request_human` nobody answered,
-			// timing out to "failed — stuck not resolved in time" fifteen minutes later — is the
-			// worst available one. The bound is CONSECUTIVE, so a run that recovers is untouched.
-			if (carry.turns.consecutive >= MAX_ENGINE_FAILURES) return { ...engineErrorEnding(carry.turns, goal.repo, transcript), steps: step, transcript };
+		const folded = foldTurn(carry, snap, { repo: goal.repo, signInBlock: () => engineSignInBlock(snap) });
+		Object.assign(carry, folded.carry);
+		for (const e of folded.effects) await say(e);
+		if (folded.ending?.kind === "reauth") return reauthResult(folded.ending.block, goal, step, transcript);
+		if (folded.ending) {
+			const { kind: _kind, ...result } = folded.ending;
+			return { ...result, steps: step, transcript };
 		}
 
 		const decision = await deps.decide({ goal, actionLog, snapshot: snap });
@@ -208,8 +128,8 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// A completion CLAIM is held to the run's own tool calls (#1019): a contradiction the Pilot can
 			// still fix (stale green run, focused-as-full, a push that moved nothing) goes back to it ONCE.
 			const judged = decision.finish.status === "done" ? judgeCompletion(decision.finish.detail, evidence) : null;
-			if (judged?.correctable.length && !finishPushedBack) {
-				finishPushedBack = true;
+			if (judged?.correctable.length && !counters.finishPushedBack) {
+				counters.finishPushedBack = true;
 				const note = finishRefusalNote(judged);
 				actionLog.push(note);
 				transcript.push(note);
@@ -221,7 +141,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// five specs the owner asked for were not among them. The loop cannot honestly rewrite the
 			// brain's summary, so it states the one thing it measured and lets the reader check.
 			const checked = judged ? evidenceNote(judged) : "";
-			const detail = [decision.finish.detail, decision.finish.status === "done" && repeatedInstruction ? repeatCaution(repeatedInstruction) : "", checked].filter(Boolean).join("\n\n");
+			const detail = [decision.finish.detail, decision.finish.status === "done" && counters.repeatedInstruction ? repeatCaution(counters.repeatedInstruction) : "", checked].filter(Boolean).join("\n\n");
 			transcript.push(`finish: ${decision.finish.status} — ${detail}`);
 			return {
 				outcome: decision.finish.status === "done" ? "done" : "failed",
@@ -248,10 +168,10 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			if (carry.turns.consecutive > 0) return { ...engineErrorEnding(carry.turns, goal.repo, transcript), steps: step, transcript };
 			return { outcome: "stuck", detail: decision.stuck.why, steps: step, transcript };
 		}
-		if (decision.needsInput?.incomplete && !askSentBack) {
+		if (decision.needsInput?.incomplete && !counters.askSentBack) {
 			// #1224: a question that introduces choices and gives none would park as a headline nobody can
 			// answer. Sent back once through the step log, as a merge refusal is; a second one parks free-form.
-			askSentBack = true;
+			counters.askSentBack = true;
 			const note = `ask_owner not sent: "${decision.needsInput.field}" introduces choices but gave no options — put them in options (or parts), a sentence each is fine, or ask the whole question in question`;
 			actionLog.push(note);
 			transcript.push(note);
@@ -284,105 +204,12 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		// through the step log the next decision renders, and the brain demonstrably reacts to it. The
 		// note names the remedy (be shorter) because the leading hypothesis for the empties is an
 		// instruction truncated at the output cap.
-		if (decision.action.kind === "message" && !decision.action.text.trim()) {
-			emptyInstructions++;
-			const why = decision.truncated
-				? "it was cut off at the model's output limit before any text arrived"
-				: "the brain returned an instruction with no text";
-			const note = `empty instruction not sent (${why}) — send a SHORTER, self-contained instruction`;
-			actionLog.push(note);
-			transcript.push(note);
-			await deps.onEvent?.("empty", note);
-			if (emptyInstructions >= MAX_EMPTY_INSTRUCTIONS) {
-				return {
-					outcome: "failed",
-					detail: `The orchestrator produced ${emptyInstructions} empty instructions in a row (${why}). Nothing was sent to the engine — try again with a narrower objective.`,
-					steps: step,
-					transcript,
-				};
-			}
-			continue;
-		}
-		emptyInstructions = 0;
-
-		// MERGE AUTHORITY (#314): the orchestrator's own instruction is screened before it reaches
-		// the Engine. This is the layer that would have stopped run 73ffc073 — its objective said
-		// "merge each before starting the next" and the Pilot dutifully relayed it three times.
-		//
-		// The refusal goes into `actionLog`, which is rendered back to the brain as "Steps so far"
-		// on the next decision, so it ADAPTS rather than repeating: the loop already communicates
-		// with itself through that log and this needs no new channel. A no-op under the default
-		// policy, where `screenInstruction` returns null for everything.
-		const refusal = decision.action.kind === "message" ? screenInstruction(goal.mergePolicy ?? "merge", decision.action.text) : null;
-		if (refusal) {
-			refusals++;
-			const note = `refused (merge authority): ${refusal}`;
-			actionLog.push(note);
-			transcript.push(note);
-			await deps.onEvent?.("refused", refusal);
-			// Finish with the reason rather than exhausting the step budget in silence. "failed" is
-			// the honest status: the objective as given cannot be completed under this policy, and
-			// the detail says exactly why so the owner can approve the merge themselves.
-			if (refusals >= MAX_REFUSALS) return { outcome: "failed", detail: refusal, steps: step, transcript };
-			continue;
-		}
-		// THE OWNER'S SCOPE (#1019), enforced on the instruction itself: refused before transport, like the merge screen above.
-		const scoped = decision.action.kind === "message" ? screenScopedInstruction(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)), decision.action.text) : null;
-		if (scoped) {
-			const note = `refused (owner constraint): ${scopeRefusalNote(scoped)}`;
-			actionLog.push(note);
-			transcript.push(note);
-			await deps.onEvent?.("scope_refused", note);
-			if (++scopeRefusals >= MAX_REFUSALS) return { outcome: "failed", detail: `Stopped: the orchestrator kept producing instructions outside the owner's constraints. Last: ${scopeRefusalNote(scoped)}`, steps: step, transcript };
-			continue;
-		}
-
-		// REPEATED INSTRUCTION (#522). The two ways the Pilot gets stuck on one instruction — the CLI
-		// refusing it, and the CLI answering it outside the terminal window the Pilot can read — are
-		// indistinguishable from here and do not need to be told apart: both look like the same payload
-		// going out again, and both are bounded by counting that. The prompt rule #505 added for the
-		// first of them is prose, and a run repeated a byte-identical payload three times after it
-		// deployed; this is the code-side counterpart.
-		//
-		// Keyed on the instruction (fenced command preferred), counted over a WINDOW rather than the
-		// whole run — see coding-repetition.ts for why a naive consecutive-equality counter would have
-		// killed a working 26-step run at step 21.
-		if (decision.action.kind === "message") {
-			const key = instructionKey(decision.action.text);
-			const v = repetitionVerdict(sentKeys, key);
-			if (v.verdict === "stop") {
-				const why = repeatStopDetail(decision.action.text);
-				transcript.push(why);
-				await deps.onEvent?.("repeated", why);
-				// `stuck`, not `failed`: a refusal on safety grounds and an unreadable answer are both
-				// things a human settles in seconds, the takeover machinery already exists, and `failed`
-				// throws away a session nine steps in. An unanswered handoff still times out to `failed`.
-				return { outcome: "stuck", detail: why, steps: step, transcript };
-			}
-			if (v.verdict === "note") {
-				repeatedInstruction = decision.action.text;
-				const note = repeatNote(v);
-				actionLog.push(note);
-				transcript.push(note);
-				await deps.onEvent?.("repeated", note);
-			}
-			sentKeys.push(key);
-
-			// RE-READING (#807, widened at #822). The bound above keys on the payload, and "quote lines
-			// 1-80 of x.ts" and "quote lines 80-200 of x.ts" are two payloads — run 6bc4dbf3 sent nine
-			// of them and reached its first edit on step nine of ten. Keyed on WHAT is read instead —
-			// every path, and `gh issue view N` — and a NOTE only, never a stop: a re-read after an
-			// edit is real work, and the brain reacts to its own step log.
-			const targets = readTargets(decision.action.text);
-			const again = rereads(sentReads, targets);
-			if (again.length) {
-				const note = rereadNote(again);
-				actionLog.push(note);
-				transcript.push(note);
-				await deps.onEvent?.("repeated", note);
-			}
-			sentReads.push(targets);
-		}
+		// The screens an instruction passes before it reaches the engine: empty (#504), merge authority (#314), the owner's scope (#1019),
+		// repeat (#522) and re-read (#807). See coding-screens.ts.
+		const screened = screenAction(counters, goal, { action: decision.action, truncated: decision.truncated });
+		for (const e of screened.effects) await say(e);
+		if (screened.kind === "end") return { outcome: screened.outcome, detail: screened.detail, steps: step, transcript };
+		if (screened.kind === "skip") continue;
 
 		// SPEAKING FOR THE OWNER IS STAMPED WHERE IT IS SAID (#505), not only in the report.
 		//

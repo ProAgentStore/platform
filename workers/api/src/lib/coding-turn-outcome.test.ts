@@ -4,7 +4,9 @@ import {
 	EMPTY_STREAK,
 	engineFailureDetail,
 	engineFailureNote,
+	foldTurn,
 	MAX_ENGINE_FAILURES,
+	type TurnCarry,
 	observeTurn,
 	TURN_REPORT_MIN_CLI,
 } from "./coding-turn-outcome.js";
@@ -183,5 +185,88 @@ describe("the engine's own output reaches the failure summary (#889)", () => {
 	it("a later SUCCESS clears it — a recovered engine carries no stale output", () => {
 		const s = observeTurn(threeOf(TAIL_401), okAt(99)).streak;
 		expect(s.lastTail).toBeUndefined();
+	});
+});
+
+describe("foldTurn — the loop's failed-turn handling as a pure reducer (#1359)", () => {
+	const fresh = (): TurnCarry => ({ turns: EMPTY_STREAK, transientStreak: 0 });
+	const ctx = (block: ReturnType<typeof Object> | null = null) => ({ repo: "acme/app", signInBlock: () => (block as never) ?? null });
+
+	it("a healthy or unreported turn changes nothing and says nothing", () => {
+		expect(foldTurn(fresh(), {}, ctx())).toEqual({ carry: fresh(), effects: [], ending: null });
+		const ok = foldTurn(fresh(), { lastTurn: okAt(5) }, ctx());
+		expect(ok.effects).toEqual([]);
+		expect(ok.ending).toBeNull();
+		expect(ok.carry).toMatchObject({ transientStreak: 0, okTurnSeen: true });
+	});
+
+	it("does not mutate the carry it is given", () => {
+		const before = fresh();
+		foldTurn(before, { lastTurn: failedAt(1, "boom") }, ctx());
+		expect(before).toEqual(fresh());
+	});
+
+	it("reports a NEW failure once, and a re-read of the same turn not at all", () => {
+		const first = foldTurn(fresh(), { lastTurn: failedAt(10, "invalid model") }, ctx());
+		expect(first.ending).toBeNull();
+		expect(first.effects).toHaveLength(1);
+		expect(first.effects[0]).toMatchObject({ event: { name: "engine_failed" } });
+		expect(first.effects[0].log).toBe(first.effects[0].transcript);
+		expect(first.carry.turns.consecutive).toBe(1);
+		const again = foldTurn(first.carry, { lastTurn: failedAt(10, "invalid model") }, ctx());
+		expect(again.effects).toEqual([]);
+		expect(again.carry.turns.consecutive).toBe(1);
+	});
+
+	it("ends in engine_error on the third consecutive failure, after its note, with the transcript line", () => {
+		let carry = fresh();
+		let last = foldTurn(carry, { lastTurn: failedAt(1, "exit 1") }, ctx());
+		for (let i = 2; i <= MAX_ENGINE_FAILURES; i++) {
+			expect(last.ending).toBeNull();
+			carry = last.carry;
+			last = foldTurn(carry, { lastTurn: failedAt(i, "exit 1") }, ctx());
+		}
+		expect(last.ending).toMatchObject({ kind: "result", outcome: "engine_error" });
+		expect(last.effects.at(-1)?.transcript).toMatch(/^finish: engine_error — /);
+		expect(last.effects[0]?.event?.name).toBe("engine_failed");
+	});
+
+	it("a worked turn resets the streak between failures", () => {
+		const a = foldTurn(fresh(), { lastTurn: failedAt(1, "x") }, ctx());
+		const b = foldTurn(a.carry, { lastTurn: okAt(2) }, ctx());
+		expect(b.carry.turns.consecutive).toBe(0);
+		expect(foldTurn(b.carry, { lastTurn: failedAt(3, "x") }, ctx()).carry.turns.consecutive).toBe(1);
+	});
+
+	it("a dead login is a reauth ending, not a strike, and says nothing itself", () => {
+		const block = { engine: "claude", evidence: "Please run /login" };
+		const v = foldTurn(fresh(), { lastTurn: failedAt(1, "not logged in") }, ctx(block));
+		expect(v.ending).toEqual({ kind: "reauth", block });
+		expect(v.effects).toEqual([]);
+	});
+
+	it("the provider's own words: a usage limit parks without spending a strike, a first transient failure retries, a second parks, billing ends", () => {
+		const limit = foldTurn(fresh(), { lastTurn: failedAt(1, "You've hit your weekly limit · resets Mon 9am") }, ctx());
+		expect(limit.ending).toMatchObject({ kind: "result", outcome: "waiting", waitKind: "limit" });
+		expect(limit.effects[0]).toMatchObject({ event: { name: "waiting" } });
+		expect(limit.carry.turns.consecutive).toBe(0);
+
+		const retry = foldTurn(fresh(), { lastTurn: failedAt(1, "API Error: 529 overloaded_error") }, ctx());
+		expect(retry.ending).toBeNull();
+		expect(retry.carry.transientStreak).toBe(1);
+		expect(retry.carry.turns.consecutive).toBe(0);
+		expect(retry.effects[0]).toMatchObject({ event: { name: "engine_failed" } });
+		const park = foldTurn(retry.carry, { lastTurn: failedAt(2, "API Error: 529 overloaded_error") }, ctx());
+		expect(park.ending).toMatchObject({ kind: "result", outcome: "waiting", waitKind: "transient" });
+
+		const billing = foldTurn(fresh(), { lastTurn: failedAt(1, "You're out of usage credits") }, ctx());
+		expect(billing.ending).toMatchObject({ kind: "result", outcome: "engine_error" });
+		expect(billing.effects).toEqual([{ transcript: expect.stringMatching(/^finish: engine_error — /) }]);
+	});
+
+	it("a worked turn after a transient failure resets the ladder and marks it", () => {
+		const retry = foldTurn(fresh(), { lastTurn: failedAt(1, "API Error: 529 overloaded_error") }, ctx());
+		const ok = foldTurn(retry.carry, { lastTurn: okAt(2) }, ctx());
+		expect(ok.carry).toMatchObject({ transientStreak: 0, okTurnSeen: true });
 	});
 });

@@ -21,6 +21,9 @@
  *
  * Pure, so the table below is testable without a runner, a Workflow or an LLM.
  */
+import type { LoopEffect } from "./coding-loop-state.js";
+import type { EngineAuthPrompt } from "./engine-auth-prompt.js";
+import { engineProviderError, providerTurnVerdict, type ProviderTurnVerdict } from "./engine-provider-error.js";
 import { redactText } from "./redact.js";
 
 /** The runner's report, widened to what arrives over HTTP from a machine we do not control. */
@@ -230,4 +233,80 @@ export function engineErrorEnding(turns: TurnStreak, repo: string, transcript: s
 	const detail = engineFailureDetail(turns, repo);
 	transcript.push(`finish: engine_error — ${detail}`);
 	return { outcome: "engine_error", detail };
+}
+
+/**
+ * The failed-turn streak, held by the workflow ACROSS rounds like `evidence` (#1344). A round used to start from an empty
+ * streak, so the first snapshot after a park or a question re-read the turn before it as a new failure.
+ */
+export interface TurnCarry {
+	turns: TurnStreak;
+	/** Consecutive failed turns the engine's AI provider blamed on itself (#1326) — retried, not counted as strikes. */
+	transientStreak: number;
+	/**
+	 * A turn worked since the last transient park (#1362). The workflow resets the transient-wait ladder on it, so the
+	 * ladder bounds one outage: three short outages hours apart used to spend it, and the fourth ended the run.
+	 */
+	okTurnSeen?: boolean;
+}
+
+/** How a snapshot's failed turn ends the run, if it does. `reauth` carries the prompt the loop words itself (#881). */
+export type TurnEnding =
+	| { kind: "reauth"; block: EngineAuthPrompt }
+	| { kind: "result"; outcome: "engine_error" | "waiting"; detail: string; waitKind?: ProviderTurnVerdict["waitKind"]; resetHint?: ProviderTurnVerdict["resetHint"] };
+
+export interface TurnVerdict {
+	/** The carry after this snapshot. The loop copies it onto the workflow's object, which outlives the round. */
+	carry: TurnCarry;
+	/** Notes to say, in order, before the ending (if any) is returned. */
+	effects: LoopEffect[];
+	ending: TurnEnding | null;
+}
+
+/**
+ * The engine's own verdict on its last turn, folded into the run (#545, #1326, #1344): the loop's failed-turn handling as a
+ * pure reducer. Same table as before it was lifted out of `runCodingLoop` — a NEW failed turn is reported once (the same
+ * turn is re-read on every poll), a dead login ends in `reauth`, the provider's own words park / retry / end, and anything
+ * else spends one of {@link MAX_ENGINE_FAILURES} consecutive strikes.
+ *
+ * `signInBlock` is read only when a new failure needs it.
+ */
+export function foldTurn(carry: TurnCarry, snap: { lastTurn?: EngineTurnReport | null }, ctx: { repo: string; signInBlock: () => EngineAuthPrompt | null }): TurnVerdict {
+	const effects: LoopEffect[] = [];
+	const seen = observeTurn(carry.turns, snap.lastTurn);
+	let next: TurnCarry = { ...carry, turns: seen.streak };
+	// A NEW turn that worked ends a transient run of failures; a re-read of the same turn changes nothing.
+	if (seen.streak.lastAt !== carry.turns.lastAt && classifyTurn(snap.lastTurn) === "ok") next = { ...next, transientStreak: 0, okTurnSeen: true };
+	if (!seen.newFailure) return { carry: next, effects, ending: null };
+
+	// A turn refused on a dead login is not one of three strikes — no instruction and no retry changes it, and only the owner signing the engine in does (#881).
+	const block = ctx.signInBlock();
+	if (block) return { carry: next, effects, ending: { kind: "reauth", block } };
+
+	// THE PROVIDER'S OWN WORDS (#1326): a usage window parks, a transient failure is retried, an empty account ends —
+	// none is the engine refusing to run, so none spends one of the strikes below.
+	const verdict = providerTurnVerdict(engineProviderError(next.turns.lastDetail, next.turns.lastTail), next.transientStreak, ctx.repo);
+	next = { ...next, transientStreak: verdict?.transientStreak ?? 0 };
+	if (verdict) next = { ...next, turns: { ...next.turns, consecutive: Math.max(0, next.turns.consecutive - 1) } };
+	if (verdict?.end) {
+		effects.push({ transcript: `finish: engine_error — ${verdict.end}` });
+		return { carry: next, effects, ending: { kind: "result", outcome: "engine_error", detail: verdict.end } };
+	}
+	if (verdict?.park) {
+		effects.push({ transcript: `waiting: ${verdict.park}`, event: { name: "waiting", detail: verdict.park } });
+		return { carry: next, effects, ending: { kind: "result", outcome: "waiting", detail: verdict.park, waitKind: verdict.waitKind, ...(verdict.resetHint ? { resetHint: verdict.resetHint } : {}) } };
+	}
+	if (verdict?.retry) {
+		effects.push({ log: verdict.retry, transcript: verdict.retry, event: { name: "engine_failed", detail: verdict.retry } });
+		return { carry: next, effects, ending: null };
+	}
+	const note = engineFailureNote(next.turns);
+	effects.push({ log: note, transcript: note, event: { name: "engine_failed", detail: note } });
+	// `failed`, not `stuck`: no human takeover fixes a CLI that refuses on every invocation. The bound is CONSECUTIVE, so a run that recovers is untouched.
+	if (next.turns.consecutive >= MAX_ENGINE_FAILURES) {
+		const detail = engineFailureDetail(next.turns, ctx.repo);
+		effects.push({ transcript: `finish: engine_error — ${detail}` });
+		return { carry: next, effects, ending: { kind: "result", outcome: "engine_error", detail } };
+	}
+	return { carry: next, effects, ending: null };
 }
