@@ -11,7 +11,8 @@
  * `runner_restart`), otherwise after a backoff that doubles from 10s to 5 minutes and resets once a
  * run has lasted 10 minutes. The OS unit only has to keep that supervisor alive:
  *
- *   - macOS: a launchd LaunchAgent (`KeepAlive`), loaded into the user's GUI session;
+ *   - macOS: a launchd LaunchAgent (`KeepAlive`), loaded into the user's GUI session — or, with `--daemon` (#1149), a
+ *     LaunchDaemon in /Library/LaunchDaemons run as this user (`UserName`), which starts at boot with nobody logged in;
  *   - Linux: a systemd user unit (`Restart=always`) — `loginctl enable-linger` lets it run with nobody logged in;
  *   - Windows: a Scheduled Task at startup, as this user (S4U), re-triggered every 5 minutes with `IgnoreNew` (#1154):
  *     Task Scheduler's own restart-on-failure only covers a task that fails to START, not a supervisor that was
@@ -26,6 +27,8 @@ import { posix, win32 } from "node:path";
 
 export const SERVICE_LABEL = "online.proagentstore.pags-up";
 export const SYSTEMD_UNIT = "pags-up.service";
+/** Where launchd requires a system-wide job: root-owned, or it refuses to load it. */
+export const daemonPlistPath = () => `/Library/LaunchDaemons/${SERVICE_LABEL}.plist`;
 export const WINDOWS_TASK = "pags up";
 
 export interface ServiceContext {
@@ -44,6 +47,8 @@ export interface ServiceContext {
 	user?: string;
 	/** Windows: the account's domain. */
 	domain?: string;
+	/** macOS: install a LaunchDaemon (starts at boot, needs sudo) instead of a LaunchAgent (#1149). */
+	daemon?: boolean;
 }
 
 export interface ServiceFile {
@@ -56,6 +61,8 @@ export interface ServiceCommand {
 	args: string[];
 	/** A failure is reported, but does not fail the install (e.g. unloading a unit that was not loaded). */
 	optional?: true;
+	/** Needs the owner's terminal (sudo asks for a password): run with inherited stdio, not captured. */
+	interactive?: true;
 	why: string;
 }
 
@@ -165,11 +172,82 @@ const pinnedNodeNote = (ctx: ServiceContext): string[] => {
 		: [];
 };
 
+/** The plist staged in the user's config dir; `sudo install` copies it to /Library/LaunchDaemons with the ownership launchd demands. */
+export const stagedDaemonPlist = (ctx: ServiceContext) => posix.join(ctx.configDir, `${SERVICE_LABEL}.daemon.plist`);
+
+/**
+ * A LaunchDaemon (#1149): loaded in launchd's system domain at boot, run as the owner (`UserName`) with their HOME, so the runner
+ * comes back after an unattended reboot without anyone logging in. The sign-in it needs is `~/.config/proagentstore/session.json`
+ * — a plain file, not a keychain item — so the same `pags login` works from a daemon. Everything but the plist copy and the
+ * load runs as the owner; those need sudo, which asks in the owner's terminal.
+ */
+function daemonPlan(ctx: ServiceContext, files: ServiceFile[]): ServicePlan {
+	if (!ctx.user || ctx.user === "root" || ctx.uid === 0) {
+		throw new Error("A LaunchDaemon runs as the account that owns the pags sign-in. Run `pags up --install-service --daemon` as that user (not root, not via sudo); it asks for sudo itself when it needs it.");
+	}
+	const staged = stagedDaemonPlist(ctx);
+	const target = daemonPlistPath();
+	const supervisor = supervisorPath(ctx);
+	const log = serviceLogPath(ctx);
+	const agent = posix.join(ctx.home, "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`);
+	const env = { HOME: ctx.home, USER: ctx.user, LOGNAME: ctx.user, PATH: ctx.pathEnv, PAGS_SERVICE_DOMAIN: "system" };
+	files.push({
+		path: staged,
+		content: `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>${SERVICE_LABEL}</string>
+	<key>UserName</key><string>${xml(ctx.user)}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>${xml(ctx.nodePath)}</string>
+		<string>${xml(supervisor)}</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+${Object.entries(env).map(([k, v]) => `		<key>${k}</key><string>${xml(v)}</string>`).join("\n")}
+	</dict>
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>30</integer>
+	<key>ProcessType</key><string>Background</string>
+	<key>WorkingDirectory</key><string>${xml(ctx.home)}</string>
+	<key>StandardOutPath</key><string>${xml(log)}</string>
+	<key>StandardErrorPath</key><string>${xml(log)}</string>
+</dict>
+</plist>
+`,
+	});
+	const sudo = (args: string[], why: string, optional?: true): ServiceCommand => ({ file: "sudo", args, why, interactive: true, ...(optional ? { optional } : {}) });
+	return {
+		kind: "launchd",
+		files,
+		commands: [
+			// One supervisor only: an earlier LaunchAgent copy would fight the daemon for the runner's lock.
+			{ file: "launchctl", args: ["bootout", `gui/${ctx.uid ?? 501}/${SERVICE_LABEL}`], optional: true, why: "unload the LaunchAgent, if there is one" },
+			{ file: "rm", args: ["-f", agent], optional: true, why: "remove the LaunchAgent plist" },
+			sudo(["launchctl", "bootout", `system/${SERVICE_LABEL}`], "unload an earlier LaunchDaemon", true),
+			sudo(["install", "-o", "root", "-g", "wheel", "-m", "644", staged, target], "install the LaunchDaemon plist (root-owned, as launchd requires)"),
+			sudo(["launchctl", "bootstrap", "system", target], "load the LaunchDaemon"),
+			sudo(["launchctl", "kickstart", "-k", `system/${SERVICE_LABEL}`], "start it now"),
+		],
+		notes: [
+			...pinnedNodeNote(ctx),
+			`LaunchDaemon ${target} — starts at boot as ${ctx.user}, with nobody logged in. It uses the sign-in in ${ctx.configDir} (a file, not the keychain); if you sign out with \`pags logout\` or the session expires, run \`pags login\` again.`,
+			"With FileVault on, a Mac that reboots still waits at the disk-unlock screen: the daemon starts after that unlock, not before.",
+			"The watchdog service is a LaunchAgent and is not installed under a daemon; the supervisor itself restarts a crashed runner.",
+			"Remove it with: pags up --uninstall-service",
+		],
+	};
+}
+
 /** The files and commands that install the service here. Pure — {@link installService} carries it out. */
 export function servicePlan(ctx: ServiceContext): ServicePlan {
 	const supervisor = supervisorPath(ctx);
 	const log = serviceLogPath(ctx);
 	const files: ServiceFile[] = [{ path: supervisor, content: supervisorScript(ctx) }];
+	if (ctx.platform === "darwin" && ctx.daemon) return daemonPlan(ctx, files);
 	if (ctx.platform === "darwin") {
 		const plist = posix.join(ctx.home, "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`);
 		const domain = `gui/${ctx.uid ?? 501}`;
@@ -278,6 +356,15 @@ WantedBy=default.target
 export function serviceRemovalPlan(ctx: ServiceContext): { commands: ServiceCommand[]; files: string[] } {
 	const plan = servicePlan(ctx);
 	const files = plan.files.map((f) => f.path);
+	if (plan.kind === "launchd" && ctx.daemon) {
+		return {
+			files,
+			commands: [
+				{ file: "sudo", args: ["launchctl", "bootout", `system/${SERVICE_LABEL}`], optional: true, interactive: true, why: "unload the LaunchDaemon" },
+				{ file: "sudo", args: ["rm", "-f", daemonPlistPath()], optional: true, interactive: true, why: "remove the LaunchDaemon plist" },
+			],
+		};
+	}
 	if (plan.kind === "launchd") return { files, commands: [{ file: "launchctl", args: ["bootout", `gui/${ctx.uid ?? 501}/${SERVICE_LABEL}`], optional: true, why: "unload the LaunchAgent" }] };
 	if (plan.kind === "systemd") return { files, commands: [{ file: "systemctl", args: ["--user", "disable", "--now", SYSTEMD_UNIT], optional: true, why: "stop and disable the unit" }] };
 	return {
@@ -289,14 +376,16 @@ export function serviceRemovalPlan(ctx: ServiceContext): { commands: ServiceComm
 export interface ServiceDeps {
 	write?: (path: string, content: string) => void;
 	remove?: (path: string) => void;
-	run?: (file: string, args: string[]) => void;
+	run?: (file: string, args: string[], opts?: { interactive?: boolean }) => void;
 }
 
 const defaultWrite = (path: string, content: string) => {
 	mkdirSync(path.replace(/[\\/][^\\/]*$/, ""), { recursive: true });
 	writeFileSync(path, content);
 };
-const defaultRun = (file: string, args: string[]) => void execFileSync(file, args, { stdio: "pipe", timeout: 60_000 });
+const defaultRun = (file: string, args: string[], opts?: { interactive?: boolean }) =>
+	// sudo asks for a password on the owner's terminal, so its output is not captured and it gets more than a minute to be answered.
+	void execFileSync(file, args, opts?.interactive ? { stdio: "inherit", timeout: 300_000 } : { stdio: "pipe", timeout: 60_000 });
 
 /** One line per thing done or refused. `ok` is false when a required command failed. */
 export function installService(ctx: ServiceContext, deps: ServiceDeps = {}): { ok: boolean; lines: string[] } {
@@ -312,7 +401,7 @@ function applyPlan(plan: ServicePlan, deps: ServiceDeps): { ok: boolean; lines: 
 	let ok = true;
 	for (const c of plan.commands) {
 		try {
-			(deps.run ?? defaultRun)(c.file, c.args);
+			(deps.run ?? defaultRun)(c.file, c.args, { interactive: c.interactive === true });
 			lines.push(`${c.why}: ok`);
 		} catch (e) {
 			const why = String((e as { stderr?: unknown }).stderr ?? "").trim() || (e instanceof Error ? e.message : String(e));
@@ -331,7 +420,7 @@ function removeByPlan(plan: { commands: ServiceCommand[]; files: string[] }, dep
 	const lines: string[] = [];
 	for (const c of plan.commands) {
 		try {
-			(deps.run ?? defaultRun)(c.file, c.args);
+			(deps.run ?? defaultRun)(c.file, c.args, { interactive: c.interactive === true });
 			lines.push(`${c.why}: ok`);
 		} catch (e) {
 			lines.push(`${c.why}: skipped — ${(e instanceof Error ? e.message : String(e)).split(/\r?\n/)[0].slice(0, 200)}`);

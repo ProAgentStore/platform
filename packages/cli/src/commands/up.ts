@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { requireSession } from "./login.js";
@@ -18,7 +19,7 @@ import { LineSplitter } from "../line-buffer.js";
 import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
 import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
-import { installService, uninstallService } from "../service-install.js";
+import { daemonPlistPath, installService, uninstallService } from "../service-install.js";
 import { serviceContext } from "../service-context.js";
 import { ensureWatchdogInstalled } from "../watchdog/ensure.js";
 import { logUpdateStep } from "../bootstrap/update-log.js";
@@ -65,10 +66,23 @@ export const upCommand = new Command("up")
 	// #1141: an OS supervisor (launchd / systemd / Scheduled Task) that starts `pags up` again whenever it exits — a
 	// crash, an update that never came back, a reboot — with backoff. See service-install.ts.
 	.option("--install-service", "Install an OS service that keeps `pags up` running (launchd, systemd or a Scheduled Task), then exit")
+	.option("--daemon", "With --install-service on macOS: a LaunchDaemon (needs sudo) that starts at boot with nobody logged in, instead of a LaunchAgent")
 	.option("--uninstall-service", "Remove the service --install-service installed, then exit")
-	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean; background?: boolean; installService?: boolean; uninstallService?: boolean }) => {
+	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean; background?: boolean; installService?: boolean; uninstallService?: boolean; daemon?: boolean }) => {
 		if (opts.uninstallService) {
 			for (const line of uninstallService(serviceContext()).lines) writeLine(line);
+			// A LaunchDaemon (#1149) is removed too when one is installed; the LaunchAgent removal above is harmless without one.
+			if (process.platform === "darwin" && (opts.daemon || existsSync(daemonPlistPath()))) for (const line of uninstallService({ ...serviceContext(), daemon: true }).lines) writeLine(line);
+			return;
+		}
+		if (opts.daemon && !opts.installService) {
+			writeLine("--daemon goes with --install-service (macOS): pags up --install-service --daemon");
+			process.exitCode = 1;
+			return;
+		}
+		if (opts.daemon && process.platform !== "darwin") {
+			writeLine("--daemon is for macOS. Linux uses a systemd user unit with linger, and Windows a Scheduled Task — both already start at boot; run `pags up --install-service`.");
+			process.exitCode = 1;
 			return;
 		}
 		// One restart owner from the FIRST start (#1154): a terminal `pags up` with no service or launcher above it
@@ -81,7 +95,14 @@ export const upCommand = new Command("up")
 		const session = requireSession();
 		if (opts.installService) {
 			// Signed in first: the service runs as this user, on this sign-in.
-			const result = installService(serviceContext());
+			let result: ReturnType<typeof installService>;
+			try {
+				result = installService({ ...serviceContext(), ...(opts.daemon ? { daemon: true } : {}) });
+			} catch (e) {
+				writeLine(e instanceof Error ? e.message : String(e));
+				process.exitCode = 1;
+				return;
+			}
 			for (const line of result.lines) writeLine(line);
 			writeLine(result.ok
 				? "The service starts `pags up` now and whenever it exits. A `pags up` already running here keeps the lock; the service takes over once it stops."

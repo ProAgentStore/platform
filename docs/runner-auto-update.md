@@ -199,7 +199,14 @@ Node supervisor (`~/.config/proagentstore/pags-up-supervisor.mjs`). It starts `p
 (an update or `runner_restart`), the supervisor starts it again after 1 second. After any other exit it
 waits, doubling the wait from 10 seconds up to 5 minutes, and resets the wait once a run has lasted 10
 minutes. `pags up --uninstall-service` removes it. The macOS LaunchAgent runs only while the user is
-logged in, so a Mac that has to come back after a reboot unattended needs automatic login. The Linux
+logged in, so a Mac that has to come back after a reboot unattended needs either automatic login or
+`pags up --install-service --daemon` (#1149): a LaunchDaemon in `/Library/LaunchDaemons` that runs as the
+owner (`UserName`, with their `HOME`) from boot, with nobody logged in. Run it as that user, not root; it asks
+for `sudo` in the terminal to copy the root-owned plist and load it, and replaces an existing LaunchAgent so
+two supervisors do not fight for the runner's lock. The sign-in it uses is the plain file in
+`~/.config/proagentstore`, not the keychain, so the same `pags login` works from the daemon. With FileVault on
+the Mac still waits at the disk-unlock screen after a reboot. The watchdog service is a LaunchAgent and is not
+installed under a daemon. `pags up --uninstall-service` removes whichever is installed. The Linux
 installer runs `loginctl enable-linger` so the unit runs with nobody logged in. On Windows the task is
 registered from an elevated PowerShell. If registering is refused, the installer leaves the script it
 wrote and says to run it from an elevated shell.

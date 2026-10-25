@@ -69,6 +69,9 @@ describe("a service-started runner installs the watchdog, once (#1320)", () => {
 	const x = ctx("darwin");
 	it("installs when the unit is absent", () => {
 		const install = vi.fn(() => ({ ok: true, lines: [] }));
+		const daemonRun = vi.fn(() => ({ ok: true, lines: [] }));
+		expect(ensureWatchdogInstalled(x, { PAGS_SERVICE: "1", PAGS_SERVICE_DOMAIN: "system" }, { exists: () => false, install: daemonRun })).toMatchObject({ action: "skipped", why: expect.stringMatching(/LaunchDaemon/) });
+		expect(daemonRun).not.toHaveBeenCalled();
 		expect(ensureWatchdogInstalled(x, { PAGS_SERVICE: "1" }, { exists: () => false, install })).toEqual({ action: "installed", why: "installed the watchdog service" });
 		expect(install).toHaveBeenCalledTimes(1);
 	});

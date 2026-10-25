@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installService, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
+import { daemonPlistPath, installService, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
 
 const mac: ServiceContext = { platform: "darwin", home: "/Users/serge", nodePath: "/opt/homebrew/bin/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/serge/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin:/bin", uid: 501, user: "serge" };
 const linux: ServiceContext = { platform: "linux", home: "/home/serge", nodePath: "/usr/bin/node", script: "/usr/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/home/serge/.config/proagentstore", pathEnv: "/usr/local/bin:/usr/bin", user: "serge" };
@@ -201,5 +201,68 @@ describe("a service pinned to a version manager's Node (#1154)", () => {
 			expect(servicePlan(pinned).notes.join("\n")).toMatch(/installed by nvm.*run `pags up --install-service` again/);
 			expect(servicePlan(ctx).notes.join("\n")).not.toMatch(/installed by/);
 		}
+	});
+});
+
+describe("macOS LaunchDaemon (#1149): restart after an unattended reboot", () => {
+	const daemon: ServiceContext = { ...mac, daemon: true };
+
+	it("a system-domain job run AS the owner, with their HOME, staged in the config dir and installed root-owned", () => {
+		const plan = servicePlan(daemon);
+		const staged = plan.files.find((f) => f.path.endsWith(".daemon.plist"));
+		expect(staged?.path).toBe(`/Users/serge/.config/proagentstore/${SERVICE_LABEL}.daemon.plist`);
+		expect(staged?.content).toContain("<key>UserName</key><string>serge</string>");
+		expect(staged?.content).toContain("<key>HOME</key><string>/Users/serge</string>");
+		expect(staged?.content).toContain("<key>PAGS_SERVICE_DOMAIN</key><string>system</string>");
+		expect(staged?.content).toContain("<key>KeepAlive</key><true/>");
+		expect(staged?.content).toContain("<string>/Users/serge/.config/proagentstore/pags-up-supervisor.mjs</string>");
+		// Nothing is written into /Library from the user's process: launchd needs root:wheel, so `sudo install` does it.
+		expect(plan.files.map((f) => f.path).every((p) => !p.startsWith("/Library"))).toBe(true);
+		expect(plan.commands.map((c) => [c.file, ...c.args].join(" "))).toEqual([
+			`launchctl bootout gui/501/${SERVICE_LABEL}`,
+			`rm -f /Users/serge/Library/LaunchAgents/${SERVICE_LABEL}.plist`,
+			`sudo launchctl bootout system/${SERVICE_LABEL}`,
+			`sudo install -o root -g wheel -m 644 ${staged?.path} ${daemonPlistPath()}`,
+			`sudo launchctl bootstrap system ${daemonPlistPath()}`,
+			`sudo launchctl kickstart -k system/${SERVICE_LABEL}`,
+		]);
+		expect(plan.commands.filter((c) => c.file === "sudo").every((c) => c.interactive)).toBe(true);
+		expect(plan.notes.join("\n")).toMatch(/starts at boot as serge, with nobody logged in/);
+		expect(plan.notes.join("\n")).toMatch(/FileVault/);
+	});
+
+	it("escapes the owner's name and paths in the plist", () => {
+		const odd = servicePlan({ ...daemon, user: "a&b", home: "/Users/a&b" }).files.find((f) => f.path.endsWith(".daemon.plist"));
+		expect(odd?.content).toContain("<key>UserName</key><string>a&amp;b</string>");
+	});
+
+	it("refuses to run as root or without an account: the sign-in belongs to a user", () => {
+		expect(() => servicePlan({ ...daemon, user: "root", uid: 0 })).toThrow(/not root/);
+		expect(() => servicePlan({ ...daemon, user: undefined })).toThrow(/runs as the account/);
+	});
+
+	it("installing runs sudo commands interactively; a refused sudo is FAILED and the install is not ok", () => {
+		const seen: Array<[string, boolean]> = [];
+		const ok = installService(daemon, { write: () => undefined, run: (file, args, o) => void seen.push([`${file} ${args[0]}`, o?.interactive === true]) });
+		expect(ok.ok).toBe(true);
+		expect(seen.filter(([, i]) => i)).toHaveLength(4);
+		expect(seen.filter(([c]) => c.startsWith("launchctl") || c.startsWith("rm"))).toEqual([["launchctl bootout", false], ["rm -f", false]]);
+		const refused = installService(daemon, { write: () => undefined, run: (file, args) => { if (file === "sudo" && args[0] === "install") throw Object.assign(new Error("x"), { stderr: "sudo: a password is required" }); } });
+		expect(refused.ok).toBe(false);
+		expect(refused.lines.join("\n")).toMatch(/install the LaunchDaemon plist.*: FAILED — sudo: a password is required/);
+	});
+
+	it("--uninstall-service for a daemon unloads it, deletes the root-owned plist with sudo, and removes the staged files", () => {
+		const ran: string[] = [];
+		const removed: string[] = [];
+		uninstallService(daemon, { run: (f, a) => ran.push([f, ...a].join(" ")), remove: (p) => removed.push(p) });
+		expect(ran).toEqual([`sudo launchctl bootout system/${SERVICE_LABEL}`, `sudo rm -f ${daemonPlistPath()}`]);
+		expect(removed).toEqual(serviceRemovalPlan(daemon).files);
+		expect(removed).toContain(`/Users/serge/.config/proagentstore/${SERVICE_LABEL}.daemon.plist`);
+	});
+
+	it("without --daemon nothing changes: still the LaunchAgent", () => {
+		expect(servicePlan(mac).files.some((f) => f.path.includes("LaunchDaemons") || f.path.endsWith(".daemon.plist"))).toBe(false);
+		expect(servicePlan({ ...linux, daemon: true }).kind).toBe("systemd");
 	});
 });
