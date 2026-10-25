@@ -116,7 +116,7 @@ interface Site {
 	 *
 	 * Kept apart because the declaration is itself a `{kind:"message"}` construction and would
 	 * otherwise count as a labelled call site — which let a mutation that stripped the Pilot's own
-	 * label pass the by-module assertion, since both live in `coding-loop.ts`.
+	 * label pass the by-module assertion, since both lived in one file (`coding-loop.ts`, before #1359 split them into `coding-pilot.ts` and `coding-loop-types.ts`).
 	 */
 	declaration: boolean;
 }
@@ -179,18 +179,18 @@ describe("every machine driver names itself on the turns it sends an Engine (#50
 
 	it("finds the constructions at all — a rename must fail loudly, not silently pass", () => {
 		// Zero hits is the failure mode where a source-level guard reports success forever. The
-		// count is the four production constructions plus the type declaration in `coding-loop.ts`.
+		// count is the four production constructions plus the type declaration in `coding-loop-types.ts`.
 		expect(SITES.length).toBeGreaterThanOrEqual(5);
 	});
 
 	it("labels all three brains that compose an instruction", () => {
 		// Named explicitly, because "no unlabelled sites" also passes if all three were deleted.
 		// These are the three places a MODEL writes the words: the Pilot at the point its decision
-		// becomes an action (`coding-loop.ts`), the Agent chat's delegate path (`coding-brains.ts`),
+		// becomes an action (`coding-pilot.ts`, `toDecision`), the Agent chat's delegate path (`coding-brains.ts`),
 		// and the chat brain's `drive_claude` tool (`storage-tools.ts`). In every one of them the
 		// owner asked for an outcome and the model chose the sentence.
 		const labelled = SITES.filter((s) => s.hasAuthor && !s.declaration).map((s) => s.rel);
-		expect(labelled).toContain("lib/coding-loop.ts");
+		expect(labelled).toContain("lib/coding-pilot.ts");
 		expect(labelled).toContain("routes/coding-brains.ts");
 		expect(labelled).toContain("lib/storage-tools.ts");
 	});
@@ -236,11 +236,11 @@ describe("every machine driver names itself on the turns it sends an Engine (#50
 	});
 
 	it("keeps the type's optional author, which is what makes the field expressible", () => {
-		// The declaration in `coding-loop.ts` is a `{kind:"message"}` construction too, and it is
+		// The declaration in `coding-loop-types.ts` is a `{kind:"message"}` construction too, and it is
 		// the one that has to carry `author` for any of the others to compile. Dropping it from the
 		// type would fail the call sites, but with a type error rather than with the reason — so it
 		// is asserted here, where the reason is.
-		const decl = SITES.find((s) => s.rel === "lib/coding-loop.ts" && s.declaration);
+		const decl = SITES.find((s) => s.rel === "lib/coding-loop-types.ts" && s.declaration);
 		expect(decl, "CodingActionKind no longer declares `author?` — no caller can name itself").toBeTruthy();
 	});
 });
