@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { afterAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	capturePane,
 	createSession,
@@ -19,15 +20,48 @@ const HAS_TMUX = (() => {
 	}
 })();
 
-// Unique per run (#1254): this talks to the ONE system tmux server, shared with every other
-// process on the machine — including another checkout of this same repo running this same suite
-// at the same time. A fixed name collided: one run's kill-then-create raced another's, so
-// `listSessionsDetailed` sometimes read a session a concurrent run had just torn down.
+// Unique per run (#1254): a fixed name collided with another checkout running this same suite at the same time.
 const SESSION = `pags-tmux-connector-test-${process.pid}`;
 
+/**
+ * A tmux server of this suite's own (#1360). The unique name above stopped two runs colliding on a session, but they still
+ * shared the machine's ONE default tmux server — and that server exits the instant its last session does. Under full-suite load
+ * another process's cleanup could take it down between two of these tests: "no server running on /tmp/tmux-502/default".
+ * tmux takes its socket directory from `$TMUX_TMPDIR`, and from `$TMUX` when the suite itself runs inside tmux, so the whole
+ * file points both at a private directory (short: a unix socket path is capped near 104 characters) and kills that server after.
+ */
+let tmuxTmp = "";
+const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX };
+const restoreEnv = (k: "TMUX_TMPDIR" | "TMUX") => {
+	if (saved[k] === undefined) delete process.env[k];
+	else process.env[k] = saved[k];
+};
+
+/** Poll until `cond` holds: an upper bound on a shell starting and rendering, never a deadline under test. */
+async function until(cond: () => boolean, what: string, timeoutMs = 45_000): Promise<void> {
+	const start = Date.now();
+	while (!cond()) {
+		if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
+		await new Promise((r) => setTimeout(r, 50));
+	}
+}
+
 describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
+	beforeAll(() => {
+		tmuxTmp = mkdtempSync("/tmp/ptc-");
+		process.env.TMUX_TMPDIR = tmuxTmp;
+		delete process.env.TMUX;
+	});
 	afterAll(() => {
 		killSession(SESSION);
+		try {
+			execFileSync("tmux", ["kill-server"], { stdio: "ignore" });
+		} catch {
+			/* no server left to stop */
+		}
+		restoreEnv("TMUX_TMPDIR");
+		restoreEnv("TMUX");
+		rmSync(tmuxTmp, { recursive: true, force: true });
 	});
 
 	it("lists a created session with rich info", () => {
@@ -42,10 +76,9 @@ describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 
 	it("runs a command and captures its output in the pane", async () => {
 		runCommand(SESSION, "echo tmux_connector_marker_42");
-		// Give the shell a beat to render.
-		await new Promise((r) => setTimeout(r, 400));
-		const pane = capturePane(SESSION, 200);
-		expect(pane).toContain("tmux_connector_marker_42");
+		// Until the shell has rendered it — not a fixed beat that a loaded machine outruns.
+		await until(() => capturePane(SESSION, 200).includes("tmux_connector_marker_42"), "the shell to render the command's output");
+		expect(capturePane(SESSION, 200)).toContain("tmux_connector_marker_42");
 	});
 
 	it("kills the session", () => {

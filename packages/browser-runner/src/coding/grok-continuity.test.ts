@@ -15,6 +15,13 @@ const PRESET = ["--permission-mode", "bypassPermissions", "-p"];
 /** What a session spawns from that preset: the structured-output flags in front (#1187, grok-adapter.ts). */
 const SPAWNED = ["--output-format", "streaming-json", "--no-auto-update", ...PRESET];
 
+/**
+ * The least any `until` here waits (#1360). Every wait in this file is an UPPER BOUND on a real process starting, printing or
+ * exiting, never a deadline under test, so it is sized for a loaded machine like `vitest.config.ts`'s 120s integration budget
+ * (runs there measured ~9x slower): a passing run is not slowed, and a real hang still fails inside the test budget.
+ */
+const UNTIL_FLOOR_MS = 45_000;
+
 describe("the turn's argv (#1156)", () => {
 	it("starts a conversation with -s, resumes it with -r, and leaves the turn as -p's value at the end", () => {
 		expect(grokTurnArgs(PRESET, "fix it", { id: ID, started: false })).toEqual(["-s", ID, ...PRESET, "fix it"]);
@@ -76,14 +83,27 @@ describe("a Grok session, in real processes (#1156)", () => {
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-	const until = async (cond: () => boolean, ms = 10_000) => {
-		const end = Date.now() + ms;
+	const until = async (cond: () => boolean, ms = UNTIL_FLOOR_MS) => {
+		const end = Date.now() + Math.max(ms, UNTIL_FLOOR_MS);
 		while (!cond()) {
 			if (Date.now() > end) throw new Error("timed out");
 			await new Promise((r) => setTimeout(r, 25));
 		}
 	};
-	const runs = (log: string) => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]) : []);
+	/** The argv of every turn the fake CLI logged. A line still being appended is "not yet" (#1360): the poll reads it whole next time. */
+	const runs = (log: string): string[][] => {
+		if (!existsSync(log)) return [];
+		return readFileSync(log, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.flatMap((l) => {
+				try {
+					return [JSON.parse(l) as string[]];
+				} catch {
+					return []; // half-written trailing line
+				}
+			});
+	};
 	const turn = async (s: HeadlessSession, text: string, count: number, log: string) => {
 		s.input(text);
 		await until(() => runs(log).length >= count && s.runState() === "idle");
@@ -109,7 +129,7 @@ describe("a Grok session, in real processes (#1156)", () => {
 		await turn(after, "third", 3, log);
 		expect(runs(log)[2].slice(0, 2)).toEqual(["-r", id]);
 		after.stop();
-	}, 30_000);
+	}, 60_000);
 
 	it("a failed resume forgets the id: the next turn starts a clean conversation under a new one", async () => {
 		const log = join(dir, "fail.jsonl");
@@ -122,7 +142,7 @@ describe("a Grok session, in real processes (#1156)", () => {
 		expect(runs(log)[2][0]).toBe("-s");
 		expect(runs(log)[2][1]).not.toBe(first);
 		s.stop();
-	}, 30_000);
+	}, 60_000);
 
 	it("a CLI that rejects the flags runs the SAME turn again without them — once — and the session goes on one-shot", async () => {
 		const log = join(dir, "reject.jsonl");
@@ -135,7 +155,7 @@ describe("a Grok session, in real processes (#1156)", () => {
 		expect(runs(log)[2]).toEqual([...SPAWNED, "next"]); // no continuity flags again
 		expect(runs(log)).toHaveLength(3);
 		s.stop();
-	}, 30_000);
+	}, 60_000);
 
 	it("still sends the platform's replay with every turn — its own memory is not trusted until a signed-in run proves it", () => {
 		expect(session("g4", join(dir, "x.jsonl")).holdsConversationThisTurn).toBe(false);
@@ -194,9 +214,22 @@ describe("a Grok turn end to end (#1197)", () => {
 		chmodSync(bin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
-	const runs = (log: string) => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]) : []);
+	/** The argv of every turn the fake CLI logged. A line still being appended is "not yet" (#1360): the poll reads it whole next time. */
+	const runs = (log: string): string[][] => {
+		if (!existsSync(log)) return [];
+		return readFileSync(log, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.flatMap((l) => {
+				try {
+					return [JSON.parse(l) as string[]];
+				} catch {
+					return []; // half-written trailing line
+				}
+			});
+	};
 	const settle = async (s: HeadlessSession, log: string, count: number) => {
-		const end = Date.now() + 10_000;
+		const end = Date.now() + UNTIL_FLOOR_MS;
 		while (!(runs(log).length >= count && s.runState() === "idle")) {
 			if (Date.now() > end) throw new Error("timed out");
 			await new Promise((r) => setTimeout(r, 25));
@@ -217,7 +250,7 @@ describe("a Grok turn end to end (#1197)", () => {
 		s.input("change a to b");
 		await settle(s, log, 1);
 		// Idle can read true while the turn's last line is still being handled: wait for the turn-end line itself.
-		for (let i = 0; i < 400 && !s.snapshot().includes("holds this conversation"); i++) await new Promise((r) => setTimeout(r, 25));
+		for (const end = Date.now() + UNTIL_FLOOR_MS; !s.snapshot().includes("holds this conversation") && Date.now() < end; ) await new Promise((r) => setTimeout(r, 25));
 		const pane = s.snapshot();
 		expect(pane).toMatch(/Edit/);
 		expect(pane).toContain("src/app.ts");
@@ -232,5 +265,5 @@ describe("a Grok turn end to end (#1197)", () => {
 		expect(runs(log)[0][0]).toBe("-s");
 		expect(runs(log)[1].slice(0, 2)).toEqual(["-r", THEIRS]); // the session the CLI named, not the one this runner made up
 		s.stop();
-	}, 30_000);
+	}, 60_000);
 });

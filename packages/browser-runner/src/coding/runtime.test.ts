@@ -24,9 +24,34 @@ rl.on("line", (line) => {
 `;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function until(cond: () => boolean, timeoutMs = 5000): Promise<void> {
+/**
+ * The least any `until` here waits (#1360). Every wait in this file is an UPPER BOUND on a real process starting, printing or
+ * exiting, never a deadline under test, so it is sized for a loaded machine like `vitest.config.ts`'s 120s integration budget
+ * (runs there measured ~9x slower): a passing run is not slowed, and a real hang still fails inside the test budget.
+ */
+const UNTIL_FLOOR_MS = 45_000;
+
+/** Poll until `cond` holds; THROWS when it never does, so a hang is named here and not as a confusing assertion further down. */
+async function until(cond: () => boolean, timeoutMs = UNTIL_FLOOR_MS, what = "condition"): Promise<void> {
+	const budget = Math.max(timeoutMs, UNTIL_FLOOR_MS);
 	const start = Date.now();
-	while (!cond() && Date.now() - start < timeoutMs) await wait(30);
+	while (!cond()) {
+		if (Date.now() - start > budget) throw new Error(`timed out waiting for ${what}`);
+		await wait(30);
+	}
+}
+
+/**
+ * Does the JSON object in `file` have `key`? A file read while the runtime is still writing it is simply "not yet" (#1360):
+ * a partial read made `JSON.parse` throw out of the poll and fail the test, where the next poll would have read it whole.
+ */
+function jsonFileHasKey(file: string, key: string): boolean {
+	if (!existsSync(file)) return false;
+	try {
+		return key in (JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>);
+	} catch {
+		return false; // half-written: not there yet — the caller polls again
+	}
 }
 
 function gitAvailable(): boolean {
@@ -487,12 +512,12 @@ describe("CodingRuntime over the stream-json engine", () => {
 		// rather than slept for: a fixed 300ms lost the race whenever spawning the engine was slow
 		// (a loaded machine), and the warm start below then correctly found nothing to resume.
 		const statePath = defaultStatePath(join(dir, "resume-base"));
-		await until(() => existsSync(statePath) && "prev" in JSON.parse(readFileSync(statePath, "utf8")), 15_000);
+		await until(() => jsonFileHasKey(statePath, "prev"), 15_000, "the engine's init event to persist its resume key");
 		rt.end("prev");
 
 		expect(rt.start({ sessionId: "next-cold", repoId: "r1", workDir: dir, clientType: "claude", bin }).resumed).toBe(false);
 		expect(rt.start({ sessionId: "next-warm", repoId: "r1", workDir: dir, clientType: "claude", bin, resumeFrom: "prev" }).resumed).toBe(true);
-	}, 25_000);
+	}, 60_000);
 
 	it("refuses a keystroke instead of answering it with an unchanged pane (#448)", () => {
 		// The old shape: `act` called `key()`, which pushed a transcript line and returned void,

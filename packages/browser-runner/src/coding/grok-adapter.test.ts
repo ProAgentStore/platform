@@ -22,6 +22,13 @@ const parseAll = () => {
 };
 const shown = (events: NormalizedEngineEvent[]) => events.filter((e) => e.kind !== "meta");
 
+/**
+ * The least any `until` here waits (#1360). Every wait in this file is an UPPER BOUND on a real process starting, printing or
+ * exiting, never a deadline under test, so it is sized for a loaded machine like `vitest.config.ts`'s 120s integration budget
+ * (runs there measured ~9x slower): a passing run is not slowed, and a real hang still fails inside the test budget.
+ */
+const UNTIL_FLOOR_MS = 45_000;
+
 describe("the Grok adapter reads the captured stream (#1187)", () => {
 	it("each terminal command is a Bash tool call, settled by its exit code; the reply is ONE line, not a token per line", () => {
 		const events = shown(parseAll());
@@ -89,14 +96,27 @@ describe("a Grok session renders its calls into the pane the evidence check read
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-	const until = async (cond: () => boolean, ms = 10_000) => {
-		const end = Date.now() + ms;
+	const until = async (cond: () => boolean, ms = UNTIL_FLOOR_MS) => {
+		const end = Date.now() + Math.max(ms, UNTIL_FLOOR_MS);
 		while (!cond()) {
 			if (Date.now() > end) throw new Error("timed out");
 			await new Promise((r) => setTimeout(r, 25));
 		}
 	};
-	const runs = (log: string) => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]) : []);
+	/** The argv of every turn the fake CLI logged. A line still being appended is "not yet" (#1360): the poll reads it whole next time. */
+	const runs = (log: string): string[][] => {
+		if (!existsSync(log)) return [];
+		return readFileSync(log, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.flatMap((l) => {
+				try {
+					return [JSON.parse(l) as string[]];
+				} catch {
+					return []; // half-written trailing line
+				}
+			});
+	};
 	const session = (id: string, log: string, env: Record<string, string> = {}) =>
 		new HeadlessSession({ id, workDir: dir, clientType: "grok", command: "grok --permission-mode bypassPermissions -p", bin, statePath: defaultStatePath(join(dir, `state-${id}`)), env: { GROK_FAKE_LOG: log, GROK_FAKE_STREAM: FIXTURE.pathname, ...env } });
 
@@ -117,7 +137,7 @@ describe("a Grok session renders its calls into the pane the evidence check read
 		expect(pane).not.toContain('"type":"usage"');
 		expect(pane).not.toContain('"type":"text"');
 		s.stop();
-	}, 30_000);
+	}, 60_000);
 
 	it("an older CLI that refuses the flags: the turn is retried once raw, WITHOUT them", async () => {
 		const log = join(dir, "old.jsonl");
@@ -130,7 +150,7 @@ describe("a Grok session renders its calls into the pane the evidence check read
 		expect(retried).not.toContain("--no-auto-update");
 		expect(s.snapshot()).toContain("plain reply");
 		s.stop();
-	}, 30_000);
+	}, 60_000);
 });
 
 /**
