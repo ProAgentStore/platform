@@ -197,7 +197,9 @@ export async function installMacActionsService(dir: string, ctx: ServiceContext)
 	let oldStopped = false;
 	let newStarted = false;
 	try {
+		if (activeWorkerIn(dir)) throw new Error(`Runner.Worker started during service adoption in ${dir}; retry when it finishes.`);
 		if (prior && wasRunning) { stop(prior); oldStopped = true; await waitListenerGone(dir); }
+		if (activeWorkerIn(dir)) throw new Error(`Runner.Worker remained active after the old service stopped in ${dir}; refusing to start a second listener.`);
 		const copy = spawnSync("sudo", ["install", "-o", "root", "-g", "wheel", "-m", "644", staged, target], { stdio: "inherit" });
 		if (copy.status !== 0) throw new Error("Administrator approval or plist installation failed.");
 		const startedAt = Date.now();
@@ -228,7 +230,11 @@ export async function installMacActionsService(dir: string, ctx: ServiceContext)
 			}
 			else writeFileSync(prior.path, previousPlist);
 		}
-		if (prior && oldStopped && !rollbackErrors.length) try { await waitListenerGone(dir); start(prior); } catch (e) { rollbackErrors.push(`could not safely restart ${prior.domain}/${prior.label}: ${String(e)}`); }
+		if (prior && oldStopped && !rollbackErrors.length) try {
+			await waitListenerGone(dir);
+			if (activeWorkerIn(dir)) throw new Error("an active Runner.Worker remains; retry adoption after it completes");
+			start(prior);
+		} catch (e) { rollbackErrors.push(`could not safely restart ${prior.domain}/${prior.label}: ${String(e)}`); }
 		if (rollbackErrors.length) throw new Error(`Installation failed (${String(error)}); rollback incomplete: ${rollbackErrors.join("; ")}. Inspect both service units locally.`);
 		throw error;
 	}
@@ -242,6 +248,7 @@ export async function removeMacActionsService(dir: string, ctx: ServiceContext):
 	if (services.length > 1) throw new Error(`Ambiguous service ownership for ${dir}: ${services.map((s) => `${s.domain}/${s.label}`).join(", ")}`);
 	const service = services[0];
 	if (service) {
+		if (activeWorkerIn(dir)) return [`Deferred: ${dir} has an active Runner.Worker. Retry after the job completes.`];
 		const wasRunning = loaded(service);
 		if (wasRunning) { stop(service); await waitListenerGone(dir); }
 		if (service.domain === "system") {
