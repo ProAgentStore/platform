@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { deviceCredentialRefused } from "../lib/device-credentials.js";
 import { isSubscriptionActive, subFromUserRow } from "../lib/billing.js";
 import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
 import { isAllowedReturnTo } from "../lib/origins.js";
@@ -492,6 +493,8 @@ authRoutes.put("/me", async (c) => {
 	// suspension gate has to be applied explicitly — without it a suspended account
 	// could still edit its public profile (#273).
 	if (await isSuspended(c, session.uid)) return c.json({ error: "Account suspended" }, 403);
+	// A revoked or expired machine sign-in (#1184) stops working here too: the MCP worker gates on this route.
+	if (session.did && (await deviceCredentialRefused(c.env, session.did, session.uid))) return c.json({ error: "This machine's sign-in was revoked or has expired" }, 401);
 
 	const body = await c.req.json<{
 		display_name?: string;
@@ -567,6 +570,8 @@ authRoutes.get("/me", async (c) => {
 	);
 	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
 	if (await isSuspended(c, session.uid)) return c.json({ error: "Account suspended" }, 403);
+	// A revoked or expired machine sign-in (#1184) stops working here too: the MCP worker gates on this route.
+	if (session.did && (await deviceCredentialRefused(c.env, session.did, session.uid))) return c.json({ error: "This machine's sign-in was revoked or has expired" }, 401);
 
 	const row = await c.env.DB.prepare(
 		"SELECT id, github_login, linked_github_login, github_name, avatar_url, roles, stripe_customer_id, subscription_status, subscription_expires_at, display_name, bio, website, twitter, slack_webhook, board_config FROM users WHERE id = ?1",

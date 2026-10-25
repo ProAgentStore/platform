@@ -462,3 +462,19 @@ only, so it works even when the release it restarts onto is broken). It waits fo
 lock directory for a live runner that is not the old one. If none appears within 150 seconds it runs the command again —
 up to three starts in all — and every step, including `GAVE UP … it needs starting at the machine` when none comes up, is
 a line in `update.log`. If the guard itself cannot start, the update log says the restart is unverified.
+
+## A machine's sign-in: per machine, revocable, of a length you choose (#1184)
+
+`pags login --device` (#1157) signs a headless machine in from any other device. Each approved machine now gets its own
+**credential**: the session it receives carries the credential's id, and every request from it is checked against that
+record, so one machine can be withdrawn without ending anything else.
+
+- **Length.** 30, 90 or 180 days. The approval page has a "Stay signed in for" choice; leaving it on "my default" uses
+  your account setting (30 days until you change it with `pags devices lifetime 90`, or `PUT /v1/auth/device/lifetime`). A
+  change applies to machines signed in from then on; existing ones keep theirs.
+- **Renewal.** A running `pags up` renews its sign-in in the last 7 days. A machine's session is renewed as the same
+  credential for its own length, so a reboot reconnects without a login for as long as the credential is valid.
+- **See and revoke.** `pags devices` lists the machines (name, id, expiry, status) and shows when your own sign-in runs
+  out; `pags devices revoke <id>` (or `DELETE /v1/auth/device/credentials/<id>`) stops one at once, on every route, and a
+  refresh cannot bring it back. `pags whoami` shows the expiry and warns 30, 7 and 1 days before it, and once it has passed.
+- **Not changed.** A browser session carries no credential and is never looked up; it stays a 30-day session.

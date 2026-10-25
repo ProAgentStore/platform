@@ -17,17 +17,18 @@ import { HttpError, isSuspended, requireUser, rolesOf } from "../lib/auth.js";
 import { signSession, verifySession } from "../lib/session.js";
 import { CONSOLE_ORIGIN } from "../lib/console-deep-link.js";
 import { deviceApprovalLink } from "../lib/console-links.js";
+import { createDeviceCredential, DAY_SECONDS, getAccountLifetime, isLifetimeDays, listDeviceCredentials, RUNNER_SESSION_DAYS, renewDeviceCredential, revokeDeviceCredential, setAccountLifetime } from "../lib/device-credentials.js";
 import { decideDeviceRequest, type DeviceDecisionResponse, type DeviceRequestResponse, getDeviceRequest, normalizeUserCode, pollDeviceAuthorization, startDeviceAuthorization } from "../lib/device-auth.js";
 
 export const deviceAuthRoutes = new Hono<{ Bindings: Env }>();
 export const sessionRoutes = new Hono<{ Bindings: Env }>();
 
 /** A session for `uid` with its live roles, or null when the account is gone or suspended. */
-async function mintFor(c: Context<{ Bindings: Env }>, uid: string): Promise<{ session: string; expiresAt: string } | null> {
+async function mintFor(c: Context<{ Bindings: Env }>, uid: string, device?: { did: string; ttl: number }): Promise<{ session: string; expiresAt: string } | null> {
 	const row = await c.env.DB.prepare("SELECT roles FROM users WHERE id = ?1").bind(uid).first<{ roles: string | null }>();
 	if (!row || (await isSuspended(c, uid))) return null;
 	const roles = rolesOf(row.roles);
-	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles: roles.length ? roles : ["user"] });
+	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles: roles.length ? roles : ["user"], ...(device ? { did: device.did, ttl: device.ttl } : {}) });
 	const payload = await verifySession(session, c.env.SESSION_SIGNING_KEY);
 	return { session, expiresAt: new Date((payload?.exp ?? 0) * 1000).toISOString() };
 }
@@ -59,9 +60,37 @@ deviceAuthRoutes.post("/token", async (c) => {
 	const poll = await pollDeviceAuthorization(c.env, body.device_code);
 	c.header("Cache-Control", "no-store");
 	if (poll.kind !== "approved") return c.json({ error: poll.kind }, 400);
-	const minted = await mintFor(c, poll.userId);
-	if (!minted) return c.json({ error: "access_denied" }, 400);
-	return c.json({ session: minted.session, expires_at: minted.expiresAt });
+	// The machine's own credential (#1184): per machine, revocable, of the length chosen at approval (else the owner's default).
+	const days = isLifetimeDays(poll.lifetimeDays) ? poll.lifetimeDays : await getAccountLifetime(c.env, poll.userId);
+	const credential = await createDeviceCredential(c.env, poll.userId, poll.node, days);
+	const minted = await mintFor(c, poll.userId, { did: credential.id, ttl: days * DAY_SECONDS });
+	if (!minted) {
+		await revokeDeviceCredential(c.env, poll.userId, credential.id).catch(() => false);
+		return c.json({ error: "access_denied" }, 400);
+	}
+	return c.json({ session: minted.session, expires_at: minted.expiresAt, device_id: credential.id, lifetime_days: days });
+});
+
+// ── The owner's machines (#1184) ─────────────────────────────────────────────────────────────────────────────
+
+deviceAuthRoutes.get("/credentials", async (c) => {
+	const s = await requireUser(c);
+	c.header("Cache-Control", "no-store");
+	return c.json({ credentials: await listDeviceCredentials(c.env, s.uid), lifetimeDays: await getAccountLifetime(c.env, s.uid), allowedLifetimeDays: RUNNER_SESSION_DAYS });
+});
+
+deviceAuthRoutes.delete("/credentials/:id", async (c) => {
+	const s = await requireUser(c);
+	if (!(await revokeDeviceCredential(c.env, s.uid, c.req.param("id")))) throw new HttpError(404, "No active sign-in with that id on your account.");
+	return c.json({ revoked: true, id: c.req.param("id") });
+});
+
+deviceAuthRoutes.put("/lifetime", async (c) => {
+	const s = await requireUser(c);
+	const body = (await c.req.json().catch(() => ({}))) as { days?: unknown };
+	if (!isLifetimeDays(body.days)) throw new HttpError(400, `days must be one of ${RUNNER_SESSION_DAYS.join(", ")}.`);
+	await setAccountLifetime(c.env, s.uid, body.days);
+	return c.json({ lifetimeDays: body.days, appliesTo: "machines signed in from now on; existing sign-ins keep their length" });
 });
 
 deviceAuthRoutes.get("/requests/:userCode", async (c) => {
@@ -74,10 +103,11 @@ deviceAuthRoutes.get("/requests/:userCode", async (c) => {
 
 deviceAuthRoutes.post("/requests/:userCode", async (c) => {
 	const s = await requireUser(c);
-	const body = (await c.req.json().catch(() => ({}))) as { approve?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { approve?: unknown; lifetimeDays?: unknown };
 	if (typeof body.approve !== "boolean") throw new HttpError(400, "approve must be true or false.");
+	if (body.lifetimeDays !== undefined && !isLifetimeDays(body.lifetimeDays)) throw new HttpError(400, `lifetimeDays must be one of ${RUNNER_SESSION_DAYS.join(", ")}.`);
 	const code = userCodeParam(c);
-	if ((await decideDeviceRequest(c.env, s.uid, code, body.approve)) === "gone") {
+	if ((await decideDeviceRequest(c.env, s.uid, code, body.approve, Date.now(), body.lifetimeDays ?? null)) === "gone") {
 		throw new HttpError(409, "This sign-in was already decided, or it has expired. Run `pags login --device` again for a new code.");
 	}
 	return c.json({ request: await getDeviceRequest(c.env, code) } satisfies DeviceDecisionResponse);
@@ -85,6 +115,17 @@ deviceAuthRoutes.post("/requests/:userCode", async (c) => {
 
 sessionRoutes.post("/refresh", async (c) => {
 	const s = await requireUser(c); // a valid, unexpired session of a non-suspended account
+	// A machine's session (#1184) is renewed as the SAME credential, for its own length — and not at all once it is revoked.
+	// (Read from the token itself: `requireUser` has already refused a revoked or expired one.)
+	const did = (await verifySession(c.req.header("Authorization")?.slice(7) ?? "", c.env.SESSION_SIGNING_KEY))?.did;
+	if (did) {
+		const renewed = await renewDeviceCredential(c.env, s.uid, did);
+		if (!renewed) throw new HttpError(401, "This machine's sign-in was revoked or has expired. Sign it in again with `pags login --device`.");
+		const device = await mintFor(c, s.uid, { did, ttl: renewed.lifetimeDays * DAY_SECONDS });
+		if (!device) throw new HttpError(403, "This account cannot be signed in.");
+		c.header("Cache-Control", "no-store");
+		return c.json({ ...device, device_id: did, lifetime_days: renewed.lifetimeDays });
+	}
 	const minted = await mintFor(c, s.uid);
 	if (!minted) throw new HttpError(403, "This account cannot be signed in.");
 	c.header("Cache-Control", "no-store");

@@ -5162,16 +5162,87 @@ paths:
               required: [approve]
               properties:
                 approve: { type: boolean }
+                lifetimeDays: { type: integer, enum: [30, 90, 180], description: "How long this machine stays signed in (#1184). Omit for the owner's own default for new machines (30 unless changed with PUT /v1/auth/device/lifetime)." }
       responses:
         "200": { description: The request, decided }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "409": { description: Already decided, or expired }
+
+  /v1/auth/device/credentials:
+    get:
+      summary: The machines signed in by device login, and how long new ones last
+      description: |
+        #1184. Each approved device gets its own credential: its session carries the credential's id and is refused the moment
+        the credential is revoked or expires. Lists this account's, newest first (active, expired, and revoked in the last
+        90 days), with the account's default length for NEW credentials and the lengths allowed (30, 90, 180 days).
+      operationId: deviceCredentials
+      tags: [Auth]
+      responses:
+        "200":
+          description: The credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  credentials:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        node: { type: string, nullable: true }
+                        lifetimeDays: { type: integer }
+                        createdAt: { type: string, format: date-time }
+                        expiresAt: { type: string, format: date-time }
+                        lastRefreshedAt: { type: string, format: date-time, nullable: true }
+                        revokedAt: { type: string, format: date-time, nullable: true }
+                        status: { type: string, enum: [active, expired, revoked] }
+                  lifetimeDays: { type: integer }
+                  allowedLifetimeDays: { type: array, items: { type: integer } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/device/credentials/{id}:
+    delete:
+      summary: Revoke one machine's sign-in
+      description: Stops it at once, on every route; a refresh cannot bring it back. The machine signs in again with `pags login --device`. 404 when it is not this account's or already revoked.
+      operationId: deviceCredentialRevoke
+      tags: [Auth]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No active sign-in with that id on this account }
+
+  /v1/auth/device/lifetime:
+    put:
+      summary: How long NEW machine sign-ins last
+      description: 30, 90 or 180 days; applies to machines approved from now on (a single approval can still choose its own). Existing sign-ins keep their length.
+      operationId: deviceLifetimeSet
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [days]
+              properties:
+                days: { type: integer, enum: [30, 90, 180] }
+      responses:
+        "200": { description: Saved }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/auth/session/refresh:
     post:
-      summary: Swap a valid session for a fresh 30-day one
+      summary: Swap a valid session for a fresh one
       description: |
         What a running `pags up` does in its session's last 7 days (#1157), so a long-running machine never ends up
-        signed out. Live roles; refused to a suspended account. An expired session cannot refresh — sign in again.
+        signed out. Live roles; refused to a suspended account. An expired session cannot refresh — sign in again. A browser
+        session is renewed for 30 days; a machine's (device) session is renewed as the same credential for its own length, and
+        not at all once that credential is revoked (#1184).
       operationId: sessionRefresh
       tags: [Auth]
       responses:

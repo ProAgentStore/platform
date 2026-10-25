@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { writeLine, writeError } from "../output.js";
 import { chooseLoginFlow, deviceLogin, sessionExpiresAt } from "./login-device.js";
+import { expiryLine, expiryWarning } from "../session-expiry.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "proagentstore");
 const TOKEN_FILE = join(CONFIG_DIR, "session.json");
@@ -189,6 +190,11 @@ export const whoamiCommand = new Command("whoami")
 		const session = loadSession();
 		if (session) {
 			writeLine(`${session.user.login} (${session.user.id})`);
+			// When this sign-in runs out, and a warning at 30, 7 and 1 days before (#1184).
+			const until = sessionExpiresAt(session.token) ?? session.expiresAt;
+			writeLine(expiryLine(until, Date.now()));
+			const warning = expiryWarning(until, Date.now());
+			if (warning) writeLine(warning);
 		} else {
 			writeLine("Not logged in. Run: pags login");
 		}

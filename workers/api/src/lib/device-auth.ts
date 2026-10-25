@@ -25,7 +25,7 @@ export const DEVICE_POLL_INTERVAL_SECONDS = 5;
 const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
 
 export type DevicePoll =
-	| { kind: "approved"; userId: string }
+	| { kind: "approved"; userId: string; node: string | null; lifetimeDays: number | null }
 	| { kind: "authorization_pending" | "slow_down" | "access_denied" | "expired_token" };
 
 async function sha256hex(s: string): Promise<string> {
@@ -102,11 +102,11 @@ export async function getDeviceRequest(env: Pick<Env, "DB">, userCode: string, n
 }
 
 /** The owner's decision. Only a pending, unexpired request can be decided, once. */
-export async function decideDeviceRequest(env: Pick<Env, "DB">, userId: string, userCode: string, approve: boolean, now = Date.now()): Promise<"ok" | "gone"> {
+export async function decideDeviceRequest(env: Pick<Env, "DB">, userId: string, userCode: string, approve: boolean, now = Date.now(), lifetimeDays: number | null = null): Promise<"ok" | "gone"> {
 	const at = Math.floor(now / 1000);
 	const res = await env.DB.prepare(
-		"UPDATE device_authorizations SET status = ?1, user_id = ?2, decided_at = ?3 WHERE user_code = ?4 AND status = 'pending' AND expires_at > ?3",
-	).bind(approve ? "approved" : "denied", approve ? userId : null, at, userCode).run();
+		"UPDATE device_authorizations SET status = ?1, user_id = ?2, decided_at = ?3, lifetime_days = ?5 WHERE user_code = ?4 AND status = 'pending' AND expires_at > ?3",
+	).bind(approve ? "approved" : "denied", approve ? userId : null, at, userCode, approve ? lifetimeDays : null).run();
 	return (res.meta?.changes ?? 0) > 0 ? "ok" : "gone";
 }
 
@@ -123,10 +123,10 @@ export async function pollDeviceAuthorization(env: Pick<Env, "DB">, deviceCode: 
 	if (row.status === "denied") return { kind: "access_denied" };
 	if (row.expires_at <= at) return { kind: "expired_token" };
 	if (row.status === "approved") {
-		const taken = await env.DB.prepare("UPDATE device_authorizations SET status = 'consumed' WHERE device_code_hash = ?1 AND status = 'approved' RETURNING user_id")
+		const taken = await env.DB.prepare("UPDATE device_authorizations SET status = 'consumed' WHERE device_code_hash = ?1 AND status = 'approved' RETURNING user_id, client_node, lifetime_days")
 			.bind(hash)
-			.first<{ user_id: string | null }>();
-		return taken?.user_id ? { kind: "approved", userId: taken.user_id } : { kind: "expired_token" };
+			.first<{ user_id: string | null; client_node: string | null; lifetime_days: number | null }>();
+		return taken?.user_id ? { kind: "approved", userId: taken.user_id, node: taken.client_node, lifetimeDays: taken.lifetime_days } : { kind: "expired_token" };
 	}
 	await env.DB.prepare("UPDATE device_authorizations SET last_polled_at = ?1 WHERE device_code_hash = ?2").bind(at, hash).run();
 	// A second inside the interval is slow; clock granularity (1s) leaves a margin of one second.

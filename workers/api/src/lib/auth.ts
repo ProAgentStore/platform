@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { deviceCredentialRefused } from "./device-credentials.js";
 import type { Env, SessionPayload } from "../types.js";
 import { verifySession } from "./session.js";
 
@@ -40,6 +41,10 @@ export async function requireUser(
 	}
 	if (await isSuspended(c, session.uid)) {
 		throw new HttpError(403, "Account suspended");
+	}
+	// A machine's sign-in (#1184) can be withdrawn on its own: its credential is checked, browser sessions are not.
+	if (session.did && (await deviceCredentialRefused(c.env, session.did, session.uid))) {
+		throw new HttpError(401, "This machine's sign-in was revoked or has expired. Sign it in again with `pags login --device`.");
 	}
 	return session;
 }

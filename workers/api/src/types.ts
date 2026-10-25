@@ -161,4 +161,6 @@ export interface SessionPayload {
 	roles: string[]; // 'user', 'creator', 'admin'
 	iat: number;
 	exp: number;
+	/** A device credential (#1184): the session is one machine's, and is refused once that credential is revoked or expired. */
+	did?: string;
 }

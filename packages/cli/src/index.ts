@@ -6,6 +6,7 @@
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { checkCommand } from "./commands/check.js";
+import { devicesCommand } from "./commands/devices.js";
 import { initCommand } from "./commands/init.js";
 import { loginCommand, logoutCommand, whoamiCommand } from "./commands/login.js";
 import { machinesCommand } from "./commands/machines.js";
@@ -33,6 +34,7 @@ program
 program.addCommand(loginCommand);
 program.addCommand(logoutCommand);
 program.addCommand(whoamiCommand);
+program.addCommand(devicesCommand);
 program.addCommand(upCommand);
 program.addCommand(watchdogCommand);
 program.addCommand(downCommand);

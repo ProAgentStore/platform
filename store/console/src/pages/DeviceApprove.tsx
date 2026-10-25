@@ -19,6 +19,8 @@ export default function DeviceApprove() {
 	const [request, setRequest] = useState<DeviceRequestView | null>(null);
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
+	// How long this machine stays signed in (#1184): "" = the owner's own default for new machines (30 days unless changed).
+	const [lifetime, setLifetime] = useState("");
 
 	const load = useCallback(async () => {
 		if (!code) return;
@@ -39,7 +41,7 @@ export default function DeviceApprove() {
 	const decide = async (approve: boolean) => {
 		setBusy(true);
 		try {
-			const res = await api<DeviceDecisionResponse>(`/v1/auth/device/requests/${encodeURIComponent(code)}`, { method: "POST", body: JSON.stringify({ approve }) });
+			const res = await api<DeviceDecisionResponse>(`/v1/auth/device/requests/${encodeURIComponent(code)}`, { method: "POST", body: JSON.stringify({ approve, ...(approve && lifetime ? { lifetimeDays: Number(lifetime) } : {}) }) });
 			if (res.request) setRequest(res.request);
 			else setRequest((r) => (r ? { ...r, status: approve ? "approved" : "denied" } : r));
 		} catch (e) {
@@ -92,6 +94,16 @@ export default function DeviceApprove() {
 									Approve only if <strong>you</strong> just ran <code>pags login</code> on this machine and it shows this same code. Approving signs that machine in to
 									your account.
 								</p>
+								<label className="text-sm flex flex-wrap items-center gap-2" htmlFor="device-lifetime">
+									<span className="text-muted">Stay signed in for</span>
+									<select id="device-lifetime" value={lifetime} onChange={(e) => setLifetime(e.target.value)} className="rounded border border-line bg-paper px-2 py-1 text-sm" data-testid="device-lifetime">
+										<option value="">my default</option>
+										<option value="30">30 days</option>
+										<option value="90">90 days</option>
+										<option value="180">180 days</option>
+									</select>
+									<span className="text-xs text-muted">A running machine renews itself; you can revoke it any time with <code>pags devices revoke</code>.</span>
+								</label>
 								<div className="flex gap-2">
 									<Button variant="primary" onClick={() => void decide(true)} disabled={busy} data-testid="device-approve-button">
 										<Check size={16} /> Approve
