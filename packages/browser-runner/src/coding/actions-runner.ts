@@ -506,8 +506,8 @@ export function installedRunners(home = homedir(), programData = process.platfor
 	const machine = programData ? scan(join(programData, "ProAgentStore", "actions-runner"), false) : [];
 	const profile = scan(join(home, ".proagentstore", "actions-runner"), process.platform === "win32");
 	return [...machine, ...profile, readInstalledRunner(join(home, "actions-runner"), false, readText)].filter((r): r is InstalledRunner => r !== null).map((r) => {
-		if (process.platform === "win32") return { ...r, serviceMode: r.legacy ? "unknown" : "windows_system" };
-		if (process.platform === "linux") return { ...r, serviceMode: "linux_system" };
+		// A configured folder alone does not prove that systemd or the Windows service still exists.
+		if (process.platform === "win32" || process.platform === "linux") return { ...r, serviceMode: "unknown" };
 		if (process.platform !== "darwin" || !r.managed) return r;
 		const label = `online.proagentstore.actions.${r.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
 		const system = `/Library/LaunchDaemons/${label}.plist`;
