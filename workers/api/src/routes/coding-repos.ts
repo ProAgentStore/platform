@@ -24,6 +24,8 @@ import { logEvent } from "../lib/events.js";
 // Pilot's pause both report, so this surface cannot invent a third wording for one state (#440).
 import { describeFacts } from "../lib/runner-availability.js";
 import { runtimeConnectivity } from "../lib/instance-connectivity.js";
+import { mirrorRepoToAllMachines } from "../lib/coding-repo-mirror.js";
+import { listCheckoutsForInstance, type CheckoutRow } from "../lib/coding-repo-checkouts.js";
 import { createRepo, deleteRepo, findExistingRepoBinding, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
 import { folderHeldByAnother, folderTakenRefusal } from "../lib/coding-repo-folder.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
@@ -197,8 +199,12 @@ async function noRunnerReason(env: Env, instanceId: string, uid: string): Promis
 export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	codingRoutes.get("/:instanceId/coding/repos", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		const repos = await listRepos(c.env, instanceId, uid);
-		const local = repos.filter((r) => r.workdir).slice(0, MAX_VERIFY_PER_LIST);
+		const bare = await listRepos(c.env, instanceId, uid);
+		// Each binding's per-machine checkouts (#1142), beside the binding's own single workdir/status.
+		const checkouts = await listCheckoutsForInstance(c.env, instanceId, uid).catch(() => new Map<string, CheckoutRow[]>());
+		const withCheckouts = (rs: CodingRepo[]) => rs.map((r) => ({ ...r, checkouts: checkouts.get(r.id) ?? [] }));
+		const repos = withCheckouts(bare);
+		const local = bare.filter((r) => r.workdir).slice(0, MAX_VERIFY_PER_LIST);
 		if (!local.length) return c.json({ repos, recheck: { ran: false, checked: 0 } satisfies RecheckReport });
 		const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
 		// MEASURED (#440): this is the branch that fires. `getBoundRunnerConn` honours the
@@ -235,7 +241,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 				context: { instanceId, node: conn.runnerNode ?? null, checked, total: local.length },
 			});
 		}
-		return c.json({ repos: repos.map((r) => fresh.get(r.id) ?? r), recheck: { ran: true, checked } satisfies RecheckReport });
+		return c.json({ repos: withCheckouts(bare.map((r) => fresh.get(r.id) ?? r)), recheck: { ran: true, checked } satisfies RecheckReport });
 	});
 
 	/**
@@ -277,6 +283,14 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			// opposite of what happened.
 			...(conn ? {} : { reason: await noRunnerReason(c.env, instanceId, uid) }),
 		});
+	});
+
+	/** Put this binding's checkout on every connected machine of the instance (#1142). Clones run in the background. */
+	codingRoutes.post("/:instanceId/coding/repos/:repoId/mirror", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const machines = await mirrorRepoToAllMachines(c.env, instanceId, uid, c.req.param("repoId"));
+		if (!machines) throw new HttpError(404, "Repo not found");
+		return c.json({ repoId: c.req.param("repoId"), machines });
 	});
 
 	codingRoutes.post("/:instanceId/coding/repos", async (c) => {

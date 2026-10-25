@@ -24,6 +24,7 @@ import type { Hono } from "hono";
 import { withinConfirmationWindow } from "../lib/confirmation-window.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { repinNote } from "../lib/coding-run-session.js";
+import { ensureCheckoutsOnRepin } from "../lib/coding-repo-mirror.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
 import { type AttachCause, attachBlocker, heartbeatContext, newAttachProgress, recordAttach, windowExpiredCause } from "../lib/runner-attach-report.js";
 import { attachedOnMachine, attachOnRepin, attachAgentOnNode } from "../lib/runner-repin.js";
@@ -87,6 +88,9 @@ export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 			c.executionCtx.waitUntil(recordAttach(c.env, { ...base, outcome: "not_attached", ...blocked, durationMs: 0 }));
 			return c.json({ ...pinned, attachment: { node: to, attached: false, ...blocked } });
 		}
+		// #1142: the repos this instance is bound to must exist on the machine it now runs on. Best effort and off the
+		// response path, the pin is already saved and a big clone outlasts any request; `coding_repos_list` shows the result.
+		c.executionCtx.waitUntil(ensureCheckoutsOnRepin(c.env, instanceId, session.uid, to, machineId, { waitMs: 25_000 }).catch(() => []));
 		const startedAt = Date.now();
 		const progress = newAttachProgress(startedAt);
 		const attachment = await withinConfirmationWindow(

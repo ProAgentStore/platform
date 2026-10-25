@@ -235,6 +235,14 @@ tags:
       `GET …/coding/repos/{repoId}/retargets` returns the audit history and labels each session
       with the coordinate the binding had when it started.
 
+      **Per-machine checkouts (#1142).** A binding is one repo; where it lives is per machine. `GET …/coding/repos`
+      returns each repo with `checkouts: [{machineId, workdir, cloneStatus, cloneError, lastVerifiedAt}]` beside
+      the binding's own `workdir`/`cloneStatus`. `POST …/coding/repos/{repoId}/mirror` puts the repo on every
+      connected machine of the instance: a machine without a usable checkout gets a background clone (its own git
+      credentials) into the binding's folder and a `cloning` checkout; others are verified. Answers
+      `200 {repoId, machines:[{machineId, runnerNode, status: ready|cloning|error|skipped, detail?}]}`, `404` unknown
+      repo. Repinning (`PUT …/runner-node`) starts the same clones for the target machine, best effort.
+
       **Standing policies.** `PUT …/coding/repos/{repoId}` also accepts `policies`, a map from a
       closed registry of invariants to `off` | `observe` | `act`. Unknown names and modes are
       **refused (400), never dropped** — a policy that silently never applies is

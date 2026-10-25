@@ -441,7 +441,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_repos_list",
-		"List all repos registered in a coding instance, with their status and active sessions. Answers `{repos, hint}` — `hint` is present when a repo is hosted on GitHub, and names the tools that reach it directly (list_instance_tools, then call_instance_tool) instead of through the terminal.",
+		"List all repos registered in a coding instance, with their status and active sessions. Each repo carries `checkouts`: its per-machine checkouts `{machineId, workdir, cloneStatus, cloneError, lastVerifiedAt}` (#1142), so you can see which machines hold it before repinning with set_instance_runner_node. Answers `{repos, hint}` — `hint` is present when a repo is hosted on GitHub, and names the tools that reach it directly (list_instance_tools, then call_instance_tool) instead of through the terminal.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
@@ -466,6 +466,25 @@ export function registerCodingSessionTools(
 			const repos = filterReposByInstance(r.repos || [], instance_id);
 			const hint = reposToolRoutingHint(repos);
 			return jsonText(hint ? { repos, hint } : { repos });
+		},
+	);
+
+	server.tool(
+		"coding_repo_mirror",
+		"Put a repo on every connected machine of a coding instance (#1142), so the instance can be repinned (set_instance_runner_node) or moved between machines without a missing checkout. For each connected machine with no usable checkout of `repo_id` it starts a background clone into the binding's folder using THAT machine's own git credentials (https, then SSH) and records the checkout as `cloning`; machines that already hold it are verified and left alone. Clones are not awaited — read coding_repos_list afterwards: each repo's `checkouts` turn `ready` (or fail with the reason in `cloneError`). Answers `{repoId, machines: [{machineId, runnerNode, status: ready|cloning|error|skipped, detail?}]}`. Only GitHub repos that have a folder are cloned (others are `skipped`); offline machines are not listed — repeat the call when they are back.",
+		{
+			instance_id: z.string().describe("Instance ID"),
+			repo_id: z.string().describe("Repo ID from coding_repos_list"),
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ instance_id, repo_id, token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "write", "coding_repo_mirror", { instance_id, repo_id });
+			if (denied) return denied;
+			const r = await authedCall(`/v1/instances/${instance_id}/coding/repos/${encodeURIComponent(repo_id)}/mirror`, sessionToken, { method: "POST" }, env);
+			await audit(safetyFor(token), { tool: "coding_repo_mirror", action: (r as { error?: string }).error ? "failed" : "completed", input: { instance_id, repo_id } });
+			return jsonText(r);
 		},
 	);
 

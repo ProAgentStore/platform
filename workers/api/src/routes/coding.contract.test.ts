@@ -192,6 +192,7 @@ const ROUTES = [
 	// asked deliberately about one repo — and because the list's own re-check is conditional on a
 	// runner connection it frequently cannot resolve.
 	"POST /:instanceId/coding/repos/:repoId/recheck",
+	"POST /:instanceId/coding/repos/:repoId/mirror",
 	"POST /:instanceId/coding/repos",
 	"POST /:instanceId/coding/repos/:repoId/detect-github",
 	"POST /:instanceId/coding/repos/:repoId/retarget",
@@ -297,6 +298,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"coding-repos.ts": [
 		"GET /:instanceId/coding/repos",
 		"POST /:instanceId/coding/repos/:repoId/recheck",
+		"POST /:instanceId/coding/repos/:repoId/mirror",
 		"POST /:instanceId/coding/repos",
 		"POST /:instanceId/coding/repos/:repoId/detect-github",
 		"POST /:instanceId/coding/repos/:repoId/retarget",

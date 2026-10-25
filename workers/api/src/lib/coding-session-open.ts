@@ -14,6 +14,7 @@ import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
 import { preflightEngine } from "./engine-preflight.js";
 import { ApiCodingRefused } from "./coding-api-policy.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
+import { effectiveWorkdir, getCheckout, machineIdForNode, upsertCheckout } from "./coding-repo-checkouts.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { appendTimeline } from "./coding-timeline.js";
 import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.js";
@@ -112,9 +113,15 @@ export interface StartOnRunnerResult {
  * Never throws: this is bookkeeping after a launch that already worked, and a failed probe must
  * not turn a live session into a failed open.
  */
-async function recordStartVerdict(env: Env, conn: RunnerConn, repo: CodingRepo): Promise<void> {
+async function recordStartVerdict(env: Env, conn: RunnerConn, repo: CodingRepo, checkoutOn?: { instanceId: string; userId: string; machineId: string }): Promise<void> {
+	// The per-machine row (#1142) records what THIS machine said; the binding's columns keep the latest verdict from any
+	// machine, which is all older readers know.
+	const record = async (cloneStatus: string, cloneError: string | null, verified: boolean) => {
+		if (checkoutOn) await upsertCheckout(env, checkoutOn.instanceId, checkoutOn.userId, repo.id, checkoutOn.machineId, { cloneStatus, cloneError, verified }).catch(() => undefined);
+	};
 	if (!repo.workdir) {
 		await updateRepoClone(env, repo.id, { cloneStatus: "needs_path", cloneError: null }).catch(() => undefined);
+		await record("needs_path", null, false);
 		return;
 	}
 	const verdict = await checkWorkdirVia(conn, repo.workdir).catch(() => null);
@@ -132,6 +139,7 @@ async function recordStartVerdict(env: Env, conn: RunnerConn, repo: CodingRepo):
 		// nobody has re-confirmed since Monday.
 		checkedNow: true,
 	}).catch(() => undefined);
+	await record(status, verdict.detail || null, true);
 }
 
 /**
@@ -199,7 +207,7 @@ export async function startSessionOnRunner(
 	instanceId: string,
 	uid: string,
 	session: CodingSessionRecord,
-	repo: CodingRepo,
+	bindingRepo: CodingRepo,
 	opts?: {
 		resumeFrom?: string | null;
 		cleanSlate?: boolean;
@@ -239,6 +247,14 @@ export async function startSessionOnRunner(
 		}
 	}
 	if (!conn) return { conn: null, resumed: false, seeded: false };
+	// The checkout on the machine that will RUN this session (#1142). The binding is one repo; where it lives differs per
+	// machine, so the path used from here on is that machine's own, falling back to the binding's. A machine with no row
+	// yet gets one (status unknown) before the start, and the verdict below fills it in.
+	const machineId = await machineIdForNode(env, instanceId, uid, conn.runnerNode ?? "").catch(() => null);
+	const checkout = machineId ? await getCheckout(env, instanceId, uid, bindingRepo.id, machineId).catch(() => null) : null;
+	const repo: CodingRepo = { ...bindingRepo, workdir: effectiveWorkdir(checkout, bindingRepo.workdir) };
+	const checkoutOn = machineId ? { instanceId, userId: uid, machineId } : undefined;
+	if (checkoutOn && !checkout) await upsertCheckout(env, instanceId, uid, repo.id, checkoutOn.machineId, { cloneStatus: "unknown" }).catch(() => undefined);
 	// ── Fail-closed guard (#760) ──────────────────────────────────────────────────────────────────
 	//
 	// A remote repo (no `workdir`) that carries no GitHub coordinates (`githubRepo` absent) cannot
@@ -340,7 +356,7 @@ export async function startSessionOnRunner(
 			ghScope: repo.githubRepo ? [repo.githubRepo] : undefined,
 			env: engineEnv,
 		});
-		await recordStartVerdict(env, conn, repo);
+		await recordStartVerdict(env, conn, repo, checkoutOn);
 		const outcome = { conn, resumed: started?.resumed === true, seeded: started?.seeded === true };
 		// The DURABLE half of #738. Everything else this issue fixed is a sentence in a response:
 		// a banner is missed if the tab is not open, and a chat notice is missed if nobody is in
@@ -383,6 +399,7 @@ export async function startSessionOnRunner(
 		// `onUnverified: null` already makes at list time.
 		if (!isRunnerUnreachable(e)) {
 			await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
+			if (checkoutOn) await upsertCheckout(env, instanceId, uid, repo.id, checkoutOn.machineId, { cloneStatus: "error", cloneError: msg }).catch(() => undefined);
 		}
 		return { conn: null, resumed: false, seeded: false, startError: msg };
 	}

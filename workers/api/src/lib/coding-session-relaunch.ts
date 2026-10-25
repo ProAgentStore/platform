@@ -11,6 +11,7 @@
  */
 import { callRunner, type RunnerConn } from "./runner-client.js";
 import { getRepo, getSession } from "./coding-store.js";
+import { effectiveWorkdir, getCheckout, machineIdForNode } from "./coding-repo-checkouts.js";
 import { resolveEngineEnv } from "./coding-engines.js";
 import type { Env } from "../types.js";
 
@@ -43,11 +44,14 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 	// (wrong binary / auth failure). Env is resolved at call time and never journalled, so the key
 	// does not land in workflow state — matching how the runner token is kept out of it elsewhere.
 	const [sess, repo] = await Promise.all([getSession(env, instanceId, userId, sessionId), getRepo(env, instanceId, userId, repoId)]);
+	// This machine's own path for the repo (#1142), else the binding's.
+	const machineId = repo ? await machineIdForNode(env, instanceId, userId, conn.runnerNode ?? "").catch(() => null) : null;
+	const checkout = repo && machineId ? await getCheckout(env, instanceId, userId, repoId, machineId).catch(() => null) : null;
 	const engineEnv = sess ? await resolveEngineEnv(env, instanceId, userId, sess) : undefined;
 	return callRunner<{ sessionId?: string; resumed?: boolean; seeded?: boolean }>(conn, "/coding/start", {
 		sessionId,
 		repoId,
-		workDir: repo?.workdir || undefined,
+		workDir: effectiveWorkdir(checkout, repo?.workdir) || undefined,
 		cloneUrl: input.cloneUrl,
 		branch: input.branch,
 		token: input.token,

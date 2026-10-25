@@ -355,6 +355,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_queue_reorder: "write", // #1097 — changes which queued entry starts first; starts nothing
 	coding_loop_stop: "write",
 	coding_repo_add: "write",
+	coding_repo_mirror: "write", // #1142 — starts background clones on the instance's connected machines; adds checkouts, removes nothing
 	retarget_repository_binding: "write",
 	coding_engine_set: "write",
 	create_agent: "write",
