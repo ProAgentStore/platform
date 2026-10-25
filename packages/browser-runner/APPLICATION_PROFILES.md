@@ -67,6 +67,25 @@ reaching the sign-in is an outcome with a reason, and you then get the ordinary 
 
 There is one try per run.
 
+**Any site signs in from the vault (#1229).** If a login for the site is stored under Knowledge → Credentials
+(a username and a password), a sign-in pause there is not handed to you either:
+- PAGS reads that credential, for the paused page's own site, and sends it to the runner in one request.
+- The runner types it into the paused browser — the CLI never sees it — and, once the site lets the browser
+  in, the run resumes and the sign-in is recorded as above. A two-step form (username, Continue, password) works.
+- Each use stamps the credential's last-used time and writes a `credential.use` event naming the site and the
+  outcome. The username and password are never stored by the runner or written to a trace, log or event.
+
+It ends with a reason, and you then get the ordinary sign-in handoff, when:
+- the site shows a CAPTCHA or other proof of a human (never worked around);
+- it asks for a second factor (a code);
+- it refuses the password — that password is **not tried again** on later runs until you change it;
+- it does not let the browser in, or its sign-in page is not one the runner can read;
+- the page is not on the credential's own site (nothing is typed);
+- the runner's CLI is older than the release that added this.
+
+On SEEK, with **SEEK sign-in email** set, the emailed code goes first and the vault is tried only if the code failed.
+There is one try per run. Not verified on a live site's sign-in page.
+
 **If the run ended before you signed in (#1100).** A sign-in pause lasts only as long as the run, and a
 run that runs out of time ends `blocked` (`login_required`). Taking over its board card then opens
 **this profile** at the job's page, with no run behind it. Sign in there and press Resume: the sign-in

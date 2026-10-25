@@ -44,6 +44,7 @@ import {
 } from "./contract.js";
 import { type ApplicationRunnerSettings, RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, hostOfUrl } from "./policy.js";
 import { advanceEmailCodeSignIn, emailCodeWillTry } from "./email-code-sign-in.js";
+import { advanceVaultSignIn, vaultSignInWillTry } from "./vault-sign-in.js";
 import {
 	type ApplicationMove,
 	type ApplyRun,
@@ -683,7 +684,8 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
 		// successful login from a redirect.
 		// #1106: a SEEK sign-in the email code can clear is not the owner's yet; they hear of it if it fails.
-		if (!(await emailCodeWillTry(env, current, signInSettings))) await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
+		// #1229: nor is one the vault can sign in with a stored password login.
+		if (!(await emailCodeWillTry(env, current, signInSettings)) && !(await vaultSignInWillTry(env, uid, current, signInSettings))) await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
 	} else if (current.status === "running" && run.status === "paused") {
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
@@ -694,9 +696,13 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	if (current.status === "paused" && current.pause?.reason === "login_required") {
 		const signIn = await advanceEmailCodeSignIn(env, uid, current, signInSettings, now);
 		current = signIn.run;
-		if (signIn.outcome === "failed" && current.pause) await notifyLiveBrowserBlocker(env, uid, current, current.pause, now, attentionDeps).catch(() => undefined);
+		// #1229: when the email code did not clear it (or does not apply), the stored password login gets one try.
+		const vault = signIn.outcome === "not_applicable" || signIn.outcome === "failed" ? await advanceVaultSignIn(env, uid, current, signInSettings, now) : { outcome: "not_applicable" as const, run: current };
+		current = vault.run;
+		// The owner hears of it once, when the last automatic try is spent: an email-code failure with nothing in the vault, or the vault's own.
+		if (((signIn.outcome === "failed" && vault.outcome === "not_applicable") || vault.outcome === "failed") && current.pause) await notifyLiveBrowserBlocker(env, uid, current, current.pause, now, attentionDeps).catch(() => undefined);
 		// The runner released its own pause: read it back now rather than a minute later.
-		if (signIn.outcome === "signed_in") return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
+		if (signIn.outcome === "signed_in" || vault.outcome === "signed_in") return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
 	}
 	// Delivery is deliberately best-effort: the directive was persisted first. A later pull retries
 	// an unacknowledged directive with exactly the same checkpoint and decision.

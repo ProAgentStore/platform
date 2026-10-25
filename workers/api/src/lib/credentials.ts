@@ -233,6 +233,24 @@ export async function findCredentialForHost(env: Env, instanceId: string, userId
 	return { id: match.id, username: match.username ?? undefined, loginUrl: match.login_url ?? undefined, password: secrets.password, pin: secrets.pin };
 }
 
+/**
+ * Is there a stored password login that fits this host — WITHOUT decrypting it (#1229)? The vault sign-in asks this to decide whether to
+ * try at all (and so whether the owner is alerted yet); only the attempt itself reads the secret, through {@link findCredentialForHost}.
+ * `updatedAt` is when the owner last changed it, so a password that failed can be told from one they have since replaced.
+ */
+export async function passwordLoginForHost(env: Env, instanceId: string, userId: string, host: string): Promise<{ id: string; updatedAt: string } | null> {
+	const h = credDomain(host);
+	if (!h) return null;
+	const res = await env.DB.prepare("SELECT id, domain, updated_at FROM agent_credentials WHERE instance_id = ?1 AND user_id = ?2 AND username IS NOT NULL AND username <> '' AND secrets_ciphertext IS NOT NULL ORDER BY created_at DESC, id")
+		.bind(instanceId, userId)
+		.all<{ id: string; domain: string; updated_at: string }>();
+	const best = (res.results ?? [])
+		.map((r) => ({ r, rank: credentialMatchRank(h, String(r.domain)) }))
+		.filter((m): m is { r: { id: string; domain: string; updated_at: string }; rank: number } => m.rank !== null)
+		.sort((a, b) => a.rank - b.rank)[0];
+	return best ? { id: best.r.id, updatedAt: best.r.updated_at } : null;
+}
+
 export async function createCredential(env: Env, instanceId: string, userId: string, input: CredentialInput): Promise<string> {
 	const id = crypto.randomUUID();
 	const enc = await encryptSecretsFor(env, input);

@@ -48,6 +48,16 @@ export const LOCAL_APPLY_EMAIL_CODE_PATH = "/local-apply/email-code";
 export const EMAIL_CODE_SIGN_IN_SITES: readonly string[] = ["seek.com", "seek.com.au", "seek.co.nz"];
 export type LocalApplyEmailCodeFailure = "unsupported_site" | "no_email_field" | "no_send_button" | "no_code_field" | "code_rejected";
 export type LocalApplyEmailCodeResult = { state: "code_requested" } | { state: "signed_in" } | { state: "failed"; reason: LocalApplyEmailCodeFailure };
+/**
+ * The vault sign-in (#1229), on a run paused `login_required` on a host with a stored password login: `{runId, host, username, password}`
+ * has the runner type the credential into the paused run's own sign-in page and, once the site lets the browser in, release the pause.
+ * The credential passes through this one request and is never stored by the runner, traced, logged or shown to the CLI. `host` is the site
+ * the credential belongs to: the runner refuses to type it anywhere else. A CAPTCHA, a second factor or a refused password ends the
+ * attempt with its reason — never a retry — and the owner gets the ordinary sign-in handoff.
+ */
+export const LOCAL_APPLY_VAULT_SIGN_IN_PATH = "/local-apply/vault-sign-in";
+export type LocalApplyVaultSignInFailure = "host_mismatch" | "no_username_field" | "no_password_field" | "no_submit_button" | "captcha" | "two_factor" | "wrong_password" | "not_signed_in";
+export type LocalApplyVaultSignInResult = { state: "signed_in" } | { state: "failed"; reason: LocalApplyVaultSignInFailure };
 
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];

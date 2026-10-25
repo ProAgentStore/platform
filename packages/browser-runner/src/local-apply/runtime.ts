@@ -36,6 +36,7 @@ import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js"
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
 import { runEmailCodeStep } from "./email-code.js";
+import { runVaultSignIn } from "./vault-sign-in.js";
 import type { SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
 import { confirmationSignals } from "./confirmation.js";
@@ -54,6 +55,7 @@ import {
 	type LocalApplyBlockReason,
 	type LocalApplyDirectiveRequest,
 	type LocalApplyEmailCodeResult,
+	type LocalApplyVaultSignInResult,
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
 	type LocalApplyPause,
@@ -671,6 +673,13 @@ export class LocalApplyRuntime {
 		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
 		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
 		return runEmailCodeStep({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);
+	}
+
+	/** The vault sign-in (#1229) on a run paused for one: the credential goes into its own browser and nowhere else. */
+	vaultSignIn(raw: unknown): Promise<LocalApplyVaultSignInResult> {
+		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
+		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
+		return runVaultSignIn({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);
 	}
 
 	/** The owner acted: add their answers to what values may be grounded in, admit any site they allowed, release. */
