@@ -5,8 +5,8 @@ import { configDefaults, defineConfig } from "vitest/config";
  * The heavy-integration set (#253). Everything under `packages/browser-runner` drives
  * something real — a full Chrome over CDP, a bound TCP socket, a spawned tmux pane, a
  * `git clone` — so every one of these files has a wall-clock budget that a busy machine
- * can blow. They are the only tests in the suite whose result depends on how much CPU is
- * left over.
+ * can blow. They need a larger budget than the API's real-schema and assembled-route
+ * unit checks, which also slow down on a busy machine.
  *
  * A DIRECTORY, deliberately, not a list of file names. The first cut of this fix named
  * `runner-browser.test.ts` because that is the file we had watched fail; the next
@@ -146,6 +146,10 @@ export default defineConfig({
 					include: UNIT_TESTS,
 					exclude: [...configDefaults.exclude, ...INTEGRATION_TESTS],
 					sequence: { groupOrder: 0 },
+					// Real-schema and assembled-route checks can exceed Vitest's 5s test / 10s hook
+					// defaults when this shared machine is busy (#1360). Keep a finite budget.
+					testTimeout: 30_000,
+					hookTimeout: 30_000,
 				},
 			},
 			{
