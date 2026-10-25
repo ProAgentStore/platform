@@ -1,6 +1,6 @@
 # Unattended Actions runner recovery on PAGS machines
 
-**Status:** design and queued work. This extends the self-hosted runner design
+**Status:** implementation in progress; fleet rollout and physical verification remain queued. This extends the self-hosted runner design
 in [runner-self-hosted-design.md](runner-self-hosted-design.md). It does not
 change GitHub Actions routing or promise startup after a laptop's battery is
 fully depleted.
@@ -89,6 +89,17 @@ configuration, with a local copy sufficient to recover while its cloud relay
 is disconnected. The default for a new macOS system service is to recover on
 AC return; an owner can inspect or disable it through PAGS. The policy must
 have one source of truth and survive CLI updates and reboots.
+
+The implementation uses `actions_runner_setup` with
+`service_mode: "macos_system"` to request pre-login mode. The machine returns
+`needs_admin` with the local command. On that machine, the owner runs
+`pags actions service install --dir <runner-directory>` and approves the
+administrator prompt. `pags actions status --dir <runner-directory>` reads the
+local supervisor sample, while `pags actions policy --dir <runner-directory>
+--ac-recovery on|off` changes the persisted AC policy. PAGS also exposes
+`actions_runner_status` and a scoped `actions_runner_recover` tool; the latter
+returns a recovery ID whose outcome appears in status. Omitting `service_mode`
+keeps the existing macOS user-service setup behavior.
 
 Extend `actions_runner_status` (MCP, API, and console/CLI view) with the local
 service mode and health, last battery-to-AC observation, last restart reason,
