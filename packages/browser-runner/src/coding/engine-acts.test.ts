@@ -61,6 +61,40 @@ describe("classifySegment — the acts a supervisor must not miss", () => {
 		}
 	});
 
+	it("reports EVERY spelling of a force-push as one, including the flagless `+refspec` (#1139)", () => {
+		// "Never force-push (`--force`, `--force-with-lease`, `+refspec`)" is a repo rule; the evidence check can only
+		// notice a broken rule it can read. A leading `+` forces that ref with no flag at all.
+		for (const cmd of [
+			"git push origin +main",
+			"git push origin +HEAD:main",
+			"git push origin +refs/heads/fix:refs/heads/fix",
+			"git push -u origin +fix",
+			"git push --force-if-includes origin main",
+			"git push -uf origin fix",
+			"git push -fu origin fix",
+			"git push --force=true origin main",
+			"cd /repo && git add -A && git push origin +main",
+		]) {
+			expect(classifySegment(cmd), cmd).toMatchObject({ kind: "push.force", irreversible: true });
+		}
+	});
+
+	it("does not mistake an ordinary push for a force-push", () => {
+		// A false force-push report is its own harm: a supervisor stops trusting the word.
+		for (const [cmd, kind] of [
+			["git push origin main", "push.trunk"],
+			["git push --follow-tags origin main", "push.trunk"],
+			["git push -u origin feature/plus+sign", "push"],
+			["git push origin fix:main-copy", "push"],
+			["git push --dry-run origin main", "push.trunk"],
+		] as const) {
+			expect(classifySegment(cmd)?.kind, cmd).toBe(kind);
+		}
+		// A `+` in a different command on the same line is not a refspec.
+		expect(classifySegment("git commit -m 'a +b' && echo +x")).toBeNull();
+		expect(classifyCommand("t1", "git commit -m 'fix +main' && git push origin fix").map((a) => a.kind)).toEqual(["push"]);
+	});
+
 	it("separates a push to the trunk from a push to a feature branch", () => {
 		expect(classifySegment("git push origin main")).toMatchObject({ kind: "push.trunk", irreversible: true });
 		expect(classifySegment("git push -u origin fix/94-thing")).toMatchObject({ kind: "push", irreversible: false });

@@ -300,6 +300,17 @@ export interface ClassifiedAct {
 }
 
 /**
+ * Does this `git push` overwrite the remote ref? Every spelling of it, not just the loud ones: `--force`,
+ * `--force-with-lease`, `--force-if-includes`, a short flag in any cluster (`-f`, `-uf`), and a leading `+` on a
+ * refspec (`git push origin +main`, `+HEAD:main`), which forces that one ref with no flag at all (#1139). A rule that
+ * says "never force-push" is only as good as the evidence check that notices when it is broken.
+ */
+function forcesPush(segment: string): boolean {
+	if (/(?:^|\s)(?:--force(?:-with-lease|-if-includes)?|-[A-Za-z]*f[A-Za-z]*)(?:=|\s|$)/.test(segment)) return true;
+	return (segment.split(/\bgit\s+push\b/)[1] ?? "").split(/\s+/).some((word) => /^\+[^\s+]/.test(word));
+}
+
+/**
  * Classify ONE shell segment. Returns null for ordinary work, which is nearly everything.
  *
  * The rules are matched in order of consequence, so `git push --force origin main` is recorded as
@@ -319,7 +330,7 @@ export function classifySegment(segment: string): ClassifiedAct | null {
 	if (/\bgh\s+repo\s+delete\b/.test(s)) return hit("repo.delete");
 
 	if (/\bgit\s+push\b/.test(s)) {
-		if (/(?:^|\s)(?:--force|--force-with-lease|-f)(?:=|\s|$)/.test(s)) return hit("push.force", pushTarget(s));
+		if (forcesPush(s)) return hit("push.force", pushTarget(s));
 		// `git push origin --delete x` and the older `git push origin :x` both delete a REMOTE
 		// branch — the one push that destroys rather than adds.
 		if (/(?:^|\s)--delete(?:\s|$)/.test(s) || /\s:\S+/.test(s)) return hit("branch.delete", pushTarget(s));

@@ -173,6 +173,18 @@ describe("deriveAct — the claim each kind is entitled to make, per kind (#582)
 		expect(claim("push.trunk", "git push origin feature/main-fix")).toEqual({ phrase: "pushed a branch", irreversible: false });
 	});
 
+	it("push.force: a flagless `+refspec` force-push is claimed as one, not downgraded to an ordinary push (#1139)", () => {
+		for (const cmd of ["git push origin +main", "git push origin +HEAD:main", "git push -u origin +fix", "git push --force-if-includes origin main", "git push -uf origin fix"]) {
+			const c = claim("push.force", cmd);
+			expect(c.irreversible, cmd).toBe(true);
+			expect(c.phrase, cmd).toBe("force-pushed (overwrote the remote branch)");
+		}
+		// …and a push that merely has a `+` somewhere else, or no force at all, is still an ordinary one.
+		for (const cmd of ["git push origin main", "git push origin feature/plus+sign", "git commit -m '+main' && git push origin fix"]) {
+			expect(claim("push.force", cmd), cmd).toEqual({ phrase: "pushed a branch", irreversible: false });
+		}
+	});
+
 	it("push.force: distinguishes a lease from a bare force, and claims nothing about 'published'", () => {
 		// The old constant said "(rewrote published history)". Whether anything had been published,
 		// or fetched by anyone, is not in the command. The flag is.

@@ -19,6 +19,21 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
   Delegate codebase exploration, documentation research, testing, and reviews where appropriate.
   Wait for relevant agents and consolidate their results before finishing.
 
+## Git workflow
+
+- Commit finished work and push directly to `main` (see *Delivery mode*). Do not open pull requests unless Serge
+  explicitly asks.
+- **NEVER force-push.** That means `--force`, `--force-with-lease`, `--force-if-includes`, a short-flag cluster that
+  carries `f` (`-f`, `-uf`), and a leading `+` on a refspec (`git push origin +main`, `+HEAD:main`), which forces
+  that ref with no flag at all. The platform's evidence check records every one of these as a force-push (`push.force`,
+  irreversible), so a run that does it is flagged. If a push is rejected, `git pull --rebase` and push again; if the
+  rebase conflicts, stop and report.
+- When a commit fully resolves an issue, put a closing keyword in its message (`closes #123`; `fixes` and `resolves`
+  work the same). GitHub closes the issue on the push, and the release-note collector reads the same keywords. Work
+  that only touches an issue says `refs #123` instead.
+- Out-of-scope work found along the way gets its own issue that references the original. Do not fold it into the
+  current change.
+
 ## Running the full test suite
 
 Use one command, from any directory, and read its last line:

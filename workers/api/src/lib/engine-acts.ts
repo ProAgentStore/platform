@@ -133,6 +133,11 @@ function clusterHas(segment: string, letter: string): boolean {
 	return words(segment).some((w) => /^-[A-Za-z]+$/.test(w) && w.slice(1).includes(letter));
 }
 
+/** Does a `git push` argument start with `+`? That forces the ref it names. */
+function forcesByRefspec(segment: string): boolean {
+	return (segment.split(/\bgit\s+push\b/)[1] ?? "").split(/\s+/).some((word) => /^\+[^\s+]/.test(word));
+}
+
 /** A token that is exactly the trunk, not a branch merely containing the word (`feature/main-fix`). */
 const TRUNK_TOKEN = /(?:^|\s)(?:HEAD:)?(?:refs\/heads\/)?(?:main|master)(?:\s|$)/;
 
@@ -357,7 +362,8 @@ export const ACT_RULES: Record<string, ActRule> = {
 		from: (_c, segs) => {
 			if (segs.some((s) => hasFlag(s, "--dry-run"))) return DRY_PUSH;
 			const lease = segs.some((s) => hasFlag(s, "--force-with-lease"));
-			const forced = segs.some((s) => hasFlag(s, "--force") || clusterHas(s, "f"));
+			// A leading `+` on a refspec forces that ref with no flag at all (`git push origin +main`) (#1139).
+			const forced = segs.some((s) => hasFlag(s, "--force") || hasFlag(s, "--force-if-includes") || clusterHas(s, "f") || forcesByRefspec(s));
 			// The old sentence claimed the push "rewrote published history". Whether anything had
 			// been published, or pulled by anyone, is not in the command — what IS in it is the flag,
 			// and `--force-with-lease` is a materially weaker act than a bare force: it refuses
