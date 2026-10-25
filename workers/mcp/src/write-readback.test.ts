@@ -367,6 +367,17 @@ const READBACK: Record<string, string | null> = {
 	"runner_restart.runner_node": "list_runner_nodes",
 	// A per-call choice for that one restart, not state anything keeps.
 	"runner_restart.force": null,
+	// #1324: the checkout actions name a repo from coding_repos_list; their label/pull/node are per-call choices, and the result is read back from the call itself.
+	"stash_checkout.repo_id": "coding_repos_list",
+	"stash_checkout.label": null,
+	"stash_checkout.pull": null,
+	"stash_checkout.runner_node": "list_runner_nodes",
+	"discard_checkout.repo_id": "coding_repos_list",
+	"discard_checkout.label": null,
+	"discard_checkout.pull": null,
+	"discard_checkout.runner_node": "list_runner_nodes",
+	// The approval is read back with GET /coding/auto-stash and on the run timeline; the MCP surface returns it from the write itself.
+	"set_auto_stash.enabled": null,
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The
 	// matching reader must land with its writer so an MCP-only caller can verify a clear/save.
 	"set_instance_terminal_session.active_terminal_target": "get_instance_terminal_session",

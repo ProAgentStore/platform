@@ -341,6 +341,86 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 		},
 	);
 
+	// ── Stash / discard a checkout's local changes (#1324) ──────────────────────
+	//
+	// A run stopped on a dirty tree (a fast-forward git refuses because an incoming commit touches a
+	// changed file) used to wait for somebody at that machine's keyboard. These act on the checkout
+	// remotely: the platform asks the machine that holds it, which writes the backup, cleans the tree,
+	// fast-forwards it and reports HEAD and whether it is clean. Never while a run is working there.
+	const checkoutAction = (action: "stash" | "discard") => async ({ token, instance_id, repo_id, label, pull, runner_node, confirm, dry_run }: { token?: string; instance_id: string; repo_id: string; label?: string; pull?: boolean; runner_node?: string; confirm?: string; dry_run?: boolean }) => {
+		const sessionToken = tokenFor(token);
+		if (!sessionToken) return authRequired();
+		const tool = `${action}_checkout`;
+		const input = { instance_id, repo_id, label, pull, runner_node };
+		// A stash keeps every byte on a ref; a discard throws the work away after backing up a patch, so only it is `destructive`.
+		const denied = await requirePermission(safetyFor(token), action === "discard" ? "destructive" : "runtime", tool, input);
+		if (denied) return denied;
+		const checkoutEndpoint = `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/checkout/${action}`;
+		if (dry_run) {
+			return dryRun(safetyFor(token), tool, `${action} the local changes in a repo's checkout`, input, {
+				endpoint: checkoutEndpoint,
+				method: "POST",
+				effect:
+					action === "stash"
+						? "The machine would run `git stash push --include-untracked` with a labelled message (pinned on a refs/pags/stash ref), leave the tree clean, then fast-forward it unless pull is false. Refused while a run is working in that checkout."
+						: "The machine would write a binary patch of every tracked change and a list of untracked files under the checkout's .git/pags-backups, then `git reset --hard HEAD` and `git clean -fd` (never -x), then fast-forward it unless pull is false. Untracked files' CONTENTS are not kept. Refused while a run is working in that checkout.",
+				reversible: action === "stash" ? "`git stash apply <commit>` in that checkout, using the commit the answer names." : "Tracked changes only: `git apply <backup patch>`. Untracked files are gone.",
+			});
+		}
+		if (action === "discard") {
+			const unconfirmed = await requireConfirmation(safetyFor(token), tool, confirm, tool, input);
+			if (unconfirmed) return unconfirmed;
+		}
+		const data = (await authedAsyncCall(checkoutEndpoint, sessionToken, { method: "POST", body: JSON.stringify({ label, pull, runner_node, ...(action === "discard" ? { confirm: "discard_checkout" } : {}) }) }, env, { tool, possibleOutcomes: ["not-started", "stashed", "discarded"], poll: { tool: "coding_repos_list", input: { instance_id } } })) as { error?: string; outcome?: string };
+		// A failure carries `reason` (unreachable | busy | old_runner | refused | failed) and a sentence saying what to do: pass it through whole.
+		if (data.outcome === "unknown") return jsonText(data);
+		if (!data.error) await audit(safetyFor(token), { tool, action: "completed", input, result: data });
+		return jsonText(data);
+	};
+	const checkoutSchema = {
+		token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		instance_id: z.string().describe("Instance ID or slug"),
+		repo_id: z.string().describe("Repo ID from coding_repos_list."),
+		label: z.string().max(60).optional().describe("A short label recorded with the backup (letters, digits, spaces and . _ : # / @ -), e.g. the run or issue it unblocks."),
+		pull: z.boolean().optional().describe("Fast-forward (`git pull --ff-only`) after cleaning. Default true."),
+		runner_node: z.string().optional().describe("Machine (node) holding the checkout. Default: the machine this agent is pinned to."),
+		dry_run: z.boolean().optional().describe("Say what would happen, without contacting the machine."),
+	};
+	server.tool(
+		"stash_checkout",
+		"Stash a repo checkout's local changes on the machine that holds it, then bring it current (#1324). Use it when a run is stuck because the checkout is dirty and behind (`git pull --ff-only` refused: an incoming commit touches a changed file) and you want to KEEP the work. The machine runs `git stash push --include-untracked` with a labelled message, pins it on a `refs/pags/stash/<time>` ref, leaves the tree clean (ignored files are never touched), then fast-forwards unless `pull` is false. Answers `{ok, action, machine, summary, result: {files, backup: {ref, commit}, head, clean, pulled}}`: HEAD and `clean` are re-read from the machine, not assumed. Refused with `reason: busy` while a run, driver or direct turn is working in that checkout. When the machine cannot take the command it says so with a `reason`: `unreachable` (offline, `pags up` not running, or it dropped mid-call — then the answer says it is not known whether it ran), `old_runner` (names the CLI to update to), `refused` or `failed` (the sentence says what happened). To let runs do this by themselves, see set_auto_stash. To throw the changes away instead, see discard_checkout.",
+		checkoutSchema,
+		checkoutAction("stash"),
+	);
+	server.tool(
+		"discard_checkout",
+		"Discard a repo checkout's local changes on the machine that holds it, after backing them up, then bring it current (#1324). Use it when the owner has decided the uncommitted work is not wanted. The machine first writes a binary patch of every tracked change and a list of untracked paths under the checkout's `.git/pags-backups`; only if that succeeds does it run `git reset --hard HEAD` and `git clean -fd` (never `-x`: ignored files stay), then it fast-forwards unless `pull` is false. Untracked files' CONTENTS are not kept (only their names) — use stash_checkout to keep them. Answers like stash_checkout, with `backup: {path, untrackedList}`. Requires `confirm: \"discard_checkout\"`. Refused while a run is working in that checkout, and an unreachable or old machine is named with a `reason`, as for stash_checkout.",
+		{ ...checkoutSchema, confirm: z.string().optional().describe('Must be "discard_checkout" to actually discard.') },
+		checkoutAction("discard"),
+	);
+	server.tool(
+		"set_auto_stash",
+		"Approve (or stop approving) runs stashing a dirty checkout by themselves (#1324). With it on, when a run's pull-before-run fast-forward is blocked by local changes (a dirty tree an incoming commit would overwrite), the platform stashes them first — with a backup ref the machine records, written on the run's timeline — and continues, instead of stopping for a person. Off (the default), such a run stops with a message naming stash_checkout, discard_checkout and this setting. Per instance; it never discards anything, only stashes. Answers `{enabled}`.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug"),
+			enabled: z.boolean().describe("true to approve auto-stash, false to withdraw it."),
+			dry_run: z.boolean().optional().describe("Say what would change, without changing it."),
+		},
+		async ({ token, instance_id, enabled, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, enabled };
+			const denied = await requirePermission(safetyFor(token), "write", "set_auto_stash", input);
+			if (denied) return denied;
+			const policyEndpoint = `/v1/instances/${encodeURIComponent(instance_id)}/coding/auto-stash`;
+			if (dry_run) return dryRun(safetyFor(token), "set_auto_stash", "approve or withdraw auto-stash for this agent's runs", input, { endpoint: policyEndpoint, method: "PUT", effect: enabled ? "Runs on this agent would stash a dirty checkout (with a backup ref) when it blocks their pull-before-run fast-forward, and continue." : "Runs would stop with a message when a dirty checkout blocks their fast-forward, as before." });
+			const data = (await authedCall(policyEndpoint, sessionToken, { method: "PUT", body: JSON.stringify({ enabled }) }, env)) as { error?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "set_auto_stash", action: "completed", input, result: data });
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
 	// ── The durable outcome (#990) ───────────────────────────────────────────────
 	//
 	// `runner_update` used to be answerable only by the reply to its own request, and that reply

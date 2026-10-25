@@ -20,7 +20,8 @@ import type { Env } from "../types.js";
 import { getRepo } from "./coding-store.js";
 import { readRepoSync, type RepoSyncVerdict } from "./repo-sync.js";
 import { readRepoWorkingState } from "./repo-state.js";
-import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, readWorkingStateWithRetry, skippedSyncHeal, syncSelfHealEligible, type SyncHealOutcome } from "./repo-sync-gate.js";
+import { attemptSyncSelfHealWithStash, readAutoStashPolicy } from "./checkout-actions.js";
+import { describeSyncHeal, gateRunOnSync, readWorkingStateWithRetry, skippedSyncHeal, syncSelfHealEligible, type SyncHealOutcome } from "./repo-sync-gate.js";
 import { callRunner, type RunnerConn } from "./runner-client.js";
 
 /** How many changed files a note names before it says how many more there are. */
@@ -62,7 +63,7 @@ export async function resyncBeforeAnswer(env: Env, conn: RunnerConn, input: { in
 		readRepoSync(conn, { workDir: repo.workdir, sessionId: input.sessionId, branch: repo.branch, forceFetch: true }).catch(() => null as RepoSyncVerdict | null),
 	]);
 	const eligible = syncSelfHealEligible(sync, read.state, repo.branch ?? null);
-	const attempted = eligible.eligible && eligible.branch ? await attemptSyncSelfHeal(conn, { repo, sessionId: input.sessionId, branch: eligible.branch }) : skippedSyncHeal(eligible);
+	const attempted = eligible.eligible && eligible.branch ? await attemptSyncSelfHealWithStash(conn, { repo, sessionId: input.sessionId, branch: eligible.branch, runLabel: `resume ${input.sessionId}`, approved: await readAutoStashPolicy(env, input.instanceId, input.userId) }) : skippedSyncHeal(eligible);
 	const heal = attempted && read.error ? { ...attempted, stateReadError: read.error } : attempted;
 	const after = heal?.sync ?? sync;
 	const gate = await gateRunOnSync(env, { instanceId: input.instanceId, userId: input.userId, sessionId: input.sessionId, node: conn.runnerNode ?? null, repo: repo.name, heal }, after);

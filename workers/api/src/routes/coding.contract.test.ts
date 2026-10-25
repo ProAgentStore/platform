@@ -135,6 +135,7 @@ const PARAMS: Record<string, string> = {
 	repoId: "repo-1",
 	sessionId: "csess-1",
 	number: "7",
+	action: "stash",
 };
 
 function concrete(pattern: string): string {
@@ -209,6 +210,9 @@ const ROUTES = [
 	"PUT /:instanceId/coding/work-mode",
 	"GET /:instanceId/coding/repos/:repoId/next-issue",
 	"PUT /:instanceId/coding/repos/:repoId",
+	"POST /:instanceId/coding/repos/:repoId/checkout/:action",
+	"GET /:instanceId/coding/auto-stash",
+	"PUT /:instanceId/coding/auto-stash",
 	"GET /:instanceId/coding/repos/:repoId/pulls",
 	"GET /:instanceId/coding/repos/:repoId/pulls/:number",
 	"GET /:instanceId/coding/timeline",
@@ -318,6 +322,12 @@ const OWNERSHIP: Record<string, string[]> = {
 		"PUT /:instanceId/coding/work-mode",
 		"GET /:instanceId/coding/repos/:repoId/next-issue",
 		"PUT /:instanceId/coding/repos/:repoId",
+	],
+	// Stash / discard a checkout's local changes on the machine that holds it, and the auto-stash approval (#1324).
+	"coding-checkout-actions.ts": [
+		"POST /:instanceId/coding/repos/:repoId/checkout/:action",
+		"GET /:instanceId/coding/auto-stash",
+		"PUT /:instanceId/coding/auto-stash",
 	],
 	// The PR surface (#401) — the two routes that read pull requests and attribute them to agent
 	// runs. Its own module for the same reason the others are: one answerable question per file.

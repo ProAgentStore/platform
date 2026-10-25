@@ -560,6 +560,16 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	}
+	// Stash or discard a checkout's local changes, with a backup, then fast-forward it (#1324,
+	// `coding/checkout-clean.ts`). An older runner 404s this; the cloud names the CLI that has it.
+	if (req.method === "POST" && path === "/coding/checkout-clean") {
+		const b = await readJson<{ workDir?: string; repoId?: string; action: "stash" | "discard"; label: string; pull?: boolean; branch?: string }>(req);
+		try {
+			return json(res, 200, runner.coding.checkoutClean({ ...b, label: String(b.label ?? "") }));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
 	if (req.method === "POST" && path === "/coding/git-remote") {
 		const b = await readJson<{ sessionId?: string; workDir?: string }>(req);
 		try {

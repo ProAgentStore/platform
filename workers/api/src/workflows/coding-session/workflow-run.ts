@@ -37,7 +37,8 @@ import { accountTimeZone } from "../../lib/account-timezone.js";
 import type { EngineWaitState } from "../../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../../lib/repo-state.js";
 import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../../lib/repo-sync.js";
-import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, readWorkingStateWithRetry, REPAIR_RUN_OBJECTIVE, repairCheckoutObjective, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../../lib/repo-sync-gate.js";
+import { attemptSyncSelfHealWithStash, autoStashApproved, readAutoStashPolicy } from "../../lib/checkout-actions.js";
+import { describeSyncHeal, gateRunOnSync, readWorkingStateWithRetry, REPAIR_RUN_OBJECTIVE, repairCheckoutObjective, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../../lib/repo-sync-gate.js";
 import { enforceRepoPolicies } from "../../lib/repo-policy-act.js";
 import { setWorkCardProgress, upsertWorkCard } from "../../lib/work-card.js";
 import { normalizeRunnerNode } from "../../lib/runtime-nodes.js";
@@ -1003,7 +1004,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			if (!eligible.eligible || !eligible.branch) return skippedSyncHeal(eligible);
 			const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
 			if (!repo) return null;
-			const attempted = await attemptSyncSelfHeal(conn, { repo, sessionId, branch: eligible.branch });
+			// #1324: a dirty tree that blocks the pull is stashed (backup kept) only when the owner approved it: per instance, or once on this run.
+			const approved = autoStashApproved(null, (goal as { autoStash?: boolean }).autoStash) || (await readAutoStashPolicy(env, instanceId, userId));
+			const attempted = await attemptSyncSelfHealWithStash(conn, { repo, sessionId, branch: eligible.branch, runLabel: `run ${event.payload.loopRunId ?? sessionId ?? ""}`, approved });
 			return repoStart.stateError ? { ...attempted, stateReadError: repoStart.stateError } : attempted;
 		})) as SyncHealOutcome | null;
 		// The verdict the run is judged on is the checkout as it IS now — the re-read after a

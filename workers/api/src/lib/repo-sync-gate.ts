@@ -348,6 +348,8 @@ export interface SyncHealOutcome {
 	to: string | null;
 	/** Commits brought in. Null when unknown. */
 	commits: number | null;
+	/** Set when approved local changes were stashed to let the heal through (#1324): the sentence the run records, and where the work is. */
+	stashed?: { summary: string; ref: string | null; commit: string | null; files: number };
 	/** The INDEPENDENT re-read after the attempt — the verdict the gate must now decide on. Null when it failed. */
 	sync: RepoSyncVerdict | null;
 }
@@ -494,7 +496,7 @@ export async function attemptSyncSelfHeal(
  */
 export function describeSyncHeal(h: SyncHealOutcome): string {
 	const unread = h.stateReadError ? ` (The working tree's state could not be read — ${h.stateReadError} — so the machine's own checks decided.)` : "";
-	return `${describeHealCore(h)}${unread}`;
+	return `${h.stashed ? `Auto-stashed local changes first (approved): ${h.stashed.summary} ` : ""}${describeHealCore(h)}${unread}`;
 }
 
 function describeHealCore(h: SyncHealOutcome): string {
@@ -502,7 +504,7 @@ function describeHealCore(h: SyncHealOutcome): string {
 		const n = h.commits !== null ? `${h.commits} commit${h.commits === 1 ? "" : "s"}` : "the missing commits";
 		const shas = h.from && h.to ? ` (${h.from} → ${h.to})` : "";
 		const undo = h.from ? ` Undo: \`git reset --keep ${h.from}\`.` : "";
-		return `Fast-forwarded \`${h.branch}\` by ${n}${shas} before starting, because the checkout was behind and the tree was clean.${undo}`;
+		return `Fast-forwarded \`${h.branch}\` by ${n}${shas} before starting, because the checkout was behind${h.stashed ? "" : " and the tree was clean"}.${undo}`;
 	}
 	if (h.status === "noop") return `\`${h.branch}\` was already current when the fast-forward ran; nothing was brought in.`;
 	if (h.status === "skipped") return `A fast-forward was not attempted: ${h.detail}.`;

@@ -496,6 +496,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	actions_runner_setup: "runtime",
 	// Restarts a machine's runner on the CLI it has — the recovery for a wedged runtime (#1032).
 	runner_restart: "runtime",
+	// #1324: act on a checkout's local changes on the machine that holds it. A stash keeps every byte on a ref (`runtime`);
+	// a discard throws the work away after backing it up (`destructive`); the auto-stash approval is a reversible platform setting (`write`).
+	stash_checkout: "runtime",
+	discard_checkout: "destructive",
+	set_auto_stash: "write",
 	// #990: reads one machine's latest update operation. A read, and deliberately so — it answers
 	// the question a lost `runner_update` reply leaves open, and must not need the scope that
 	// drives a machine to do it.
