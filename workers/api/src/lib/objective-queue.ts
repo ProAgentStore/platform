@@ -45,6 +45,8 @@ interface ObjectiveQueueRow {
 	defer_reason?: string | null;
 	/** When a TIMED backoff may try it again, ms epoch (#1264); null = eligible the moment something drains the queue. */
 	next_retry_at?: number | null;
+	/** When the entry began waiting on an offline runner in this unbroken stretch (#1189); null = not waiting on one. */
+	offline_since?: number | null;
 }
 
 export interface ObjectiveQueueEntry {
@@ -74,10 +76,12 @@ export interface ObjectiveQueueEntry {
 	deferReason: string | null;
 	/** When a timed backoff may try it again, ms epoch (#1264); null = eligible as soon as something drains the queue. */
 	nextRetryAt: number | null;
+	/** When it began waiting on an offline runner, ms epoch (#1189); the wait is bounded by `QUEUE_OFFLINE_MAX_MS`. Null = not waiting on one. */
+	offlineSince?: number | null;
 }
 
 const COLUMNS =
-	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed, defer_reason, next_retry_at";
+	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed, defer_reason, next_retry_at, offline_since";
 
 /**
  * The queue in BOARD order (#1097): each entry is a card (`objective:<id>`), and where the owner placed it
@@ -107,6 +111,7 @@ function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 		attribution: row.actor_uid ? { kind: "owner", uid: row.actor_uid, verified: true, clientClaimed: row.client_claimed ?? null } : { kind: "unknown", legacy: true },
 		deferReason: row.defer_reason ?? null,
 		nextRetryAt: row.next_retry_at ?? null,
+		offlineSince: row.offline_since ?? null,
 	};
 }
 
@@ -352,6 +357,7 @@ export async function requeueEntry(env: Env, id: string, note?: string | null, o
 		`UPDATE instance_objective_queue
 		    SET status = 'pending', started_at = NULL, stop_reason = ?2, deferred_at = ?3, deferral_count = deferral_count + 1,
 		        defer_reason = ?4,
+		        offline_since = CASE WHEN ?4 = 'runner_offline' THEN COALESCE(offline_since, ?3) ELSE NULL END,
 		        next_retry_at = CASE WHEN ?4 = 'runner_overloaded' THEN ?3 + (CASE WHEN deferral_count + 1 <= 1 THEN 60000 WHEN deferral_count + 1 = 2 THEN 120000 WHEN deferral_count + 1 = 3 THEN 300000 ELSE 600000 END) ELSE NULL END
 		  WHERE id = ?1 AND status = 'running'
 		  RETURNING deferral_count`,
@@ -359,6 +365,24 @@ export async function requeueEntry(env: Env, id: string, note?: string | null, o
 		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null, Date.now(), opts.reason ?? null)
 		.first<{ deferral_count: number | null }>();
 	return row ? { requeued: true, deferralSeq: row.deferral_count } : { requeued: false, deferralSeq: null };
+}
+
+/**
+ * Fail a pending entry that has waited the whole bound for an offline runner (#1189). Guarded on its being STILL pending and
+ * still waiting on an offline runner, so a drain that started it a moment ago — or an owner who cancelled it — is not
+ * overwritten. Returns whether this call moved it.
+ */
+export async function failOfflineEntry(env: Env, id: string, sentence: string, now = Date.now()): Promise<boolean> {
+	const row = await env.DB.prepare(
+		`UPDATE instance_objective_queue SET status = 'failed', stop_reason = ?2, finished_at = ?3
+		  WHERE id = ?1 AND status = 'pending' AND defer_reason = 'runner_offline'
+		  RETURNING id`,
+	)
+		.bind(id, clipMarked(sentence, QUEUE_NOTE_CHARS), now)
+		.first<{ id: string }>();
+	if (!row) return false;
+	await dropObjectiveCard(env, id);
+	return true;
 }
 
 /**

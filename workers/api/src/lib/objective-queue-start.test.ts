@@ -11,7 +11,7 @@
  *   recovery_required     → back to `pending` with the reason on the row (#984): the repo is
  *                           mid-handover, which a person resolves
  *   runner_offline        → back to `pending` (#1161): the machine is away; its relay reconnecting
- *                           drains the queue
+ *                           drains the queue — for at most a day (#1189), then `failed`
  *   any other refusal     → `failed`, with the driver's own sentence, rather than pending forever
  *
  * And the property that makes it safe to call from a workflow's terminal path: it NEVER THROWS. The
@@ -187,6 +187,37 @@ describe("when the start is refused", () => {
 		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "No coding runner connected for owner/repo — run `pags up`.", { reason: "runner_offline" });
 		expect(finishQueueEntry).not.toHaveBeenCalled();
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
+	});
+
+	it("runner_offline has an end (#1189): past the whole bound a drain that finds the machine still away FAILS the entry, naming the bound", async () => {
+		const longAgo = Date.now() - 25 * 3600_000;
+		dequeueNext.mockResolvedValue(entry({ offlineSince: longAgo }));
+		start.mockResolvedValue({ ok: false, status: 409, reason: "runner_offline", error: "No coding runner connected for owner/repo — run `pags up`." });
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(requeueEntry).not.toHaveBeenCalled();
+		expect(finishQueueEntry).toHaveBeenCalledWith(env, "objq-1", "failed", expect.stringContaining("the longest a queued objective waits"));
+		expect(out).toMatchObject({ drained: true, started: false, requeued: false, error: expect.stringContaining("queue it again") });
+	});
+
+	it("runner_offline inside the bound still waits, and an entry with no clock (queued before 0296) waits too", async () => {
+		for (const offlineSince of [Date.now() - 3600_000, null, undefined]) {
+			requeueEntry.mockClear();
+			finishQueueEntry.mockClear();
+			dequeueNext.mockResolvedValue(entry({ offlineSince }));
+			start.mockResolvedValue({ ok: false, status: 409, reason: "runner_offline", error: "No coding runner connected." });
+			const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+			expect(requeueEntry).toHaveBeenCalledTimes(1);
+			expect(finishQueueEntry).not.toHaveBeenCalled();
+			expect(out).toMatchObject({ requeued: true });
+		}
+	});
+
+	it("only an offline runner is bounded: another waitable reason is requeued however old the entry's offline clock", async () => {
+		dequeueNext.mockResolvedValue(entry({ offlineSince: Date.now() - 100 * 3600_000 }));
+		start.mockResolvedValue({ ok: false, status: 409, reason: "recovery_required", error: "The checkout holds uncommitted work." });
+		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(requeueEntry).toHaveBeenCalledTimes(1);
+		expect(finishQueueEntry).not.toHaveBeenCalled();
 	});
 
 	it("runner_overloaded is WAITED FOR, with the reason passed through for the timed backoff (#1264)", async () => {

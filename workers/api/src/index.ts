@@ -100,7 +100,7 @@ import { runDueGmailScoutScans } from "./lib/gmail-scout/scan.js";
 import { runDueCoderQuestions } from "./lib/coder-question-sweep.js";
 import { runCreditAutoResume } from "./lib/credit-auto-resume.js";
 import { runFleetHealth } from "./lib/fleet-health.js";
-import { runDueOverloadRetries } from "./lib/objective-queue-start.js";
+import { failExpiredOfflineWaits, runDueOverloadRetries } from "./lib/objective-queue-start.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runCiHealthWatch } from "./lib/repo-ci-health.js";
@@ -399,6 +399,11 @@ export default {
 		// is woken by no event, only this clock. Its own failure domain, like every sweep above.
 		ctx.waitUntil(
 			runDueOverloadRetries(env).catch((err) => logUnhandled(env, err, { path: "scheduled:overload-retries", method: "CRON" })),
+		);
+		// A queued objective waiting on an offline runner has an upper bound (#1189); a machine that never returns sends
+		// no event to drain it, so this clock fails what has waited the whole bound. Its own failure domain.
+		ctx.waitUntil(
+			failExpiredOfflineWaits(env).catch((err) => logUnhandled(env, err, { path: "scheduled:queue-offline-bound", method: "CRON" })),
 		);
 		// Runs that stopped on an empty provider balance continue by themselves once the key works again (#1318); also the
 		// deploy's one-time backfill. Idempotent, paced and bounded; its own failure domain.

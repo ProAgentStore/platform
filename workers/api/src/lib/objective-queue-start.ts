@@ -26,7 +26,8 @@ import { readLoopLimits } from "./loop-limits-store.js";
 import { openBudget, resolveAccountCeilings } from "./delegation-budget-store.js";
 import { logError } from "./error-log.js";
 import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
-import { dequeueNext, finishQueueEntry, requeueEntry } from "./objective-queue.js";
+import { dequeueNext, failOfflineEntry, finishQueueEntry, requeueEntry } from "./objective-queue.js";
+import { offlineWaitExpired, offlineWaitSentence, QUEUE_OFFLINE_MAX_MS } from "./objective-queue-offline.js";
 import { pausedStartRefusal } from "./instance-pause.js";
 import { automaticProviderHold } from "./provider-account-hold.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
@@ -154,6 +155,14 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// started on top of it. The refusal is recorded on the row, because an entry that sits pending
 		// with nobody told why is the other half of the same complaint.
 		if (startRefusalIsWaitable(started.reason)) {
+			// A wait on an offline runner has an end (#1189). A drain that finds the machine still away after the whole bound
+			// fails the entry instead of putting it back; `failExpiredOfflineWaits` does the same for machines nothing drains.
+			if (started.reason === "runner_offline" && offlineWaitExpired(entry.offlineSince, Date.now())) {
+				const sentence = offlineWaitSentence(entry.offlineSince as number, Date.now());
+				await finishQueueEntry(env, entry.id, "failed", sentence);
+				await recordLifecycle(env, { ...lifecycleOf(entry), event: "admission_failed", reason: sentence });
+				return { drained: true, entryId: entry.id, started: false, requeued: false, error: sentence };
+			}
 			// Only a requeue that moved the claimed row is a deferral, and its event carries the ordinal that
 			// row now counts (#1017), so a repeated bookkeeping write for it lands on the same deferral.
 			// The reason rides along (#1264): only `runner_overloaded` turns it into a TIMED backoff —
@@ -236,6 +245,40 @@ export async function runDueOverloadRetries(env: Env, now: number = Date.now()):
 		tried++;
 	}
 	return tried;
+}
+
+/**
+ * The clock half of the offline bound (#1189). An entry waiting on an offline runner is woken by an EVENT — the relay
+ * reconnecting — and a machine that never comes back sends none, so nothing would ever fail it. This is the per-minute cron
+ * tick that does: every pending entry whose wait on an offline runner has reached `QUEUE_OFFLINE_MAX_MS` fails with the
+ * sentence naming the bound, is recorded in the objective's lifecycle, and frees its place. Bounded per tick; never throws.
+ */
+export async function failExpiredOfflineWaits(env: Env, now: number = Date.now()): Promise<number> {
+	type Overdue = { id: string; instance_id: string; user_id: string; request_id: string | null; offline_since: number };
+	let rows: { results?: Overdue[] };
+	try {
+		rows = await env.DB.prepare(
+			`SELECT id, instance_id, user_id, request_id, offline_since FROM instance_objective_queue
+			  WHERE status = 'pending' AND defer_reason = 'runner_offline' AND offline_since IS NOT NULL AND offline_since <= ?1
+			  ORDER BY offline_since LIMIT 200`,
+		)
+			.bind(now - QUEUE_OFFLINE_MAX_MS)
+			.all<Overdue>();
+	} catch {
+		return 0; // an unreadable queue is retried on the next tick
+	}
+	let failed = 0;
+	for (const r of rows.results ?? []) {
+		try {
+			const sentence = offlineWaitSentence(r.offline_since, now);
+			if (!(await failOfflineEntry(env, r.id, sentence, now))) continue;
+			failed++;
+			await recordLifecycle(env, { userId: r.user_id, instanceId: r.instance_id, queueEntryId: r.id, requestId: r.request_id ?? null, actor: { kind: "platform" }, event: "admission_failed", reason: sentence, now });
+		} catch {
+			// One entry's trouble must not stop the rest; it is retried on the next tick.
+		}
+	}
+	return failed;
 }
 
 /** The handles a drain transition is recorded under — the platform is the actor (#1017). */
