@@ -8,6 +8,7 @@
 // What this module does decide is presentation and order, which the server has no opinion about.
 
 import type { Instance } from "./types";
+import { STOP_REASONS } from "../../../../workers/api/src/lib/stop-reasons";
 
 /** The four states a card can be in. `idle` is the server's collapse of `ended` + never-run. */
 export const INSTANCE_HEALTHS = ["working", "waiting", "stalled", "idle"] as const;
@@ -112,24 +113,14 @@ export function outcomeLine(activity: InstanceActivity, now: number): string | n
 	return `Last run: ${word} ${ago(at, now)}`;
 }
 
+/**
+ * The words per ending: every stop reason's from `stop-reasons.ts` (#1354), which the card had fallen behind — it had
+ * none for `engine_auth` or `engine_error` — plus the two STATUS values a run without a reason falls back to.
+ */
 const OUTCOME_WORD: Record<string, string> = {
-	done: "finished",
+	...Object.fromEntries(Object.entries(STOP_REASONS).map(([reason, facts]) => [reason, facts.outcomeWord])),
 	completed: "finished",
-	max_iterations: "hit its step limit",
-	no_progress: "stopped repeating itself",
-	budget: "hit its spend limit",
-	engine_limit: "hit the CLI's usage limit",
-	provider_credit: "had an empty Anthropic API key balance (it continues by itself once the key works again)",
-	provider_credentials: "had its AI provider key refused (it continues by itself once the key works again)",
-	interrupted: "was cut off",
-	escalated: "asked a question",
 	needs_human: "asked a question",
-	cancelled: "was stopped",
-	constraint_refused: "was stopped: your constraints are too long to send whole",
-	turn_lost: "lost an engine turn to a runner restart",
-	decision: "waited 30 days for your answer to its question",
-	runner_gone: "waited a day for its machine, which did not come back",
-	failed: "failed",
 };
 
 function ago(ms: number, now: number): string {

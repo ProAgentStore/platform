@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { RESUMABLE_STOP_REASONS } from "../../../api/src/lib/stop-reasons.js";
 import { registerCompositionTools } from "./composition.js";
 
 /**
@@ -15,8 +15,8 @@ describe("continue_instance_run describes exactly what continues", () => {
 		safetyFor: () => ({ env: { API_BASE: "https://api.test" }, subject: "user-1", scopes: ["read"] }),
 	} as never);
 	const description = described.get("continue_instance_run") ?? "";
-	const source = readFileSync(new URL("../../../api/src/lib/agent-loop-store.ts", import.meta.url).pathname, "utf8");
-	const resumable = [...(/export const RESUMABLE_STOP_REASONS = \[([^\]]*)\]/.exec(source) as RegExpExecArray)[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+	// The API's own list, imported from the import-free table (#1354) rather than regex-read out of its source.
+	const resumable: readonly string[] = RESUMABLE_STOP_REASONS;
 
 	it("names every resumable stop reason, including engine_auth and constraint_refused", () => {
 		expect(resumable).toEqual(expect.arrayContaining(["engine_auth", "constraint_refused"]));

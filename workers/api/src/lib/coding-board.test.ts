@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
 	closeCodingSessionCards,
 	codingCardId,
@@ -9,7 +7,8 @@ import {
 	setCodingSessionCardStatus,
 	upsertCodingSessionCard,
 } from "./coding-board.js";
-import { statusFor, type LoopStopReason } from "./agent-loop.js";
+import { statusFor } from "./agent-loop.js";
+import { LOOP_STOP_REASONS } from "./stop-reasons.js";
 import { defaultBoardColumns, columnForStatus } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -149,13 +148,10 @@ describe("`needs_human` — the status the board had a column for and the card c
 	});
 
 	it("gives every stop reason a coding card status the board can render", () => {
-		// G1: the reason list is read off the type's own declaration rather than retyped, and its
-		// size asserted, so a reason added without a column fails HERE instead of rendering blank.
-		const decl = /export type LoopStopReason =([\s\S]*?);\n/.exec(readFileSync(join(__dirname, "agent-loop.ts"), "utf8"));
-		expect(decl, "LoopStopReason's declaration shape changed — re-read this guard").not.toBeNull();
-		const reasons = [...decl![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]) as LoopStopReason[];
-		expect(reasons.length, "found no reasons — this guard has stopped measuring").toBeGreaterThanOrEqual(8);
-		for (const r of reasons) {
+		// G1: every reason in the table (#1354) — the type is derived from it, so a reason added without a column fails
+		// HERE instead of rendering blank.
+		expect(LOOP_STOP_REASONS.length).toBeGreaterThanOrEqual(8);
+		for (const r of LOOP_STOP_REASONS) {
 			expect(columnForStatus(COLUMNS, statusFor(r)), `${r} → ${statusFor(r)}`).not.toBeNull();
 		}
 	});

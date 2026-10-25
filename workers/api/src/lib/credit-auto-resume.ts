@@ -26,6 +26,7 @@
  *   • the one-run-per-repo lock is respected: a refusal that waiting fixes is deferred with a backed-off retry, never dropped.
  */
 import { startAutomaticContinuation } from "../routes/loop-continue-routes.js";
+import { PROVIDER_ACCOUNT_STOP_REASONS, stopReasonsSql } from "./stop-reasons.js";
 import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
 import { logEvent } from "./events.js";
@@ -77,7 +78,7 @@ async function candidates(env: Env, now: number, windowMs: number, userId?: stri
 		   FROM agent_loop_runs r
 		   JOIN agent_instances i ON i.id = r.instance_id AND i.status = 'active'
 		   LEFT JOIN coding_sessions s ON s.id = r.session_id
-		  WHERE r.stop_reason IN ('provider_credit', 'provider_credentials') AND r.finished_at IS NOT NULL AND r.finished_at > ?1
+		  WHERE r.stop_reason IN (${stopReasonsSql(PROVIDER_ACCOUNT_STOP_REASONS)}) AND r.finished_at IS NOT NULL AND r.finished_at > ?1
 		    AND r.auto_resume_at IS NULL AND (r.auto_resume_next_at IS NULL OR r.auto_resume_next_at <= ?2)
 		    AND (?3 IS NULL OR r.user_id = ?3)
 		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs n LEFT JOIN coding_sessions ns ON ns.id = n.session_id

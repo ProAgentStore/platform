@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { needsHuman, statusFor, type LoopStopReason } from "./agent-loop.js";
+import { LOOP_STOP_REASONS } from "./stop-reasons.js";
 import { codingCrashReport, INTERRUPTED_CLASSES, OWNER_ACTION_CLASSES, interruptedBy, outcomeWord, resumeNotice, runOutcomeNote, withoutVendorAdvice } from "./coding-run-report.js";
 import { AI_STALL_TIMEOUT_MS, deadlineMessage } from "./ai-deadlines.js";
 import { CARD_DETAIL_MAX, cardDetail } from "./card-detail.js";
@@ -109,15 +108,10 @@ describe("`interrupted` is distinguishable from a run whose objective failed (#5
 	});
 
 	it("maps every stop reason to a status, so no reason can land nowhere", () => {
-		// G1/G3: the reason list is read off the type's own source rather than retyped, so a
-		// reason added without a status mapping fails here instead of silently defaulting.
-		const source = readFileSync(join(__dirname, "agent-loop.ts"), "utf8");
-		const decl = /export type LoopStopReason =([\s\S]*?);\n/.exec(source);
-		expect(decl, "LoopStopReason's declaration shape changed — re-read this guard").not.toBeNull();
-		const reasons = [...decl![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]) as LoopStopReason[];
-		expect(reasons.length, "found no reasons — the regex stopped measuring").toBeGreaterThanOrEqual(8);
-		expect(reasons).toContain("interrupted");
-		for (const r of reasons) {
+		// G1/G3: every reason in the table (#1354) — the type is derived from it, so a reason cannot exist without a row,
+		// and a row cannot exist without a status.
+		expect(LOOP_STOP_REASONS).toContain("interrupted");
+		for (const r of LOOP_STOP_REASONS) {
 			expect(["completed", "failed", "needs_human", "cancelled"], r).toContain(statusFor(r));
 		}
 	});

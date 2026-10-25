@@ -1,15 +1,10 @@
 /**
- * Which ended runs offer Continue (#806), and the one assertion that is not about this file.
- *
- * The last test reads the WORKER's own `RESUMABLE_STOP_REASONS` and requires the two lists to
- * match. The module header explains why a copy is acceptable and which direction of drift is
- * survivable; this is what keeps the drift from happening silently anyway. It is a source read
- * rather than an import because the console and the worker are separate builds — importing worker
- * code into a console test would bring `Env` and the D1 types with it.
+ * Which ended runs offer Continue (#806), and how a run's ending is worded. Both now come from the worker's import-free
+ * `stop-reasons.ts` (#1354), so these test what the console DOES with every reason, not that a copy matches a source file.
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { statusFor, type LoopStopReason } from "../../../../workers/api/src/lib/agent-loop";
+import { statusFor } from "../../../../workers/api/src/lib/agent-loop";
+import { LOOP_STOP_REASONS, STOP_REASONS } from "../../../../workers/api/src/lib/stop-reasons";
 import { canContinueRun, CONTINUABLE_STOP_REASONS, continueBody, endingLabel, previewLines, type ContinuePreview } from "./loopContinue";
 
 describe("canContinueRun", () => {
@@ -35,14 +30,11 @@ describe("canContinueRun", () => {
 	});
 });
 
-describe("the copy of the server's list", () => {
-	it("matches RESUMABLE_STOP_REASONS in the API worker", () => {
-		const source = readFileSync(new URL("../../../../workers/api/src/lib/agent-loop-store.ts", import.meta.url).pathname, "utf8");
-		const declared = /export const RESUMABLE_STOP_REASONS = \[([^\]]*)\]/.exec(source);
-		expect(declared).not.toBeNull();
-		const server = [...(declared as RegExpExecArray)[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
-		expect(server.length).toBeGreaterThan(0);
-		expect([...CONTINUABLE_STOP_REASONS]).toEqual(server);
+describe("Continue is offered for exactly the endings the server continues (#1354)", () => {
+	it.each(LOOP_STOP_REASONS)("%s", (stopReason) => {
+		// The server's `resumable` column is the authority; the button follows it for every reason, including new ones.
+		expect(canContinueRun({ status: statusFor(stopReason), stopReason })).toBe(STOP_REASONS[stopReason].resumable);
+		expect(CONTINUABLE_STOP_REASONS.includes(stopReason)).toBe(STOP_REASONS[stopReason].resumable);
 	});
 });
 
@@ -150,13 +142,9 @@ describe("what the stopped run had worked out, and what the owner adds (#806 ite
 });
 
 describe("the run-history badge says how a run ENDED, from its stop reason (#1019)", () => {
-	const source = readFileSync(new URL("../../../../workers/api/src/lib/agent-loop.ts", import.meta.url).pathname, "utf8");
-	const union = /export type LoopStopReason =([\s\S]*?);\n/.exec(source);
-	const reasons = [...(union as RegExpExecArray)[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]) as LoopStopReason[];
-
 	it("every stop reason the API produces renders as its own words — never the coarse status it files under", () => {
-		expect(reasons).toContain("constraint_refused");
-		for (const reason of reasons) {
+		expect(LOOP_STOP_REASONS).toContain("constraint_refused");
+		for (const reason of LOOP_STOP_REASONS) {
 			const row = { stopReason: reason, status: statusFor(reason) }; // exactly what the API stores for that ending
 			expect(endingLabel(row), reason).not.toBe(row.status);
 			expect(endingLabel(row), reason).not.toBe(reason);

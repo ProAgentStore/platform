@@ -1,31 +1,25 @@
+import { RESUMABLE_STOP_REASONS, stopReasonFacts } from "../../../../workers/api/src/lib/stop-reasons";
+
 /**
  * Which ended runs offer a Continue button (#806 item 3(c)).
  *
- * ── The server is the authority, and this is a filter
+ * ── The server is the authority, and this is the same list
  *
- * `RESUMABLE_STOP_REASONS` lives in `workers/api/src/lib/agent-loop-store.ts` and is where the
- * decision is made: `POST /:id/loop/:runId/continue` refuses anything else with a 409 that names
- * what to do instead. This list exists only so the button is not OFFERED on a run the server will
- * refuse — a control that always errors is worse than no control.
- *
- * So the two lists can drift, and the drift is survivable in one direction only, which is why it is
- * worth stating: a reason added to the server and not here costs a button that could have been
- * shown; a reason added here and not to the server costs a click that comes back as an explained
- * 409. Neither can start work the server would not have started. The console cannot import the
- * worker's copy — different build, no shared package — and vendoring is this repo's answer to that
- * (see the workspace CLAUDE.md), so a copy with its direction of failure written down beats an
- * import that does not exist.
+ * `POST /:id/loop/:runId/continue` decides, and refuses anything else with a 409 that names what to do instead. This
+ * list only keeps the button off a run the server would refuse. It is now the server's own list, imported from the
+ * worker's import-free `stop-reasons.ts` (#1354) the way `brain-models.ts` is — it used to be a vendored copy kept in
+ * step by a test that regex-read the worker's source.
  *
  * ── Why "ended" is checked separately from the reason
  *
- * A run still going has no `stopReason` at all, so the reason test alone would be enough today. It
- * is checked anyway because the two facts answer different questions — "is this over" and "was it
- * over WITHOUT a verdict" — and a run that reports a reason while still running (a cooperative
- * cancel settling, a park) must not grow a Continue button underneath its Stop button.
+ * A run still going has no `stopReason` at all, so the reason test alone would be enough today. It is checked anyway
+ * because the two facts answer different questions — "is this over" and "was it over WITHOUT a verdict" — and a run
+ * that reports a reason while still running (a cooperative cancel settling, a park) must not grow a Continue button
+ * underneath its Stop button.
  */
 
-/** The endings the server will continue. Kept in the order `RESUMABLE_STOP_REASONS` lists them. */
-export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "provider_credentials", "engine_auth", "constraint_refused", "turn_lost", "decision", "runner_gone", "engine_error"] as const;
+/** The endings the server will continue. */
+export const CONTINUABLE_STOP_REASONS: readonly string[] = RESUMABLE_STOP_REASONS;
 
 /** The fields of a loop run that decide whether Continue is offered (`LoopRunView` has more). */
 export interface LoopRunContinueLike {
@@ -41,7 +35,7 @@ export interface LoopRunContinueLike {
  */
 export function canContinueRun(run: LoopRunContinueLike | null | undefined): boolean {
 	if (!run || run.status === "running") return false;
-	return (CONTINUABLE_STOP_REASONS as readonly string[]).includes(run.stopReason ?? "");
+	return CONTINUABLE_STOP_REASONS.includes(run.stopReason ?? "");
 }
 
 /**
@@ -126,39 +120,10 @@ export function continueBody(note: string | undefined): { note?: string } {
 	return text ? { note: text } : {};
 }
 
-/** Plain-language endings. The raw reasons are accurate but not self-explanatory. */
-const REASON_LABEL: Record<string, string> = {
-	done: "Finished",
-	escalated: "Needs you",
-	failed: "Failed",
-	max_iterations: "Hit the step limit",
-	budget: "Hit its spend limit",
-	cancelled: "You stopped it",
-	no_progress: "Was repeating itself",
-	// #546. Deliberately not "Failed": the platform cut the invocation off and the objective never
-	// reported, so the run may well have pushed. The word has to send the owner to the repo rather
-	// than to the Retry button.
-	interrupted: "Cut off by the platform",
-	engine_limit: "Hit the coding CLI's usage limit",
-	provider_credit: "Out of AI provider credit — continues by itself after you top up",
-	// #1326. The provider refused the key; the platform re-checks it and continues once it works.
-	provider_credentials: "AI provider refused the key — continues by itself once it works",
-	engine_auth: "Coding CLI not signed in",
-	// #1019. Nobody cancelled and nothing failed: the owner's own rules did not fit the engine's envelope whole.
-	constraint_refused: "Stopped: your rules are too long to send",
-	// #1053. A runner restart cut a turn off and it could not be resumed exactly once — check the worktree first.
-	turn_lost: "Lost a turn to a runner restart",
-	decision: "Parked on your answer; the 30-day wait ran out",
-	// #1188. Its machine stayed away past the whole 24h wait; continuing works once the machine is connected again.
-	runner_gone: "Its machine was away for a day",
-	// #1200. The engine CLI exited non-zero (a bad model, a crash) — its own message is on the run, and no person was asked.
-	engine_error: "The coding CLI crashed",
-};
-
 /**
  * The ending a run's history row shows. The STOP REASON drives it — the status is coarse (`needs_human` covers four
  * different endings) — and the raw status is only the fallback for a reason this console does not know yet.
  */
 export function endingLabel(run: { stopReason?: string | null; status: string }): string {
-	return REASON_LABEL[run.stopReason ?? ""] ?? run.status;
+	return stopReasonFacts(run.stopReason)?.label ?? run.status;
 }

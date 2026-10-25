@@ -12,6 +12,7 @@ import {
 	type InstanceActivity,
 } from "./instanceActivity";
 import type { Instance } from "./types";
+import { LOOP_STOP_REASONS, STOP_REASONS } from "../../../../workers/api/src/lib/stop-reasons";
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -140,5 +141,13 @@ describe("parseHealthFilter", () => {
 		expect(parseHealthFilter("stalled")).toBe("stalled");
 		expect(parseHealthFilter("ended")).toBe("");
 		expect(parseHealthFilter(undefined)).toBe("");
+	});
+});
+
+describe("outcomeLine has its own words for every ending (#1354)", () => {
+	it.each(LOOP_STOP_REASONS)("%s", (stopReason) => {
+		// `engine_auth` and `engine_error` used to fall back to their status's word ("asked a question", "failed").
+		const line = outcomeLine(act({ health: "idle", lastOutcome: { runId: "r", status: "failed", stopReason, finishedAt: NOW - 5 * MIN, lastAliveAt: null, startedAt: NOW - 9 * MIN } }), NOW);
+		expect(line).toBe(`Last run: ${STOP_REASONS[stopReason].outcomeWord} 5m ago`);
 	});
 });

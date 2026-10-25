@@ -6,7 +6,9 @@ import {
 	loopRunEnded,
 	loopStartFailureNotice,
 	loopStartNotice,
+	loopEndLabel,
 } from "./coding-loop-run";
+import { LOOP_STOP_REASONS, STOP_REASONS } from "../../../../workers/api/src/lib/stop-reasons";
 
 describe("loopRunEnded", () => {
 	it("treats every status but `running` as terminal", () => {
@@ -139,5 +141,19 @@ describe("loopRaceCancelFailureNotice", () => {
 
 	it("handles a non-Error rejection without printing [object Object]", () => {
 		expect(loopRaceCancelFailureNotice("network down")).toContain("network down");
+	});
+});
+
+describe("loopEndLabel says every ending in words (#1354)", () => {
+	it.each(LOOP_STOP_REASONS)("%s", (reason) => {
+		// `runner_gone`, `turn_lost`, `decision` and `constraint_refused` used to print "Loop stopped (runner_gone)".
+		expect(loopEndLabel(reason)).toBe(STOP_REASONS[reason].endLabel);
+		expect(loopEndLabel(reason)).not.toContain(`(${reason})`);
+	});
+
+	it("keeps the status fallbacks and the raw reason for one this build does not know", () => {
+		expect(loopEndLabel("completed")).toBe("Loop complete");
+		expect(loopEndLabel("needs_human")).toBe("Loop needs you");
+		expect(loopEndLabel("some_future_reason")).toBe("Loop stopped (some_future_reason)");
 	});
 });

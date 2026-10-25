@@ -8,6 +8,7 @@ import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
 import type { AskPart } from "./coding-ask.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
+import { RESUMABLE_STOP_REASONS, type ResumableStopReason } from "./stop-reasons.js";
 import type { Env } from "../types.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
 import { recordRunEvent } from "./run-events.js";
@@ -424,31 +425,12 @@ export const RESUME_NOTE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 export const CONTINUE_RESUME_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * The stop reasons after which a successor is told what already landed (#523 item 4, #806).
- *
- * The test is "did the run reach a verdict on its objective". These five did not — something else
- * ended the run while the work was still going, and a new run started from the bare objective
- * re-does what is already pushed:
- *
- *   * `interrupted`     — the platform cut the invocation off (#546).
- *   * `max_iterations`  — the Pilot used up its step budget mid-work (#806's own case).
- *   * `engine_limit`    — the coding CLI's usage window outlasted the run's wait (#541).
- *   * `provider_credit` — the owner's Anthropic account ran dry; its own sentence says "start the
- *                         run again" after topping up (#773), and that restart is this successor.
- *   * `engine_auth`     — the coding CLI was not signed in and the park ran out before anyone signed
- *                         it in (#881). Once the relay has signed it in, the successor carries on.
- *   * `runner_gone`    — its machine stayed away past the 24h park (#1188); continuable once it is back (`runnerAwayRefusal`).
- *   * `decision`        — the run parked on a question and its 30-day park ran out unanswered (#1076).
- *                         The answer, once given, is on the question row for the successor.
- *
- * The rest are verdicts or choices and stay out. A `failed` run got to say what happened, and
- * repeating its steps may be exactly right. `escalated` is the run asking a human, answered through
- * its own handoff rather than a successor. `cancelled` is a human stopping it, and a restart after
- * that may well be the "start clean" #806 lists as an option in its own right. `done` needs nothing.
+ * The stop reasons after which a successor is told what already landed (#523 item 4, #806): the runs that ended
+ * WITHOUT a verdict on their objective — something else ended the run while the work was still going, and a new run
+ * started from the bare objective would re-do what is already pushed. Derived from the `resumable` column of
+ * `stop-reasons.ts` (#1354), where each reason's row says why it is in or out.
  */
-export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "provider_credentials", "engine_auth", "constraint_refused", "turn_lost", "decision", "runner_gone", "engine_error"] as const satisfies readonly LoopStopReason[];
-
-export type ResumableStopReason = (typeof RESUMABLE_STOP_REASONS)[number];
+export { RESUMABLE_STOP_REASONS, type ResumableStopReason } from "./stop-reasons.js";
 
 export function isResumableStopReason(reason: string | null | undefined): reason is ResumableStopReason {
 	return (RESUMABLE_STOP_REASONS as readonly string[]).includes(reason ?? "");

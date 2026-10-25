@@ -23,6 +23,8 @@
 // be struck off — and both are now read off a run row rather than off a `/loop-decide` reply, so
 // they live in a pure module instead of inside a hook where no test can reach them.
 
+import { STOP_REASONS } from "../../../../workers/api/src/lib/stop-reasons";
+
 /** The bits of `GET /v1/instances/:id/loop/:runId` this tab reads. */
 export interface LoopRunSnapshot {
 	/** `running` while it goes; anything else is terminal. */
@@ -103,21 +105,11 @@ export function loopOutcomeNotice(run: LoopRunSnapshot): string {
  * to raise the cap, top up a key or sign in. One map, used by this tab and the Assistant's.
  */
 const LOOP_END_LABEL: Record<string, string> = {
-	done: "Loop complete",
+	// Every stop reason's notice from `stop-reasons.ts` (#1354) — this map had fallen behind, so `runner_gone`, `turn_lost`,
+	// `decision` and `constraint_refused` printed "Loop stopped (runner_gone)" — plus the two STATUS fallbacks.
+	...Object.fromEntries(Object.entries(STOP_REASONS).map(([reason, facts]) => [reason, facts.endLabel])),
 	completed: "Loop complete",
-	max_iterations: "Loop hit its step limit",
-	no_progress: "Loop stopped — it was repeating itself",
-	budget: "Loop hit its spend limit",
-	engine_limit: "Loop stopped — the coding CLI hit its usage limit",
-	provider_credit: "Loop stopped — the Anthropic API key has no balance",
-	provider_credentials: "Loop paused — the AI provider refused the API key (it continues by itself once the key works)",
-	engine_auth: "Loop stopped — the coding CLI needs you to sign in",
-	engine_error: "Loop stopped — the coding CLI crashed",
-	interrupted: "Loop was cut off by the platform",
-	escalated: "Loop needs you",
 	needs_human: "Loop needs you",
-	cancelled: "Loop stopped by you",
-	failed: "Loop failed",
 };
 
 /** {@link LOOP_END_LABEL}, with the raw reason kept for one this map does not know yet. */

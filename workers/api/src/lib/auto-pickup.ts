@@ -23,6 +23,7 @@
  * qualifies, the owner is told once — not on every empty queue.
  */
 import type { Env } from "../types.js";
+import { PROVIDER_ACCOUNT_STOP_REASONS, stopReasonsSql } from "./stop-reasons.js";
 import { clipMarked } from "./clip-marked.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
@@ -253,7 +254,7 @@ async function failuresByIssue(env: Env, iid: string, repo: string, uid: string)
 	const { results } = await env.DB.prepare(
 		`SELECT json_extract(q.metadata, '$.autoPickup.issue') AS issue, COUNT(*) AS n FROM agent_loop_runs r JOIN instance_objective_queue q ON q.id = r.queue_entry_id
 		  WHERE q.instance_id = ?1 AND json_extract(q.metadata, '$.autoPickup.repo') = ?2 AND r.status IN ('failed', 'needs_human')
-		    AND COALESCE(r.stop_reason, '') NOT IN ('provider_credit', 'provider_credentials')
+		    AND COALESCE(r.stop_reason, '') NOT IN (${stopReasonsSql(PROVIDER_ACCOUNT_STOP_REASONS)})
 		    AND r.run_id NOT IN (
 		      SELECT COALESCE(json_extract(e.context, '$.runId'), json_extract(e.context, '$.traceId')) FROM error_log e
 		      WHERE e.user_id = ?3 AND e.source = 'coding:session'

@@ -638,8 +638,14 @@ export function stopReasonFor(outcome: CodingOutcome): LoopStopReason {
 			return "engine_auth";
 		case "engine_error":
 			return "engine_error";
-		default:
+		case "done":
 			return "done";
+		default: {
+			// Exhaustive (#1354): an outcome added to `CodingOutcome` without a row here is a compile error. It used to fall
+			// to `done`, so an unmapped ending would have been reported as "Finished".
+			const unmapped: never = outcome;
+			return unmapped;
+		}
 	}
 }
 

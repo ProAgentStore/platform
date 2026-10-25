@@ -10,27 +10,11 @@
 // This module is the referee. The model proposes (`loop-decide`); these rules dispose.
 
 import { clipMarked } from "./clip-marked.js";
+import { stopReasonFacts, type LoopRunStatus, type LoopStopReason } from "./stop-reasons.js";
 import type { LoopDecision } from "./loop-decide.js";
 
-/** Why a run ended. Every one of these is a DIFFERENT thing to tell a human. */
-export type LoopStopReason =
-	| "done" // the objective was met
-	| "escalated" // needs a human
-	| "failed" // the agent reported failure
-	| "max_iterations" // hit the caller's iteration cap
-	| "budget" // the tree ran out of money/delegations (#184)
-	| "cancelled" // a human stopped it
-	| "no_progress" // repeating itself — a loop that cannot terminate on its own
-	| "engine_limit" // the coding CLI's OWN usage window was still spent after this run's wait budget (#541)
-	| "provider_credit" // the owner's AI provider account has no credit left — top up, do not retry (#773)
-	| "provider_credentials" // the provider refused the owner's key (401/403); the platform re-checks it and continues once it works (#1326)
-	| "engine_auth" // the coding CLI is not signed in and nobody signed it in within the park (#881)
-	| "interrupted" // the PLATFORM cut the invocation off — the objective never reported (#546)
-	| "constraint_refused" // the owner's constraints in force do not fit the engine's envelope whole: nothing more was sent (#1019)
-	| "turn_lost" // a runner restart or engine relaunch cut a turn off and it could not be resumed exactly once: nothing was re-sent (#1053)
-	| "decision" // parked on a question to the owner and nobody answered within the park's 30 days: continuable (#1076)
-	| "runner_gone" // the machine stayed away past the run's whole 24h park (#1160); continuable once it is back (#1188)
-	| "engine_error"; // the coding CLI itself exited non-zero (a bad model, a crash): its own message carried, never a wait on a person (#1200)
+/** Why a run ended — the vocabulary and every fact about each reason live in `stop-reasons.ts` (#1354). */
+export type { LoopRunStatus, LoopStopReason } from "./stop-reasons.js";
 
 export interface LoopState {
 	iteration: number;
@@ -206,49 +190,18 @@ export function nextStep(
 	return { continue: true, nextInstruction: instruction };
 }
 
-/** Does this ending need a human? Drives whether the run notifies rather than closing quietly. */
+/** Does this ending need a human? Drives whether the run notifies rather than closing quietly — the row's `notifies`. */
 export function needsHuman(reason: LoopStopReason): boolean {
-	return statusFor(reason) === "needs_human" || reason === "failed" || reason === "budget" || reason === "no_progress";
+	return stopReasonFacts(reason)?.notifies ?? false; // an unknown reason never notified, and still does not
 }
 
 /**
- * The terminal status a run record carries.
- *
- * This is the platform's ONE mapping from "why did it stop" to "which column is it in": the loop
- * run row, the delegation card and the coding session card all read it, so they cannot disagree
- * about a run they are all describing (#553). {@link LoopRunStatus} is deliberately the exact set
- * a board card may hold at rest.
+ * The terminal status a run record carries — the platform's ONE mapping from "why did it stop" to "which column is it
+ * in" (#553), read from the reason's row in `stop-reasons.ts`, where each choice is explained. A reason this build does
+ * not know files as `failed`, as it always did.
  */
-export type LoopRunStatus = "completed" | "failed" | "needs_human" | "cancelled";
-
 export function statusFor(reason: LoopStopReason): LoopRunStatus {
-	if (reason === "done") return "completed";
-	if (reason === "cancelled") return "cancelled";
-	// `engine_limit` sits with `escalated` rather than with `failed` (#541): the run did not fail, it
-	// ran out of the time it was allowed to wait for somebody else's usage window. The remedy is the
-	// OWNER's — wait for the next window, upgrade the plan, or switch engine — so "needs you" is the
-	// honest column, and the distinct REASON is what keeps it tellable apart from a human handoff.
-	//
-	// `interrupted` joins them for the same reason and a sharper one (#546): the platform cut the
-	// invocation off, so the objective never reported EITHER way — and two of the five occurrences
-	// had already pushed to `origin main`. "Failed" tells the owner to re-run work that may already
-	// be on the trunk. Somebody has to look, which is what this column is for.
-	//
-	// `provider_credit` is the same shape as `engine_limit` one level down (#773): the run did not
-	// fail, the owner's own Anthropic account ran out of credit, and the only remedy is theirs — top
-	// up. "Failed" would invite a retry that costs nothing and fixes nothing; "needs you" says who.
-	// `provider_credentials` likewise (#1326): the provider refused the key, and the run is continued once a re-check passes.
-	//
-	// `engine_auth` is the same shape again (#881): the engine is not signed in, and signing it in
-	// is an owner act — which the re-auth relay makes possible from any device.
-	//
-	// `constraint_refused` too (#1019): nothing failed and nobody cancelled — the owner's own constraints do not fit
-	// the engine's envelope, and only the owner can shorten them.
-	//
-	// `turn_lost` (#1053): the turn may have half-run before the restart, so somebody has to look at the worktree.
-	// `decision` (#1076): the run asked the owner a question and is still owed the answer.
-	if (reason === "decision" || reason === "runner_gone" || reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "provider_credentials" || reason === "engine_auth" || reason === "constraint_refused" || reason === "turn_lost") return "needs_human";
-	return "failed";
+	return stopReasonFacts(reason)?.status ?? "failed";
 }
 
 /**
