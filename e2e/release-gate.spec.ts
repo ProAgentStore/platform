@@ -165,7 +165,7 @@ test.describe("the exact-SHA release gate in the console (#1347)", () => {
 		await expect(gate(page)).toContainText("Verified production note: setup needed");
 	});
 
-	test("at phone width nothing overflows sideways and the editor works from the keyboard", async ({ page }) => {
+	test("mobile — at phone width nothing overflows sideways and the editor works from the keyboard", async ({ page }) => {
 		await page.setViewportSize({ width: 360, height: 740 });
 		const { puts } = await mock(page, { stored: { requiredWorkflows: CHESS } });
 		await open(page);
