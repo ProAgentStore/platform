@@ -216,6 +216,8 @@ describe("a Grok turn end to end (#1197)", () => {
 		});
 		s.input("change a to b");
 		await settle(s, log, 1);
+		// Idle can read true while the turn's last line is still being handled: wait for the turn-end line itself.
+		for (let i = 0; i < 400 && !s.snapshot().includes("holds this conversation"); i++) await new Promise((r) => setTimeout(r, 25));
 		const pane = s.snapshot();
 		expect(pane).toMatch(/Edit/);
 		expect(pane).toContain("src/app.ts");

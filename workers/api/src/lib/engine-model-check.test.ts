@@ -74,9 +74,9 @@ describe("checkEngineModel — when the list cannot be had, it says so instead o
 		return d;
 	};
 
-	it("an engine whose CLI lists no models is saved unchecked — and the machine is not even asked", async () => {
+	it("an engine the platform cannot list for (a custom wrapper) is saved unchecked — and the machine is not even asked", async () => {
 		const d = deps();
-		expect(await checkEngineModel(env, "inst-1", "u1", { clientType: "claude", command: "claude", label: "Claude" }, "opus", d)).toMatchObject({ validated: false, reason: expect.stringMatching(/publishes no model list/) });
+		expect(await checkEngineModel(env, "inst-1", "u1", { clientType: "generic", command: "my-wrapper.sh", label: "Wrapper" }, "x", d)).toMatchObject({ validated: false, reason: expect.stringMatching(/publishes no model list/) });
 		expect(d.asked).toBe(0);
 	});
 
@@ -131,5 +131,55 @@ describe("coding_engine_get's suggestions come from the machine's live list (#12
 		getBoundRunnerConn.mockResolvedValue(null);
 		const grok = (await readEngineChoice(env, "inst-1", "u1")).engines.find((e) => e.id === "grok");
 		expect(grok).toMatchObject({ suggestions: [], suggestionsFrom: null });
+	});
+});
+
+describe("Claude Code, Codex and Gemini ids are checked against the provider's list when the machine can read it (#1206)", () => {
+	const ENGINE = (clientType: string, label: string) => ({ clientType, command: clientType, label });
+	const answering = (models: string[] | null, reason?: string): ModelListDeps => ({ now: () => 1_000, ask: async () => ({ node: "mac", models, ...(reason ? { reason } : {}) }) });
+
+	it("a typo'd Claude id is refused naming the real ones; a real id and every Claude alias pass", async () => {
+		const d = answering(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+		const claude = ENGINE("claude", "Claude Code");
+		const err = await checkEngineModel(env, "inst-1", "u1", claude, "claude-opus-5", d).then(() => null, (e) => e as Error & { status?: number });
+		expect(err?.status).toBe(400);
+		expect(err?.message).toContain("claude-sonnet-5-5");
+		expect(await checkEngineModel(env, "inst-1", "u1", claude, "claude-opus-5-5", d)).toEqual({ validated: true });
+		for (const alias of ["opus", "sonnet", "haiku", "fable", "opusplan", "sonnet[1m]"]) expect(await checkEngineModel(env, "inst-1", "u1", claude, alias, d)).toEqual({ validated: true });
+	});
+
+	it("Codex and Gemini ids are checked the same way", async () => {
+		const codex = ENGINE("codex", "Codex");
+		await expect(checkEngineModel(env, "inst-1", "u1", codex, "gpt-9", answering(["gpt-5", "gpt-5-codex"]))).rejects.toMatchObject({ status: 400 });
+		expect(await checkEngineModel(env, "inst-1", "u1", codex, "gpt-5-codex", answering(["gpt-5", "gpt-5-codex"]))).toEqual({ validated: true });
+		await expect(checkEngineModel(env, "inst-1", "u1", ENGINE("gemini", "Gemini"), "gemini-9", answering(["gemini-2.5-pro"]))).rejects.toMatchObject({ status: 400 });
+	});
+
+	it("no API key on the machine (a subscription login): saved unchecked, the reason says why", async () => {
+		const reason = "the claude CLI publishes no model list, and no ANTHROPIC_API_KEY is set on this machine to ask the provider";
+		const out = await checkEngineModel(env, "inst-1", "u1", ENGINE("claude", "Claude Code"), "claude-typo", answering(null, reason));
+		expect(out).toEqual({ validated: false, reason: `${reason}, so the id was saved unchecked` });
+	});
+
+	it("a long provider list is cut in the refusal, saying how many more", async () => {
+		const models = Array.from({ length: 100 }, (_, i) => `gpt-${i}`);
+		const err = await checkEngineModel(env, "inst-1", "u1", ENGINE("codex", "Codex"), "nope", answering(models)).then(() => null, (e) => e as Error);
+		expect(err?.message).toContain("gpt-39");
+		expect(err?.message).not.toContain("gpt-40,");
+		expect(err?.message).toContain("and 60 more");
+	});
+
+	it("through coding_engine_set: a refused Claude pin writes nothing; an accepted one is saved", async () => {
+		callRunner.mockImplementation(async () => ({ models: ["claude-opus-5-5"], defaultModel: null }));
+		const before = (await readEngines(env, "inst-1", "u1")).engines.find((e) => e.id === "claude")?.command;
+		await expect(writeEngineChoice(env, "inst-1", "u1", { engineId: "claude", model: "claude-opus-5" })).rejects.toMatchObject({ status: 400 });
+		expect((await readEngines(env, "inst-1", "u1")).engines.find((e) => e.id === "claude")?.command).toBe(before);
+		const view = await writeEngineChoice(env, "inst-1", "u1", { engineId: "claude", model: "claude-opus-5-5" });
+		expect(view.modelCheck).toEqual({ validated: true });
+	});
+
+	it("Claude's dropdown keeps its documented aliases — only Grok's suggestions come from the machine", async () => {
+		const claude = (await readEngineChoice(env, "inst-1", "u1")).engines.find((e) => e.id === "claude");
+		expect(claude).toMatchObject({ suggestionsFrom: "documented" });
 	});
 });

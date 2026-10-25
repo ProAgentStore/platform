@@ -235,6 +235,61 @@ export function listEngineModels(input: { clientType?: string; command?: string 
 	return { clientType: engine, ...parsed };
 }
 
+/** Where an engine's provider publishes its models, and the env var(s) holding a key that may read them (#1206). */
+const PROVIDER_LISTS: Partial<Record<ClientType, { keys: string[]; url: (key: string) => string; headers: (key: string) => Record<string, string>; ids: (body: unknown) => string[] }>> = {
+	claude: {
+		keys: ["ANTHROPIC_API_KEY"],
+		url: () => "https://api.anthropic.com/v1/models?limit=1000",
+		headers: (key) => ({ "x-api-key": key, "anthropic-version": "2023-06-01" }),
+		ids: (b) => pickIds(b, "data", "id"),
+	},
+	codex: {
+		keys: ["OPENAI_API_KEY"],
+		url: () => "https://api.openai.com/v1/models",
+		headers: (key) => ({ authorization: `Bearer ${key}` }),
+		ids: (b) => pickIds(b, "data", "id"),
+	},
+	gemini: {
+		keys: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+		url: () => "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+		headers: (key) => ({ "x-goog-api-key": key }),
+		ids: (b) => pickIds(b, "models", "name").map((n) => n.replace(/^models\//, "")),
+	},
+};
+
+function pickIds(body: unknown, list: string, field: string): string[] {
+	const rows = body && typeof body === "object" ? (body as Record<string, unknown>)[list] : null;
+	if (!Array.isArray(rows)) return [];
+	return rows.map((r) => (r && typeof r === "object" ? (r as Record<string, unknown>)[field] : null)).filter((v): v is string => typeof v === "string" && v.length > 0);
+}
+
+/**
+ * {@link listEngineModels}, plus — for Claude Code, Codex and Gemini, whose CLIs list nothing — the PROVIDER's own model
+ * list, read with the API key this machine already holds in its environment (#1206). No key (a subscription login, the
+ * usual case) or no answer: `models` stays null with the reason, and the platform saves the id unchecked, as before.
+ * The key is used for this one request and never returned.
+ */
+export async function listEngineModelsLive(
+	input: { clientType?: string; command?: string },
+	deps: EngineCheckDeps & { listText?: (spawn: EngineSpawn, env: NodeJS.ProcessEnv) => string | null; fetch?: typeof fetch } = {},
+): Promise<EngineModels> {
+	const base = listEngineModels(input, deps);
+	const provider = PROVIDER_LISTS[base.clientType];
+	if (base.models || !provider) return base;
+	const env = deps.env ?? process.env;
+	const keyName = provider.keys.find((k) => (env[k] ?? "").trim());
+	if (!keyName) return { ...base, reason: `${base.reason}, and no ${provider.keys.join(" / ")} is set on this machine to ask the provider` };
+	try {
+		const res = await (deps.fetch ?? fetch)(provider.url(env[keyName] as string), { headers: provider.headers((env[keyName] as string).trim()), signal: AbortSignal.timeout(10_000) });
+		if (!res.ok) return { ...base, reason: `${base.reason}; the provider answered ${res.status} to the model list request (is ${keyName} valid?)` };
+		const models = [...new Set(provider.ids(await res.json()))];
+		if (!models.length) return { ...base, reason: `${base.reason}; the provider's model list was empty` };
+		return { clientType: base.clientType, models, defaultModel: null };
+	} catch {
+		return { ...base, reason: `${base.reason}; the provider could not be reached for its model list` };
+	}
+}
+
 function defaultListText(launch: EngineSpawn, env: NodeJS.ProcessEnv): string | null {
 	const command = launch.via === "direct" && launch.binaryPath ? launch.binaryPath : launch.command;
 	const r = spawnSync(command, launch.args, { encoding: "utf8", env, timeout: 20_000, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments });

@@ -14,7 +14,7 @@ import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
-import { checkEngine, listEngineModels } from "./coding/engine-check.js";
+import { checkEngine, listEngineModelsLive } from "./coding/engine-check.js";
 import { routeActionsRunner } from "./coding/actions-runner.js";
 import { routeWindowsRunner } from "./coding/windows-runner-routes.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
@@ -584,7 +584,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && (path === "/coding/engine-check" || path === "/coding/engine-models")) {
 		const b = await readJson<{ clientType?: string; command?: string; credentialInjected?: boolean }>(req);
 		try {
-			return json(res, 200, path === "/coding/engine-models" ? listEngineModels(b) : checkEngine(b)); // #1199: the CLI's live model list
+			return json(res, 200, path === "/coding/engine-models" ? await listEngineModelsLive(b) : checkEngine(b)); // #1199: the CLI's live model list; #1206: the provider's for the engines whose CLI lists none
 		} catch (e: unknown) {
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
