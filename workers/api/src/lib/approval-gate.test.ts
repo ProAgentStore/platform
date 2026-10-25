@@ -135,5 +135,5 @@ describe("every registered route is a real route (#1268: no silent miss)", () =>
 			mounted.some((m) => (m.method === method || m.method === "ALL") && matchPattern(m.path.replace(/:[a-zA-Z]+(\{[^}]*\})?/g, ":p"), pattern.replace(/:[a-zA-Z]+/g, ":p")) !== null);
 		const missing = [...GATED_ACTIONS, GATE_ACTION].flatMap((a) => a.routes.filter((r) => !matches(r.method, r.pattern)).map((r) => `${a.id}: ${r.method} ${r.pattern}`));
 		expect(missing).toEqual([]);
-	});
+	}, 30_000); // Importing the assembled API can exceed Vitest's 5s default under load.
 });
