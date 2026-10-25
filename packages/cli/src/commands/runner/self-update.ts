@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, payloadRoot, runNpm } from "../../bootstrap/payload.js";
 import { probePayload } from "../../bootstrap/start-probe.js";
+import { installGlobalWithRollback } from "./global-install.js";
 import { beginTrial, markBad } from "../../bootstrap/trial.js";
 import { logUpdateStep } from "../../bootstrap/update-log.js";
 import type { SessionStateCounts } from "./runner-work-observation.js";
@@ -238,10 +239,8 @@ export async function installVersion(version: string, current: string | null = n
 			}
 			beginTrial(payloadRoot(), version, current);
 		} else {
-			await runNpm(["i", "-g", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 }).catch((e: unknown) => {
-				const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim();
-				throw new Error((stderr || (e instanceof Error ? e.message : String(e))).slice(-400));
-			});
+			// Not under the stub, so no copy to fall back to: the new global install is tried, and the old one put back if it fails (#1147).
+			await installGlobalWithRollback(version, current, { npm: (args, timeout) => runNpm(args, { timeout }) });
 		}
 	} catch (e) {
 		logUpdateStep(`install: ${version} FAILED — ${e instanceof Error ? e.message : String(e)}`);

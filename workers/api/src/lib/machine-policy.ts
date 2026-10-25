@@ -77,6 +77,8 @@ export interface MachinePolicy {
 	updateLog: string | null;
 	/** Releases this machine rolled back from and will not install again until retried (#1150). */
 	rollbacks: MachineRollback[];
+	/** Whether an automatic update here can be rolled back: true under the bootstrap stub, false when it updates in place; null = not reported (#1147). */
+	rollbackAvailable: boolean | null;
 	/** Post-run cleanup (#1265): the mode and overrides the owner set, and what the runner last reported. */
 	cleanup: MachineCleanup;
 }
@@ -127,6 +129,7 @@ interface Row {
 	observations?: string | null;
 	update_log?: string | null;
 	rollbacks?: string | null;
+	rollback_available?: number | null;
 	cleanup_mode?: string | null;
 	cleanup_overrides?: string | null;
 	cleanup_report?: string | null;
@@ -149,6 +152,7 @@ const present = (row: Row | null, enabled = false): MachinePolicy => ({
 	observations: parseObservations(row?.observations ? safeJson(row.observations) : null, (ms) => new Date(ms).toISOString()),
 	updateLog: row?.update_log ?? null,
 	rollbacks: parseRollbacks(row?.rollbacks ? safeJson(row.rollbacks) : null) ?? [],
+	rollbackAvailable: row?.rollback_available === 1 ? true : row?.rollback_available === 0 ? false : null,
 	cleanup: {
 		mode: normalizeMode(row?.cleanup_mode),
 		overrides: parseOverrides(row?.cleanup_overrides),
@@ -205,6 +209,7 @@ export function machinePolicyWire(policy: MachinePolicy) {
 		last_error: policy.lastError,
 		update_log: policy.updateLog,
 		rollbacks: policy.rollbacks,
+		rollback_available: policy.rollbackAvailable,
 		// #1265: the mode, the six resolved switches and any per-machine overrides, and the runner's own last report.
 		cleanup: {
 			mode: policy.cleanup.mode,
@@ -237,7 +242,7 @@ export async function getMachinePolicy(env: Pick<Env, "DB">, userId: string, raw
 	const machineId = normalizeMachineId(rawMachineId);
 	if (!machineId) return present(null);
 	const row = await env.DB.prepare(`SELECT auto_update, status, latest_version, last_attempt_at, last_error, last_heartbeat_at, last_check_at, last_decision_at,
-		next_retry_due_at, blocker_class, observations, update_log, rollbacks, cleanup_mode, cleanup_overrides, cleanup_report, cleanup_report_at,
+		next_retry_due_at, blocker_class, observations, update_log, rollbacks, rollback_available, cleanup_mode, cleanup_overrides, cleanup_report, cleanup_report_at,
 		cleanup_now_requested_at, cleanup_now_done_at FROM machine_policies WHERE user_id = ?1 AND machine_id = ?2`)
 		.bind(userId, machineId).first<Row>().catch(() => null);
 	return present(row);
@@ -349,6 +354,8 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 	const observations = Array.isArray(value.observations) ? JSON.stringify(parseObservations(value.observations, (ms) => ms)) : null;
 	const latestCandidate = typeof value.latestVersion === "string" ? value.latestVersion : typeof value.latest_version === "string" ? value.latest_version : null;
 	const rollbacks = parseRollbacks(value.rollbacks);
+	// Only a boolean is an answer; anything else leaves what the machine last said.
+	const rollbackAvailable = typeof value.rollbackAvailable === "boolean" ? (value.rollbackAvailable ? 1 : 0) : null;
 	const errorCandidate = typeof value.error === "string" ? value.error : null;
 	// A lifecycle record is evidence, not display text: never silently turn an arbitrary client
 	// value into a plausible-but-incomplete version or error. Invalid telemetry is omitted.
@@ -371,8 +378,9 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 		observations = CASE WHEN ?11 IS NOT NULL THEN ?11 ELSE observations END,
 		update_log = COALESCE(?13, update_log),
 		rollbacks = CASE WHEN ?14 IS NOT NULL THEN ?14 ELSE rollbacks END,
+		rollback_available = CASE WHEN ?15 IS NOT NULL THEN ?15 ELSE rollback_available END,
 		last_heartbeat_at = ?4, updated_at = ?4 WHERE user_id = ?5 AND machine_id = ?6`)
-		.bind(status, latest, error, now, userId, machineId, decisionAt, checkAt, nextRetry, blocker, observations, diagnostics ? 1 : 0, updateLog, rollbacks ? JSON.stringify(rollbacks) : null)
+		.bind(status, latest, error, now, userId, machineId, decisionAt, checkAt, nextRetry, blocker, observations, diagnostics ? 1 : 0, updateLog, rollbacks ? JSON.stringify(rollbacks) : null, rollbackAvailable)
 		.run()
 		.catch(() => undefined);
 	if (before && (before.status !== "failed" || before.last_error !== error)) {

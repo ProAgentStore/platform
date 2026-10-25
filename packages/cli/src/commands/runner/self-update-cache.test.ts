@@ -50,7 +50,8 @@ describe("installVersion", () => {
 
 	it("not bootstrapped: the global install, as before", async () => {
 		await installVersion("0.4.70");
-		expect(npmCalls).toEqual([["i", "-g", "@proagentstore/cli@0.4.70"]]);
+		// then asks where npm put it (#1147) — here nowhere it can be probed, so the install stands
+		expect(npmCalls).toEqual([["i", "-g", "@proagentstore/cli@0.4.70"], ["root", "-g"]]);
 		expect(cachedPayloads(root)).toEqual([]);
 	});
 });

@@ -16,7 +16,7 @@ import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAu
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, RelayMutationAdmission } from "./auto-update-controller.js";
 import { readWorkLook } from "./runner-work-observation.js";
 import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
-import { applyRetryRolledBack, releaseTrial } from "./release-trial.js";
+import { applyRetryRolledBack, releaseTrial, rollbackAvailable } from "./release-trial.js";
 import { updateLogUpload } from "../../bootstrap/update-log.js";
 import { restartOwner } from "../up-restart.js";
 import { sessionExpiresAt } from "../login-device.js";
@@ -73,6 +73,7 @@ export async function connectViaRelay(
 		status: autoUpdateStatusWire(cell.policy.status),
 		latestVersion: cell.policy.latestVersion,
 		error: cell.policy.reason,
+		rollbackAvailable: rollbackAvailable(process.env, runsFromSource()), // #1147: false = this machine updates in place
 		rollbacks: trial.rollbacks(), // #1150: durable on the machine page; empty once the owner retries the release
 		...updateLog.body(),
 		...autoUpdateDiagnostics(),

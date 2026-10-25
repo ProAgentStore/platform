@@ -44,12 +44,36 @@ export interface RollbackRecorder {
 }
 
 /**
+ * Whether an automatic update here can be undone (#1147): true under the bootstrap stub (the new release is installed beside the
+ * running one and falls back to it), false for a runner updating in place. Null for a source checkout, which npm does not update.
+ */
+export function rollbackAvailable(env: NodeJS.ProcessEnv = process.env, fromSource = false): boolean | null {
+	if (fromSource) return null;
+	return !!env[BOOTSTRAP_ENV];
+}
+
+/**
+ * A runner the stub did not start has no trial to prove and no notice to report, but it can still have releases given up on
+ * (the in-place install's own start-up check, global-install.ts) — those are read, listed and retried like any other.
+ */
+function notUnderStub(root: () => string): ReleaseTrial {
+	return {
+		rollbackReason: null,
+		proven: () => undefined,
+		rolledBack: () => badVersions(root()),
+		forget: (v) => clearBad(root(), v),
+		rollbacks: () =>
+			Object.entries(badVersions(root())).map(([from, reason]) => ({ from, reason, to: badDetails(root())[from]?.to ?? null, at: badDetails(root())[from]?.at ?? null })),
+	};
+}
+
+/**
  * Read what the stub decided and record a rollback — as a failure that also ends the update cycle which installed the
  * rolled-back release, so the controller does not retry it. `proven` is what the relay calls on every service answer.
  */
 export function releaseTrial(version: string, cell: RollbackRecorder, log: (line: string) => void, env: NodeJS.ProcessEnv = process.env, root: () => string = payloadRoot): ReleaseTrial {
 	// Only a payload the stub started is on trial; a source checkout or a global install has nothing to prove.
-	if (!env[BOOTSTRAP_ENV]) return { rollbackReason: null, proven: () => undefined, rolledBack: () => ({}), forget: () => false, rollbacks: () => [] };
+	if (!env[BOOTSTRAP_ENV]) return notUnderStub(root);
 	const notice = takeRollbackNotice(root());
 	const rollbackReason = notice ? `Rolled back from ${notice.from} to ${version}: ${notice.reason}.` : null;
 	if (rollbackReason) {

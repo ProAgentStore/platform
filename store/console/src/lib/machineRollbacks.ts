@@ -19,3 +19,13 @@ export function retryableRollback(machine: MachineDetail): MachineRollback | nul
 export function rollbackLine(r: MachineRollback): string {
 	return `${r.from} was rolled back${r.to ? ` to ${r.to}` : ""}: ${r.reason.replace(/\.$/, "")}.`;
 }
+
+/**
+ * What to tell the owner about a machine that updates in place (#1147): not under the bootstrap stub, so a release is not
+ * installed beside the running one with a fallback. null when it is (or the machine has not said).
+ */
+export function noRollbackNote(machine: MachineDetail): string | null {
+	return machine.rollback_available === false
+		? "This machine updates in place (it is not running under the bootstrap stub), so a broken release is not tried beside the running one. A new release is started once after it is installed and, if that fails, the previous release is put back — but there is no automatic fall-back after that. Starting it with `pags up` from the installed `pags` command puts it under the stub."
+		: null;
+}

@@ -200,6 +200,17 @@ the update fails with the reason and is tried again. The trial window stays as t
 runs for the stub's payload cache only (a global `npm i -g` install has no payload to try), and
 `PAGS_NO_UPDATE_PROBE=1` skips it.
 
+**A runner not under the stub (#1147).** The trial and the fall-back above need the bootstrap stub, which runs payloads
+from `~/.config/proagentstore/cli/<version>`. A runner started any other way — a global install run from a path other
+than the stub — updates in place with `npm i -g`, and there is no older copy beside it. Two things change for it. It
+SAYS so: every status report carries `rollbackAvailable` (`false` in place, `true` under the stub), the machine detail
+and `list_runner_nodes` rows return it as `rollback_available`, and the machine page notes that the machine updates in
+place. And the in-place install is no longer final: right after `npm i -g`, the installed package is started as `pags
+runner probe` (see above), and if that fails the PREVIOUS release is installed again, the failing one is marked bad (if
+it would not start), and the update fails naming both. What it cannot do is the stub's later fall-back, for a release
+that starts and registers but crashes afterwards. Starting `pags up` from the installed `pags` command puts the machine
+under the stub, and every update after that gets the trial.
+
 A version that was given up on is not picked again. The stub's own check on `pags up` does not fetch it,
 and the updater refuses it as `failed` with the reason ("… was installed here and rolled back: …") until
 a newer release is published. The version that runs next reports the rollback in its first registration

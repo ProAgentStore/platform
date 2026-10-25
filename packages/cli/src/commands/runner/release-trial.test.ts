@@ -39,9 +39,9 @@ describe("what the machine reports (#1150)", () => {
 		expect(t.rollbacks()).toEqual([{ from: "0.4.150", reason: "it did not register", to: "0.4.148", at: 5_000 }]);
 		expect(trialAt("0.4.148").rollbacks()).toEqual([{ from: "0.4.150", reason: "it did not register", to: "0.4.148", at: 5_000 }]);
 	});
-	it("is empty for a payload the stub did not start, and after a retry clears the mark", () => {
+	it("is empty after a retry clears the mark; a runner not under the stub reports what it refused too (#1147)", () => {
 		markBad(root, "0.4.150", "x", "0.4.148", 1);
-		expect(releaseTrial("0.4.148", cell, () => undefined, {}, () => root).rollbacks()).toEqual([]);
+		expect(releaseTrial("0.4.148", cell, () => undefined, {}, () => root).rollbacks()).toEqual([{ from: "0.4.150", reason: "x", to: "0.4.148", at: 1 }]);
 		const t = trialAt("0.4.148");
 		expect(t.forget("0.4.150")).toBe(true);
 		expect(t.rollbacks()).toEqual([]);

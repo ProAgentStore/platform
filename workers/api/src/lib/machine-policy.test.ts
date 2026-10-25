@@ -65,6 +65,23 @@ describe("machine policy — rollbacks stay on the machine's record (#1150)", ()
 	});
 });
 
+describe("machine policy — can an update here be rolled back (#1147)", () => {
+	const M = "machine-aaaa1111";
+	it("is what the runner last said, on the wire; unreported is null and a non-boolean changes nothing", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		expect(machinePolicyWire(await getMachinePolicy(env(), "u1", M)).rollback_available).toBeNull();
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle", rollbackAvailable: false });
+		expect((await getMachinePolicy(env(), "u1", M)).rollbackAvailable).toBe(false);
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle", rollbackAvailable: "yes" });
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle", rollbackAvailable: null });
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle" });
+		expect((await getMachinePolicy(env(), "u1", M)).rollbackAvailable).toBe(false);
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle", rollbackAvailable: true });
+		expect(machinePolicyWire(await getMachinePolicy(env(), "u1", M)).rollback_available).toBe(true);
+		expect((await getMachinePolicy(env(), "u2", M)).rollbackAvailable).toBeNull();
+	});
+});
+
 describe("machine policy — receipt time is not decision time (#1020)", () => {
 	const M = "machine-aaaa1111";
 	const at = (ms: number) => vi.spyOn(Date, "now").mockReturnValue(ms);

@@ -47,6 +47,8 @@ export interface MachineDetail {
 	auto_update_stuck?: AutoUpdateStuck | null;
 	/** Releases the machine rolled back from and will not install again until retried (#1150). Absent on an older API. */
 	rollbacks?: MachineRollback[] | null;
+	/** false: this machine updates in place, not under the bootstrap stub (#1147). Absent/null: not reported. */
+	rollback_available?: boolean | null;
 	/** Post-run cleanup (#1265): the mode, the six resolved switches, and the runner's own last report. */
 	cleanup?: MachineCleanup;
 }

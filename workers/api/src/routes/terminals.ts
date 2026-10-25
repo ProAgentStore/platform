@@ -188,6 +188,8 @@ export interface TerminalNode {
 	update?: RunnerUpdateOp;
 	/** Owner-scoped persisted policy; absent legacy identity is explicitly unsupported. */
 	auto_update_policy?: boolean;
+	/** Whether an automatic update on this machine can be rolled back: false = it updates in place (#1147); absent = not reported. */
+	rollback_available?: boolean;
 	/**
 	 * Post-run cleanup (#1265): the mode in force on this machine and the runner's own last word about it —
 	 * leftovers it found, load and disk warnings, its last pass. `gentle` until the owner sets otherwise.
@@ -594,6 +596,7 @@ terminalRoutes.get("/nodes", async (c) => {
 		}
 		const policy = await getMachinePolicy(c.env, uid, n.machineId);
 		n.auto_update_policy = policy.autoUpdate;
+		if (policy.rollbackAvailable !== null) n.rollback_available = policy.rollbackAvailable;
 		n.cleanup_mode = policy.cleanup.mode;
 		n.cleanup = cleanupNodeView(policy);
 		n.latest_version = policy.latestVersion;

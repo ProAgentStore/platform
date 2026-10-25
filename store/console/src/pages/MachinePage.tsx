@@ -28,7 +28,7 @@ import {
 	type MachineDetail,
 	type MachineDetailResponse,
 } from "../lib/machineDetail";
-import { machineRollbacks, retryableRollback } from "../lib/machineRollbacks";
+import { machineRollbacks, noRollbackNote, retryableRollback } from "../lib/machineRollbacks";
 import type { RunnerUpdateResponse } from "../lib/runnerPanel";
 
 function displayTime(iso: string | null | undefined): string {
@@ -188,6 +188,7 @@ export default function MachinePage() {
 								<input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => void setAutoUpdate(event.target.checked)} aria-label="Enable automatic updates" data-testid="machine-auto-update-toggle" />
 							</label>
 						</div>
+						{machine && noRollbackNote(machine) && <p className="text-xs text-warning mt-3" data-testid="machine-no-rollback">{noRollbackNote(machine)}</p>}
 						{saving && <p role="status" className="text-xs text-muted mt-3">Saving automatic update policy…</p>}
 						{!canRunAutomaticUpdates && <p className="text-xs text-warning mt-3" data-testid="machine-auto-update-compatibility">
 							This runner must first be safely updated to CLI 0.4.92 or later. This toggle stores the policy, but an older running CLI will not install updates from it.
