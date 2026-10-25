@@ -66,9 +66,9 @@ describe("OAuthProvider wiring", () => {
 		]);
 	});
 
-	it("enforces OAuth 2.1 S256-only PKCE and the 24h access-token lifetime", () => {
+	it("enforces OAuth 2.1 S256-only PKCE and the 30-day access-token lifetime", () => {
 		expect(captured.options?.allowPlainPKCE).toBe(false);
-		expect(captured.options?.accessTokenTTL).toBe(86_400);
+		expect(captured.options?.accessTokenTTL).toBe(30 * 86_400);
 	});
 });
 

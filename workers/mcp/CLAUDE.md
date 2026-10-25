@@ -42,7 +42,7 @@ behaves wrongly, the bug is usually in `workers/api`, not here.
 
 | Concern | Where | Contract |
 |---|---|---|
-| OAuth 2.1 + PKCE | `src/oauth-provider.ts`, plus the library | `apiRoute: "/mcp"`. `authorizeEndpoint /authorize`, `tokenEndpoint /token`, DCR at `/register`. `allowPlainPKCE: false` and `/authorize` hard-rejects a missing `code_challenge`. `accessTokenTTL` 86400. |
+| OAuth 2.1 + PKCE | `src/oauth-provider.ts`, plus the library | `apiRoute: "/mcp"`. `authorizeEndpoint /authorize`, `tokenEndpoint /token`, DCR at `/register`. `allowPlainPKCE: false` and `/authorize` hard-rejects a missing `code_challenge`. `accessTokenTTL` is 30 days by default. |
 | Consent → identity | `src/oauth-provider.ts` | `/authorize` renders GitHub/Google buttons, stashes the parsed `AuthRequest` in KV under a nonce, and sets a `pags_authnonce` cookie. `/oauth/callback` requires the cookie to match (browser binding, blocks login-CSRF), exchanges a single-use `?code=` at `POST /v1/auth/mcp/exchange` server-to-server (the raw session never appears in a URL), validates it against `/v1/auth/me`, then `completeAuthorization`. |
 | Grant props | `src/oauth-provider.ts` → `src/index.ts` | `props = { authToken, mcpScopes, mcpSubject }`. `PagsMcp.init()` reads them into `userToken` / `scopes` / `subject`. `userId` is colon-stripped for the library; the real uid stays in `mcpSubject`. |
 | Session verification | `src/session.ts` | `verifyMcpSession` — HMAC-SHA256 over `data.sig`, `exp` checked. Needs `SESSION_SIGNING_KEY` to match the API worker's. |

@@ -1084,6 +1084,6 @@ export default withRequestTiming(new OAuthProvider<ProviderEnv>({
 	scopesSupported: [...MCP_SCOPES],
 	// OAuth 2.1: only S256 PKCE, matching the previous hand-rolled server.
 	allowPlainPKCE: false,
-	// Preserve the previous 24h access-token lifetime.
-	accessTokenTTL: 86_400,
+	// Avoid daily browser re-authentication while retaining an OAuth-bound credential.
+	accessTokenTTL: 30 * 86_400,
 }));

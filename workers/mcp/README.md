@@ -137,7 +137,7 @@ Two paths, both resolving to a ProAgentStore session:
 
 | Path | How | Notes |
 |---|---|---|
-| OAuth 2.1 + PKCE (default) | The client discovers `/authorize` + `/token`, registers dynamically at `/register`, and the browser consent page delegates to ProAgentStore's own GitHub or Google sign-in | PKCE `S256` is mandatory — `code_challenge` is required and plain PKCE is rejected. Access tokens live 24h. Requested scopes are stored on the grant. |
+| OAuth 2.1 + PKCE (default) | The client discovers `/authorize` + `/token`, registers dynamically at `/register`, and the browser consent page delegates to ProAgentStore's own GitHub or Google sign-in | PKCE `S256` is mandatory — `code_challenge` is required and plain PKCE is rejected. Access tokens live 30 days by default. Requested scopes are stored on the grant. |
 | Per-call `token` argument | Every authenticated tool accepts an optional `token` (a PAGS session token) | Bypasses the OAuth grant, so it carries no requested scope set and uses the default grant. It is still audited: the signed session's `uid` becomes the audit subject. Prefer OAuth unless you are scripting. |
 
 The endpoint under `/mcp` is gated by the OAuth provider. Every other path is served by
