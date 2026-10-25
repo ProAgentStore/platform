@@ -48,6 +48,7 @@
 import { diagnoseAttachment, type AttachmentDiagnosis, type AttachmentState } from "./runtime-attachment.js";
 import { isRunnerGone, isRunnerUnreachable, isRunnerUnresponsive, RunnerGoneError } from "./runner-unreachable.js";
 import type { RuntimeFacts } from "./instance-connectivity.js";
+import { checkRunner, labelFor, nextPark, nextWait, parkStart, waitStart, type Observation, type ParkInput, type ParkState, type Say, type WaitDone, type WaitInput, type WaitState } from "./runner-wait-machine.js";
 
 // Re-exported so a caller needs ONE import for "was it the runner, and what do I do about it".
 export * from "./runner-unreachable.js";
@@ -266,41 +267,9 @@ export function parkExpiredMessage(d: AttachmentDiagnosis, parkedMs: number): st
  * machine unit-tests without any of them, the same way `runCodingLoop` does.
  */
 export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string; waitMs: number; unresponsive?: boolean; extraMs?: number }): Promise<RunnerWaitResult> {
-	let facts = await deps.probe(`${opts.label}-q`);
-	// After a runner that did not ANSWER, the instant read is the one fact not to trust (#913): it
-	// counts the failed dispatch's own milliseconds-old ping as connected, so the wait returned after
-	// 0ms and the run re-dispatched straight into the same silence. Waiting one interval first is
-	// what lets a loaded machine catch up — and a frozen one read as disconnected by then.
-	if (facts.relayConnected && !opts.unresponsive) {
-		// Already healed between the failure and this probe — the common case for a blip shorter
-		// than the step's own retries. Nothing to announce; the run just carries on.
-		return { returned: true, waitedMs: 0, state: "attached", message: "", remedy: null };
-	}
-
-	const ticks = Math.max(0, Math.floor(opts.waitMs / RUNNER_PROBE_INTERVAL_MS));
-	if (ticks > 0) {
-		// The wait is run state before it is a notice (#1177): `runner_away` until the instant it gives up — the end of this poll, plus the
-		// park that follows it when the run can park — so a reader of the run row sees a wait, not work and then a stall.
-		if (deps.state) {
-			const start = await deps.state.now(`${opts.label}-t0`);
-			await deps.state.begin(`${opts.label}-w0`, start + opts.waitMs + (opts.extraMs ?? 0));
-		}
-		await deps.announce(opts.unresponsive && facts.relayConnected ? slowRunnerMessage(opts.waitMs) : pauseMessage(describeFacts(facts), opts.waitMs), `${opts.label}-n`);
-	}
-
-	for (let i = 0; i < ticks; i++) {
-		await deps.sleep(`${opts.label}-p${i}`);
-		const waited = (i + 1) * RUNNER_PROBE_INTERVAL_MS;
-		await deps.tick?.(waited, `${opts.label}-k${i}`);
-		facts = await deps.probe(`${opts.label}-q${i}`);
-		if (facts.relayConnected && (await answers(deps, opts.unresponsive, `${opts.label}-h${i}`))) {
-			await deps.state?.end(`${opts.label}-w1`);
-			await deps.announce(resumeMessage(facts.node, waited), `${opts.label}-back`);
-			return { returned: true, waitedMs: waited, state: "attached", message: "", remedy: null };
-		}
-	}
-
-	const waited = ticks * RUNNER_PROBE_INTERVAL_MS;
+	const done = await driveWait(deps, { label: opts.label, waitMs: opts.waitMs, unresponsive: !!opts.unresponsive, extraMs: opts.extraMs ?? 0 });
+	if (done.returned) return { returned: true, waitedMs: done.waitedMs, state: "attached", message: "", remedy: null };
+	const { facts, waitedMs: waited } = done;
 	// Connected-but-silent with no budget left to wait: describing the socket would say "attached".
 	if (opts.unresponsive && facts.relayConnected) {
 		return { returned: false, waitedMs: waited, state: "attached", message: "The runner stayed connected but did not answer — usually a machine under heavy load. Free it up (fewer concurrent sessions), or move this agent to another machine.", remedy: null };
@@ -309,10 +278,60 @@ export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string;
 	return { returned: false, waitedMs: waited, state: d.state, message: runnerGoneMessage(d, waited), remedy: d.remedy };
 }
 
-/** After an unanswered command, "back" means the runner answers its health check, not only that its socket is listed (#1341). */
-async function answers(deps: RunnerWaitDeps, unresponsive: boolean | undefined, label: string): Promise<boolean> {
-	if (!unresponsive || !deps.healthy) return true;
-	return deps.healthy(label).catch(() => false);
+/** The words for a sentence the wait or park machine asked to say (#1359). */
+function sayText(say: Say): string {
+	switch (say.kind) {
+		case "pause":
+			return say.slow ? slowRunnerMessage(say.waitMs) : pauseMessage(describeFacts(say.facts), say.waitMs);
+		case "resume":
+			return resumeMessage(say.node, say.waitedMs);
+		case "park":
+			return parkMessage(describeFacts(say.facts), say.until, say.left);
+	}
+}
+
+/**
+ * The thin driver for the wait machine (`runner-wait-machine.ts`): perform each action it asks for against the workflow's
+ * durable deps, and feed back what was seen. The decisions — when to give up, which label — are all in the machine.
+ */
+async function driveWait(deps: RunnerWaitDeps, input: WaitInput): Promise<WaitDone> {
+	let state: WaitState = waitStart;
+	let obs: Observation = { ack: true };
+	for (;;) {
+		const step = nextWait(input, state, obs);
+		state = step.state;
+		const a = step.action;
+		switch (a.do) {
+			case "check":
+				obs = await checkRunner(deps, a.target, { depth: a.target.health ? "health" : "relay" });
+				break;
+			case "now":
+				obs = { time: deps.state ? await deps.state.now(a.label) : 0 };
+				break;
+			case "begin":
+				await deps.state?.begin(a.label, a.until);
+				obs = { ack: true };
+				break;
+			case "end":
+				await deps.state?.end(a.label);
+				obs = { ack: true };
+				break;
+			case "say":
+				await deps.announce(sayText(a.say), a.label);
+				obs = { ack: true };
+				break;
+			case "sleep":
+				await deps.sleep(a.label);
+				obs = { ack: true };
+				break;
+			case "tick":
+				await deps.tick?.(a.waitedMs, a.label);
+				obs = { ack: true };
+				break;
+			case "done":
+				return a.result;
+		}
+	}
 }
 
 // ── The guard ───────────────────────────────────────────────────────────────
@@ -361,12 +380,12 @@ export function makeRunnerGuard(cfg: {
 		for (let round = 0; ; round++) {
 			try {
 				// A Workflow step name must be unique within an instance, so a re-attempt gets its own.
-				return (await run(round === 0 ? name : `${name}-r${round}`, fn)) as T;
+				return (await run(labelFor({ of: "step", name, round }), fn)) as T;
 			} catch (e) {
 				if (isRunnerGone(e) || round >= RECONNECT_ROUNDS) throw e;
 				// The machine is back but the engine is not: relaunch it, as a heal would, and re-run the step (#1053).
 				if (cfg.sessionLost && (await cfg.sessionLost(e).catch(() => false))) {
-					await cfg.reconnect(`${name}-lost${round}`);
+					await cfg.reconnect(labelFor({ of: "lost", name, round }));
 					continue;
 				}
 				// A genuine failure must still fail IMMEDIATELY — that is the acceptance criterion this
@@ -376,7 +395,7 @@ export function makeRunnerGuard(cfg: {
 				// A probe that could not be answered (a D1 or DO blip) is UNKNOWN, not "disconnected" (#1344): reading it as down
 				// sent a genuine non-runner failure into a ten-minute wait that could end in a 24-hour park.
 				if (!isRunnerUnreachable(e)) {
-					const facts = await cfg.wait.probe(`${name}-chk${round}`).catch(() => "unknown" as const);
+					const facts = await checkRunner(cfg.wait, { probe: labelFor({ of: "check", name, round }) }, { depth: "relay" }).then((c) => c.facts).catch(() => "unknown" as const);
 					if (facts === "unknown" || facts.relayConnected) throw e;
 				}
 				await recover(name, round, isRunnerUnresponsive(e));
@@ -393,16 +412,16 @@ export function makeRunnerGuard(cfg: {
 	 */
 	async function recover(name: string, round: number, unresponsive: boolean): Promise<void> {
 		for (let attempt = 0; ; attempt++) {
-			const tag = attempt === 0 ? `${round}` : `${round}-${attempt}`;
+			const waitLabel = labelFor({ of: "wait", name, round, attempt });
 			const budget = Math.min(perLoss, Math.max(0, total - spent));
-			const w = await waitForRunner(cfg.wait, { label: `${name}-w${tag}`, waitMs: budget, unresponsive, extraMs: cfg.park ? Math.max(0, parkTotal - parked) : 0 });
+			const w = await waitForRunner(cfg.wait, { label: waitLabel, waitMs: budget, unresponsive, extraMs: cfg.park ? Math.max(0, parkTotal - parked) : 0 });
 			spent += w.waitedMs;
 			// A machine that went AWAY parks the run (#1160). One still connected but silent parks too when its
 			// health can be asked (#1341): the park's own periodic check then sees it answer again — a wedged
 			// runner is usually restarted by its supervisor within minutes — rather than the run ending on work
 			// that is intact. Without a health check it cannot tell "back" from "still silent", so it ends below.
 			if (!w.returned && cfg.park && (w.state !== "attached" || (unresponsive && cfg.wait.healthy))) {
-				await parkUntilBack(cfg.park, `${name}-w${tag}`, unresponsive);
+				await parkUntilBack(cfg.park, waitLabel, unresponsive);
 			} else if (!w.returned) {
 				throw new RunnerGoneError(
 					budget <= 0
@@ -411,7 +430,7 @@ export function makeRunnerGuard(cfg: {
 				);
 			}
 			try {
-				await cfg.reconnect(`${name}-rc${tag}`);
+				await cfg.reconnect(labelFor({ of: "reconnect", name, round, attempt }));
 				return;
 			} catch (re) {
 				if (isRunnerGone(re) || !isRunnerUnreachable(re) || attempt >= RECONNECT_ROUNDS) throw re;
@@ -429,32 +448,52 @@ export function makeRunnerGuard(cfg: {
 	 * Returns when the runner is connected; throws {@link RunnerGoneError} with the bound named otherwise.
 	 */
 	async function parkUntilBack(p: RunnerParkDeps, label: string, unresponsive = false): Promise<void> {
-		const start = await p.now(`${label}-pk`);
-		const left = parkTotal - parked;
-		let facts = await cfg.wait.probe(`${label}-pk-q`);
-		if (left <= 0) throw new RunnerGoneError(parkExpiredMessage(describeFacts(facts), parked));
-		const until = start + left;
-		await p.begin(`${label}-pk-begin`, until);
-		await cfg.wait.announce(parkMessage(describeFacts(facts), until, left), `${label}-pk-n`);
+		const input: ParkInput = { base: label, unresponsive, parkTotal, parked, wakePollMs: RUNNER_WAKE_POLL_MS, checkMs: RUNNER_PARK_CHECK_MS };
 		// The wake poll below neither announces nor touches the wait state: the park owns both until it ends.
 		const quiet: RunnerWaitDeps = { ...cfg.wait, announce: async () => undefined, state: undefined };
-		for (let i = 0; ; i++) {
-			const at = await p.now(`${label}-pk${i}-at`);
-			if (at >= until) {
-				parked = parkTotal;
-				await p.end(`${label}-pk-end`);
-				throw new RunnerGoneError(parkExpiredMessage(describeFacts(facts), parked));
-			}
-			const woken = await p.waitForBack(`${label}-pk${i}`, Math.min(RUNNER_PARK_CHECK_MS, until - at));
-			const now = await p.now(`${label}-pk${i}-t`);
-			await cfg.wait.tick?.(now - start, `${label}-pk${i}-k`);
-			const back = woken ? await waitForRunner(quiet, { label: `${label}-pk${i}-w`, waitMs: RUNNER_WAKE_POLL_MS, unresponsive }) : null;
-			facts = await cfg.wait.probe(`${label}-pk${i}-q`);
-			if (back?.returned || (facts.relayConnected && (await answers(cfg.wait, unresponsive, `${label}-pk${i}-h`)))) {
-				parked += now - start;
-				await p.end(`${label}-pk-end`);
-				await cfg.wait.announce(resumeMessage(facts.node, now - start), `${label}-pk-back`);
-				return;
+		let state: ParkState = parkStart;
+		let obs: Observation = { ack: true };
+		// The thin driver for the park machine (`runner-wait-machine.ts`): the decisions and every label are the machine's.
+		for (;;) {
+			const step = nextPark(input, state, obs);
+			state = step.state;
+			const a = step.action;
+			switch (a.do) {
+				case "now":
+					obs = { time: await p.now(a.label) };
+					break;
+				case "check":
+					obs = await checkRunner(cfg.wait, a.target, { depth: a.target.health ? "health" : "relay" });
+					break;
+				case "begin":
+					await p.begin(a.label, a.until);
+					obs = { ack: true };
+					break;
+				case "end":
+					await p.end(a.label);
+					obs = { ack: true };
+					break;
+				case "say":
+					await cfg.wait.announce(sayText(a.say), a.label);
+					obs = { ack: true };
+					break;
+				case "waitBack":
+					obs = { woken: await p.waitForBack(a.label, a.timeoutMs) };
+					break;
+				case "tick":
+					await cfg.wait.tick?.(a.waitedMs, a.label);
+					obs = { ack: true };
+					break;
+				case "wait":
+					obs = { wait: await driveWait(quiet, { label: a.label, waitMs: a.waitMs, unresponsive, extraMs: 0 }) };
+					break;
+				case "done":
+					if (a.result.kind === "back") {
+						parked += a.result.parkedMs;
+						return;
+					}
+					parked = a.result.parkedMs;
+					throw new RunnerGoneError(parkExpiredMessage(describeFacts(a.result.facts), a.result.parkedMs));
 			}
 		}
 	}
