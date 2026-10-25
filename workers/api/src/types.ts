@@ -54,6 +54,8 @@ export interface Env {
 	GITHUB_APP_ID?: string;
 	GITHUB_APP_PRIVATE_KEY?: string;
 	GITHUB_APP_SLUG?: string;
+	/** Secret the GitHub App's webhook is signed with (#1325); the CI-completion hook is off without it. */
+	GITHUB_WEBHOOK_SECRET?: string;
 	SESSION_SIGNING_KEY: string;
 	KEY_ENCRYPTION_KEY?: string;
 	STRIPE_SECRET_KEY?: string;

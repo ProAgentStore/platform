@@ -11,6 +11,7 @@ import { syncUserInstallations } from "../lib/github-installation-sync.js";
 import type { GithubInstallationSyncResponse } from "../agent-types.js";
 import { logEvent } from "../lib/events.js";
 import { clipMarked } from "../lib/clip-marked.js";
+import { resumeRunsOnCiCompletion, verifyGithubSignature } from "../lib/ci-resume.js";
 import type { Env } from "../types.js";
 
 /**
@@ -23,6 +24,25 @@ export const githubRoutes = new Hono<{ Bindings: Env }>();
 
 /** Is the GitHub App wired up on this deployment? */
 githubRoutes.get("/status", (c) => c.json({ configured: githubAppConfigured(c.env) }));
+
+/**
+ * GitHub App webhook (#1325) — NO session, signature-verified. `workflow_run` completions resume coding
+ * runs parked on that commit's CI; every other event is acknowledged and ignored.
+ */
+githubRoutes.post("/webhook", async (c) => {
+	if (!c.env.GITHUB_WEBHOOK_SECRET) return c.json({ error: "Webhook not configured" }, 503);
+	const body = await c.req.text();
+	if (!(await verifyGithubSignature(body, c.req.header("x-hub-signature-256"), c.env.GITHUB_WEBHOOK_SECRET))) return c.json({ error: "Invalid signature" }, 401);
+	if (c.req.header("x-github-event") !== "workflow_run") return c.json({ received: true });
+	let payload: unknown;
+	try {
+		payload = JSON.parse(body);
+	} catch {
+		return c.json({ error: "Invalid payload" }, 400);
+	}
+	const result = await resumeRunsOnCiCompletion(c.env, payload).catch((e) => ({ ignored: `failed: ${e instanceof Error ? e.message : String(e)}` }));
+	return c.json({ received: true, ...result });
+});
 
 /** The URL to send a user to so they install the App and grant repo access. */
 githubRoutes.get("/install-url", async (c) => {

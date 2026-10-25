@@ -70,6 +70,11 @@ const EXCLUSIONS = [
 		reason:
 			"Read-only reconciliation browser transport. These seven owner-only Console-to-Runner routes carry an opaque, short-lived handoff to a retained local page; their frame/input lifecycle is intentionally not a stable public API contract.",
 	},
+	{
+		match: /^POST \/v1\/github\/webhook$/,
+		reason:
+			"GitHub App webhook receiver (#1325). Called only by GitHub, authenticated by its X-Hub-Signature-256 HMAC rather than a session; the payload is GitHub's, not ours, and no API client sends it.",
+	},
 ];
 
 const isExcluded = (key) =>
