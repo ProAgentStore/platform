@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { floatingReason, runsOnValues, touchesPlaywright, violationsIn } from "./check-workflow-runner.mjs";
+import { floatingReason, PAGS_RUNNER_EXPR, runsOnValues, touchesPlaywright, violationsIn } from "./check-workflow-runner.mjs";
 
 const wf = (runsOn, body = "run: npx playwright install") => `jobs:\n  ci:\n    runs-on: ${runsOn}\n    steps:\n      - ${body}\n`;
 
@@ -53,5 +53,26 @@ describe("the repo's own workflows", () => {
 		const install = ci.indexOf("node scripts/install-playwright-browsers.mjs");
 		expect(guard).toBeGreaterThan(0);
 		expect(guard).toBeLessThan(install);
+	});
+});
+
+describe("the PAGS_RUNNER route (#1214)", () => {
+	const expr = (fallback) => ["$", "{{ fromJSON(vars.PAGS_RUNNER || '\"", fallback, "\"') }}"].join("");
+
+	it("accepts the routed expression when its fallback is a pin, and judges the fallback", () => {
+		expect(floatingReason(expr("ubuntu-24.04"))).toBeNull();
+		expect(floatingReason(expr("ubuntu-latest"))).toMatch(/-latest/);
+		expect(floatingReason(expr("ubuntu"))).toBe("no version");
+	});
+
+	it("still refuses any other expression, and a PAGS_RUNNER read without a pinned fallback", () => {
+		expect(floatingReason(["$", "{{ vars.PAGS_RUNNER }}"].join(""))).toMatch(/expression/);
+		expect(floatingReason(["$", "{{ fromJSON(vars.OTHER || '\"ubuntu-24.04\"') }}"].join(""))).toMatch(/expression/);
+		expect(PAGS_RUNNER_EXPR.test(["$", "{{ fromJSON(vars.PAGS_RUNNER) }}"].join(""))).toBe(false);
+	});
+
+	it("a Playwright-touching workflow with the routed expression passes, and with a floating fallback fails", () => {
+		expect(violationsIn(wf(expr("ubuntu-24.04")))).toEqual([]);
+		expect(violationsIn(wf(expr("ubuntu-latest"))).length).toBe(1);
 	});
 });

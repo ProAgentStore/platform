@@ -138,4 +138,4 @@ current visibility, and a periodic re-check removes any repo that has since beco
 | Registration tokens never persisted | design (§2); pending |
 | Health + routing visible; stuck-job watcher alerts | pending (§7) |
 | interns deploy end-to-end via self-hosted with OIDC | pending, PAS (§8) |
-| Workflow templates updated | pending, PAS (§8) |
+| Workflow templates updated | this repo's deploy and publish workflows shipped (#1214): every Linux deploy and publish job reads `fromJSON(vars.PAGS_RUNNER || '"ubuntu-24.04"')` (the fallback stays pinned, #1266), has `timeout-minutes`, and every workflow has a `concurrency` group; the macOS (TestFlight), Windows and Linux release-smoke jobs are not routed (the smoke tests need a clean GitHub-hosted image, #1152). Not checked: whether npm / the MCP registry accept an OIDC token from a self-hosted job, and this repo is public, which the design bars from self-hosted runners. The PAS `app-deploy.yml` and `template-app` / `template-marketplace` are other repos and still pending (§8) |

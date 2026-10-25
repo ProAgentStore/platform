@@ -35,9 +35,18 @@ export function runsOnValues(text) {
 	return out;
 }
 
+/**
+ * The one expression that is allowed (#1214): `fromJSON(vars.PAGS_RUNNER || '"<image>"')`. The platform sets PAGS_RUNNER to the
+ * pinned self-hosted machine's own labels when Actions minutes run out; with it unset the job runs on `<image>`, which must itself
+ * be a pin. Any other expression stays unreadable to this check.
+ */
+export const PAGS_RUNNER_EXPR = /^\$\{\{\s*fromJSON\(vars\.PAGS_RUNNER\s*\|\|\s*'"([^"']+)"'\)\s*\}\}$/;
+
 /** Why this image label is not a pin, or null when it is. */
 export function floatingReason(label) {
 	if (!label) return "empty";
+	const routed = PAGS_RUNNER_EXPR.exec(label);
+	if (routed) return floatingReason(routed[1]);
 	if (label.includes("${{")) return "an expression (the image cannot be checked)";
 	if (/-latest$/i.test(label)) return "a floating `-latest` image";
 	if (/^(ubuntu|macos|windows)$/i.test(label)) return "no version";

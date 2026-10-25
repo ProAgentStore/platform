@@ -10,6 +10,11 @@ on:
       - 'scripts/release-smoke/**'
   workflow_dispatch:
 
+# One publish at a time, and never cancelled halfway: a half-published SDK/CLI pair is worse than a queued one.
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
@@ -19,7 +24,7 @@ jobs:
   # minute cost, and Actions minutes are already constrained). A failure here stops `publish` (it `needs` this job), so
   # neither the SDK nor the CLI goes out. Two jobs rather than a matrix so each runner image is pinned where scripts/check-workflow-runner.mjs can read it. What it does is described at the top of scripts/release-smoke/run.mjs.
   smoke-linux:
-    runs-on: ubuntu-24.04  # pinned, see #1266
+    runs-on: ubuntu-24.04  # pinned, see #1266. NOT routed to PAGS_RUNNER (#1214): the smoke test needs a clean GitHub-hosted image
     timeout-minutes: 20
     permissions:
       contents: read
@@ -60,7 +65,8 @@ jobs:
 
   publish:
     needs: [smoke-linux, smoke-windows]
-    runs-on: ubuntu-24.04  # pinned from ubuntu-latest, see #1266 (ubuntu-26.04 broke Playwright/chromium)
+    runs-on: ${{ fromJSON(vars.PAGS_RUNNER || '"ubuntu-24.04"') }}  # PAGS_RUNNER (#1214) names the pinned self-hosted machine when Actions minutes run out; the fallback stays pinned, see #1266
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write

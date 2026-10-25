@@ -30,7 +30,8 @@ env:
 
 jobs:
   deploy:
-    runs-on: ubuntu-24.04  # pinned from ubuntu-latest, see #1266 (ubuntu-26.04 broke Playwright/chromium)
+    runs-on: ${{ fromJSON(vars.PAGS_RUNNER || '"ubuntu-24.04"') }}  # PAGS_RUNNER (#1214) names the pinned self-hosted machine when Actions minutes run out; the fallback stays pinned, see #1266
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:

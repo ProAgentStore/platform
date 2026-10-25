@@ -49,9 +49,15 @@ on:
     paths:
       - "server.json"
 
+# One publish at a time, and never cancelled halfway: a half-published registry entry is worse than a queued one.
+concurrency:
+  group: publish-mcp-registry
+  cancel-in-progress: false
+
 jobs:
   publish:
-    runs-on: ubuntu-24.04  # pinned from ubuntu-latest, see #1266 (ubuntu-26.04 broke Playwright/chromium)
+    runs-on: ${{ fromJSON(vars.PAGS_RUNNER || '"ubuntu-24.04"') }}  # PAGS_RUNNER (#1214) names the pinned self-hosted machine when Actions minutes run out; the fallback stays pinned, see #1266
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
