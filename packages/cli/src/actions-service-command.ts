@@ -7,6 +7,6 @@ export const serviceCommand = new Command("service")
 	.addCommand(new Command("install").requiredOption("--dir <absolute-directory>", "Configured runner directory").action(async (opts: { dir: string }) => {
 		for (const line of await installMacActionsService(opts.dir, serviceContext())) process.stdout.write(`${line}\n`);
 	}))
-	.addCommand(new Command("remove").requiredOption("--dir <absolute-directory>", "Configured runner directory").action((opts: { dir: string }) => {
-		for (const line of removeMacActionsService(opts.dir, serviceContext())) process.stdout.write(`${line}\n`);
+	.addCommand(new Command("remove").requiredOption("--dir <absolute-directory>", "Configured runner directory").action(async (opts: { dir: string }) => {
+		for (const line of await removeMacActionsService(opts.dir, serviceContext())) process.stdout.write(`${line}\n`);
 	}));

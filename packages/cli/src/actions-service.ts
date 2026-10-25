@@ -24,8 +24,6 @@ export function actionsServiceContent(dir: string, ctx: ServiceContext): string 
 <key>EnvironmentVariables</key><dict><key>HOME</key><string>${xml(ctx.home)}</string><key>USER</key><string>${xml(ctx.user)}</string><key>PATH</key><string>${xml(ctx.pathEnv)}</string><key>ACTIONS_RUNNER_SVC</key><string>1</string></dict>
 <key>WorkingDirectory</key><string>${xml(dir)}</string>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>
-<key>StandardOutPath</key><string>${xml(join(dir, ".pags-supervisor", "launchd.log"))}</string>
-<key>StandardErrorPath</key><string>${xml(join(dir, ".pags-supervisor", "launchd.log"))}</string>
 </dict></plist>\n`;
 }
 
@@ -71,18 +69,45 @@ export function inventoryActionsServices(dir: string, ctx: ServiceContext): MacA
 }
 
 /** Resolve a Worker PID to its cwd, so a job in another runner folder does not block this scope. */
-export function activeProcessIn(dir: string, name: "Runner.Worker" | "Runner.Listener"): number[] {
-	const ps = spawnSync("pgrep", ["-f", name], { encoding: "utf8", timeout: 5000 });
-	if (ps.status !== 0) return [];
+type ProbeResult = { status: number | null; stdout: string };
+type ProcessProbe = (file: string, args: string[]) => ProbeResult;
+const liveProcessProbe: ProcessProbe = (file, args) => {
+	const result = spawnSync(file, args, { encoding: "utf8", timeout: 5000 });
+	return { status: result.status, stdout: String(result.stdout ?? "") };
+};
+const livePid = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; } };
+
+export function activeProcessIn(dir: string, name: "Runner.Worker" | "Runner.Listener", probe: ProcessProbe = liveProcessProbe, alive: (pid: number) => boolean = livePid): number[] {
+	const ps = probe("pgrep", ["-f", name]);
+	if (ps.status === 1) return [];
+	if (ps.status !== 0) throw new Error(`Could not inspect ${name} processes; refusing a service change.`);
+	const pids = ps.stdout.trim().split(/\s+/).filter((x) => /^\d+$/.test(x));
+	if (!pids.length) throw new Error(`Process inventory for ${name} was incomplete; refusing a service change.`);
 	const found: number[] = [];
-	for (const pid of ps.stdout.trim().split(/\s+/).filter((x) => /^\d+$/.test(x))) {
-		const cwd = spawnSync("lsof", ["-a", "-p", pid, "-d", "cwd", "-Fn"], { encoding: "utf8", timeout: 5000 });
-		if (cwd.status === 0 && cwd.stdout.split("\n").some((line) => line.startsWith("n") && (line.slice(1) === dir || line.slice(1).startsWith(`${dir}/`)))) found.push(Number(pid));
+	for (const pidText of pids) {
+		const pid = Number(pidText);
+		const cwd = probe("lsof", ["-a", "-p", pidText, "-d", "cwd", "-Fn"]);
+		if (cwd.status !== 0) {
+			if (alive(pid)) throw new Error(`Could not inspect ${name} process ${pid}; refusing a service change.`);
+			continue; // exited between pgrep and lsof
+		}
+		const paths = cwd.stdout.split("\n").filter((line) => line.startsWith("n")).map((line) => line.slice(1));
+		if (!paths.length && alive(pid)) throw new Error(`No cwd for ${name} process ${pid}; refusing a service change.`);
+		if (paths.some((path) => path === dir || path.startsWith(`${dir}/`))) found.push(pid);
 	}
 	return found;
 }
 
 export const activeWorkerIn = (dir: string): boolean => activeProcessIn(dir, "Runner.Worker").length > 0;
+
+export async function waitListenerGone(dir: string, timeoutMs = 20_000, scan: (dir: string, name: "Runner.Listener") => number[] = activeProcessIn, pause: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))): Promise<void> {
+	const until = Date.now() + timeoutMs;
+	while (Date.now() < until) {
+		if (scan(dir, "Runner.Listener").length === 0) return;
+		await pause(500);
+	}
+	throw new Error(`Runner.Listener remained active in ${dir} after its exact service stopped; refusing to start another listener.`);
+}
 
 function launchctl(args: string[], allowAbsent = false): void {
 	const r = spawnSync("sudo", ["launchctl", ...args], { stdio: "inherit" });
@@ -172,7 +197,7 @@ export async function installMacActionsService(dir: string, ctx: ServiceContext)
 	let oldStopped = false;
 	let newStarted = false;
 	try {
-		if (prior && wasRunning) { stop(prior); oldStopped = true; }
+		if (prior && wasRunning) { stop(prior); oldStopped = true; await waitListenerGone(dir); }
 		const copy = spawnSync("sudo", ["install", "-o", "root", "-g", "wheel", "-m", "644", staged, target], { stdio: "inherit" });
 		if (copy.status !== 0) throw new Error("Administrator approval or plist installation failed.");
 		const startedAt = Date.now();
@@ -189,7 +214,7 @@ export async function installMacActionsService(dir: string, ctx: ServiceContext)
 		return [`Installed system/${label} as ${ctx.user}. Existing .runner, .credentials, labels and work directory were retained. Check actions_runner_status for a fresh ready event and GitHub online status.`];
 	} catch (error) {
 		const rollbackErrors: string[] = [];
-		if (newStarted || loaded(next)) try { stop(next); } catch (e) { rollbackErrors.push(`new service did not stop: ${String(e)}`); }
+		if (newStarted || loaded(next)) try { stop(next); await waitListenerGone(dir); } catch (e) { rollbackErrors.push(`new service did not stop cleanly: ${String(e)}`); }
 		if (oldPlist) {
 			const restore = join(local, "previous-service.plist");
 			writeFileSync(restore, oldPlist, { mode: 0o600 });
@@ -203,14 +228,14 @@ export async function installMacActionsService(dir: string, ctx: ServiceContext)
 			}
 			else writeFileSync(prior.path, previousPlist);
 		}
-		if (prior && oldStopped && !rollbackErrors.length) try { start(prior); } catch (e) { rollbackErrors.push(`could not restart ${prior.domain}/${prior.label}: ${String(e)}`); }
+		if (prior && oldStopped && !rollbackErrors.length) try { await waitListenerGone(dir); start(prior); } catch (e) { rollbackErrors.push(`could not safely restart ${prior.domain}/${prior.label}: ${String(e)}`); }
 		if (rollbackErrors.length) throw new Error(`Installation failed (${String(error)}); rollback incomplete: ${rollbackErrors.join("; ")}. Inspect both service units locally.`);
 		throw error;
 	}
 }
 
 /** Remove only the generated unit. Deregistration remains the existing token-gated setup flow. */
-export function removeMacActionsService(dir: string, ctx: ServiceContext): string[] {
+export async function removeMacActionsService(dir: string, ctx: ServiceContext): Promise<string[]> {
 	assertRunner(dir, ctx);
 	if (activeWorkerIn(dir)) return [`Deferred: ${dir} has an active Runner.Worker. Retry after the job completes.`];
 	const services = inventoryActionsServices(dir, ctx);
@@ -218,7 +243,7 @@ export function removeMacActionsService(dir: string, ctx: ServiceContext): strin
 	const service = services[0];
 	if (service) {
 		const wasRunning = loaded(service);
-		if (wasRunning) stop(service);
+		if (wasRunning) { stop(service); await waitListenerGone(dir); }
 		if (service.domain === "system") {
 			const result = spawnSync("sudo", ["rm", "-f", service.path], { stdio: "inherit" });
 			if (result.status !== 0) {
