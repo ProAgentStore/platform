@@ -136,6 +136,9 @@ async function post(taskId: string, value: string) {
 
 describe("a coding run asks, PARKS at zero compute, and resumes with the owner's answer (#964, #1076)", () => {
 	it("through POST /v1/instances/:id/input — the console's and answer_instance_input's path — after any delay", async () => {
+		// The issue link comes from the bound session, not the question's wording.
+		d1.exec("UPDATE coding_repos SET github_repo = 'owner/repo' WHERE id = 'r1'");
+		d1.exec("UPDATE coding_sessions SET issue_number = 1349 WHERE id = 's1'");
 		decisions = [
 			toDecision({ name: "ask_owner", arguments: { question: "Keep the v1 API or drop it?", options: ["keep it", "drop it"], why: "breaking change for two clients" } }),
 			toDecision({ name: "send_message", arguments: { text: "Drop the v1 API as the owner chose." } }),
@@ -164,12 +167,14 @@ describe("a coding run asks, PARKS at zero compute, and resumes with the owner's
 
 		// Parked on the decision, with the question on the run and its 30-day end published.
 		expect(whileParked).toMatchObject({ status: "running", waitingReason: "decision", waitingAsk: { question: "Keep the v1 API or drop it?", taskId: "csess-s1" } });
+		expect((whileParked as Awaited<ReturnType<typeof getLoopRun>>)?.waitingAsk?.issue).toMatchObject({ repo: "owner/repo", number: 1349, url: "https://github.com/owner/repo/issues/1349" });
 		expect(waitClause(whileParked!, Date.now())).toContain('PARKED, waiting for YOUR ANSWER to a question: "Keep the v1 API or drop it?"');
 		expect(sleeps.filter((n) => /^wait-/.test(n))).toEqual([]);
 		expect(statusPollsWhileParked).toBe(0);
 		expect(d1.sqlite.prepare("SELECT workflow_instance_id FROM agent_loop_runs WHERE run_id = 'run-1'").get()).toEqual({ workflow_instance_id: "wf-run-1" });
 		const ev = d1.sqlite.prepare("SELECT payload FROM instance_runtime_task_events WHERE task_id = 'csess-s1' AND type = 'agent.needs_input'").get() as { payload: string };
 		expect(JSON.parse(ev.payload).data.why).toBe("breaking change for two clients — from: keep it, drop it");
+		expect(JSON.parse(ev.payload).data.issue).toMatchObject({ repo: "owner/repo", number: 1349, url: "https://github.com/owner/repo/issues/1349" });
 
 		// The answer was written, then woke the parked instance — on the event named for its question.
 		const qid = (d1.sqlite.prepare("SELECT id FROM coder_questions WHERE task_id = 'csess-s1'").get() as { id: string }).id;

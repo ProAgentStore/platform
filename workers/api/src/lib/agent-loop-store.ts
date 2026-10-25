@@ -7,6 +7,7 @@ import { type ParkedWork, parkedWork } from "./parked-work.js";
 import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
 import type { AskPart } from "./coding-ask.js";
+import { codingQuestionIssue, codingQuestionIssueUrl, type CodingQuestionIssue } from "./coding-question-source.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import { RESUMABLE_STOP_REASONS, type ResumableStopReason } from "./stop-reasons.js";
 import type { Env } from "../types.js";
@@ -141,6 +142,8 @@ export interface WaitingAsk {
 	fullQuestion?: string;
 	/** A multi-part ask's decisions, each with its own options (#1129). */
 	parts?: AskPart[];
+	/** Trusted source issue, when this run is linked to one. */
+	issue?: CodingQuestionIssue;
 }
 
 export function parseWaitingAsk(raw: string | null | undefined): WaitingAsk | null {
@@ -157,6 +160,9 @@ export function parseWaitingAsk(raw: string | null | undefined): WaitingAsk | nu
 			// Stored with the park all along, and dropped HERE on read (#1224) — so coding_loop_status showed a headline.
 			...(typeof o.fullQuestion === "string" && o.fullQuestion ? { fullQuestion: o.fullQuestion } : {}),
 			...(Array.isArray(o.parts) && o.parts.length ? { parts: o.parts } : {}),
+			...(o.issue && codingQuestionIssueUrl(o.issue.repo, o.issue.number) === o.issue.url
+				? { issue: { repo: o.issue.repo, number: o.issue.number, title: typeof o.issue.title === "string" ? o.issue.title : `Issue #${o.issue.number}`, url: o.issue.url, ...(typeof o.issue.summary === "string" ? { summary: o.issue.summary } : {}) } }
+				: {}),
 		};
 	} catch {
 		return null;
@@ -344,7 +350,15 @@ export async function getLoopRun(env: Env, userId: string, runId: string): Promi
 	const row = await env.DB.prepare("SELECT * FROM agent_loop_runs WHERE run_id = ?1 AND user_id = ?2")
 		.bind(runId, userId)
 		.first<LoopRunRow>();
-	return row ? toLoopRunView(row) : null;
+	return row ? withQuestionSource(env, row) : null;
+}
+
+/** Older parked questions predate stored issue metadata. Resolve their bound session on read. */
+async function withQuestionSource(env: Env, row: LoopRunRow): Promise<LoopRunView> {
+	const view = toLoopRunView(row);
+	if (!view.waitingAsk || view.waitingAsk.issue || !row.session_id) return view;
+	const issue = await codingQuestionIssue(env, { instanceId: row.instance_id, userId: row.user_id, sessionId: row.session_id, runId: row.run_id }).catch(() => null);
+	return issue ? { ...view, waitingAsk: { ...view.waitingAsk, issue } } : view;
 }
 
 export async function listLoopRuns(env: Env, userId: string, instanceId: string, limit = 50, offset = 0): Promise<LoopRunView[]> {
@@ -353,7 +367,7 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
 	)
 		.bind(userId, instanceId, Math.max(1, Math.min(200, limit)), Math.max(0, Math.trunc(offset) || 0))
 		.all<LoopRunRow>();
-	return (res.results ?? []).map(toLoopRunView);
+	return Promise.all((res.results ?? []).map((row) => withQuestionSource(env, row)));
 }
 
 /**
@@ -370,7 +384,7 @@ export async function pageLoopRuns(env: Env, userId: string, instanceId: string,
 	)
 		.bind(...(page.after ? [userId, instanceId, page.after.at, page.after.id, limit + 1, 0] : [userId, instanceId, limit + 1, Math.max(0, Math.trunc(page.offset) || 0)]))
 		.all<LoopRunRow>();
-	const rows = (res.results ?? []).map(toLoopRunView);
+	const rows = await Promise.all((res.results ?? []).map((row) => withQuestionSource(env, row)));
 	const runs = rows.slice(0, limit);
 	const more = rows.length > limit;
 	const last = runs[runs.length - 1];

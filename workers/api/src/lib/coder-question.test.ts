@@ -8,6 +8,8 @@ import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { coderBrainFrom, readCoderBrain, setCoderBrain } from "./coder-brain.js";
 import { type DecisionContext, GUARDRAILS, brainPrompt, declineAfterModel, declineBeforeModel, decideCoderQuestion, parseBrainReply } from "./coder-brain-decide.js";
 import { getCoderQuestion, recordAnswer } from "./coder-question-store.js";
+import { codingQuestionIssue, codingQuestionIssueUrl } from "./coding-question-source.js";
+import { getLoopRun, recordLiveness } from "./agent-loop-store.js";
 import { type CoderQuestionEffects, HUMAN_ONLY_WAIT_MS, captureAndAnnounceQuestion, defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
 import type { Env } from "../types.js";
 
@@ -66,6 +68,26 @@ beforeEach(async () => {
 	env = { DB: d1.DB } as unknown as Env;
 });
 afterEach(() => d1.close());
+
+describe("trusted source for a coder question (#1363)", () => {
+	it("links the bound session issue without reading a number from the question", async () => {
+		expect(await codingQuestionIssue(env, { instanceId: "coder", userId: "u1", sessionId: "s1" })).toEqual({ repo: "acme/app", number: 7, title: "Issue #7", url: "https://github.com/acme/app/issues/7" });
+		const { question } = await ask(fakes().effects);
+		expect(question.issueUrl).toBe("https://github.com/acme/app/issues/7");
+	});
+
+	it("does not construct a link from an unsafe or unbound repository", async () => {
+		expect(codingQuestionIssueUrl("acme/app?x=1", 7)).toBeNull();
+		expect(codingQuestionIssueUrl("acme/app", -1)).toBeNull();
+		expect(await codingQuestionIssue(env, { instanceId: "other", userId: "u1", sessionId: "s1" })).toBeNull();
+	});
+
+	it("adds the linked issue to a parked run whose older ask omitted it", async () => {
+		d1.exec("INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, iteration, max_iterations, started_at, session_id) VALUES ('old-run','u1','coder','work issue 7','running',1,10,1,'s1')");
+		await recordLiveness(env, "old-run", 2, { reason: "decision", ask: { question: "Which?", field: "Which?", options: ["A", "B"], why: "", taskId: "csess-s1" } });
+		expect((await getLoopRun(env, "u1", "old-run"))?.waitingAsk?.issue).toMatchObject({ repo: "acme/app", number: 7, url: "https://github.com/acme/app/issues/7" });
+	});
+});
 
 describe("AC1 — brain off: the human is told and nothing else happens", () => {
 	it("records the question, posts it on the issue, waits the usual 15 minutes, and the sweep never decides", async () => {

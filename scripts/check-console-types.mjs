@@ -174,7 +174,7 @@ const KNOWN_ANONYMOUS = {
 
 	// ── InstanceDetail ────────────────────────────────────────────────────────
 	"507c16f9": "{ instances?: Array<{ capabilities?: { surfaces?: string[] } }> }",
-	"1bb9dea4": "{ items?: { attempts?: { id: string }[] }[] }",
+	"113080f7": "{ items?: { attempts?: { id: string }[]; githubIssue?: unknown }[] }",
 	"9f00bc5a": "{ ids?: string[] }",
 	"c83f4514": "{ message?: Message; toolMessage?: Message; transfer?: unknown }",
 	"b050b6ba": "{ instanceId: string }",

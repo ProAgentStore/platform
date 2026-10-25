@@ -34,6 +34,7 @@ import { ASK_QUESTION_FULL_MAX, type AskPart } from "./coding-ask.js";
 import type { CapSummary, CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
 import { codingCardId } from "./coding-board.js";
+import type { CodingQuestionIssue } from "./coding-question-source.js";
 import { DECISION_PARK_MS, MAX_PARK_WAKES } from "./coding-park.js";
 
 /** Max polls for a human to resolve a stuck/needs-input handoff. 180 × 5s = 15 min. */
@@ -68,6 +69,8 @@ function handoffLink(deps: Pick<PauseDeps, "instanceId" | "taskId" | "sessionId"
 export interface PauseDeps {
 	/** Repo label, for the notification body. */
 	repo: string;
+	/** The run's trusted linked issue, if any. A read failure must not block a question. */
+	sourceIssue?: () => Promise<CodingQuestionIssue | null>;
 	/** The owner's IANA zone, or undefined. Rendered as UTC, out loud, when unset. */
 	timeZone?: string;
 	/** The instance ID, for building deep-links to the run (#899). */
@@ -87,7 +90,7 @@ export interface PauseDeps {
 	 * the run (what coding_loop_status, the fleet and the board read). Optional so a test or a caller
 	 * with nothing to publish to still pauses; the workflow always provides it.
 	 */
-	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string; fullQuestion?: string; parts?: AskPart[] }) => Promise<unknown>;
+	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string; fullQuestion?: string; parts?: AskPart[]; issue?: CodingQuestionIssue }) => Promise<unknown>;
 	/** Has the human resolved it, and with what value? */
 	takeoverStatus: () => Promise<{ resolved: boolean; value?: string }>;
 	/** Close the takeover once it is resolved. */
@@ -260,12 +263,13 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// wait on a person is a question on the card: answerable from a conversation, parked at zero compute
 	// like any other, and decidable by the brain under the same rules.
 	const cardId = askCardId(deps);
+	const issue = await deps.sourceIssue?.().catch(() => null) ?? null;
 
 	await deps.takeover(label, reason);
 	// A QUESTION is published as one (#960): its event on the card and its park on the run, before the
 	// pushes below point anyone at it. Best-effort for the same reason the card is — a lost event is a
 	// visibility bug; failing the pause is a work bug.
-	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: reason === "needs_input" ? (result.detail ?? "") : "", field: result.fieldNeeded ?? label, taskId: cardId, ...(result.fullQuestion ? { fullQuestion: result.fullQuestion } : {}), ...(result.parts?.length ? { parts: result.parts } : {}) }).catch(() => undefined)) : null;
+	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: reason === "needs_input" ? (result.detail ?? "") : "", field: result.fieldNeeded ?? label, taskId: cardId, ...(result.fullQuestion ? { fullQuestion: result.fullQuestion } : {}), ...(result.parts?.length ? { parts: result.parts } : {}), ...(issue ? { issue } : {}) }).catch(() => undefined)) : null;
 	const giveUpMs = Math.max(HANDOFF_GIVE_UP_MS, wait?.waitMs ?? 0);
 	const minutes = Math.round((wait?.brain ? wait.humanMs : giveUpMs) / 60_000);
 	// #1076: a captured question PARKS — no compute, no deadline worth racing — rather than polling.
@@ -285,7 +289,10 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// A question opens the card its answer box is on; a takeover opens the run (#894).
 	const notificationUrl = cardId ? deepLinkFor({ kind: "task", instanceId: deps.instanceId, taskId: cardId }) : handoffLink(deps);
 	const offered = options.length ? ` Options: ${options.join(" | ")}.` : "";
-	const body = `${deps.repo}: ${label}.${offered} ${clock}`;
+	const source = issue ? `${issue.repo}#${issue.number} — ${issue.title}. ${issue.url}` : deps.repo;
+	const context = issue?.summary ? ` Context: ${clipMarked(issue.summary, 180, { within: true })}.` : "";
+	const why = result.detail?.trim() ? ` Why: ${clipMarked(result.detail.trim(), 180, { within: true })}.` : "";
+	const body = `${source}: ${label}.${why}${context}${offered} ${clock}`;
 	const title = reason === "needs_input" ? "Coder has a question" : "Coder needs you";
 	const icon = reason === "needs_input" ? "❓" : "🙋";
 	await deps.notify(`${icon} ${title}`, body, `coding-handoff:${reason}:${round}`, true, notificationUrl, "coder_question");
@@ -298,7 +305,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// announced its resume time in this same thread. "Take over" without "by when" is why three runs
 	// sat here for the full fifteen minutes and then reported that they had been waiting on someone.
 	await deps.announce(
-		`${icon} **${title}** — ${parkOn ? "parked" : "paused"} on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain || parkOn ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`,
+		`${icon} **${title}** — ${parkOn ? "parked" : "paused"} on ${issue ? `[${issue.repo}#${issue.number} — ${issue.title}](${issue.url})` : deps.repo}: ${label}${result.detail?.trim() ? `\n\nWhy: ${result.detail.trim()}` : ""}${issue?.summary ? `\n\nIssue context: ${issue.summary}` : ""}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain || parkOn ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`,
 	);
 
 	if (parkOn && deps.park) return parkOnQuestion(deps, deps.park, { result, label, options, questionId: parkOn, keepCheckout: opts.keepCheckout });

@@ -8,6 +8,7 @@
 import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
 import { redactText } from "./local-browser/contract.js";
+import { codingQuestionIssueUrl } from "./coding-question-source.js";
 
 export type CoderQuestionState = "waiting_human" | "brain_deciding" | "answered_human" | "answered_brain" | "escalated" | "unresolved" | "expired";
 export type AnswerVia = "console" | "mcp" | "brain";
@@ -22,6 +23,8 @@ export interface CoderQuestion {
 	taskId: string | null;
 	repo: string | null;
 	issueNumber: number | null;
+	/** Canonical source link, derived from the bound repo and issue rather than question text. */
+	issueUrl?: string;
 	question: string;
 	options: string[];
 	why: string | null;
@@ -67,6 +70,7 @@ function asQuestion(r: Row): CoderQuestion {
 		taskId: r.task_id ? String(r.task_id) : null,
 		repo: r.repo ? String(r.repo) : null,
 		issueNumber: num(r.issue_number),
+		...(codingQuestionIssueUrl(r.repo, num(r.issue_number)) ? { issueUrl: codingQuestionIssueUrl(r.repo, num(r.issue_number)) as string } : {}),
 		question: String(r.question),
 		options: json<string[]>(r.options, []),
 		why: r.why ? String(r.why) : null,

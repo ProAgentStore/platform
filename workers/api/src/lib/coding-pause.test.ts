@@ -20,7 +20,7 @@ interface Spy {
 	deps: PauseDeps;
 	slept: number[];
 	announced: string[];
-	notified: Array<{ title: string; alert: boolean; url?: string; type?: string }>;
+	notified: Array<{ title: string; body: string; alert: boolean; url?: string; type?: string }>;
 	ticks: number;
 	takeovers: number;
 	endTakeovers: number;
@@ -66,8 +66,8 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		sleep: async (_label, ms) => {
 			s.slept.push(ms);
 		},
-		notify: async (title, _body, _key, alert, url, type) => {
-			s.notified.push({ title, alert, url, ...(type ? { type } : {}) });
+		notify: async (title, body, _key, alert, url, type) => {
+			s.notified.push({ title, body, alert, url, ...(type ? { type } : {}) });
 		},
 		announce: async (m) => {
 			s.announced.push(m);
@@ -446,6 +446,20 @@ describe("resolvePause — a question the coder brain holds stays parked past 15
 		s.deps.ask = async () => wait ?? undefined;
 		return s;
 	};
+
+	it("shows the bound source issue and context in the question, push and thread", async () => {
+		const s = spy({ resolveAfter: 1, taskId: "csess-s1" });
+		const issue = { repo: "ProAgentStore/platform", number: 1349, title: "Page release evidence", url: "https://github.com/ProAgentStore/platform/issues/1349", summary: "Transient GitHub reads remain pending for the next cron tick." };
+		s.deps.sourceIssue = async () => issue;
+		let asked: Parameters<NonNullable<PauseDeps["ask"]>>[0] | null = null;
+		s.deps.ask = async (a) => { asked = a; return undefined; };
+		await resolvePause(s.deps, { round: 1, result: question, state: { waits: 0, spentMs: 0 } });
+		expect(asked).toMatchObject({ issue });
+		expect(s.notified[0].body).toContain(issue.url);
+		expect(s.notified[0].body).toContain(issue.summary);
+		expect(s.notified[0].url).toBe("/console/instances/test-instance/tasks/csess-s1");
+		expect(s.announced[0]).toContain(`[${issue.repo}#${issue.number} — ${issue.title}](${issue.url})`);
+	});
 
 	it("brain on: polls 15 minutes at 5s, then once a minute up to the question's own bound — and the push goes out before the first sleep", async () => {
 		const s = withAsk(spy(), { waitMs: 100 * 60_000, humanMs: 30 * 60_000, brain: true });

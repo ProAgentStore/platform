@@ -15,6 +15,7 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import Card from "../components/Card";
 import ActionLog from "../components/ActionLog";
 import MarkdownText from "../components/MarkdownText";
+import QuestionIssueContext, { resolveQuestionIssue, verifiedQuestionIssue, type QuestionIssue } from "../components/QuestionIssueContext";
 import { partsAnswer, questionOptions, questionParts, whyWithoutOptions } from "../lib/agentText";
 
 /**
@@ -296,6 +297,9 @@ export default function RunDetail() {
 	// Which attempt of the job this run is (JSW-style: each retry is a separate,
 	// numbered run with its own activity log). Resolved from the board's grouping.
 	const [attempt, setAttempt] = useState<{ num: number; total: number } | null>(null);
+	// The board's cached issue also covers questions parked before question events carried
+	// structured source metadata. Never derive the issue from the agent's question text.
+	const [boardIssue, setBoardIssue] = useState<QuestionIssue | null>(null);
 	// A handoff notification outlives the handoff (#349): the tap can come hours later, after the
 	// run finished — or after it was deleted. A finished run needs nothing special (it loads, and
 	// `needsHuman` is simply false, so the takeover prompt is absent). A run that is GONE used to
@@ -322,8 +326,9 @@ export default function RunDetail() {
 		} catch { /* keep */ }
 		try {
 			// Find this run's attempt number within its job (attempts are newest-first).
-			const b = await api<{ items?: { attempts?: { id: string }[] }[] }>(`/v1/instances/${instanceId}/board`);
+			const b = await api<{ items?: { attempts?: { id: string }[]; githubIssue?: unknown }[] }>(`/v1/instances/${instanceId}/board`);
 			const item = (b.items || []).find((it) => it.attempts?.some((a) => a.id === taskId));
+			setBoardIssue(verifiedQuestionIssue(item?.githubIssue));
 			if (item?.attempts) {
 				const i = item.attempts.findIndex((a) => a.id === taskId);
 				if (i >= 0) setAttempt({ num: item.attempts.length - i, total: item.attempts.length });
@@ -368,7 +373,9 @@ export default function RunDetail() {
 	// `data: { field, why }` from `request_user_info` — the field name is exactly what the brain
 	// already knew it needed. Fall back to scraping the message only for events from an older runner
 	// that predates the structured payload.
-	const needsInputData = needsInputEv?.data as { field?: string; why?: string; options?: unknown; parts?: unknown; fullQuestion?: unknown } | undefined;
+	const needsInputData = needsInputEv?.data as { field?: string; why?: string; options?: unknown; parts?: unknown; fullQuestion?: unknown; issue?: unknown } | undefined;
+	const questionIssue = resolveQuestionIssue(needsInputData?.issue, boardIssue);
+	const questionObjective = [task?.input?.objective, task?.description, task?.title].find((v): v is string => typeof v === "string" && !!v.trim());
 	const field = needsInputData?.field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
 	const why = needsInputData?.why ?? "";
 	const paren = why || (detail.match(/\(([^)]*)\)/)?.[1] ?? "");
@@ -486,7 +493,8 @@ export default function RunDetail() {
 			{needsHuman && kind === "value" && (
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
 					<div className="text-lg font-bold text-ink">✏️ The agent needs one answer to continue</div>
-					<div className="text-sm text-muted mt-0.5 mb-3">It won’t guess personal or legal details — answer once and it keeps going.</div>
+					<div className="text-sm text-muted mt-0.5 mb-3">Review the context, then answer once and it keeps going.</div>
+					<QuestionIssueContext issue={questionIssue} codingQuestion={codingCard} objective={questionObjective} />
 					{/* The question is the agent's text: markdown, so bold and numbered decisions read as written (#1129). */}
 					<div id={fieldLabelId}>
 						<MarkdownText text={fullOpen ? fullQuestion : field} className="text-base font-semibold text-ink" />
