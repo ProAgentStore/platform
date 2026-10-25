@@ -564,7 +564,7 @@ const TABLE: Record<string, Row> = {
 	get_machine_capabilities: ["machineControl", "read", null, null, "include_history,machine_id,token"],
 	check_capability_requirements: ["machineControl", "read", null, null, "machine_id,needs,token"],
 	native_preflight: ["machineControl", "read", null, null, "instance_id,token"],
-	runner_update: ["machineControl", "runtime", null, "envelope", "dry_run,runner_node,token"],
+	runner_update: ["machineControl", "runtime", null, "envelope", "dry_run,retry_rolled_back,runner_node,token"],
 	runner_restart: ["machineControl", "runtime", null, "envelope", "confirm,dry_run,force,runner_node,token"],
 	runner_update_status: ["machineControl", "read", null, null, "runner_node,token"],
 	actions_runner_setup: ["machineControl", "runtime", null, "envelope", "action,dry_run,instance_id,runner_group,scope,token"],

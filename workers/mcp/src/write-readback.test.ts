@@ -112,6 +112,9 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"machine_id",
 	// #857: `coding_repo_add.clone` is an instruction — clone before binding — not a stored field.
 	"clone",
+	// #1150: `runner_update.retry_rolled_back` is an instruction — clear the rolled-back mark, install again — not a stored
+	// field; the rollbacks it clears read back through get_machine_policy's `rollbacks`.
+	"retry_rolled_back",
 	// #858: `coding_repo_add.clone_protocol` picks the transport for that clone — also not stored.
 	"clone_protocol",
 	// #613: `forget_runner_node.node` identifies the registration to remove. The preflight/list

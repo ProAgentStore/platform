@@ -1,3 +1,4 @@
+import { clipMarked } from "./clip-marked.js";
 import { logError } from "./error-log.js";
 import { normalizeMachineId } from "./machine-identity.js";
 import { applyChange, resolveBehaviours, type CleanupChange, type CleanupConfig, normalizeMode, parseOverrides, sanitizeReport, type CleanupReportView } from "./runner-cleanup-policy.js";
@@ -74,8 +75,33 @@ export interface MachinePolicy {
 	observations: UpdateObservation[];
 	/** The runner's own step-by-step update log, as its last restart uploaded it (#1151). */
 	updateLog: string | null;
+	/** Releases this machine rolled back from and will not install again until retried (#1150). */
+	rollbacks: MachineRollback[];
 	/** Post-run cleanup (#1265): the mode and overrides the owner set, and what the runner last reported. */
 	cleanup: MachineCleanup;
+}
+
+/** One release the machine's bootstrap stub gave up on: what it was, what it fell back to, why, and when (ISO, null if unknown). */
+export interface MachineRollback {
+	from: string;
+	to: string | null;
+	reason: string;
+	at: string | null;
+}
+
+const ROLLBACKS_MAX = 10;
+/** The runner's `rollbacks` report, kept only where it reads as one: bounded count and text, no stray fields. */
+export function parseRollbacks(raw: unknown): MachineRollback[] | null {
+	if (!Array.isArray(raw)) return null;
+	const out: MachineRollback[] = [];
+	for (const r of raw) {
+		if (out.length >= ROLLBACKS_MAX) break;
+		const v = r as Record<string, unknown> | null;
+		if (!v || typeof v.from !== "string" || !v.from || v.from.length > 80 || typeof v.reason !== "string") continue;
+		const at = typeof v.at === "number" && Number.isFinite(v.at) && v.at > 0 ? new Date(v.at).toISOString() : typeof v.at === "string" && !Number.isNaN(Date.parse(v.at)) ? new Date(v.at).toISOString() : null;
+		out.push({ from: v.from, to: typeof v.to === "string" && v.to.length <= 80 ? v.to : null, reason: clipMarked(v.reason, 300, { what: "the reason" }), at });
+	}
+	return out;
 }
 
 export interface MachineCleanup extends CleanupConfig {
@@ -100,6 +126,7 @@ interface Row {
 	blocker_class?: string | null;
 	observations?: string | null;
 	update_log?: string | null;
+	rollbacks?: string | null;
 	cleanup_mode?: string | null;
 	cleanup_overrides?: string | null;
 	cleanup_report?: string | null;
@@ -121,6 +148,7 @@ const present = (row: Row | null, enabled = false): MachinePolicy => ({
 	blockerClass: row?.blocker_class && BLOCKERS.has(row.blocker_class as BlockerClass) ? (row.blocker_class as BlockerClass) : null,
 	observations: parseObservations(row?.observations ? safeJson(row.observations) : null, (ms) => new Date(ms).toISOString()),
 	updateLog: row?.update_log ?? null,
+	rollbacks: parseRollbacks(row?.rollbacks ? safeJson(row.rollbacks) : null) ?? [],
 	cleanup: {
 		mode: normalizeMode(row?.cleanup_mode),
 		overrides: parseOverrides(row?.cleanup_overrides),
@@ -176,6 +204,7 @@ export function machinePolicyWire(policy: MachinePolicy) {
 		last_attempt_at: policy.lastAttemptAt,
 		last_error: policy.lastError,
 		update_log: policy.updateLog,
+		rollbacks: policy.rollbacks,
 		// #1265: the mode, the six resolved switches and any per-machine overrides, and the runner's own last report.
 		cleanup: {
 			mode: policy.cleanup.mode,
@@ -208,7 +237,7 @@ export async function getMachinePolicy(env: Pick<Env, "DB">, userId: string, raw
 	const machineId = normalizeMachineId(rawMachineId);
 	if (!machineId) return present(null);
 	const row = await env.DB.prepare(`SELECT auto_update, status, latest_version, last_attempt_at, last_error, last_heartbeat_at, last_check_at, last_decision_at,
-		next_retry_due_at, blocker_class, observations, update_log, cleanup_mode, cleanup_overrides, cleanup_report, cleanup_report_at,
+		next_retry_due_at, blocker_class, observations, update_log, rollbacks, cleanup_mode, cleanup_overrides, cleanup_report, cleanup_report_at,
 		cleanup_now_requested_at, cleanup_now_done_at FROM machine_policies WHERE user_id = ?1 AND machine_id = ?2`)
 		.bind(userId, machineId).first<Row>().catch(() => null);
 	return present(row);
@@ -319,6 +348,7 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 	const diagnostics = decisionAt !== null || checkAt !== null || "blockerClass" in value || "observations" in value;
 	const observations = Array.isArray(value.observations) ? JSON.stringify(parseObservations(value.observations, (ms) => ms)) : null;
 	const latestCandidate = typeof value.latestVersion === "string" ? value.latestVersion : typeof value.latest_version === "string" ? value.latest_version : null;
+	const rollbacks = parseRollbacks(value.rollbacks);
 	const errorCandidate = typeof value.error === "string" ? value.error : null;
 	// A lifecycle record is evidence, not display text: never silently turn an arbitrary client
 	// value into a plausible-but-incomplete version or error. Invalid telemetry is omitted.
@@ -340,8 +370,9 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 		blocker_class = CASE WHEN ?12 = 1 THEN ?10 ELSE blocker_class END,
 		observations = CASE WHEN ?11 IS NOT NULL THEN ?11 ELSE observations END,
 		update_log = COALESCE(?13, update_log),
+		rollbacks = CASE WHEN ?14 IS NOT NULL THEN ?14 ELSE rollbacks END,
 		last_heartbeat_at = ?4, updated_at = ?4 WHERE user_id = ?5 AND machine_id = ?6`)
-		.bind(status, latest, error, now, userId, machineId, decisionAt, checkAt, nextRetry, blocker, observations, diagnostics ? 1 : 0, updateLog)
+		.bind(status, latest, error, now, userId, machineId, decisionAt, checkAt, nextRetry, blocker, observations, diagnostics ? 1 : 0, updateLog, rollbacks ? JSON.stringify(rollbacks) : null)
 		.run()
 		.catch(() => undefined);
 	if (before && (before.status !== "failed" || before.last_error !== error)) {

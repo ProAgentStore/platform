@@ -16,7 +16,7 @@ import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAu
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, RelayMutationAdmission } from "./auto-update-controller.js";
 import { readWorkLook } from "./runner-work-observation.js";
 import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
-import { releaseTrial } from "./release-trial.js";
+import { applyRetryRolledBack, releaseTrial } from "./release-trial.js";
 import { updateLogUpload } from "../../bootstrap/update-log.js";
 import { restartOwner } from "../up-restart.js";
 import { sessionExpiresAt } from "../login-device.js";
@@ -73,6 +73,7 @@ export async function connectViaRelay(
 		status: autoUpdateStatusWire(cell.policy.status),
 		latestVersion: cell.policy.latestVersion,
 		error: cell.policy.reason,
+		rollbacks: trial.rollbacks(), // #1150: durable on the machine page; empty once the owner retries the release
 		...updateLog.body(),
 		...autoUpdateDiagnostics(),
 	});
@@ -258,15 +259,20 @@ export async function connectViaRelay(
 	if (cell.authoritative && cell.policy.autoUpdate) scheduleAutomaticUpdate(true);
 	const answerUpdate = async (body?: unknown): Promise<{ status: number; result: unknown }> => {
 		const dryRun = (body as { dryRun?: unknown } | undefined)?.dryRun === true;
-		const facts = await boundedWork((signal) => updateFacts(signal));
+		let facts = await boundedWork((signal) => updateFacts(signal));
 		if (!facts) return { status: 504, result: { error: "The local work and registry look did not answer within 30s; nothing was installed or restarted." } };
+		// #1150: the owner asked to try again the release this machine rolled back from (release-trial.ts clears its bad mark first).
+		const retry = applyRetryRolledBack(facts, body, trial, dryRun);
+		facts = retry.facts;
+		const retried = retry.retried;
+		const retriedNote = retried ? { retriedRolledBack: retried } : {};
 		const plan = planRunnerUpdate(facts);
-		if (dryRun || plan.action === "up-to-date" || plan.action === "refused") return { status: 200, result: { ...plan, dryRun } };
+		if (dryRun || plan.action === "up-to-date" || plan.action === "refused") return { status: 200, result: { ...plan, dryRun, ...retriedNote } };
 		if (plan.action === "wait") {
 			const lease = deferredUpdateLease(body);
 			if (!lease) return { status: 400, result: { error: "A busy runner_update needs a current operation lease; no delayed restart was scheduled." } };
 			if (!updateWhenIdle(lease)) return { status: 409, result: { error: "A runner update is already waiting for active work to finish." } };
-			return { status: 200, result: { ...plan, operationId: lease.operationId, deferredUntil: lease.expiresAt, detail: "This operation may restart only before its recorded lease expires; no delayed restart survives an expired or terminal operation." } };
+			return { status: 200, result: { ...plan, ...retriedNote, operationId: lease.operationId, deferredUntil: lease.expiresAt, detail: "This operation may restart only before its recorded lease expires; no delayed restart survives an expired or terminal operation." } };
 		}
 		try {
 			if (!(await bridge.run(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
@@ -278,7 +284,7 @@ export async function connectViaRelay(
 		// `openRelaySocket` sends this value before timers run.  Calling `leaveForRestart` above
 		// would synchronously exit and make this decisive machine acknowledgement impossible.
 		setTimeout(() => leaveForRestart(plan.restarter), 25).unref();
-		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.latest, restartedBy: plan.restarter, ...(supervisor ? { supervisor } : {}) } };
+		return { status: 200, result: { action: "restarting", ...retriedNote, current: plan.current, latest: plan.latest, restartedBy: plan.restarter, ...(supervisor ? { supervisor } : {}) } };
 	};
 
 	/**

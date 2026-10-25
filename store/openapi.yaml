@@ -14218,6 +14218,12 @@ paths:
         `runner_update_status` (#990) — the DURABLE outcome of the update, and what a caller whose
         POST reply was slow or lost reads instead of guessing.
 
+        `POST` of the same path takes `{retryRolledBack: true}` (#1150): when the latest release is one
+        this machine installed and rolled back from (so auto-update and a plain update refuse it), the
+        machine clears that mark and installs it on trial again; the answer carries `retriedRolledBack`
+        with the version. Each rollback (`from`, `to`, `reason`, `at`) is listed as `rollbacks` on
+        `GET /v1/terminals/machines/{machineId}`, and an empty list once the mark is cleared.
+
         Before this the update ran inline in the POST: it can take ~205s (a 115s relay command, then
         a 90s wait for every agent to re-attach) while the MCP seam's confirmation deadline is 20s,
         and on expiry that seam aborts the request — cancelling the Worker and killing the work

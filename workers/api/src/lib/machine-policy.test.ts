@@ -30,6 +30,41 @@ describe("machine policy — stable owner-scoped defaults", () => {
 	});
 });
 
+describe("machine policy — rollbacks stay on the machine's record (#1150)", () => {
+	const M = "machine-aaaa1111";
+	const rb = { from: "0.4.150", to: "0.4.148", reason: "it did not register within 5 minutes of first starting", at: Date.parse("2026-10-25T01:00:00Z") };
+
+	it("stores what the runner reports, as the wire the machine page reads — and keeps it through reports that omit it", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "failure", error: "Rolled back from 0.4.150 to 0.4.148: x.", rollbacks: [rb] });
+		const wire = machinePolicyWire(await getMachinePolicy(env(), "u1", M));
+		expect(wire.rollbacks).toEqual([{ from: "0.4.150", to: "0.4.148", reason: rb.reason, at: "2026-10-25T01:00:00.000Z" }]);
+		// an older runner's report has no field: the record stands
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle" });
+		expect((await getMachinePolicy(env(), "u1", M)).rollbacks).toHaveLength(1);
+	});
+
+	it("an empty list from the runner clears it: the owner's retry removed the mark", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "failure", rollbacks: [rb] });
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "restarting", rollbacks: [] });
+		expect((await getMachinePolicy(env(), "u1", M)).rollbacks).toEqual([]);
+	});
+
+	it("keeps only well-formed, bounded entries, and none across owners", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		const junk = [rb, { from: 5 }, null, { from: "", reason: "x" }, { from: "0.4.1", reason: "r".repeat(900), to: 7, at: "not a date" }, ...Array.from({ length: 20 }, (_, i) => ({ from: `0.5.${i}`, reason: "r" }))];
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "failure", rollbacks: junk });
+		const got = (await getMachinePolicy(env(), "u1", M)).rollbacks;
+		expect(got.length).toBeLessThanOrEqual(10);
+		expect(got[0]?.from).toBe("0.4.150");
+		const bounded = got.find((r) => r.from === "0.4.1");
+		expect(bounded).toMatchObject({ to: null, at: null });
+		expect(bounded?.reason.length).toBeLessThan(400);
+		expect((await getMachinePolicy(env(), "u2", M)).rollbacks).toEqual([]);
+	});
+});
+
 describe("machine policy — receipt time is not decision time (#1020)", () => {
 	const M = "machine-aaaa1111";
 	const at = (ms: number) => vi.spyOn(Date, "now").mockReturnValue(ms);

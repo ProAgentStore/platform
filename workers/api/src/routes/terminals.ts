@@ -753,11 +753,13 @@ terminalRoutes.post("/nodes/:node/update", async (c) => {
 	const identity = await c.env.DB.prepare("SELECT machine_id FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2 AND machine_id IS NOT NULL LIMIT 1")
 		.bind(session.uid, target).first<{ machine_id: string | null }>().catch(() => null);
 	const machineId = normalizeMachineId(identity?.machine_id);
-	const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown; wait?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown; wait?: unknown; retryRolledBack?: unknown };
 	const dryRun = body.dryRun === true || c.req.query("dryRun") === "1";
+	// #1150: the owner says "try the release this machine rolled back from again".
+	const retryRolledBack = body.retryRolledBack === true;
 	// A dry run contacts the machine and answers in one hop — nothing is installed and nothing
 	// outlives the request, so it needs no durable operation.
-	if (dryRun) return c.json(await updateRunnerNode(c.env, session.uid, target, { dryRun: true }));
+	if (dryRun) return c.json(await updateRunnerNode(c.env, session.uid, target, { dryRun: true, retryRolledBack }));
 
 	// #1008: claim a durable operation, queue its Workflow, and answer immediately.
 	//
@@ -765,7 +767,7 @@ terminalRoutes.post("/nodes/:node/update", async (c) => {
 	// aborted, which cancelled the Worker, and the update died mid-flight having recorded nothing —
 	// an idle node left on 0.4.84 with no outcome and no error anywhere. The durable Workflow owns
 	// execution; a request termination cannot cancel or silently abandon the machine work.
-	const { op, started } = await startRunnerUpdate(c.env, session.uid, target, { machineId });
+	const { op, started } = await startRunnerUpdate(c.env, session.uid, target, { machineId, retryRolledBack });
 	// 200 whatever the outcome: `state` is the verdict, and a non-2xx would lose the machine's reason
 	// at the MCP seam. `operationId` is what a timed-out caller polls.
 	return c.json({ operationId: op.id, node: op.node, state: op.state, started, detail: op.detail, poll: `/v1/terminals/nodes/${encodeURIComponent(op.node)}/update`, operation: op });

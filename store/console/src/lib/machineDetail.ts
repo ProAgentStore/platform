@@ -15,6 +15,14 @@ export interface AutoUpdateStatus {
 
 import type { MachineCleanup } from "./machineCleanup";
 
+/** A release this machine installed and rolled back from (#1150): where it fell back to, why, and when. */
+export interface MachineRollback {
+	from: string;
+	to: string | null;
+	reason: string;
+	at: string | null;
+}
+
 export interface MachineDetail {
 	machineId: string;
 	/** The owner's name for the machine (#1250); null until named. */
@@ -37,6 +45,8 @@ export interface MachineDetail {
 	autoUpdateStatus?: AutoUpdateStatus | string | null;
 	auto_update_diagnostics?: AutoUpdateDiagnostics | null;
 	auto_update_stuck?: AutoUpdateStuck | null;
+	/** Releases the machine rolled back from and will not install again until retried (#1150). Absent on an older API. */
+	rollbacks?: MachineRollback[] | null;
 	/** Post-run cleanup (#1265): the mode, the six resolved switches, and the runner's own last report. */
 	cleanup?: MachineCleanup;
 }

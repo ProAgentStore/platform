@@ -192,6 +192,15 @@ a newer release is published. The version that runs next reports the rollback in
 ("Rolled back from 0.4.149 to 0.4.148: it crashed on start: …"). That message goes to `last_error` and
 to the error log.
 
+The rollback is also kept (#1150): each report lists the releases the machine rolled back from, as
+`rollbacks` (`from`, `to`, `reason`, `at`), and the machine page shows them under "Rolled-back releases".
+To try a rolled-back release again — after a fix at the machine, or when the failure was environmental —
+press **Retry** on that page, or call `runner_update` with `retry_rolled_back` (`POST
+/v1/terminals/nodes/{node}/update` with `{"retryRolledBack": true}`). The machine clears the bad mark for the
+latest release and installs it on trial again, like any new release; if it fails again it is rolled back and
+marked again. A plain update, and auto-update, still refuse a rolled-back release. Nothing needs deleting at
+the machine (`~/.config/proagentstore/cli/.bad.json`).
+
 **An OS supervisor: `pags up --install-service`.** This installs a LaunchAgent on macOS, a systemd
 user unit on Linux, or a Scheduled Task at startup on Windows, and starts it. All three run the same small
 Node supervisor (`~/.config/proagentstore/pags-up-supervisor.mjs`). It starts `pags up --headless` with

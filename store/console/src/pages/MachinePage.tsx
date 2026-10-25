@@ -8,6 +8,7 @@ import Card from "../components/Card";
 import MachineCleanupCard from "../components/MachineCleanupCard";
 import MachineCapabilitiesCard from "../components/MachineCapabilitiesCard";
 import MachineThresholdsCard from "../components/MachineThresholdsCard";
+import MachineRollbacksCard from "../components/MachineRollbacksCard";
 import MachineTelemetry from "../components/MachineTelemetry";
 import Page from "../components/Page";
 import {
@@ -27,6 +28,8 @@ import {
 	type MachineDetail,
 	type MachineDetailResponse,
 } from "../lib/machineDetail";
+import { machineRollbacks, retryableRollback } from "../lib/machineRollbacks";
+import type { RunnerUpdateResponse } from "../lib/runnerPanel";
 
 function displayTime(iso: string | null | undefined): string {
 	if (!iso) return "Never";
@@ -104,6 +107,24 @@ export default function MachinePage() {
 		}
 	}, [machineId, nameDraft]);
 
+	// #1150: ask the machine to try the release it rolled back from again — a durable update operation, like Update CLI.
+	const [retryNote, setRetryNote] = useState("");
+	const [retrying, setRetrying] = useState(false);
+	const retryRollback = useCallback(async () => {
+		if (!machine?.node) return;
+		setRetrying(true);
+		setRetryNote("Asking the machine to install it again…");
+		try {
+			const res = await api<RunnerUpdateResponse>(`/v1/terminals/nodes/${encodeURIComponent(machine.node)}/update`, { method: "POST", body: JSON.stringify({ retryRolledBack: true }) });
+			setRetryNote(res.detail ?? `Update ${res.state ?? "started"}. This page refreshes as the machine reports.`);
+			await load();
+		} catch (err) {
+			setRetryNote(err instanceof Error ? err.message : "Could not ask the machine to retry.");
+		} finally {
+			setRetrying(false);
+		}
+	}, [load, machine?.node]);
+
 	const status = machine ? machineAutoUpdateStatus(machine) : {};
 	const enabled = machine ? machineAutoUpdateEnabled(machine) : false;
 	const canRunAutomaticUpdates = machine ? machineCanRunAutomaticUpdates(machine) : false;
@@ -172,6 +193,9 @@ export default function MachinePage() {
 							This runner must first be safely updated to CLI 0.4.92 or later. This toggle stores the policy, but an older running CLI will not install updates from it.
 						</p>}
 					</Card>
+
+					{/* #1150: releases the machine rolled back from — from, to, why — and the owner's retry. */}
+					<MachineRollbacksCard rollbacks={machineRollbacks(machine)} retryable={retryableRollback(machine)} connected={machine.connected === true} busy={retrying} note={retryNote} onRetry={() => void retryRollback()} />
 
 					{/* #1265: the runner's post-run cleanup mode and its six switches. */}
 					<MachineCleanupCard machineId={machine.machineId || machineId} machine={machine} onChange={setMachine} />

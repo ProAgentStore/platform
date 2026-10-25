@@ -165,7 +165,7 @@ export function planRunnerUpdate(f: UpdateFacts): UpdatePlan {
 	if (!olderThan(f.current, f.latest)) return { action: "up-to-date", current: f.current };
 	// Retryable: nothing forbids updating — the NEXT release installs as usual; this one is never installed again (#1141).
 	const rolledBack = f.rolledBack?.[f.latest];
-	if (rolledBack) return { action: "refused", current: f.current, reason: `${f.latest} was installed here and rolled back: ${rolledBack}. This machine stays on ${f.current} until a newer release is published.`, retryable: true };
+	if (rolledBack) return { action: "refused", current: f.current, reason: `${f.latest} was installed here and rolled back: ${rolledBack}. This machine stays on ${f.current} until a newer release is published, or the owner retries it (runner_update retry_rolled_back).`, retryable: true };
 	if (!f.restarter) {
 		return {
 			action: "refused",

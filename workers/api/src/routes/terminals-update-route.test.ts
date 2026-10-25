@@ -32,7 +32,8 @@ vi.mock("../lib/runner-client.js", () => ({
 	relayConnected: async (_e: unknown, id: string, node: string) => `${id}@${node}` === "i1@Macmini.modem",
 	evictStaleRunnerSocket: async () => ({ sockets: 0, alive: false, evicted: 0 }),
 	getRunnerConnIgnoringLiveness: async (_e: unknown, id: string, _uid: string, node: string) => ({ instanceId: id, runnerNode: node }),
-	callRunner: async (_conn: unknown, path: string) => {
+	callRunner: async (_conn: unknown, path: string, body?: unknown) => {
+		if (path === "/pags/runner/update") runnerBodies.push(body);
 		if (path !== "/pags/runner/update" && path !== "/pags/runner/restart") return { attached: [] };
 		if (replyDelayMs) await new Promise((r) => setTimeout(r, replyDelayMs));
 		const r = reply();
@@ -44,6 +45,8 @@ vi.mock("../lib/runner-client.js", () => ({
 const { terminalRoutes } = await import("./terminals.js");
 
 let d1: RealSchemaD1;
+/** What the machine was asked, per update call (#1150). */
+const runnerBodies: unknown[] = [];
 /** Workflow creates are the only post-request hand-off the route is allowed to make. */
 let created: Array<{ id: string; params: unknown }>;
 const env = () => ({ DB: d1.DB, RUNNER_UPDATE: { create: async (input: { id: string; params: unknown }) => { created.push(input); return { id: input.id }; } } }) as unknown as Env;
@@ -73,6 +76,7 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, status, last_seen_at, updated_at)
 	         VALUES ('i1', 'u1', 'Macmini.modem', 'relay://', '0.4.84', 'online', '2026-10-09 01:00:00', '2026-10-09 01:00:00')`);
 	created = [];
+	runnerBodies.length = 0;
 	replyDelayMs = 0;
 	reply = () => ({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
 });
@@ -105,6 +109,28 @@ describe("POST …/nodes/:node/update — a durable Workflow claim (#1008)", () 
 		expect(res.body.operationId, "a dry run claims no operation").toBeUndefined();
 		expect(created, "and starts no workflow").toHaveLength(0);
 		expect((await call("GET", UPDATE)).body.operation).toBeNull();
+	});
+
+	it("retryRolledBack rides the durable operation to the Workflow, and only an update carries it (#1150)", async () => {
+		const plain = await call("POST", UPDATE, {});
+		expect(created[0]?.params).not.toHaveProperty("retryRolledBack");
+		d1.exec("UPDATE runner_update_ops SET state = 'restarted'");
+		const retry = await call("POST", UPDATE, { retryRolledBack: true });
+		expect(retry.body).toMatchObject({ started: true });
+		expect(retry.body.operationId).not.toBe(plain.body.operationId);
+		expect(created[1]?.params).toMatchObject({ retryRolledBack: true });
+		// a non-boolean is not a yes
+		d1.exec("UPDATE runner_update_ops SET state = 'restarted'");
+		await call("POST", UPDATE, { retryRolledBack: "true" });
+		expect(created[2]?.params).not.toHaveProperty("retryRolledBack");
+	});
+
+	it("a dry run with retryRolledBack asks the machine exactly that, inline", async () => {
+		reply = () => ({ action: "would-update", current: "0.4.148", latest: "0.4.150", retriedRolledBack: "0.4.150" });
+		const res = await call("POST", UPDATE, { dryRun: true, retryRolledBack: true });
+		expect(res.body).toMatchObject({ action: "would-update", retriedRolledBack: "0.4.150" });
+		expect(runnerBodies[0]).toMatchObject({ dryRun: true, retryRolledBack: true });
+		expect(created).toHaveLength(0);
 	});
 
 	it("GET says so plainly when no update was ever asked for", async () => {

@@ -91,17 +91,44 @@ export function badVersions(root: string): Record<string, string> {
 	return out;
 }
 
+/** Where each given-up version fell back to and when (#1150); absent for a mark written before this was kept. */
+export function badDetails(root: string): Record<string, { to: string | null; at: number | null }> {
+	const raw = readJson(badPath(root)) as { details?: Record<string, { to?: unknown; at?: unknown }> } | null;
+	const out: Record<string, { to: string | null; at: number | null }> = {};
+	for (const [v, d] of Object.entries(raw?.details ?? {})) out[v] = { to: typeof d?.to === "string" ? d.to : null, at: typeof d?.at === "number" ? d.at : null };
+	return out;
+}
+
 /**
  * Give up on `version`: never picked or fetched again, its trial ended, and a notice left for the
  * version that runs next to report (`to` is what the stub falls back to, when it knows).
  */
 export function markBad(root: string, version: string, reason: string, to: string | null, now = Date.now()): void {
 	try {
-		writeJson(root, badPath(root), { versions: { ...badVersions(root), [version]: reason.slice(0, 300) } });
+		writeJson(root, badPath(root), { versions: { ...badVersions(root), [version]: reason.slice(0, 300) }, details: { ...badDetails(root), [version]: { to, at: now } } });
 		writeJson(root, noticePath(root), { from: version, to, reason: reason.slice(0, 300), at: now } satisfies RollbackNotice);
 		if (readTrial(root)?.version === version) rmSync(trialPath(root), { force: true });
 	} catch {
 		/* best-effort, as above */
+	}
+}
+
+/**
+ * Forget that `version` was given up on, so it can be installed on trial again (#1150): the owner's "try it again", for a failure
+ * that was environmental or has been fixed on the machine. Only the bad mark goes; a rollback notice already recorded stays as history.
+ * Returns whether there was a mark to clear.
+ */
+export function clearBad(root: string, version: string): boolean {
+	const bad = badVersions(root);
+	if (!(version in bad)) return false;
+	delete bad[version];
+	const details = badDetails(root);
+	delete details[version];
+	try {
+		writeJson(root, badPath(root), { versions: bad, details });
+		return true;
+	} catch {
+		return false;
 	}
 }
 

@@ -73,6 +73,8 @@ interface MachineReply {
 	reason?: string;
 	waitingFor?: string[];
 	detail?: string;
+	/** The release the machine cleared its rolled-back mark on, because the owner asked to retry it (#1150). */
+	retriedRolledBack?: string;
 	dryRun?: boolean;
 	/** Echoed by a bounded busy deferral; never a credential. */
 	operationId?: string;
@@ -104,6 +106,8 @@ export interface RunnerUpdateResult {
 	/** Of those, the ones still without a socket — with each one's reason. */
 	missing?: Array<{ instanceId: string; detail: string }>;
 	waitingFor?: string[];
+	/** The release whose rolled-back mark the machine cleared at the owner's request, to install it on trial again (#1150). */
+	retriedRolledBack?: string;
 	/** How the machine brought itself back (#860): `pags-up`, `pags-up-child-only`, `service` or `command`. */
 	restartedBy?: string;
 	/** Set when the machine's `pags up` supervisor did NOT move onto the new release (#860). */
@@ -115,7 +119,7 @@ export interface RunnerUpdateResult {
 
 type UpdateProgress = (phase: Exclude<RunnerUpdatePhase, "claimed" | "queued">, detail: string, versions?: { current?: string; latest?: string }) => Promise<boolean>;
 
-export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress; operationId?: string; deferUntil?: number; kind?: RunnerOpKind; force?: boolean } = {}): Promise<RunnerUpdateResult> {
+export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress; operationId?: string; deferUntil?: number; kind?: RunnerOpKind; force?: boolean; retryRolledBack?: boolean } = {}): Promise<RunnerUpdateResult> {
 	const restart = opts.kind === "restart";
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const now = opts.now ?? Date.now;
@@ -167,6 +171,8 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 						dryRun: opts.dryRun === true,
 						...(opts.operationId ? { operationId: opts.operationId } : {}),
 						...(opts.deferUntil ? { deferUntil: opts.deferUntil } : {}),
+						// #1150: clear the machine's "rolled back" mark for the latest release and install it on trial again.
+						...(opts.retryRolledBack ? { retryRolledBack: true } : {}),
 					}, { timeoutMs: UPDATE_TIMEOUT_MS })) ?? {};
 			break;
 		} catch (e) {
@@ -209,7 +215,7 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 		return { node, action: "unreachable", held, detail: `Every relay socket on ${node} is connected but not answering, so the update could not be confirmed. A stale agent socket may be recoverable: try force_runner_attach for an affected instance on this node, then check coding_diagnostics and list_runner_nodes before deciding whether to retry the update. If remote attachment cannot recover it, restart \`pags up\` at the machine.` };
 	}
 
-	const base = { node, held, current: reply.current, latest: reply.latest };
+	const base = { node, held, current: reply.current, latest: reply.latest, ...(typeof reply.retriedRolledBack === "string" ? { retriedRolledBack: clipMarked(reply.retriedRolledBack, 80, { what: "the version" }) } : {}) };
 	if (reply.action === "up-to-date") return { ...base, action: "up-to-date", detail: `${node} already runs ${reply.current}, the latest release.` };
 	if (reply.action === "refused") return { ...base, action: "refused", detail: reply.reason, ...(reply.waitingFor?.length ? { waitingFor: reply.waitingFor } : {}) };
 	if (reply.action === "wait") {
@@ -325,6 +331,8 @@ export interface RunnerUpdateWorkflowParams {
 	kind?: RunnerOpKind;
 	/** A restart that skips the work look (#1032) — the owner's explicit choice. */
 	force?: boolean;
+	/** An update that first clears the machine's rolled-back mark on the latest release (#1150). */
+	retryRolledBack?: boolean;
 }
 
 type StartWorkflow = (params: RunnerUpdateWorkflowParams, id: string) => Promise<unknown>;
@@ -358,7 +366,7 @@ export async function startRunnerUpdate(
 	env: Env,
 	userId: string,
 	rawNode: string,
-	opts: RepinDeps & { dryRun?: boolean; machineId?: string | null; startWorkflow?: StartWorkflow; kind?: RunnerOpKind; force?: boolean } = {},
+	opts: RepinDeps & { dryRun?: boolean; machineId?: string | null; startWorkflow?: StartWorkflow; kind?: RunnerOpKind; force?: boolean; retryRolledBack?: boolean } = {},
 ): Promise<StartRunnerUpdate> {
 	const node = normalizeRunnerNode(rawNode);
 	const { op, claimed } = await claimUpdateOp(env, userId, node, { dryRun: opts.dryRun === true, now: opts.now?.(), machineId: opts.machineId, kind: opts.kind });
@@ -370,7 +378,7 @@ export async function startRunnerUpdate(
 	// Workflow id from the durable row; the request itself owns no long-running promise.
 	await queueUpdateWorkflow(env, userId, op.id, workflowId, opts.now?.());
 	try {
-		await (opts.startWorkflow ?? workflowStarter(env))({ opId: op.id, userId, node, machineId: opts.machineId ?? null, ...(opts.kind === "restart" ? { kind: "restart", force: opts.force === true } : {}) }, workflowId);
+		await (opts.startWorkflow ?? workflowStarter(env))({ opId: op.id, userId, node, machineId: opts.machineId ?? null, ...(opts.kind === "restart" ? { kind: "restart", force: opts.force === true } : {}), ...(opts.kind !== "restart" && opts.retryRolledBack ? { retryRolledBack: true } : {}) }, workflowId);
 	} catch {
 		// Deliberately remain queued for scheduled recovery; a route error must not turn into an
 		// unrecorded machine update or cause a direct fallback execution.
@@ -421,6 +429,7 @@ export async function executeRunnerUpdateOperation(
 			...opts,
 			kind: params.kind,
 			force: params.force,
+			retryRolledBack: params.retryRolledBack,
 			onProgress: checkpoint,
 			operationId: opId,
 			deferUntil: (opts.now?.() ?? Date.now()) + DEFERRED_UPDATE_LEASE_MS,
