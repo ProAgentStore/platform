@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BOOTSTRAP_ENV } from "../../bootstrap/payload.js";
 import { badDetails, badVersions, clearBad, markBad } from "../../bootstrap/trial.js";
 import { planRunnerUpdate, type UpdateFacts } from "./self-update.js";
-import { applyRetryRolledBack, releaseTrial } from "./release-trial.js";
+import { agentsStillMissing, applyRetryRolledBack, releaseTrial } from "./release-trial.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "pags-retry-")); });
@@ -87,5 +87,26 @@ describe("retrying a rolled-back release (#1150)", () => {
 		trialAt("0.4.148").forget("0.4.150");
 		markBad(root, "0.4.150", "crashed again", "0.4.148", 9);
 		expect(badVersions(root)).toEqual({ "0.4.150": "crashed again" });
+	});
+});
+
+describe("a release on trial is kept only once its agents are back (#1154)", () => {
+	const cycle = { attachments: ["a1", "a2", "a3"] };
+	it("requires nothing without an open update cycle: a manual start, a first run or a resolved cycle is proven by the first answer", () => {
+		expect(agentsStillMissing(undefined, [], null)).toEqual([]);
+		expect(agentsStillMissing({ ...cycle, verifiedAt: "2026-10-25T00:00:00Z" }, [], null)).toEqual([]);
+	});
+	it("names the agents the install was made over that are not attached and registered yet", () => {
+		expect(agentsStillMissing(cycle, [], null)).toEqual(["a1", "a2", "a3"]);
+		expect(agentsStillMissing(cycle, ["a1", "a3"], null)).toEqual(["a2"]);
+		expect(agentsStillMissing(cycle, ["a3", "a2", "a1", "extra"], null)).toEqual([]);
+	});
+	it("excuses an agent the machine no longer should hold (repinned, paused, unsubscribed since the install)", () => {
+		expect(agentsStillMissing(cycle, ["a1"], new Set(["a1", "a2"]))).toEqual(["a2"]);
+		expect(agentsStillMissing(cycle, ["a1"], new Set(["a1"]))).toEqual([]);
+		expect(agentsStillMissing(cycle, [], new Set())).toEqual([]);
+	});
+	it("takes any iterable of attached ids", () => {
+		expect(agentsStillMissing(cycle, new Set(["a1", "a2", "a3"]), null)).toEqual([]);
 	});
 });

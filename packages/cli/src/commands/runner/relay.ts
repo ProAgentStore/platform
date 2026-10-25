@@ -16,7 +16,7 @@ import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAu
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, RelayMutationAdmission } from "./auto-update-controller.js";
 import { readWorkLook } from "./runner-work-observation.js";
 import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
-import { applyRetryRolledBack, releaseTrial, rollbackAvailable } from "./release-trial.js";
+import { agentsStillMissing, applyRetryRolledBack, releaseTrial, rollbackAvailable } from "./release-trial.js";
 import { updateLogUpload } from "../../bootstrap/update-log.js";
 import { restartOwner } from "../up-restart.js";
 import { sessionExpiresAt } from "../login-device.js";
@@ -63,6 +63,7 @@ export async function connectViaRelay(
 	// The policy record (#1020, update-bridge.ts). A cache is an outage aid, never a second authority: only a fresh
 	// service answer confirms the owner's switch; the cache carries the status and the unverified recovery cycle.
 	const cell = new PolicyCell(autoUpdateKey ? (loadAutoUpdatePolicy(autoUpdateKey) ?? { autoUpdate: false }) : { autoUpdate: false }, (p) => saveAutoUpdatePolicy(autoUpdateKey, p), !!autoUpdateKey);
+	let lastMissingLogged = -1;
 	const trial = releaseTrial(CLI_VERSION, cell, writeLine); // #1141: report a rollback; the first answer proves a release on trial
 	let scheduleAutomaticUpdate: (initial?: boolean, cancel?: boolean) => void = () => undefined;
 	// The controller's own record (#1020), bound once it exists. Times, a normalized blocker class and
@@ -108,7 +109,12 @@ export async function connectViaRelay(
 		},
 		onAction: (action) => scheduleAutomaticUpdate(action === "start", action === "cancel"),
 		onAnswer: () => {
-			trial.proven();
+			// #1154: a release that registered but left the agents it was installed over unattached is not yet proven.
+			const missing = agentsStillMissing(cell.policy.recovery, [...attached.keys()].filter((id) => registered.has(id)), shouldHoldNow);
+			if (missing.length) {
+				if (missing.length !== lastMissingLogged) writeLine(`auto-update: ${CLI_VERSION} answered, but ${missing.length} agent(s) it was installed over are not attached yet — not kept until they are.`);
+				lastMissingLogged = missing.length;
+			} else trial.proven();
 			updateLog.answered();
 		},
 	});

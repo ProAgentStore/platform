@@ -211,6 +211,13 @@ it would not start), and the update fails naming both. What it cannot do is the 
 that starts and registers but crashes afterwards. Starting `pags up` from the installed `pags` command puts the machine
 under the stub, and every update after that gets the trial.
 
+**The trial is passed on health, not on a first answer (#1154).** A release on trial used to be kept as soon as the platform
+answered its first registration. When the install was an automatic update cycle, it is now kept only once every agent
+the machine held at install time that it should still hold has re-attached and registered (agents repinned, paused or
+unsubscribed since are excused, as in the update verdict). Until then the runner says so in its output and the stub's
+five-minute window runs; a release that answers but never brings its agents back is given up on and the previous release
+runs. A start with no open update cycle (by hand, first run) is still proven by the first answer.
+
 A version that was given up on is not picked again. The stub's own check on `pags up` does not fetch it,
 and the updater refuses it as `failed` with the reason ("… was installed here and rolled back: …") until
 a newer release is published. The version that runs next reports the rollback in its first registration

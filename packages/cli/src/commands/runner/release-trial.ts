@@ -44,6 +44,22 @@ export interface RollbackRecorder {
 }
 
 /**
+ * Which agents a release on trial has NOT yet brought back (#1154, gap 9). The trial used to pass on the platform's first answer —
+ * a release that registered but never re-attached the agents the machine held would be kept. When this install was an update
+ * cycle (a recovery record with the agents held at install time, not yet verified), the release is proven only once every one of
+ * them that the machine should still hold is attached AND registered; the stub's window gives up on it otherwise. Pure: no record
+ * (a manual start, a first run, a resolved cycle) requires nothing, so the first answer proves it as before.
+ *
+ * `shouldHold` is the latest membership pass (null before the first one): an agent repinned, paused or unsubscribed since the
+ * install is excused, as in the controller's own verdict (#1170).
+ */
+export function agentsStillMissing(recovery: { attachments: readonly string[]; verifiedAt?: string } | undefined, backNow: Iterable<string>, shouldHold: ReadonlySet<string> | null): string[] {
+	if (!recovery || recovery.verifiedAt) return [];
+	const back = new Set(backNow);
+	return recovery.attachments.filter((id) => (shouldHold ? shouldHold.has(id) : true) && !back.has(id));
+}
+
+/**
  * Whether an automatic update here can be undone (#1147): true under the bootstrap stub (the new release is installed beside the
  * running one and falls back to it), false for a runner updating in place. Null for a source checkout, which npm does not update.
  */
