@@ -16,6 +16,7 @@
 import { callRunner, getBoundRunnerConn, getRunnerConn, type RunnerConn } from "./runner-client.js";
 import { describeOwner, repoOwners } from "./coding-ownership.js";
 import { getRepo } from "./coding-store.js";
+import { clipMarked } from "./clip-marked.js";
 import { runnerUpgradeClause } from "./runner-upgrade.js";
 import { isRunnerUnreachable } from "./runner-unreachable.js";
 import { parseConfigBlob } from "./instance-config.js";
@@ -49,19 +50,22 @@ export type CheckoutActionOutcome =
 	| { ok: true; action: CheckoutAction; machine: string | null; result: CheckoutCleanWire; summary: string }
 	| { ok: false; reason: CheckoutActionFailure; machine: string | null; error: string; result?: CheckoutCleanWire };
 
+/** A commit id for a sentence a person reads: eight characters, which is how git itself shortens it. An id is not prose, so it carries no cut marker. */
+const shortSha = (sha: string | null | undefined): string | undefined => sha?.slice(0, 8);
+
 export const checkoutLabel = (s: string): string => s.replace(/[^A-Za-z0-9 ._:#/@-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "pags";
 
 /** One sentence for the owner: what was kept, where, and where the checkout stands now. */
 export function describeCheckoutAction(action: CheckoutAction, r: CheckoutCleanWire): string {
 	const verb = action === "stash" ? "Stashed" : "Discarded";
-	if (r.files === 0) return `The checkout had no local changes, so nothing was ${action === "stash" ? "stashed" : "discarded"}.${r.pulled?.changed ? ` Fast-forwarded to ${r.head?.slice(0, 8)}.` : ""}`;
+	if (r.files === 0) return `The checkout had no local changes, so nothing was ${action === "stash" ? "stashed" : "discarded"}.${r.pulled?.changed ? ` Fast-forwarded to ${shortSha(r.head)}.` : ""}`;
 	const kept = !r.backup
 		? ""
 		: r.backup.kind === "stash"
-			? ` Saved as \`${r.backup.ref}\` (${r.backup.commit.slice(0, 8)}); \`git stash apply ${r.backup.commit}\` in that checkout brings it back.`
+			? ` Saved as \`${r.backup.ref}\` (${shortSha(r.backup.commit)}); \`git stash apply ${r.backup.commit}\` in that checkout brings it back.`
 			: ` Backup patch: ${r.backup.path}${r.backup.untracked ? `; ${r.backup.untracked} untracked file${r.backup.untracked === 1 ? "" : "s"} listed in ${r.backup.untrackedList} (their contents were not kept)` : ""}.`;
-	const pulled = r.pulled ? (r.pulled.error || r.pulled.refused ? ` The fast-forward did not run: ${r.pulled.error ?? r.pulled.refused}.` : r.pulled.changed ? ` Then fast-forwarded to ${r.head?.slice(0, 8)} (${r.pulled.commits ?? "?"} commit${r.pulled.commits === 1 ? "" : "s"}).` : " It was already current.") : "";
-	return `${verb} ${r.files} changed file${r.files === 1 ? "" : "s"}.${kept}${pulled} The checkout is ${r.clean ? "clean" : "NOT clean"} at ${r.head?.slice(0, 8) ?? "an unknown commit"}.`;
+	const pulled = r.pulled ? (r.pulled.error || r.pulled.refused ? ` The fast-forward did not run: ${r.pulled.error ?? r.pulled.refused}.` : r.pulled.changed ? ` Then fast-forwarded to ${shortSha(r.head)} (${r.pulled.commits ?? "?"} commit${r.pulled.commits === 1 ? "" : "s"}).` : " It was already current.") : "";
+	return `${verb} ${r.files} changed file${r.files === 1 ? "" : "s"}.${kept}${pulled} The checkout is ${r.clean ? "clean" : "NOT clean"} at ${shortSha(r.head) ?? "an unknown commit"}.`;
 }
 
 /**
@@ -95,8 +99,8 @@ export async function runCheckoutAction(
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		if (/→ 404|not found/i.test(message)) return { ok: false, reason: "old_runner", machine, error: runnerUpgradeClause({ what: `${input.action} this checkout`, minCli: CHECKOUT_CLEAN_MIN_CLI, node: machine }) };
-		if (isRunnerUnreachable(e)) return { ok: false, reason: "unreachable", machine, error: `${machine ? `The machine ${machine}` : "The machine"} went away before it answered (${message.slice(0, 120)}), so it is not known whether the ${input.action} ran. Read the checkout's state before retrying.` };
-		return { ok: false, reason: /→ 400/.test(message) ? "refused" : "failed", machine, error: `The machine declined or failed the ${input.action}: ${message.slice(0, 200)}` };
+		if (isRunnerUnreachable(e)) return { ok: false, reason: "unreachable", machine, error: `${machine ? `The machine ${machine}` : "The machine"} went away before it answered (${clipMarked(message, 120, { within: true })}), so it is not known whether the ${input.action} ran. Read the checkout's state before retrying.` };
+		return { ok: false, reason: /→ 400/.test(message) ? "refused" : "failed", machine, error: `The machine declined or failed the ${input.action}: ${clipMarked(message, 200, { within: true })}` };
 	}
 }
 
@@ -154,7 +158,7 @@ export async function attemptSyncSelfHealWithStash(
 		return { ...second, stashed };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
-		const why = /→ 404|not found/i.test(message) ? runnerUpgradeClause({ what: "stash this checkout itself", minCli: CHECKOUT_CLEAN_MIN_CLI, node: conn.runnerNode }) : `the machine ${isRunnerUnreachable(e) ? "went away" : "failed"}: ${message.slice(0, 160)}`;
+		const why = /→ 404|not found/i.test(message) ? runnerUpgradeClause({ what: "stash this checkout itself", minCli: CHECKOUT_CLEAN_MIN_CLI, node: conn.runnerNode }) : `the machine ${isRunnerUnreachable(e) ? "went away" : "failed"}: ${clipMarked(message, 160, { within: true })}`;
 		return { ...first, detail: `${first.detail} Auto-stash was approved but could not run — ${why}` };
 	}
 }
