@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cliPackument, missingForVersion, previousRelease } from "./lib.mjs";
+import { attachProbeRelay } from "./relay.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cliRoot = resolve(here, "..", "..", "packages", "cli");
@@ -90,11 +91,11 @@ async function startServer({ candidateTarball, candidateManifest, previousManife
 			res.writeHead(502); res.end(String(e));
 		}
 	});
-	// A relay socket upgrade is refused: registration and heartbeats are what this test watches, and the runner retries.
-	server.on("upgrade", (_req, socket) => socket.destroy());
+	// The candidate must pass its real start probe before the previous runner swaps to it (#1369).
+	const relay = attachProbeRelay(server, { instanceId: "smoke-i1", token: "smoke" });
 	await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
 	base = `http://127.0.0.1:${server.address().port}`;
-	return { base, requests, state, close: () => new Promise((ok) => { server.closeAllConnections?.(); server.close(ok); }) };
+	return { base, requests, state, close: () => new Promise((ok) => { relay.close(); server.closeAllConnections?.(); server.close(ok); }) };
 }
 
 // ── processes ─────────────────────────────────────────────────────────────────────────────────────────────────────
