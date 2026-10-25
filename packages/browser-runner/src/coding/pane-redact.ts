@@ -70,9 +70,14 @@ export function redactPane(text: string, now = Date.now()): string {
 
 const redacting = new WeakSet<ServerResponse>();
 
-/** Mark this response's panes for redaction: a terminal route, unless the caller is inject confirming a delivery. */
+/**
+ * Mark this response's panes for redaction: a terminal route, unless the caller is inject confirming a delivery — and every
+ * `/coding/*` route (#1195), whose captures (`/coding/capture`, the diagnostics and handoff reads) carry the engine's pane and were
+ * the readers #1166 left out. Nothing asks those for an unmasked pane.
+ */
 export function redactPanesOf(res: ServerResponse, path: string, body: { unmasked?: unknown } | undefined): void {
-	if ((path.startsWith("/tmux/") || path.startsWith("/terminal/")) && body?.unmasked !== true) redacting.add(res);
+	if (path.startsWith("/coding/")) redacting.add(res);
+	else if ((path.startsWith("/tmux/") || path.startsWith("/terminal/")) && body?.unmasked !== true) redacting.add(res);
 }
 
 /** The body `json()` writes: its `pane`/`paneBefore` redacted when {@link redactPanesOf} marked the response. */

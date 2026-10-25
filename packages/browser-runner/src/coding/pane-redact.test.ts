@@ -60,10 +60,25 @@ describe("a delivered value is masked in every later capture (#1166)", () => {
 		const raw = {} as ServerResponse;
 		redactPanesOf(raw, "/tmux/capture", { unmasked: true });
 		expect((outgoing(raw, { pane }) as { pane: string }).pane).toBe(pane);
-		// Not a terminal route: untouched.
+		// Not a pane route at all: untouched.
 		const other = {} as ServerResponse;
-		redactPanesOf(other, "/coding/capture", {});
+		redactPanesOf(other, "/health", {});
 		expect((outgoing(other, { pane }) as { pane: string }).pane).toBe(pane);
+	});
+
+	it("so is a coding session's capture, which #1166 left out (#1195) — whatever the body asks", () => {
+		rememberInjected(CODE);
+		const pane = `engine output\n$ echo ${PAGS_SESSION}\nthe code was ${CODE}`;
+		for (const path of ["/coding/capture", "/coding/diagnostics", "/coding/start"]) {
+			const res = {} as ServerResponse;
+			redactPanesOf(res, path, { unmasked: true }); // there is no unmasked read for the coding routes
+			const out = outgoing(res, { sessionId: "s1", pane, paneBefore: pane, runState: "working" }) as { pane: string; paneBefore: string; runState: string };
+			expect(out.pane, path).toBe(redactPane(pane));
+			expect(out.pane, path).not.toContain(PAGS_SESSION);
+			expect(out.pane, path).not.toContain(CODE);
+			expect(out.paneBefore, path).toBe(out.pane);
+			expect(out.runState, path).toBe("working");
+		}
 	});
 });
 

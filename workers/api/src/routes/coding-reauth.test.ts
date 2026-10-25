@@ -95,6 +95,14 @@ beforeEach(() => {
 });
 
 describe("the re-auth relay (#881)", () => {
+	it("reads its terminal UNMASKED from the runner (#1195): setup-token prints the token there, and a masking runner leaves nothing to extract", async () => {
+		store.state = null;
+		await call("POST", "", {});
+		const reads = calls.filter((c) => ["/tmux/capture", "/tmux/send", "/tmux/run"].includes(c.path));
+		expect(reads.length).toBeGreaterThan(0);
+		for (const c of reads) expect(c.body.unmasked, c.path).toBe(true);
+	});
+
 	it("start: with a stored Claude token, runs setup-token in a fresh shell and relays the URL", async () => {
 		pane = `Browser didn't open? Use the url below to sign in:\n${CLAUDE_URL}\n\nPaste code here if prompted >`;
 		const { status, body } = await call("POST", "", {});
@@ -116,7 +124,7 @@ describe("the re-auth relay (#881)", () => {
 		pane = `Paste code here if prompted > abc#def\n\nYour OAuth token (valid for 1 year):\n${TOKEN}\nStore this token securely.`;
 		const { status, body } = await call("POST", "/input", { text: "abc#def" });
 		expect(status).toBe(200);
-		expect(calls[0]).toEqual({ path: "/tmux/send", body: { session: "pags-signin-claude", text: "abc#def", keys: ["Enter"] } });
+		expect(calls[0]).toEqual({ path: "/tmux/send", body: { session: "pags-signin-claude", text: "abc#def", keys: ["Enter"], unmasked: true } });
 		expect(upsertUserProviderKey).toHaveBeenCalledWith(expect.anything(), UID, "claude-code", TOKEN);
 		expect(calls.some((c) => c.path === "/tmux/session" && c.body.action === "kill")).toBe(true);
 		expect(body.status).toBe("succeeded");
@@ -176,7 +184,7 @@ describe("the re-auth relay (#881)", () => {
 		hasUserProviderKey.mockResolvedValue(false);
 		pane = "Select login method:\n❯ 1. Claude account with subscription · Pro, Max\n  2. Anthropic Console account · API usage billing";
 		await call("POST", "", {});
-		expect(calls.find((c) => c.path === "/tmux/send")?.body).toEqual({ session: "pags-signin-claude", keys: ["Enter"] });
+		expect(calls.find((c) => c.path === "/tmux/send")?.body).toEqual({ session: "pags-signin-claude", keys: ["Enter"], unmasked: true });
 
 		calls.length = 0;
 		pane = "Select login method:\n  1. Claude account with subscription\n❯ 2. Anthropic Console account · API usage billing";

@@ -1,4 +1,5 @@
 import { clipMarked } from "./clip-marked.js";
+import { maskPaneText } from "./pane-mask.js";
 import { capToolCalls, type EngineToolCall, toolCallsForSnapshot } from "./engine-tool-calls.js";
 import type { EngineUsageReport } from "./engine-usage.js";
 import type { Env } from "../types.js";
@@ -67,7 +68,9 @@ export async function appendTimeline(
 	await env.DB.prepare(
 		"INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content, audio_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
 	)
-		.bind(args.sessionId, args.instanceId, args.userId, args.type, clipMarked(args.content, 100_000), audioKey) // marked, not silent (#898)
+		// Terminal snapshots and typed commands are masked on the way in (#1195): the runner redacts a pane since 0.4.158, an older
+		// one does not, and the platform does not rely on it.
+		.bind(args.sessionId, args.instanceId, args.userId, args.type, clipMarked(args.type === "terminal" || args.type === "command" ? maskPaneText(args.content) : args.content, 100_000), audioKey) // marked, not silent (#898)
 		.run();
 }
 

@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { maskPaneText } from "../lib/pane-mask.js";
 import { HttpError } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { ENGINE_AUTHS, engineAuthFor, engineAuthReport, engineInvocationReport, readEngines, resolveEngine, reusedEngineNotice, type CodingEngine, type EngineAuth, type EngineAuthResolved } from "../lib/coding-engines.js";
@@ -284,7 +285,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// The turn report too (#881): a headless engine that exits on a dead login says so in its last
 		// turn's detail, not necessarily in the pane.
 		const authPrompt = engineSignInBlock({
-			pane: String((snap as { pane?: unknown }).pane ?? ""),
+			pane: maskPaneText(String((snap as { pane?: unknown }).pane ?? "")),
 			lastTurn: (snap as { lastTurn?: { detail?: string } | null }).lastTurn ?? null,
 		});
 

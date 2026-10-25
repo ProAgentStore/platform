@@ -45,6 +45,7 @@
 // Pure: every decision here is testable without a runner, a relay or a CLI.
 
 import { isAuthUrl } from "./engine-auth-prompt.js";
+import { maskPaneText } from "./pane-mask.js";
 import type { CodingClientType } from "./coding-types.js";
 import type { EngineAuth } from "./coding-engines.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
@@ -255,7 +256,7 @@ export function extractSetupToken(pane: string): string | null {
 
 /** The pane as it may be shown to a caller — unwrapped, with any Anthropic token masked. */
 export function redactPane(pane: string): string {
-	return unwrapPane(pane).replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-…[redacted]");
+	return maskPaneText(unwrapPane(pane).replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-…[redacted]"));
 }
 
 /**

@@ -2,6 +2,7 @@ import type { Env } from "../types.js";
 import type { TimelineEntry, TimelineType } from "./coding-timeline.js";
 import { jsonPath } from "./sql.js";
 import { removeInstanceConfigKey } from "./instance-config.js";
+import { maskPaneText } from "./pane-mask.js";
 import { shouldPersistSnapshot, terminalSnapshotContent } from "./terminal-snapshot.js";
 
 /**
@@ -122,8 +123,9 @@ export async function rememberTerminalTarget(env: Env, instanceId: string, userI
 }
 
 async function appendRow(env: Env, row: { instanceId: string; userId: string; target: string; type: TerminalHistoryType; content: string }): Promise<void> {
+	// Masked on the way in (#1195): a runner older than 0.4.158 sends panes as they are, and a typed command can carry a credential.
 	await env.DB.prepare("INSERT INTO terminal_history (instance_id, user_id, target, type, content) VALUES (?1, ?2, ?3, ?4, ?5)")
-		.bind(row.instanceId, row.userId, row.target, row.type, row.content)
+		.bind(row.instanceId, row.userId, row.target, row.type, maskPaneText(row.content))
 		.run();
 	// Keep the newest TERMINAL_HISTORY_KEEP. `OFFSET` finds the first row past the cap; when there
 	// is none the subquery is NULL and `seq <= NULL` deletes nothing.

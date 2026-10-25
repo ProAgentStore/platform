@@ -38,6 +38,7 @@ import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
 import { accountTimeZone } from "./account-timezone.js";
 import { fenceUntrusted, withFraming } from "./untrusted-fence.js";
 import type { ConversationTransfer } from "./conversation-transfer.js";
+import { maskConnectorResult } from "./pane-mask.js";
 import { recordTerminalToolUse } from "./terminal-record.js";
 import { attributeStop, controlRefusal, sessionTarget, stopTarget } from "./control-intent.js";
 /**
@@ -872,7 +873,10 @@ export async function runRegistryTool(
 			// follow the asker either, or up-borrowing would work where consent-bypass does not.
 			connectorClient: ctx.connectorClient ?? ((provider: string) => connectorClient(ctx.env, provider, { userId: ctx.userId, instanceId: consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf }) || undefined })),
 		};
-		const r = await tool.handler(handlerCtx, callInput);
+		const raw = await tool.handler(handlerCtx, callInput);
+		// A pane is masked here too (#1195): the runner redacts since 0.4.158, but a machine on an older CLI answers with the pane as it
+		// is, and this result goes on to a model, a log and the terminal record.
+		const r = maskConnectorResult(tool.connector, raw);
 		// #878: a repo-less terminal's only durable record, AFTER every gate (a refused call records nothing); best-effort — lib/terminal-record.ts.
 		if (tool.connector === "tmux" || tool.connector === "terminal") await recordTerminalToolUse(ctx.env, { instanceId: ctx.instanceId, userId: ctx.userId, name, input: callInput, success: r.success, content: r.content }).catch(() => undefined);
 		// #185 audit: record WHOSE authority ran a delegated tool call. Only when delegated —

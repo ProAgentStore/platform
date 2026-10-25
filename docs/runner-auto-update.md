@@ -523,3 +523,27 @@ sign-in above for what that costs).
 
 Also worth knowing, from #1165: `tmux_secure_put` / `tmux_secure_get` no longer take an arbitrary path. A flow that delivered a `.env`
 straight into a project folder now writes it to `~/.config/proagentstore/secure-files`, and the operator moves it.
+
+## Terminal secrets: what is masked, where, and what is not (#1195)
+
+#1166 made the runner mask a terminal pane before it leaves the machine and clear tmux scrollback after an echoed
+`secure_input_inject`. What #1195 adds:
+
+- **The platform masks too**, with the same redactor (`maskPaneText`, a test runs it and the runner's `maskSecrets` over one corpus so
+  they cannot drift), at every point it takes a pane in or writes one down: the tmux / terminal connectors' results, the terminal record
+  (`terminal_history`) and the coding timeline's terminal and command rows, the coding capture shown to a client, and the sign-in
+  relay's pane. A runner older than 0.4.158, which answers with the pane as it is, is covered by this, not by the consent gate alone.
+- **Coding captures are redacted by the runner too**: every `/coding/*` answer's `pane` / `paneBefore`, which #1166 left out.
+- **Rows already stored are re-redacted.** A cron sweep (`redactStoredPanes`) walks `terminal_history`, the coding timeline's terminal and
+  command rows and `error_log` in bounded batches from a per-source watermark (`pane_redaction_progress`), rewriting a row only if masking
+  changes it. It is idempotent and finishes by catching up to the end of each table.
+- **A fix found on the way:** the sign-in relay reads its terminal from the runner UNMASKED, because `claude setup-token` prints the token there
+  and a runner that masks it (#1166) left nothing to extract. Everything shown to a caller still goes through `redactPane`.
+
+Still not covered, and why:
+
+- **The visible screen.** A running program is drawing it; clearing it would need a keystroke sent into whatever is running. Captures mask the
+  value, but anyone looking at the terminal sees it until it scrolls off.
+- **kitty and iTerm2 scrollback.** Not reachable through the runner; `/secure/scrub` still answers `cleared:false` for them and only masks.
+- **Masking across a runtime restart, and hand-typed secrets.** The delivered-value mask is in memory on purpose — persisting it would store the
+  secret at rest. A password typed by hand at a prompt that echoed it is masked only if it has a credential's shape.

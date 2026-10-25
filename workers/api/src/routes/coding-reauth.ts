@@ -89,7 +89,7 @@ async function tmux<T>(conn: RunnerConn, path: string, body: unknown, what = "si
 }
 
 async function capture(conn: RunnerConn, session: string): Promise<string | null> {
-	const r = await callRunner<{ pane?: string }>(conn, "/tmux/capture", { session, lines: 400 }, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => {
+	const r = await callRunner<{ pane?: string }>(conn, "/tmux/capture", { session, lines: 400, unmasked: true }, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => {
 		// The session is gone — killed, or the machine restarted. Not an error to the caller: the
 		// relay reports it as over.
 		if (e instanceof Error && e.message.includes("→ 404")) return null;
@@ -161,7 +161,7 @@ async function advance(
 		const choice = subscriptionMenuChoice(pane);
 		const highlighted = pane.split("\n").find((l) => /^\s*[❯>›]/.test(l) && /subscription/i.test(l));
 		if (choice && highlighted) {
-			const sent = await tmux<{ pane?: string }>(conn, "/tmux/send", { session: state.session, keys: ["Enter"] });
+			const sent = await tmux<{ pane?: string }>(conn, "/tmux/send", { session: state.session, keys: ["Enter"], unmasked: true });
 			pane = String(sent.pane ?? pane);
 			reading = readReauthPane(pane, state.method);
 		}
@@ -317,7 +317,7 @@ export function registerReauthRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// leftover login session blocking a fresh login" #881 records.
 		await tmux(conn, "/tmux/session", { action: "kill", session }).catch(() => undefined);
 		await tmux(conn, "/tmux/session", { session, workDir: "~" });
-		const ran = await tmux<{ pane?: string }>(conn, "/tmux/run", { session, command: plan.command });
+		const ran = await tmux<{ pane?: string }>(conn, "/tmux/run", { session, command: plan.command, unmasked: true });
 
 		const state: EngineReauthState = {
 			clientType,
@@ -357,7 +357,7 @@ export function registerReauthRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const conn = await requireConn(c, instanceId, uid);
 		// A pasted code is submitted with Enter unless the caller named its own keys.
 		const keys = Array.isArray(body.keys) ? (body.keys as string[]) : body.text != null ? ["Enter"] : [];
-		const sent = await tmux<{ pane?: string }>(conn, "/tmux/send", { session: state.session, text: body.text ?? undefined, keys });
+		const sent = await tmux<{ pane?: string }>(conn, "/tmux/send", { session: state.session, text: body.text ?? undefined, keys, unmasked: true });
 		// The code is exchanged over the network after Enter; read again rather than trusting the
 		// settle snapshot, which can predate the CLI's verdict.
 		const pane = (await capture(conn, state.session)) ?? String(sent.pane ?? "");

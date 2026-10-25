@@ -90,6 +90,7 @@ import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { failSilentUpdates } from "./lib/machine-policy.js";
 import { notifySilentMachines } from "./lib/machine-silence.js";
+import { redactStoredPanes } from "./lib/pane-redaction-sweep.js";
 import { notifyMachineWarnings, notifyRecoveredMachines } from "./lib/machine-warnings.js";
 import { expireStaleTakeovers } from "./lib/browser-takeovers.js";
 import { runLeadBrowserVerification } from "./lib/job-lead-browser-verification.js";
@@ -455,6 +456,8 @@ export default {
 		// memory / disk pressure — once per episode; and the all-clear after a silence the owner was told about.
 		ctx.waitUntil(notifyMachineWarnings(env).catch((err) => logUnhandled(env, err, { path: "scheduled:machine-warnings", method: "CRON" })));
 		ctx.waitUntil(notifyRecoveredMachines(env).catch((err) => logUnhandled(env, err, { path: "scheduled:machine-back-online", method: "CRON" })));
+		// #1195: terminal text stored before it was masked on the way in, re-redacted in bounded, resumable batches.
+		ctx.waitUntil(redactStoredPanes(env).catch((err) => logUnhandled(env, err, { path: "scheduled:redact-stored-panes", method: "CRON" })));
 		// #1174: machine registrations unseen for 30 days are expired, so lookups stop probing abandoned hostnames.
 		ctx.waitUntil(pruneStaleRuntimeNodes(env).catch((err) => logUnhandled(env, err, { path: "scheduled:prune-runtime-nodes", method: "CRON" })));
 		// #1031: a takeover nobody answered before its expiry becomes `expired`, not open forever.
