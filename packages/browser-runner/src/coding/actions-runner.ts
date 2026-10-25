@@ -526,24 +526,21 @@ export function requestLocalActionsRecovery(url: string, deps: Pick<ActionsRunne
 	const local = join(dir, ".pags-supervisor");
 	const cfg = JSON.parse(readFileSync(join(local, "config.json"), "utf8")) as { version?: unknown; acRecoveryEnabled?: unknown };
 	if (cfg.version !== 1 || typeof cfg.acRecoveryEnabled !== "boolean") throw new Error("The PAGS supervisor configuration is invalid.");
-	const status = JSON.parse(readFileSync(join(local, "status.json"), "utf8")) as { updatedAt?: unknown; supervisorPid?: unknown; activeJob?: unknown };
+	const status = JSON.parse(readFileSync(join(local, "status.json"), "utf8")) as { updatedAt?: unknown; supervisorPid?: unknown; activeJob?: unknown; lastRecovery?: { id?: unknown; state?: unknown; completedAt?: unknown } };
 	if (typeof status.updatedAt !== "number" || Date.now() - status.updatedAt > 90_000 || typeof status.supervisorPid !== "number") throw new Error("The PAGS supervisor has no current health sample.");
 	try { process.kill(status.supervisorPid, 0); } catch { throw new Error("The PAGS supervisor is not running."); }
 	const target = join(local, "recover.json");
-	const lock = join(local, "recover-write-lock");
-	mkdirSync(lock); // exclusive: two remote calls cannot replace each other's request during rename
-	try {
-		if (deps.exists(target)) {
-			const prior = JSON.parse(readFileSync(target, "utf8")) as { id?: unknown; requestedAt?: unknown; reason?: unknown };
-			if (typeof prior.id === "string" && typeof prior.requestedAt === "number" && prior.reason === "manual") return { id: prior.id, requestedAt: prior.requestedAt, reason: "manual", state: status.activeJob ? "deferred_active_job" : "queued" };
-			throw new Error("An unknown recovery request already exists; refusing to overwrite it.");
-		}
-		const request = { id: randomUUID(), reason: "manual" as const, requestedAt: Date.now() };
-		const temp = join(local, `recover.${request.id}.tmp`);
-		writeFileSync(temp, JSON.stringify(request) + "\n", { mode: 0o600, flag: "wx" });
-		try { renameSync(temp, target); } finally { rmSync(temp, { force: true }); }
-		return { ...request, state: status.activeJob ? "deferred_active_job" : "queued" };
-	} finally { rmSync(lock, { recursive: true, force: true }); }
+	if (deps.exists(target)) {
+		const prior = JSON.parse(readFileSync(target, "utf8")) as { id?: unknown; requestedAt?: unknown; reason?: unknown };
+		const completed = status.lastRecovery?.id === prior.id && (status.lastRecovery?.state === "ready" || status.lastRecovery?.state === "error") && typeof status.lastRecovery?.completedAt === "number";
+		if (typeof prior.id === "string" && typeof prior.requestedAt === "number" && prior.reason === "manual" && !completed) return { id: prior.id, requestedAt: prior.requestedAt, reason: "manual", state: status.activeJob ? "deferred_active_job" : "queued" };
+		if (prior.reason !== "manual" || typeof prior.id !== "string") throw new Error("An unknown recovery request already exists; refusing to overwrite it.");
+	}
+	const request = { id: randomUUID(), reason: "manual" as const, requestedAt: Date.now() };
+	const temp = join(local, `recover.${request.id}.tmp`);
+	writeFileSync(temp, JSON.stringify(request) + "\n", { mode: 0o600, flag: "wx" });
+	try { renameSync(temp, target); } finally { rmSync(temp, { force: true }); }
+	return { ...request, state: status.activeJob ? "deferred_active_job" : "queued" };
 }
 
 /**

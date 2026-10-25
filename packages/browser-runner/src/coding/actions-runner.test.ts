@@ -244,6 +244,13 @@ describe("explicit recovery request (#1367)", () => {
 			expect(first).toMatchObject({ reason: "manual", state: "queued" });
 			expect(again.id).toBe(first.id);
 			expect(JSON.parse(readFileSync(join(local, "recover.json"), "utf8"))).toEqual({ id: first.id, reason: "manual", requestedAt: first.requestedAt });
+			writeFileSync(join(local, "status.json"), JSON.stringify({ updatedAt: Date.now(), supervisorPid: process.pid, activeJob: false, lastRecovery: { id: first.id, state: "restarting" } }));
+			expect(requestLocalActionsRecovery(ORG.url, deps).id).toBe(first.id);
+			writeFileSync(join(local, "status.json"), JSON.stringify({ updatedAt: Date.now(), supervisorPid: process.pid, activeJob: false, lastRecovery: { id: first.id, state: "ready", completedAt: Date.now() } }));
+			const second = requestLocalActionsRecovery(ORG.url, deps);
+			expect(second.id).not.toBe(first.id);
+			expect(JSON.parse(readFileSync(join(local, "recover.json"), "utf8")).id).toBe(second.id);
+			expect(deps.exists(join(local, "recover-write-lock"))).toBe(false);
 			expect(() => requestLocalActionsRecovery("https://github.com/other", deps)).toThrow(/fully configured/);
 		} finally { rmSync(home, { recursive: true, force: true }); }
 	});
