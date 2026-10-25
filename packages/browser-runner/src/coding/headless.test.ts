@@ -339,6 +339,47 @@ describe("HeadlessSession (stream-json engine)", () => {
 		s.stop();
 	});
 
+	it("with a cursor, spend is READ, not drained, and goes only when the cloud acknowledges it (#1358)", async () => {
+		// The capture used to take the records and forget them in one step. A capture whose reply the relay timed out, or whose
+		// persistence failed on the cloud, therefore lost its batch. With a cursor the records survive until they are acknowledged.
+		const s = new HeadlessSession({ id: "usage-ack", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle");
+		s.input("first");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: first"));
+		s.input("second");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: second"));
+
+		const optIn = { epoch: null, usage: 0, acts: 0 }; // "I speak cursors", acknowledging nothing yet
+		const first = s.readRecords(optIn);
+		const resent = s.readRecords(optIn); // the cloud never saw the first reply
+		expect(first.usage).toHaveLength(2);
+		expect(resent.usage.map((u) => u.id)).toEqual(first.usage.map((u) => u.id));
+		expect(resent.cursor).toEqual(first.cursor);
+
+		s.input("third");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: third"));
+		const next = s.readRecords(first.cursor); // the cloud persisted the first two
+		expect(next.usage).toHaveLength(1);
+		expect(next.usage[0]?.id).not.toBe(first.usage[0]?.id);
+		expect(next.cursor.usage).toBeGreaterThan(first.cursor.usage);
+		expect(s.readRecords(next.cursor).usage).toEqual([]);
+		s.stop();
+	});
+
+	it("an ack from another session's epoch deletes nothing (#1358)", async () => {
+		const s = new HeadlessSession({ id: "usage-epoch", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle");
+		s.input("only");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: only"));
+		const seen = s.readRecords({ epoch: null, usage: 0, acts: 0 });
+		expect(seen.usage).toHaveLength(1);
+		// What a restarted runner's predecessor would have sent: a plausible cursor, in the wrong epoch.
+		expect(s.readRecords({ epoch: "a-previous-sessions-epoch", usage: 99, acts: 99 }).usage).toHaveLength(1);
+		s.stop();
+	});
+
 	it("does not crash when the binary is missing — surfaces the error instead", async () => {
 		const s = new HeadlessSession({ id: "sx", workDir: dir, clientType: "claude", bin: join(dir, "no-such-binary-xyz") });
 		// MUST NOT throw / emit an uncaught 'error' that would kill the runner.

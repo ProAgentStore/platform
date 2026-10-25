@@ -37,6 +37,8 @@
  * unmetered spend, applied to liveness. Since #1183 a hibernation no longer makes everything
  * unknown: each socket's last ping and pong live in its hibernation attachment.
  */
+import { RELAY_PONG_DEADLINE_MS } from "./runner-timeouts.js";
+
 
 /** The half of a WebSocket this module uses. Structural, so a test needs no Cloudflare runtime. */
 export interface PingableSocket {
@@ -48,7 +50,7 @@ export interface PingableSocket {
 }
 
 /** How long an incumbent has to answer before a connecting runner may evict it. */
-export const PONG_DEADLINE_MS = 1500;
+export const PONG_DEADLINE_MS = RELAY_PONG_DEADLINE_MS;
 
 /** How long an unanswered ping must stand before `observe` calls the peer gone. */
 export const PONG_STALE_MS = 2000;

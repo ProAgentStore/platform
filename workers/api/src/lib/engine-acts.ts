@@ -53,6 +53,7 @@
  * floor. Unverifiable evidence never downgrades an act, and never adds a qualifier to one.
  */
 import { logEvent } from "./events.js";
+import type { TelemetryWrite } from "./telemetry-spool.js";
 import { codingCardId } from "./coding-board.js";
 import { writeActionEntry } from "./task-action-log.js";
 import { splitHeredocs } from "./heredoc.js";
@@ -648,12 +649,19 @@ export async function recordEngineActs(
 	env: Env,
 	ctx: { userId: string; instanceId: string; sessionId: string; traceId?: string | null; cardId?: string | null },
 	acts: EngineActReport[],
-): Promise<void> {
+): Promise<TelemetryWrite> {
+	// What the caller may rely on (#1358): the worst of every write. `queued` is the durable spool — replayed under the same id — so it
+	// is as good as persisted; `lost` means an act reached neither the log nor the spool, and a caller that would acknowledge it to the
+	// runner must not.
+	let outcome: TelemetryWrite = "persisted";
+	const worse = (w: TelemetryWrite) => {
+		if (w === "lost" || (w === "queued" && outcome === "persisted")) outcome = w;
+	};
 	for (const act of acts) {
 		// The card's paper trail (#1108): one line per act, idempotent on the act's own id. A push or
 		// commit is a `commit`; anything else the engine did is a `tool_call`. No link is invented — an
 		// act carries a command and a target, never a resolved commit sha.
-		await writeActionEntry(env, {
+		if (!(await writeActionEntry(env, {
 			instanceId: ctx.instanceId,
 			userId: ctx.userId,
 			taskId: ctx.cardId || codingCardId(ctx.sessionId),
@@ -663,8 +671,8 @@ export async function recordEngineActs(
 			status: act.ok === false ? "error" : "ok",
 			at: act.atReliable ? Date.parse(act.at) : undefined,
 			dedupeKey: engineActRowId(ctx.sessionId, act.id),
-		});
-		await logEvent(env, {
+		}))) worse("lost");
+		worse(await logEvent(env, {
 			id: engineActRowId(ctx.sessionId, act.id),
 			source: "coding",
 			event: "act.consequential",
@@ -696,6 +704,7 @@ export async function recordEngineActs(
 			// guaranteed outside every `[runStartedAt, now]` window since real runs start at epoch
 			// times many orders of magnitude above zero.
 			ts: act.atReliable ? Date.parse(act.at) : 0,
-		});
+		}));
 	}
+	return outcome;
 }

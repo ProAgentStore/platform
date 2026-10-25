@@ -497,6 +497,56 @@ describe("CodingRuntime over the stream-json engine", () => {
 		rt.end("codex-raw");
 	});
 
+	it("advertises the capture cursor, and a capture honours it only when the caller sent one (#1358)", () => {
+		expect(CodingRuntime.capabilities()).toContain("coding.capture-ack");
+		const calls: string[] = [];
+		const session = {
+			config: { clientType: "claude" },
+			alive: true,
+			ready: true,
+			runState: () => "idle",
+			snapshot: () => "pane",
+			authResolved: null,
+			engineRuntime: null,
+			engineMode: "stream-json",
+			engineModeWarning: null,
+			lastTurn: null,
+			consumedInputs: [],
+			acceptedInputs: [],
+			inputs: { report: () => null },
+			takeUsage: () => {
+				calls.push("takeUsage");
+				return [{ id: "u1" }];
+			},
+			takeActs: () => {
+				calls.push("takeActs");
+				return [{ id: "a1" }];
+			},
+			readRecords: (ack: unknown) => {
+				calls.push(`readRecords:${JSON.stringify(ack)}`);
+				return { usage: [{ id: "u1" }], acts: [{ id: "a1" }], cursor: { epoch: "e1", usage: 1, acts: 1 } };
+			},
+		};
+		const runtime = new CodingRuntime("/tmp/does-not-matter");
+		(runtime as unknown as { sessions: Map<string, unknown> }).sessions.set("s1", session);
+
+		// An older cloud sends no cursor: the destructive drain, and no cursor back.
+		const legacy = runtime.snapshot("s1", { drainUsage: true });
+		expect(legacy.recordCursor).toBeUndefined();
+		expect(calls).toEqual(["takeUsage", "takeActs"]);
+
+		calls.length = 0;
+		const modern = runtime.snapshot("s1", { drainUsage: true, ack: { epoch: null, usage: 0, acts: 0 } });
+		expect(modern.recordCursor).toEqual({ epoch: "e1", usage: 1, acts: 1 });
+		expect(modern.usage).toEqual([{ id: "u1" }]);
+		expect(calls).toEqual(['readRecords:{"epoch":null,"usage":0,"acts":0}']); // nothing was drained
+
+		// A read-only capture (no drainUsage) touches neither, cursor or not.
+		calls.length = 0;
+		expect(runtime.snapshot("s1", { ack: { epoch: "e1", usage: 1, acts: 1 } }).usage).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
 	it("reports back whether the engine came up with a conversation to continue (#408)", async () => {
 		// The cloud cannot know this. It nominates a predecessor; only the machine holding
 		// `~/.claude` and the resume store can say whether one was found — and a runner published

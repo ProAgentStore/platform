@@ -198,6 +198,20 @@ describe("callRunner (relay-only)", () => {
 		expect(seen).toBeUndefined();
 	});
 
+	it("gives a quick read its route's fail-fast timeout when the caller names none (#1358), and lets the caller override it", async () => {
+		const seen: Array<number | undefined> = [];
+		const relay = mockRelay(async (req) => {
+			seen.push(((await req.json()) as { timeoutMs?: number }).timeoutMs);
+			return Response.json({ ok: true });
+		});
+		const conn = mockConn({ RELAY: relay });
+		await callRunner(conn, "/health", {});
+		await callRunner(conn, "/capabilities", {});
+		await callRunner(conn, "/coding/github-repos", {}); // a slow read: the relay default
+		await callRunner(conn, "/health", {}, { timeoutMs: 2_000 });
+		expect(seen).toEqual([READ_TIMEOUT_MS, READ_TIMEOUT_MS, undefined, 2_000]);
+	});
+
 	it("handles null JSON response from relay", async () => {
 		const relay = mockRelay(async () => new Response("null", { headers: { "Content-Type": "application/json" } }));
 		const conn = mockConn({ RELAY: relay });

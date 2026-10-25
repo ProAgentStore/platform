@@ -1,4 +1,5 @@
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
+import { readRecordAck } from "./coding/record-cursor.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
 import { codingSessionRefusal, instanceOf, readJson } from "./request-instance.js";
 import {
@@ -342,10 +343,12 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		// gets the snapshot it always got.
 		// `platformRun` (#1178): the run driving this session says so, with a lease long enough to cover its Pilot's decision, so the update
 		// guard does not read the idle gap between turns as a safe moment to restart. `false` (or `0`) releases it. An older cloud omits it.
-		const b = await readJson<{ sessionId: string; drainUsage?: boolean; platformRun?: { leaseMs?: number } | false }>(req);
+		// `ack` (#1358): the cursor the cloud last persisted. With it the records are read, not drained (see record-cursor.ts); an older
+		// cloud sends none and gets the drain it always got. A malformed one is read as none.
+		const b = await readJson<{ sessionId: string; drainUsage?: boolean; ack?: unknown; platformRun?: { leaseMs?: number } | false }>(req);
 		if (b.platformRun === false) runner.coding.releaseRun(b.sessionId);
 		else if (b.platformRun && typeof b.platformRun === "object") runner.coding.holdForRun(b.sessionId, b.platformRun.leaseMs);
-		return json(res, 200, runner.coding.snapshot(b.sessionId, { drainUsage: b.drainUsage === true }));
+		return json(res, 200, runner.coding.snapshot(b.sessionId, { drainUsage: b.drainUsage === true, ack: readRecordAck(b.ack) }));
 	}
 	if (req.method === "POST" && path === "/coding/act") {
 		const b = await readJson<{ sessionId: string; action: CodingAction }>(req);

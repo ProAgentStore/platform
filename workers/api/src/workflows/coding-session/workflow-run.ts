@@ -383,6 +383,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		writeScope,
 		cardId: traceCtx.cardId,
 		getConn: () => conn,
+		// The record cursor of the latest JOURNALLED capture (#1358): what the protocol resumes from after a replay. `lastPane` is declared
+		// further down and set by `measured`, which every capture's result passes through.
+		getAck: () => lastPane.recordAck,
 	});
 
 	/**

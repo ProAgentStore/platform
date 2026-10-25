@@ -82,7 +82,20 @@ export interface CodingGoal {
 }
 
 /** What the orchestrator "sees": the current pane plus the CLI's run-state. */
+/**
+ * How far the cloud has persisted the runner's usage and act records (#1358): the highest sequence number of each kind, in the runner
+ * buffer's `epoch`. Carried in a capture's journalled result and sent back as the next capture's `ack`; the runner forgets a record only
+ * when it is acknowledged, so a capture that timed out, failed to persist, or is replayed can cause a re-send and never a loss.
+ */
+export interface RecordCursor {
+	epoch: string;
+	usage: number;
+	acts: number;
+}
+
 export interface CodingPaneSnapshot {
+	/** The cursor to acknowledge this capture's records with (#1358); absent from a runner that does not speak cursors. */
+	recordAck?: RecordCursor;
 	pane: string;
 	/** The session's output length before the runner's 64 KiB cut (#898); absent from older runners. */
 	paneChars?: number;

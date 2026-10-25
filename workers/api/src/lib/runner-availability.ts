@@ -45,8 +45,9 @@
 // must be able to raise it, and the connectivity read below imports `runner-client.ts`. And
 // `RuntimeFacts` is a TYPE-only import with `noRunnerDetail` taking facts rather than an Env, for
 // the same reason — `import-graph.test.ts` forbids a static cycle even when it is erased.
+import { routeFor } from "./runner-routes.js";
 import { diagnoseAttachment, type AttachmentDiagnosis, type AttachmentState } from "./runtime-attachment.js";
-import { isRunnerGone, isRunnerUnreachable, isRunnerUnresponsive, RunnerGoneError } from "./runner-unreachable.js";
+import { isRunnerGone, isRunnerUnreachable, isRunnerUnresponsive, RunnerGoneError, runnerErrorDispatched, runnerErrorPath } from "./runner-unreachable.js";
 import type { RuntimeFacts } from "./instance-connectivity.js";
 import { checkRunner, labelFor, nextPark, nextWait, parkStart, waitStart, type Observation, type ParkInput, type ParkState, type Say, type WaitDone, type WaitInput, type WaitState } from "./runner-wait-machine.js";
 
@@ -345,7 +346,22 @@ async function driveWait(deps: RunnerWaitDeps, input: WaitInput): Promise<WaitDo
  */
 export type RunStep = (name: string, fn: () => Promise<unknown>) => Promise<unknown>;
 
-export type RunnerGuard = <T>(run: RunStep, name: string, fn: () => Promise<T>) => Promise<T>;
+/**
+ * `opts.reconciles` (#1358): this step asks the runner whether its first attempt landed before it sends again — `sendAct` reads the
+ * input ledger — so a repeat after a reconnect is safe even on a route that is not. Without it, the guard re-runs a failure that
+ * was dispatched only if the route is `safe` (`runner-routes.ts`).
+ */
+export type RunnerGuard = <T>(run: RunStep, name: string, fn: () => Promise<T>, opts?: { reconciles?: boolean }) => Promise<T>;
+
+/**
+ * Must this failure NOT be re-run blind? True when the command may have reached the runner and its route is not one a repeat is
+ * harmless on. A failure that does not name its route (it predates the tag, or a test threw it) keeps the old behaviour: re-run.
+ */
+export function refusesBlindResend(e: unknown): boolean {
+	const path = runnerErrorPath(e);
+	if (!path || !runnerErrorDispatched(e)) return false;
+	return routeFor(path).retry !== "safe";
+}
 
 /**
  * Wrap a durable step so a runner disconnect pauses it instead of ending the run.
@@ -376,7 +392,7 @@ export function makeRunnerGuard(cfg: {
 	let spent = 0;
 	let parked = 0;
 
-	return async function guard<T>(run: RunStep, name: string, fn: () => Promise<T>): Promise<T> {
+	return async function guard<T>(run: RunStep, name: string, fn: () => Promise<T>, opts: { reconciles?: boolean } = {}): Promise<T> {
 		for (let round = 0; ; round++) {
 			try {
 				// A Workflow step name must be unique within an instance, so a re-attempt gets its own.
@@ -388,6 +404,9 @@ export function makeRunnerGuard(cfg: {
 					await cfg.reconnect(labelFor({ of: "lost", name, round }));
 					continue;
 				}
+				// A command that may have run, on a route a repeat is not harmless on, is not sent again just because the machine is
+				// back (#1358) — unless the step reconciles first, as `sendAct` does. It fails with the error it had, naming the route.
+				if (!opts.reconciles && refusesBlindResend(e)) throw e;
 				// A genuine failure must still fail IMMEDIATELY — that is the acceptance criterion this
 				// change is most likely to break. So when the error does not say it is a disconnect, ask
 				// the relay: a live socket means the runner is fine and this error is about something

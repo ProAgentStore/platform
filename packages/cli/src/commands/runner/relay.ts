@@ -636,6 +636,9 @@ export interface RelaySocketHandle {
  *  so the update drain — forever. Mutable so a test need not wait ten minutes. */
 export const relayLimits = { forwardMs: 600_000 };
 
+/** The reason a forward is aborted with when the relay sends `{ type: "cancel", id }` (#1358). */
+const CANCELLED_BY_RELAY = "cancelled by the relay";
+
 /** The relay echo protocol (#924): the runner sends `rtt:<id>`, the RelayDO answers `rtt-echo:<id>`. */
 export const RTT_PROBE_PREFIX = "rtt:";
 export const RTT_ECHO_PREFIX = "rtt-echo:";
@@ -693,6 +696,8 @@ export function openRelaySocket(
 	let socket: WebSocket | null = null;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	const rttWaiters = new Map<string, (echoedAt: number) => void>();
+	/** The commands being forwarded to the local runtime, by relay command id, so a relay `cancel` can stop the right one (#1358). */
+	const inflight = new Map<string, AbortController>();
 	let lastInboundAt = Date.now();
 	let watchdog: ReturnType<typeof setInterval> | null = null;
 
@@ -800,10 +805,16 @@ export function openRelaySocket(
 			// Server pings to verify liveness — respond with pong
 			if (text === "ping") { try { ws.send("pong"); } catch { /* closed */ } return; }
 			if (text.startsWith(RTT_ECHO_PREFIX)) { rttWaiters.get(text.slice(RTT_ECHO_PREFIX.length))?.(Date.now()); return; }
-			let cmd: { id: string; method?: string; path: string; body?: unknown };
+			let cmd: { type?: string; id: string; method?: string; path: string; body?: unknown };
 			try {
-				cmd = JSON.parse(text) as { id: string; method?: string; path: string; body?: unknown };
+				cmd = JSON.parse(text) as { type?: string; id: string; method?: string; path: string; body?: unknown };
 			} catch {
+				return;
+			}
+			// The relay has stopped waiting for this command (#1358): stop forwarding it. The relay already told its caller it timed
+			// out, so there is no reply to send — only a local request, and the mutation slot it holds, to let go of.
+			if (cmd.type === "cancel" && cmd.id) {
+				inflight.get(cmd.id)?.abort(new Error(CANCELLED_BY_RELAY));
 				return;
 			}
 			if (!cmd.id || !cmd.path) return;
@@ -833,16 +844,21 @@ export function openRelaySocket(
 				return;
 			}
 			const hasBody = method !== "GET" && method !== "HEAD" && cmd.body !== undefined;
+			const controller = new AbortController();
+			inflight.set(cmd.id, controller);
 			try {
 				const headers: Record<string, string> = {};
 				if (hasBody) headers["Content-Type"] = "application/json";
 				if (runnerToken) headers.Authorization = `Bearer ${runnerToken}`;
 				headers["X-PAGS-Instance-Id"] = instanceId;
+				// The forward's own limit, and the relay's cancel, both end the same request.
+				const timeout = AbortSignal.timeout(relayLimits.forwardMs);
+				timeout.addEventListener("abort", () => controller.abort(timeout.reason), { once: true });
 				const res = await fetch(`${localUrl}${cmd.path}`, {
 					method,
 					headers,
 					body: hasBody ? JSON.stringify(cmd.body) : undefined,
-					signal: AbortSignal.timeout(relayLimits.forwardMs),
+					signal: controller.signal,
 				});
 				const text = await res.text().catch(() => "");
 				let result: unknown;
@@ -850,10 +866,15 @@ export function openRelaySocket(
 				try { result = text ? JSON.parse(text) : {}; } catch { result = text.length > 500 ? { raw: text.slice(0, 500), rawChars: text.length, truncated: true } : { raw: text }; }
 				try { ws.send(JSON.stringify({ id: cmd.id, status: res.status, result })); } catch { /* WS closed mid-flight */ }
 			} catch (err) {
+				// Cancelled by the relay: its caller has already been told, so nothing is sent back.
+				if (controller.signal.aborted && (controller.signal.reason as Error | undefined)?.message === CANCELLED_BY_RELAY) return;
 				const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
 				const error = timedOut ? `The local runtime did not answer within ${Math.round(relayLimits.forwardMs / 1000)}s.` : err instanceof Error ? err.message : String(err);
 				try { ws.send(JSON.stringify({ id: cmd.id, status: timedOut ? 504 : 500, error })); } catch { /* WS closed */ }
-			} finally { releaseMutation?.(); }
+			} finally {
+				inflight.delete(cmd.id);
+				releaseMutation?.();
+			}
 		};
 
 		ws.onclose = (ev) => {

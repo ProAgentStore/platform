@@ -19,15 +19,11 @@ import { appendEngineUsageTimeline } from "../../lib/coding-timeline.js";
 import { recordEngineActs, sanitizeEngineActs } from "../../lib/engine-acts.js";
 import { recordAuthorityViolations, type MergePolicy } from "../../lib/coding-authority.js";
 import { recordRepoScopeViolations } from "../../lib/repo-write-scope.js";
-import type { CodingPaneSnapshot } from "../../lib/coding-loop.js";
+import type { CodingPaneSnapshot, RecordCursor } from "../../lib/coding-loop.js";
+import { RUN_OWNERSHIP_LEASE_MS } from "../../lib/runner-timeouts.js";
 import type { Env } from "../../types.js";
 
-/**
- * How long one capture keeps the runner believing a platform run owns the session (#1178). The Pilot may spend up to 12 minutes
- * deciding between two captures (`decideRetry`), so the lease is longer than that; the next capture renews it and the closing
- * drain releases it. Capped by the runner at 20 minutes.
- */
-export const RUN_OWNERSHIP_LEASE_MS = 15 * 60_000;
+export { RUN_OWNERSHIP_LEASE_MS } from "../../lib/runner-timeouts.js";
 
 export interface CodingCaptureCtx {
 	env: Env;
@@ -45,14 +41,29 @@ export interface CodingCaptureCtx {
 	cardId: string | null;
 	/** The machine this run is talking to — read at call time, because the runner guard re-points it. */
 	getConn: () => RunnerConn;
+	/** The cursor the latest JOURNALLED capture reported (#1358) — what a replayed run resumes the protocol from. */
+	getAck: () => RecordCursor | undefined;
+}
+
+/** A cursor as the runner sent it, or undefined for anything else — an older runner sends none, and must read as "not speaking cursors". */
+function readCursor(v: unknown): RecordCursor | undefined {
+	const o = v as Partial<RecordCursor> | null | undefined;
+	if (!o || typeof o.epoch !== "string" || !o.epoch) return undefined;
+	const ok = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+	return ok(o.usage) && ok(o.acts) ? { epoch: o.epoch, usage: o.usage, acts: o.acts } : undefined;
 }
 
 export function makeCapture(ctx: CodingCaptureCtx): () => Promise<CodingPaneSnapshot & { sessionId: string }> {
-	const { env, instanceId, userId, sessionId, loopRunId, driverId, repo, mergePolicy, writeScope, cardId, getConn } = ctx;
+	const { env, instanceId, userId, sessionId, loopRunId, driverId, repo, mergePolicy, writeScope, cardId, getConn, getAck } = ctx;
 	/** When the activity heartbeat last cost a subrequest (#523) — see `shouldTouchActivity`. */
 	let lastActivityTouchAt = 0;
 	/** Owner-directive ids this run has already recorded as consumed (#1019) — so a poll writes only on news. */
 	const creditedInputs = new Set<string>();
+	/**
+	 * The cursor this process last finished persisting (#1358). Set only after a capture's records are kept, so a step that fails and
+	 * retries starts from the previous value. A replayed run starts with none and falls back to the journalled capture's.
+	 */
+	let localAck: RecordCursor | undefined;
 	/**
 	 * Read the pane AND whether the run should stop.
 	 *
@@ -76,16 +87,19 @@ export function makeCapture(ctx: CodingCaptureCtx): () => Promise<CodingPaneSnap
 	 * deliberately NOT a stop, is `pilotStopSignal`.
 	 */
 	return async (): Promise<CodingPaneSnapshot & { sessionId: string }> => {
+		const sent = localAck ?? getAck();
 		const [snap, row, cancelRequested] = await Promise.all([
 			// `drainUsage` — an autonomous Pilot run is exactly the case where no console is
 			// open, so this is the only path collecting the Engine's own spend (#267) for the
 			// longest and most expensive sessions the platform has.
-			callRunner<CodingPaneSnapshot & { sessionId: string; usage?: unknown; acts?: unknown }>(
+			callRunner<CodingPaneSnapshot & { sessionId: string; usage?: unknown; acts?: unknown; recordCursor?: unknown }>(
 				getConn(),
 				"/coding/capture",
 				// `platformRun`: this run owns the session for the next decision (#1178). The lease outlives a Pilot decision (12 min) and is
 				// refreshed by the next capture, so the runner's update guard never reads the gap between turns as idle.
-				{ sessionId, drainUsage: true, platformRun: { leaseMs: RUN_OWNERSHIP_LEASE_MS } },
+				// `ack` (#1358) opts in to the cursor protocol: what the cloud last persisted, or the empty ack on the first capture. A runner
+				// that predates it ignores the field and drains as it always did; one that has it reads the records without deleting them.
+				{ sessionId, drainUsage: true, platformRun: { leaseMs: RUN_OWNERSHIP_LEASE_MS }, ack: { epoch: sent?.epoch ?? null, usage: sent?.usage ?? 0, acts: sent?.acts ?? 0 } },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			),
 			env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
@@ -98,22 +112,25 @@ export function makeCapture(ctx: CodingCaptureCtx): () => Promise<CodingPaneSnap
 				? isCancelRequested(env, loopRunId).catch(() => false)
 				: Promise.resolve(false),
 		]);
-		const { usage, acts, ...pane } = snap;
+		const { usage, acts, recordCursor, ...journalled } = snap;
+		const cursor = readCursor(recordCursor);
 		// The SAME snapshot carries how the engine authenticated (runtime.ts sets it on every
 		// capture), so the payer is in hand here exactly as it is on the route drain. Dropping
 		// it made the Pilot-driven sessions — the longest and most expensive the platform runs —
 		// the only ones recording an unknown payer (#356).
 		const pilotUsageRecords = sanitizeEngineUsage(usage);
-		await recordEngineUsage(
+		const usageKept = await recordEngineUsage(
 			env,
 			{ userId, sessionId, instanceId, authResolved: (snap as { authResolved?: EngineAuthResolved | null }).authResolved ?? null },
 			pilotUsageRecords,
 		);
-		await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, pilotUsageRecords);
+		// With a cursor a batch the ledger refused is sent again, so its timeline line waits for the write that kept it; without one the
+		// records are gone either way and the line is all that is left of them.
+		if (usageKept || !cursor) await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, pilotUsageRecords);
 		const reported = sanitizeEngineActs(acts);
 		// An owner directive the runner says a completed turn READ is processed (#1019) — the steer of a
 		// running Pilot otherwise never got past "queued", because only a direct turn's watcher marked any.
-		const fresh = (pane.consumedInputs ?? []).filter((id) => !creditedInputs.has(id));
+		const fresh = (journalled.consumedInputs ?? []).filter((id) => !creditedInputs.has(id));
 		if (fresh.length) {
 			await markDirectivesProcessed(env, { instanceId, userId, sessionId, consumed: fresh }).catch(() => 0);
 			for (const id of fresh) creditedInputs.add(id);
@@ -121,11 +138,25 @@ export function makeCapture(ctx: CodingCaptureCtx): () => Promise<CodingPaneSnap
 		// What this run actually DID (#294). Stamped with the loop-run id when there is one, so
 		// `/trace?trace_id=<runId>` reconstructs exactly what a delegation did — the record whose
 		// absence let run 73ffc073 merge its own PRs to `main` and report only "done".
-		await recordEngineActs(
+		const actsKept = await recordEngineActs(
 			env,
 			{ userId, sessionId, instanceId, traceId: loopRunId ?? null, cardId: cardId },
 			reported,
-		).catch(() => undefined);
+		).catch(() => "lost" as const);
+		// THE ACKNOWLEDGEMENT (#1358): only what was actually kept. A stream whose write failed keeps its previous cursor, so the runner
+		// holds those records and sends them again — nothing is dropped, and nothing here throws or ends the run over a ledger blip.
+		// `queued` counts as kept: the telemetry spool replays it under the same id. A cursor from another buffer (the runner restarted)
+		// is not ours to build on, so a failed stream starts again from zero.
+		const before = sent && cursor && sent.epoch === cursor.epoch ? sent : undefined;
+		const recordAck: RecordCursor | undefined = cursor && {
+			epoch: cursor.epoch,
+			usage: usageKept ? cursor.usage : (before?.usage ?? 0),
+			acts: actsKept !== "lost" ? cursor.acts : (before?.acts ?? 0),
+		};
+		localAck = recordAck ?? localAck;
+		// `pane`, not `snap`: the drained usage AND acts have been persisted and must not be carried into the workflow's step state,
+		// where a replay would drag them around forever. The cursor is the one thing from them that must be.
+		const pane = recordAck ? { ...journalled, recordAck } : journalled;
 		// MERGE AUTHORITY, the enforcing half (#314). The instruction screen keeps the Pilot from
 		// ASKING for a merge; this catches one that happened anyway — the Engine's own initiative,
 		// or an engine that ignored the prompt. Protocol fact, not prose: the act came from a

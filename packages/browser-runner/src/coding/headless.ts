@@ -1,4 +1,5 @@
 import { InputLedger } from "./input-ledger.js";
+import { type RecordAck, RecordBuffer, type RecordCursor } from "./record-cursor.js";
 import type { CleanupManager } from "./cleanup.js";
 import { spawnTarget, unwrapLauncher } from "./launcher-wrapper.js";
 import { type ObjectiveOrigin, runObjectiveBlock } from "./run-objective.js";
@@ -235,12 +236,7 @@ export class HeadlessSession {
 	/** A Codex CLI explicitly rejected the `--json` flag in the current one-shot process. */
 	private structuredOutputRejected = false;
 	/** Measured engine spend not yet handed to the cloud (#267). Drained by {@link takeUsage}. */
-	private pendingUsage: EngineUsageRecord[] = [];
-	/**
-	 * Consequential acts observed but not yet handed to the cloud (#294). Drained by
-	 * {@link takeActs}.
-	 */
-	private pendingActs: EngineActRecord[] = [];
+	private readonly records = new RecordBuffer<EngineUsageRecord, EngineActRecord>();
 	/**
 	 * Acts whose `tool_result` has not come back yet, keyed by the engine's `tool_use` id.
 	 *
@@ -1025,8 +1021,7 @@ export class HeadlessSession {
 				// Grok's `end` event names the session it ran in (#1197): kept to be cross-checked against the id this runner asked for.
 				this.grokReportedSession = reportedGrokSession(ev.raw);
 				if (usage) {
-					this.pendingUsage.push(usage);
-					if (this.pendingUsage.length > MAX_PENDING_USAGE) this.pendingUsage.shift();
+					this.records.pushUsage(usage, MAX_PENDING_USAGE);
 				}
 				// The turn ended, so no further `tool_result` is coming for anything still waiting.
 				// Publish it with an UNKNOWN outcome rather than dropping it: "it ran this and we
@@ -1106,8 +1101,7 @@ export class HeadlessSession {
 	private publishAct(act: EngineActRecord): void {
 		// Drops the NEWEST at the cap — see MAX_PENDING_ACTS for why this queue is the opposite
 		// way round from the usage one.
-		if (this.pendingActs.length >= MAX_PENDING_ACTS) return;
-		this.pendingActs.push(act);
+		this.records.pushAct(act, MAX_PENDING_ACTS);
 	}
 
 	/**
@@ -1122,9 +1116,7 @@ export class HeadlessSession {
 	 * hand over; an empty list here means "not observed", never "nothing happened".
 	 */
 	takeActs(): EngineActRecord[] {
-		const out = this.pendingActs;
-		this.pendingActs = [];
-		return out;
+		return this.records.takeActs();
 	}
 
 	/**
@@ -1138,9 +1130,17 @@ export class HeadlessSession {
 	 * there is nothing to hand over and the cloud writes no row for it.
 	 */
 	takeUsage(): EngineUsageRecord[] {
-		const out = this.pendingUsage;
-		this.pendingUsage = [];
-		return out;
+		return this.records.takeUsage();
+	}
+
+	/**
+	 * The cursor protocol (#1358): forget what the cloud has confirmed it persisted, then hand over everything still pending
+	 * WITHOUT forgetting it, with the cursor that acknowledges exactly this batch. Used instead of {@link takeUsage} /
+	 * {@link takeActs} by a caller that sent an `ack`, so a capture that timed out but ran, or whose persistence failed, loses nothing.
+	 */
+	readRecords(ack: RecordAck | undefined): { usage: EngineUsageRecord[]; acts: EngineActRecord[]; cursor: RecordCursor } {
+		this.records.acknowledge(ack);
+		return this.records.peek();
 	}
 }
 

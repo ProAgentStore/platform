@@ -310,4 +310,4 @@ function reauthResult(block: EngineAuthPrompt, goal: CodingGoal, step: number, t
 
 // The Pilot moved to `coding-pilot.ts` (#1359); re-exported so existing importers are unchanged.
 export { CAP_SUMMARY_TOOL, CODING_TOOLS, LEARNED_MAX, LEARNED_PREFIX, decideCodingAction, pilotUserBlocks, systemPrompt, systemPromptBlocks, toCapSummary, toDecision } from "./coding-pilot.js";
-export type { CodingGoal, CodingPaneSnapshot, CodingActionKind, CodingOutcome, CodingDecision, CapSummary } from "./coding-loop-types.js";
+export type { CodingGoal, CodingPaneSnapshot, CodingActionKind, CodingOutcome, CodingDecision, CapSummary, RecordCursor } from "./coding-loop-types.js";

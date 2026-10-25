@@ -141,7 +141,7 @@ export async function sendAct(deps: ActSendDeps, label: string, compose: () => C
 				? { inputId: id, ...verdict }
 				: { inputId: id, outcome: verdict === "absent" ? "unknown" : "accepted", objective: dispatch.objective, ledger: pane.engine?.ledger ?? null, epoch: pane.engine?.epoch ?? null };
 		return { pane, receipt };
-	});
+	}, { reconciles: true }); // every attempt reads the runner's input ledger first (#1358), so a repeat after a reconnect cannot duplicate the act
 	// A step journalled before this shape existed held the bare pane: it was accepted, with what was composed.
 	if (!(done && typeof done === "object" && "receipt" in done)) {
 		const a = compose();

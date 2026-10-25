@@ -11,6 +11,7 @@ import { clipMarked } from "./lib/clip-marked.js";
 import { logError } from "./lib/error-log.js";
 import { relayDispatchObservation } from "./lib/relay-dispatch-observability.js";
 import { evictStaleSockets, PONG_DEADLINE_MS, RunnerLiveness, rttEcho, sendOnFirstOpen } from "./lib/relay-liveness.js";
+import { RELAY_DEFAULT_TIMEOUT_MS } from "./lib/runner-timeouts.js";
 import type { Env } from "./types.js";
 
 interface PendingRequest {
@@ -35,7 +36,7 @@ interface CommandResponse {
 	error?: string;
 }
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = RELAY_DEFAULT_TIMEOUT_MS;
 const RELAY_UNRESPONSIVE_ERROR = "Runner relay is connected but not responding";
 const REPLACED = "Runner replaced by new connection";
 const EVICTED = "Stale runner socket evicted";
@@ -252,7 +253,11 @@ export class RelayDO extends DurableObject<Env> {
 		try {
 			result = await new Promise<CommandResponse>((resolve, reject) => {
 				const timer = setTimeout(() => {
+					const entry = this.pending.get(id);
 					this.pending.delete(id);
+					// The relay has given up on this command; the runner must not carry on with it (#1358). Without this the CLI went on
+					// forwarding for up to its own limit (10 minutes) a command whose caller was told it timed out at two.
+					if (entry?.ws) this.cancelOnRunner(entry.ws as WebSocket, id);
 					reject(new Error(RELAY_TIMEOUT));
 				}, timeoutMs);
 
@@ -301,6 +306,19 @@ export class RelayDO extends DurableObject<Env> {
 	}
 
 	// ── Helpers ──────────────────────────────────────────────────────────
+
+	/**
+	 * Tell the runner the relay has stopped waiting for command `id` (#1358): `{ type: "cancel", id }`. A runner that predates it
+	 * reads a message with no `path` as noise and drops it, so the frame is safe to send to every runner. Best-effort: a socket that
+	 * closed is already telling the runner everything.
+	 */
+	private cancelOnRunner(ws: WebSocket, id: string): void {
+		try {
+			ws.send(JSON.stringify({ type: "cancel", id }));
+		} catch {
+			/* the socket is gone — the runner learns it from the close */
+		}
+	}
 
 	private rejectSentOn(ws: WebSocket, reason: string): void {
 		for (const [id, pending] of this.pending) {

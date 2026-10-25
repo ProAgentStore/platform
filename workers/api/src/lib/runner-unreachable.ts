@@ -44,10 +44,13 @@ export class RunnerUnreachableError extends Error {
 	 * response becomes a duplicate instruction. Defaults to `true`, the conservative reading.
 	 */
 	readonly dispatched: boolean;
-	constructor(message: string, opts: { dispatched?: boolean } = {}) {
+	/** The runner route that failed (#1358), when the thrower knows it: what the guard classifies a re-send by. */
+	readonly path: string | undefined;
+	constructor(message: string, opts: { dispatched?: boolean; path?: string } = {}) {
 		super(message);
 		this.name = "RunnerUnreachableError";
 		this.dispatched = opts.dispatched ?? true;
+		this.path = opts.path;
 	}
 }
 
@@ -90,16 +93,21 @@ export const RELAY_WIRE_CODES: Readonly<Record<string, RunnerErrorCode>> = {
 	RUNNER_RELAY_FAILED: "RELAY_FAILED",
 };
 
-/** The tag `callRunner` appends to a message. At the END, so patterns anchored on `Runner /path → status:` still hold. */
-export function runnerErrorTag(code: RunnerErrorCode, unreachable: boolean): string {
-	return ` [${unreachable ? "runner-unreachable" : "runner-error"}:${code}]`;
+/**
+ * The tag `callRunner` appends to a message. At the END, so patterns anchored on `Runner /path → status:` still hold.
+ *
+ * `path` (#1358) rides inside the tag as `@/coding/act`: a Workflow step boundary flattens an error to its message, so a property on
+ * the error class does not survive it, and the guard has to decide whether a failed attempt may be sent again from the route.
+ */
+export function runnerErrorTag(code: RunnerErrorCode, unreachable: boolean, path?: string): string {
+	return ` [${unreachable ? "runner-unreachable" : "runner-error"}:${code}${path ? `@${path.split("?")[0]}` : ""}]`;
 }
 
-const TAG = /\[(runner-unreachable|runner-error):([A-Z_]+)\]/;
+const TAG = /\[(runner-unreachable|runner-error):([A-Z_]+)(?:@([^\]\s]+))?\]/;
 
 /** The message without its tag — for a reader that parses the runner's body out of it. */
 export function withoutRunnerErrorTag(msg: string): string {
-	return msg.replace(/ ?\[(?:runner-unreachable|runner-error):[A-Z_]+\]$/, "");
+	return msg.replace(/ ?\[(?:runner-unreachable|runner-error):[A-Z_]+(?:@[^\]\s]+)?\]$/, "");
 }
 
 /**
@@ -116,6 +124,29 @@ export function runnerErrorCode(e: unknown): RunnerErrorCode | null {
 	if (DROPPED_REASONS.some((r) => msg.includes(r))) return "DROPPED";
 	if (msg.includes("Relay command timed out")) return "RELAY_TIMEOUT";
 	return null;
+}
+
+/** The runner route a failure names (#1358), from its class or its tag; undefined for a failure that predates the tag or does not know. */
+export function runnerErrorPath(e: unknown): string | undefined {
+	const own = (e as { path?: unknown } | null)?.path;
+	if (typeof own === "string" && own) return own;
+	const msg = typeof (e as { message?: unknown } | null)?.message === "string" ? (e as { message: string }).message : typeof e === "string" ? e : "";
+	return TAG.exec(msg)?.[3];
+}
+
+/** Codes that prove nothing was sent: the relay held no socket, or the runner refused the command before it ran. */
+const NOT_DISPATCHED: ReadonlySet<RunnerErrorCode> = new Set(["NO_SOCKET", "UNRESPONSIVE", "DRAINING"]);
+
+/**
+ * Might the command have reached the runner (#1358)? A 503 from the relay or a draining runner proves it did not; a timeout, a
+ * dropped socket or a runner's own error proves nothing either way. Read from the class when it is still one, else from the code
+ * in the tag; a failure it cannot read is treated as dispatched, because the wrong guess the other way is a duplicate.
+ */
+export function runnerErrorDispatched(e: unknown): boolean {
+	const own = (e as { dispatched?: unknown } | null)?.dispatched;
+	if (typeof own === "boolean") return own;
+	const code = runnerErrorCode(e);
+	return code ? !NOT_DISPATCHED.has(code) : true;
 }
 
 export function isRunnerUnreachable(e: unknown): boolean {

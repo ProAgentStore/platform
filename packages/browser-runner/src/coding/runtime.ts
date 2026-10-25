@@ -1,5 +1,6 @@
 import { confineWorkDir } from "./workdir-guard.js";
 import { codingEngineModelProblem } from "./engine-model-policy.js";
+import type { RecordAck, RecordCursor } from "./record-cursor.js";
 import { actDigest, type EngineInputs } from "./input-ledger.js";
 import { cleanCheckout, type CheckoutCleanAction } from "./checkout-clean.js";
 import { parkRestore, parkSnapshot } from "./park-snapshot.js";
@@ -212,6 +213,11 @@ export interface CodingSnapshot {
 	 * never "nothing happened".
 	 */
 	acts?: EngineActRecord[];
+	/**
+	 * The cursor that acknowledges exactly the `usage` and `acts` in this snapshot (#1358); present only when the caller sent an
+	 * `ack`. The cloud persists the records, then sends this back as the next capture's `ack`; only then are they forgotten.
+	 */
+	recordCursor?: RecordCursor;
 }
 
 /** Hard cap on a pane returned to the brain/console (matches the worker MAX_PANE_CHARS). */
@@ -340,6 +346,9 @@ export class CodingRuntime {
 		// a reader of the registration can see which machines can restore a branch invariant; the
 		// cloud still never trusts it, because an older runner simply 404s and the policy reports
 		// that it asked and was not answered.
+		// `coding.capture-ack` (#1358): a capture that names an `ack` cursor READS its usage/act records without deleting them, and
+		// they go only when a later capture acknowledges them — so a capture that timed out but ran, or whose persistence failed,
+		// loses nothing. A runner without it drains destructively and returns no cursor, which a cloud reads as "not available".
 		// `coding.run-objective` (#1019): a message may carry the run's objective, delivered verbatim and
 		// attributed to the platform. `.v2`: attributed by its VERIFIED origin (run-objective.ts) — a cloud
 		// sends the objective only to a v2 runner, so an older one is never made to call it the owner's.
@@ -347,7 +356,7 @@ export class CodingRuntime {
 		// and every snapshot lists the accepted ids, so a retry after a lost reply can be reconciled.
 		// `.v3` renders the owner's constraints in force with the objective; `coding.engine-identity`: every snapshot
 		// names its input ledger and engine process, and an id is deduplicated together with its content (input-ledger.ts).
-		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity", "coding.checkout-clean"];
+		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity", "coding.checkout-clean", "coding.capture-ack"];
 	}
 
 	/**
@@ -535,7 +544,7 @@ export class CodingRuntime {
 	 * `drainUsage` is opt-in because draining is destructive: nine cloud call sites hit
 	 * `/coding/capture` and only the two that actually write the ledger may consume the records.
 	 */
-	snapshot(sessionId: string, opts: { drainUsage?: boolean } = {}): CodingSnapshot {
+	snapshot(sessionId: string, opts: { drainUsage?: boolean; ack?: RecordAck } = {}): CodingSnapshot {
 		const session = this.require(sessionId);
 		const alive = session.alive;
 		// ALWAYS return the transcript — it holds the produced output AND the
@@ -564,8 +573,18 @@ export class CodingRuntime {
 			...(session.consumedInputs.length ? { consumedInputs: [...session.consumedInputs] } : {}),
 			acceptedInputs: [...session.acceptedInputs],
 			engine: session.inputs.report(),
-			...(opts.drainUsage ? { usage: session.takeUsage(), acts: session.takeActs() } : {}),
+			...(opts.drainUsage ? this.records(session, opts.ack) : {}),
 		};
+	}
+
+	/**
+	 * The records a draining capture carries. With an `ack` (#1358) they are read, not taken: what the cloud acknowledged is
+	 * forgotten, the rest is returned with the cursor that acknowledges it. Without one — an older cloud — they are drained as before.
+	 */
+	private records(session: HeadlessSession, ack: RecordAck | undefined): Pick<CodingSnapshot, "usage" | "acts" | "recordCursor"> {
+		if (!ack) return { usage: session.takeUsage(), acts: session.takeActs() };
+		const { usage, acts, cursor } = session.readRecords(ack);
+		return { usage, acts, recordCursor: cursor };
 	}
 
 	/** Perform one action, then return the fresh snapshot (non-blocking, like browser act). */

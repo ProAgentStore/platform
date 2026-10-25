@@ -111,9 +111,13 @@ export function redactArtifacts(artifacts: readonly ActionArtifact[] | undefined
 
 let writeSeq = 0;
 
-/** Write one action to the card's log. Best-effort: a log line must never fail the work it records. */
-export async function writeActionEntry(env: Pick<Env, "DB">, input: ActionInput): Promise<void> {
-	if (!input.taskId || !input.instanceId || !input.userId) return;
+/**
+ * Write one action to the card's log. Best-effort: a log line must never fail the work it records. Returns whether the line is on the card
+ * (true also for one skipped on purpose — no card, or already there); false only when the write FAILED (#1358), for the one caller that
+ * must not acknowledge a record it could not keep.
+ */
+export async function writeActionEntry(env: Pick<Env, "DB">, input: ActionInput): Promise<boolean> {
+	if (!input.taskId || !input.instanceId || !input.userId) return true;
 	const at = input.at ?? Date.now();
 	// Time, then this isolate's write sequence: two actions in the same millisecond keep their order.
 	const id = `act-${String(at).padStart(13, "0")}-${String(++writeSeq % 1e9).padStart(9, "0")}-${crypto.randomUUID()}`;
@@ -143,8 +147,10 @@ export async function writeActionEntry(env: Pick<Env, "DB">, input: ActionInput)
 		)
 			.bind(id, input.instanceId, input.userId, input.taskId, ACTION_EVENT_TYPE, JSON.stringify(payload), sqlTime(at), input.dedupeKey ?? null)
 			.run();
+		return true;
 	} catch {
 		/* the record of the work, never the work */
+		return false;
 	}
 }
 

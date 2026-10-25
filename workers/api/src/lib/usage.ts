@@ -192,9 +192,9 @@ export async function recordEngineUsage(
 		authResolved?: EngineAuthResolved | null;
 	},
 	records: EngineUsageReport[] | undefined,
-): Promise<void> {
+): Promise<boolean> {
 	try {
-		if (!args.userId || !args.sessionId || !records?.length) return;
+		if (!args.userId || !args.sessionId || !records?.length) return true;
 		const payer = payerForEngineAuth(args.authResolved);
 		const stmts = records.map((r) =>
 			env.DB.prepare(
@@ -219,8 +219,11 @@ export async function recordEngineUsage(
 			),
 		);
 		await env.DB.batch(stmts);
+		return true;
 	} catch {
 		/* observability, never load-bearing */
+		// …but the caller that acknowledges these records to the runner (#1358) has to know they were NOT kept.
+		return false;
 	}
 }
 

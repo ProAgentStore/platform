@@ -743,7 +743,12 @@ describe("a browser agent's action trail leaves the loop only through the redact
 		// Scanned over RAW source: the path is a string literal, which the lexer blanks. The same
 		// trap the credential-writer guard above documents — a guard that cannot see its own
 		// subject reports "no offenders" forever.
-		const writers = ALL.flatMap((f) =>
+		// `lib/runner-routes.ts` names the path to CLASSIFY it (a repeat of it is never safe, #1358); it sends nothing. It is skipped as a
+		// subject, and the guard below proves it cannot be a writer, so the exemption cannot hide one.
+		const routeTable = ALL.find((f) => f.rel === "lib/runner-routes.ts");
+		expect(routeTable, "lib/runner-routes.ts moved — repoint this guard").toBeTruthy();
+		expect(findCalls((routeTable as Source).code, "callRunner").length + findCalls((routeTable as Source).code, "fetch").length, "the route table must not send anything").toBe(0);
+		const writers = ALL.filter((f) => f.rel !== "lib/runner-routes.ts").flatMap((f) =>
 			matchLines(f.raw, /"\/browser\/event"/g).map((h) => ({ rel: f.rel, line: h.line, excerpt: h.excerpt })),
 		);
 		expect(writers.length, "no /browser/event writers found — repoint this guard").toBeGreaterThanOrEqual(6);

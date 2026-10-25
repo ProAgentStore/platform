@@ -2,6 +2,8 @@ import { decryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
 import { latestResourceSample, resourceHistory, resourcesView } from "./runner-resources.js";
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
+import { routeFor, TIMED_OUT_READ_PATHS } from "./runner-routes.js";
+import { READ_TIMEOUT_MS, RELAY_DEFAULT_TIMEOUT_MS } from "./runner-timeouts.js";
 import { DRAINING_MARKER, NO_SOCKET_MARKER, relayFailureIsDisconnect, relayWireCode, runnerErrorCode, runnerErrorTag, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
@@ -310,7 +312,16 @@ export async function isRunnerOnline(env: Env, instanceId: string, runnerNode?: 
  *  request for the full DEFAULT_TIMEOUT_MS (120s) — a ~1.5-3s capture poll must fail fast and
  *  free the socket instead of stacking 2-minute waits in the RelayDO. Mutating commands
  *  (act/clone/start) keep the long default. */
-export const READ_TIMEOUT_MS = 10_000;
+export { READ_TIMEOUT_MS };
+
+/**
+ * The timeout to send for a route the caller named none for (#1358): the route's own when it is SHORTER than the relay's default
+ * (a quick read fails fast), else none — the relay applies its default, which keeps the wire as it was for every other command.
+ */
+function routeTimeoutMs(path: string): number | undefined {
+	const t = routeFor(path).timeoutMs;
+	return t < RELAY_DEFAULT_TIMEOUT_MS ? t : undefined;
+}
 
 /** Send a command to the runner via the WebSocket relay DO. `opts.timeoutMs` caps how long
  *  the relay waits for the runner's reply (defaults to the DO's 120s); pass READ_TIMEOUT_MS
@@ -321,7 +332,7 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 	const res = await stub.fetch(new Request("https://relay/command", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ method: "POST", path, body, timeoutMs: opts?.timeoutMs }),
+		body: JSON.stringify({ method: "POST", path, body, timeoutMs: opts?.timeoutMs ?? routeTimeoutMs(path) }),
 	}));
 	if (!res.ok) {
 		const detail = await res.text().catch(() => "");
@@ -341,35 +352,31 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 			throw new RunnerUnreachableError(
 				(unresponsive
 					? `Runner relay is ${UNRESPONSIVE_MARKER} — ${NO_SOCKET_MARKER} for this agent.`
-					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`) + runnerErrorTag(code, true),
-				{ dispatched: res.status !== 503 },
+					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`) + runnerErrorTag(code, true, path),
+				{ dispatched: res.status !== 503, path },
 			);
 		}
 		// The runner draining for an update refused the command BEFORE it ran (#1344): retryable, and nothing was sent to the
 		// runtime — but it is a connected runner, so it says so instead of "no live socket".
 		if (res.status === 503 && detail.includes(DRAINING_MARKER)) {
-			throw new RunnerUnreachableError(`Runner ${path} → 503: the runner is draining for an automatic update and is ${UNRESPONSIVE_MARKER} to new work until it restarts.${runnerErrorTag("DRAINING", true)}`, { dispatched: false });
+			throw new RunnerUnreachableError(`Runner ${path} → 503: the runner is draining for an automatic update and is ${UNRESPONSIVE_MARKER} to new work until it restarts.${runnerErrorTag("DRAINING", true, path)}`, { dispatched: false, path });
 		}
-		// A CAPTURE that timed out at the relay is a runner connected but not answering (#1341) — the same state as
-		// the 503 above, met one step later. Typed the same way so the runner guard waits for it instead of ending a
-		// long run as `unknown`. A capture never touches the checkout or the engine, so re-sending it cannot duplicate
-		// an act. It is not free of effects, though: the Pilot's capture also drains the runner's usage and act
-		// records, so if the timed-out one DID run, that one batch is not recorded. Losing a batch of records is the
-		// accepted price of not losing the run. Every other path keeps the plain error: a mutating command that timed
-		// out may have run (#1015).
+		// A QUICK READ that timed out at the relay (a capture, `/health`, `/capabilities`: `TIMED_OUT_READ_PATHS`) is a runner connected but
+		// not answering (#1341) — the same state as the 503 above, met one step later. Typed the same way so the runner guard waits for it
+		// instead of ending a long run as `unknown`. Re-sending it cannot duplicate an act. Nor does it lose records any more (#1358): a
+		// capture that names a cursor reads the runner's usage/act records without deleting them, so a timed-out one that DID run only
+		// causes a re-send (an older runner still drains, and loses that one batch as it always did). Every other path keeps the plain
+		// error: a mutating command that timed out may have run (#1015).
 		// A relay that predates its codes (a deploy rolling) is read by its words — only on its own 504, never a runner's body.
 		const code = relayWireCode(detail) ?? (res.status === 504 ? runnerErrorCode(detail) : null) ?? "RUNNER_HTTP";
-		if (res.status === 504 && code === "RELAY_TIMEOUT" && READ_ONLY_RUNNER_PATHS.has(path)) {
+		if (res.status === 504 && code === "RELAY_TIMEOUT" && TIMED_OUT_READ_PATHS.has(path.split("?")[0] ?? path)) {
 			await recordUnresponsive(conn, path);
-			throw new RunnerUnreachableError(`Runner ${path} → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.${runnerErrorTag(code, true)}`, { dispatched: true });
+			throw new RunnerUnreachableError(`Runner ${path} → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.${runnerErrorTag(code, true, path)}`, { dispatched: true, path });
 		}
-		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}${runnerErrorTag(code, false)}`);
+		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}${runnerErrorTag(code, false, path)}`);
 	}
 	return (await res.json()) as T;
 }
-
-/** Runner paths that never change the checkout or the engine, so a timed-out one is waited out and re-sent (#1341). */
-export const READ_ONLY_RUNNER_PATHS: ReadonlySet<string> = new Set(["/coding/capture", "/terminal/capture"]);
 
 /**
  * Stamp a "connected but not responding" dispatch with what the machine was doing (#924).
