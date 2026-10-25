@@ -16,8 +16,16 @@
  *
  * Resolved through symlinks first (the nearest existing ancestor, for a folder a clone will create), so
  * `~/dev/innocent -> ~/.ssh` is the credential directory it points at.
+ *
+ * Then an ALLOW-list (#1193). A deny-list leaves `~/Documents` readable and cannot name every app's token store, so a folder
+ * must also be one of:
+ *   • inside a git working tree whose root is below the home folder — a repository, which is what these routes exist to read;
+ *   • inside a root the owner registered on this machine (`runner-roots.ts`, `pags runner roots add`).
+ * Anything else is refused with the folder named and the command that fixes it. The credential check still comes first: a
+ * registered root cannot be a credential directory.
  */
 import { existsSync, realpathSync } from "node:fs";
+import { readRoots } from "./runner-roots.js";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { InspectError } from "./inspect.js";
@@ -67,7 +75,18 @@ export function isWithin(child: string, parent: string): boolean {
  * The `workDir` a request may name, or an {@link InspectError} saying why not. `allow` lists folders the
  * runner itself manages inside a credential directory — the managed clone root — which stay usable.
  */
-export function confineWorkDir(raw: string, opts: { home?: string; allow?: readonly string[] } = {}): string {
+/** The nearest folder at or above `path` that holds a `.git` (a directory, or the file a worktree or submodule has), or null. */
+export function gitRootOf(path: string): string | null {
+	let p = path;
+	for (;;) {
+		if (existsSync(join(p, ".git"))) return p;
+		const up = dirname(p);
+		if (up === p) return null;
+		p = up;
+	}
+}
+
+export function confineWorkDir(raw: string, opts: { home?: string; allow?: readonly string[]; roots?: readonly string[] } = {}): string {
 	const home = realPathOf(opts.home ?? homedir(), opts.home ?? homedir());
 	const path = realPathOf(raw, opts.home ?? homedir());
 	if (isWithin(home, path)) {
@@ -76,5 +95,13 @@ export function confineWorkDir(raw: string, opts: { home?: string; allow?: reado
 	if ((opts.allow ?? []).some((a) => isWithin(path, realPathOf(a, home)))) return path;
 	const credential = CREDENTIAL_DIRS.find((d) => isWithin(path, realPathOf(join(home, d), home)));
 	if (credential) throw new InspectError(`"${raw}" is inside ~/${credential}, which holds credentials — it cannot be read as a repository.`);
-	return path;
+	// The allow-list (#1193): a registered root, else a git working tree that is not the home folder's own.
+	const registered = (opts.roots ?? readRoots(opts.home ?? homedir())).map((r) => realPathOf(r, home));
+	if (registered.some((r) => !isWithin(home, r) && isWithin(path, r))) return path;
+	const repo = gitRootOf(path);
+	if (repo && !isWithin(home, repo)) return path;
+	throw new InspectError(
+		`"${raw}" is not a git repository or a folder you have allowed on this machine, so it cannot be read through the runner. ` +
+			`If it is a project, run \`pags runner roots add "${path}"\` on that machine (or put it under git); a registered or forged path outside both is refused.`,
+	);
 }

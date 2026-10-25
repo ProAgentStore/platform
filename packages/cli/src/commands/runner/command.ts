@@ -18,6 +18,7 @@ import {
 } from "./process.js";
 import { connectViaRelay } from "./relay.js";
 import { probeCommand } from "./probe.js";
+import { rootsCommand } from "./roots.js";
 import { thresholdsCommand } from "./thresholds.js";
 import { alreadyRunningLines, identifyPortOccupant, portCollisionLines, RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../../existing-runner.js";
 import { acquireLock, configDir, holderMessage, releaseLock, UNKNOWN_LOCK_ACCOUNT } from "../../runner-lock.js";
@@ -47,6 +48,7 @@ export function createRunnerCommand(): Command {
 		"Manage the local ProAgentStore browser runtime for ProAgentStore agents",
 	);
 	command.addCommand(thresholdsCommand()); // #1275: this machine's admission thresholds
+	command.addCommand(rootsCommand()); // #1193: the folders this machine allows the runner to read besides git repositories
 	command.addCommand(probeCommand()); // #1148: proves a candidate release before auto-update swaps to it
 
 	command

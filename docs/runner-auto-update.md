@@ -501,3 +501,25 @@ Not done, and why: the OS keychain — an unattended service (the `--daemon` Lau
 keychain, which is the case that matters; and a sandbox profile for engines, which differs per engine and per OS and which this
 repo does not set. A runner-only session can still act as that runner (register, heartbeat, ask for relay tokens for the owner's
 agents), which is why it stays revocable; it cannot touch the account.
+
+## Which folders the runner will read: an allow-list (#1193)
+
+The runner's inspection routes (`read-file`, `tree`, `search`, `git`, `git-write`, park) take a `workDir` from the request, and the
+platform supplies it from the owner's repo registry, which the machine has no copy of. #1165 refused the home folder, credential
+directories and links into them — a deny-list, which left a registered or forged `~/Documents` readable and could not name every
+app's token store. The runner now also requires the folder to be one of:
+
+- **inside a git working tree** whose root is below the home folder (a `.git` directory, or the file a worktree or submodule has) —
+  a repository, which is what these routes exist to read. A repository at the home folder itself (dotfiles) does not make everything
+  in the home folder a repository; or
+- **inside a root the owner registered on this machine**: `pags runner roots add <folder>` (and `remove`, or no argument to list).
+  It writes `~/.config/proagentstore/runner-roots.json`. Nothing the cloud can ask for writes it, which is the point: a folder the
+  platform supplies cannot widen what the machine allows.
+
+The credential rules still come first, so a root cannot be the home folder, a folder above it, a credential directory or a link
+into one. The runner's own managed clones are unchanged. A folder outside both is refused with the folder named and the command that
+fixes it. Not covered: an engine running as you can edit the roots file as it can read anything you can (see the runner-only
+sign-in above for what that costs).
+
+Also worth knowing, from #1165: `tmux_secure_put` / `tmux_secure_get` no longer take an arbitrary path. A flow that delivered a `.env`
+straight into a project folder now writes it to `~/.config/proagentstore/secure-files`, and the operator moves it.
