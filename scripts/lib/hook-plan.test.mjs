@@ -65,8 +65,10 @@ describe("the pre-push guards are CI's guards", () => {
 	it("runs exactly the guard scripts ci.yml runs, with the same arguments", () => {
 		const ci = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../.github/workflows/ci.yml"), "utf8");
 		const inCi = [...ci.matchAll(/run: node (scripts\/check-[\w-]+\.mjs)([^\n]*)/g)].map((m) => [m[1], ...m[2].trim().split(/\s+/).filter(Boolean)]);
-		// e2e projects need a Playwright install and a built console; that one stays CI-only.
-		const local = inCi.filter(([s]) => s !== "scripts/check-e2e-projects.mjs");
+		// e2e projects need a Playwright install and a built console; that one stays CI-only. So does the release gate (#1321): it
+		// compares a push's range (CI's `before`..`sha`) and asks npm what is published, neither of which a local push has.
+		const CI_ONLY = new Set(["scripts/check-e2e-projects.mjs", "scripts/check-release-version.mjs"]);
+		const local = inCi.filter(([s]) => !CI_ONLY.has(s));
 		expect(CI_GUARDS).toEqual(local);
 		expect(CI_GUARDS.length).toBeGreaterThan(10);
 	});

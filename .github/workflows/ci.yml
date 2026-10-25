@@ -38,6 +38,12 @@ jobs:
         # ubuntu-latest rolled to 26.04, where Playwright does not support chromium: 21 browser tests failed, main went red and the
         # API worker stopped deploying. Runs first, so a floating image is named in seconds instead of as a wall of test failures.
         run: node scripts/check-workflow-runner.mjs
+      - name: Release gate - shipped CLI/SDK code changed under an already-published version (#1321)
+        # #1312's capability reporting changed the CLI and left package.json at 0.4.176, which npm already had; publish-npm skips a
+        # published version, so the feature shipped to nobody and the build stayed green. Pushes compare against the previous head,
+        # pull requests against their base. No range (a first push, a manual run) is nothing to judge, not a failure.
+        if: github.event_name != 'workflow_dispatch'
+        run: node scripts/check-release-version.mjs "${{ github.event.before || github.event.pull_request.base.sha }}" "${{ github.sha }}"
       - name: Guard agents/ Tier-0 allowlist (#49)
         run: node scripts/check-agents-allowlist.mjs
       - name: Guard quality-scan config (#290, #295)

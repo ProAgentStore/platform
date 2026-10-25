@@ -1,4 +1,6 @@
 import type { Hono } from "hono";
+import { publishedCli } from "../lib/auto-update-stuck.js";
+import { capabilityNotReportedMessage } from "../lib/capability-report-message.js";
 import { requireUser } from "../lib/auth.js";
 import { normalizeMachineId } from "../lib/machine-identity.js";
 import { capabilityHistory, getMachineCapabilities, MAX_NEEDS, summarizeCapabilities } from "../lib/machine-capabilities.js";
@@ -24,7 +26,11 @@ export function registerMachineCapabilityRoutes(router: Hono<{ Bindings: Env }>)
 		const machineId = await ownedMachineId(c.env, session.uid, c.req.param("machineId"));
 		if (!machineId) return c.json({ error: NOT_FOUND }, 404);
 		const stored = await getMachineCapabilities(c.env, session.uid, machineId);
-		if (!stored) return c.json({ machineId, reported: false, message: "This machine has not reported its capabilities yet. Update the runner (`pags update`) and keep `pags up` running; it reports at startup." });
+		if (!stored) {
+			// #1321: say WHY - the machine may already run the newest release, and that release may lack reporting.
+			const row = await c.env.DB.prepare("SELECT runner_version FROM instance_runtime_nodes WHERE user_id = ?1 AND machine_id = ?2 ORDER BY last_seen_at DESC LIMIT 1").bind(session.uid, machineId).first<{ runner_version: string | null }>().catch(() => null);
+			return c.json({ machineId, reported: false, message: capabilityNotReportedMessage({ runnerVersion: row?.runner_version, published: await publishedCli().catch(() => null) }) });
+		}
 		const history = c.req.query("history") === "1" ? await capabilityHistory(c.env, session.uid, machineId) : undefined;
 		return c.json({ machineId, reported: true, summary: summarizeCapabilities(stored), capabilities: stored.capabilities, ...(history ? { history } : {}) });
 	});
