@@ -58,6 +58,9 @@ export default function ActionsRunnerCard({ instanceId }: { instanceId: string }
 	const load = useCallback(async () => {
 		try {
 			const next = await api<ActionsRunnerStatus>(`/v1/instances/${encodeURIComponent(instanceId)}/actions-runner`);
+			if (!next || (next.machineHealth !== "current" && next.machineHealth !== "unknown") || !Array.isArray(next.installed) || next.installed.some((item) => !item || typeof item !== "object")) {
+				throw new Error("The machine returned an invalid Actions runner status.");
+			}
 			setStatus(next);
 			setWatchRecovery((current) => current && next.installed.some((item) => {
 				const r = item.supervisor?.lastRecovery;
