@@ -4,6 +4,7 @@ import BrainModelCard from "../components/BrainModelCard";
 import PilotModelCard from "../components/PilotModelCard";
 import CodingEngineCard from "../components/CodingEngineCard";
 import RunnerPanel from "../components/RunnerPanel";
+import ActionsRunnerCard from "../components/ActionsRunnerCard";
 import SecureInputHistory from "../components/SecureInputHistory";
 import TeamworkSection from "./TeamworkSection";
 import LoopPresetsSection from "./LoopPresetsSection";
@@ -286,6 +287,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}
 
 			<RunnerPanel instanceId={instanceId} />
+			{isCoding && <ActionsRunnerCard instanceId={instanceId} />}
 			<SecureInputHistory instanceId={instanceId} />
 
 			<TeamworkSection instanceId={instanceId} />
