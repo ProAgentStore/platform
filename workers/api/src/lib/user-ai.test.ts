@@ -163,7 +163,7 @@ describe("runUserWorkersAi", () => {
 		const { env } = envWithCloudflareKey(await encryptedCloudflareRow());
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }, { status: 403, headers: { "cf-ray": "8d1f2a" } })));
 		const err = (await runUserWorkersAi(env, "user-1", "@cf/meta/llama-3.2-3b-instruct", {}).catch((e: unknown) => e)) as UserAiProviderError;
-		expect(err.message).toBe("Cloudflare Workers AI request failed with HTTP 403: Authentication error [code 10000; request-id 8d1f2a]");
+		expect(err.message).toBe("Cloudflare Workers AI request failed with HTTP 403: Authentication error [code 10000; request-id 8d1f2a] [provider-error:credentials]");
 		expect(classifyCodingFailure(err).class).toBe("provider_credentials");
 	});
 });
@@ -930,7 +930,7 @@ describe("the chat call streams, and its deadlines measure silence (#427)", () =
 		// No type and no request id: nothing is invented.
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { message: "overloaded" } }, { status: 529 })));
 		const bare = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
-		expect(bare.message).toBe("Anthropic (529): overloaded");
+		expect(bare.message).toBe("Anthropic (529): overloaded [provider-error:server]");
 	});
 });
 

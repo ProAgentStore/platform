@@ -25,6 +25,8 @@ import { isWorkersAiModel } from "./brain-models.js";
 import { redactCloudflareUpstream } from "./cloudflare-redact.js";
 import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
+import { type StoredCloudflareAiCredentials, parseCloudflareAiCredentials } from "./cloudflare-credentials.js";
+import { classifyAnthropicError, classifyCloudflareError, type ProviderErrorKind, providerErrorTag } from "./provider-error-kind.js";
 import { DEFAULT_ANTHROPIC_MODEL, anthropicModelProblem, type AnthropicModelId } from "./anthropic-model-routing.js";
 
 export class UserAiCredentialsError extends Error {
@@ -79,29 +81,21 @@ export class UserAiProviderError extends Error {
 		 * provider credit.
 		 */
 		public readonly retryable = false,
+		/**
+		 * What KIND of refusal this is (#1356) — decided once, by the adapter that built the error (`provider-error-kind.ts`), and
+		 * also written into the message as a tag because a Workflow step boundary drops this field but keeps the message. Absent on an
+		 * error that is not a provider's refusal (a deadline, an empty reply).
+		 */
+		public readonly kind?: ProviderErrorKind,
 	) {
 		super(message);
 		this.name = "UserAiProviderError";
 	}
 }
 
-/**
- * Does a provider's error sentence say the account is out of money? (#773)
- *
- * Anthropic: "Your credit balance is too low to access the Anthropic API." Matched loosely on the
- * noun phrase rather than the whole sentence, so a reworded suffix does not silently drop the hint.
- * The classifier in `coding-failure.ts` matches the same phrase; the two are kept in step by
- * `user-ai.test.ts`, which feeds the live wording to both.
- */
-export function isCreditBalanceMessage(message: string): boolean {
-	const m = message.toLowerCase();
-	return m.includes("credit balance") || m.includes("insufficient_funds") || m.includes("insufficient credit");
-}
-
-export interface StoredCloudflareAiCredentials {
-	accountId: string;
-	token: string;
-}
+// The classifier lives in provider-error-kind.ts (#1356); these stay importable from here.
+export { isCreditBalanceMessage } from "./provider-error-kind.js";
+export { encodeCloudflareAiCredentials, parseCloudflareAiCredentials, type StoredCloudflareAiCredentials } from "./cloudflare-credentials.js";
 
 /** The two providers a brain runs on — which one a turn is on is read off its first completion. */
 export type AiProvider = "anthropic" | "cloudflare";
@@ -446,29 +440,31 @@ async function runAnthropic(
 		const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 		const errObj = (errBody as { error?: { message?: string; type?: string } }).error;
 		const errMsg = errObj?.message || JSON.stringify(errBody);
-		if (res.status === 401 || res.status === 403 || isCreditBalanceMessage(errMsg)) await observeProviderAccount(env, userId, "anthropic", apiKey, isCreditBalanceMessage(errMsg) ? "provider_credit" : "provider_credentials", Date.now(), String(anthropicBody.model));
+		// Decided ONCE (#1356, `provider-error-kind.ts`); the hold, the hint and the error all read it.
+		const kind = classifyAnthropicError({ status: res.status, message: errMsg });
+		if (kind === "credit" || kind === "credentials") await observeProviderAccount(env, userId, "anthropic", apiKey, kind === "credit" ? "provider_credit" : "provider_credentials", Date.now(), String(anthropicBody.model));
 		// An exhausted balance arrives as a 400 `invalid_request_error` — the same status and type as
 		// a malformed request — with the sentence as its only signature (#773). The vendor's text is
 		// kept verbatim (it is what `coding-failure.ts` classifies on) and the remedy is appended in
 		// the same shape as the 401 hint, so the owner reads which page to go to rather than which
 		// endpoint said no.
-		const hint = res.status === 404
+		const hint = kind === "model_access"
 			? " — Your API key may not have access to this model. Get a key from console.anthropic.com/settings/keys"
-			: res.status === 401
+			: kind === "credentials" && res.status === 401
 				? " — Invalid API key. Update it in Profile → API Keys → Anthropic"
 				// A 403 `permission_error` "Request not allowed" has been measured to come and go on a
 				// key that works minutes either side of it (#1326), so it is reported as a refusal the
 				// platform re-checks, not as a dead key.
-				: res.status === 403
+				: kind === "credentials" && res.status === 403
 					? ` — Anthropic API key ending in ${keyHint(apiKey) ?? "an unavailable hint"} was refused. PAGS re-checks this key automatically and continues stopped runs once it works; if it stays refused, check the key and organization at console.anthropic.com or replace it in Profile → API Keys → Anthropic`
-				: res.status === 400 && isCreditBalanceMessage(errMsg)
+				: kind === "credit"
 					// `keyHint` is exactly four non-secret trailing characters (#780). `runAnthropic`
 					// holds the precise key that made this request, so this identifies THAT key even if
 					// the owner replaces it before reading the error; a later vault lookup could lie.
 					? ` — Anthropic API key ending in ${keyHint(apiKey) ?? "an unavailable hint"} has insufficient balance. This is the Anthropic API key balance, never a machine or Claude CLI subscription. Top up at console.anthropic.com/settings/billing`
 					: "";
 		throw new UserAiProviderError(
-			`Anthropic (${res.status}): ${errMsg}${providerFacts(errObj?.type, res.headers.get("request-id"))}${hint}`,
+			`Anthropic (${res.status}): ${errMsg}${providerFacts(errObj?.type, res.headers.get("request-id"))}${hint}${providerErrorTag(kind)}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
 			errBody,
@@ -477,6 +473,7 @@ async function runAnthropic(
 			// reach, or a rate limit are all still true a second later, and 429 in particular wants
 			// a backoff this path does not have.
 			res.status >= 500,
+			kind,
 		);
 	}
 
@@ -771,17 +768,20 @@ async function runCloudflareAi(
 	clearTimeout(timeout);
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
-		if (res.status === 401 || res.status === 403) await observeProviderAccount(env, userId, "cloudflare", credentials, "provider_credentials", Date.now(), model);
+		const kind = classifyCloudflareError({ status: res.status });
+		if (kind === "credentials") await observeProviderAccount(env, userId, "cloudflare", credentials, "provider_credentials", Date.now(), model);
 		// `details` reaches the verify response and the error log; Cloudflare's errors quote the
 		// account path, which holds a token when the two were saved swapped (#893).
 		const redacted = redactCloudflareUpstream(data, credentials);
 		const first = (redacted as { errors?: Array<{ code?: unknown; message?: unknown }> })?.errors?.[0];
 		const said = typeof first?.message === "string" ? `: ${clipMarked(first.message, 300, { within: true })}` : "";
 		throw new UserAiProviderError(
-			`Cloudflare Workers AI request failed with HTTP ${res.status}${said}${providerFacts(first?.code != null ? `code ${String(first.code)}` : null, res.headers.get("cf-ray"))}`,
+			`Cloudflare Workers AI request failed with HTTP ${res.status}${said}${providerFacts(first?.code != null ? `code ${String(first.code)}` : null, res.headers.get("cf-ray"))}${providerErrorTag(kind)}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
 			redacted,
+			false,
+			kind,
 		);
 	}
 	await env.DB.prepare(
@@ -875,39 +875,4 @@ export async function getUserCloudflareAiCredentials(
 	// the owner pasted, not the last four characters of the JSON encoding.
 	await backfillKeyHint(env, userId, "cloudflare", row.account_id ?? "", raw, row.key_hint);
 	return credentials;
-}
-
-export function encodeCloudflareAiCredentials(
-	accountId: string,
-	token: string,
-): string {
-	return JSON.stringify({ accountId, token });
-}
-
-export function parseCloudflareAiCredentials(
-	raw: string,
-): StoredCloudflareAiCredentials | null {
-	const trimmed = raw.trim();
-	if (!trimmed) return null;
-
-	if (trimmed.startsWith("{")) {
-		try {
-			const data = JSON.parse(trimmed) as Partial<StoredCloudflareAiCredentials>;
-			if (data.accountId?.trim() && data.token?.trim()) {
-				return { accountId: data.accountId.trim(), token: data.token.trim() };
-			}
-		} catch {
-			return null;
-		}
-		return null;
-	}
-
-	const separator = trimmed.indexOf(":");
-	if (separator > 0) {
-		const accountId = trimmed.slice(0, separator).trim();
-		const token = trimmed.slice(separator + 1).trim();
-		if (accountId && token) return { accountId, token };
-	}
-
-	return null;
 }

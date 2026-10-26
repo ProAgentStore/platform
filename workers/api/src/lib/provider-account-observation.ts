@@ -1,5 +1,6 @@
 /** Credential-specific transport observations, independent of instance model selection (#1314). */
 import type { Env } from "../types.js";
+import { parseCloudflareAiCredentials } from "./cloudflare-credentials.js";
 import { logError } from "./error-log.js";
 
 export type HeldProvider = "anthropic" | "cloudflare";
@@ -9,13 +10,10 @@ export type ProviderAccountFailure = "provider_credit" | "provider_credentials";
 export async function providerCredentialId(provider: HeldProvider, credential: string | { accountId: string; token: string }): Promise<string> {
 	let value: string;
 	if (provider === "cloudflare") {
-		let c: { accountId: string; token: string };
-		if (typeof credential === "string") {
-			const raw = credential.trim();
-			if (raw.startsWith("{")) c = JSON.parse(raw) as typeof c;
-			else { const colon = raw.indexOf(":"); c = { accountId: raw.slice(0, colon), token: raw.slice(colon + 1) }; }
-		} else c = credential;
-		if (!c.accountId?.trim() || !c.token?.trim()) throw new Error("Provider credential identity could not be checked");
+		// The ONE reader of the stored credential (#1356). This used to carry its own copy of the colon form, which built an account id
+		// from a value with no colon at all; the shared parser refuses it, and so does the identity check below.
+		const c = typeof credential === "string" ? parseCloudflareAiCredentials(credential) : credential;
+		if (!c?.accountId?.trim() || !c.token?.trim()) throw new Error("Provider credential identity could not be checked");
 		value = JSON.stringify([c.accountId.trim(), c.token.trim()]);
 	} else value = String(credential);
 	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${provider}\0${value}`));

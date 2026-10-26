@@ -36,6 +36,7 @@
  * `connectionLostMessage()`, so a reworded message fails the test instead of silently degrading
  * every future stall to `unknown`.
  */
+import { providerErrorKind } from "./provider-error-kind.js";
 import { countInterruption } from "./agent-loop-store.js";
 import { INCOMPLETE_TOOL_ARGS_MARKER, TRANSPORT_EOF_MARKER } from "./anthropic-stream.js";
 import { logError } from "./error-log.js";
@@ -258,6 +259,13 @@ export function classifyCodingFailure(err: unknown): CodingFailure {
 	// fresh run has no journal, so every act would repeat. Nothing reads this field but a human
 	// (`coding-failure.test.ts` pins that), and it stays honest by saying which retry it means.
 	if (WORKFLOW_INTERNAL_MARKERS.some((k) => m.includes(k))) return at("workflow_internal", true);
+	// THE ADAPTER'S OWN VERDICT (#1356), read before any wording: the provider adapter that built the error decided its kind once
+	// (`provider-error-kind.ts`) and stamped it on the message, where a step boundary keeps it. The marker lists below are for
+	// a message that carries no tag — one written before this, or by something that is not an adapter.
+	const decided = providerErrorKind(err);
+	if (decided === "credit") return at("provider_credit", false);
+	if (decided === "credentials") return at("provider_credentials", false);
+	if (decided === "rate_limit") return at("provider_rate_limit", false);
 	// Credit BEFORE credentials, and both BEFORE the generic provider branch: `Anthropic (400): Your
 	// credit balance is too low` is a 4xx that says nothing about transport, and reporting it as a
 	// stall is exactly the confusion #529 was filed over. Credit is read first because its status
