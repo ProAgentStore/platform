@@ -53,7 +53,12 @@ export interface CodingRepo {
 	webUrl?: string;
 	cloneUrl?: string;
 	branch: string;
+	/** The folder as stored: home-relative (`~/dev/x`) where it was added from a machine that said so (#1379), else as the owner wrote it. */
 	workdir?: string;
+	/** What the last machine to start a session here expanded `workdir` to, and by which rule — the trail for "why did it clone THERE" (#1379). */
+	workdirResolved?: string;
+	workdirResolvedVia?: string;
+	workdirResolvedAt?: string;
 	cloneStatus: CloneStatus;
 	cloneError?: string;
 	/**

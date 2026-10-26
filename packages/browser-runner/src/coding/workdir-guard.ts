@@ -27,7 +27,8 @@
 import { existsSync, realpathSync } from "node:fs";
 import { readRoots } from "./runner-roots.js";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { resolveHomePath } from "./home-path.js";
 import { InspectError } from "./inspect.js";
 
 /** Folders under the home folder whose contents are credentials, never a repository to read. */
@@ -47,8 +48,7 @@ export const CREDENTIAL_DIRS = [
 
 /** `~` expanded; resolved through symlinks as far as the path exists. */
 export function realPathOf(raw: string, home = homedir()): string {
-	const expanded = raw.trim().replace(/^~(?=$|[\\/])/, home);
-	let p = resolve(isAbsolute(expanded) ? expanded : join(home, expanded));
+	let p = resolveHomePath(raw, { home }).path;
 	const tail: string[] = [];
 	while (!existsSync(p)) {
 		const up = dirname(p);

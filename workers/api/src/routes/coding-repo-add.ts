@@ -124,7 +124,9 @@ export async function addPairedRepo(
 	// binding getting its GitHub half. That row is completed IN PLACE, keeping its id, sessions and
 	// timeline; a second binding on one checkout left two repos for session and engine resolution to
 	// choose between. A folder bound to some OTHER repo is refused by name, never rebound.
-	const sameFolder = await findRepoByWorkdir(c.env, instanceId, [localPath, verdict.path]);
+	// The folder is STORED home-relative when the machine said where its home is (#1379): `~/dev/x` holds on every machine, `/Users/serge/dev/x` on one.
+	const storedPath = verdict.homeRelative ?? localPath;
+	const sameFolder = await findRepoByWorkdir(c.env, instanceId, [...new Set([localPath, verdict.path, storedPath])]);
 	if (sameFolder?.githubRepo) {
 		return c.json(
 			{
@@ -151,7 +153,7 @@ export async function addPairedRepo(
 				409,
 			);
 		}
-		const attached = await attachWorkdir(c.env, instanceId, existing.id, localPath);
+		const attached = await attachWorkdir(c.env, instanceId, existing.id, storedPath);
 		// A concurrent add gave it a folder between the lookup and here — the same 409 as a binding that had one.
 		if (!attached) return duplicateBinding(c, ref.slug, existing);
 		await updateRepoClone(c.env, attached.id, { cloneStatus: "ready", cloneError: null, checkedNow: true });
@@ -184,7 +186,7 @@ export async function addPairedRepo(
 	}
 	const created = await createRepo(c.env, instanceId, uid, {
 		name: name || ref.slug,
-		workdir: localPath,
+		workdir: storedPath,
 		githubRepo: ref.slug,
 		provider: "github",
 		repoSlug: ref.slug,

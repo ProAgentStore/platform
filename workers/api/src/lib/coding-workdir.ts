@@ -54,6 +54,8 @@ export interface WorkdirVerdict {
 	 * than because a check failed (#853 finding 11). The one `unverified` with a definite remedy: update it.
 	 */
 	outdatedRunner?: true;
+	/** `~/dev/x` when the runner found `path` under its machine's home folder (#1379): the spelling to STORE, since it holds on any machine. */
+	homeRelative?: string;
 }
 
 /** Raw `/coding/repo-check` shape. Every field optional — an older runner sends none of them. */
@@ -65,6 +67,7 @@ interface RawCheck {
 	entryCount?: number;
 	insideWorkTree?: boolean;
 	gitChecked?: boolean;
+	homeRelative?: string | null;
 	error?: string;
 }
 
@@ -76,6 +79,13 @@ interface RawCheck {
  * that does not exist.
  */
 export function verdictFromCheck(workDir: string, raw: unknown): WorkdirVerdict {
+	const verdict = judgeCheck(workDir, raw);
+	const home = (raw as RawCheck | null)?.homeRelative;
+	// Carried on every verdict the runner actually checked (#1379); an older runner sends none and the folder is stored as written.
+	return typeof home === "string" && /^~(\/|$)/.test(home) && verdict.state !== "unverified" ? { ...verdict, homeRelative: home } : verdict;
+}
+
+function judgeCheck(workDir: string, raw: unknown): WorkdirVerdict {
 	const r = (raw ?? {}) as RawCheck;
 	// The version marker. An older runner answers `{error:"Not found"}` through the relay, and a
 	// CLI skew must read as "unverified" — never as "this repo is broken", which would condemn

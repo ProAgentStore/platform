@@ -52,6 +52,10 @@ export interface WorkdirCheck {
 	 * `insideWorkTree` carries no information.
 	 */
 	gitChecked: boolean;
+	/** What the caller asked about, before expansion (#1379). Only the runtime's route sets it. */
+	requested?: string;
+	/** `~/dev/x` when `path` is under this machine's home folder, else null (#1379): the spelling that holds on any machine. */
+	homeRelative?: string | null;
 }
 
 /**

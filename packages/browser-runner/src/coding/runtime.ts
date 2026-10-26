@@ -1,4 +1,4 @@
-import { confineWorkDir } from "./workdir-guard.js";
+import { confineWorkDir, realPathOf } from "./workdir-guard.js";
 import { codingEngineModelProblem } from "./engine-model-policy.js";
 import type { RecordAck, RecordCursor } from "./record-cursor.js";
 import { actDigest, type EngineInputs } from "./input-ledger.js";
@@ -6,7 +6,7 @@ import { cleanCheckout, type CheckoutCleanAction } from "./checkout-clean.js";
 import { parkRestore, parkSnapshot } from "./park-snapshot.js";
 import { runObjective } from "./run-objective.js";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { RunnerInputError } from "../errors.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 import type { EngineTurnReport } from "./engine-turn.js";
@@ -17,6 +17,7 @@ import type { EngineAuthResolved } from "./engine-auth.js";
 import type { EngineInvocationMode } from "./engine-adapter.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoSync, repoTree, runRepoGit } from "./inspect.js";
 import { fastForwardRepo, type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
+import { resolveHomePath, homeRelative, type ResolvedWorkdir } from "./home-path.js";
 import { checkWorkdir, cloneIntoWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 import { type CloneProtocol, CloneJobs } from "./repo-clone-job.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
@@ -110,6 +111,11 @@ export interface StartCodingResult extends CodingSnapshot {
 	 * when the session was already running here — a re-attach does not re-brief an engine mid-work.
 	 */
 	seeded: boolean;
+	/**
+	 * How the folder this session runs in was resolved on THIS machine (#1379): what was asked for, the absolute path it became, and which
+	 * rule produced it. Absent when the session already existed (nothing was resolved) or no folder was named (a managed clone).
+	 */
+	workDirResolution?: ResolvedWorkdir;
 }
 
 export type CodingAction =
@@ -467,7 +473,9 @@ export class CodingRuntime {
 	 * resolved path so a message can name the thing the owner actually typed, `~` and all.
 	 */
 	checkRepo(input: { sessionId?: string; workDir?: string }) {
-		return checkWorkdir(this.resolveWorkDir(input));
+		const resolved = this.resolveWorkDir(input);
+		// `homeRelative` (#1379), against the home's REAL path because `resolved` is one (a symlinked home must not read as 'outside home'): the machine-independent spelling of where this is, which the cloud stores as the folder's source of truth.
+		return { ...checkWorkdir(resolved), ...(input.workDir ? { requested: input.workDir } : {}), homeRelative: homeRelative(resolved, { home: realPathOf(homedir()) }) };
 	}
 
 	/**
@@ -499,6 +507,7 @@ export class CodingRuntime {
 	/** Start (or return the existing) session and report its first snapshot. */
 	start(input: StartCodingInput): StartCodingResult {
 		let session = this.sessions.get(input.sessionId);
+		let resolution: ResolvedWorkdir | null = null;
 		const modelProblem = codingEngineModelProblem(session?.config.command ?? input.command, { ...process.env, ...(session?.config.env ?? input.env) }, session?.config.clientType ?? input.clientType);
 		if (modelProblem) throw new RunnerInputError(modelProblem);
 		if (!session) {
@@ -506,9 +515,10 @@ export class CodingRuntime {
 			// start). A user-supplied local path may use ~ — expand it; otherwise
 			// clone into a managed dir. Without this the CLI would launch nowhere.
 			// A local path is cloned into only when absent or empty (#828).
-			const workDir = input.workDir
-				? resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()))
-				: join(this.reposBaseDir, sanitizeSessionName(input.repoId));
+			// #1379: the stored folder is home-relative (`~/dev/x`); THIS machine expands it against its own home, whatever user
+			// or OS it is, and the answer carries how it was translated.
+			resolution = input.workDir ? resolveHomePath(input.workDir) : null;
+			const workDir = resolution ? resolution.path : join(this.reposBaseDir, sanitizeSessionName(input.repoId));
 			ensureRepo(workDir, { cloneUrl: input.cloneUrl ?? input.emptyCheckoutCloneUrl, branch: input.branch, token: input.token, tokenUsername: input.tokenUsername, ownFolder: Boolean(input.workDir) });
 			session = new HeadlessSession({
 				id: input.sessionId,
@@ -535,7 +545,7 @@ export class CodingRuntime {
 		// describe a different launch from the one the caller asked about.
 		const seeded = session.seededConversation;
 		session.start();
-		return { ...this.snapshot(input.sessionId), resumed, seeded };
+		return { ...this.snapshot(input.sessionId), resumed, seeded, ...(resolution ? { workDirResolution: resolution } : {}) };
 	}
 
 	/**

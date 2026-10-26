@@ -1,3 +1,4 @@
+import { workdirTrail } from "./repo-workdir-trail";
 import { useState, useRef, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { createTts, type VoiceTts } from "@proagentstore/sdk/hooks";
@@ -218,6 +219,11 @@ export default function ReposList({
 				{/* HOW OLD the verdict above is, and the way to replace it (#440). Only for a repo
 				    that has a folder on a machine — a cloned repo has no checkout to look at.
 				    `flex-wrap` because "never checked" plus the button is wider than a 320px card. */}
+				{workdirTrail(r) && (
+					<div className="mt-1 text-2xs text-muted-soft break-all" data-testid={`repo-trail-${r.id}`}>
+						{workdirTrail(r)}
+					</div>
+				)}
 				{r.workdir && (
 					<div className="mt-1.5 flex items-center gap-2 flex-wrap text-2xs text-muted-soft">
 						<span>{repoFreshnessLabel(r)}</span>

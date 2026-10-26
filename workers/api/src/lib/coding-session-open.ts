@@ -13,6 +13,8 @@ import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
 import { preflightEngine } from "./engine-preflight.js";
 import { ApiCodingRefused } from "./coding-api-policy.js";
+import { logError } from "./error-log.js";
+import { recordWorkdirResolution } from "./coding-workdir-resolution.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { effectiveWorkdir, getCheckout, machineIdForNode, upsertCheckout } from "./coding-repo-checkouts.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
@@ -316,7 +318,7 @@ export async function startSessionOnRunner(
 	// cold is the trade ADR 0005 makes.
 	const seed = opts?.cleanSlate ? "" : await seedBriefForRepo(env, { instanceId, userId: uid, repoId: repo.id, repoName: repo.name });
 	try {
-		const started = await callRunner<{ resumed?: unknown; seeded?: unknown }>(conn, "/coding/start", {
+		const started = await callRunner<{ resumed?: unknown; seeded?: unknown; workDirResolution?: { path?: unknown; via?: unknown } }>(conn, "/coding/start", {
 			sessionId: session.id,
 			repoId: repo.id,
 			// Local checkout → run in that dir (no clone). Else clone to a managed dir. Use the
@@ -356,6 +358,9 @@ export async function startSessionOnRunner(
 			ghScope: repo.githubRepo ? [repo.githubRepo] : undefined,
 			env: engineEnv,
 		});
+		// #1379: how this machine expanded the stored folder, kept beside it. Best-effort — a debugging line, never a reason to fail a start.
+		const res = started?.workDirResolution;
+		if (res && typeof res.path === "string" && typeof res.via === "string") await recordWorkdirResolution(env, repo.id, { path: res.path, via: res.via }).catch((e: unknown) => logError(env, { source: "coding", message: `workdir resolution not recorded: ${e instanceof Error ? e.message : String(e)}`, level: "warn" }));
 		await recordStartVerdict(env, conn, repo, checkoutOn);
 		const outcome = { conn, resumed: started?.resumed === true, seeded: started?.seeded === true };
 		// The DURABLE half of #738. Everything else this issue fixed is a sentence in a response:

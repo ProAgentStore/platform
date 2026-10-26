@@ -457,6 +457,20 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 		expect(body.repo?.cloneStatus).toBe("ready");
 	});
 
+	it("an absolute path from a machine that reports its home is STORED home-relative (#1379)", async () => {
+		// The Hiring coder's failure: `/Users/serge/dev/...` baked in, then pinned to a machine whose user is someone else.
+		machine("git@github.com:proappstore-online/stash.git", { ...HEALTHY, path: "/Users/serge/dev/stash", homeRelative: "~/dev/stash" });
+		const { status, row } = await addRepo({ localPath: "/Users/serge/dev/stash", requireGithub: true });
+		expect(status).toBe(201);
+		expect(row).toMatchObject({ workdir: "~/dev/stash" });
+	});
+
+	it("keeps the folder as written when the machine is too old to say where its home is (#1379)", async () => {
+		machine("git@github.com:proappstore-online/stash.git", HEALTHY);
+		const { row } = await addRepo({ localPath: "/home/u/dev/stash", requireGithub: true });
+		expect(row).toMatchObject({ workdir: "/home/u/dev/stash" });
+	});
+
 	it("accepts a matching github_repo, case-insensitively", async () => {
 		machine("https://github.com/proappstore-online/stash.git");
 		const { status } = await addRepo({ localPath: "~/dev/stash", githubRepo: "ProAppStore-Online/Stash", requireGithub: true });

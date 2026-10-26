@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -363,6 +363,30 @@ describe("CodingRuntime over the stream-json engine", () => {
 		rt = new CodingRuntime(join(dir, "base"));
 		rt.start({ sessionId: "fill", repoId: "r1", workDir: work, emptyCheckoutCloneUrl: src, clientType: "claude", bin });
 		expect(existsSync(join(work, "f.txt"))).toBe(true);
+	});
+
+	it("start resolves a home-relative or another account's folder against THIS machine's home, and says how (#1379)", () => {
+		const home = join(dir, "home-1379");
+		mkdirSync(join(home, "dev", "proj"), { recursive: true });
+		execFileSync("git", ["init", "-q"], { cwd: join(home, "dev", "proj") });
+		const was = process.env.HOME;
+		process.env.HOME = home;
+		try {
+			rt = new CodingRuntime(join(dir, "base"));
+			const tilde = rt.start({ sessionId: "tilde-1379", repoId: "r1", workDir: "~/dev/proj", clientType: "claude", bin });
+			expect(tilde.workDirResolution).toEqual({ requested: "~/dev/proj", path: join(home, "dev", "proj"), via: "tilde" });
+			// The row stored on another machine, with that machine's user baked in: the failure the issue reports.
+			const foreign = rt.start({ sessionId: "foreign-1379", repoId: "r1", workDir: "/Users/someone-who-is-not-here/dev/proj", clientType: "claude", bin });
+			expect(foreign.workDirResolution).toMatchObject({ path: join(home, "dev", "proj"), via: "foreign-home" });
+			// A session that already exists resolves nothing, so the answer does not claim it did.
+			expect(rt.start({ sessionId: "tilde-1379", repoId: "r1", workDir: "~/dev/proj", clientType: "claude", bin }).workDirResolution).toBeUndefined();
+			// repo-check hands back the machine-independent spelling for the cloud to store.
+			// The guard answers with the REAL path (macOS /tmp is /private/tmp); the home-relative form must survive that.
+			expect(rt.checkRepo({ workDir: join(home, "dev", "proj") })).toMatchObject({ path: realpathSync(join(home, "dev", "proj")), homeRelative: "~/dev/proj" });
+		} finally {
+			if (was === undefined) delete process.env.HOME;
+			else process.env.HOME = was;
+		}
 	});
 
 	it("start → act(message) → capture reflects the agent's real reply", async () => {

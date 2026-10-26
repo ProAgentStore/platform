@@ -100,3 +100,15 @@ describe("verdictFromCheck — a runner too old to check says so (#853 finding 1
 	});
 });
 
+
+describe("verdictFromCheck carries the machine's home-relative spelling (#1379)", () => {
+	const ok = { checked: true, path: "/Users/sergeivo/dev/x", exists: true, isDirectory: true, entryCount: 3, insideWorkTree: true, gitChecked: true };
+	it("passes it through on a checked path", () => {
+		expect(verdictFromCheck("/Users/serge/dev/x", { ...ok, homeRelative: "~/dev/x" })).toMatchObject({ state: "ok", path: "/Users/sergeivo/dev/x", homeRelative: "~/dev/x" });
+	});
+	it("ignores null (a path outside home), a non-tilde value, and an unverified answer", () => {
+		expect(verdictFromCheck("/srv/x", { ...ok, homeRelative: null }).homeRelative).toBeUndefined();
+		expect(verdictFromCheck("/srv/x", { ...ok, homeRelative: "/etc/passwd" }).homeRelative).toBeUndefined();
+		expect(verdictFromCheck("~/x", { error: "Runner /coding/repo-check → 404" }).homeRelative).toBeUndefined();
+	});
+});

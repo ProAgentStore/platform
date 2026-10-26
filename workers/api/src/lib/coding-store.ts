@@ -42,6 +42,10 @@ export interface RepoRow {
 	clone_url: string | null;
 	branch: string;
 	workdir: string | null;
+	/** #1379 (migration 0302): the debugging trail of how `workdir` was expanded on the last machine to start a session here. */
+	workdir_resolved?: string | null;
+	workdir_resolved_via?: string | null;
+	workdir_resolved_at?: string | null;
 	clone_status: string;
 	clone_error: string | null;
 	clone_checked_at: string | null;
@@ -98,6 +102,9 @@ export function toRepo(r: RepoRow): CodingRepo {
 		cloneUrl: r.clone_url ?? undefined,
 		branch: r.branch,
 		workdir: r.workdir ?? undefined,
+		workdirResolved: r.workdir_resolved ?? undefined,
+		workdirResolvedVia: r.workdir_resolved_via ?? undefined,
+		workdirResolvedAt: r.workdir_resolved_at ?? undefined,
 		cloneStatus: effectiveCloneStatus(r.workdir, r.clone_status) as CloneStatus,
 		cloneError: r.clone_error ?? undefined,
 		// Undefined on every row written before migration 0110, and on every row no machine has

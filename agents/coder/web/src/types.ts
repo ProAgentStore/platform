@@ -5,6 +5,9 @@ export interface CodingRepo {
 	id: string;
 	name: string;
 	workdir?: string;
+	/** What the last machine to start a session here expanded `workdir` to, and the rule that did it (#1379). */
+	workdirResolved?: string;
+	workdirResolvedVia?: string;
 	cloneStatus?: string;
 	/**
 	 * Why the path is unusable, when `cloneStatus` is `needs_attention` (#405) — written by the
