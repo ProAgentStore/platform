@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CHARTS, type ChartOpts, type ChartSpec, chartGeometry, type FleetMachine, type FleetTier, seriesColor, TIER_GAP_MS, TIER_WINDOW_MS, tooltipAt } from "../lib/fleetTelemetry";
+import { CHARTS, type ChartOpts, type ChartSpec, chartGeometry, chartOmissions, type FleetMachine, type FleetTier, seriesColor, TIER_GAP_MS, TIER_WINDOW_MS, tooltipAt } from "../lib/fleetTelemetry";
 import Card from "./Card";
 
 /**
@@ -35,13 +35,14 @@ function Chart({ spec, machines, tier, nowMs, width }: { spec: ChartSpec; machin
 	const geom = chartGeometry(spec, machines, opts);
 	const [hoverX, setHoverX] = useState<number | null>(null);
 	const tip = hoverX === null ? null : tooltipAt(geom, hoverX, opts, spec);
+	const omitted = chartOmissions(spec, machines);
 	const summary = geom.empty ? `${spec.title}: no readings` : `${spec.title}: ${geom.labels.map((l) => l.text).join("; ")}`;
 
 	return (
 		<Card className="min-w-0">
 			<h3 className="text-sm font-bold">{spec.title}</h3>
 			{geom.empty ? (
-				<p className="text-2xs text-muted-soft py-6">{spec.note?.startsWith("Linux") ? spec.note : "No machine is reporting this yet."}</p>
+				<p className="text-2xs text-muted-soft py-6">{spec.note?.startsWith("Linux") ? spec.note : "No machine has a reading for this in the range yet."}</p>
 			) : (
 				<div className="relative">
 					<svg
@@ -115,6 +116,16 @@ function Chart({ spec, machines, tier, nowMs, width }: { spec: ChartSpec; machin
 						</div>
 					)}
 				</div>
+			)}
+			{omitted.length > 0 && (
+				<ul className="text-2xs text-muted-soft leading-snug mt-1 list-none p-0 m-0" aria-label={`Machines not drawn on ${spec.title}`}>
+					{omitted.map((o) => (
+						<li key={o.key}>
+							<span aria-hidden="true" className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ background: seriesColor(o.colorIndex) }} />
+							<span className="font-semibold">{o.name}</span> not drawn: {o.reason}
+						</li>
+					))}
+				</ul>
 			)}
 			{spec.note && !geom.empty && <p className="text-2xs text-muted-soft leading-snug mt-1">{spec.note}</p>}
 		</Card>

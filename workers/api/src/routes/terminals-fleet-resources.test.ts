@@ -139,6 +139,49 @@ describe("every owned machine in one call", () => {
 	});
 });
 
+describe("the owner's five machines all come back with a series (#1380)", () => {
+	// The shape reported on 26 Oct: three macOS machines online, a Windows one, and a Mac silent for hours. Every one was reporting; the
+	// page showed two. The API's half of the answer: each machine arrives with `latest` and a non-empty `points` series under its own name.
+	const FLEET: Array<{ name: string; platform: string; id: string; instance: string; ageMs: number }> = [
+		{ name: "Sergeys-RL-Laptop.local", platform: "darwin", id: "machine-rl-0000000001", instance: "i1", ageMs: 5_000 },
+		{ name: "Sergeys-Mac-mini.local", platform: "darwin", id: "machine-mini-00000002", instance: "i1", ageMs: 30_000 },
+		{ name: "dell-laptop", platform: "win32", id: "machine-dell-00000003", instance: "i2", ageMs: 20_000 },
+		{ name: "pink-laptop", platform: "darwin", id: "machine-pink-00000004", instance: "i2", ageMs: 200_000 },
+		{ name: "tiny-laptop", platform: "darwin", id: "machine-tiny-00000005", instance: "i2", ageMs: 3_600_000 },
+	];
+	beforeEach(async () => {
+		for (const f of FLEET) {
+			node("u1", f.instance, f.name, f.id);
+			for (let i = 3; i >= 0; i--) {
+				await beat("u1", f.instance, f.name, raw({ platform: f.platform, sampledAt: NOW - f.ageMs - i * 30_000, ...(f.platform === "win32" ? { loadAvg: null } : {}) }));
+			}
+		}
+	});
+
+	it("returns all five, each with a latest reading and points, whatever its platform", async () => {
+		const { json } = await get("/resources?tier=dense");
+		expect(json.machines.map((m: { name: string }) => m.name).sort()).toEqual(FLEET.map((f) => f.name).sort());
+		for (const m of json.machines) {
+			expect(m.latest, m.name).not.toBeNull();
+			expect(m.points.length, m.name).toBeGreaterThan(0);
+		}
+	});
+
+	it("marks the silent ones stale instead of leaving them out", async () => {
+		const { json } = await get("/resources?tier=dense");
+		const stale = Object.fromEntries(json.machines.map((m: { name: string; stale: boolean }) => [m.name, m.stale]));
+		expect(stale).toMatchObject({ "Sergeys-RL-Laptop.local": false, "Sergeys-Mac-mini.local": false, "dell-laptop": false, "pink-laptop": true, "tiny-laptop": true });
+	});
+
+	it("a machine's history is read under every hostname the machine has, so a differently-cased alias does not empty its series", async () => {
+		d1.sqlite.prepare("INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, token_plaintext, machine_id, status, last_seen_at) VALUES ('i2', 'u1', 'mac-mini', ?, ?, 'machine-mini-00000002', 'registered', ?)").run(SECRET_ENDPOINT, SECRET_TOKEN, new Date(NOW - 60_000).toISOString().replace("T", " ").substring(0, 19));
+		const { json } = await get("/resources?tier=dense");
+		const mini = json.machines.filter((m: { machineId: string }) => m.machineId === "machine-mini-00000002");
+		expect(mini).toHaveLength(1);
+		expect(mini[0].points.length).toBeGreaterThan(0);
+	});
+});
+
 describe("stale and silent machines are marked, not zeroed", () => {
 	it("a machine silent for over 3 minutes is stale with its age; one without any sample is stale with no latest", async () => {
 		node("u1", "i1", "quiet-box", "machine-quiet-0000004");

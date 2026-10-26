@@ -162,12 +162,16 @@ export interface ChartSpec {
 	include?: (m: FleetMachine) => boolean;
 	/** A per-machine limit drawn as a dashed line in that machine's colour (sessions against the recommended maximum). */
 	limit?: (m: FleetMachine) => number | null;
+	/** Why a machine this chart leaves out (`include` is false) is left out — said under the chart, so an omitted machine is never silent (#1380). */
+	excludedWhy?: (m: FleetMachine) => string;
+	/** Why a machine that reports, but never this figure, has no line (Windows has no load average). */
+	nullWhy?: (m: FleetMachine) => string | null;
 	/** Said under the chart when it explains what is NOT shown. */
 	note?: string;
 }
 
 export const CHARTS: readonly ChartSpec[] = [
-	{ id: "load", title: "Load per core", unit: "", scale: "log", threshold: { value: LOAD_WARN, label: "1.5 overload" }, value: (p) => p.loadPerCpu, note: "Log scale. A Windows machine has no load average and draws no line — it is not reported, not idle." },
+	{ id: "load", title: "Load per core", unit: "", scale: "log", threshold: { value: LOAD_WARN, label: "1.5 overload" }, value: (p) => p.loadPerCpu, nullWhy: (m) => (m.latest?.platform === "win32" ? "Windows has no load average" : null), note: "Log scale. A Windows machine has no load average and draws no line — it is not reported, not idle." },
 	{ id: "disk", title: "Disk used (checkout volume)", unit: "%", scale: "linear", fixedMax: 100, threshold: { value: DISK_WARN, label: "90% low" }, value: (p) => p.diskUsedPct },
 	{ id: "relay", title: "Relay round trip", unit: " ms", scale: "log", value: (p) => p.relayRttMs, note: "Log scale. Over about 1 s a machine answers its relay late." },
 	{ id: "restarts", title: "Runner starts in 24 h", unit: "", scale: "linear", value: (p) => p.starts24h, note: "A rising line is a crash loop." },
@@ -181,6 +185,7 @@ export const CHARTS: readonly ChartSpec[] = [
 		value: (p) => p.memUsedPct,
 		// macOS counts cache as used, so a healthy Mac reads 95% (machineHealth.ts); only machines where the figure means something are drawn.
 		include: (m) => m.latest?.platform === "linux" || m.latest?.platform === "win32",
+		excludedWhy: (m) => (m.latest?.platform === "darwin" ? "macOS counts cache as used" : "memory is not drawn for this platform"),
 		note: "Linux and Windows only: macOS counts cache as used, so its figure would read as pressure on a healthy machine.",
 	},
 ];
@@ -188,6 +193,42 @@ export const CHARTS: readonly ChartSpec[] = [
 /** The series colours, as CSS variables a theme can override (index.css) — never a literal colour in a component. */
 export const SERIES_COLORS = 8;
 export const seriesColor = (index: number): string => `var(--color-series-${(index % SERIES_COLORS) + 1})`;
+
+// ── What a chart leaves out, and why (#1380) ───────────────────────────────────────────────────────
+
+export interface Omission {
+	key: string;
+	name: string;
+	colorIndex: number;
+	reason: string;
+}
+
+/**
+ * Every machine the fleet has that a chart does NOT draw, with the reason in words. The owner saw telemetry for two of five machines and
+ * read the other three as "not reporting"; they were reporting, and the chart left them out without saying so. A machine is omitted for
+ * exactly one of three reasons: the chart does not apply to its platform (`excludedWhy`), the machine reports no such figure (`nullWhy`),
+ * or it has no reading in this window — and when that machine is silent the reason says when it last spoke.
+ */
+export function chartOmissions(spec: ChartSpec, machines: readonly FleetMachine[]): Omission[] {
+	const out: Omission[] = [];
+	machines.forEach((m, i) => {
+		const base = { key: m.key, name: m.name, colorIndex: i };
+		if (spec.include && !spec.include(m)) {
+			out.push({ ...base, reason: spec.excludedWhy?.(m) ?? "not reported on this platform" });
+			return;
+		}
+		const drawn = m.points.some((p) => {
+			const v = spec.value(p);
+			return v !== null && Number.isFinite(v);
+		});
+		if (drawn) return;
+		const why = spec.nullWhy?.(m);
+		if (why) out.push({ ...base, reason: why });
+		else if (m.stale) out.push({ ...base, reason: m.points.length ? `offline — last sample ${ageText(m.sampleAgeSec)}` : `offline — no samples in this range, last sample ${ageText(m.sampleAgeSec)}` });
+		else out.push({ ...base, reason: "no reading in this range yet" });
+	});
+	return out;
+}
 
 // ── Chart geometry ───────────────────────────────────────────────────────────────────────────────
 

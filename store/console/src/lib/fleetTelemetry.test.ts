@@ -4,6 +4,7 @@ import {
 	type ChartOpts,
 	chartDomain,
 	chartGeometry,
+	chartOmissions,
 	type FleetLatest,
 	type FleetMachine,
 	type FleetPoint,
@@ -334,5 +335,48 @@ describe("summary table", () => {
 		expect(fleetRow(machine("a", { sampleAgeSec: 600 })).lastSample).toBe("10m ago");
 		expect(fleetRow(machine("a", { sampleAgeSec: 7200 })).lastSample).toBe("2h ago");
 		expect(fleetRow(machine("a", { sampleAgeSec: 3 * 86400 })).lastSample).toBe("3d ago");
+	});
+});
+
+describe("a chart says which machines it is not drawing, and why (#1380)", () => {
+	// The owner's fleet: three Macs reporting, a Windows machine, and a Mac that went quiet hours ago.
+	const rl = machine("rl-laptop", { latest: latest({ platform: "darwin" }) });
+	const mini = machine("mac-mini", { latest: latest({ platform: "darwin" }) });
+	const dell = machine("dell-laptop", { latest: latest({ platform: "win32", loadPerCpu: null }), points: [point(60, { loadPerCpu: null }), point(5, { loadPerCpu: null })] });
+	const pink = machine("pink-laptop", { stale: true, sampleAgeSec: 200, latest: latest({ platform: "darwin" }) });
+	const tiny = machine("tiny-laptop", { stale: true, sampleAgeSec: 3 * 3600, latest: latest({ platform: "darwin" }), points: [] });
+	const fleet = [rl, mini, dell, pink, tiny];
+
+	it("the memory chart names every macOS machine it leaves out, with the reason", () => {
+		const out = chartOmissions(spec("memory"), fleet);
+		expect(out.filter((o) => o.reason === "macOS counts cache as used").map((o) => o.name)).toEqual(["rl-laptop", "mac-mini", "pink-laptop", "tiny-laptop"]);
+		expect(out.some((o) => o.name === "dell-laptop")).toBe(false);
+	});
+
+	it("the load chart says a Windows machine has no load average, not that it is missing", () => {
+		const out = chartOmissions(spec("load"), fleet);
+		expect(out.find((o) => o.name === "dell-laptop")?.reason).toBe("Windows has no load average");
+	});
+
+	it("a machine silent for the whole range is listed as offline with when it last spoke, not dropped", () => {
+		const out = chartOmissions(spec("disk"), fleet);
+		expect(out).toEqual([expect.objectContaining({ name: "tiny-laptop", colorIndex: 4, reason: "offline — no samples in this range, last sample 3h ago" })]);
+	});
+
+	it("an online machine with no reading yet is told apart from an offline one", () => {
+		const fresh = machine("new-mac", { points: [] });
+		expect(chartOmissions(spec("disk"), [fresh])[0].reason).toBe("no reading in this range yet");
+	});
+
+	it("every machine is accounted for: drawn on the chart or listed as omitted, never neither", () => {
+		for (const c of CHARTS) {
+			const geom = chartGeometry(c, fleet, OPTS);
+			const accounted = new Set([...geom.series.filter((s) => s.marks.length).map((s) => s.name), ...chartOmissions(c, fleet).map((o) => o.name)]);
+			expect([...accounted].sort(), c.id).toEqual(fleet.map((m) => m.name).sort());
+		}
+	});
+
+	it("keeps a machine's colour index across charts, so its omission line matches its dot in the table", () => {
+		expect(chartOmissions(spec("memory"), fleet).map((o) => [o.name, o.colorIndex])).toContainEqual(["tiny-laptop", 4]);
 	});
 });
