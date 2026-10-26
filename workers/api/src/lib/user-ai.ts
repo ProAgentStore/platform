@@ -1,104 +1,29 @@
 import { decryptKey } from "./crypto.js";
 import { backfillKeyHint } from "./key-hint-backfill.js";
-import { keyHint } from "./key-hint.js";
-import { clipMarked } from "./clip-marked.js";
-import { observeProviderAccount } from "./provider-account-observation.js";
-import {
-	AI_FIRST_TOKEN_TIMEOUT_MS,
-	AI_STALL_TIMEOUT_MS,
-	AI_TOTAL_TIMEOUT_MS,
-	type AiDeadlineKind,
-	connectionLostMessage,
-	deadlineMessage,
-	isRetryableDeadline,
-} from "./ai-deadlines.js";
-import {
-	AnthropicStreamAssembler,
-	AnthropicStreamError,
-	type AnthropicMessageBody,
-	parseSseEvents,
-} from "./anthropic-stream.js";
-import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
-import { recordUsage, workersAiToolCallCount, type UsageContext } from "./usage.js";
-import { fromWorkersAiResult, toWorkersAiBody, WorkersAiUnsupportedContentError, workersAiModelFor } from "./workers-ai-protocol.js";
-import { isWorkersAiModel } from "./brain-models.js";
-import { redactCloudflareUpstream } from "./cloudflare-redact.js";
-import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
-import type { Env } from "../types.js";
+import { anthropicAdapter } from "./anthropic.js";
+import { cloudflareAdapter } from "./cloudflare-ai.js";
 import { type StoredCloudflareAiCredentials, parseCloudflareAiCredentials } from "./cloudflare-credentials.js";
-import { classifyAnthropicError, classifyCloudflareError, type ProviderErrorKind, providerErrorTag } from "./provider-error-kind.js";
+import { type ProviderAdapter, type AiProvider } from "./provider-adapter.js";
+import { providerErrorTag } from "./provider-error-kind.js";
+import { observeProviderAccount, recordProviderCallSuccess } from "./provider-account-observation.js";
+import { recordUsage, type UsageContext } from "./usage.js";
+import { isWorkersAiModel } from "./brain-models.js";
+import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import { DEFAULT_ANTHROPIC_MODEL, anthropicModelProblem, type AnthropicModelId } from "./anthropic-model-routing.js";
+import type { StreamDeadlines } from "./stream-phase.js";
+import { UserAiCredentialsError, UserAiProviderError } from "./user-ai-errors.js";
+import type { Env } from "../types.js";
 
-export class UserAiCredentialsError extends Error {
-	constructor(
-		message = "Add your Cloudflare Workers AI account ID and API token before running this agent.",
-		public readonly status = 402,
-	) {
-		super(message);
-		this.name = "UserAiCredentialsError";
-	}
-}
-
-import { type StreamDeadlines, type StreamPhase, streamPhaseSuffix } from "./stream-phase.js";
+// What used to be defined here now lives beside the code it belongs to (#1356). Every name stays importable from this module.
+export { UserAiCredentialsError, UserAiProviderError, UserAiUnsupportedInputError } from "./user-ai-errors.js";
 export type { StreamDeadlines, StreamPhase } from "./stream-phase.js";
 export { streamPhaseFromMessage, streamPhaseSuffix } from "./stream-phase.js";
-
-export class UserAiProviderError extends Error {
-	/**
-	 * How many SSE events the assembler accepted before the stall deadline fired.
-	 *
-	 * Set only on a stall or first-token deadline, where the stream had opened. Absent on every
-	 * other kind of failure. Recorded by `recordCodingFailure` into `error_log.context` so a reader
-	 * can tell whether the silence began before or after the first content byte (#734).
-	 */
-	eventsSeen?: number;
-	/** The `type` of the last SSE event accepted before silence — companion to `eventsSeen`. */
-	lastEventType?: string;
-	/**
-	 * What the stream was doing when it went silent (#907) — measured, never inferred. Also written
-	 * into the message as a `[stream: …]` suffix, because a Workflow step boundary keeps an error's
-	 * message but not its own properties, which is why #734's fields never reached `error_log`.
-	 */
-	streamPhase?: StreamPhase;
-	/** The provider and model THIS request ran on, for telemetry (#907). */
-	provider?: string;
-	model?: string;
-
-	constructor(
-		message: string,
-		public readonly status = 502,
-		public readonly upstreamStatus?: number,
-		public readonly details?: unknown,
-		/**
-		 * Could an IDENTICAL immediate retry plausibly succeed? (#518)
-		 *
-		 * Set at the site that knows WHICH failure this is, because by the time it reaches a caller
-		 * the only things left are a message and a 502/504 — and the three deadlines all report 504
-		 * while disagreeing completely about whether retrying helps. Read by
-		 * `autoResumableRoundOf`, which is what decides whether the platform performs the retry its
-		 * own error message recommends. Defaults to false: a failure nobody classified is one
-		 * nobody has established is transient, and the cost of guessing wrong is the user's own
-		 * provider credit.
-		 */
-		public readonly retryable = false,
-		/**
-		 * What KIND of refusal this is (#1356) — decided once, by the adapter that built the error (`provider-error-kind.ts`), and
-		 * also written into the message as a tag because a Workflow step boundary drops this field but keeps the message. Absent on an
-		 * error that is not a provider's refusal (a deadline, an empty reply).
-		 */
-		public readonly kind?: ProviderErrorKind,
-	) {
-		super(message);
-		this.name = "UserAiProviderError";
-	}
-}
-
-// The classifier lives in provider-error-kind.ts (#1356); these stay importable from here.
 export { isCreditBalanceMessage } from "./provider-error-kind.js";
 export { encodeCloudflareAiCredentials, parseCloudflareAiCredentials, type StoredCloudflareAiCredentials } from "./cloudflare-credentials.js";
+export { providerFacts, type AiProvider } from "./provider-adapter.js";
+export { type SystemPromptBlock, anthropicSystemBlocks, isSystemPromptBlocks, isUserPromptBlocks, systemPromptSections, systemPromptText } from "./anthropic-prompt.js";
 
 /** The two providers a brain runs on — which one a turn is on is read off its first completion. */
-export type AiProvider = "anthropic" | "cloudflare";
 
 const midTurnLoss = (provider: string, credential: string) =>
 	`This turn's earlier rounds ran on ${provider}, and ${credential} can no longer be read, so it cannot continue — another provider cannot read those rounds. Check it in Profile → API Keys, then ask again.`;
@@ -141,12 +66,12 @@ export async function runUserWorkersAi(
 	if (opts?.provider === "anthropic" || opts?.anthropicModel !== undefined) {
 		const key = await getUserProviderKey(env, userId, "anthropic");
 		if (!key) throw new UserAiCredentialsError(opts?.anthropicModel ? "The selected model uses your Anthropic API key. Add it in Profile → API Keys." : midTurnLoss("Anthropic", "the Anthropic key"));
-		return runAnthropic(env, userId, key, body as Parameters<typeof runAnthropic>[3], ctx, opts.anthropicModel);
+		return completeWith(anthropicAdapter, env, userId, key, opts.anthropicModel ?? DEFAULT_ANTHROPIC_MODEL, body, ctx);
 	}
 	if (opts?.provider === "cloudflare") {
 		const creds = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
 		if (!creds) throw new UserAiCredentialsError(midTurnLoss("Cloudflare Workers AI", "the Cloudflare credentials"));
-		return runCloudflareAi(env, userId, creds, model, body, ctx);
+		return completeWith(cloudflareAdapter, env, userId, creds, model, body, ctx);
 	}
 	if (opts?.honorModel && isWorkersAiModel(model)) {
 		// The owner PICKED this model, so it runs here or the turn fails saying why (#853 finding 8).
@@ -154,7 +79,7 @@ export async function runUserWorkersAi(
 		// whenever the credentials were removed, revoked or unreadable after the pick was checked; and a
 		// read that failed on a LATER round flipped the provider mid-turn (#853 finding 9).
 		const picked = await getUserCloudflareAiCredentials(env, userId).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
-		if (!(picked instanceof Error)) return runCloudflareAi(env, userId, picked, model, body, ctx);
+		if (!(picked instanceof Error)) return completeWith(cloudflareAdapter, env, userId, picked, model, body, ctx);
 		// No row at all is the one error thrown with the class's default message.
 		const removed = picked instanceof UserAiCredentialsError && picked.message === new UserAiCredentialsError().message;
 		throw new UserAiCredentialsError(
@@ -168,638 +93,46 @@ export async function runUserWorkersAi(
 	if (anthropicKey) {
 		// content is usually a string, but may be an array of content blocks (e.g. a
 		// PDF `document` block for résumé parsing) — passed straight through to Anthropic.
-		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number }, ctx);
+		return completeWith(anthropicAdapter, env, userId, anthropicKey, DEFAULT_ANTHROPIC_MODEL, body, ctx);
 	}
 
 	const cfCredentials = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
 	if (cfCredentials) {
-		return runCloudflareAi(env, userId, cfCredentials, model, body, ctx);
+		return completeWith(cloudflareAdapter, env, userId, cfCredentials, model, body, ctx);
 	}
 
 	throw new UserAiCredentialsError("Add an API key in Profile → API Keys (Anthropic or Cloudflare Workers AI).");
 }
 
 /**
- * Anthropic's Messages API rejects any array whose first message isn't `user` or
- * whose roles don't strictly alternate. Our chat history routinely violates both:
- * a 10-message context window can start on `assistant` (turn 6+), an errored turn
- * leaves two adjacent `user` messages once the `system` error note is filtered out,
- * and the tool loop appends `assistant, user, user`. Normalize before sending:
- * drop leading assistants, then merge consecutive same-role messages into one.
- *
- * It now also knows about `tool_use` / `tool_result` blocks (#398). It has to: those are the two
- * block types the API pairs across turns, and this function is the only thing between the caller's
- * array and the wire that DROPS and MERGES turns. Its merge of consecutive same-role turns is
- * exactly what used to erase the boundary between a platform result and the model's own prose, and
- * left unchanged it would now bury a `tool_result` behind a trailing string or orphan one behind a
- * dropped leading assistant — both of which the provider answers with a 400 on the whole request.
- * The rules are pure and live in lib/anthropic-tool-turns.ts with their tests.
+ * One call to one provider, whichever it is (#1356). The adapter knows the wire; THIS is where everything that is the same for both happens,
+ * once: a refusal is read into its `kind` by the adapter and the account's hold follows from the kind; a success records the key's use and
+ * clears a hold in a single round trip, then writes the ledger.
  */
-function normalizeForAnthropic(
-	msgs: Array<{ role: string; content: unknown }>,
-): Array<{ role: "user" | "assistant"; content: unknown }> {
-	const mapped = msgs.map((m) => ({
-		role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
-		content: m.content,
-	}));
-	let start = 0;
-	while (start < mapped.length && mapped[start].role === "assistant") start++;
-	// …and the same rule at the OTHER end (#429). Serialising chat turns made a history whose tail
-	// is `user, user, assistant` — the mid-turn arrival is stored when it arrives, the running
-	// turn's reply when it finishes — and a trailing assistant turn is a PREFILL, which
-	// `claude-sonnet-4-6` refuses with a 400 on the whole request. Before merging, deliberately:
-	// merged first, the two user turns become one and the array still ends on the assistant.
-	const ordered = endOnUserTurn(mapped.slice(start));
-	// Pair BEFORE merging: an orphan is created by the drop above, and merging first would fold it
-	// into a neighbouring turn where "which turn introduced this id" is no longer answerable.
-	const paired = pairToolBlocks(ordered);
-	const merged: Array<{ role: "user" | "assistant"; content: unknown }> = [];
-	for (const m of paired) {
-		const last = merged[merged.length - 1];
-		if (last && last.role === m.role) {
-			last.content = mergeContent(last.content, m.content);
-		} else {
-			merged.push({ role: m.role, content: m.content });
-		}
-	}
-	return merged;
-}
-
-/**
- * One ordered part of a system prompt (#768).
- *
- * A system message's `content` is either a string — one block, cached whole, which is what every
- * caller sent before this — or an array of these. The array exists because the provider's cache
- * matches an identical PREFIX: a chat prompt that interleaves per-turn facts (the clock, retrieved
- * documents, the terminal tail) with fixed instructions changes early, so everything after the
- * first changing byte is re-written to the cache on every turn. Splitting it lets the fixed part
- * be read back instead.
- *
- * `cache` places a breakpoint at the END of the block. `label` names the block in prompt-section
- * traces and is never sent. `ttl: "1h"` asks for the 1-hour cache instead of the 5-minute one (#914)
- * — for a prefix whose callers are further apart than five minutes, which the Pilot's are.
- */
-export interface SystemPromptBlock {
-	text: string;
-	cache?: boolean;
-	ttl?: "1h";
-	label?: string;
-}
-
-/** Anthropic accepts at most four cache breakpoints per request. */
-const MAX_CACHE_BREAKPOINTS = 4;
-
-export function isSystemPromptBlocks(content: unknown): content is SystemPromptBlock[] {
-	return Array.isArray(content) && content.every((b) => b !== null && typeof b === "object" && typeof (b as SystemPromptBlock).text === "string");
-}
-
-/**
- * The system prompt as ONE string, for a provider with no notion of blocks.
- *
- * Joined with nothing, because the builders already open each section with its own newlines: the
- * flattened text is byte-identical to what a single string builder would have produced.
- */
-export function systemPromptText(content: unknown): string {
-	return isSystemPromptBlocks(content) ? content.map((b) => b.text).join("") : String(content ?? "");
-}
-
-/**
- * Prompt-section trace entries for a system message: one per block (#768), so a run's trace shows
- * the cached half and the per-turn half separately — the split is only worth what that difference
- * measures. A string stays one section under `label`, as it was traced before.
- */
-export function systemPromptSections(label: string, content: unknown): Array<{ label: string; value: unknown }> {
-	return isSystemPromptBlocks(content) ? content.map((b) => ({ label: `${label}.${b.label ?? "block"}`, value: b.text })) : [{ label, value: content }];
-}
-
-/**
- * The Anthropic `system` field for a system message's content.
- *
- * A string becomes one cached block, as it always has. Blocks keep their order; empty ones are
- * dropped (the API rejects an empty text block, and an absent section is simply absent); a
- * breakpoint goes on each block marked `cache`, keeping the LAST four when more are asked for —
- * a later breakpoint already covers the prefix before it, so it is the earlier ones that are
- * redundant. Returns undefined when nothing is left to send.
- *
- * A breakpoint asks for the 1-hour TTL only while no 5-minute one precedes it: the provider requires
- * longer-lived entries to come first, so a 1h request after a 5m breakpoint is sent as 5m rather
- * than as a request the API rejects.
- */
-type AnthropicSystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } };
-
-/**
- * The provider's cache rules, held across ONE request (#914): at most four breakpoints in all, and a
- * 1-hour entry may not follow a 5-minute one. The system prompt and a user message's prompt blocks
- * draw on the same budget, in request order — tools, system, then messages.
- */
-interface CacheBudget {
-	left: number;
-	shortSeen: boolean;
-}
-
-function toAnthropicBlocks(blocks: readonly SystemPromptBlock[], budget: CacheBudget): AnthropicSystemBlock[] {
-	const kept = blocks.filter((b) => b.text.length > 0);
-	// The LAST breakpoints asked for are kept: a later one already covers the prefix before it.
-	const breakpoints = new Set(kept.filter((b) => b.cache).slice(-Math.max(0, budget.left)));
-	budget.left -= breakpoints.size;
-	return kept.map((b): AnthropicSystemBlock => {
-		if (!breakpoints.has(b)) return { type: "text", text: b.text };
-		const long = b.ttl === "1h" && !budget.shortSeen;
-		if (!long) budget.shortSeen = true;
-		return { type: "text", text: b.text, cache_control: long ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" } };
-	});
-}
-
-export function anthropicSystemBlocks(content: unknown, budget: CacheBudget = { left: MAX_CACHE_BREAKPOINTS, shortSeen: false }): AnthropicSystemBlock[] | undefined {
-	if (!isSystemPromptBlocks(content)) {
-		const text = String(content ?? "");
-		if (!text) return undefined;
-		budget.left -= 1;
-		budget.shortSeen = true;
-		return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
-	}
-	const out = toAnthropicBlocks(content, budget);
-	return out.length ? out : undefined;
-}
-
-/**
- * A USER message written as prompt blocks (#914) — the same `{text, cache?, ttl?, label?}` a system
- * prompt uses, and nothing else: an array carrying a `type` is already in the provider's own block
- * shape (a PDF `document`, a `tool_result`) and passes through untouched.
- */
-export function isUserPromptBlocks(content: unknown): content is SystemPromptBlock[] {
-	return isSystemPromptBlocks(content) && content.length > 0 && content.every((b) => !("type" in b));
-}
-
-/** A message list with every user prompt-block message as provider text blocks, within the request's budget. */
-function anthropicUserBlocks<M extends { role: string; content: unknown }>(messages: readonly M[], budget: CacheBudget): M[] {
-	return messages.map((m) => (m.role === "user" && isUserPromptBlocks(m.content) ? { ...m, content: toAnthropicBlocks(m.content, budget) } : m));
-}
-
-/**
- * The provider's own error type and request id, as a bracketed suffix (#1326). In the MESSAGE, not
- * only `details`, because a Workflow step boundary keeps an error's message and drops its fields —
- * and without these a refusal could not be told apart from a dead key, or traced with the provider.
- */
-export function providerFacts(type: string | null | undefined, requestId: string | null | undefined): string {
-	const facts = [type, requestId ? `request-id ${requestId}` : null].filter(Boolean);
-	return facts.length ? ` [${facts.join("; ")}]` : "";
-}
-
-async function runAnthropic(
+async function completeWith<Cred, Req extends { model: string }, Raw>(
+	adapter: ProviderAdapter<Cred, Req, Raw>,
 	env: Env,
 	userId: string | undefined,
-	apiKey: string,
-	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number; streamDeadlines?: StreamDeadlines },
-	ctx?: UsageContext,
-	model: AnthropicModelId = DEFAULT_ANTHROPIC_MODEL,
-): Promise<unknown> {
-	const systemMsg = (body.messages || []).find((m) => m.role === "system");
-	// The system prompt's breakpoints first, then the messages' — one budget, in request order (#914).
-	const budget: CacheBudget = { left: MAX_CACHE_BREAKPOINTS, shortSeen: false };
-	const system = systemMsg ? anthropicSystemBlocks(systemMsg.content, budget) : undefined;
-	const messages = normalizeForAnthropic(anthropicUserBlocks((body.messages || []).filter((m) => m.role !== "system"), budget));
-
-	const anthropicBody: Record<string, unknown> = {
-		model,
-		// The fallback is what a caller inherits by NOT choosing, and #397 is the bill for that:
-		// chat was the one caller that never chose, so every reply a human read end to end was cut
-		// at ~4,000 characters. Every surface now names its own ceiling; this number is left where
-		// it is only so a new call site fails cheaply rather than unboundedly.
-		max_tokens: body.maxTokens ?? 1024,
-		messages,
-	};
-	// Prompt-cache the (large, stable) system prompt so repeated calls within a run
-	// — the apply loop fires one per step — reprocess it from cache instead of
-	// re-paying for it each time. Makes the per-step cost flat instead of growing.
-	// A caller whose prompt mixes stable text with per-turn facts sends BLOCKS instead (#768).
-	if (system) anthropicBody.system = system;
-
-	// Convert tools to Anthropic format (deduplicate by name)
-	if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
-		const seen = new Set<string>();
-		anthropicBody.tools = [];
-		for (const t of body.tools as Array<{ type: string; function?: { name: string; description: string; parameters: unknown }; name?: string; description?: string; parameters?: unknown }>) {
-			const name = t.function?.name || t.name;
-			if (!name || seen.has(name)) continue;
-			seen.add(name);
-			(anthropicBody.tools as unknown[]).push({
-				name,
-				description: t.function?.description || t.description || "",
-				input_schema: t.function?.parameters || t.parameters || { type: "object", properties: {} },
-			});
-		}
-		// `none` declares the tools without permitting a call (#398). The caller that needs it is
-		// the one producing a FINAL answer after a structured tool round: the provider requires
-		// `tools` to be defined whenever the messages contain `tool_use`/`tool_result`, and simply
-		// omitting them — which is how the final call used to discourage another round — turns the
-		// whole request into a 400 the moment the transcript is in the structured protocol.
-		if (body.toolChoice === "none") anthropicBody.tool_choice = { type: "none" };
-	}
-
-	// STREAMED (#427). Not for the client — the caller still gets one whole message — but so the
-	// deadline can measure SILENCE instead of LENGTH. Non-streamed, the 25s ceiling had to cover the
-	// entire generation, which a 4,096-token reply cannot fit at any observed throughput: the tool
-	// loop's second round failed by construction, twice on the same message, after the tool call had
-	// already committed its side effects. See lib/ai-deadlines.ts for the three deadlines.
-	anthropicBody.stream = true;
-
-	const startedAt = Date.now();
-	const firstTokenMs = body.streamDeadlines?.preContentMs ?? body.timeoutMs ?? AI_FIRST_TOKEN_TIMEOUT_MS;
-	const silenceMs = body.streamDeadlines?.silenceMs ?? AI_STALL_TIMEOUT_MS;
-	const totalMs = Math.min(AI_TOTAL_TIMEOUT_MS, body.streamDeadlines?.totalMs ?? AI_TOTAL_TIMEOUT_MS);
-	const firstTokenDeadline = startedAt + firstTokenMs;
-	const totalDeadline = startedAt + totalMs;
-	const meta = { provider: "anthropic", model: String(anthropicBody.model) };
-	const controller = new AbortController();
-	let res: Response;
-	try {
-		res = await withDeadline(
-			fetch("https://api.anthropic.com/v1/messages", {
-				method: "POST",
-				headers: {
-					"x-api-key": apiKey,
-					"anthropic-version": "2023-06-01",
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(anthropicBody),
-				signal: controller.signal,
-			}),
-			firstTokenDeadline - Date.now(),
-			"first-token",
-			firstTokenMs,
-		);
-	} catch (err) {
-		controller.abort();
-		throw asProviderError(err, meta) ?? err;
-	}
-
-	if (!res.ok) {
-		// An error is still a plain JSON body even with `stream: true` — the provider only opens the
-		// event stream once the request is accepted — so this branch is unchanged.
-		const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-		const errObj = (errBody as { error?: { message?: string; type?: string } }).error;
-		const errMsg = errObj?.message || JSON.stringify(errBody);
-		// Decided ONCE (#1356, `provider-error-kind.ts`); the hold, the hint and the error all read it.
-		const kind = classifyAnthropicError({ status: res.status, message: errMsg });
-		if (kind === "credit" || kind === "credentials") await observeProviderAccount(env, userId, "anthropic", apiKey, kind === "credit" ? "provider_credit" : "provider_credentials", Date.now(), String(anthropicBody.model));
-		// An exhausted balance arrives as a 400 `invalid_request_error` — the same status and type as
-		// a malformed request — with the sentence as its only signature (#773). The vendor's text is
-		// kept verbatim (it is what `coding-failure.ts` classifies on) and the remedy is appended in
-		// the same shape as the 401 hint, so the owner reads which page to go to rather than which
-		// endpoint said no.
-		const hint = kind === "model_access"
-			? " — Your API key may not have access to this model. Get a key from console.anthropic.com/settings/keys"
-			: kind === "credentials" && res.status === 401
-				? " — Invalid API key. Update it in Profile → API Keys → Anthropic"
-				// A 403 `permission_error` "Request not allowed" has been measured to come and go on a
-				// key that works minutes either side of it (#1326), so it is reported as a refusal the
-				// platform re-checks, not as a dead key.
-				: kind === "credentials" && res.status === 403
-					? ` — Anthropic API key ending in ${keyHint(apiKey) ?? "an unavailable hint"} was refused. PAGS re-checks this key automatically and continues stopped runs once it works; if it stays refused, check the key and organization at console.anthropic.com or replace it in Profile → API Keys → Anthropic`
-				: kind === "credit"
-					// `keyHint` is exactly four non-secret trailing characters (#780). `runAnthropic`
-					// holds the precise key that made this request, so this identifies THAT key even if
-					// the owner replaces it before reading the error; a later vault lookup could lie.
-					? ` — Anthropic API key ending in ${keyHint(apiKey) ?? "an unavailable hint"} has insufficient balance. This is the Anthropic API key balance, never a machine or Claude CLI subscription. Top up at console.anthropic.com/settings/billing`
-					: "";
-		throw new UserAiProviderError(
-			`Anthropic (${res.status}): ${errMsg}${providerFacts(errObj?.type, res.headers.get("request-id"))}${hint}${providerErrorTag(kind)}`,
-			res.status === 401 || res.status === 403 ? 400 : 502,
-			res.status,
-			errBody,
-			// A 5xx (including 529 `overloaded_error`) is the provider saying "not me, not now" —
-			// worth one immediate retry (#518). A 4xx is not: a bad key, a model the key cannot
-			// reach, or a rate limit are all still true a second later, and 429 in particular wants
-			// a backoff this path does not have.
-			res.status >= 500,
-			kind,
-		);
-	}
-
-	let data: AnthropicMessageBody;
-	try {
-		data = await readAnthropicStream(res, { firstTokenDeadline, totalDeadline, firstTokenMs, silenceMs, totalMs, startedAt });
-	} catch (err) {
-		controller.abort();
-		throw asProviderError(err, meta) ?? err;
-	}
-	if (!data.content.length) {
-		throw new UserAiProviderError("Anthropic: the reply arrived empty — no content blocks", 502);
-	}
-
-	await env.DB.prepare(
-		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = 'anthropic'",
-	).bind(userId).run();
-
-	await observeProviderAccount(env, userId, "anthropic", apiKey, null);
-
-	// Convert Anthropic response to Workers AI format for compatibility
-	const content = data.content;
-	const textParts = content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
-	const toolUse = content.filter((c) => c.type === "tool_use");
-	const u = data.usage;
-	// Kept SEPARATE, not summed (#212). Anthropic bills a cache read at 0.1x input and a cache
-	// write at 1.25x; folding all three into `input` priced every read at the full rate and made
-	// the cache invisible — you could not tell a hit from a miss, so you could not tell whether
-	// caching was working before changing a prompt to make it work better.
-	const usage = {
-		input: u.input_tokens || 0,
-		output: u.output_tokens || 0,
-		cacheRead: u.cache_read_input_tokens || 0,
-		cacheWrite: u.cache_creation_input_tokens || 0,
-		cacheWrite1h: u["cache_creation.ephemeral_1h_input_tokens"] || 0,
-	};
-
-	// Ledger the call for the Usage page. Best-effort: recordUsage swallows all errors,
-	// so it can never break the AI call — it's a small awaited D1 insert on the return path.
-	if (ctx) {
-		await recordUsage(env, { ...ctx, userId, provider: "anthropic", model: (anthropicBody.model as string) || "claude-sonnet-4-6" }, { ...usage, toolCalls: toolUse.length });
-	}
-
-	// WHY the response carries the provider's verdict (#397): `stop_reason: "max_tokens"` sits in
-	// this same body, one key away from the `content` and `usage` already read, and dropping it made
-	// a reply cut off at the cap indistinguishable from one that finished. A caller cannot recover
-	// the fact later — the truncated text looks like prose that simply ended. Surfaced on BOTH
-	// returns, because a round that stops mid-`tool_use` is the same loss with worse consequences.
-	const stopReason = typeof data.stop_reason === "string" ? data.stop_reason : undefined;
-
-	if (toolUse.length > 0) {
-		return {
-			response: textParts,
-			tool_calls: toolUse.map((t) => ({
-				name: t.name,
-				arguments: t.input || {},
-				// The id is what makes a result ATTRIBUTABLE (#398). Dropping it is why the follow-up
-				// context read `[repo_read_file]: <contents>` with no path: call one tool twice in a
-				// round with different arguments and the model had to infer which result was which.
-				id: t.id,
-			})),
-			// The assistant turn EXACTLY as the provider produced it, so the caller can append it and
-			// answer its `tool_use` blocks with real `tool_result`s instead of narrating them back as
-			// the model's own prose. Named `contentBlocks` rather than `content` so it cannot be
-			// mistaken for a message's content field. Absent on every non-Anthropic provider, which
-			// is how the caller branches without a provider enum to keep in sync.
-			contentBlocks: content,
-			inference: meta,
-			usage,
-			stopReason,
-		};
-	}
-	return { response: textParts, usage, stopReason, inference: meta };
-}
-
-/** One deadline ran out. Carries WHICH, because the three mean different things to the user. */
-class DeadlineExceeded extends Error {
-	/** How many SSE events the assembler accepted before silence — annotated by readAnthropicStream. */
-	eventsSeen?: number;
-	/** The `type` of the last accepted event — annotated by readAnthropicStream. */
-	lastEventType?: string;
-	/** The measured phase (#907) — annotated by readAnthropicStream. */
-	phase?: StreamPhase;
-
-	constructor(
-		readonly kind: AiDeadlineKind,
-		readonly budgetMs: number,
-	) {
-		super(`${kind} deadline exceeded after ${budgetMs}ms`);
-		this.name = "DeadlineExceeded";
-	}
-}
-
-/**
- * Bound a promise, without touching the AbortController.
- *
- * A race rather than only `signal.abort()` because an abort is advisory — it unblocks the socket,
- * but whether the pending `read()` rejects, and how soon, is the runtime's business. The deadline
- * has to be OURS or the ceiling is a suggestion. The caller aborts as well, to free the connection.
- */
-function withDeadline<T>(promise: Promise<T>, remainingMs: number, kind: AiDeadlineKind, budgetMs: number): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => reject(new DeadlineExceeded(kind, budgetMs)), Math.max(0, remainingMs));
-		promise.then(
-			(value) => {
-				clearTimeout(timer);
-				resolve(value);
-			},
-			(err) => {
-				clearTimeout(timer);
-				reject(err);
-			},
-		);
-	});
-}
-
-/** Translate our two internal failures into the error the user reads. Anything else is a real bug. */
-function asProviderError(err: unknown, meta?: { provider: string; model: string }): UserAiProviderError | null {
-	if (err instanceof DeadlineExceeded) {
-		// Retryability comes from the SAME table the sentence does (#518), so what the platform does
-		// automatically is what the platform told the user to do. The measured phase rides in the
-		// message too (#907): it is the one part of an error a Workflow step boundary keeps.
-		const provErr = new UserAiProviderError(`${deadlineMessage(err.kind, err.budgetMs)}${err.phase ? streamPhaseSuffix(err.phase) : ""}`, 504, undefined, undefined, isRetryableDeadline(err.kind));
-		if (err.phase) provErr.streamPhase = err.phase;
-		if (meta) Object.assign(provErr, meta);
-		// Thread the stream state so `recordCodingFailure` can write what the assembler had seen
-		// before the silence — the fact that settles whether a stall is pre- or post-content (#734).
-		if (err.eventsSeen !== undefined) provErr.eventsSeen = err.eventsSeen;
-		if (err.lastEventType !== undefined) provErr.lastEventType = err.lastEventType;
-		return provErr;
-	}
-	// A malformed or truncated stream is a transport fact — a lost frame, a mid-stream
-	// `overloaded_error`, tool arguments that arrived half-written. A fresh generation is a fresh
-	// stream, so this is worth exactly one retry.
-	// The provider stopping mid-reply — a tool call whose arguments stopped arriving, or a dropped stream
-	// with no output cap (#907) — is marked as such IN THE MESSAGE, the part that survives a step boundary.
-	if (err instanceof AnthropicStreamError) {
-		return new UserAiProviderError(`Anthropic: ${err.message}${err.marker ? ` ${err.marker}` : ""}`, 502, undefined, undefined, true);
-	}
-	// The runtime's own abort, raised by a socket we cancelled or one the provider dropped. It says
-	// nothing about HOW LONG anything waited — see `connectionLostMessage`.
-	if (err instanceof Error && err.name === "AbortError") {
-		return new UserAiProviderError(connectionLostMessage(), 504, undefined, undefined, true);
-	}
-	return null;
-}
-
-/**
- * Read the SSE body to a whole message, under the three deadlines.
- *
- * The first read carries the FIRST-TOKEN budget; every read after it carries the STALL budget,
- * re-armed per chunk — that is the whole point of streaming here, because a long reply now looks
- * like steady progress rather than one long silence. The TOTAL ceiling clamps both, so a provider
- * that dribbles a token every 19 seconds forever still ends.
- */
-async function readAnthropicStream(
-	res: Response,
-	deadlines: { firstTokenDeadline: number; totalDeadline: number; firstTokenMs: number; silenceMs?: number; totalMs?: number; startedAt?: number },
-): Promise<AnthropicMessageBody> {
-	const silenceMs = deadlines.silenceMs ?? AI_STALL_TIMEOUT_MS;
-	const totalMs = deadlines.totalMs ?? AI_TOTAL_TIMEOUT_MS;
-	const startedAt = deadlines.startedAt ?? Date.now();
-	let lastChunkAt = Date.now();
-	if (!res.body) throw new UserAiProviderError("Anthropic: the response carried no body to stream", 502);
-	const reader = res.body.getReader();
-	const decoder = new TextDecoder();
-	const assembler = new AnthropicStreamAssembler();
-	let buffer = "";
-	try {
-		for (;;) {
-			const now = Date.now();
-			// PRE-CONTENT until the model produces a content block (#907). Framing frames (`message_start`,
-			// `ping`) keep the stream alive exactly as before — the deadline never gets STRICTER — but they
-			// no longer end the pre-content budget: the first byte is not the first answer.
-			const pre = !assembler.contentStarted;
-			const silenceDeadline = pre ? Math.max(deadlines.firstTokenDeadline, lastChunkAt + silenceMs) : now + silenceMs;
-			const kind: AiDeadlineKind = deadlines.totalDeadline < silenceDeadline ? "total" : pre ? "first-token" : "stall";
-			const budgetMs = kind === "total" ? totalMs : kind === "first-token" ? deadlines.firstTokenMs : silenceMs;
-			let chunk: ReadableStreamReadResult<Uint8Array>;
-			try {
-				chunk = await withDeadline(
-					reader.read(),
-					Math.min(silenceDeadline, deadlines.totalDeadline) - now,
-					kind,
-					budgetMs,
-				);
-			} catch (e) {
-				// Annotate a stall/first-token deadline with the stream state at the moment of silence
-				// so the caller can record what the assembler had accepted and what it last saw.
-				if (e instanceof DeadlineExceeded) {
-					e.eventsSeen = assembler.eventsSeen;
-					e.lastEventType = assembler.lastEventType;
-					const at = Date.now();
-					e.phase = { contentStarted: assembler.contentStarted, eventsSeen: assembler.eventsSeen, lastEventType: assembler.lastEventType ?? null, silentForMs: at - lastChunkAt, elapsedMs: at - startedAt };
-				}
-				throw e;
-			}
-			lastChunkAt = Date.now();
-			if (chunk.done) break;
-			buffer += decoder.decode(chunk.value, { stream: true });
-			const { events, rest } = parseSseEvents(buffer);
-			buffer = rest;
-			for (const event of events) assembler.push(event);
-			// Stop at `message_stop` rather than waiting for the socket to close: the message is whole,
-			// and a provider that keeps the connection open would otherwise cost a full stall timeout.
-			if (assembler.done) break;
-		}
-	} finally {
-		await reader.cancel().catch(() => undefined);
-	}
-	return assembler.finish();
-}
-
-/**
- * Workers AI takes the system prompt as a plain string, so blocks (#768) are joined back into
- * exactly the text a single-string builder would have sent. Anything else passes through untouched.
- */
-function withFlatSystemPrompt(body: unknown): unknown {
-	const messages = (body as { messages?: unknown })?.messages;
-	if (!Array.isArray(messages)) return body;
-	// A provider with no cache reads the same text: system blocks and user prompt blocks (#914) flattened.
-	const flat = (m: { role?: string; content?: unknown }) => (m?.role === "system" && isSystemPromptBlocks(m.content)) || (m?.role === "user" && isUserPromptBlocks(m.content));
-	if (!messages.some(flat)) return body;
-	return {
-		...(body as Record<string, unknown>),
-		messages: messages.map((m) => (flat(m) ? { ...m, content: systemPromptText(m.content) } : m)),
-	};
-}
-
-/**
- * The request only an Anthropic key can serve (#853): content Workers AI cannot read, such as a PDF.
- * A provider error, so every caller already handles it; its own class, so a caller can tell the
- * owner what to add rather than logging it as a failure.
- */
-export class UserAiUnsupportedInputError extends UserAiProviderError {}
-
-/** The Workers AI body, or the refusal — thrown before any request is made. */
-function workersAiPayload(body: unknown): unknown {
-	try {
-		return toWorkersAiBody(withFlatSystemPrompt(body));
-	} catch (e) {
-		if (e instanceof WorkersAiUnsupportedContentError) throw new UserAiUnsupportedInputError(e.message, 400);
-		throw e;
-	}
-}
-
-async function runCloudflareAi(
-	env: Env,
-	userId: string | undefined,
-	credentials: StoredCloudflareAiCredentials,
+	credential: Cred,
 	model: string,
 	body: unknown,
 	ctx?: UsageContext,
 ): Promise<unknown> {
-	// The platform's own callers speak one provider-neutral body (#851); `/run` is the exception — a
-	// public passthrough of the CALLER's Workers AI input and result, which must reach them untouched.
-	const platform = ctx?.kind !== "run";
-	// The brains name an Anthropic model; on this path that is a URL that does not exist.
-	if (platform) model = workersAiModelFor(model);
-	const encodedModel = model.split("/").map(encodeURIComponent).join("/");
-	// Still non-streamed, and correctly so: this path is the fallback for a user with CF creds and no
-	// Anthropic key, where the model is `llama-3.2-3b` and the REST endpoint's default output is a few
-	// hundred tokens — a total-time deadline is the right measurement for a call that short. It shares
-	// the CONSTANT with the Anthropic path so there is one 25 in the codebase, not two.
-	const timeoutMs = (body as { timeoutMs?: number })?.timeoutMs ?? AI_FIRST_TOKEN_TIMEOUT_MS;
-	// Built first: content this path cannot carry is refused before any request or timer (#853).
-	const payload = platform ? workersAiPayload(body) : withFlatSystemPrompt(body);
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), timeoutMs);
-	let res: Response;
-	try {
-		res = await fetch(
-			`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(credentials.accountId)}/ai/run/${encodedModel}`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${credentials.token}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(payload),
-				signal: controller.signal,
-			},
-		);
-	} catch (err) {
-		clearTimeout(timeout);
-		if (err instanceof Error && err.name === "AbortError") {
-			// A non-streamed call that ran out of time IS the total-budget failure, so it reads as one.
-			throw new UserAiProviderError(deadlineMessage("total", timeoutMs), 504);
-		}
-		throw err;
-	}
-	clearTimeout(timeout);
-	const data = await res.json().catch(() => ({}));
+	const req = adapter.buildRequest(body, model, ctx);
+	const res = await adapter.send(req, credential);
 	if (!res.ok) {
-		const kind = classifyCloudflareError({ status: res.status });
-		if (kind === "credentials") await observeProviderAccount(env, userId, "cloudflare", credentials, "provider_credentials", Date.now(), model);
-		// `details` reaches the verify response and the error log; Cloudflare's errors quote the
-		// account path, which holds a token when the two were saved swapped (#893).
-		const redacted = redactCloudflareUpstream(data, credentials);
-		const first = (redacted as { errors?: Array<{ code?: unknown; message?: unknown }> })?.errors?.[0];
-		const said = typeof first?.message === "string" ? `: ${clipMarked(first.message, 300, { within: true })}` : "";
-		throw new UserAiProviderError(
-			`Cloudflare Workers AI request failed with HTTP ${res.status}${said}${providerFacts(first?.code != null ? `code ${String(first.code)}` : null, res.headers.get("cf-ray"))}${providerErrorTag(kind)}`,
-			res.status === 401 || res.status === 403 ? 400 : 502,
-			res.status,
-			redacted,
-			false,
-			kind,
-		);
+		const wire = await adapter.parseError(res, req, credential);
+		// The hold follows from the kind the adapter decided — credit and credentials are different holds with different remedies.
+		if (wire.kind === "credit" || wire.kind === "credentials") {
+			await observeProviderAccount(env, userId, adapter.id, adapter.credentialRef(credential), wire.kind === "credit" ? "provider_credit" : "provider_credentials", Date.now(), req.model);
+		}
+		throw new UserAiProviderError(`${wire.message}${providerErrorTag(wire.kind)}`, wire.status, wire.upstreamStatus, wire.details, wire.retryable, wire.kind);
 	}
-	await env.DB.prepare(
-		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = 'cloudflare'",
-	).bind(userId).run();
-	await observeProviderAccount(env, userId, "cloudflare", credentials, null);
-	// CF Workers AI is per-neuron (cost ~0), but still emit a ledger row with token
-	// counts when the response carries usage, so the Usage page shows CF calls too.
-	if (ctx) {
-		const cu = (data as { usage?: Record<string, number> })?.usage || {};
-		await recordUsage(env, { ...ctx, userId, provider: "cloudflare", model }, {
-			input: cu.prompt_tokens || cu.input_tokens || 0,
-			output: cu.completion_tokens || cu.output_tokens || 0, toolCalls: workersAiToolCallCount(data),
-		});
-	}
-	// One result shape for every brain, whichever habit the model has (#851) — see workers-ai-protocol.
-	const result = data && typeof data === "object" && "result" in data ? (data as { result: unknown }).result : data;
-	return platform ? { ...fromWorkersAiResult(result, (payload as { max_tokens?: number }).max_tokens), inference: { provider: "cloudflare", model } } : result;
+	const raw = await adapter.readSuccess(res, req);
+	await recordProviderCallSuccess(env, userId, adapter.id, adapter.credentialRef(credential));
+	// Ledger the call for the Usage page. Best-effort: recordUsage swallows all errors, so it can never break the AI call.
+	if (ctx) await recordUsage(env, { ...ctx, userId, provider: adapter.id, model: req.model }, adapter.usage(raw));
+	return adapter.toResult(raw, req);
 }
 
 export async function getUserProviderKey(

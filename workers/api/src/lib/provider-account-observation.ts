@@ -48,3 +48,38 @@ export async function observeProviderAccount(env: Env, userId: string | undefine
 		await logError(env, { source: "provider:hold", userId, message: "The provider-account observation could not be persisted", context: { provider, observation: failure ?? "success" } }).catch(() => undefined);
 	}
 }
+
+/** A key's `last_used_at` is for the owner to read ("used a minute ago"), so a write finer than this buys nothing. */
+export const LAST_USED_GRANULARITY_SECONDS = 60;
+
+/**
+ * Everything a SUCCESSFUL provider call writes, once (#1356): the key's `last_used_at` and the clearing of a hold on that credential, in a
+ * single D1 round trip. The two used to be separate awaited writes on every success, plus the credential's SHA-256 for the hold — and the
+ * `last_used_at` write was unguarded, so a D1 blip there failed an AI call that had already succeeded.
+ *
+ * `last_used_at` is only moved when it is older than {@link LAST_USED_GRANULARITY_SECONDS}: inside that window the statement matches no
+ * row, so a busy run's calls cost no write for it. The hold statement likewise matches nothing unless a hold is open.
+ *
+ * Never throws and never replaces the provider's answer: the call succeeded, this is the record of it.
+ */
+export async function recordProviderCallSuccess(env: Env, userId: string | undefined, provider: HeldProvider, credential: string | { accountId: string; token: string }): Promise<void> {
+	if (!userId) return;
+	try {
+		const now = Date.now();
+		const stmts = [
+			env.DB.prepare(
+				"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2 AND (last_used_at IS NULL OR last_used_at < datetime('now', ?3))",
+			).bind(userId, provider, `-${LAST_USED_GRANULARITY_SECONDS} seconds`),
+		];
+		// A credential whose identity cannot be computed has no hold to clear; the use is still recorded.
+		const id = await providerCredentialId(provider, credential).catch(() => null);
+		if (id) {
+			stmts.push(
+				env.DB.prepare("UPDATE provider_account_holds SET cleared_at = ?4 WHERE user_id = ?1 AND provider = ?2 AND credential_id = ?3 AND cleared_at IS NULL AND failed_at <= ?4").bind(userId, provider, id, now),
+			);
+		}
+		await env.DB.batch(stmts);
+	} catch {
+		await logError(env, { source: "provider:hold", userId, message: "The provider call's success could not be recorded", context: { provider } }).catch(() => undefined);
+	}
+}
