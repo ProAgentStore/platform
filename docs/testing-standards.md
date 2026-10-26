@@ -112,6 +112,23 @@ standard allows: the driver registries in `driver-cancel.test.ts` / `driver-fail
 `workflow-trace.test.ts` (every file in `workflows/` is classified), `metering-callsites.test.ts`
 (every caller in the tree), `autonomous-budget.test.ts` (import-graph reachability).
 
+## Navigation: when the shell may be mocked, and when it must be real (#1292)
+
+A browser test that replaces the app shell with a plain `<div>` is fast, and it removes exactly the behaviour a phone user
+depends on — the Menu button, its keyboard and outside-click handling, `aria-current`, the single navigation landmark — so a menu
+that never opens, or lists fewer destinations than the desktop bar, passes every such test.
+
+- **Mock the shell** when the test is about a page's own behaviour: its data, forms, empty and error states. The header is not
+  what is under test, and rendering it costs a session and a router.
+- **Use the real shell** for anything about navigation itself: opening and closing the menu, Escape and outside click, which
+  destinations it lists, `aria-current`, that choosing an item does not reload the document, how many navigation landmarks are
+  exposed, and whether the header overflows at phone width.
+
+`e2e/appshell-mobile.spec.ts` is the reference: it renders the real console `Layout` at 375 x 812 with only the API mocked, and
+reads the desktop bar's destinations from the DOM so the menu is compared with what the product actually offers, not with a
+second hand-kept list. It owns those checks — do not re-mock them elsewhere. The console's shell is `Layout`; the SDK
+`ProShell` that apps build on lives in the ProAppStore repository and has its own tests there.
+
 ## Remaining text guards — convert them when you touch that code
 
 158 test files still call `readFileSync` (measured at #915) — over console and admin components, prompts,

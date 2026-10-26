@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { type ButtonSize, type ButtonVariant, buttonClass } from "../lib/control-classes";
 
 /**
@@ -45,6 +45,8 @@ export default function Button({
 	size?: ButtonSize;
 	className?: string;
 	children?: ReactNode;
+	/** React 19 passes `ref` as an ordinary prop; it rides `...rest` onto the <button> (#1292: Layout returns focus to the menu button). */
+	ref?: Ref<HTMLButtonElement>;
 }) {
 	return (
 		<button type={type} className={buttonClass(variant, size, className)} {...rest}>

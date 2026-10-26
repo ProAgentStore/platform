@@ -44,6 +44,7 @@ export default function Layout() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [unreadCount, setUnreadCount] = useState(0);
 	const menuRef = useRef<HTMLElement>(null);
+	const menuButtonRef = useRef<HTMLButtonElement>(null);
 	const navHidden = useNavHidden();
 	const headerSlot = useHeaderSlotContent();
 
@@ -54,8 +55,19 @@ export default function Layout() {
 				setMenuOpen(false);
 			}
 		};
+		// Escape closes it and puts focus back on the button that opened it (#1292): a keyboard user who opened the menu
+		// is otherwise left on an element that has just disappeared.
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			setMenuOpen(false);
+			menuButtonRef.current?.focus();
+		};
 		document.addEventListener("click", handler, true);
-		return () => document.removeEventListener("click", handler, true);
+		document.addEventListener("keydown", onKey);
+		return () => {
+			document.removeEventListener("click", handler, true);
+			document.removeEventListener("keydown", onKey);
+		};
 	}, [menuOpen]);
 
 	const loadBadge = useCallback(async () => {
@@ -177,11 +189,14 @@ export default function Layout() {
 				{/* Hamburger — only when default nav is showing */}
 				{!navHidden && (
 					<Button
+						ref={menuButtonRef}
 						variant="ghost"
 						size="icon"
 						className="lg:hidden shrink-0"
 						onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
-						aria-label="Open menu"
+						aria-label="Menu"
+						aria-expanded={menuOpen}
+						aria-haspopup="true"
 					>
 						<Menu size={20} />
 					</Button>
