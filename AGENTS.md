@@ -166,7 +166,8 @@ If you are writing or reviewing an app that uses the ProAppStore SDK shell (`Pro
 [docs/appshell-navigation-contract.md](docs/appshell-navigation-contract.md) (machine-readable twin:
 `docs/appshell-navigation-contract.json`): one primary navigation, every destination in `nav`, no second navbar, `onNavigate` for
 SPAs, scope kept in the path, and a 375px browser test against the real shell. The console's own shell is tested that way in
-`e2e/appshell-mobile.spec.ts`.
+`e2e/appshell-mobile.spec.ts`. The contract is executable: `node scripts/check-appshell-navigation.mjs <path>` flags a second
+primary navbar, an incomplete shell `nav` and a custom topbar that omits `ctx.nav` (#1290).
 
 ## Writing a guard test
 

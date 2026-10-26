@@ -76,7 +76,7 @@ describe("the human-readable contract matches it", () => {
 
 	it("has the sections the issue asks for, as headings", () => {
 		const names = doc.headings.map((h) => h.text);
-		for (const section of ["Terminology", "The seven rules", "Starter checklist", "React Router example", "Role-aware and scoped-link example", "Open items"]) {
+		for (const section of ["Terminology", "The seven rules", "Starter checklist", "Executable check", "React Router example", "Role-aware and scoped-link example", "Open items"]) {
 			expect(names, `missing section: ${section}`).toContain(section);
 		}
 	});

@@ -131,6 +131,39 @@ export function useNav(workspace: string, role: Role): NavItem[] {
 // <ProShell app={app} appName="Cases" nav={useNav(workspace, role)} onNavigate={navigate}>…</ProShell>
 ```
 
+## Executable check
+
+Rules 1–3 can be checked on source, so there is a command for it (#1290):
+
+```bash
+node scripts/check-appshell-navigation.mjs <path…> [--strict] [--json]
+```
+
+It reads the app's `.tsx`/`.jsx`/`.ts` files with the TypeScript compiler and, for each `ProShell`/`AppShell` element, reports:
+
+| Code | Severity | Means |
+|---|---|---|
+| `APPSHELL_NAV_STRAY` | error | a second primary `<nav>` in the shell content (rule 3) — the shape Hiring shipped |
+| `APPSHELL_NAV_BYPASSED` | warning | the shell declares no `nav` and the app renders its own primary `<nav>` in the content (rule 1) |
+| `APPSHELL_NAV_INCOMPLETE` | warning | the shell's `nav` lists one item (or none) while the content shows more destinations (rule 2) |
+| `APPSHELL_TOPBAR_OMITS_NAV` | error | a custom `renderTopbar` never places `ctx.nav` (rule 3) |
+| `APPSHELL_EXEMPT_NO_REASON` | error | an opt-out comment without a reason |
+
+Each finding names the file and line, the fix, and links to the rule above. It exits 1 on an error (`--strict`: on a warning too),
+and says "no shell found" rather than "clean" when it found none.
+
+It does **not** flag breadcrumbs, tabs, footer navigation, admin or settings sub-navigation, pagination, a table of contents, a `<nav>`
+with a single link, or any `<nav data-nav="local">`. An app with `hideTopbar` owns its own navigation and is skipped, and a custom `renderTopbar` is the topbar, not content. A shell that is
+legitimately different opts out, with a reason, in a comment on or just above the element:
+
+```text
+// appshell-nav-exempt: single-purpose kiosk; the content bar is its only navigation
+```
+
+**Limits.** It is static: a component it cannot find in the scanned files is not guessed at, a `nav` built by a function call has an
+unknown length (so it is never called incomplete), and a `renderTopbar` imported from another file is not inspected. A clean result
+means nothing the contract names was found in what was read. It does not prove the menu works — rule 6 does.
+
 ## Open items
 
 This contract is published here, in `ProAgentStore/platform`, because that is where the issue was filed. Its acceptance asks for
@@ -138,6 +171,6 @@ more than a document:
 
 - referenced from the **template-app** and the **SDK README/API docs** — both are in `proappstore-online/platform`;
 - referenced from the PAS platform AI guidance (the MCP server's SDK reference and platform skill) — same repository;
-- a router adapter so rule 4 needs no hand-written glue (#1289), and a compliance check that enforces rules 1–3 (#1293).
+- a router adapter so rule 4 needs no hand-written glue (#1289), and wiring the executable check above into the template CI and the compliance package (#1293).
 
 Those remain to be done in that repository. The only reference added here is from [AGENTS.md](../AGENTS.md).
