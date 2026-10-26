@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionsServiceContent, actionsServiceLabel, actionsServicePlist, activeProcessIn, serviceForPlist, waitListenerGone } from "./actions-service.js";
+import { actionsServiceContent, actionsServiceLabel, actionsServicePlist, activeProcessIn, assertOwnedRemovalService, serviceForPlist, waitListenerGone } from "./actions-service.js";
 import type { ServiceContext } from "./service-install.js";
 
 const dir = "/Users/serge/.proagentstore/actions-runner/proappstore-online";
@@ -23,6 +23,11 @@ describe("macOS Actions system service (#1209)", () => {
 		expect(serviceForPlist("/Library/LaunchDaemons/actions.runner.proappstore-online.pags-tiny-laptop.plist", old, dir, 501)).toMatchObject({ domain: "system", owned: false });
 		expect(serviceForPlist("/Library/LaunchDaemons/other.plist", old, "/Users/serge/.proagentstore/actions-runner/other", 501)).toBeNull();
 		expect(serviceForPlist(actionsServicePlist(dir), { ...old, Label: actionsServiceLabel(dir) }, dir, 501)).toMatchObject({ owned: true });
+	});
+
+	it("refuses to remove a legacy service before any stop or deletion", () => {
+		expect(() => assertOwnedRemovalService({ path: "/Library/LaunchDaemons/actions.runner.legacy.plist", label: "actions.runner.legacy", domain: "system", owned: false })).toThrow(/not a PAGS-generated Actions service/);
+		expect(() => assertOwnedRemovalService({ path: actionsServicePlist(dir), label: actionsServiceLabel(dir), domain: "system", owned: true })).not.toThrow();
 	});
 
 	it("refuses unknown process inventory or cwd instead of treating a worker as idle", () => {

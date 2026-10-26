@@ -34,6 +34,10 @@ export interface MacActionsService {
 	owned: boolean;
 }
 
+export function assertOwnedRemovalService(service: MacActionsService | undefined): void {
+	if (service && !service.owned) throw new Error(`Refusing to remove ${service.domain}/${service.label}: it is not a PAGS-generated Actions service. Adopt it first, or remove that exact legacy service separately.`);
+}
+
 /** A plist is a candidate only when launchd directly names this exact runner directory. */
 export function serviceForPlist(path: string, value: unknown, dir: string, uid: number): MacActionsService | null {
 	if (!value || typeof value !== "object") return null;
@@ -247,6 +251,7 @@ export async function removeMacActionsService(dir: string, ctx: ServiceContext):
 	const services = inventoryActionsServices(dir, ctx);
 	if (services.length > 1) throw new Error(`Ambiguous service ownership for ${dir}: ${services.map((s) => `${s.domain}/${s.label}`).join(", ")}`);
 	const service = services[0];
+	assertOwnedRemovalService(service);
 	if (service) {
 		if (activeWorkerIn(dir)) return [`Deferred: ${dir} has an active Runner.Worker. Retry after the job completes.`];
 		const wasRunning = loaded(service);

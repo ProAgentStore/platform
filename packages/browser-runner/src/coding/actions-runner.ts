@@ -31,6 +31,7 @@ import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 
 import { checkWindowsReadiness, type WindowsReadinessDeps } from "./windows-runner-readiness.js";
+import { macRunnerServiceRemoved } from "./actions-runner-mac-removal.js";
 import { liveWindowsDeps } from "./windows-runner-live.js";
 import { ensureWindowsRunnerRoot, machineRoot, NETWORK_SERVICE, type WindowsRootDeps } from "./windows-runner-root.js";
 
@@ -94,6 +95,8 @@ export interface ActionsRunnerDeps {
 	isRoot: boolean;
 	exists: (path: string) => boolean;
 	readText?: (path: string) => string;
+	/** macOS: local physical verification before accepting a user-writable removal receipt. */
+	macServiceRemoved?: (dir: string) => boolean;
 	mkdir: (path: string) => void;
 	which: (bin: string) => boolean;
 	/** The newest actions/runner version, e.g. "2.329.0". */
@@ -403,6 +406,11 @@ export async function runRemove(job: ActionsRunnerJob, req: ActionsRunnerRequest
 					job.serviceNote = `Remove this runner's exact service on the machine, then ask again to deregister: pags actions service remove --dir ${job.dir}`;
 					return finish(job, deps);
 				}
+				if (deps.macServiceRemoved?.(job.dir) !== true) {
+					job.service = "needs_admin";
+					job.serviceNote = `The local approval receipt is present, but an Actions service or process for this runner may still be active. Inspect the exact service and retry: pags actions service remove --dir ${job.dir}`;
+					return finish(job, deps);
+				}
 				job.steps.push("local administrator-approved service removal verified");
 				await step(job, deps, join(job.dir, "config.sh"), ["remove", "--token", req.token], req.token);
 				rmSync(proof, { force: true });
@@ -469,6 +477,7 @@ export function liveRunnerDeps(): ActionsRunnerDeps {
 		isRoot: typeof process.getuid === "function" && process.getuid() === 0,
 		exists: existsSync,
 		readText: (path) => readFileSync(path, "utf8"),
+		macServiceRemoved: (dir) => macRunnerServiceRemoved(dir, homedir()),
 		mkdir: (path) => mkdirSync(path, { recursive: true }),
 		which: (bin) => spawnSync(win ? "where" : "which", [bin], { stdio: "ignore" }).status === 0,
 		probe: (file, args) => {

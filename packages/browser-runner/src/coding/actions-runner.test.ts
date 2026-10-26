@@ -221,6 +221,33 @@ describe("remove (#1209)", () => {
 		expect(d.ran).toEqual([]);
 	});
 
+	it("does not trust a forged local approval receipt while a service or process still exists", async () => {
+		const dir = runnerDir(HOME, ORG.url);
+		const proof = join(dir, ".pags-supervisor", "removal-approved.json");
+		const d = fake({
+			readText: () => JSON.stringify({ name: ORG.name, url: ORG.url, at: Date.now() }),
+			macServiceRemoved: () => false,
+		});
+		d.files.add(join(dir, ".runner"));
+		d.files.add(proof);
+		const blocked = await settle(startRunnerJob("remove", ORG, d));
+		expect(blocked).toMatchObject({ service: "needs_admin", serviceNote: expect.stringContaining("may still be active") });
+		expect(d.ran).toEqual([]);
+	});
+
+	it("deregisters after both the local receipt and physical absence check", async () => {
+		const dir = runnerDir(HOME, ORG.url);
+		const d = fake({
+			readText: () => JSON.stringify({ name: ORG.name, url: ORG.url, at: Date.now() }),
+			macServiceRemoved: () => true,
+		});
+		d.files.add(join(dir, ".runner"));
+		d.files.add(join(dir, ".pags-supervisor", "removal-approved.json"));
+		const removed = await settle(startRunnerJob("remove", ORG, d));
+		expect(removed.service).toBe("removed");
+		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["config.sh"]);
+	});
+
 	it("nothing configured: nothing to remove, and nothing is run", async () => {
 		const d = fake();
 		expect(await settle(startRunnerJob("remove", ORG, d))).toMatchObject({ state: "done", service: "removed" });
