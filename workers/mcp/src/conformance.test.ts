@@ -1133,6 +1133,13 @@ describe("tool discovery — the right tool carries the words people search with
 		["list my instances", "my_instances"],
 		["show my subscriptions", "my_instances"],
 		["which instances am I subscribed to", "my_instances"],
+		// #404: phrasings the issue reported losing to coding_* and activity tools.
+		["subscribed instances", "my_instances"],
+		["my subscriptions", "my_instances"],
+		["list all my instances", "my_instances"],
+		["all instances including paused", "my_instances"],
+		["subscribed private instances roster", "my_instances"],
+		["account activity all instances uncapped", "my_instances"],
 		["list my agents as creator", "my_agents"],
 		["browse the public catalogue of agents", "list_agents"],
 		["what was I working on recently", "recent_instances"],
