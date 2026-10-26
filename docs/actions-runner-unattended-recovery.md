@@ -1,7 +1,9 @@
 # Unattended Actions runner recovery on PAGS machines
 
-**Status:** implementation in progress; fleet rollout and physical verification remain queued. This extends the self-hosted runner design
-in [runner-self-hosted-design.md](runner-self-hosted-design.md). It does not
+**Status:** PAGS implementation shipped on `main` in `a6be5d7d` (CLI
+0.4.183, MCP surface 0.1.189); fleet rollout and physical verification remain
+queued. This extends the self-hosted runner design in
+[runner-self-hosted-design.md](runner-self-hosted-design.md). It does not
 change GitHub Actions routing or promise startup after a laptop's battery is
 fully depleted.
 
@@ -22,7 +24,7 @@ listeners. A simulated transition passed; a physical retest is outstanding.
 The product goal is for PAGS to own installation, recovery, configuration,
 monitoring, and removal of that behavior.
 
-## Current product boundary
+## Previous product boundary
 
 `pags up` owns the PAGS relay/browser runner. It does not own GitHub's
 `Runner.Listener` processes, and it can exit on a machine with no eligible
@@ -30,16 +32,16 @@ pinned runtime instances. The current CLI already offers
 `pags up --install-service --daemon` for pre-login PAGS startup on macOS.
 The two laptops still use earlier custom PAGS system LaunchDaemons.
 
-`actions_runner_setup` registers an Actions runner and calls GitHub's
+Before this change, `actions_runner_setup` registered an Actions runner and called GitHub's
 `svc.sh install/start`. On macOS that installs a user LaunchAgent. The laptops
 instead use manually installed system LaunchDaemons so Actions starts before
-login. Re-running setup when `.runner` exists returns early; it does not adopt
-or repair the service. `actions_runner_status` already enriches each installed
-runner with GitHub's online/busy/routable view when the App can read it. It
-does not yet show the local service domain, a current supervisor health
-sample, or the outcome of an AC wake recovery.
+login. Re-running setup when `.runner` existed returned early; it did not adopt
+or repair the service. `actions_runner_status` already enriched each installed
+runner with GitHub's online/busy/routable view when the App could read it. It
+did not show the local service domain, a current supervisor health sample,
+or the outcome of an AC wake recovery.
 
-The implementation points on current `main` are
+The original implementation points were
 `packages/browser-runner/src/coding/actions-runner.ts`,
 `packages/cli/src/service-install.ts`,
 `workers/api/src/lib/actions-runner-provision.ts`, and
@@ -100,6 +102,12 @@ local supervisor sample, while `pags actions policy --dir <runner-directory>
 `actions_runner_status` and a scoped `actions_runner_recover` tool; the latter
 returns a recovery ID whose outcome appears in status. Omitting `service_mode`
 keeps the existing macOS user-service setup behavior.
+
+The shipped local commands are `pags actions supervise --dir`,
+`pags actions service install|remove --dir`, `pags actions status --dir`,
+`pags actions recover --dir`, and `pags actions policy --dir --ac-recovery
+on|off`. The service installation reads the existing runner configuration and
+does not mint a second GitHub registration.
 
 Extend `actions_runner_status` (MCP, API, and console/CLI view) with the local
 service mode and health, last battery-to-AC observation, last restart reason,
