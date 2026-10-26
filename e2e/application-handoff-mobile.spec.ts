@@ -115,13 +115,12 @@ const REFUSAL = "Secure sign-in input is no longer available.";
 const READ_ONLY = "Authenticated read-only inspection remains live.";
 
 async function mountHandoff(page: import("@playwright/test").Page, reconciliation: boolean) {
-	const ctl = { rejectInput: false, frameFails: 0, framesServed: 0, resume: { state: "running" } as Record<string, unknown> };
+	const ctl = { rejectInput: false, frameFails: false, framesServed: 0, resume: { state: "running" } as Record<string, unknown> };
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.route("**/v1/instances/instance-1/application-runs/run-1/**", async (route) => {
 		const path = new URL(route.request().url()).pathname;
 		if (path.endsWith("/frame")) {
-			if (ctl.frameFails > 0) {
-				ctl.frameFails--;
+			if (ctl.frameFails) {
 				return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "runner relay unavailable" }) });
 			}
 			ctl.framesServed++;
@@ -163,10 +162,12 @@ for (const [label, reconciliation] of [["live", false], ["reconciliation", true]
 		ctl.rejectInput = true;
 		await entry.fill("refused-value");
 		await expect(page.getByText(REFUSAL)).toBeVisible();
-		ctl.frameFails = 1;
+		// Hold the fault until observed; a single 500ms poll can elude the assertion (#1378).
+		ctl.frameFails = true;
 		await expect(page.getByText("Live handoff unavailable")).toBeVisible();
 		expect(await page.getByText(REFUSAL).isVisible()).toBe(true);
 		await expect(page.getByAltText("Live Application Runner browser")).toBeVisible();
+		ctl.frameFails = false;
 		await afterFrames(3);
 		expect(await page.getByText(REFUSAL).isVisible()).toBe(true);
 		await expect(page.getByText("Live handoff unavailable")).toHaveCount(0);
