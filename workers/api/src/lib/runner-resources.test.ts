@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import { heartbeatContext } from "./runner-attach-report.js";
-import { CPU_HIGH_WATER, MEMORY_HIGH_WATER_PCT, memoryPressurePct, mergeCoarse, parseResourceSample, resourcePoint, resourcesView, saveResourceSample } from "./runner-resources.js";
+import { CPU_HIGH_WATER, environmentOf, environmentsForNodes, MEMORY_HIGH_WATER_PCT, memoryPressurePct, mergeCoarse, parseResourceSample, resourcePoint, resourcesView, saveResourceSample } from "./runner-resources.js";
 
 const GiB = 1024 ** 3;
 const sample = (over: Record<string, unknown> = {}) => ({ loadAvg: [1, 0.8, 0.5], cpus: 8, memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB, platform: "linux", sampledAt: Date.UTC(2026, 9, 5, 6, 0), ...over });
@@ -208,6 +208,52 @@ describe("a Windows machine through the store (#1258)", () => {
 			expect(resourcesView(stored.resources, 0)).toMatchObject({ load1: null, loadPerCpu: null });
 			const ctx = await heartbeatContext(env, "u1", ["dell-laptop"]);
 			expect(ctx).toMatchObject({ load1: null, load5: null, load15: null });
+		} finally {
+			d1.close();
+		}
+	});
+});
+
+describe("the machine's environment (#405)", () => {
+	const host = { arch: "x64", shell: "msys-bash", home: "C:\\Users\\admin", node: "v22.4.0" };
+
+	it("parseResourceSample keeps a valid host block and drops a malformed one without losing the sample", () => {
+		expect(parseResourceSample(sample({ host }))?.host).toEqual(host);
+		expect(parseResourceSample(sample({ host: { arch: "x64" } }))?.host).toEqual({ arch: "x64", shell: null, home: null, node: "" });
+		for (const bad of [{ arch: 5 }, { arch: "x64; rm -rf /" }, { arch: "a".repeat(40) }, "x64", null]) {
+			const parsed = parseResourceSample(sample({ host: bad }));
+			expect(parsed).not.toBeNull();
+			expect(parsed?.host).toBeUndefined();
+		}
+		expect(parseResourceSample(sample({ host: { ...host, shell: "s".repeat(65), home: "h".repeat(301) } }))?.host).toMatchObject({ shell: null, home: null });
+		expect(parseResourceSample(sample())?.host).toBeUndefined(); // a CLI before the host block
+	});
+
+	it("resourcesView exposes host, and null when the runner did not report it", () => {
+		expect(resourcesView(sample({ host }), 0)?.host).toEqual(host);
+		expect(resourcesView(sample(), 0)?.host).toBeNull();
+	});
+
+	it("environmentOf says what was reported and 'null' for what was not — never a guess", () => {
+		expect(environmentOf("dell-laptop", null)).toBeNull();
+		expect(environmentOf("dell-laptop", parseResourceSample(sample({ platform: "win32", host })))).toEqual({ node: "dell-laptop", os: "win32", arch: "x64", shell: "msys-bash", home: host.home, nodeVersion: "v22.4.0", sampledAt: "2026-10-05T06:00:00.000Z" });
+		expect(environmentOf("old", parseResourceSample(sample()))).toMatchObject({ os: "linux", arch: null, shell: null, home: null, nodeVersion: null });
+	});
+
+	it("environmentsForNodes reads one query, owner-scoped, newest sample per machine, absent when none reported", async () => {
+		const d1 = realSchemaD1();
+		try {
+			seedTenant(d1, { userId: "u1", instanceIds: ["inst-1", "inst-2"] });
+			seedTenant(d1, { userId: "u2", instanceIds: ["inst-3"] });
+			const ins = d1.sqlite.prepare("INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, status, resources) VALUES (?, ?, ?, 'relay://', 'registered', ?)");
+			ins.run("inst-1", "u1", "dell-laptop", JSON.stringify(sample({ platform: "win32", host })));
+			ins.run("inst-2", "u1", "silent", null);
+			ins.run("inst-3", "u2", "dell-laptop", JSON.stringify(sample({ platform: "linux", host: { ...host, arch: "arm64", shell: "zsh" } })));
+			const env = { DB: d1.DB } as unknown as Parameters<typeof environmentsForNodes>[0];
+			const got = await environmentsForNodes(env, "u1", ["dell-laptop", "silent", "missing", ""]);
+			expect([...got.keys()]).toEqual(["dell-laptop"]);
+			expect(got.get("dell-laptop")).toMatchObject({ os: "win32", arch: "x64", shell: "msys-bash" }); // not u2's arm64 linux machine of the same name
+			expect((await environmentsForNodes(env, "u1", [])).size).toBe(0);
 		} finally {
 			d1.close();
 		}

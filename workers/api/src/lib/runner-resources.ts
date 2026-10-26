@@ -22,6 +22,17 @@ export const RESOURCES_MIN_CLI = "0.4.71";
 /** The first CLI whose sample also carries disk, the runner process, relay round trip and sessions. */
 export const RESOURCE_DETAIL_MIN_CLI = "0.4.76";
 
+/** The first CLI whose sample carries the `host` block (arch, shell, home, node). */
+export const HOST_MIN_CLI = "0.4.189";
+
+/** The machine facts a caller needs before it writes a command (#405). `shell`/`home` are null when the runner could not tell. */
+export interface RunnerHost {
+	arch: string;
+	shell: string | null;
+	home: string | null;
+	node: string;
+}
+
 /** What the runner sends, validated — it is a system boundary, so nothing is trusted unread. */
 export interface RunnerResourceSample {
 	/**
@@ -44,6 +55,8 @@ export interface RunnerResourceSample {
 	platform: string;
 	/** Epoch ms, the runner's clock. */
 	sampledAt: number;
+	/** The machine's architecture, default shell, home and Node version (#405); absent from a CLI before {@link HOST_MIN_CLI}. */
+	host?: RunnerHost;
 	/** The checkout volume (CLI ≥ {@link RESOURCE_DETAIL_MIN_CLI}). */
 	disk?: { path: string; totalBytes: number; freeBytes: number; inodesTotal: number; inodesFree: number };
 	/** The `pags runner connect` process: start time, uptime, starts in 24h, relay reconnects. */
@@ -116,6 +129,12 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 	const sampledAt = finite(r.sampledAt, 2 ** 53);
 	if ((load !== null && (load.length !== 3 || load.some((v) => v === null))) || !cpus || !memTotalBytes || memFreeBytes === null || memFreeBytes > memTotalBytes || !sampledAt) return null;
 	const sample: RunnerResourceSample = { loadAvg: load as [number, number, number] | null, cpus, memTotalBytes, memFreeBytes, platform, sampledAt };
+	// #405: the machine's arch / shell / home / node. Each part bounded and typed; a sample without a usable arch carries no block at all.
+	const h = r.host as Record<string, unknown> | undefined;
+	if (h && typeof h === "object" && typeof h.arch === "string" && /^[a-z0-9_-]{1,32}$/i.test(h.arch)) {
+		const text = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() && v.length <= max ? v.trim() : null);
+		sample.host = { arch: h.arch, shell: text(h.shell, 64), home: text(h.home, 300), node: text(h.node, 32) ?? "" };
+	}
 	// #1264: optional, and never above the total — same shape as every other field here, absent means "not reported".
 	const memAvailableBytes = finite(r.memAvailableBytes, 2 ** 53);
 	if (memAvailableBytes !== null && memAvailableBytes <= memTotalBytes) sample.memAvailableBytes = memAvailableBytes;
@@ -203,6 +222,8 @@ export interface RunnerResourcesView {
 	memFreeBytes: number;
 	memUsedPct: number;
 	platform: string;
+	/** Architecture, default shell, home and Node version of the machine (#405); null when the runner does not report them (a CLI before {@link HOST_MIN_CLI}). */
+	host: RunnerHost | null;
 	/** ISO time of the sample. A stale one means the heartbeat stopped, not that the machine is idle. */
 	sampledAt: string;
 	/** Coding sessions active on this machine, from the platform's own records; null when not counted. */
@@ -343,6 +364,7 @@ export function resourcesView(raw: unknown, activeSessions: number | null, gateS
 		memFreeBytes: s.memFreeBytes,
 		memUsedPct,
 		platform: s.platform,
+		host: s.host ?? null,
 		sampledAt: new Date(s.sampledAt).toISOString(),
 		activeSessions,
 		recommendedMaxSessions: capacity,
@@ -571,4 +593,53 @@ export async function resourceHistory(env: Pick<Env, "DB">, userId: string, node
 		const p = resourcePoint(r.sample);
 		return p ? [{ ...p, ...(tier === "coarse" ? { at: new Date(r.at).toISOString() } : {}) }] : [];
 	});
+}
+
+/**
+ * What a caller may know about the machine an instance is pinned to before it runs anything (#405): the OS the runner reported
+ * (`process.platform`), its architecture, default shell, home and Node version. null when the machine has not reported a sample
+ * or its CLI predates the host block — "not reported", never a guessed platform.
+ */
+export interface RunnerEnvironment {
+	node: string;
+	os: string;
+	arch: string | null;
+	shell: string | null;
+	home: string | null;
+	nodeVersion: string | null;
+	sampledAt: string;
+}
+
+export function environmentOf(node: string, sample: RunnerResourceSample | null): RunnerEnvironment | null {
+	if (!sample) return null;
+	return { node, os: sample.platform, arch: sample.host?.arch ?? null, shell: sample.host?.shell ?? null, home: sample.host?.home ?? null, nodeVersion: sample.host?.node || null, sampledAt: new Date(sample.sampledAt).toISOString() };
+}
+
+/** The environment of each named machine of this user, in one query; machines with no sample are absent from the map. */
+export async function environmentsForNodes(env: Pick<Env, "DB">, userId: string, nodes: readonly string[]): Promise<Map<string, RunnerEnvironment>> {
+	const names = [...new Set(nodes.filter(Boolean))].slice(0, 50);
+	const out = new Map<string, RunnerEnvironment>();
+	if (!names.length) return out;
+	const marks = names.map((_, i) => `?${i + 2}`).join(", ");
+	const { results } = await env.DB.prepare(`SELECT runner_node, resources FROM instance_runtime_nodes WHERE user_id = ?1 AND resources IS NOT NULL AND runner_node IN (${marks})`)
+		.bind(userId, ...names)
+		.all<{ runner_node: string; resources: string }>()
+		.catch(() => ({ results: [] as { runner_node: string; resources: string }[] }));
+	const best = new Map<string, RunnerResourceSample>();
+	for (const r of results ?? []) {
+		const sample = parseResourceSample(r.resources);
+		const prior = best.get(r.runner_node);
+		if (sample && (!prior || sample.sampledAt > prior.sampledAt)) best.set(r.runner_node, sample);
+	}
+	for (const [node, sample] of best) {
+		const e = environmentOf(node, sample);
+		if (e) out.set(node, e);
+	}
+	return out;
+}
+
+/** `{ environment }` for an instance pinned to a machine that has reported one, else `{}` — so an unpinned card stays byte-identical to before (#405). */
+export function environmentFields(node: string | undefined, environments: ReadonlyMap<string, RunnerEnvironment>): { environment?: RunnerEnvironment } {
+	const environment = node ? environments.get(node) : undefined;
+	return environment ? { environment } : {};
 }

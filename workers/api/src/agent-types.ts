@@ -684,6 +684,8 @@ export interface OperatorManualResponse {
 	combined: string;
 	rules: string;
 	context: string;
+	/** The machine this instance is pinned to (#405): OS, arch, default shell, home. null when not pinned or not yet reported. */
+	environment: { node: string; os: string; arch: string | null; shell: string | null; home: string | null; nodeVersion: string | null; sampledAt: string } | null;
 }
 
 /** `GET /v1/agents/:id/operator-manual` (#1237): the template's manual and how many instances inherit it. */

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseVmStat, probeRuntimeHealth, RUNTIME_HEALTH_TIMEOUT_MS, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
+import { defaultShell, parseVmStat, probeRuntimeHealth, RUNTIME_HEALTH_TIMEOUT_MS, recordRunnerStart, sampleDisk, sampleHost, sampleMemAvailable, sampleResources } from "./resources.js";
 
 const fakeOs = (over: Partial<Record<"loadavg" | "cpus" | "totalmem" | "freemem" | "platform", () => unknown>> = {}) =>
 	({
@@ -183,5 +183,34 @@ describe("sampleResources on Windows (#1258)", () => {
 	it("macOS and Linux keep their real readings — including a genuine 0", () => {
 		expect(sampleResources(fakeOs({ platform: () => "darwin" })).loadAvg).toEqual([2.5, 1.5, 0.5]);
 		expect(sampleResources(fakeOs({ platform: () => "linux", loadavg: () => [0, 0, 0] })).loadAvg).toEqual([0, 0, 0]);
+	});
+});
+
+describe("the host block (#405)", () => {
+	it("a POSIX shell on Windows is msys-<name>; cmd is the fallback; paths and .exe are normalised", () => {
+		expect(defaultShell("win32", { SHELL: "/usr/bin/bash" })).toBe("msys-bash");
+		expect(defaultShell("win32", { SHELL: "C:\\Program Files\\Git\\usr\\bin\\bash.exe" })).toBe("msys-bash");
+		expect(defaultShell("win32", { COMSPEC: "C:\\Windows\\System32\\cmd.exe" })).toBe("cmd");
+		expect(defaultShell("win32", {})).toBe("cmd");
+	});
+
+	it("on macOS and Linux it is $SHELL, then the account's login shell, then unknown", () => {
+		expect(defaultShell("darwin", { SHELL: "/bin/zsh" })).toBe("zsh");
+		expect(defaultShell("linux", {}, () => "/usr/bin/fish")).toBe("fish");
+		expect(defaultShell("linux", {}, () => null)).toBeNull();
+		expect(defaultShell("linux", {}, () => "")).toBeNull();
+	});
+
+	it("sampleHost reads arch, home and node; an unreadable home is null, not a throw", () => {
+		const read = { arch: () => "arm64", homedir: () => "/Users/me", platform: () => "darwin" } as unknown as Parameters<typeof sampleHost>[0];
+		expect(sampleHost(read, { SHELL: "/bin/zsh" }, "v22.4.0")).toEqual({ arch: "arm64", shell: "zsh", home: "/Users/me", node: "v22.4.0" });
+		const broken = { ...read, homedir: () => { throw new Error("no home"); } } as unknown as Parameters<typeof sampleHost>[0];
+		expect(sampleHost(broken, {}, "v22.4.0").home).toBeNull();
+	});
+
+	it("sampleResources carries the host block when the reader can tell, and none when it cannot", () => {
+		const withHost = { ...fakeOs(), arch: () => "arm64", homedir: () => "/Users/me" } as unknown as Parameters<typeof sampleResources>[0];
+		expect(sampleResources(withHost, 1)).toMatchObject({ host: { arch: "arm64", home: "/Users/me" } });
+		expect(sampleResources(fakeOs(), 1)).not.toHaveProperty("host");
 	});
 });

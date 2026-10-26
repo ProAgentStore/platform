@@ -101,6 +101,7 @@ export {
 import { adoptableIdByName, freshestVersion, namesOfMachine, normalizeMachineId, pinCandidates, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { failoverField } from "../lib/runner-failover.js";
 import { resolveRunnerPin, resolveRunnerPins } from "../lib/runtime-nodes.js";
+import { environmentFields, environmentsForNodes } from "../lib/runner-resources.js";
 import { machineDisplayNames } from "../lib/machine-names.js";
 import { wakeRunsParkedOnMachine } from "../lib/coding-park.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
@@ -406,6 +407,7 @@ instanceRoutes.get("/my/instances", async (c) => {
 	// machine pin (#1250) travels as the hostname that machine answers to NOW — a CLI from before #1250
 	// keeps working — with `runnerMachineId` beside it for the CLIs that compare ids.
 	const pins = await resolveRunnerPins(c.env, session.uid, resolved.map((e) => ({ id: e.row.id as string, config: e.row.instance_config as string | null })));
+	const environments = await environmentsForNodes(c.env, session.uid, [...pins.values()].map((p) => p.node)).catch(() => new Map()); // #405: one query for the list
 	const instances = resolved.map(({ row: r, caps: fullCaps }) => {
 		const { config, instance_config, last_activity_at, ...rest } = r;
 		const view = instanceListView(instance_config as string | null);
@@ -422,6 +424,7 @@ instanceRoutes.get("/my/instances", async (c) => {
 				const pin = pins.get(r.id as string);
 				return pin?.node ? { config: { runnerNode: pin.node, ...(pin.machineId ? { runnerMachineId: pin.machineId } : {}) } } : {};
 			})(),
+			...environmentFields(pins.get(r.id as string)?.node, environments),
 			...(view.tags.length ? { tags: view.tags } : {}),
 			lastActivityAt: last_activity_at ?? null,
 			// A RETIRED workflow, with the owner's own replacement instances attached (#979). Present

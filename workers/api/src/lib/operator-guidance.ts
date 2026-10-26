@@ -28,6 +28,7 @@
  * {@link OPERATOR_GUIDANCE_MAX_CHARS}. A test holds the whole catalogue to it.
  */
 import { clipMarked } from "./clip-marked.js";
+import type { RunnerEnvironment } from "./runner-resources.js";
 import { type GuideToolRow, placeholderFor, schemaShape } from "./connection-guide.js";
 
 export interface OperatorGuidanceInput {
@@ -37,6 +38,31 @@ export interface OperatorGuidanceInput {
 	runtime: string | null;
 	/** ALLOWED rows only, schemas included — `projectToolListing(policy, { allowedOnly: true, schemas: true })`. */
 	tools: readonly GuideToolRow[];
+	/**
+	 * The machine this instance is pinned to (#405): OS, arch, default shell, home. undefined = the instance is not pinned (nothing to say);
+	 * null = pinned, but the machine has reported no sample.
+	 */
+	environment?: RunnerEnvironment | null;
+}
+
+/** The "### Runner environment" section, or [] for an unpinned instance. Says what is unknown rather than leaving a gap a caller would guess into. */
+export function environmentSection(e: RunnerEnvironment | null | undefined): string[] {
+	if (e === undefined) return [];
+	if (e === null) return ["### Runner environment", "", "This instance is pinned to a machine that has not reported its environment yet (its `pags up` runner is offline or older than the release that reports it). Do not assume the OS or shell — check before writing platform-specific commands.", ""];
+	const line = (k: string, v: string | null) => `- ${k}: ${v ?? "not reported"}`;
+	return [
+		"### Runner environment",
+		"",
+		`Commands run on \`${e.node}\`. Write them for this machine:`,
+		"",
+		line("os", e.os),
+		line("arch", e.arch),
+		line("default shell", e.shell),
+		line("home", e.home),
+		line("node", e.nodeVersion),
+		`- reported: ${e.sampledAt}`,
+		"",
+	];
 }
 
 /** The ceiling on the generated text. An agent declaring the whole catalogue fits under it (tested). */
@@ -130,6 +156,7 @@ export function buildOperatorGuidance(input: OperatorGuidanceInput): string {
 		"",
 		"Rendered by ProAgentStore from this instance's allowed tools on every read — never stored, so it cannot go stale. The owner's own notes are the separate `manual` field.",
 		"",
+		...environmentSection(input.environment),
 		...procedures(input, callable.length),
 		"",
 		`### Tools this instance may run (${input.tools.length}: ${callable.length} callable via \`call_instance_tool\`, ${chatOnly.length} chat-only)`,

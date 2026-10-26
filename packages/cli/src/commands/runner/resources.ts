@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 /**
  * The machine's resource sample, sent on the runner heartbeat (#924).
@@ -25,6 +25,8 @@ export interface ResourceSample {
 	memAvailableBytes?: number;
 	platform: string;
 	sampledAt: number;
+	/** What commands on this machine run against (#405) — read once per beat from `os`/`process`, nothing executed. */
+	host?: HostSample;
 	/** The volume holding the checkouts (#924) — a full disk or inode table fails clones and writes. */
 	disk?: DiskSample;
 	/** This runner process: how long it has run and how often it has started lately (#924). */
@@ -35,6 +37,15 @@ export interface ResourceSample {
 	runtime?: RuntimeHealthSample;
 	/** Per-session CPU and memory, engine plus descendants. Absent when it could not be read. */
 	sessions?: Array<{ sessionId: string; engineLabel: string; pid: number; processes: number; rssBytes: number; cpuPct: number }>;
+}
+
+/** The machine facts a caller needs before writing a command: CPU architecture, the default shell, the home directory, the Node version. */
+export interface HostSample {
+	arch: string;
+	/** `bash`, `zsh`, `powershell`, `cmd` … — `msys-bash` for a POSIX shell under Windows. null when none can be told. */
+	shell: string | null;
+	home: string | null;
+	node: string;
 }
 
 export interface RuntimeHealthSample {
@@ -172,8 +183,37 @@ export function recordRunnerStart(now: number = Date.now(), file: string = START
 	return starts.length;
 }
 
+/**
+ * The default shell commands on this machine run under (#405), from the environment alone — no process is started.
+ * A POSIX shell reported on Windows (Git Bash / MSYS sets `SHELL`) is `msys-<name>`: its paths and PATH separator are
+ * POSIX but the machine is not, which is exactly the distinction a caller guessing `which` vs `where` needs.
+ */
+export function defaultShell(platform: string, env: NodeJS.ProcessEnv = process.env, userShell: () => string | null = () => { try { return os.userInfo().shell; } catch { return null; } }): string | null {
+	const name = (path: string | null | undefined): string | null => {
+		const b = basename((path ?? "").replace(/\\/g, "/")).replace(/\.exe$/i, "").toLowerCase();
+		return b || null;
+	};
+	if (platform === "win32") {
+		const posix = name(env.SHELL);
+		if (posix) return `msys-${posix}`;
+		return name(env.COMSPEC) ?? "cmd";
+	}
+	return name(env.SHELL) ?? name(userShell());
+}
+
+/** The host block for one beat. Every read is guarded: an unreadable home or shell is absent, never a throw that loses the whole sample. */
+export function sampleHost(read: Pick<typeof os, "arch" | "homedir" | "platform"> = os, env: NodeJS.ProcessEnv = process.env, nodeVersion: string = process.version): HostSample {
+	let home: string | null = null;
+	try {
+		home = read.homedir() || null;
+	} catch {
+		home = null;
+	}
+	return { arch: read.arch(), shell: defaultShell(read.platform(), env), home, node: nodeVersion };
+}
+
 export function sampleResources(
-	read: Pick<typeof os, "loadavg" | "cpus" | "totalmem" | "freemem" | "platform"> = os,
+	read: Pick<typeof os, "loadavg" | "cpus" | "totalmem" | "freemem" | "platform"> & Partial<Pick<typeof os, "arch" | "homedir">> = os,
 	now: number = Date.now(),
 	extra: Pick<ResourceSample, "disk" | "runner" | "relayRttMs" | "sessions" | "memAvailableBytes" | "runtime"> = {},
 ): ResourceSample {
@@ -189,5 +229,7 @@ export function sampleResources(
 		memFreeBytes: read.freemem(),
 		platform,
 		sampledAt: now,
+		// #405: absent when the reader offers no arch/homedir (a test double), so the sample never carries a guess.
+		...(read.arch && read.homedir ? { host: sampleHost({ arch: read.arch, homedir: read.homedir, platform: read.platform }) } : {}),
 	};
 }

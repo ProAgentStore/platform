@@ -11,7 +11,7 @@ import { HttpError } from "./auth.js";
 import type { GuideToolRow } from "./connection-guide.js";
 import { realSchemaD1, type RealSchemaD1, seedTenant } from "./d1-sqlite.js";
 import { allToolPolicyInputs, projectToolListing, resolveToolPolicy } from "./instance-tool-policy.js";
-import { buildOperatorGuidance, OPERATOR_GUIDANCE_MAX_CHARS, toolPurpose } from "./operator-guidance.js";
+import { buildOperatorGuidance, environmentSection, OPERATOR_GUIDANCE_MAX_CHARS, toolPurpose } from "./operator-guidance.js";
 import type { Env } from "../types.js";
 
 vi.mock("./auth.js", async () => {
@@ -141,5 +141,84 @@ describe("GET /v1/instances/:id/operator-manual (#1109)", () => {
 		expect(body.context).toMatch(/^## Operating this instance \(generated\)/);
 		expect(body.context).toContain("`call_instance_tool`");
 		expect((d1.sqlite.prepare("SELECT operator_manual FROM agent_instances WHERE id = ?").get(INSTANCE) as { operator_manual: string }).operator_manual).toBe(owner);
+	});
+});
+
+describe("operator manual and instance list carry the pinned machine's environment (#405)", () => {
+	let d1: RealSchemaD1;
+	beforeEach(() => {
+		d1 = realSchemaD1();
+		seedTenant(d1, { userId: "u1", instanceIds: [INSTANCE] });
+	});
+	afterEach(() => d1.close());
+	const GiB = 1024 ** 3;
+	const sampleJson = JSON.stringify({ loadAvg: null, cpus: 8, memTotalBytes: 16 * GiB, memFreeBytes: 8 * GiB, platform: "win32", sampledAt: Date.UTC(2026, 9, 26, 1, 0), host: { arch: "x64", shell: "msys-bash", home: "C:\\Users\\admin", node: "v22.4.0" } });
+	const pin = (node: string) => d1.DB.prepare("UPDATE agent_instances SET config = ?1 WHERE id = ?2").bind(JSON.stringify({ runnerNode: node }), INSTANCE).run();
+	const node = (name: string, resources: string | null) => d1.sqlite.prepare("INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, status, resources) VALUES (?, 'u1', ?, 'relay://', 'registered', ?)").run(INSTANCE, name, resources);
+	const call = async (path: string) => {
+		const { instanceRoutes } = await import("../routes/instances.js");
+		const app = new Hono<{ Bindings: Env }>();
+		app.route("/v1/instances", instanceRoutes);
+		app.onError((e, c) => (e instanceof HttpError ? c.json({ error: e.message }, e.status as 400) : c.json({ error: String(e) }, 500)));
+		const res = await app.request(path, {}, { DB: d1.DB } as unknown as Env);
+		expect(res.status).toBe(200);
+		return (await res.json()) as { environment: Record<string, unknown> | null; context: string; instances?: Array<{ id: string; environment?: Record<string, unknown> }> } & Array<{ id: string; environment?: Record<string, unknown> }>;
+	};
+
+	it("a pinned instance's manual says Windows / x64 / msys-bash, in `environment` and in the generated context", async () => {
+		await pin("dell-laptop");
+		node("dell-laptop", sampleJson);
+		const body = await call(`/v1/instances/${INSTANCE}/operator-manual`);
+		expect(body.environment).toMatchObject({ node: "dell-laptop", os: "win32", arch: "x64", shell: "msys-bash", home: "C:\\Users\\admin", nodeVersion: "v22.4.0" });
+		expect(body.context).toContain("- default shell: msys-bash");
+	});
+
+	it("an instance pinned to a machine that has reported nothing is told not to assume", async () => {
+		await pin("dell-laptop");
+		node("dell-laptop", null);
+		const body = await call(`/v1/instances/${INSTANCE}/operator-manual`);
+		expect(body.environment).toBeNull();
+		expect(body.context).toContain("has not reported its environment");
+	});
+
+	it("an unpinned instance has no environment and no section", async () => {
+		node("dell-laptop", sampleJson); // a machine exists, but this instance is not pinned to it
+		const body = await call(`/v1/instances/${INSTANCE}/operator-manual`);
+		expect(body.environment).toBeNull();
+		expect(body.context).not.toContain("Runner environment");
+	});
+
+	it("the instance list echoes the environment for the pinned instance only", async () => {
+		await pin("dell-laptop");
+		node("dell-laptop", sampleJson);
+		const list = await call("/v1/instances/my/instances");
+		const mine = (Array.isArray(list) ? list : (list.instances ?? [])).find((i) => i.id === INSTANCE);
+		expect(mine?.environment).toMatchObject({ os: "win32", arch: "x64", shell: "msys-bash" });
+	});
+});
+
+describe("the runner environment section (#405)", () => {
+	const e = { node: "dell-laptop", os: "win32", arch: "x64", shell: "msys-bash", home: "C:\\Users\\admin", nodeVersion: "v22.4.0", sampledAt: "2026-10-26T01:00:00.000Z" };
+	const c = caps({ surfaces: [], runtime: null });
+	const withEnv = (environment: typeof e | null | undefined) => buildOperatorGuidance({ instanceId: INSTANCE, surfaces: c.surfaces, runtime: c.runtime, tools: rowsFor(c), ...(environment === undefined ? {} : { environment }) });
+
+	it("names OS, arch, default shell and home for a pinned machine, ahead of the procedures", () => {
+		const text = withEnv(e);
+		for (const line of ["- os: win32", "- arch: x64", "- default shell: msys-bash", "- home: C:\\Users\\admin", "- node: v22.4.0"]) expect(text).toContain(line);
+		expect(text).toContain("`dell-laptop`");
+		expect(text.indexOf("### Runner environment")).toBeLessThan(text.indexOf("### Tools this instance may run"));
+	});
+
+	it("says 'not reported' for a field a CLI did not send, instead of omitting it", () => {
+		expect(withEnv({ ...e, arch: null, shell: null })).toMatch(/- arch: not reported[\s\S]*- default shell: not reported/);
+	});
+
+	it("tells a caller not to assume when the pinned machine has reported nothing", () => {
+		expect(withEnv(null)).toMatch(/has not reported its environment[\s\S]*Do not assume the OS or shell/);
+	});
+
+	it("leaves an unpinned instance's guide exactly as it was", () => {
+		expect(withEnv(undefined)).not.toContain("Runner environment");
+		expect(environmentSection(undefined)).toEqual([]);
 	});
 });

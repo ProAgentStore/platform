@@ -11,6 +11,8 @@ import { requireUser } from "../lib/auth.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { buildOperatorGuidance } from "../lib/operator-guidance.js";
 import { combinedOperatorManual, operatorManualLayers, operatorManualTooLong } from "../lib/operator-manual.js";
+import { resolveRunnerPins } from "../lib/runtime-nodes.js";
+import { environmentsForNodes } from "../lib/runner-resources.js";
 import { allowedToolRows } from "./instances-guide.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { OperatorManualResponse } from "../agent-types.js";
@@ -50,7 +52,10 @@ export function registerOperatorManualRoutes(router: Hono<{ Bindings: Env }>): v
 		// rendered on every read from the same rows `list_instance_tools` returns. Never stored, and
 		// the owner's `manual` above is returned exactly as written.
 		const capabilities = await capabilitiesForInstance(c.env, instanceId, session.uid);
-		const context = buildOperatorGuidance({ instanceId, surfaces: capabilities?.surfaces ?? [], runtime: capabilities?.runtime ?? null, tools: await allowedToolRows(c.env, instanceId, session.uid, instance.config) });
+		// #405: the machine this instance is pinned to — OS, arch, default shell, home — so a caller does not guess `which` vs `where`.
+		const pinNode = (await resolveRunnerPins(c.env, session.uid, [{ id: instanceId, config: row?.config ?? null }]).catch(() => null))?.get(instanceId)?.node ?? "";
+		const environment = pinNode ? ((await environmentsForNodes(c.env, session.uid, [pinNode]).catch(() => null))?.get(pinNode) ?? null) : null;
+		const context = buildOperatorGuidance({ instanceId, surfaces: capabilities?.surfaces ?? [], runtime: capabilities?.runtime ?? null, tools: await allowedToolRows(c.env, instanceId, session.uid, instance.config), ...(pinNode ? { environment } : {}) });
 		// #1237 / #1238: the owner's account manual and the template's, read LIVE (an edit reaches every instance on its next read), beside this one's own.
 		const layers = await operatorManualLayers(c.env, instanceId, session.uid);
 		const body: OperatorManualResponse = {
@@ -61,6 +66,7 @@ export function registerOperatorManualRoutes(router: Hono<{ Bindings: Env }>): v
 			combined: combinedOperatorManual(layers),
 			rules,
 			context,
+			environment,
 		};
 		return c.json(body);
 	});
