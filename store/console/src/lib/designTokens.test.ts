@@ -126,12 +126,16 @@ describe("the two @theme blocks are one palette", () => {
 	 * either file could be edited alone and the two apps would drift apart at
 	 * whatever hue someone touched. This makes the claim checkable.
 	 */
+	// Every `@theme` block counts, `@theme static { … }` included: the console keeps the runtime-assembled series
+	// colours in a static block so Tailwind does not prune them (#1381), and the admin app declares the same
+	// tokens in its one block. Reading only the first plain block made that look like drift when the palettes agree.
 	const theme = (css: string): Record<string, string> => {
-		const block = css.match(/@theme\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
 		const out: Record<string, string> = {};
-		for (const line of block.split("\n")) {
-			const m = line.match(/^\s*(--[\w-]+):\s*(.+?);\s*$/);
-			if (m) out[m[1]] = m[2].trim();
+		for (const block of css.matchAll(/@theme(?:\s+static)?\s*\{([\s\S]*?)\n\}/g)) {
+			for (const line of block[1].split("\n")) {
+				const m = line.match(/^\s*(--[\w-]+):\s*(.+?);\s*$/);
+				if (m) out[m[1]] = m[2].trim();
+			}
 		}
 		return out;
 	};
