@@ -2,15 +2,17 @@
  * The errors the user-ai layer throws (#1356). A leaf, so the provider adapters and `user-ai.ts` can all name them without importing each other.
  * `user-ai.ts` re-exports them: every existing importer is unchanged.
  */
-import type { ProviderErrorKind } from "./provider-error-kind.js";
+import { type ProviderErrorKind, providerErrorTag } from "./provider-error-kind.js";
 import type { StreamPhase } from "./stream-phase.js";
 
 export class UserAiCredentialsError extends Error {
+	/** No stored credential is a credentials failure by construction (#1355): readers ask the kind, not the wording. */
+	readonly kind: ProviderErrorKind = "credentials";
 	constructor(
 		message = "Add your Cloudflare Workers AI account ID and API token before running this agent.",
 		public readonly status = 402,
 	) {
-		super(message);
+		super(`${message}${providerErrorTag("credentials")}`);
 		this.name = "UserAiCredentialsError";
 	}
 }

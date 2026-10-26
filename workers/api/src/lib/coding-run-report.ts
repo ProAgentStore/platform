@@ -20,7 +20,7 @@
  * the work it was asked to do — see {@link INTERRUPTED_CLASSES}.
  */
 import { anthropicCreditKeyIdentity, classifyCodingFailure, type CodingFailureClass } from "./coding-failure.js";
-import { isRunnerGone } from "./runner-unreachable.js";
+import { isRunnerGone, withoutRunnerErrorTag } from "./runner-unreachable.js";
 import type { LoopStopReason } from "./agent-loop.js";
 
 /**
@@ -149,7 +149,7 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 	// Only a run with a loop-run row reaches the 24h park; a run without one (no `loopRunId`, so no durable row to continue
 	// or wake) keeps its old 10/30-minute ending: no durable run exists to continue, so none is invented. The stop reason is only
 	// written to a loop-run row, which such a run lacks; its session card reads it as needing the owner, with the same sentence.
-	if (isRunnerGone(err)) return { detail: message, stopReason: "runner_gone" };
+	if (isRunnerGone(err)) return { detail: withoutRunnerErrorTag(message), stopReason: "runner_gone" };
 	const cls = classifyCodingFailure(err).class;
 	// An ending only the owner can clear (#773). Same shape as the interruption below — what to DO
 	// first, the vendor's own text last where the card's 300 characters will cut it — and its own

@@ -32,34 +32,53 @@ export const UNRESPONSIVE_MARKER = "connected but not responding";
  */
 const DROPPED_REASONS = ["Runner disconnected", "Runner WebSocket error"];
 
-/** A runner-side failure that WILL heal on its own if given time. */
-export class RunnerUnreachableError extends Error {
-	/** The field #339 asks for: the thrower knows, so no catch site has to guess from wording. */
-	readonly retryable = true;
-	readonly runnerUnreachable = true;
-	/**
-	 * Whether the command may have reached the runner (#1015). A 503 is "no socket at dispatch" —
-	 * nothing was sent. A 504 drop is a socket that went away WITH THE COMMAND IN FLIGHT, which proves
-	 * nothing either way. A caller that would re-send on failure must tell these apart, or a lost
-	 * response becomes a duplicate instruction. Defaults to `true`, the conservative reading.
-	 */
-	readonly dispatched: boolean;
+/** Who answered with the failure: the relay (a Durable Object), the runner itself, or the platform's own wait guard. */
+export type RunnerErrorOrigin = "relay" | "runner" | "guard";
+
+/**
+ * Any runner command failure, with its cause as FIELDS (#1355): `code`, `origin`, `path`, `dispatched`, `retryable`. The same facts ride
+ * in the message as one tag (`runnerErrorTag`) because a Workflow step boundary flattens an error to its message; `parseRunnerError`
+ * reads either form, so a reader never matches the words.
+ */
+export class RunnerError extends Error {
+	readonly code: RunnerErrorCode;
+	readonly origin: RunnerErrorOrigin;
 	/** The runner route that failed (#1358), when the thrower knows it: what the guard classifies a re-send by. */
 	readonly path: string | undefined;
-	constructor(message: string, opts: { dispatched?: boolean; path?: string } = {}) {
+	/**
+	 * Whether the command may have reached the runner (#1015). A 503 is "no socket at dispatch" — nothing was sent. A 504 drop is a
+	 * socket that went away WITH THE COMMAND IN FLIGHT, which proves nothing either way. A caller that would re-send on failure must
+	 * tell these apart, or a lost response becomes a duplicate instruction. Defaults to `true`, the conservative reading.
+	 */
+	readonly dispatched: boolean;
+	/** Will it heal on its own if given time? (#339) The thrower knows, so no catch site has to guess from wording. */
+	readonly retryable: boolean;
+	constructor(message: string, code: RunnerErrorCode, opts: { origin?: RunnerErrorOrigin; dispatched?: boolean; path?: string; retryable?: boolean } = {}) {
 		super(message);
-		this.name = "RunnerUnreachableError";
-		this.dispatched = opts.dispatched ?? true;
+		this.name = "RunnerError";
+		this.code = code;
+		this.origin = opts.origin ?? originOfCode(code);
+		this.dispatched = opts.dispatched ?? !NOT_DISPATCHED.has(code);
 		this.path = opts.path;
+		this.retryable = opts.retryable ?? false;
 	}
 }
 
-/** The runner was waited for and did not come back. Terminal, and says so honestly. */
-export class RunnerGoneError extends Error {
-	readonly retryable = false;
+/** A runner-side failure that WILL heal on its own if given time. */
+export class RunnerUnreachableError extends RunnerError {
+	readonly runnerUnreachable = true;
+	/** `code` defaults to what the message's tag says, else the conservative `DROPPED` (a command that may have been in flight). */
+	constructor(message: string, opts: { code?: RunnerErrorCode; dispatched?: boolean; path?: string } = {}) {
+		super(message, opts.code ?? runnerErrorCode(message) ?? "DROPPED", { ...opts, dispatched: opts.dispatched ?? true, retryable: true });
+		this.name = "RunnerUnreachableError";
+	}
+}
+
+/** The runner was waited for and did not come back. Terminal, and says so honestly. Raised by the guard, not the relay. */
+export class RunnerGoneError extends RunnerError {
 	readonly runnerGone = true;
 	constructor(message: string) {
-		super(message);
+		super(`${message}${runnerErrorTag("GONE", false)}`, "GONE", { origin: "guard", retryable: false });
 		this.name = "RunnerGoneError";
 	}
 }
@@ -81,7 +100,13 @@ export type RunnerErrorCode =
 	| "REPLACED" // the owner's own takeover or a stale-socket eviction ended it on purpose
 	| "RELAY_FAILED" // the relay could not send it for another reason (the socket refused the write)
 	| "DRAINING" // the runner refused new work while it drains for a safe automatic update — nothing ran
-	| "RUNNER_HTTP"; // the runner itself answered with an error status
+	| "RUNNER_HTTP" // the runner itself answered with an error status
+	| "GONE"; // the platform's guard waited for the runner and it did not come back (RunnerGoneError)
+
+const RELAY_ORIGIN: ReadonlySet<RunnerErrorCode> = new Set(["NO_SOCKET", "UNRESPONSIVE", "RELAY_TIMEOUT", "DROPPED", "REPLACED", "RELAY_FAILED"]);
+function originOfCode(code: RunnerErrorCode): RunnerErrorOrigin {
+	return code === "GONE" ? "guard" : RELAY_ORIGIN.has(code) ? "relay" : "runner";
+}
 
 /** The relay's wire codes (`relay-do.ts` answers with these), as the codes above. */
 export const RELAY_WIRE_CODES: Readonly<Record<string, RunnerErrorCode>> = {
@@ -115,6 +140,8 @@ export function withoutRunnerErrorTag(msg: string): string {
  * the deploy), from the words it used to be recognised by. Null when it is not a runner failure this module knows.
  */
 export function runnerErrorCode(e: unknown): RunnerErrorCode | null {
+	const own = (e as { code?: unknown; origin?: unknown } | null);
+	if (typeof own?.code === "string" && typeof own.origin === "string" && e instanceof Error) return own.code as RunnerErrorCode;
 	const msg = typeof (e as { message?: unknown } | null)?.message === "string" ? ((e as { message: string }).message) : typeof e === "string" ? e : "";
 	const tagged = TAG.exec(msg);
 	if (tagged) return tagged[2] as RunnerErrorCode;
@@ -172,7 +199,21 @@ export function isRunnerUnresponsive(e: unknown): boolean {
 }
 
 export function isRunnerGone(e: unknown): boolean {
-	return e instanceof RunnerGoneError || (e as { runnerGone?: unknown } | null)?.runnerGone === true;
+	return e instanceof RunnerGoneError || (e as { runnerGone?: unknown } | null)?.runnerGone === true || runnerErrorCode(e) === "GONE";
+}
+
+/** Every fact a runner failure carries, from the error itself or from its flattened message; null when it is not a runner failure. */
+export interface ParsedRunnerError { code: RunnerErrorCode; origin: RunnerErrorOrigin; path: string | undefined; dispatched: boolean; retryable: boolean }
+export function parseRunnerError(e: unknown): ParsedRunnerError | null {
+	const code = runnerErrorCode(e);
+	if (!code) return null;
+	return {
+		code,
+		origin: (e as { origin?: RunnerErrorOrigin } | null)?.origin ?? originOfCode(code),
+		path: runnerErrorPath(e),
+		dispatched: runnerErrorDispatched(e),
+		retryable: isRunnerUnreachable(e),
+	};
 }
 
 /**

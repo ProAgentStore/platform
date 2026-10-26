@@ -107,3 +107,21 @@ describe("one Cloudflare credential parser (#1356)", () => {
 		expect(viaUserAi).toBe(parseCloudflareAiCredentials);
 	});
 });
+
+describe("isCredentialsError reads the adapter's kind (#1355)", () => {
+	it("a credit refusal that talks about the API key is not a missing key", async () => {
+		const { isCredentialsError } = await import("./loop-orchestrator.js");
+		expect(isCredentialsError(new Error(`Your credit balance is too low for this API key${providerErrorTag("credit")}`))).toBe(false);
+		expect(isCredentialsError(new Error(`Anthropic refused the key${providerErrorTag("credentials")}`))).toBe(true);
+	});
+	it("a missing key is credentials by construction, and survives flattening", async () => {
+		const { isCredentialsError } = await import("./loop-orchestrator.js");
+		const { UserAiCredentialsError } = await import("./user-ai-errors.js");
+		expect(isCredentialsError(new Error(new UserAiCredentialsError("Add a thing").message))).toBe(true);
+		expect(new UserAiCredentialsError().kind).toBe("credentials");
+	});
+	it("an untagged message still falls back to its wording", async () => {
+		const { isCredentialsError } = await import("./loop-orchestrator.js");
+		expect(isCredentialsError(new Error("No API key configured"))).toBe(true);
+	});
+});

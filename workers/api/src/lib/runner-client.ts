@@ -4,7 +4,7 @@ import { latestResourceSample, resourceHistory, resourcesView } from "./runner-r
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
 import { routeFor, TIMED_OUT_READ_PATHS } from "./runner-routes.js";
 import { READ_TIMEOUT_MS, RELAY_DEFAULT_TIMEOUT_MS } from "./runner-timeouts.js";
-import { DRAINING_MARKER, NO_SOCKET_MARKER, relayFailureIsDisconnect, relayWireCode, runnerErrorCode, runnerErrorTag, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
+import { DRAINING_MARKER, NO_SOCKET_MARKER, relayFailureIsDisconnect, relayWireCode, runnerErrorCode, RunnerError, runnerErrorTag, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 import type { StaleSocketVerdict } from "./relay-liveness.js";
@@ -353,13 +353,13 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 				(unresponsive
 					? `Runner relay is ${UNRESPONSIVE_MARKER} — ${NO_SOCKET_MARKER} for this agent.`
 					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`) + runnerErrorTag(code, true, path),
-				{ dispatched: res.status !== 503, path },
+				{ code, dispatched: res.status !== 503, path },
 			);
 		}
 		// The runner draining for an update refused the command BEFORE it ran (#1344): retryable, and nothing was sent to the
 		// runtime — but it is a connected runner, so it says so instead of "no live socket".
 		if (res.status === 503 && detail.includes(DRAINING_MARKER)) {
-			throw new RunnerUnreachableError(`Runner ${path} → 503: the runner is draining for an automatic update and is ${UNRESPONSIVE_MARKER} to new work until it restarts.${runnerErrorTag("DRAINING", true, path)}`, { dispatched: false, path });
+			throw new RunnerUnreachableError(`Runner ${path} → 503: the runner is draining for an automatic update and is ${UNRESPONSIVE_MARKER} to new work until it restarts.${runnerErrorTag("DRAINING", true, path)}`, { code: "DRAINING", dispatched: false, path });
 		}
 		// A QUICK READ that timed out at the relay (a capture, `/health`, `/capabilities`: `TIMED_OUT_READ_PATHS`) is a runner connected but
 		// not answering (#1341) — the same state as the 503 above, met one step later. Typed the same way so the runner guard waits for it
@@ -371,9 +371,9 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 		const code = relayWireCode(detail) ?? (res.status === 504 ? runnerErrorCode(detail) : null) ?? "RUNNER_HTTP";
 		if (res.status === 504 && code === "RELAY_TIMEOUT" && TIMED_OUT_READ_PATHS.has(path.split("?")[0] ?? path)) {
 			await recordUnresponsive(conn, path);
-			throw new RunnerUnreachableError(`Runner ${path} → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.${runnerErrorTag(code, true, path)}`, { dispatched: true, path });
+			throw new RunnerUnreachableError(`Runner ${path} → 504: Relay command timed out — the runner is ${UNRESPONSIVE_MARKER}.${runnerErrorTag(code, true, path)}`, { code, dispatched: true, path });
 		}
-		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}${runnerErrorTag(code, false, path)}`);
+		throw new RunnerError(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}${runnerErrorTag(code, false, path)}`, code, { path });
 	}
 	return (await res.json()) as T;
 }

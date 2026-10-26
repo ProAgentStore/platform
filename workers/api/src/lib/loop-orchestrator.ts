@@ -9,6 +9,7 @@
 import { clipMarked } from "./clip-marked.js";
 import { agentFailureOf } from "./agent-loop.js";
 import { classifyCodingFailure, DRIVER_RESUME_POLICY } from "./coding-failure.js";
+import { providerErrorKind } from "./provider-error-kind.js";
 import { logEvent } from "./events.js";
 import { parseLoopDecision, type LoopDecisionResult } from "./loop-decide.js";
 import { controllerAiCall } from "./controller-ai-recovery.js";
@@ -73,6 +74,10 @@ export function buildLoopUserContent(input: LoopDecideInput): string {
  * escalation in the workflow) rather than burning iterations on it.
  */
 export function isCredentialsError(err: unknown): boolean {
+	// The adapter decided what this was (#1355). Only an UNTAGGED error falls back to its wording — which is why a credit
+	// refusal that mentions "your API key" is no longer read as a missing one.
+	const decided = providerErrorKind(err);
+	if (decided) return decided === "credentials";
 	const msg = err instanceof Error ? err.message : String(err);
 	return msg.includes("API key") || msg.includes("credentials");
 }
