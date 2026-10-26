@@ -516,24 +516,32 @@ export function installedRunners(home = homedir(), programData = process.platfor
 	// The machine root (#1272) and, on Windows, any profile-scoped install still waiting to be migrated (`legacy`).
 	const machine = programData ? scan(join(programData, "ProAgentStore", "actions-runner"), false) : [];
 	const profile = scan(join(home, ".proagentstore", "actions-runner"), process.platform === "win32");
-	return [...machine, ...profile, readInstalledRunner(join(home, "actions-runner"), false, readText)].filter((r): r is InstalledRunner => r !== null).map((r) => {
+	const runners = [...machine, ...profile, readInstalledRunner(join(home, "actions-runner"), false, readText)].filter((r): r is InstalledRunner => r !== null);
+	// A legacy service can have any plist name. Parse the two launchd directories once
+	// per status request, only when at least one runner needs legacy discovery.
+	const needsLegacyScan = process.platform === "darwin" && runners.some((r) => r.managed && !existsSync(`/Library/LaunchDaemons/online.proagentstore.actions.${r.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}.plist`));
+	const legacyServices: Array<{ mode: "macos_system" | "macos_user"; workingDirectory?: unknown; args?: unknown }> = [];
+	if (needsLegacyScan) for (const [base, mode] of [["/Library/LaunchDaemons", "macos_system"], [join(home, "Library", "LaunchAgents"), "macos_user"]] as const) {
+		if (!existsSync(base)) continue;
+		for (const name of readdirSync(base)) {
+			if (!name.endsWith(".plist")) continue;
+			const plist = spawnSync("plutil", ["-convert", "json", "-o", "-", join(base, name)], { encoding: "utf8", timeout: 5000 });
+			if (plist.status !== 0) continue;
+			try {
+				const value = JSON.parse(plist.stdout) as { WorkingDirectory?: unknown; ProgramArguments?: unknown };
+				legacyServices.push({ mode, workingDirectory: value.WorkingDirectory, args: value.ProgramArguments });
+			} catch { /* other software's plist */ }
+		}
+	}
+	return runners.map((r) => {
 		// A configured folder alone does not prove that systemd or the Windows service still exists.
 		if (process.platform === "win32" || process.platform === "linux") return { ...r, serviceMode: "unknown" };
 		if (process.platform !== "darwin" || !r.managed) return r;
 		const label = `online.proagentstore.actions.${r.dir.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
 		const system = `/Library/LaunchDaemons/${label}.plist`;
 		let mode: InstalledRunner["serviceMode"] = existsSync(system) ? "macos_system" : "unknown";
-		if (mode === "unknown") for (const [base, candidate] of [["/Library/LaunchDaemons", "macos_system"], [join(home, "Library", "LaunchAgents"), "macos_user"]] as const) {
-			if (!existsSync(base)) continue;
-			for (const name of readdirSync(base)) {
-				if (!name.endsWith(".plist")) continue;
-				const plist = spawnSync("plutil", ["-convert", "json", "-o", "-", join(base, name)], { encoding: "utf8", timeout: 5000 });
-				if (plist.status !== 0) continue;
-				try {
-					const value = JSON.parse(plist.stdout) as { WorkingDirectory?: unknown; ProgramArguments?: unknown };
-					if (value.WorkingDirectory === r.dir || (Array.isArray(value.ProgramArguments) && value.ProgramArguments.some((arg) => arg === r.dir || arg === join(r.dir, "runsvc.sh")))) mode = candidate;
-				} catch { /* other software's plist */ }
-			}
+		if (mode === "unknown") for (const service of legacyServices) {
+			if (service.workingDirectory === r.dir || (Array.isArray(service.args) && service.args.some((arg) => arg === r.dir || arg === join(r.dir, "runsvc.sh")))) mode = service.mode;
 		}
 		const status = readText(join(r.dir, ".pags-supervisor", "status.json"));
 		let supervisor: Record<string, unknown> | null = null;
