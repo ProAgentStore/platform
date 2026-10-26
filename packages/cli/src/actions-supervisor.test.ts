@@ -15,7 +15,7 @@ function runner() {
   return dir;
 }
 function fakeRuntime() {
-  let now = 1000; let busy = false; let alive = true; let groupAlive = true; let orphan: boolean | null = false; let update: string | null = null; let pins = 0; let online = true; let starts = 0; let power: "ac" | "battery" = "ac";
+  let now = 1000; let busy = false; let alive = true; let groupAlive = true; let orphan: boolean | null = false; let update: string | null = null; let pins = 0; let online = true; let starts = 0; let power: "ac" | "battery" = "ac"; let stubborn = false;
   let child: EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter };
   const sleeps: Array<() => void> = [];
   const signals: string[] = [];
@@ -31,11 +31,11 @@ function fakeRuntime() {
     approvedUpdate: () => update,
     pinPayload: () => { pins++; },
     unpinPayload: () => { pins--; },
-    terminateService: () => { signals.push("SIGTERM"); alive = false; groupAlive = false; child.emit("exit", 0); },
+    terminateService: () => { signals.push("SIGTERM"); if (stubborn) return; alive = false; groupAlive = false; child.emit("exit", 0); },
     spawnRunner: () => { starts++; alive = true; groupAlive = true; child = Object.assign(new EventEmitter(), { pid: 900001, stdout: new EventEmitter(), stderr: new EventEmitter() }); return child as never; },
   };
   const tick = async (elapsed = 2000) => { now += elapsed; const resolve = sleeps.shift(); expect(resolve).toBeDefined(); resolve?.(); await new Promise((r) => setImmediate(r)); };
-  return { runtime, tick, signals, get child() { return child; }, get starts() { return starts; }, get pins() { return pins; }, set busy(v: boolean) { busy = v; }, set groupAlive(v: boolean) { groupAlive = v; }, set orphan(v: boolean | null) { orphan = v; }, set update(v: string | null) { update = v; }, set online(v: boolean) { online = v; }, set power(v: "ac" | "battery") { power = v; }, exit(groupRemains = false) { alive = false; groupAlive = groupRemains; child.emit("exit", 1); } };
+  return { runtime, tick, signals, get child() { return child; }, get starts() { return starts; }, get pins() { return pins; }, set busy(v: boolean) { busy = v; }, set stubborn(v: boolean) { stubborn = v; }, set groupAlive(v: boolean) { groupAlive = v; }, set orphan(v: boolean | null) { orphan = v; }, set update(v: string | null) { update = v; }, set online(v: boolean) { online = v; }, set power(v: "ac" | "battery") { power = v; }, exit(groupRemains = false) { alive = false; groupAlive = groupRemains; child.emit("exit", 1); } };
 }
 
 describe("PAGS Actions supervisor", () => {
@@ -216,5 +216,53 @@ describe("PAGS Actions supervisor", () => {
     expect(requestSupervisorRecovery(dir).id).toBe(receipt.id);
     writeFileSync(supervisorPaths(dir).status, JSON.stringify({ version: 1, runnerDir: dir, supervisorPid: process.pid, health: "ready", acPower: "ac", activeJob: false, updatedAt: Date.now(), lastRecovery: { ...receipt, state: "ready", completedAt: Date.now() }, lastManualRequestId: receipt.id }));
     expect(requestSupervisorRecovery(dir).id).not.toBe(receipt.id);
+  });
+
+  // #1374 — a verified CLI update is taken only by an idle supervisor with nothing unresolved, and nothing is lost across the handoff.
+  it("does not hand off to a new CLI while a recovery is pending, then does so once it has completed", async () => {
+    const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
+    const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
+    await new Promise((r) => setImmediate(r));
+    f.child.stdout.emit("data", Buffer.from("Listening for Jobs\n"));
+    f.power = "battery"; await f.tick();
+    f.update = "99.0.0"; f.power = "ac"; f.online = false; await f.tick();
+    // A queued AC recovery is waiting for the network: the update must not preempt it, and the receipt is kept.
+    expect(readSupervisorStatus(dir)?.lastRecovery).toMatchObject({ reason: "ac_return", state: "waiting_network" });
+    expect(readSupervisorStatus(dir)?.health).toBe("waiting_network");
+    expect(f.signals).toEqual([]);
+    f.online = true; await f.tick();
+    expect(readSupervisorStatus(dir)?.lastRecovery?.state).toBe("restarting");
+    f.child.stdout.emit("data", Buffer.from("Listening for Jobs\n"));
+    const receiptId = readSupervisorStatus(dir)?.lastRecovery?.id;
+    expect(readSupervisorStatus(dir)?.lastRecovery).toMatchObject({ state: "ready" });
+    await f.tick(); await f.tick(); await loop;
+    // The handoff stopped the service gracefully and left the completed receipt in place for the new release to read.
+    expect(readSupervisorStatus(dir)).toMatchObject({ health: "stopped", approvedCliVersion: "99.0.0", lastRecovery: { id: receiptId, state: "ready" } });
+    expect(f.signals).toEqual(["SIGTERM", "SIGTERM"]);
+  });
+
+  it("a stubborn old listener keeps the supervisor from starting a replacement: the stop is refused, the receipt stays open and truthful", async () => {
+    const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
+    const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
+    await new Promise((r) => setImmediate(r));
+    f.child.stdout.emit("data", Buffer.from("Listening for Jobs\n"));
+    f.stubborn = true;
+    writeFileSync(supervisorPaths(dir).recover, JSON.stringify({ id: "manual-stuck", reason: "manual", requestedAt: 1000 }));
+    await f.tick();
+    const startsBefore = f.starts;
+    // The service was signalled but its group never exits: the stop waits its full five minutes (1200 x 250 ms), then refuses —
+    // and at no point does a second listener start.
+    for (let i = 0; i < 1300; i++) await f.tick(250);
+    expect(f.signals).toContain("SIGTERM");
+    expect(f.starts).toBe(startsBefore);
+    expect(readSupervisorStatus(dir)?.lastError).toMatch(/refusing duplicate listener/);
+    expect(readSupervisorStatus(dir)?.lastRecovery?.id).toBe("manual-stuck");
+    expect(readSupervisorStatus(dir)?.lastRecovery?.state).not.toBe("ready");
+    // Let it finish: the old listener finally exits, so the supervisor can stop cleanly.
+    f.stubborn = false; f.groupAlive = false; abort.abort();
+    let settled = false;
+    void loop.then(() => { settled = true; });
+    for (let i = 0; i < 50 && !settled; i++) { try { await f.tick(2000); } catch { await new Promise((r) => setImmediate(r)); } }
+    await loop;
   });
 });
