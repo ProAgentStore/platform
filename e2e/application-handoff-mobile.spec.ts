@@ -166,8 +166,8 @@ for (const [label, reconciliation] of [["live", false], ["reconciliation", true]
 		ctl.frameFails = true;
 		await expect(page.getByText("Live handoff unavailable")).toBeVisible();
 		expect(await page.getByText(REFUSAL).isVisible()).toBe(true);
-		await expect(page.getByAltText("Live Application Runner browser")).toBeVisible();
 		ctl.frameFails = false;
+		await expect(page.getByAltText("Live Application Runner browser")).toBeVisible();
 		await afterFrames(3);
 		expect(await page.getByText(REFUSAL).isVisible()).toBe(true);
 		await expect(page.getByText("Live handoff unavailable")).toHaveCount(0);
