@@ -15,7 +15,7 @@ function runner() {
   return dir;
 }
 function fakeRuntime() {
-  let now = 1000; let busy = false; let alive = true; let online = true; let starts = 0; let power: "ac" | "battery" = "ac";
+  let now = 1000; let busy = false; let alive = true; let groupAlive = true; let orphan: boolean | null = false; let update: string | null = null; let pins = 0; let online = true; let starts = 0; let power: "ac" | "battery" = "ac";
   let child: EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter };
   const sleeps: Array<() => void> = [];
   const signals: string[] = [];
@@ -26,11 +26,16 @@ function fakeRuntime() {
     now: () => now,
     sleep: async () => new Promise<void>((resolve) => { sleeps.push(resolve); }),
     isAlive: () => alive,
-    terminateTree: (_pid, signal) => { signals.push(signal); alive = false; child.emit("exit", 0); },
-    spawnRunner: () => { starts++; alive = true; child = Object.assign(new EventEmitter(), { pid: 900001, stdout: new EventEmitter(), stderr: new EventEmitter() }); return child as never; },
+    groupAlive: () => groupAlive,
+    runnerProcessesIn: () => orphan,
+    approvedUpdate: () => update,
+    pinPayload: () => { pins++; },
+    unpinPayload: () => { pins--; },
+    terminateService: () => { signals.push("SIGTERM"); alive = false; groupAlive = false; child.emit("exit", 0); },
+    spawnRunner: () => { starts++; alive = true; groupAlive = true; child = Object.assign(new EventEmitter(), { pid: 900001, stdout: new EventEmitter(), stderr: new EventEmitter() }); return child as never; },
   };
   const tick = async (elapsed = 2000) => { now += elapsed; const resolve = sleeps.shift(); expect(resolve).toBeDefined(); resolve?.(); await new Promise((r) => setImmediate(r)); };
-  return { runtime, tick, signals, get child() { return child; }, get starts() { return starts; }, set busy(v: boolean) { busy = v; }, set online(v: boolean) { online = v; }, set power(v: "ac" | "battery") { power = v; }, exit() { alive = false; child.emit("exit", 1); } };
+  return { runtime, tick, signals, get child() { return child; }, get starts() { return starts; }, get pins() { return pins; }, set busy(v: boolean) { busy = v; }, set groupAlive(v: boolean) { groupAlive = v; }, set orphan(v: boolean | null) { orphan = v; }, set update(v: string | null) { update = v; }, set online(v: boolean) { online = v; }, set power(v: "ac" | "battery") { power = v; }, exit(groupRemains = false) { alive = false; groupAlive = groupRemains; child.emit("exit", 1); } };
 }
 
 describe("PAGS Actions supervisor", () => {
@@ -119,6 +124,74 @@ describe("PAGS Actions supervisor", () => {
     await f.tick(1999); expect(f.starts).toBe(2);
     await f.tick(1); expect(f.starts).toBe(3);
     abort.abort(); await f.tick(); await loop;
+  });
+
+  it("holds a replacement until the exited service's whole process group disappears", async () => {
+    const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
+    const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
+    await new Promise((r) => setImmediate(r));
+    f.exit(true); await f.tick(); await f.tick(60_000);
+    expect(f.starts).toBe(1);
+    expect(readSupervisorStatus(dir)?.health).toBe("error");
+    expect(readSupervisorStatus(dir)?.listenerPid).toBe(900001);
+    f.groupAlive = false; await f.tick();
+    expect(readSupervisorStatus(dir)?.listenerPid).toBeUndefined();
+    await f.tick(1000); expect(f.starts).toBe(2);
+    abort.abort(); await f.tick(); await loop;
+  });
+
+  it("refuses an orphan listener or unknown process inventory even with no old group", async () => {
+    const dir = runner(); const f = fakeRuntime();
+    f.orphan = true;
+    await expect(runActionsSupervisor(dir, f.runtime)).rejects.toThrow(/refusing duplicate service/);
+    expect(f.starts).toBe(0);
+    f.orphan = null;
+    await expect(runActionsSupervisor(dir, f.runtime)).rejects.toThrow(/refusing duplicate service/);
+    expect(f.starts).toBe(0);
+  });
+
+  it("keeps ownership after runsvc exits when an orphan listener remains", async () => {
+    const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
+    const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
+    await new Promise((r) => setImmediate(r));
+    f.orphan = true; f.exit(); await f.tick(60_000);
+    expect(f.starts).toBe(1);
+    expect(readSupervisorStatus(dir)?.listenerPid).toBe(900001);
+    f.orphan = false; await f.tick(); await f.tick(1000);
+    expect(f.starts).toBe(2);
+    abort.abort(); await f.tick(); await loop;
+  });
+
+  it("replays a durable unfinished manual recovery after the supervisor restarts", async () => {
+    const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
+    writeFileSync(supervisorPaths(dir).status, JSON.stringify({
+      version: 1, runnerDir: dir, supervisorPid: 1, health: "deferred_active_job",
+      acPower: "ac", activeJob: true, updatedAt: 1000, lastManualRequestId: "manual-1",
+      lastRecovery: { id: "manual-1", reason: "manual", state: "deferred_active_job", requestedAt: 1000 },
+    }));
+    writeFileSync(supervisorPaths(dir).recover, JSON.stringify({ id: "manual-1", reason: "manual", requestedAt: 1000 }));
+    const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
+    await new Promise((r) => setImmediate(r));
+    expect(readSupervisorStatus(dir)?.lastRestartReason).toBe("manual");
+    expect(readSupervisorStatus(dir)?.lastRecovery?.state).toBe("deferred_active_job");
+    f.child.stdout.emit("data", Buffer.from("Listening for Jobs\n"));
+    expect(readSupervisorStatus(dir)?.lastRecovery?.state).toBe("ready");
+    abort.abort(); await f.tick(); await loop;
+  });
+
+  it("defers a verified CLI handoff until the job ends and exits for launchd restart", async () => {
+    const dir = runner(); const f = fakeRuntime(); const abort = new AbortController();
+    const loop = runActionsSupervisor(dir, f.runtime, abort.signal);
+    await new Promise((r) => setImmediate(r));
+    f.child.stdout.emit("data", Buffer.from("Listening for Jobs\n"));
+    f.update = "99.0.0"; f.busy = true; await f.tick();
+    expect(readSupervisorStatus(dir)?.approvedCliVersion).toBe("99.0.0");
+    expect(readSupervisorStatus(dir)?.cliVersion).toBeTruthy();
+    expect(f.signals).toEqual([]);
+    f.busy = false; await f.tick(); await f.tick(); await loop;
+    expect(f.signals).toEqual(["SIGTERM"]);
+    expect(readSupervisorStatus(dir)?.health).toBe("stopped");
+    expect(f.pins).toBeGreaterThan(0);
   });
 
   it("refuses to create a second listener while an orphan PID still lives", async () => {
