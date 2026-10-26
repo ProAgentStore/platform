@@ -9,7 +9,8 @@ export type RunnerCapability =
 	// #1057 slice 1: answers /native/preflight (read-only machine probe for the local_native runtime).
 	| "native.preflight"
 	// #1057 slice 2: answers the native READ routes (running apps, accessibility tree, Maestro devices and hierarchy).
-	| "native.read";
+	| "native.read"
+	| "native.act";
 
 export type TaskStatus =
 	| "queued"

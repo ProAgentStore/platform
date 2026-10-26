@@ -98,11 +98,16 @@ export const CONNECTORS: Connector[] = [
 	{
 		id: "native",
 		label: "Native desktop & Maestro (local runner)",
-		// auth:"none" — reached over the runner relay like tmux; no cloud credential. Read-only in this
-		// slice (#1057): no write scope exists to consent to, and every call is refused unless the agent's
-		// runtime is local_native and the owner opted THIS machine in for the tool's backend.
+		// auth:"none" — reached over the runner relay like tmux; no cloud credential. Reads (slice 2) need no
+		// consent; the act tools (slice 3, #1057) are write-scoped, so the owner's per-instance write consent
+		// is required AND click/type/key still wait for the owner on every call. Every call is refused unless
+		// the agent's runtime is local_native and the owner opted THIS machine in for the tool's backend.
 		auth: "none",
-		scopes: { read: true, write: false },
+		scopes: { read: true, write: true },
+		// #720/#1057. Checked against the native write tools: open an app, scroll, and — each only after the owner approves it —
+		// click, type and press a key. It acts through whatever is on screen, signed in as the owner, which is why the sentence says so.
+		writeMeaning:
+			"Open apps and scroll on your own computer, and click, type and press keys there — each click, type and key only after you approve that exact action. It acts as you in whatever is on screen, signed-in apps included. You can halt it at any time; screenshots stay on your machine.",
 		grantModel: "user",
 		tools: NATIVE_TOOLS,
 	},

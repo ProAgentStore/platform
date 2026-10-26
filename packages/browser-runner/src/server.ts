@@ -21,6 +21,7 @@ import { routeWindowsRunner } from "./coding/windows-runner-routes.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
 import { runNativePreflight } from "./native/preflight.js";
+import { nativeActRoute } from "./native/act-route.js";
 import { nativeReadRoute } from "./native/read-route.js";
 import { routeLocalApplyReconciliation } from "./local-apply/reconciliation-routes.js";
 import { routeLocalApplySignIn } from "./local-apply/sign-in-runtime.js";
@@ -159,7 +160,9 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// #1057 slice 2: the native READ routes — look, never touch. 400 for a malformed request, else
 	// 200 with the result envelope (the data, or a stable code: permissions, timeout, no device).
 	if (req.method === "POST" && path.startsWith("/native/") && path !== "/native/preflight") {
-		const answer = await nativeReadRoute(path, (await readJson<Record<string, unknown>>(req).catch(() => null)) ?? {});
+		const body = (await readJson<Record<string, unknown>>(req).catch(() => null)) ?? {};
+		// #1057 slice 3: the ACT routes (launch, click, type, key, scroll, screenshot) and halt/resume.
+		const answer = (await nativeReadRoute(path, body)) ?? (await nativeActRoute(path, body));
 		if (answer) return json(res, answer.status, answer.body);
 	}
 

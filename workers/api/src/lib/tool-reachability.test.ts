@@ -85,6 +85,13 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 	native_accessibility_tree: NATIVE_DECLARATION_ONLY,
 	native_maestro_devices: NATIVE_DECLARATION_ONLY,
 	native_maestro_hierarchy: NATIVE_DECLARATION_ONLY,
+	native_launch_app: NATIVE_DECLARATION_ONLY,
+	native_click: NATIVE_DECLARATION_ONLY,
+	native_type: NATIVE_DECLARATION_ONLY,
+	native_key: NATIVE_DECLARATION_ONLY,
+	native_scroll: NATIVE_DECLARATION_ONLY,
+	native_screenshot: NATIVE_DECLARATION_ONLY,
+	native_halt: NATIVE_DECLARATION_ONLY,
 	delete_record:
 		"COLLECTIONS_DESTRUCTIVE is its own group precisely so nobody inherits an irreversible delete: " +
 		"the group is outside FULL, so a creator opts in by declaring it. No seeded agent has yet had a " +

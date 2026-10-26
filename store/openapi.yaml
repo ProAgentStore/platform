@@ -13664,7 +13664,7 @@ paths:
       description: |
         Owner-only. Enabling either backend requires `acknowledged_disclosure_version` to equal the current
         account-risk disclosure (e.g. WeChat bans automated accounts); disabling never does. A field left out
-        keeps its value. Slice 1 grants readiness checks only — nothing drives a screen or device yet.
+        keeps its value. Opting in lets the agent's native tools reach the machine (reads, and — each click, type and key only after the owner approves it — input); halt it any time.
       operationId: setTerminalMachineNativeOptIn
       tags: [Terminals]
       parameters:
@@ -13682,6 +13682,54 @@ paths:
       responses:
         "200": { description: The saved opt-in, same shape as GET }
         "400": { description: "`code`: NATIVE_DISCLOSURE_REQUIRED, NATIVE_DISCLOSURE_OUTDATED or NATIVE_INVALID_REQUEST; carries `current_disclosure`" }
+        "404": { description: No identified machine is registered under this account }
+  /v1/terminals/machines/{machineId}/native-halt:
+    get:
+      summary: Is native control halted on this machine?
+      description: |
+        The HALT on a machine's native control (#1057). Halted means every native act tool (launch, click, type,
+        key, scroll, screenshot) is refused by the cloud before the runner is asked anything, and the runner
+        refuses too. The agent can halt itself with `native_halt`; only the owner clears it.
+      operationId: getTerminalMachineNativeHalt
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      responses:
+        "200": { description: "`{halted}`, and when halted `{by: agent|owner, reason, at}`" }
+        "404": { description: No identified machine is registered under this account }
+    post:
+      summary: Halt all native control on one machine now
+      description: |
+        Owner-only. Works whether or not the machine is opted in or its runner is reachable: the cloud row refuses
+        every native act while it exists. Runs in flight are cancelled. Idempotent — the first halt's author and
+        reason stand.
+      operationId: haltTerminalMachineNative
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, description: Why, in a sentence. Clipped. }
+      responses:
+        "200": { description: "`{halted: true, runnerTold}` — `runnerTold` is false when no runner was reachable (the cloud still refuses every act)" }
+        "404": { description: No identified machine is registered under this account }
+  /v1/terminals/machines/{machineId}/native-resume:
+    post:
+      summary: Resume native control on one machine after a halt
+      description: |
+        Owner-only; the agent has no way to do this. Clears the cloud halt and tells the runner. If the runner
+        cannot be reached it stays halted there until it is told or restarted.
+      operationId: resumeTerminalMachineNative
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      responses:
+        "200": { description: "`{wasHalted, runnerTold}`" }
         "404": { description: No identified machine is registered under this account }
   /v1/terminals/machines/{machineId}/policy:
     put:

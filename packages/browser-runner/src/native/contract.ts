@@ -84,7 +84,10 @@ export type NativeErrorCode =
 	// Slice 2 (the read tools):
 	| "NATIVE_INVALID_REQUEST"
 	| "NATIVE_TIMEOUT"
-	| "NATIVE_COMMAND_FAILED";
+	| "NATIVE_COMMAND_FAILED"
+	// Slice 3 (the act tools):
+	| "NATIVE_HALTED"
+	| "NATIVE_SECURE_FIELD";
 
 /** Run lifecycle, for slice 2 onward. */
 export type NativeRunStatus = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
@@ -97,6 +100,11 @@ export type NativeRunEventType =
 	| "app.launched"
 	| "screen.read"
 	| "run.paused"
+	| "action.performed"
+	| "action.refused"
+	| "screenshot.taken"
+	| "run.halted"
+	| "run.resumed"
 	| "run.completed"
 	| "run.failed"
 	| "run.cancelled";
@@ -197,5 +205,99 @@ export function nativeReadInputError(tool: NativeReadTool, input: Record<string,
 	if (tool === "native_maestro_hierarchy") {
 		if (typeof input.deviceId !== "string" || !/^[A-Za-z0-9._:-]{1,120}$/.test(input.deviceId)) return "`deviceId` must be a device id from native_maestro_devices.";
 	}
+	return null;
+}
+
+// ── Slice 3: the ACT tools ────────────────────────────────────────────────────
+//
+// Launch an app, click, type, press a key, scroll, take a screenshot — and halt. Each is behind the same
+// per-machine opt-in as the reads, and the three that can DO something consequential (click, type, key)
+// also wait for the owner's approval on every call (the registry's per-call approval, `ToolDef.approval`).
+// Nothing here logs what was typed or what the screen showed: the audit records the tool, the machine,
+// counts and codes. A screenshot is saved on the machine and NOT sent anywhere — pixels can hold anything.
+
+/** The capability a runner advertises once it serves the act routes below. */
+export const NATIVE_ACT_CAPABILITY = "native.act";
+
+/** Act tool → the runner route, its backend, and whether every call waits for the owner. */
+export const NATIVE_ACT_ROUTES = {
+	native_launch_app: { path: "/native/launch-app", backend: "desktop", approval: false },
+	native_click: { path: "/native/click", backend: "desktop", approval: true },
+	native_type: { path: "/native/type", backend: "desktop", approval: true },
+	native_key: { path: "/native/key", backend: "desktop", approval: true },
+	native_scroll: { path: "/native/scroll", backend: "desktop", approval: false },
+	native_screenshot: { path: "/native/screenshot", backend: "desktop", approval: false },
+} as const satisfies Record<string, { path: string; backend: NativeBackend; approval: boolean }>;
+export type NativeActTool = keyof typeof NATIVE_ACT_ROUTES;
+export const NATIVE_ACT_TOOLS = Object.keys(NATIVE_ACT_ROUTES) as NativeActTool[];
+
+/** Halt stops every act tool on the machine until the OWNER resumes it; the agent can halt, never resume. */
+export const NATIVE_HALT_PATH = "/native/halt";
+export const NATIVE_RESUME_PATH = "/native/resume";
+
+/** Bounds, so one call cannot be a flood or a screen-sized bet. */
+export const NATIVE_COORD_MAX = 20_000;
+export const NATIVE_TYPE_MAX_CHARS = 2_000;
+export const NATIVE_SCROLL_MAX = 100;
+export const NATIVE_WHY_MAX_CHARS = 300;
+/** Screenshots kept on the machine; older ones are deleted as new ones are taken. */
+export const NATIVE_SHOTS_KEPT = 20;
+
+export const NATIVE_MODIFIERS = ["cmd", "ctrl", "alt", "shift"] as const;
+export type NativeModifier = (typeof NATIVE_MODIFIERS)[number];
+/** Named keys; a single letter or digit is also a key. */
+export const NATIVE_KEY_NAMES = ["return", "tab", "escape", "space", "delete", "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"] as const;
+
+/** `cmd+shift+4`, `return`, `a`: the modifiers (in any order, no repeats) and one key. Null when it is not one. */
+export function parseNativeKey(spec: unknown): { modifiers: NativeModifier[]; key: string } | null {
+	if (typeof spec !== "string") return null;
+	const parts = spec.trim().toLowerCase().split("+");
+	const key = parts.pop() ?? "";
+	const mods = parts as NativeModifier[];
+	if (new Set(mods).size !== mods.length || !mods.every((m) => (NATIVE_MODIFIERS as readonly string[]).includes(m))) return null;
+	if (!((NATIVE_KEY_NAMES as readonly string[]).includes(key) || /^[a-z0-9]$/.test(key))) return null;
+	return { modifiers: mods, key };
+}
+
+export interface NativeActDone {
+	done: true;
+}
+export interface NativeScreenshotData {
+	/** Where the image is, ON THE MACHINE. The image itself is never sent to the model or the log. */
+	path: string;
+	bytes: number;
+	sha256: string;
+}
+export interface NativeHaltData {
+	halted: boolean;
+}
+
+/** An app's visible name or bundle id: letters, digits, spaces and . _ + & ( ) ' - — no path, no shell, no control characters. */
+export const NATIVE_APP_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._+&()'-]{0,119}$/u;
+
+const int = (v: unknown, lo: number, hi: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi;
+
+/** Validate an act request's input; a message when it is not one. Shared so both sides refuse alike. */
+export function nativeActInputError(tool: NativeActTool, input: Record<string, unknown>): string | null {
+	if (tool === "native_launch_app") {
+		if (typeof input.app !== "string" || !NATIVE_APP_NAME.test(input.app)) return "`app` must be an app's visible name or bundle id (letters, digits, spaces and . _ + & ( ) ' -, at most 120 characters) — never a path.";
+	}
+	if (tool === "native_click") {
+		if (!int(input.x, 0, NATIVE_COORD_MAX) || !int(input.y, 0, NATIVE_COORD_MAX)) return `\`x\` and \`y\` must be whole screen coordinates from 0 to ${NATIVE_COORD_MAX}.`;
+		if (input.button !== undefined && input.button !== "left" && input.button !== "right") return "`button` must be \"left\" or \"right\".";
+		if (input.double !== undefined && typeof input.double !== "boolean") return "`double` must be true or false.";
+	}
+	if (tool === "native_type") {
+		if (typeof input.text !== "string" || input.text.length < 1 || input.text.length > NATIVE_TYPE_MAX_CHARS) return `\`text\` must be 1–${NATIVE_TYPE_MAX_CHARS} characters.`;
+	}
+	if (tool === "native_key") {
+		if (!parseNativeKey(input.key)) return "`key` must be a key with optional modifiers, e.g. `return`, `tab`, `cmd+a`, `ctrl+shift+t` (modifiers: cmd, ctrl, alt, shift; one key: a-z, 0-9, return, tab, escape, space, delete, arrows, home, end, pageup, pagedown, f1-f12).";
+	}
+	if (tool === "native_scroll") {
+		const dx = input.dx ?? 0;
+		const dy = input.dy ?? 0;
+		if (!int(dx, -NATIVE_SCROLL_MAX, NATIVE_SCROLL_MAX) || !int(dy, -NATIVE_SCROLL_MAX, NATIVE_SCROLL_MAX) || (dx === 0 && dy === 0)) return `\`dy\` (down is negative) and/or \`dx\` must be whole numbers of lines from -${NATIVE_SCROLL_MAX} to ${NATIVE_SCROLL_MAX}, not both zero.`;
+	}
+	if (input.why !== undefined && (typeof input.why !== "string" || input.why.length > NATIVE_WHY_MAX_CHARS)) return `\`why\` must be text of at most ${NATIVE_WHY_MAX_CHARS} characters.`;
 	return null;
 }

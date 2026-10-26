@@ -54,7 +54,7 @@ describe("a grantable capability, not one agent's feature", () => {
 	it("the four reads are registry tools of the `native` connector: read-scoped, non-mutating, untrusted output, no write scope", () => {
 		expect(READ_ONLY_NATIVE_TOOLS).toEqual(["native_list_apps", "native_accessibility_tree", "native_maestro_devices", "native_maestro_hierarchy"]);
 		for (const name of READ_ONLY_NATIVE_TOOLS) expect(getRegistryTool(name)).toMatchObject({ connector: "native", scope: "read", mutates: false, untrustedOutput: true });
-		expect(CONNECTORS.find((c) => c.id === "native")).toMatchObject({ auth: "none", scopes: { read: true, write: false } });
+		expect(CONNECTORS.find((c) => c.id === "native")).toMatchObject({ auth: "none", scopes: { read: true, write: true } });
 	});
 });
 

@@ -52,6 +52,14 @@ const caps = (over: Partial<AgentCapabilities>): AgentCapabilities =>
  * `dedupe_upsert` (writes the instance's own collection and fires the agent-to-agent pump).
  */
 const MUTATING = new Set<string>([
+	// ── native desktop control (#1057 slice 3): each acts on the owner's machine ──
+	"native_launch_app", // opens an app
+	"native_click", // a real click on the owner's screen — every call waits for their approval
+	"native_type", // real keystrokes — every call waits for their approval, who sees the exact text
+	"native_key", // a real key press — every call waits for their approval
+	"native_scroll", // moves the view under the pointer
+	"native_screenshot", // writes an image file to the runner's private folder (it is never returned)
+	"native_halt", // sets the halt that refuses every native act until the owner resumes
 	// ── the nine the audit found misreported ──
 	"start_work",
 	"stop_work",

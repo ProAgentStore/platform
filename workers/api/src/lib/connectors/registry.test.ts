@@ -294,17 +294,19 @@ describe("connector registry", () => {
 		it("does not describe a browser for a connector that has none", () => {
 			// The defect, stated as an assertion. `browser` is the only connector these words are
 			// true of, so it is the only one allowed to use them.
+			// `native` (#1057) clicks too — a real screen position, each one approved by the owner — and says so; it has no page to navigate.
 			for (const c of writable.filter((x) => x.id !== "browser")) {
-				expect(c.writeMeaning, c.id).not.toMatch(/\bclick\b/i);
+				if (c.id !== "native") expect(c.writeMeaning, c.id).not.toMatch(/\bclick\b/i);
 				expect(c.writeMeaning, c.id).not.toMatch(/\bnavigate\b/i);
 			}
+			expect(getConnector("native")?.writeMeaning).toMatch(/approve that exact action/i);
 			expect(getConnector("browser")?.writeMeaning).toMatch(/click, type and navigate/i);
 		});
 
 		it("only claims 'on your own computer' for the connectors that are", () => {
 			// The other half of the same false sentence: `github`, `mcp`, `supervision` and `http`
 			// are cloud or platform-internal, and 27 of 32 panels were telling owners otherwise.
-			const local = new Set(["terminal", "tmux", "browser"]);
+			const local = new Set(["terminal", "tmux", "browser", "native"]);
 			for (const c of writable) {
 				const claimsLocal = /your own computer|your machine/i.test(c.writeMeaning ?? "");
 				expect(claimsLocal, `${c.id} ${claimsLocal ? "claims" : "does not claim"} to run on the owner's machine`).toBe(local.has(c.id));

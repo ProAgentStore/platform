@@ -79,6 +79,15 @@ const MACHINE = new Set<string>([
 	"native_accessibility_tree",
 	"native_maestro_devices",
 	"native_maestro_hierarchy",
+	// native connector (#1057 slice 3) — ACTS on the owner's machine over the relay: launch, click, type, key,
+	// scroll, screenshot, halt. Nothing leaves for the internet (a screenshot stays on the machine).
+	"native_launch_app",
+	"native_click",
+	"native_type",
+	"native_key",
+	"native_scroll",
+	"native_screenshot",
+	"native_halt",
 ]);
 
 /**
