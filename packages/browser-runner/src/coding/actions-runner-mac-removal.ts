@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 
 interface RemovalProbe {
 	exists(path: string): boolean;
+	loaded(label: string): boolean | null;
 	plists(root: string): string[] | null;
 	parsePlist(path: string): unknown;
 	runnerProcessCwds(): string[] | null;
@@ -12,6 +13,12 @@ interface RemovalProbe {
 
 const liveProbe: RemovalProbe = {
 	exists: existsSync,
+	loaded: (label) => {
+		const r = spawnSync("/bin/launchctl", ["print", `system/${label}`], { encoding: "utf8", timeout: 5000 });
+		if (r.status === 0) return true;
+		if (r.status === 113 && /Could not find service/i.test(String(r.stderr))) return false;
+		return null;
+	},
 	plists: (root) => {
 		try { return existsSync(root) ? readdirSync(root).filter((name) => name.endsWith(".plist")).map((name) => join(root, name)) : []; }
 		catch { return null; }
@@ -46,11 +53,13 @@ const liveProbe: RemovalProbe = {
 export function macRunnerServiceRemoved(dir: string, home: string, probe: RemovalProbe = liveProbe): boolean {
 	const label = `online.proagentstore.actions.${basename(dir).toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
 	if (probe.exists(`/Library/LaunchDaemons/${label}.plist`)) return false;
+	if (probe.loaded(label) !== false) return false;
 	for (const root of ["/Library/LaunchDaemons", join(home, "Library", "LaunchAgents")]) {
 		const plists = probe.plists(root);
 		if (!plists) return false;
 		for (const path of plists) {
 			const value = probe.parsePlist(path) as { WorkingDirectory?: unknown; ProgramArguments?: unknown } | null;
+			if (!value) return false;
 			if (value?.WorkingDirectory === dir || (Array.isArray(value?.ProgramArguments) && value.ProgramArguments.some((arg) => arg === dir || arg === join(dir, "runsvc.sh") || arg === join(dir, "run.sh")))) return false;
 		}
 	}

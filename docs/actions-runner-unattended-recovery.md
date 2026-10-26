@@ -1,8 +1,9 @@
 # Unattended Actions runner recovery on PAGS machines
 
 **Status:** PAGS implementation shipped on `main` from `a6be5d7d` (CLI
-0.4.184 with owner console, MCP surface 0.1.189); fleet rollout and physical verification remain
-queued. This extends the self-hosted runner design in
+0.4.185 with owner console and review fixes, MCP surface 0.1.189); fleet rollout and physical verification remain
+queued behind the [architecture review](actions-runner-recovery-architecture-review.md).
+This extends the self-hosted runner design in
 [runner-self-hosted-design.md](runner-self-hosted-design.md). It does not
 change GitHub Actions routing or promise startup after a laptop's battery is
 fully depleted.

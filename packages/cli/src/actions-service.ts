@@ -247,6 +247,7 @@ export async function installMacActionsService(dir: string, ctx: ServiceContext)
 /** Remove only the generated unit. Deregistration remains the existing token-gated setup flow. */
 export async function removeMacActionsService(dir: string, ctx: ServiceContext): Promise<string[]> {
 	assertRunner(dir, ctx);
+	const record = JSON.parse(readFileSync(join(dir, ".runner"), "utf8").replace(/^﻿/, "")) as { agentName: string; gitHubUrl: string };
 	if (activeWorkerIn(dir)) return [`Deferred: ${dir} has an active Runner.Worker. Retry after the job completes.`];
 	const services = inventoryActionsServices(dir, ctx);
 	if (services.length > 1) throw new Error(`Ambiguous service ownership for ${dir}: ${services.map((s) => `${s.domain}/${s.label}`).join(", ")}`);
@@ -270,7 +271,6 @@ export async function removeMacActionsService(dir: string, ctx: ServiceContext):
 	rmSync(join(dir, ".pags-supervisor", "config.json"), { force: true });
 	rmSync(join(dir, ".pags-supervisor", "status.json"), { force: true });
 	rmSync(join(dir, ".pags-supervisor", "recover.json"), { force: true });
-	const record = JSON.parse(readFileSync(join(dir, ".runner"), "utf8")) as { agentName: string; gitHubUrl: string };
 	writeFileSync(join(dir, ".pags-supervisor", "removal-approved.json"), JSON.stringify({ name: record.agentName, url: record.gitHubUrl, at: Date.now() }) + "\n", { mode: 0o600 });
 	return [`Stopped and removed ${service ? `${service.domain}/${service.label}` : "no existing service"}. Runner credentials remain; run actions_runner_setup remove to deregister it.`];
 }
