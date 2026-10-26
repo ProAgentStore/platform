@@ -127,7 +127,8 @@ that never opens, or lists fewer destinations than the desktop bar, passes every
 `e2e/appshell-mobile.spec.ts` is the reference: it renders the real console `Layout` at 375 x 812 with only the API mocked, and
 reads the desktop bar's destinations from the DOM so the menu is compared with what the product actually offers, not with a
 second hand-kept list. It owns those checks — do not re-mock them elsewhere. The console's shell is `Layout`; the SDK
-`ProShell` that apps build on lives in the ProAppStore repository and has its own tests there.
+`ProShell` that apps build on lives in the ProAppStore repository and has its own tests there; the rules for using it are in
+[appshell-navigation-contract.md](./appshell-navigation-contract.md).
 
 ## Remaining text guards — convert them when you touch that code
 

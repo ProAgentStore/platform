@@ -160,6 +160,14 @@ A commit that pushes a file past its pin is refused locally: split the file, or 
 `scripts/check-file-size.mjs` with a reason, in the same commit. The hooks never replace the
 full-suite command above or CI. See CONTRIBUTING.md.
 
+## Building an app on the SDK shell: the navigation contract (#1291)
+
+If you are writing or reviewing an app that uses the ProAppStore SDK shell (`ProShell`, called AppShell in prose), follow
+[docs/appshell-navigation-contract.md](docs/appshell-navigation-contract.md) (machine-readable twin:
+`docs/appshell-navigation-contract.json`): one primary navigation, every destination in `nav`, no second navbar, `onNavigate` for
+SPAs, scope kept in the path, and a 375px browser test against the real shell. The console's own shell is tested that way in
+`e2e/appshell-mobile.spec.ts`.
+
 ## Writing a guard test
 
 Lock an invariant by testing what the code DOES, never by reading a source file and matching its

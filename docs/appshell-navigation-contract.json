@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "title": "AppShell navigation contract",
+  "component": {
+    "concept": "AppShell",
+    "sdkExport": "ProShell",
+    "sdkImport": "@proappstore/sdk/shell",
+    "note": "Say AppShell in prose. In code import what the installed SDK exports: today that is ProShell (there is no AppShell export). If AppShell is added, ProShell stays as a temporary alias."
+  },
+  "verifiedAgainst": {
+    "repository": "proappstore-online/platform",
+    "files": ["packages/sdk/src/shell.tsx", "packages/sdk/src/navbar.tsx"],
+    "readOn": "2026-10-26"
+  },
+  "rules": [
+    { "id": 1, "title": "AppShell owns one primary app navigation", "rule": "An app has exactly one primary navigation and the shell renders it.", "why": "A second navbar defeats the shell's responsive menu and gives assistive technology two competing landmarks." },
+    { "id": 2, "title": "Every primary destination is in nav or renderNav", "rule": "Put every primary destination in the `nav` prop, or in a `renderNav` replacement that renders the same destinations.", "why": "A shell that renders `<ProShell nav={NAV}>` with an empty or landing-only NAV passes a superficial check and gives the user no navigation." },
+    { "id": 3, "title": "Do not render a second primary navbar in shell content", "rule": "Content area headers, sidebars and tab bars must not duplicate the primary destinations. `hideTopbar` also hides the navigation; a custom `renderTopbar` must place `ctx.nav` itself.", "why": "Duplicated primary navigation is the failure this contract exists to prevent." },
+    { "id": 4, "title": "Use onNavigate for SPA apps", "rule": "A router-driven app passes its router's navigate function as `onNavigate`. Without it nav items are ordinary links that reload the document.", "why": "A reload throws away client state and breaks back/forward expectations." },
+    { "id": 5, "title": "Preserve tenant and workspace scope in links", "rule": "Keep the scope in the path (for example `/w/acme/cases`). The shell matches a nav item's `href` against `location.pathname` only, so an `href` carrying a query string is never marked current.", "why": "A link that drops the workspace silently shows the wrong tenant's data; a query-scoped href loses `aria-current`." },
+    { "id": 6, "title": "Test the menu at a mobile viewport", "rule": "Run a browser test against the real shell at 375px: a labelled Menu button, every destination listed, Escape and outside click close it, `aria-current` follows selection, no document reload, one navigation landmark.", "why": "Tests that mock the shell as a plain div never see the hamburger, so a broken menu passes them." },
+    { "id": 7, "title": "Know which navigation is outside this rule", "rule": "Tabs inside one screen, breadcrumbs, a local admin sub-navigation, footer links, in-content links and the profile menu are not primary navigation and may exist beside it.", "why": "The rule is about the app's primary destinations, not every link on the page." }
+  ],
+  "outsideTheRule": ["tabs within a screen", "breadcrumbs", "local admin subnav", "footer links", "in-content links", "profile menu items"],
+  "checklist": [
+    "The app renders the shell once and passes its destinations as `nav` or `renderNav`.",
+    "`nav` lists every primary destination, not only the landing route.",
+    "No other component renders the app's primary destinations.",
+    "A router-driven app passes `onNavigate`.",
+    "Links keep tenant or workspace scope in the path.",
+    "Role-based items are hidden for presentation only; the server enforces access.",
+    "A mobile (375px) browser test runs against the real shell and checks the menu."
+  ]
+}
