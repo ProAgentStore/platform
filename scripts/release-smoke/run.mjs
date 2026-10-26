@@ -146,13 +146,17 @@ async function main() {
 				HOME: home, USERPROFILE: home,
 				npm_config_registry: server.base, NPM_CONFIG_REGISTRY: server.base,
 				NODE_OPTIONS: `--import ${redirect}`, SMOKE_API: server.base,
-				// The stub's own fetch-newest-on-start would do the update before the runner's updater is ever asked.
-				PAGS_NO_SELF_UPDATE: "1", PAGS_NO_WATCHDOG: "1", PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
+				PAGS_NO_WATCHDOG: "1", PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
 			};
 			delete env.NODE_PATH; delete env.PAGS_BOOTSTRAP; delete env.PAGS_SERVICE;
 			say(`${name}: installing ${PKG}@${installVersion}`);
 			await npmAsync(["install", "--prefix", prefix, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false", `${PKG}@${installVersion}`], { cwd: scratch, env, timeout: 300_000 });
 			const entry = join(prefix, "node_modules", ...PKG.split("/"), "dist", "bootstrap.js");
+			if (name === "start") {
+				const actions = spawnSync(process.execPath, [entry, "actions", "supervise", "--help"], { env, cwd: home, encoding: "utf8", timeout: 30_000 });
+				if (actions.status !== 0 || !/supervise/.test(actions.stdout ?? "")) throw new Error(`A packed Actions supervisor did not start (${actions.status ?? actions.signal}): ${(actions.stderr || actions.stdout || "").slice(-600)}`);
+				say("Actions supervisor command loads from the packed CLI");
+			}
 			server.requests.length = 0;
 			server.state.autoUpdate = autoUpdate;
 			let out = "";
