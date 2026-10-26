@@ -13,22 +13,10 @@
 // pending queue entry for this repo, or a run on it.
 
 import type { Env } from "../types.js";
+import { referencedIssue } from "./objective-issue.js";
 import { listQueue, type ObjectiveQueueEntry } from "./objective-queue.js";
 
-/**
- * The GitHub issue an objective is ABOUT, or null when it names none.
- *
- * An objective routinely mentions several ("Work issue #920 … the #919 run pushed …"), so this is
- * the FIRST reference, preferring an explicit one — `issue #920`, `issue 920`, `…/issues/920`,
- * `owner/repo#920` — over a bare `#920`, because objectives lead with their subject and a bare `#N`
- * later on is usually context. Pull-request URLs and `PR #N` are not issues and are ignored.
- */
-export function referencedIssue(objective: string): number | null {
-	const explicit = /\bissues?\s*#?\s*(\d+)\b|\/issues\/(\d+)\b|\b[\w.-]+\/[\w.-]+#(\d+)\b/i.exec(objective);
-	if (explicit) return Number(explicit[1] ?? explicit[2] ?? explicit[3]);
-	const bare = /(?<![\w/])(?<!\bPR\s?)(?<!\bpull request\s?)#(\d+)\b/i.exec(objective);
-	return bare ? Number(bare[1]) : null;
-}
+export { referencedIssue } from "./objective-issue.js";
 
 export type DuplicateObjective = { kind: "queued"; entry: ObjectiveQueueEntry } | { kind: "running"; runId: string; objective: string };
 

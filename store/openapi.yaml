@@ -3041,6 +3041,60 @@ paths:
                                 last_activity_at moves only on owner-driven events, so it cannot answer it alone.
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/instances/my/coding-history:
+    get:
+      summary: My coding history across every instance (#1335)
+      description: |
+        What the auto-pickup picker chose and passed over, what was queued, admitted, refused, deferred or cancelled, and which of that
+        became a real run — across EVERY instance, newest first, filterable and cursor-paged. Read-only; it writes, replays and requeues nothing.
+        It is a read model over the queue, the runs, the start receipts, the lifecycle ledger (#1017) and the picker's log, not a ledger of its own.
+
+        `kind`: `attempt` (a queue entry — a try, which may never become a run; an admission failure with no run is an attempt, not a run),
+        `run` (started with no queue entry), `picker` (a decision with no entry: `passed_over`, `none_eligible`, `capped`, `skipped_gate`, …),
+        `request` (a duplicate or refused start request). An attempt that became a run is ONE item carrying both.
+
+        Paging is keyset (`(at DESC, sk DESC)`): rows added while a reader pages sort above the cursor and never shift or repeat a later page.
+        `complete` is paging only. `summary` is computed over the WHOLE requested range with the same filters, never the page: `attempts`,
+        real `runs`, `admissionFailuresWithoutRun`, and totals by outcome, kind and instance. `coverage` states what is not recorded and nothing
+        is reconstructed: work older than an instance's lifecycle ledger, rows with no recorded issue (which an issue filter cannot match — they
+        are counted), when per-candidate skip reasons began, retention, and that deployment is not recorded per run (`deployment` is always null,
+        meaning unobserved). Each item carries its correlation handles, machine and actor (`owner` verified, `platform`, or `unknown` legacy);
+        reasons are redacted and clipped and an objective's own text is never returned.
+      operationId: getMyCodingHistory
+      tags: [Instances]
+      parameters:
+        - { name: instance_id, in: query, required: false, schema: { type: string }, description: Narrow to one of my instances (404 if it is not mine). }
+        - { name: repo, in: query, required: false, schema: { type: string }, description: GitHub repo as owner/name. }
+        - { name: issue, in: query, required: false, schema: { type: integer, minimum: 1 }, description: GitHub issue number. Rows with no recorded issue cannot match; coverage counts them. }
+        - { name: since, in: query, required: false, schema: { type: string }, description: Window start (inclusive) - an ISO date or a millisecond epoch. }
+        - { name: until, in: query, required: false, schema: { type: string }, description: Window end (inclusive) - an ISO date or a millisecond epoch. }
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [running, completed, failed, needs_human, cancelled, queued, deferred, claimed, queue_cancelled, admission_failed, started, none_eligible, skipped_failed, capped, skipped_gate, skipped_busy, error, passed_over, duplicate, not_started, outcome_unknown]
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [attempt, run, picker, request] } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: The previous page's nextCursor, exactly as returned. }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: summary, in: query, required: false, schema: { type: boolean, default: true }, description: false skips the summary and coverage on follow-up pages. }
+      responses:
+        "200":
+          description: One page of history, the full-range summary, and the coverage statement
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asOf: { type: integer }
+                  filters: { type: object }
+                  items: { type: array, items: { type: object } }
+                  complete: { type: boolean, description: PAGING only - not a claim the history is whole. See coverage. }
+                  nextCursor: { type: string, nullable: true }
+                  summary: { type: object, nullable: true }
+                  coverage: { type: object, nullable: true }
+        "400": { description: A filter, cursor or limit is malformed - the message names it. }
+        "404": { description: instance_id is not one of my instances. }
   /v1/instances/my/instances:
     get:
       summary: List my instances

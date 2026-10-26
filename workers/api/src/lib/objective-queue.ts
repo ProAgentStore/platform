@@ -14,6 +14,7 @@ import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 import { boardOrderSql, objectiveJobKey } from "./board-order.js";
+import { referencedIssue } from "./objective-issue.js";
 
 /** Every status an entry can hold. See the migration for what each one means. */
 export const QUEUE_STATUSES = ["pending", "running", "started", "cancelled", "failed"] as const;
@@ -143,10 +144,10 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 	const objective = input.objective.slice(0, OBJECTIVE_MAX);
 	await env.DB.prepare(
 		`INSERT INTO instance_objective_queue
-		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at, deferral_count)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0)`,
+		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at, deferral_count, issue_number)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0, ?9)`,
 	)
-		.bind(id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt)
+		.bind(id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt, referencedIssue(objective))
 		.run();
 	if (input.position === "next") {
 		// Above every placed card on the instance — so above everything in its column, placed or not.

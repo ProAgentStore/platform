@@ -328,6 +328,7 @@ const TABLE: Record<string, Row> = {
 	coding_loop_status: ["coding", "read", null, null, "cursor,instance_id,offset,request_id,run_id,starts_cursor,starts_offset,token"],
 	coding_loop_stop: ["coding", "write", null, null, "instance_id,run_id,token"],
 	coding_loop_lifecycle: ["coding", "read", null, null, "cursor,instance_id,limit,queue_entry_id,request_id,run_id,token"],
+	coding_fleet_history: ["coding", "read", null, null, "cursor,instance_id,issue,kind,limit,outcome,repo,since,summary,token,until"],
 	coding_loop_queue: ["coding", "read", null, null, "cursor,instance_id,offset,repo_id,status,token"],
 	coding_loop_queue_cancel: ["coding", "write", null, null, "entry_id,instance_id,token"],
 	coding_loop_queue_reorder: ["coding", "write", null, "envelope", "after,before,dry_run,entry_id,instance_id,to,token"],

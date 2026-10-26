@@ -43,6 +43,7 @@ import { coderIsIdle, PO_TRIAGE_OFF, queueGate, wakePoTriageIfIdle } from "./po-
 import { notifyUser } from "../routes/push.js";
 import { selectedProviderAccount } from "./provider-account-hold.js";
 import { recoverReservations } from "./auto-pickup-legacy-reservations.js";
+import { recordLifecycle } from "./objective-lifecycle.js";
 export { RESERVATION_TTL_MS, recoverReservations } from "./auto-pickup-legacy-reservations.js";
 
 export interface AutoPickupSettings {
@@ -210,7 +211,7 @@ export function settleStart(drain: unknown, work: { repo: string; issue: number;
 	return { started: true, ...work }; // a caller-supplied starter that reports nothing (tests): trust the enqueue as before
 }
 
-type PickupOutcome = "started" | "none_eligible" | "skipped_failed" | "capped" | "skipped_gate" | "skipped_busy" | "error";
+type PickupOutcome = "started" | "none_eligible" | "skipped_failed" | "capped" | "skipped_gate" | "skipped_busy" | "error" | "passed_over";
 
 /** A skip repeated with the same reason is written once an hour, so a blocked coder leaves a row to read, not one per sweep (#1276). */
 export const SKIP_LOG_DEBOUNCE_MS = 60 * 60_000;
@@ -227,6 +228,21 @@ async function logSkip(env: Env, iid: string, uid: string, outcome: "skipped_gat
 		const detail = clipMarked(reason, 300);
 		const seen = await env.DB.prepare("SELECT 1 AS x FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = ?2 AND detail = ?3 AND created_at > ?4 LIMIT 1").bind(iid, outcome, detail, now - SKIP_LOG_DEBOUNCE_MS).first<{ x: number }>();
 		if (!seen) await log(env, iid, uid, outcome, detail, null, null, now);
+	} catch {
+		// The log is a trace of the decision; failing to write it must not change the decision.
+	}
+}
+
+/**
+ * An eligible issue the picker passed over because the start guard refused it (#1335): one row per issue and reason, so "why did it
+ * skip #N" is a row an owner can filter on, not a sentence inside another row. Written at most once an hour per issue and reason,
+ * like every other skip. Never throws.
+ */
+async function logPassedOver(env: Env, iid: string, uid: string, repo: string, issue: number, reason: string, now: number): Promise<void> {
+	try {
+		const detail = clipMarked(reason, 300);
+		const seen = await env.DB.prepare("SELECT 1 AS x FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'passed_over' AND repo = ?2 AND issue_number = ?3 AND detail = ?4 AND created_at > ?5 LIMIT 1").bind(iid, repo, issue, detail, now - SKIP_LOG_DEBOUNCE_MS).first<{ x: number }>();
+		if (!seen) await log(env, iid, uid, "passed_over", detail, repo, issue, now);
 	} catch {
 		// The log is a trace of the decision; failing to write it must not change the decision.
 	}
@@ -366,6 +382,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 				break;
 			}
 			passedOver.push(`#${c.issue.number} (${refusal.reason})`);
+			await logPassedOver(env, iid, uid, c.repo, c.issue.number, refusal.reason, now);
 		}
 		if (!chosen) {
 			const base = verdict.pick ? `every eligible issue was refused by the start guard: ${passedOver.join(", ")}` : verdict.reason;
@@ -393,6 +410,9 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 			await logSkip(env, iid, uid, "skipped_busy", reason, now);
 			return { started: false, reason };
 		}
+		// The enqueue happened inside the admission trigger, so no start path recorded it: write the `queued` transition the
+		// lifecycle ledger expects of every entry (#1335), as the platform's own act. Best-effort, like every transition.
+		await recordLifecycle(env, { userId: uid, instanceId: iid, queueEntryId: entryId, event: "queued", actor: { kind: "platform" }, reason: `auto-pickup selected #${issue.number} in ${repo}`, now });
 		return settleStart(await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(repoId), { repo, issue: issue.number, entryId });
 	} catch (e) {
 		const reason = `auto-pickup failed: ${e instanceof Error ? e.message : String(e)}`;

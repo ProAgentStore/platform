@@ -232,6 +232,7 @@ const ROUTES = [
 	"POST /:agentId/subscribe",
 	"GET /my/instances",
 	"GET /my/activity",
+	"GET /my/coding-history",
 	"GET /:instanceId/tags",
 	"PUT /:instanceId/tags",
 	"GET /my/snapshot",
@@ -710,6 +711,7 @@ const INSTANCES_TS = [
 	"POST /:agentId/subscribe",
 	"GET /my/instances",
 	"GET /my/activity",
+	"GET /my/coding-history",
 	"GET /:instanceId/tags",
 	"PUT /:instanceId/tags",
 	"GET /my/snapshot",
@@ -772,6 +774,8 @@ const GATES: Record<string, [number, number]> = {
 	// Same shape, same reason: the activity read is `WHERE user_id = ?1` twice over, so a stranger
 	// gets 200 and an empty list rather than a 404 about someone else's instances.
 	"GET /my/activity": [401, 200],
+	// #1335: the owner-wide coding history reads every source by `user_id = ?1`, so a stranger gets 200 and an empty history.
+	"GET /my/coding-history": [401, 200],
 	// #961: the snapshot is the tenant query too — a stranger gets 200 and no instances.
 	"GET /:instanceId/tags": [401, 404],
 	"PUT /:instanceId/tags": [401, 404],
@@ -1053,6 +1057,7 @@ describe("what a stranger gets from every route", () => {
 	const ANSWERS_A_STRANGER: Record<string, string> = {
 		"GET /my/instances": "IS the tenant query (WHERE i.user_id = ?1) — answers with an empty list",
 		"GET /my/activity": "both its queries ARE the tenant query (WHERE user_id = ?1) — answers with an empty list",
+		"GET /my/coding-history": "every source it reads is filtered by the tenant (user_id = ?1, in the shared CTE and every enrichment query) — a stranger gets an empty history and zero counts; an instance_id that is not theirs is a 404",
 		"GET /my/snapshot": "every query is the tenant query (WHERE user_id = ?1) — answers with an empty list",
 		"GET /behaviour-schema": "the behaviour field table: the same static vocabulary for every agent, public by design",
 		"GET /notification-vocabulary": "the notification types, events, channels and severities a policy rule may name (#992): the same static vocabulary for every agent, carrying no instance and nothing user-specific — public for the same reason the behaviour table above is",

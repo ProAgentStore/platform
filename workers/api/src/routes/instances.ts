@@ -53,6 +53,7 @@ import { registerApplicationTailorRoutes } from "./instances-application-tailor.
 import { registerApplicationRunnerRoutes } from "./instances-application-runner.js";
 import { registerApplicationsRoutes } from "./instances-applications.js";
 import { registerFleetRoutes } from "./instances-fleet.js";
+import { registerFleetHistoryRoutes } from "./instances-fleet-history.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
@@ -497,6 +498,7 @@ instanceRoutes.get("/my/activity", async (c) => {
 	}));
 	return c.json({ asOf: now, instances });
 });
+registerFleetHistoryRoutes(instanceRoutes); // the owner-wide coding history (#1335) — `/my/coding-history`, also before `/:instanceId/…`
 registerFleetRoutes(instanceRoutes); // tags + the fleet snapshot (#961) — `/my/snapshot` must precede `/:instanceId/…`
 
 /** Register or update the local/managed runtime for my instance. */

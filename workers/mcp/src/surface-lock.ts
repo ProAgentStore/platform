@@ -1257,4 +1257,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.188": "sha256:b7e5e309e9c1e3f14765953ddda6de8a331e735a644666c0f3aec067b9c2f97e", // #1316: Pilot schema describes Sonnet-only coding; Haiku is permitted only for non-coding ticket work.
 	"0.1.189": "sha256:db901f99baade254896d4a383f0ae519d5141e4469c07ffd864d37e5ccb10906", // #1367/#1209: scoped Actions recovery control and explicit macOS system service opt-in.
 	"0.1.190": "sha256:f1733fbfa9327ce3e3607573c2d99284ac007030b2a8e7cfe3f76102ca4fb89e", // #1230: set_application_runner_settings gains accountCreation (create a site account when none exists; default off).
+	"0.1.191": "sha256:c802a7052575641d3df8898f53ebdfa53f8e8591f18f93a523efb41b8a72c251", // #1335: coding_fleet_history (read) - the owner's coding history across every instance: picker decisions, attempts vs real runs, correlation, full-range summary and coverage.
 };

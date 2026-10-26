@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**403 tool registrations.** 374 are always registered; 29 are gated to the console
+**404 tool registrations.** 375 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -546,6 +546,7 @@ immediately instead of a whole transcript.
 | `coding_loop_queue_cancel` | Withdraw a queued objective before it starts; only a pending entry can be withdrawn | write | no ([why](#tools-with-no-dry-run)) | |
 | `coding_loop_queue_reorder` | Change which queued objective starts next (`to: next/last`, `before`/`after` an entry) without stopping the run in flight (#1097) | write | yes | |
 | `coding_loop_lifecycle` | One objective's lifecycle — requested → queued/deduplicated/not started → admitted/deferred/cancelled/admission failed → run → run finished — by `request_id`, `queue_entry_id` or `run_id`, oldest first with a stable `seq` cursor; each event names its actor (`owner`, verified uid + claimed client, or `platform`); a deduplicated request reaches the objective it joined; `coverage`/`coverage_gaps` say whether the recorded history is whole, separately from paging's `complete`. Read-only; replays nothing (#1017) | read | | |
+| `coding_fleet_history` | Your coding history across EVERY instance (or one), newest first and cursor-paged: what the picker chose and passed over (with reasons), what was queued, admitted, refused or deferred, and which of that became a real run. Filter by `instance_id`, `repo`, `issue`, `outcome`, `kind`, `since`/`until`. `summary` counts the whole range (attempts vs real runs, admission failures with no run); `coverage` states what is not recorded (older than an instance's ledger, rows with no recorded issue, retention, deployment). Read-only (#1335) | read | | |
 
 ### Triggers
 

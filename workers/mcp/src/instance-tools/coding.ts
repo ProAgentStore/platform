@@ -558,6 +558,37 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		},
 	);
 
+	// #1335: the same question across EVERY instance — what the picker chose and passed over, what was queued, admitted, refused or
+	// deferred, and which of that became a real run. Read-only, like the lifecycle it extends.
+	server.tool(
+		"coding_fleet_history",
+		"Read the owner's coding history across EVERY instance (or one): what the auto-pickup picker chose and the issues it passed over with their reasons, what was queued, admitted, refused, deferred or cancelled, and which of that became a real run. Newest first, filterable by instance_id, repo, issue, outcome, kind and a since/until window; pass `nextCursor` as `cursor` to continue (stable: rows added while you page never shift or repeat a page). `kind` is `attempt` (a queue entry — a try, which may never become a run; an admission failure with no run is an attempt, not a run), `run` (started with no queue entry), `picker` (a picker decision with no entry: passed over, nothing eligible, capped, gated, busy) or `request` (a duplicate or refused start request). Each item carries its correlation handles (request, queue entry, run, session), machine, who acted (`owner` verified, `platform`, or `unknown` legacy), the queue and run facts, and the picker decision behind it. `summary` counts the WHOLE requested range, not the page: attempts, real runs, admission failures with no run, and totals by outcome and instance. `coverage` says what is NOT recorded — work older than an instance's lifecycle ledger, rows with no recorded issue that an issue filter cannot match, when per-candidate skip reasons began, retention, and that deployment is not recorded per run (`deployment` is always null = unobserved); `complete` is only PAGING. Use coding_loop_lifecycle with an item's request_id, queue_entry_id or run_id for that objective's transition history. Read-only: it never replays, requeues or repairs work.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().optional().describe("Instance ID or slug — narrows to one instance. Omit for every instance you own."),
+			repo: z.string().optional().describe("GitHub repository, written as the owner, a slash, then the repo name (for example acme/app)"),
+			issue: z.coerce.number().int().min(1).optional().describe("GitHub issue number. Rows with no recorded issue cannot match; coverage counts them."),
+			since: z.string().optional().describe("Start of the window (inclusive): an ISO date or a millisecond epoch"),
+			until: z.string().optional().describe("End of the window (inclusive): an ISO date or a millisecond epoch"),
+			outcome: z.string().optional().describe("One of: running, completed, failed, needs_human, cancelled (a run); queued, deferred, claimed, queue_cancelled, admission_failed (an attempt with no run); started, none_eligible, skipped_failed, capped, skipped_gate, skipped_busy, error, passed_over (the picker); duplicate, not_started, outcome_unknown (a request)"),
+			kind: z.enum(["attempt", "run", "picker", "request"]).optional().describe("Only this kind of item"),
+			cursor: z.string().optional().describe("The previous page's `nextCursor`, exactly as returned"),
+			limit: z.coerce.number().int().min(1).max(100).optional().describe("Items per page (default 25, max 100)"),
+			summary: z.boolean().optional().describe("false skips the summary and coverage on follow-up pages (default true)"),
+		},
+		async ({ token, instance_id, repo, issue, since, until, outcome, kind, cursor, limit, summary }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "coding_fleet_history", { instance_id, repo, issue, outcome, kind });
+			if (denied) return denied;
+			const qs = new URLSearchParams();
+			if (instance_id) qs.set("instance_id", await resolveId(sessionToken, instance_id));
+			for (const [k, v] of Object.entries({ repo, issue, since, until, outcome, kind, cursor, limit, summary })) if (v !== undefined) qs.set(k, String(v));
+			const q = qs.toString();
+			return jsonText(await authedCall(`/v1/instances/my/coding-history${q ? `?${q}` : ""}`, sessionToken, {}, env));
+		},
+	);
+
 	/** Slug or id → the instance id the API routes expect. */
 	async function resolveId(sessionToken: string, instanceId: string): Promise<string> {
 		const inst = await findInstanceForAgent(env, sessionToken, instanceId);

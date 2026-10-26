@@ -15,6 +15,7 @@ import { recordLifecycle } from "./objective-lifecycle.js";
 import { recordRunEvent } from "./run-events.js";
 import { wakeParkedRun } from "./coding-park.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
+import { referencedIssue } from "./objective-issue.js";
 
 export interface LoopRunRow {
 	run_id: string;
@@ -325,11 +326,11 @@ export async function createLoopRun(
 ): Promise<boolean> {
 	const exclusive = input.exclusiveRepoId
 		? `WHERE NOT EXISTS (SELECT 1 FROM agent_loop_runs o JOIN coding_sessions os ON os.id = o.session_id
-		     WHERE o.instance_id = ?3 AND os.repo_id = ?10 AND o.status = 'running' AND o.checkout_released_at IS NULL)`
+		     WHERE o.instance_id = ?3 AND os.repo_id = ?11 AND o.status = 'running' AND o.checkout_released_at IS NULL)`
 		: "";
 	const res = await env.DB.prepare(
-		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id)
-		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9 ${exclusive}`,
+		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id, issue_number)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?10 ${exclusive}`,
 	)
 		.bind(
 			input.runId,
@@ -341,6 +342,7 @@ export async function createLoopRun(
 			input.startedAt,
 			input.delegatedBy ?? null,
 			input.sessionId ?? null,
+			referencedIssue(input.objective),
 			...(input.exclusiveRepoId ? [input.exclusiveRepoId] : []),
 		)
 		.run();
