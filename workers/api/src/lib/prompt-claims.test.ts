@@ -431,6 +431,8 @@ const PROMPT_MODULES_BY_HAND: Record<string, string> = {
  * included: an entry naming a file that no longer exists, or that has since joined the scan, fails.
  */
 const NOT_PROMPT_TEXT: Record<string, string> = {
+	"lib/anthropic-prompt.ts":
+		"named `-prompt` but it holds no prompt text: it is the pure SHAPING of an already-built prompt for Anthropic (block normalisation and cache-breakpoint budgeting, moved out of user-ai.ts in #1356). Every sentence a model reads is written by the prompt builders it is handed.",
 	"lib/engine-auth-prompt.ts":
 		"named `-prompt` but it is not one: it builds the ENGINE's environment (which credential a CLI signs in with), and is imported by `routes/coding.ts`, not by the chat prompt builder. Nothing it returns is read by a model.",
 };

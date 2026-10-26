@@ -207,11 +207,11 @@ describe("every outbound fetch() call carries a deadline (#438)", () => {
 	});
 
 	it("call sites that carry a signal are not mis-counted as violations", () => {
-		// Both Anthropic and CF Workers AI calls in lib/user-ai.ts build AbortControllers.
+		// Both Anthropic (lib/anthropic.ts) and CF Workers AI (lib/cloudflare-ai.ts) calls build AbortControllers.
 		// If the heuristic breaks and stops seeing their signal:, they'd inflate the pin
 		// and the guard would miss two real sites if they later lost their deadline.
 		const { compliant } = fetchSites();
-		expect(compliant.map((s) => s.rel)).toEqual(expect.arrayContaining(["lib/user-ai.ts"]));
+		expect(compliant.map((s) => s.rel)).toEqual(expect.arrayContaining(["lib/anthropic.ts", "lib/cloudflare-ai.ts"]));
 		expect(compliant.length).toBeGreaterThanOrEqual(2);
 	});
 });

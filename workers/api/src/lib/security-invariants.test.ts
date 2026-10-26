@@ -350,7 +350,12 @@ describe("credential storage has exactly one scheme", () => {
 		// Known-safe exception: lib/runner-admission-gate.ts (#1264) UPDATEs instance_runtime_nodes
 		// only to set `gate_state`/`gate_thresholds` (migration 0268) — the admission gate's hysteresis
 		// and per-node threshold override, neither a secret. The token_* columns are never named there.
-		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts", "lib/instance-permission-requests.ts", "lib/runner-admission-gate.ts"]);
+		//
+		// Known-safe exception: lib/provider-account-observation.ts (#1356) UPDATEs user_api_keys only to stamp
+		// `last_used_at` after a successful provider call (it moved there from lib/user-ai.ts, where the stamp was
+		// written beside the decryption). A timestamp is not a secret; the assertion below measures that the file
+		// names no ciphertext, DEK or IV column.
+		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts", "lib/instance-permission-requests.ts", "lib/runner-admission-gate.ts", "lib/provider-account-observation.ts"]);
 		const offenders = writers.filter((w) => !SAFE_NON_CRYPTO_WRITERS.has(w.f.rel) && !/from ["'][^"']*\/crypto\.js["']/.test(w.f.raw)).map((w) => `${w.f.rel} → ${w.writes.join(", ")}`);
 		expect(
 			offenders,
@@ -368,7 +373,7 @@ describe("credential storage has exactly one scheme", () => {
 		// The day one of them starts writing a secret without the envelope, this fails and the
 		// exemption stops covering it — which is the failure mode a bare allowlist has.
 		const ENVELOPE_COLUMN = /\b\w*(?:ciphertext|dek|dek_wrapped)\w*\b|\biv\b/i;
-		for (const rel of ["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts", "lib/instance-permission-requests.ts", "lib/runner-admission-gate.ts"]) {
+		for (const rel of ["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts", "lib/instance-permission-requests.ts", "lib/runner-admission-gate.ts", "lib/provider-account-observation.ts"]) {
 			const file = ALL.find((f) => f.rel === rel);
 			expect(file, `${rel} is exempted from the crypto-import rule but no longer exists — drop the entry`).toBeDefined();
 			const sqlText = (file?.raw ?? "").match(/["'`][^"'`]*\b(?:INSERT\s+INTO|UPDATE)\s+\w+[^"'`]*["'`]/gi) ?? [];
