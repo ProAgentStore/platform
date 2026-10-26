@@ -15,7 +15,11 @@ import { configDefaults, defineConfig } from "vitest/config";
  * failures someone has already seen. A path covers the ones nobody has seen yet, and a new
  * test added next to its subject is isolated by construction.
  */
-const INTEGRATION_TESTS = ["packages/browser-runner/src/**/*.test.ts"];
+const INTEGRATION_TESTS = [
+	"packages/browser-runner/src/**/*.test.ts",
+	// Real installer process startup/termination must not compete with the unit fork pool.
+	"scripts/integration/**/*.test.mjs",
+];
 
 const UNIT_TESTS = [
 	"packages/*/src/**/*.test.ts",

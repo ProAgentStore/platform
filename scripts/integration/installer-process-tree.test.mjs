@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { describe, expect, it } from "vitest";
-import { installerDescendants, runBoundedCommand, terminateInstallerTree } from "./installer-process-tree.mjs";
+import { installerDescendants, runBoundedCommand, terminateInstallerTree } from "../lib/installer-process-tree.mjs";
 
 describe("installer-owned process termination (#1333)", () => {
 	it("bounds a real diagnostic command and preserves completed output", async () => {
