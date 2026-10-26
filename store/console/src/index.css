@@ -66,16 +66,6 @@
 	--color-info: #3b82f6;
 	--color-info-soft: rgba(59, 130, 246, 0.15);
 	--color-info-line: rgba(59, 130, 246, 0.4);
-	/* Categorical series colours for multi-machine charts (#1259). A chart never writes a colour: it names one of these, so a theme
-	   restyles every chart by overriding eight variables. Chosen to stay apart on the dark panel and for common colour-vision types. */
-	--color-series-1: #60a5fa;
-	--color-series-2: #f59e0b;
-	--color-series-3: #34d399;
-	--color-series-4: #f472b6;
-	--color-series-5: #a78bfa;
-	--color-series-6: #f87171;
-	--color-series-7: #2dd4bf;
-	--color-series-8: #d4d4d8;
 	--font-body: "Manrope", system-ui, sans-serif;
 	--font-display: "Fraunces", Georgia, serif;
 	--font-mono: "SF Mono", ui-monospace, Menlo, monospace;
@@ -105,6 +95,19 @@
 	 */
 	--text-2xs: 0.6875rem;
 	--text-2xs--line-height: calc(1 / 0.6875);
+}
+
+/* These names are assembled at runtime by seriesColor(), so Tailwind cannot
+   detect most of their uses while building. Keep every series variable. */
+@theme static {
+	--color-series-1: #60a5fa;
+	--color-series-2: #f59e0b;
+	--color-series-3: #34d399;
+	--color-series-4: #f472b6;
+	--color-series-5: #a78bfa;
+	--color-series-6: #f87171;
+	--color-series-7: #2dd4bf;
+	--color-series-8: #d4d4d8;
 }
 
 /*
