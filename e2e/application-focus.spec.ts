@@ -22,14 +22,14 @@ const ROWS = [
 	row("app-target", "Engineering Manager - Data & AI", "blocked"),
 ];
 
-async function mockQueue(page: Page) {
+async function mockQueue(page: Page, targetRationale?: string) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), "test-pags-token");
 	await page.route(`${API}/**`, (route) => {
 		const path = new URL(route.request().url()).pathname;
 		const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
 		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user"], boardConfig: null });
 		if (path === "/v1/instances/my/instances") return json({ instances: [{ id: "runner-1", name: "Job Application Runner", slug: "job-application-runner", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: [], runtime: "local_apply", workflow: null } }] });
-		if (path === "/v1/instances/runner-1/application-queue") return json({ pipeline: { scouts: [], tailors: [], runners: [] }, items: ROWS, counts: { blocked: 1, awaiting_review: 14 }, limits: [], connections: [], notes: [] });
+		if (path === "/v1/instances/runner-1/application-queue") return json({ pipeline: { scouts: [], tailors: [], runners: [] }, items: targetRationale ? ROWS.map(item => item.applicationId === "app-target" ? { ...item, matchRationale: targetRationale } : item) : ROWS, counts: { blocked: 1, awaiting_review: 14 }, limits: [], connections: [], notes: [] });
 		if (path.includes("/connections/deliveries")) return json({ deliveries: [] });
 		return json({});
 	});
@@ -64,6 +64,13 @@ test.describe("an application notification opens that application (#1136)", () =
 	test("mobile — the focused application's decisions are in view on a phone", async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 844 });
 		await mockQueue(page);
+		await page.goto("/console/instances/runner-1/applications?application=app-target");
+		await expect(page.getByRole("group", { name: /^Actions for Engineering Manager - Data & AI/ })).toBeInViewport();
+	});
+
+	test("mobile — long application details still bring the decisions into view (#1377)", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await mockQueue(page, "This role matches the applicant's engineering leadership and data platform experience. ".repeat(80));
 		await page.goto("/console/instances/runner-1/applications?application=app-target");
 		await expect(page.getByRole("group", { name: /^Actions for Engineering Manager - Data & AI/ })).toBeInViewport();
 	});

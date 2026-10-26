@@ -3,7 +3,7 @@ import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
 import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
 import { type AutoSubmitAllowance, type AutoSubmitRules, disablePayload, enablePayload, rulesPayload } from "../lib/autoSubmitPolicy";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type Ref, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -48,7 +48,8 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 	const requestedApplicationId = searchParams.get("application")?.trim() || undefined;
 	const focusApplied = useRef<string | null>(null);
 	const [focusMissing, setFocusMissing] = useState(false);
-	const detailRef = useRef<HTMLDivElement>(null);
+	const actionsRef = useRef<HTMLFieldSetElement>(null);
+	const [focusScrollKey, setFocusScrollKey] = useState<string | null>(null);
 	const [view, setView] = useState<ApplicationQueueView | null>(null);
 	const [error, setError] = useState("");
 	const [filter, setFilter] = useState<ApplicationQueueStatus | "">("");
@@ -94,8 +95,19 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 		if (!hit) return;
 		setFilter("");
 		setOpen(hit.key);
-		requestAnimationFrame(() => detailRef.current?.scrollIntoView({ block: "start" }));
+		setFocusScrollKey(hit.key);
 	}, [view, requestedApplicationId]);
+	// Wait for the selected detail to commit; its decisions can be below a long
+	// summary on a phone. Later queue polls and manual selections never refocus it.
+	useEffect(() => {
+		if (!focusScrollKey || open !== focusScrollKey) return;
+		const frame = requestAnimationFrame(() => {
+			if (!actionsRef.current) return;
+			actionsRef.current.scrollIntoView({ block: "center" });
+			setFocusScrollKey(null);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [focusScrollKey, open]);
 
 	if (error && !view) return <LoadFailed what="applications" detail={error} onRetry={load} />;
 	if (!view) return <p className="text-sm text-muted">Loading applications…</p>;
@@ -180,7 +192,7 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 					The application this link is about is no longer in this queue — it may have been archived or removed.
 				</p>
 			)}
-			<div ref={detailRef}>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} />}</div>
+			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} />}</div>
 
 			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} allowance={view.limits.find((l) => l.runnerInstanceId === view.pipeline.runners[0])} onChanged={load} />}
 			{handoffOpen && handoff && (
@@ -251,7 +263,7 @@ function Limits({ view, instanceId, onChanged }: { view: ApplicationQueueView; i
 	);
 }
 
-function Detail({ instanceId, item, connections, onChanged }: { instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void }) {
+function Detail({ instanceId, item, connections, onChanged, actionsRef }: { instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void; actionsRef: Ref<HTMLFieldSetElement> }) {
 	const [busy, setBusy] = useState<ApplicationQueueAction | "check" | null>(null);
 	const [msg, setMsg] = useState("");
 	const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -451,7 +463,7 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 				</div>
 			)}
 
-			<fieldset className="flex flex-wrap gap-1.5 border-0 p-0 m-0 min-w-0" aria-label={`Actions for ${item.title}`}>
+			<fieldset ref={actionsRef} className="flex flex-wrap gap-1.5 border-0 p-0 m-0 min-w-0" aria-label={`Actions for ${item.title}`}>
 				{item.actions.map((a) => (
 					<Button key={a} size="sm" variant={a === "start_fill" ? "danger" : a === "request_review" || a === "apply" ? "primary" : "secondary"} disabled={!!busy} onClick={() => act(a)}>
 						{busy === a ? "…" : actionLabel(a, item.status)}
