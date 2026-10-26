@@ -376,6 +376,7 @@ export type InstalledRunner = {
 	/** Local service facts from the machine. GitHub status below remains independent. */
 	serviceMode?: string;
 	serviceState?: string;
+	acRecoveryEnabled?: boolean;
 	supervisor?: { updatedAt: number; health: string; [key: string]: unknown } | null;
 	supervisorNote?: string;
 	/** A stale sample is never evidence of current local readiness. */

@@ -31,9 +31,9 @@ export function ActionsRunnerStatusView({ status, busy, note, onRefresh, onRecov
 					<div className="font-medium break-all">{item.name || item.url || "Unnamed runner"}</div>
 					<div className="text-xs text-muted break-all">{item.url || "Scope unknown"}</div>
 					<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 mt-2 text-xs">
-						<dt className="text-muted">Service</dt><dd>{item.serviceMode || "unknown"} · {item.serviceState || "unknown"}</dd>
+						<dt className="text-muted">Service</dt><dd>{item.serviceMode || "unknown"}{item.serviceState ? ` · ${item.serviceState}` : ""}</dd>
 						<dt className="text-muted">Local</dt><dd>{item.localHealth === "current" ? item.supervisor?.health || "unknown" : item.localHealth || "unknown"}{item.localHealth === "stale" ? " (stale sample)" : ""}{item.supervisor?.activeJob ? " · active job" : ""}</dd>
-						<dt className="text-muted">GitHub</dt><dd>{item.ci ? `${item.ci.online ? "online" : "offline"} · ${item.ci.busy ? "busy" : "idle"} · ${item.ci.routable ? "routable" : "not routable"}` : `unknown${item.ciNote ? ` — ${item.ciNote}` : ""}`}</dd>
+						<dt className="text-muted">GitHub</dt><dd>{item.ci ? item.ci.registered ? `${item.ci.online ? "online" : "offline"} · ${item.ci.busy ? "busy" : "idle"} · ${item.ci.routable ? "routable" : "not routable"}` : "not registered" : `unknown${item.ciNote ? ` — ${item.ciNote}` : ""}`}</dd>
 						<dt className="text-muted">AC recovery</dt><dd>{item.acRecoveryEnabled === undefined ? "unknown" : item.acRecoveryEnabled ? "on" : "off"}{item.supervisor?.acPower ? ` · power ${item.supervisor.acPower}` : ""}</dd>
 						<dt className="text-muted">Last AC return</dt><dd>{when(item.supervisor?.lastAcReturnAt)}</dd>
 						<dt className="text-muted">Last restart</dt><dd>{when(item.supervisor?.lastRestartAt)}{item.supervisor?.lastRestartReason ? ` · ${item.supervisor.lastRestartReason}` : ""}</dd>
@@ -69,7 +69,7 @@ export default function ActionsRunnerCard({ instanceId }: { instanceId: string }
 	}, [instanceId]);
 	useEffect(() => { void load(); }, [load]);
 	useEffect(() => {
-		if (!watchRecovery && !status?.installed.some(recoveryPending)) return;
+		if (!watchRecovery) return;
 		const timer = window.setInterval(() => {
 			if (watchRecovery && Date.now() >= watchRecovery.until) {
 				setWatchRecovery(null);
@@ -79,7 +79,7 @@ export default function ActionsRunnerCard({ instanceId }: { instanceId: string }
 			void load();
 		}, 5000);
 		return () => window.clearInterval(timer);
-	}, [status, load, watchRecovery]);
+	}, [load, watchRecovery]);
 	const recover = async (item: ActionsRunnerItem) => {
 		const scope = actionsScope(item.url);
 		if (!scope || !canRequestActionsRecovery(item)) return;

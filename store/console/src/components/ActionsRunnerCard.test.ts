@@ -20,6 +20,7 @@ describe("Actions runner console status (#1367)", () => {
 	it("shows local and GitHub facts separately, with AC policy and durable recovery outcome", () => {
 		const html = markup(managed);
 		expect(html).toContain("macos_system · running");
+		expect(markup({ ...managed, serviceState: undefined })).toContain("macos_system</dd>");
 		expect(html).toContain("ready");
 		expect(html).toContain("online · idle · routable");
 		expect(html).toContain("AC recovery");
@@ -47,5 +48,11 @@ describe("Actions runner console status (#1367)", () => {
 		expect(html).toContain("Machine status unknown");
 		expect(html).toContain("relay timed out");
 		expect(html).not.toContain("Request recovery");
+	});
+
+	it("does not describe an unregistered runner as merely offline", () => {
+		const html = markup({ ...managed, ci: { ...managed.ci!, registered: false, online: false, routable: false } });
+		expect(html).toContain("not registered");
+		expect(html).not.toContain("offline · idle");
 	});
 });

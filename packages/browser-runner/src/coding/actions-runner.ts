@@ -437,6 +437,8 @@ export interface InstalledRunner {
 	legacy?: boolean;
 	/** Local OS service domain, derived from the exact generated unit where available. */
 	serviceMode?: "macos_system" | "macos_user" | "linux_system" | "windows_system" | "unknown";
+	/** The persisted local policy, when a valid PAGS supervisor configuration exists. */
+	acRecoveryEnabled?: boolean;
 	/** Supervisor's persisted observation; freshness is checked by consumers. */
 	supervisor?: Record<string, unknown> | null;
 	supervisorNote?: string;
@@ -527,7 +529,12 @@ export function installedRunners(home = homedir(), programData = process.platfor
 		const status = readText(join(r.dir, ".pags-supervisor", "status.json"));
 		let supervisor: Record<string, unknown> | null = null;
 		try { if (status) supervisor = JSON.parse(status) as Record<string, unknown>; } catch { /* reported below */ }
-		return { ...r, serviceMode: mode, supervisor, ...(!supervisor ? { supervisorNote: status ? "Supervisor status is unreadable" : "No supervisor status sample" } : {}) };
+		let acRecoveryEnabled: boolean | undefined;
+		try {
+			const config = JSON.parse(readText(join(r.dir, ".pags-supervisor", "config.json")) ?? "null") as { version?: unknown; acRecoveryEnabled?: unknown } | null;
+			if (config?.version === 1 && typeof config.acRecoveryEnabled === "boolean") acRecoveryEnabled = config.acRecoveryEnabled;
+		} catch { /* invalid or absent policy is unknown */ }
+		return { ...r, serviceMode: mode, supervisor, ...(acRecoveryEnabled === undefined ? {} : { acRecoveryEnabled }), ...(!supervisor ? { supervisorNote: status ? "Supervisor status is unreadable" : "No supervisor status sample" } : {}) };
 	});
 }
 
