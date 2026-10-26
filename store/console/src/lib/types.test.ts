@@ -20,6 +20,8 @@ import type { LeadVerification as WorkerLeadVerification, LeadVerificationListRe
 import type { PreparedApplicationTransferReceipt } from "./applicationTransfer";
 import type { BrowserArtifactListResponse, BrowserArtifactView } from "./runReplay";
 import type { BrowserArtifactListResponse as WorkerBrowserArtifactListResponse, BrowserArtifactView as WorkerBrowserArtifactView } from "../../../../workers/api/src/agent-types";
+import type { ActionsRecoveryResponse as WorkerActionsRecoveryResponse } from "../../../../workers/api/src/lib/actions-runner-recovery-types";
+import type { ActionsRecoveryResponse } from "./actionsRunnerStatus";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -56,6 +58,9 @@ import type { BrowserArtifactListResponse as WorkerBrowserArtifactListResponse, 
 
 /** The console field names the producer does not have. `never` when the two agree. */
 type Extra<Console, Producer> = Exclude<keyof Console, keyof Producer>;
+
+const _actionsRecoveryHasNoInventedFields: Extra<ActionsRecoveryResponse, WorkerActionsRecoveryResponse> extends never ? true : never = true;
+const _actionsRecoveryReceiptHasNoInventedFields: Extra<ActionsRecoveryResponse["recovery"], WorkerActionsRecoveryResponse["recovery"]> extends never ? true : never = true;
 
 // ── KnowledgeDoc ─────────────────────────────────────────────────────────────────────────────
 //

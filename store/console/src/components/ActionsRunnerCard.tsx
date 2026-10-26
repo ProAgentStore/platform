@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import Card from "./Card";
-import { actionsScope, canRequestActionsRecovery, recoveryPending, type ActionsRunnerItem, type ActionsRunnerStatus } from "../lib/actionsRunnerStatus";
+import { actionsScope, canRequestActionsRecovery, recoveryPending, type ActionsRecoveryResponse, type ActionsRunnerItem, type ActionsRunnerStatus } from "../lib/actionsRunnerStatus";
 
 function when(ms?: number): string {
 	return ms && Number.isFinite(ms) ? new Date(ms).toLocaleString() : "Never";
@@ -91,7 +91,7 @@ export default function ActionsRunnerCard({ instanceId }: { instanceId: string }
 		setBusy(true);
 		setNote("");
 		try {
-			const result = await api<{ recovery: { id: string; state: string } }>(`/v1/instances/${encodeURIComponent(instanceId)}/actions-runner/recover`, { method: "POST", body: JSON.stringify({ scope }) });
+			const result = await api<ActionsRecoveryResponse>(`/v1/instances/${encodeURIComponent(instanceId)}/actions-runner/recover`, { method: "POST", body: JSON.stringify({ scope }) });
 			setWatchRecovery({ id: result.recovery.id, until: Date.now() + 120_000 });
 			setNote(`Recovery ${result.recovery.id}: ${result.recovery.state}. The outcome will appear below.`);
 			await load();

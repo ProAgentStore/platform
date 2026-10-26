@@ -23,6 +23,7 @@ import { GRANT_ALL_HINT } from "./github-app-permissions.js";
 import { installationTokenForOwner } from "./github-app.js";
 import { logEvent } from "./events.js";
 import { migrateLegacyRunner, type MigrationView } from "./actions-runner-migrate.js";
+import type { ActionsRecoveryResponse } from "./actions-runner-recovery-types.js";
 import { callRunner, getBoundRunnerConn, type RunnerConn } from "./runner-client.js";
 import { assertPrivateRepo, type HostReadinessReport, nodeRunnerLabel, PAGS_RUNNER_LABEL, RUNNER_UNAVAILABLE_LABEL, runnerAvailability, type RunnerAvailability, routingLabels } from "./runner-routing.js";
 import { listRepos } from "./coding-store.js";
@@ -431,7 +432,7 @@ export async function recoverActionsRunner(
 	env: Env,
 	input: { userId: string; instanceId: string; scope: RunnerScope },
 	deps: ProvisionDeps = liveProvisionDeps(env, input.userId),
-): Promise<{ node: string; scope: RunnerScope; recovery: { id: string; state: "queued" | "deferred_active_job"; requestedAt: number } }> {
+): Promise<ActionsRecoveryResponse> {
 	const conn = await boundConn(deps, input.instanceId, input.userId);
 	await checkAgentScope(input.scope, input.instanceId, input.userId, deps);
 	const url = scopeUrl(input.scope);

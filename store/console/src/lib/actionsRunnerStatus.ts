@@ -1,5 +1,11 @@
 export type ActionsScope = { org: string } | { repo: string };
 
+export interface ActionsRecoveryResponse {
+	node: string;
+	scope: ActionsScope;
+	recovery: { id: string; state: "queued" | "deferred_active_job"; requestedAt: number };
+}
+
 export interface ActionsRunnerItem {
 	dir: string;
 	managed: boolean;
