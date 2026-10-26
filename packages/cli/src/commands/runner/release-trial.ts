@@ -6,6 +6,7 @@
  */
 import { BOOTSTRAP_ENV, payloadRoot } from "../../bootstrap/payload.js";
 import { badDetails, badVersions, clearBad, markPayloadHealthy, takeRollbackNotice } from "../../bootstrap/trial.js";
+import { approveActionsPayload } from "../../bootstrap/payload.js";
 
 export interface ReleaseTrial {
 	/** "Rolled back from X to Y: why." when the stub gave up on a release before this process started — reported once. */
@@ -103,6 +104,7 @@ export function releaseTrial(version: string, cell: RollbackRecorder, log: (line
 			if (done) return;
 			done = true;
 			if (markPayloadHealthy(root(), version)) log(`auto-update: ${version} registered — it is kept.`);
+			approveActionsPayload(version, root());
 		},
 		rolledBack: () => badVersions(root()),
 		forget: (v) => clearBad(root(), v),

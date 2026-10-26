@@ -9,8 +9,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BOOTSTRAP_ENV, cachedPayloads, installPayload, NO_SELF_UPDATE_ENV, payloadAt } from "./payload.js";
-import { checksForUpdate, runStub, type StubDeps } from "./stub.js";
+import { approveActionsPayload, BOOTSTRAP_ENV, cachedPayloads, installPayload, NO_SELF_UPDATE_ENV, payloadAt } from "./payload.js";
+import { isActionsSupervisor, runStub, type StubDeps } from "./stub.js";
 import { writeInstalled, writePackage } from "./test-payload.js";
 
 declare global {
@@ -50,26 +50,21 @@ function stub(version: string, args: string[], over: Partial<StubDeps> = {}): St
 	};
 }
 
-describe("the #862 acceptance case", () => {
-	it("a stub from an old release self-updates to a newer published CLI on `pags up` — and runs it", async () => {
-		const install = vi.fn((v: string) =>
-			// The newer release moved its entry: the stub must follow the package's `pagsPayload`, not a path it assumed.
-			installPayload(v, root, async (prefix, ver) => void writeInstalled(prefix, ver, "lib/cli/main.js")),
-		);
-		const ran = await runStub(stub("0.4.63", ["up"], { latest: async () => "1.7.0", install }));
-		expect(install).toHaveBeenCalledWith("1.7.0");
+describe("the policy-gated bootstrap", () => {
+	it("a cached release is picked on next start, including its moved entry path", async () => {
+		await installPayload("1.7.0", root, async (prefix, ver) => void writeInstalled(prefix, ver, "lib/cli/main.js"));
+		const ran = await runStub(stub("0.4.63", ["up"]));
 		expect(ran.version).toBe("1.7.0");
-		expect(ran.entry).toBe(join(root, "1.7.0", "node_modules", "@proagentstore", "cli", "lib", "cli", "main.js"));
+		expect(ran.entry).toContain("lib/cli/main.js");
 		expect(globalThis.__pagsRan).toEqual(["1.7.0"]);
 		expect(process.env[BOOTSTRAP_ENV]).toBe("/usr/local/lib/node_modules/@proagentstore/cli/dist/bootstrap.js");
 	});
 
-	it("…and the NEXT invocation of any command runs the fetched release with no network at all", async () => {
-		await runStub(stub("0.4.63", ["up"], { latest: async () => "1.7.0" }));
-		const latest = vi.fn(async () => "1.7.0");
-		const ran = await runStub(stub("0.4.63", ["runner", "connect", "inst-1"], { latest }));
-		expect(ran.version).toBe("1.7.0");
-		expect(latest).not.toHaveBeenCalled();
+	it("an Actions service stays on the bundled CLI until a cached payload is relay-proven", async () => {
+		await installPayload("1.7.0", root, async (prefix, ver) => void writeInstalled(prefix, ver));
+		expect((await runStub(stub("0.4.63", ["actions", "supervise", "--dir", "/runner"]))).version).toBe("0.4.63");
+		approveActionsPayload("1.7.0", root);
+		expect((await runStub(stub("0.4.63", ["actions", "supervise", "--dir", "/runner"]))).version).toBe("1.7.0");
 	});
 });
 
@@ -82,11 +77,13 @@ describe("runStub", () => {
 		expect(globalThis.__pagsRan).toEqual(["0.4.63"]);
 	});
 
-	it("only `pags up` asks npm — every other command runs the newest it has", async () => {
+	it("never asks npm on boot, even when the local Auto-update policy is off", async () => {
 		const latest = vi.fn(async () => "9.9.9");
-		await runStub(stub("0.4.63", ["login"], { latest }));
-		await runStub(stub("0.4.63", ["runner", "connect", "--watch-instances"], { latest }));
+		const install = vi.fn();
+		await runStub(stub("0.4.63", ["up"], { latest, install }));
+		await runStub(stub("0.4.63", ["runner", "connect", "--watch-instances"], { latest, install }));
 		expect(latest).not.toHaveBeenCalled();
+		expect(install).not.toHaveBeenCalled();
 	});
 
 	it("runs a payload runner_update put in the cache — the respawn after a remote update (#859)", async () => {
@@ -100,20 +97,6 @@ describe("runStub", () => {
 		expect(ran.version).toBe("0.4.63");
 	});
 
-	it("a failed fetch is said out loud and `pags up` still starts on what it has", async () => {
-		const lines: string[] = [];
-		const ran = await runStub(
-			stub("0.4.63", ["up"], {
-				latest: async () => "1.0.0",
-				install: async () => {
-					throw new Error("EACCES");
-				},
-				log: (l) => lines.push(l),
-			}),
-		);
-		expect(ran.version).toBe("0.4.63");
-		expect(lines.join("\n")).toMatch(/could not fetch 1\.0\.0 \(EACCES\) — starting 0\.4\.63 instead/);
-	});
 
 	it("never self-updates a source checkout, or with PAGS_NO_SELF_UPDATE=1", async () => {
 		const latest = vi.fn(async () => "9.9.9");
@@ -128,12 +111,10 @@ describe("runStub", () => {
 	});
 });
 
-describe("checksForUpdate", () => {
-	it("is the `up` command, flags or not", () => {
-		expect(checksForUpdate(["up"])).toBe(true);
-		expect(checksForUpdate(["up", "--force", "--instance", "abc"])).toBe(true);
-		expect(checksForUpdate(["runner", "connect"])).toBe(false);
-		expect(checksForUpdate(["--version"])).toBe(false);
-		expect(checksForUpdate([])).toBe(false);
+describe("isActionsSupervisor", () => {
+	it("matches only the supervised Actions command", () => {
+		expect(isActionsSupervisor(["actions", "supervise", "--dir", "/runner"])).toBe(true);
+		expect(isActionsSupervisor(["actions", "status"])).toBe(false);
+		expect(isActionsSupervisor(["up"])).toBe(false);
 	});
 });

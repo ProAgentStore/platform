@@ -77,13 +77,15 @@ describe("a failed install leaves the running version in place (#1141)", () => {
 		expect(ran.version).toBe("0.4.148");
 		expect(globalThis.__pagsRan).toEqual(["0.4.148"]);
 		expect(readTrial(root)).toBeNull();
-		expect(lines.join("\n")).toMatch(/could not fetch 0\.4\.149 \(ETARGET No matching version\) — starting 0\.4\.148 instead/);
+		expect(lines).toEqual([]);
 	});
 });
 
 describe("a new version that crashes on start is rolled back in the same process (#1141)", () => {
 	it("import throws: 0.4.149 is given up on, 0.4.148 runs at once, and the rollback is left for it to report", async () => {
-		const ran = await runStub(stub(["up"], { latest: async () => "0.4.149", install: (v) => installPayload(v, root, npm(["0.4.149"])) }));
+		await installPayload("0.4.149", root, npm(["0.4.149"]));
+		beginTrial(root, "0.4.149", "0.4.148", clock);
+		const ran = await runStub(stub(["up"]));
 		expect(ran.version).toBe("0.4.148");
 		expect(globalThis.__pagsRan).toEqual(["0.4.148"]);
 		expect(badVersions(root)["0.4.149"]).toMatch(/crashed on start: SyntaxError in 0\.4\.149/);
@@ -92,13 +94,15 @@ describe("a new version that crashes on start is rolled back in the same process
 	});
 
 	it("…and is never fetched or picked again, though it stays published", async () => {
-		await runStub(stub(["up"], { latest: async () => "0.4.149", install: (v) => installPayload(v, root, npm(["0.4.149"])) }));
+		await installPayload("0.4.149", root, npm(["0.4.149"]));
+		beginTrial(root, "0.4.149", "0.4.148", clock);
+		await runStub(stub(["up"]));
 		globalThis.__pagsRan = undefined;
 		let installs = 0;
 		const ran = await runStub(stub(["up"], { latest: async () => "0.4.149", install: async (v) => { installs++; return installPayload(v, root, npm()); } }));
 		expect(ran.version).toBe("0.4.148");
 		expect(installs).toBe(0);
-		expect(lines.join("\n")).toMatch(/0\.4\.149 is published, but this machine rolled back from it/);
+		expect(badVersions(root)["0.4.149"]).toBeDefined();
 	});
 
 	it("a crash in a version NOT on trial is not swallowed — there is nothing proven to fall back to", async () => {
@@ -109,7 +113,9 @@ describe("a new version that crashes on start is rolled back in the same process
 
 describe("a new version that never registers is rolled back (#1141)", () => {
 	it("the watchdog gives it up at the end of the window and leaves with the restart code; the next start runs the previous version", async () => {
-		const first = await runStub(stub(["up"], { latest: async () => "0.4.149" }));
+		await installPayload("0.4.149", root, npm());
+		beginTrial(root, "0.4.149", "0.4.148", clock);
+		const first = await runStub(stub(["up"]));
 		expect(first.version).toBe("0.4.149");
 		expect(readTrial(root)).toMatchObject({ version: "0.4.149", previous: "0.4.148", starts: 1, startedAt: clock });
 		expect(timers).toEqual([{ fn: expect.any(Function), ms: TRIAL_MS }]);
@@ -127,7 +133,9 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	});
 
 	it("registering in time keeps it: the watchdog finds it proven and does nothing", async () => {
-		await runStub(stub(["up"], { latest: async () => "0.4.149" }));
+		await installPayload("0.4.149", root, npm());
+		beginTrial(root, "0.4.149", "0.4.148", clock);
+		await runStub(stub(["up"]));
 		expect(markPayloadHealthy(root, "0.4.149")).toBe(true);
 		timers[0].fn();
 		expect(exits).toEqual([]);
@@ -137,7 +145,9 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	});
 
 	it("unsupervised it does not exit — it records the verdict, so the next `pags up` runs the previous version", async () => {
-		await runStub(stub(["up"], { latest: async () => "0.4.149", env: {} }));
+		await installPayload("0.4.149", root, npm());
+		beginTrial(root, "0.4.149", "0.4.148", clock);
+		await runStub(stub(["up"], { env: {} }));
 		timers[0].fn();
 		expect(exits).toEqual([]);
 		expect(badVersions(root)["0.4.149"]).toBeDefined();
@@ -153,7 +163,9 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	});
 
 	it("a restart after the window has passed gives it up before it runs again", async () => {
-		await runStub(stub(["up"], { latest: async () => "0.4.149" }));
+		await installPayload("0.4.149", root, npm());
+		beginTrial(root, "0.4.149", "0.4.148", clock);
+		await runStub(stub(["up"]));
 		clock += TRIAL_MS + 1;
 		expect((await runStub(stub(["up"]))).version).toBe("0.4.148");
 		expect(badVersions(root)["0.4.149"]).toMatch(/within 5 minutes/);

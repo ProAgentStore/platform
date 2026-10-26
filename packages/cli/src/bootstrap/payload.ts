@@ -9,7 +9,7 @@
  * CLI around it changes — the whole point is that it never needs reinstalling by hand.
  */
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
 import { promisify } from "node:util";
@@ -67,6 +67,72 @@ export function payloadAt(dir: string): Payload | null {
 /** Where `npm install --prefix <prefix>` puts the CLI package. */
 const installedAt = (prefix: string) => join(prefix, "node_modules", ...CLI_PACKAGE.split("/"));
 const packageDir = (root: string, version: string) => installedAt(join(root, version));
+
+const actionsApprovedPath = (root: string) => join(root, ".actions-approved.json");
+const actionsPinsDir = (root: string) => join(root, ".actions-pins");
+
+/** Only a CLI whose relay registered is eligible to run an Actions service. */
+export function approvedActionsVersion(root: string = payloadRoot()): string | null {
+	try {
+		const value = JSON.parse(readFileSync(actionsApprovedPath(root), "utf8")) as { version?: unknown };
+		return isVersion(value.version) && !badVersions(root)[value.version] ? value.version : null;
+	} catch { return null; }
+}
+
+export function approveActionsPayload(version: string, root: string = payloadRoot()): void {
+	if (!isVersion(version) || badVersions(root)[version]) return;
+	const current = approvedActionsVersion(root);
+	if (current && !olderThan(current, version)) return;
+	mkdirSync(root, { recursive: true });
+	const target = actionsApprovedPath(root);
+	const temp = `${target}.${process.pid}.tmp`;
+	try {
+		writeFileSync(temp, JSON.stringify({ version, at: Date.now() }), { mode: 0o600 });
+		renameSync(temp, target);
+	} finally { rmSync(temp, { force: true }); }
+}
+
+/** The published global package is a safe baseline; a cache entry needs explicit approval. */
+export function approvedActionsPayload(root: string, bundled: Payload | null): Payload | null {
+	const version = approvedActionsVersion(root);
+	const cached = version ? payloadAt(packageDir(root, version)) : null;
+	return newestPayload([...(bundled ? [bundled] : []), ...(cached ? [cached] : [])]);
+}
+
+export function pinActionsPayload(version: string, pid: number, root: string = payloadRoot()): void {
+	if (!isVersion(version) || !Number.isInteger(pid) || pid <= 0) return;
+	const dir = actionsPinsDir(root);
+	mkdirSync(dir, { recursive: true });
+	const target = join(dir, `${pid}.json`);
+	const temp = `${target}.${process.pid}.tmp`;
+	try {
+		writeFileSync(temp, JSON.stringify({ version, pid, at: Date.now() }), { mode: 0o600 });
+		renameSync(temp, target);
+	} finally { rmSync(temp, { force: true }); }
+}
+
+export function unpinActionsPayload(version: string, pid: number, root: string = payloadRoot()): void {
+	try {
+		const path = join(actionsPinsDir(root), `${pid}.json`);
+		const value = JSON.parse(readFileSync(path, "utf8")) as { version?: unknown; pid?: unknown };
+		if (value.pid === pid && value.version === version) rmSync(path, { force: true });
+	} catch { /* a stopped process may already have lost its pin */ }
+}
+
+export function pinnedActionsVersions(root: string = payloadRoot(), now = Date.now(), alive: (pid: number) => boolean = (pid) => {
+	try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}): Set<string> {
+	const versions = new Set<string>();
+	let names: string[];
+	try { names = readdirSync(actionsPinsDir(root)); } catch { return versions; }
+	for (const name of names) {
+		try {
+			const value = JSON.parse(readFileSync(join(actionsPinsDir(root), name), "utf8")) as { version?: unknown; pid?: unknown; at?: unknown };
+			if (isVersion(value.version) && typeof value.pid === "number" && typeof value.at === "number" && now - value.at < 90_000 && now >= value.at && alive(value.pid)) versions.add(value.version);
+		} catch { /* an incomplete or stale pin protects no payload */ }
+	}
+	return versions;
+}
 
 /** Every complete payload in the cache. */
 export function cachedPayloads(root: string = payloadRoot()): Payload[] {
@@ -225,6 +291,9 @@ export async function installPayload(version: string, root: string = payloadRoot
 		.filter((p) => p.version !== version)
 		.sort((a, b) => (olderThan(a.version, b.version) ? 1 : -1));
 	const kept = new Set(others.filter((p) => !bad[p.version]).slice(0, KEEP - 1).map((p) => p.version));
+	const approved = approvedActionsVersion(root);
+	if (approved) kept.add(approved);
+	for (const pinned of pinnedActionsVersions(root)) kept.add(pinned);
 	for (const old of others) if (!kept.has(old.version)) rmSync(join(root, old.version), { recursive: true, force: true });
 	return payload;
 }

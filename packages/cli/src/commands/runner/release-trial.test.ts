@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BOOTSTRAP_ENV } from "../../bootstrap/payload.js";
-import { badDetails, badVersions, clearBad, markBad } from "../../bootstrap/trial.js";
+import { approvedActionsVersion, BOOTSTRAP_ENV, installPayload } from "../../bootstrap/payload.js";
+import { writeInstalled } from "../../bootstrap/test-payload.js";
+import { badDetails, badVersions, beginTrial, clearBad, markBad } from "../../bootstrap/trial.js";
 import { planRunnerUpdate, type UpdateFacts } from "./self-update.js";
 import { agentsStillMissing, applyRetryRolledBack, releaseTrial } from "./release-trial.js";
 
@@ -15,6 +16,14 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 const cell = { record: () => undefined };
 const trialAt = (version: string) => releaseTrial(version, cell, () => undefined, { [BOOTSTRAP_ENV]: "1" }, () => root);
 const facts = (over: Partial<UpdateFacts> = {}): UpdateFacts => ({ current: "0.4.148", latest: "0.4.150", fromSource: false, restarter: "service", busy: [], rolledBack: badVersions(root), ...over }) as UpdateFacts;
+
+it("approves an Actions payload only after its relay has registered", async () => {
+	await installPayload("0.4.150", root, async (prefix, version) => void writeInstalled(prefix, version));
+	beginTrial(root, "0.4.150", "0.4.148");
+	expect(approvedActionsVersion(root)).toBeNull();
+	trialAt("0.4.150").proven();
+	expect(approvedActionsVersion(root)).toBe("0.4.150");
+});
 
 describe("the bad mark and its details (#1150)", () => {
 	it("records where the stub fell back to and when, beside the reason", () => {

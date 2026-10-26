@@ -21,8 +21,8 @@
  * left with the restart code, so the next start runs the previous version.
  */
 import { pathToFileURL } from "node:url";
-import { BOOTSTRAP_ENV, cachedPayloads, installPayload, latestPublishedVersion, NO_SELF_UPDATE_ENV, newestPayload, olderThan, payloadRoot, type Payload } from "./payload.js";
-import { badVersions, beginTrial, markBad, noteTrialStart, readTrial, TRIAL_MS } from "./trial.js";
+import { approvedActionsPayload, BOOTSTRAP_ENV, cachedPayloads, newestPayload, payloadRoot, type Payload } from "./payload.js";
+import { badVersions, markBad, noteTrialStart, readTrial, TRIAL_MS } from "./trial.js";
 import { logUpdateStep } from "./update-log.js";
 
 /** `runner connect`'s ask-for-a-respawn exit code (self-update.ts `RUNNER_RESTART_EXIT_CODE`), restated: the stub imports nothing else. */
@@ -59,9 +59,9 @@ export function trialApplies(args: string[]): boolean {
 	return command === "up" || command === "runner";
 }
 
-/** Only `pags up` checks: it is the long-lived command a machine starts, and one npm call is cheap beside it. */
-export function checksForUpdate(args: string[]): boolean {
-	return args.find((a) => !a.startsWith("-")) === "up";
+/** A long-lived Actions service must never import a candidate that the relay has not proven. */
+export function isActionsSupervisor(args: string[]): boolean {
+	return args.find((a) => !a.startsWith("-")) === "actions" && args.includes("supervise");
 }
 
 /** Choose the payload — fetching a newer release first when this is `pags up` — and run it. Answers the one run. */
@@ -80,25 +80,7 @@ export async function runStub(deps: StubDeps): Promise<Payload> {
 		const skip = new Set([...Object.keys(badVersions(root)), ...without]);
 		return newestPayload(all().filter((p) => !skip.has(p.version))) ?? (without.length ? null : newestPayload(all()));
 	};
-	let chosen = local();
-	if (checksForUpdate(deps.args) && !deps.fromSource && env[NO_SELF_UPDATE_ENV] !== "1") {
-		// Short: a `pags up` on a machine with no network must still start on what it has.
-		const latest = await (deps.latest ?? (() => latestPublishedVersion(15_000)))();
-		const bad = latest ? badVersions(root)[latest] : undefined;
-		if (latest && bad) {
-			log(`pags: ${latest} is published, but this machine rolled back from it (${bad}) — staying on ${chosen?.version ?? "nothing"}`);
-		} else if (latest && (!chosen || olderThan(chosen.version, latest))) {
-			log(`pags: updating ${chosen?.version ?? "(none)"} → ${latest}…`);
-			try {
-				const previous = chosen?.version ?? null;
-				chosen = await (deps.install ?? ((v: string) => installPayload(v)))(latest);
-				beginTrial(root, chosen.version, previous, now());
-				log(`pags: now on ${chosen.version}`);
-			} catch (e) {
-				log(`pags: could not fetch ${latest} (${e instanceof Error ? e.message : String(e)}) — starting ${chosen?.version ?? "nothing"} instead`);
-			}
-		}
-	}
+	let chosen = isActionsSupervisor(deps.args) ? approvedActionsPayload(root, deps.bundled) : local();
 	if (!chosen) throw new Error("pags: no CLI to run — reinstall with `npm i -g @proagentstore/cli`");
 	if (trialApplies(deps.args)) {
 		const verdict = noteTrialStart(root, chosen.version, now());

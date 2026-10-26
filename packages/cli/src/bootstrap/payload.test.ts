@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cachedPayloads, installPayload, newestPayload, payloadAt } from "./payload.js";
+import { approveActionsPayload, approvedActionsPayload, approvedActionsVersion, cachedPayloads, installPayload, newestPayload, payloadAt, pinActionsPayload, pinnedActionsVersions, unpinActionsPayload } from "./payload.js";
 import { writeInstalled, writePackage } from "./test-payload.js";
 
 let root: string;
@@ -74,5 +74,30 @@ describe("installPayload", () => {
 		for (const v of ["0.5.0", "0.5.2", "0.5.10"]) await installPayload(v, root, async (dir, ver) => void writeInstalled(dir, ver));
 		expect(readdirSync(root).sort()).toEqual(["0.5.10", "0.5.2"]);
 		expect(existsSync(join(root, "0.5.0"))).toBe(false);
+	});
+
+	it("keeps an approved Actions payload and a live pinned supervisor across later installs", async () => {
+		for (const v of ["0.5.0", "0.5.1"]) await installPayload(v, root, async (dir, ver) => void writeInstalled(dir, ver));
+		approveActionsPayload("0.5.0", root);
+		pinActionsPayload("0.5.1", process.pid, root);
+		await installPayload("0.5.2", root, async (dir, ver) => void writeInstalled(dir, ver));
+		await installPayload("0.5.3", root, async (dir, ver) => void writeInstalled(dir, ver));
+		expect(cachedPayloads(root).map((p) => p.version).sort()).toEqual(["0.5.0", "0.5.1", "0.5.2", "0.5.3"]);
+		expect(pinnedActionsVersions(root, Date.now(), (pid) => pid === process.pid)).toEqual(new Set(["0.5.1"]));
+		unpinActionsPayload("0.5.1", process.pid, root);
+		expect(pinnedActionsVersions(root)).toEqual(new Set());
+	});
+});
+
+describe("Actions approval", () => {
+	it("exposes only a complete relay-proven cached payload and never downgrades approval", async () => {
+		const bundled = payloadAt(join(root, "bundled"));
+		await installPayload("0.5.1", root, async (dir, ver) => void writeInstalled(dir, ver));
+		expect(approvedActionsPayload(root, bundled)).toBeNull();
+		approveActionsPayload("0.5.1", root);
+		expect(approvedActionsVersion(root)).toBe("0.5.1");
+		expect(approvedActionsPayload(root, null)?.version).toBe("0.5.1");
+		approveActionsPayload("0.5.0", root);
+		expect(approvedActionsVersion(root)).toBe("0.5.1");
 	});
 });
