@@ -127,6 +127,8 @@ export interface InstallBridgeDeps {
 	refresh: (signal?: AbortSignal) => Promise<boolean>;
 	facts: (signal?: AbortSignal) => Promise<UpdateFacts>;
 	install: (version: string) => Promise<void>;
+	/** Publish the probed payload only after the final owner-policy and idle admission succeeds. */
+	activate?: (version: string) => void;
 	admission: RelayMutationAdmission;
 	leaseActive: (lease: DeferredUpdateLease) => boolean;
 	/** Close every socket before the process leaves. */
@@ -218,6 +220,8 @@ export function createInstallBridge(deps: InstallBridgeDeps) {
 			release(true);
 			return false;
 		}
+		try { deps.activate?.(plan.latest); }
+		catch (error) { release(true); throw error; }
 		deps.log(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
 		deps.detachAll();
 		// The control reply must leave the relay before the process exits; the caller owns the exit (#1008).

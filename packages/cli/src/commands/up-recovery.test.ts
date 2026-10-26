@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { beginTrial, badVersions } from "../bootstrap/trial.js";
+import { activatePayload, beginTrial, badVersions } from "../bootstrap/trial.js";
 import { UP_LAUNCHER_ENV, UP_LAUNCHER_PID_ENV } from "./up-restart.js";
 import { RESTART_COMMAND_ENV, SERVICE_ENV } from "./runner/self-update.js";
 
@@ -170,7 +170,7 @@ describe.skipIf(process.platform === "win32")("a failed update, in real processe
 
 	it("a release that dies at every start is retried until the stub gives it up — and the previous version comes back", async () => {
 		payload("1.0.1", "process.exit(1);"); // dies before it ever registers, like a broken release
-		beginTrial(root, "1.0.1", "1.0.0"); // what installVersion records when it installs 1.0.1
+		beginTrial(root, "1.0.1", "1.0.0"); activatePayload(root, "1.0.1"); // what installVersion records when it installs 1.0.1
 		expect(await run()).toBe(0);
 		// Six tries of the new release (MAX_TRIAL_STARTS), then the one before it: the machine is not left without one.
 		expect(versions()).toEqual(["1.0.1", "1.0.1", "1.0.1", "1.0.1", "1.0.1", "1.0.1", "1.0.0"]);
@@ -179,7 +179,7 @@ describe.skipIf(process.platform === "win32")("a failed update, in real processe
 
 	it("a release that crashes on import is rolled back in the same start", async () => {
 		payload("1.0.1", `throw new Error("boom on import");`);
-		beginTrial(root, "1.0.1", "1.0.0");
+		beginTrial(root, "1.0.1", "1.0.0"); activatePayload(root, "1.0.1");
 		expect(await run()).toBe(0);
 		expect(versions()).toEqual(["1.0.1", "1.0.0"]);
 		expect(badVersions(root)["1.0.1"]).toMatch(/crashed on start: boom on import/);
@@ -187,7 +187,7 @@ describe.skipIf(process.platform === "win32")("a failed update, in real processe
 
 	it("once given up on, the release is never started again", async () => {
 		payload("1.0.1", "process.exit(1);");
-		beginTrial(root, "1.0.1", "1.0.0");
+		beginTrial(root, "1.0.1", "1.0.0"); activatePayload(root, "1.0.1");
 		await run();
 		rmSync(events, { force: true });
 		expect(await run()).toBe(0);

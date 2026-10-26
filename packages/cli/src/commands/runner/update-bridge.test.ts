@@ -269,12 +269,14 @@ function bridgeHarness() {
 		return healthy("0.4.90");
 	});
 	const install = vi.fn(async () => undefined);
+	const activate = vi.fn();
 	const detachAll = vi.fn();
 	const bridge = createInstallBridge({
 		cell,
 		refresh,
 		facts,
 		install,
+		activate,
 		admission,
 		leaseActive: () => true,
 		detachAll,
@@ -303,7 +305,7 @@ function bridgeHarness() {
 		done?.();
 		return done !== null;
 	};
-	return { bridge, cell, hang, late, refresh, facts, install, detachAll, expireWhen, gateOpen, bounds };
+	return { bridge, cell, hang, late, refresh, facts, install, activate, detachAll, expireWhen, gateOpen, bounds };
 }
 
 describe("B1 — every install/restart bridge wait is bounded (#1020)", () => {
@@ -320,6 +322,7 @@ describe("B1 — every install/restart bridge wait is bounded (#1020)", () => {
 		expect(h.bridge.inFlight()).toBe(false);
 		expect(h.gateOpen()).toBe(true);
 		expect(h.detachAll).not.toHaveBeenCalled();
+		expect(h.activate).not.toHaveBeenCalled();
 		expect(h.install).toHaveBeenCalledTimes(npmBefore);
 		for (const answer of h.late.splice(0)) answer();
 		await new Promise((r) => setTimeout(r, 0));
@@ -328,6 +331,8 @@ describe("B1 — every install/restart bridge wait is bounded (#1020)", () => {
 		// The retry: everything answers. What npm already installed is not installed again; it restarts exactly once.
 		h.hang[stage] = false;
 		expect(await h.bridge.run(plan, true)).toBe(true);
+		expect(h.activate).toHaveBeenCalledTimes(1);
+		expect(h.activate).toHaveBeenCalledWith(plan.latest);
 		expect(h.install).toHaveBeenCalledTimes(1);
 		expect(h.detachAll).toHaveBeenCalledTimes(1);
 	});

@@ -44,6 +44,18 @@ export interface RollbackNotice {
 const trialPath = (root: string) => join(root, ".trial.json");
 const badPath = (root: string) => join(root, ".bad.json");
 const noticePath = (root: string) => join(root, ".rollback.json");
+const activatedPath = (root: string) => join(root, ".activated.json");
+
+/** A probed candidate remains staged until the update bridge's final policy and work check. */
+export function activatedVersion(root: string): string | null {
+	const record = readJson(activatedPath(root)) as { version?: unknown } | null;
+	return typeof record?.version === "string" ? record.version : null;
+}
+
+export function activatePayload(root: string, version: string): void {
+	if (!/^(\d+)\.(\d+)\.(\d+)/.test(version)) throw new Error("invalid CLI version to activate");
+	writeJson(root, activatedPath(root), { version, at: Date.now() });
+}
 
 function readJson(path: string): unknown {
 	try {

@@ -7,8 +7,8 @@ import { existsSync, readdirSync, readFileSync, statfsSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { cachedPayloads, latestPublishedRelease, olderThan, payloadRoot } from "../bootstrap/payload.js";
-import { badVersions, markBad, peekRollbackNotice, readTrial } from "../bootstrap/trial.js";
+import { BOOTSTRAP_ENV, cachedPayloads, latestPublishedRelease, olderThan, payloadRoot } from "../bootstrap/payload.js";
+import { activatePayload, badVersions, markBad, peekRollbackNotice, readTrial } from "../bootstrap/trial.js";
 import { installVersion } from "../commands/runner/self-update.js";
 import { sampleMemAvailable } from "../commands/runner/resources.js";
 import { configDir, lockDir, pidAlive, readLock } from "../runner-lock.js";
@@ -140,7 +140,10 @@ export function realWatchdogDeps(log: (line: string) => void, ctx: ServiceContex
 			const r = await latestPublishedRelease();
 			return "version" in r ? { version: r.version } : { error: String((r as { error?: unknown }).error ?? "npm did not answer") };
 		},
-		install: (version, previous) => installVersion(version, previous),
+		install: async (version, previous) => {
+			await installVersion(version, previous);
+			if (process.env[BOOTSTRAP_ENV]) activatePayload(payloadRoot(), version);
+		},
 		markBad: (v, reason, to) => markBad(payloadRoot(), v, reason, to),
 		logTail: () => tailOf(logPath),
 		serviceDescription: () => `${kind()}${serviceInstalled(ctx) ? " (runner service installed)" : " (no runner service installed)"}`,

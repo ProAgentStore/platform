@@ -18,6 +18,8 @@ import { readWorkLook } from "./runner-work-observation.js";
 import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
 import { agentsStillMissing, applyRetryRolledBack, releaseTrial, rollbackAvailable } from "./release-trial.js";
 import { updateLogUpload } from "../../bootstrap/update-log.js";
+import { BOOTSTRAP_ENV, payloadRoot } from "../../bootstrap/payload.js";
+import { activatePayload } from "../../bootstrap/trial.js";
 import { restartOwner } from "../up-restart.js";
 import { sessionExpiresAt } from "../login-device.js";
 
@@ -193,6 +195,7 @@ export async function connectViaRelay(
 		refresh: channel.refresh,
 		facts: updateFacts,
 		install: (version) => installVersion(version, CLI_VERSION),
+		activate: (version) => { if (process.env[BOOTSTRAP_ENV]) activatePayload(payloadRoot(), version); },
 		admission: relayMutationAdmission,
 		leaseActive: deferredUpdateLeaseActive,
 		detachAll: () => {

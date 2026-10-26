@@ -22,7 +22,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { approvedActionsPayload, BOOTSTRAP_ENV, cachedPayloads, newestPayload, payloadRoot, type Payload } from "./payload.js";
-import { badVersions, markBad, noteTrialStart, readTrial, TRIAL_MS } from "./trial.js";
+import { activatedVersion, badVersions, markBad, noteTrialStart, readTrial, TRIAL_MS } from "./trial.js";
 import { logUpdateStep } from "./update-log.js";
 
 /** `runner connect`'s ask-for-a-respawn exit code (self-update.ts `RUNNER_RESTART_EXIT_CODE`), restated: the stub imports nothing else. */
@@ -77,8 +77,11 @@ export async function runStub(deps: StubDeps): Promise<Payload> {
 	const all = () => [...(deps.bundled ? [deps.bundled] : []), ...(deps.cached ?? cachedPayloads)()];
 	// A version given up on is never picked again — unless it is all there is, which beats running nothing.
 	const local = (without: string[] = []) => {
-		const skip = new Set([...Object.keys(badVersions(root)), ...without]);
-		return newestPayload(all().filter((p) => !skip.has(p.version))) ?? (without.length ? null : newestPayload(all()));
+		const trial = readTrial(root);
+		const unactivated = trial?.version !== activatedVersion(root) ? trial?.version : null;
+		const available = all().filter((p) => p.version !== unactivated && !without.includes(p.version));
+		const skip = new Set(Object.keys(badVersions(root)));
+		return newestPayload(available.filter((p) => !skip.has(p.version))) ?? (without.length ? null : newestPayload(available));
 	};
 	let chosen = isActionsSupervisor(deps.args) ? approvedActionsPayload(root, deps.bundled) : local();
 	if (!chosen) throw new Error("pags: no CLI to run — reinstall with `npm i -g @proagentstore/cli`");

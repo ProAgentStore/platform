@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { approveActionsPayload, BOOTSTRAP_ENV, cachedPayloads, installPayload, NO_SELF_UPDATE_ENV, payloadAt } from "./payload.js";
 import { isActionsSupervisor, runStub, type StubDeps } from "./stub.js";
 import { writeInstalled, writePackage } from "./test-payload.js";
+import { activatePayload, beginTrial } from "./trial.js";
 
 declare global {
 	var __pagsRan: string[] | undefined;
@@ -62,6 +63,14 @@ describe("the policy-gated bootstrap", () => {
 		expect((await runStub(stub("0.4.63", ["actions", "supervise", "--dir", "/runner"]))).version).toBe("0.4.63");
 		approveActionsPayload("1.7.0", root);
 		expect((await runStub(stub("0.4.63", ["actions", "supervise", "--dir", "/runner"]))).version).toBe("1.7.0");
+	});
+
+	it("a staged release canceled after installation cannot activate on reboot", async () => {
+		await installPayload("1.7.0", root, async (prefix, ver) => void writeInstalled(prefix, ver));
+		beginTrial(root, "1.7.0", "0.4.63");
+		expect((await runStub(stub("0.4.63", ["up"]))).version).toBe("0.4.63");
+		activatePayload(root, "1.7.0");
+		expect((await runStub(stub("0.4.63", ["up"]))).version).toBe("1.7.0");
 	});
 });
 

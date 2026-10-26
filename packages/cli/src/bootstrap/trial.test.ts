@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BOOTSTRAP_ENV, cachedPayloads, installPayload, payloadAt } from "./payload.js";
 import { runStub, STUB_RESTART_EXIT_CODE, type StubDeps } from "./stub.js";
 import { writeInstalled, writePackage } from "./test-payload.js";
-import { badVersions, beginTrial, MAX_TRIAL_STARTS, markPayloadHealthy, readTrial, takeRollbackNotice, TRIAL_MS } from "./trial.js";
+import { activatePayload, badVersions, beginTrial, MAX_TRIAL_STARTS, markPayloadHealthy, readTrial, takeRollbackNotice, TRIAL_MS } from "./trial.js";
 
 declare global {
 	var __pagsRan: string[] | undefined;
@@ -85,6 +85,7 @@ describe("a new version that crashes on start is rolled back in the same process
 	it("import throws: 0.4.149 is given up on, 0.4.148 runs at once, and the rollback is left for it to report", async () => {
 		await installPayload("0.4.149", root, npm(["0.4.149"]));
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		const ran = await runStub(stub(["up"]));
 		expect(ran.version).toBe("0.4.148");
 		expect(globalThis.__pagsRan).toEqual(["0.4.148"]);
@@ -96,6 +97,7 @@ describe("a new version that crashes on start is rolled back in the same process
 	it("…and is never fetched or picked again, though it stays published", async () => {
 		await installPayload("0.4.149", root, npm(["0.4.149"]));
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		await runStub(stub(["up"]));
 		globalThis.__pagsRan = undefined;
 		let installs = 0;
@@ -115,6 +117,7 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	it("the watchdog gives it up at the end of the window and leaves with the restart code; the next start runs the previous version", async () => {
 		await installPayload("0.4.149", root, npm());
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		const first = await runStub(stub(["up"]));
 		expect(first.version).toBe("0.4.149");
 		expect(readTrial(root)).toMatchObject({ version: "0.4.149", previous: "0.4.148", starts: 1, startedAt: clock });
@@ -135,6 +138,7 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	it("registering in time keeps it: the watchdog finds it proven and does nothing", async () => {
 		await installPayload("0.4.149", root, npm());
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		await runStub(stub(["up"]));
 		expect(markPayloadHealthy(root, "0.4.149")).toBe(true);
 		timers[0].fn();
@@ -147,6 +151,7 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	it("unsupervised it does not exit — it records the verdict, so the next `pags up` runs the previous version", async () => {
 		await installPayload("0.4.149", root, npm());
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		await runStub(stub(["up"], { env: {} }));
 		timers[0].fn();
 		expect(exits).toEqual([]);
@@ -157,6 +162,7 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	it("a crash loop after start: past its starts it is given up on at the next start", async () => {
 		await installPayload("0.4.149", root, npm());
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		for (let i = 0; i < MAX_TRIAL_STARTS; i++) expect((await runStub(stub(["runner", "connect", "i1"]))).version).toBe("0.4.149");
 		expect((await runStub(stub(["runner", "connect", "i1"]))).version).toBe("0.4.148");
 		expect(badVersions(root)["0.4.149"]).toMatch(/started 6 times without registering/);
@@ -165,6 +171,7 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	it("a restart after the window has passed gives it up before it runs again", async () => {
 		await installPayload("0.4.149", root, npm());
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		await runStub(stub(["up"]));
 		clock += TRIAL_MS + 1;
 		expect((await runStub(stub(["up"]))).version).toBe("0.4.148");
@@ -174,6 +181,7 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	it("the clock starts at the first START, not the install: a payload held back by busy work is judged from when it runs", async () => {
 		await installPayload("0.4.149", root, npm());
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		clock += 60 * 60_000; // installed an hour before the restart
 		expect((await runStub(stub(["up"]))).version).toBe("0.4.149");
 		expect(readTrial(root)?.startedAt).toBe(clock);
@@ -182,6 +190,7 @@ describe("a new version that never registers is rolled back (#1141)", () => {
 	it("short commands are not judged: `pags status` neither counts a start nor arms a watchdog", async () => {
 		await installPayload("0.4.149", root, npm());
 		beginTrial(root, "0.4.149", "0.4.148", clock);
+		activatePayload(root, "0.4.149");
 		await runStub(stub(["status"]));
 		expect(readTrial(root)?.starts).toBe(0);
 		expect(timers).toEqual([]);

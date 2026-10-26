@@ -146,6 +146,8 @@ async function main() {
 				HOME: home, USERPROFILE: home,
 				npm_config_registry: server.base, NPM_CONFIG_REGISTRY: server.base,
 				NODE_OPTIONS: `--import ${redirect}`, SMOKE_API: server.base,
+				// Published older stubs still fetch at boot; let their connected updater exercise the policy-gated path.
+				...(name === "update" ? { PAGS_NO_SELF_UPDATE: "1" } : {}),
 				PAGS_NO_WATCHDOG: "1", PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
 			};
 			delete env.NODE_PATH; delete env.PAGS_BOOTSTRAP; delete env.PAGS_SERVICE;
