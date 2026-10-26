@@ -2,12 +2,33 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ServiceContext } from "./service-install.js";
 
 export const actionsServiceLabel = (dir: string) => `online.proagentstore.actions.${basename(dir).toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
 export const actionsServicePlist = (dir: string) => `/Library/LaunchDaemons/${actionsServiceLabel(dir)}.plist`;
 const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+type LaunchProbe = { exists: (path: string) => boolean; run: (path: string, args: string[], env: NodeJS.ProcessEnv) => number | null };
+const launchProbe: LaunchProbe = {
+	exists: existsSync,
+	run: (path, args, env) => spawnSync(path, args, { env, encoding: "utf8", timeout: 15_000 }).status,
+};
+
+/** Prove that launchd's captured PATH and stable bootstrap will actually start before stopping the old runner. */
+export function preflightActionsServiceLaunch(ctx: ServiceContext, probe: LaunchProbe = launchProbe): void {
+	if (!isAbsolute(ctx.script) || basename(ctx.script) !== "bootstrap.js" || basename(dirname(ctx.script)) !== "dist" || !probe.exists(ctx.script)) {
+		throw new Error("PAGS CLI bootstrap is missing or is not a durable installed bootstrap.js; reinstall the CLI before adopting this service.");
+	}
+	const cache = join(ctx.home, ".config", "proagentstore", "cli");
+	if (ctx.script.startsWith(`${cache}/`)) throw new Error("The Actions service cannot use a versioned CLI payload as its bootstrap; reinstall the CLI.");
+	const path = ctx.pathEnv.split(":");
+	if (!path.length || path.some((part) => !isAbsolute(part))) throw new Error("The captured service PATH has an empty or relative entry; configure a durable Node installation first.");
+	const env = { ...process.env, HOME: ctx.home, USER: ctx.user, PATH: ctx.pathEnv, PAGS_NO_SELF_UPDATE: "1" };
+	if (probe.run("/usr/bin/env", ["node", ctx.script, "--version"], env) !== 0) {
+		throw new Error("Node on the captured service PATH could not run the installed PAGS bootstrap; fix Node/PATH before adopting this service.");
+	}
+}
 
 export function actionsServiceContent(dir: string, ctx: ServiceContext): string {
 	if (ctx.platform !== "darwin" || !ctx.user || ctx.user === "root" || ctx.uid === 0) throw new Error("Run this command on macOS as the runner owner, without sudo; it asks for administrator approval itself.");
@@ -175,6 +196,7 @@ async function awaitFreshReady(dir: string, startedAt: number, timeoutMs = 60_00
 
 export async function installMacActionsService(dir: string, ctx: ServiceContext): Promise<string[]> {
 	assertRunner(dir, ctx);
+	preflightActionsServiceLaunch(ctx);
 	if (activeWorkerIn(dir)) return [`Deferred: ${dir} has an active Runner.Worker. Retry after the job completes.`];
 	const services = inventoryActionsServices(dir, ctx);
 	if (services.length > 1) throw new Error(`Ambiguous service ownership for ${dir}: ${services.map((s) => `${s.domain}/${s.label}`).join(", ")}. Resolve manually before adoption.`);

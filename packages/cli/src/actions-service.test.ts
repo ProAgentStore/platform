@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { actionsServiceContent, actionsServiceLabel, actionsServicePlist, activeProcessIn, assertOwnedRemovalService, serviceForPlist, waitListenerGone } from "./actions-service.js";
+import { actionsServiceContent, actionsServiceLabel, actionsServicePlist, activeProcessIn, assertOwnedRemovalService, preflightActionsServiceLaunch, serviceForPlist, waitListenerGone } from "./actions-service.js";
 import type { ServiceContext } from "./service-install.js";
 
 const dir = "/Users/serge/.proagentstore/actions-runner/proappstore-online";
 const ctx: ServiceContext = { platform: "darwin", home: "/Users/serge", user: "serge", uid: 501, nodePath: "/old/nvm/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/serge/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin" };
 
 describe("macOS Actions system service (#1209)", () => {
+	it("proves launchd's captured PATH can run the durable CLI before adoption", () => {
+		const probe = { exists: () => true, run: (_file: string, _args: string[], _env: NodeJS.ProcessEnv) => 0 };
+		preflightActionsServiceLaunch(ctx, probe);
+		expect(() => preflightActionsServiceLaunch({ ...ctx, pathEnv: ":/usr/bin" }, probe)).toThrow(/PATH/);
+		expect(() => preflightActionsServiceLaunch({ ...ctx, script: "/Users/serge/.config/proagentstore/cli/0.4.185/dist/bootstrap.js" }, probe)).toThrow(/versioned CLI payload/);
+		expect(() => preflightActionsServiceLaunch(ctx, { ...probe, exists: () => false })).toThrow(/bootstrap is missing/);
+		expect(() => preflightActionsServiceLaunch(ctx, { ...probe, run: () => 1 })).toThrow(/could not run/);
+	});
 	it("starts the PAGS supervisor as the owner, with a stable bootstrap and no token or pinned Node binary", () => {
 		const plist = actionsServiceContent(dir, ctx);
 		expect(plist).toContain("<key>UserName</key><string>serge</string>");
