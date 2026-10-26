@@ -5,6 +5,7 @@ import ConnectionGuide from "../../components/ConnectionGuide";
 import OperatorManualCard from "../../components/OperatorManualCard";
 import HomeScreenShortcut from "../../components/HomeScreenShortcut";
 import PauseCard from "../../components/PauseCard";
+import type { DisabledRecord } from "../../lib/instancePause";
 import { unsubscribeScope, type RosterInstance } from "../../lib/unsubscribeScope";
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
 	maintMsg: string;
 	resyncMsg: string;
 	instStatus: string | null;
+	instDisabled?: DisabledRecord | null;
 	onClearFinished: () => Promise<void>;
 	onResyncIdentity: () => Promise<void>;
 	onUnsubscribe: () => void;
@@ -32,6 +34,7 @@ export default function MiscellaneousSection({
 	maintMsg,
 	resyncMsg,
 	instStatus,
+	instDisabled,
 	onClearFinished,
 	onResyncIdentity,
 	onUnsubscribe,
@@ -111,8 +114,8 @@ export default function MiscellaneousSection({
 				{resyncMsg && <p className="text-xs text-muted mt-2">{resyncMsg}</p>}
 			</Card>
 
-			{/* Pause / resume (#825) */}
-			<PauseCard instanceId={instanceId} initialStatus={instStatus} />
+			{/* Disable / enable (#825, #1383) */}
+			<PauseCard instanceId={instanceId} initialStatus={instStatus} initialDisabled={instDisabled} />
 
 			{/* Danger zone */}
 			<Card>

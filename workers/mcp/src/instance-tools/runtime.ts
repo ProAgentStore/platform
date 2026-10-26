@@ -144,11 +144,12 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			offset: z.coerce.number().int().min(0).optional().describe("Machines come back in pages that fit one response; pass `page.nextOffset` to continue."),
+			include_paused: z.boolean().optional().describe("Also include paused (disabled) instances. Default false: they are left out; the response counts what was hidden."),
 		},
-		async ({ token, offset }) => {
+		async ({ token, offset, include_paused }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			return text(runnerNodesPage(await authedCall("/v1/terminals/nodes", sessionToken, {}, env), offset));
+			return text(runnerNodesPage(await authedCall(`/v1/terminals/nodes${include_paused ? "?include_paused=1" : ""}`, sessionToken, {}, env), offset));
 		},
 	);
 

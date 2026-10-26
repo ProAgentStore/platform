@@ -188,7 +188,8 @@ describe("against the real server, over a real client", () => {
 	it("a refused call and a bad call tell the caller what to do next", () => {
 		const text = (task: string, variant: string) => report.results.find((r) => r.taskId === task && r.variant === variant)?.texts.join("\n") ?? "";
 		expect(text("invalid-input-message", "wrong-type-id")).toMatch(/Corrected example: \{"instance_id":"<instance_id>","name":"Alpha"\}/);
-		expect(text("unknown-tool-name", "invented-name")).toMatch(/Did you mean `my_instances`/);
+		// `list_disabled_instances` (#1383) shares both words of the invented name and so ranks first; the right tool must still be offered.
+		expect(text("unknown-tool-name", "invented-name")).toMatch(/Did you mean[^?]*`my_instances`/);
 		expect(text("insert-instance-record", "object-for-json-string")).toMatch(/`data` expected string, received object/);
 	});
 

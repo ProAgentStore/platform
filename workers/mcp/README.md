@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**404 tool registrations.** 375 are always registered; 29 are gated to the console
+**407 tool registrations.** 378 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -286,6 +286,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_state` | Read DO state (identity, guardrails, permissions) — read-only | — | | |
 | `pause_instance` | Temporarily stop an instance without unsubscribing — blocks new runs, asks live ones to stop; everything is kept (#825); lost confirmation returns `outcome: unknown`; poll my_instances including paused instances and coding_loop_status | write | yes | |
 | `resume_instance` | Put a paused instance back to work. Does not restart the runs the pause stopped (#825) | write | yes | |
+| `disable_instance` | Switch an instance OFF with a recorded reason (disabled_at, disabled_by, reason): hidden from the default lists, no new runs, queue starts or triage; everything kept. `pause_instance` plus a record; idempotent (#1383) | write | yes | |
+| `enable_instance` | Switch a disabled instance back on and clear its record; restores pins, repos, queue and schedules exactly. `resume_instance` under the Disabled list's name (#1383) | write | yes | |
+| `list_disabled_instances` | Only the instances you have disabled: id, name, repos, pinned machine, who/when/why, last run, queued objectives (#1383) | read | — | |
 | `cancel_instance` | Cancel the subscription, deactivating the instance | destructive | yes | `cancel_instance` |
 
 ### Instance knowledge, vectors, files

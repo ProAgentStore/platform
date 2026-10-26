@@ -14,7 +14,7 @@ import { api } from "@proagentstore/sdk/client";
 import { invalidateVoiceConfig } from "@proagentstore/sdk/hooks";
 import type { SettingsField } from "../lib/types";
 import type { RosterInstance } from "../lib/unsubscribeScope";
-import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
+import { type DisabledRecord, MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
 // Import refactored modules
 import InstanceInfo from "./settings/InstanceInfo";
@@ -68,6 +68,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 	const [loadFailures, setLoadFailures] = useState<string[]>([]);
 	const [roster, setRoster] = useState<RosterInstance[] | null>(null);
 	const [instStatus, setInstStatus] = useState<string | null>(null);
+	const [instDisabled, setInstDisabled] = useState<DisabledRecord | null>(null);
 
 	const loadAll = useCallback(() => {
 		(async () => {
@@ -78,6 +79,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				if (mine?.name) setInstName(mine.name);
 				setRoster(d.instances || []);
 				setInstStatus(mine?.status ?? null);
+				setInstDisabled(mine?.disabled ?? null);
 			} catch {
 				failed.push("your instance name");
 			}
@@ -328,6 +330,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				maintMsg={maintMsg}
 				resyncMsg={resyncMsg}
 				instStatus={instStatus}
+				instDisabled={instDisabled}
 				onClearFinished={clearFinished}
 				onResyncIdentity={resyncIdentity}
 				onUnsubscribe={onUnsubscribe}

@@ -1646,7 +1646,7 @@ describe("recent_instances", () => {
 					{ id: "i1", agent_id: "a1", slug: "coder", name: "platform coder", status: "active" },
 					{ id: "i2", agent_id: "a2", slug: "assistant", status: "active" },
 					{ id: "i3", agent_id: "a1", slug: "coder", status: "active" },
-					{ id: "i4", agent_id: "a3", slug: "browser", status: "paused" },
+					{ id: "i4", agent_id: "a3", slug: "browser", status: "active" },
 					{ id: "i5", agent_id: "a1", slug: "coder", status: "active" },
 					{ id: "i6", agent_id: "a1", slug: "coder", status: "active" },
 				],
@@ -1720,7 +1720,7 @@ describe("recent_instances", () => {
 		// A failed run: the unambiguous stop reason (#773) is right there.
 		expect(body.instances[2].run).toMatchObject({ health: "ended", stopReason: "provider_credit" });
 		// The API refused the run lookup: said so, rather than reading as "never ran".
-		expect(body.instances[3]).toMatchObject({ instanceId: "i4", status: "paused", run: null, runError: "forbidden" });
+		expect(body.instances[3]).toMatchObject({ instanceId: "i4", status: "active", run: null, runError: "forbidden" });
 		// Only the instances that made the cut were looked up.
 		const loopCalls = h.fetchStub.calls.filter((c) => c.url.includes("/loop"));
 		expect(loopCalls.map((c) => c.method)).toEqual(["GET", "GET", "GET", "GET", "GET"]);
@@ -1752,7 +1752,7 @@ describe("recent_instances", () => {
 					{ id: "i1", agent_id: "a1", slug: "coder", name: "platform coder", status: "active" },
 					{ id: "i2", agent_id: "a2", slug: "assistant", status: "active" },
 					{ id: "i3", agent_id: "a1", slug: "coder", status: "active" },
-					{ id: "i4", agent_id: "a3", slug: "browser", status: "paused" },
+					{ id: "i4", agent_id: "a3", slug: "browser", status: "active" },
 					{ id: "i5", agent_id: "a1", slug: "coder", status: "active" },
 					{ id: "i6", agent_id: "a1", slug: "coder", status: "active" },
 					{ id: "i9", agent_id: "a9", slug: "pas-coder", name: "PAS ProAppStore platform Coder", status: "active" },
@@ -1767,6 +1767,22 @@ describe("recent_instances", () => {
 		touch(h, "user-1", "i5", "coding_loop_start", "2026-09-09T06:00:00.000Z");
 		touch(h, "user-1", "i6", "coding_loop_status", "2026-09-09T05:00:00.000Z");
 	};
+
+	it("leaves a disabled (paused) instance out of the recents unless include_paused is set (#1383)", async () => {
+		const h = setup();
+		touch(h, "user-1", "i1", "coding_loop_status", "2026-09-09T10:00:00.000Z");
+		touch(h, "user-1", "i2", "coding_loop_status", "2026-09-09T09:00:00.000Z");
+		h.fetchStub.respond((u) => u.includes("/v1/instances/my/instances"), { body: { instances: [{ id: "i1", agent_id: "a1", slug: "coder", status: "active" }, { id: "i2", agent_id: "a1", slug: "coder", status: "paused" }] } });
+		h.fetchStub.respond((u) => u.includes("/v1/instances/my/activity"), { body: { instances: [] } });
+		h.fetchStub.respond((u) => u.endsWith("/loop"), { body: { runs: [] } });
+		const ids = async (args: Record<string, unknown>) => (JSON.parse((await h.tools.get("recent_instances")!.handler(args)).content[0].text) as { instances: Array<{ instanceId: string }> }).instances.map((i) => i.instanceId);
+		expect(await ids({})).toEqual(["i1"]);
+		expect(await ids({ include_paused: true })).toEqual(["i1", "i2"]);
+		// …and the activity read is asked for the paused ones only when they were.
+		const activityUrls = h.fetchStub.calls.filter((c) => c.url.includes("/v1/instances/my/activity")).map((c) => c.url);
+		expect(activityUrls.some((u) => u.includes("include_paused=1"))).toBe(true);
+		expect(activityUrls.some((u) => !u.includes("include_paused"))).toBe(true);
+	});
 
 	it("puts an instance with an open run FIRST even though this caller never touched it over MCP (#192)", async () => {
 		const h = setup();

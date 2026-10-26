@@ -613,7 +613,22 @@ terminalRoutes.get("/nodes", async (c) => {
 	// #1141: a machine silent since an install is stuck with or without the registry — it is usually the disconnected one.
 	for (const [n, p] of policies) if (published !== undefined || silentAfterInstall(p)) n.auto_update_stuck = machineAutoUpdateStuck(n, p, published ?? null);
 
-	return c.json({ nodes, unresolvedPins: await unresolvedPins(c.env, uid, nodeRows.map((r) => ({ node: r.runner_node, machineId: r.machine_id ?? null }))) });
+	// #1383: a machine's `instances` and `sessions` list only the instances that are ACTIVE, unless `?include_paused=1`. The MACHINE itself is
+	// never hidden, and its `connected` was computed from every instance's socket above: a machine whose only instance is disabled is still
+	// there, still online. This runs after the grouping and the probes on purpose — filtering the rows before them would fold a machine away,
+	// and the failover suggestion (built from these lists) would then offer a disabled coder as somewhere to move work.
+	const includePaused = ["1", "true", "yes"].includes((c.req.query("include_paused") ?? "").toLowerCase());
+	let pausedHidden = 0;
+	if (!includePaused) {
+		const inactive = new Set(((await c.env.DB.prepare("SELECT id FROM agent_instances WHERE user_id = ?1 AND status != 'active'").bind(uid).all<{ id: string }>()).results ?? []).map((r) => r.id));
+		for (const n of nodes) {
+			const before = n.instances.length;
+			n.instances = n.instances.filter((i) => !inactive.has(i.instanceId));
+			n.sessions = n.sessions.filter((s) => !inactive.has(s.instanceId));
+			pausedHidden += before - n.instances.length;
+		}
+	}
+	return c.json({ nodes, ...(pausedHidden ? { pausedHidden } : {}), unresolvedPins: await unresolvedPins(c.env, uid, nodeRows.map((r) => ({ node: r.runner_node, machineId: r.machine_id ?? null }))) });
 });
 
 

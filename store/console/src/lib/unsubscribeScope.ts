@@ -52,6 +52,8 @@ export interface RosterInstance {
 	 *  Pause control; `unsubscribeScope` itself does not use it, because the list it is handed
 	 *  already excludes cancelled rows. */
 	status?: string | null;
+	/** The disabled record (#1383) — present only on a paused instance; each part null when it was paused without one. */
+	disabled?: { at: string | null; by: string | null; reason: string | null } | null;
 }
 
 export interface UnsubscribeScope {

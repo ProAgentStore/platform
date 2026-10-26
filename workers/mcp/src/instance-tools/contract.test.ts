@@ -267,7 +267,7 @@ async function dryRunOf(name: string): Promise<string | null> {
 type Row = [string, string, string | null, string | null, string];
 const TABLE: Record<string, Row> = {
 	add_instance_knowledge: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,source,source_url,title,token"],
-	account_activity: ["recent", "read", null, null, "token"],
+	account_activity: ["recent", "read", null, null, "include_paused,token"],
 	fleet_snapshot: ["recent", "read", null, null, "include_paused,status,tags,token"],
 	agent_trace: ["observability", "none", null, null, "cursor,instance_id,level,limit,offset,scope,since,source,token,trace_id,until"],
 	apply_account_coding_default: ["account", "runtime", null, "envelope", "dry_run,token"],
@@ -302,6 +302,9 @@ const TABLE: Record<string, Row> = {
 	pause_instance: ["base", "write", null, "envelope", "dry_run,instance_id,token"],
 	plan_agent_builder: ["agentAuthoring", "none", null, null, "prompt,token"],
 	resume_instance: ["base", "write", null, "envelope", "dry_run,instance_id,token"],
+	disable_instance: ["base", "write", null, "envelope", "dry_run,instance_id,reason,token"],
+	enable_instance: ["base", "write", null, "envelope", "dry_run,instance_id,token"],
+	list_disabled_instances: ["base", "read", null, null, "token"],
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	chat_with_my_agent: ["agentAuthoring", "destructive", "chat_with_my_agent", "envelope", "agent_id,confirm,dry_run,message,token"],
@@ -440,7 +443,7 @@ const TABLE: Record<string, Row> = {
 	mark_notification_read: ["account", "write", null, "envelope", "dry_run,notification_id,token"],
 	list_pipeline_runs: ["observability", "none", null, null, "instance_id,limit,pipeline,token"],
 	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
-	list_runner_nodes: ["runtime", "none", null, null, "offset,token"],
+	list_runner_nodes: ["runtime", "none", null, null, "include_paused,offset,token"],
 	runner_resource_history: ["runtime", "none", null, null, "from,node,offset,tier,to,token"],
 	runner_node_forget_preflight: ["runtime", "read", null, null, "node,token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
@@ -449,7 +452,7 @@ const TABLE: Record<string, Row> = {
 	// #787: the caller's own recency view. `read`-gated like `get_instance_connection_guide`
 	// rather than a bare proxy, so MCP_READ_ONLY and a suspended account both see the call.
 	// #192: `limit` (default 5, clamped to 20) — the cap was a silent constant before.
-	recent_instances: ["recent", "read", null, null, "limit,token"],
+	recent_instances: ["recent", "read", null, null, "include_paused,limit,token"],
 	register_instance_runtime: ["runtime", "runtime", null, "envelope", "capabilities,dry_run,endpoint_url,instance_id,placement,runner_token,runner_version,token"],
 	record_instance_feedback: ["observability", "write", null, "envelope", "body,dry_run,instance_id,message_id,sentiment,session_id,surface,target_text,token,trace_id"],
 	resolve_feedback: ["observability", "write", null, "envelope", "dry_run,feedback_id,issue_url,status,token"],

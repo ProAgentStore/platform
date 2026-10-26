@@ -81,14 +81,17 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 	server.tool(
 		"account_activity",
 		"What every instance on this account is doing right now, in one call. Each entry names its instance the way recent_instances and my_instances do — `instanceId`, `name` (the display name when one is set, else the agent's) and `slug` — plus `health` (`working` | `waiting` | `stalled` | `idle`), `queueDepth`, and the latest run's `lastOutcome`. Computed by the platform's own `runHealth`, so it agrees with the console and with coding_loop_status rather than being a second opinion. `stalled` is the one to act on: the run is open but has stopped ticking. `waiting` is a deliberate park and usually needs nothing. An instance with no run and no queued objective is OMITTED — absence means idle — so an empty list means the account is quiet, not that the call failed. Unlike recent_instances this does not fan out per instance and is not capped. `waitingOnOwner` lists the instances whose agent is blocked waiting for the OWNER to enter a secret value (#934): `instanceId`, `pending` count, and the oldest request's `requestId` + `label` (never a value) — only a person can unblock those, in the console at /instances/<instanceId>/secure-inputs/<requestId>.",
-		{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
-		async ({ token }) => {
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			include_paused: z.boolean().optional().describe("Also include paused (disabled) instances. Default false: they are left out; the response counts what was hidden."),
+		},
+		async ({ token, include_paused }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "read", "account_activity", {});
+			const denied = await requirePermission(safetyFor(token), "read", "account_activity", { include_paused });
 			if (denied) return denied;
 			const [activity, waiting] = await Promise.all([
-				authedCall("/v1/instances/my/activity", sessionToken, {}, env),
+				authedCall(`/v1/instances/my/activity${include_paused ? "?include_paused=1" : ""}`, sessionToken, {}, env),
 				// Best-effort: a failed read of who waits on the owner must not fail the activity answer.
 				(authedCall("/v1/instances/my/secure-inputs", sessionToken, {}, env) as Promise<{ instances?: unknown }>).catch(() => null),
 			]);
@@ -157,11 +160,12 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 				.min(1)
 				.optional()
 				.describe(`How many instances to return. Default ${RECENT_INSTANCES_LIMIT}, clamped to ${RECENT_INSTANCES_MAX}; the effective value is echoed as limit.`),
+			include_paused: z.boolean().optional().describe("Also include paused (disabled) instances. Default false: they are left out; the response counts what was hidden."),
 		},
-		async ({ token, limit }) => {
+		async ({ token, limit, include_paused }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "read", "recent_instances", {});
+			const denied = await requirePermission(safetyFor(token), "read", "recent_instances", { include_paused });
 			if (denied) return denied;
 
 			const requestedLimit = limit ?? RECENT_INSTANCES_LIMIT;
@@ -174,7 +178,7 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 			// touched over MCP sat outside the top five and vanished from a status report.
 			const [touches, activity] = await Promise.all([
 				listInstanceTouches(safetyFor(token)),
-				authedCall("/v1/instances/my/activity", sessionToken, {}, env) as Promise<{ instances?: ActivityRow[]; error?: string }>,
+				authedCall(`/v1/instances/my/activity${include_paused ? "?include_paused=1" : ""}`, sessionToken, {}, env) as Promise<{ instances?: ActivityRow[]; error?: string }>,
 			]);
 			// A working instance sorts by real liveness, newest first; the activity route itself
 			// orders by id for diff-stability, which is the wrong order for a "what is happening" list.
@@ -228,6 +232,8 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 			for (const t of touches) {
 				const inst = byRef.get(t.instance);
 				if (!inst || seen.has(inst.id)) continue;
+				// #1383: a paused (= disabled) instance the caller touched once is not "what I was working on" — left out unless asked for.
+				if (inst.status === "paused" && !include_paused) continue;
 				seen.add(inst.id);
 				candidates.push({ inst, touch: t, reason: "recent-touch" });
 			}

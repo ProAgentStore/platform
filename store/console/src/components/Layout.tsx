@@ -9,7 +9,7 @@ import CopyPageLink from "./CopyPageLink";
 import Button from "./Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { Activity, Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag, Stethoscope } from "lucide-react";
+import { Activity, PowerOff, Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag, Stethoscope } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 import { isSuppressedPush } from "../lib/pushMessages";
 import { rememberRoute } from "../lib/lastRoute";
@@ -21,6 +21,8 @@ const navItems = [
 	{ to: "/terminals", label: "Terminals", icon: Terminal },
 	// Live graphs of every machine's load, disk, relay and sessions, one screen (#1259) — beside the Terminals it complements.
 	{ to: "/fleet", label: "Fleet", icon: Activity },
+	// Agents switched off (#1383): hidden from every other list, one click to bring back.
+	{ to: "/disabled", label: "Disabled", icon: PowerOff },
 	{ to: "/usage", label: "Usage", icon: Gauge },
 	// Everything flagged, across every agent (#514). Beside Usage because it is the same kind of
 	// question — "what is this costing me" / "what is still wrong with it" — asked of the whole

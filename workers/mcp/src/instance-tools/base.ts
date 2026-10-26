@@ -601,6 +601,76 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 		},
 	);
 
+	// #1383: the DISABLED state — pause with a record, hidden everywhere by default, one call to bring back. Disabled IS paused (the same gates
+	// refuse work for both); these add the reason, the Disabled list, and the names an owner reaches for.
+	server.tool(
+		"disable_instance",
+		"Switch one private instance OFF without deleting anything, and record why: it is hidden from my_instances, recent_instances, account_activity, fleet_snapshot and list_runner_nodes unless you ask for paused ones, blocks new runs, queue starts and triage, and asks any run in flight to stop. Everything is kept — subscription, config, repos, documents, queue, schedules, pinned machine — and enable_instance restores it exactly. It is pause_instance plus a record (disabled_at, disabled_by = your verified account, and the optional `reason`), so a later list_disabled_instances can say what you meant. Idempotent: disabling a disabled instance succeeds and keeps the original time and actor, replacing the reason only if you give a new one.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID from my_instances. Not the public agent_id from list_agents."),
+			reason: z.string().max(500).optional().describe("Why it is being disabled (for example: duplicate, long idle). Up to 500 characters; shown in list_disabled_instances."),
+			dry_run: z.boolean().optional().describe("Report what disabling would do, without disabling."),
+		},
+		async ({ token, instance_id, reason, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, ...(reason ? { reason } : {}) };
+			const denied = await requirePermission(safetyFor(token), "write", "disable_instance", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "disable_instance", "disable a private instance", input, {
+					endpoint: `/v1/instances/${instance_id}/disable`,
+					method: "POST",
+					effect: `${instance_id} would be hidden from the default lists and stop starting new runs; any run in flight would be asked to stop. Nothing is unsubscribed or deleted, and enable_instance reverses it exactly.`,
+				});
+			}
+			const data = (await authedCall(`/v1/instances/${instance_id}/disable`, sessionToken, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }, env)) as { success?: boolean; error?: string };
+			if (data.success) await audit(safetyFor(token), { tool: "disable_instance", action: "completed", input });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"enable_instance",
+		"Switch a DISABLED (paused) instance back on: new runs may start, queued objectives start, background work resumes, and it appears in the default lists again. Restores pins, repos, queue and schedules exactly — nothing was deleted. Clears the disabled record. Idempotent. Does NOT restart runs the disable stopped; continue one with continue_instance_run or start fresh work. The same action as resume_instance, under the name the Disabled list uses.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID from list_disabled_instances."),
+			dry_run: z.boolean().optional().describe("Report what enabling would do, without enabling."),
+		},
+		async ({ token, instance_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "enable_instance", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "enable_instance", "enable a disabled instance", input, {
+					endpoint: `/v1/instances/${instance_id}/enable`,
+					method: "POST",
+					effect: `${instance_id} would be able to start runs again and queued objectives would start. Runs the disable stopped are NOT restarted.`,
+				});
+			}
+			const data = (await authedCall(`/v1/instances/${instance_id}/enable`, sessionToken, { method: "POST" }, env)) as { success?: boolean; error?: string };
+			if (data.success) await audit(safetyFor(token), { tool: "enable_instance", action: "completed", input });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"list_disabled_instances",
+		"List ONLY the instances you have disabled (paused) — the ones every other list hides. Each: id, name, repos, the pinned machine, `disabled` {at, by, reason} (null parts mean it was paused with pause_instance, which records nothing), its last run, and how many objectives are queued behind it. Newest-disabled first. Bring one back with enable_instance. Read-only.",
+		{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "list_disabled_instances", {});
+			if (denied) return denied;
+			return jsonText(await authedCall("/v1/instances/my/disabled-instances", sessionToken, {}, env));
+		},
+	);
+
 	server.tool(
 		"cancel_instance",
 		"Cancel your subscription to one private instance and mark the instance canceled. This gives the agent up: it is the irreversible counterpart of pause_instance, which stops it temporarily and resume_instance restores. Required: `instance_id` (ID or slug from my_instances) and, for a real cancel, `confirm: \"cancel_instance\"`; `dry_run: true` previews the call without changing anything. Needs the destructive scope. Example: {\"instance_id\":\"<id>\",\"confirm\":\"cancel_instance\"}. Returns the text `Canceled`, or `Error: <reason>`.",

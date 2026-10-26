@@ -74,14 +74,14 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 
 		const roster = (
 			await c.env.DB.prepare(
-				`SELECT i.id, i.status, i.config, a.name, a.slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+				`SELECT i.id, i.status, i.config, i.disabled_at, i.disabled_by, i.disabled_reason, a.name, a.slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id
 				  WHERE i.user_id = ?1 AND i.status != 'canceled'`,
 			)
 				.bind(uid)
-				.all<{ id: string; status: string | null; config: string | null; name: string | null; slug: string | null }>()
+				.all<{ id: string; status: string | null; config: string | null; disabled_at: string | null; disabled_by: string | null; disabled_reason: string | null; name: string | null; slug: string | null }>()
 		).results ?? [];
 		const members = roster
-			.map((r) => ({ id: r.id, instanceStatus: r.status, name: instanceListName(r.config, r.name), slug: r.slug, tags: tagsOf(parseConfigBlob(r.config)), autoPickup: autoPickupFrom(r.config).enabled }))
+			.map((r) => ({ id: r.id, instanceStatus: r.status, disabled: r.status === "paused" ? { at: r.disabled_at, by: r.disabled_by, reason: r.disabled_reason } : null, name: instanceListName(r.config, r.name), slug: r.slug, tags: tagsOf(parseConfigBlob(r.config)), autoPickup: autoPickupFrom(r.config).enabled }))
 			.filter((m) => matchesTags(m.tags, wanted));
 		const ids = new Set(members.map((m) => m.id));
 		// #1028: a paused instance's repos are not read — its backlog is not work anyone can take.
@@ -147,6 +147,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				slug: m.slug,
 				tags: m.tags,
 				autoPickup: m.autoPickup, // #1233: brain-free auto-pickup is on
+				...(m.disabled ? { disabled: m.disabled } : {}), // #1383: when, by whom and why a paused instance was disabled (null parts = paused with no record)
 				status: verdict.status,
 				reason: verdict.reason,
 				health,

@@ -54,6 +54,7 @@ import { registerApplicationRunnerRoutes } from "./instances-application-runner.
 import { registerApplicationsRoutes } from "./instances-applications.js";
 import { registerFleetRoutes } from "./instances-fleet.js";
 import { registerFleetHistoryRoutes } from "./instances-fleet-history.js";
+import { registerDisabledInstancesRoutes } from "./instances-disabled.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
@@ -373,18 +374,24 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
  * Paused instances are also hidden by default (#826). They remain owned and can be resumed, so
  * a caller resolving a specific instance must request `?includePaused=1`; otherwise its detail
  * page could look missing and strand its Resume control.
+ *
+ * `?disabled_only=1` (#1383) lists ONLY the disabled (= paused) instances, each carrying `disabled: { at, by, reason }`.
  */
 instanceRoutes.get("/my/instances", async (c) => {
 	const session = await requireUser(c);
 	const flag = (name: string) => ["1", "true", "yes"].includes((c.req.query(name) ?? "").toLowerCase());
 	const includeCanceled = flag("includeCanceled");
-	const includePaused = flag("includePaused");
+	// `disabled_only` (#1383): ONLY the disabled (= paused) instances, which implies including them. It overrides `includeCanceled` for the
+	// status test: a disabled-only list never holds a canceled instance.
+	const disabledOnly = flag("disabled_only");
+	const includePaused = flag("includePaused") || disabledOnly;
+	const statusWhere = disabledOnly ? " AND i.status = 'paused'" : `${includeCanceled ? "" : " AND i.status != 'canceled'"}${includePaused ? "" : " AND i.status != 'paused'"}`;
 	const { results } = await c.env.DB.prepare(
-		`SELECT i.id, i.agent_id, i.status, i.created_at, i.last_activity_at, i.config AS instance_config,
+		`SELECT i.id, i.agent_id, i.status, i.created_at, i.last_activity_at, i.disabled_at, i.disabled_by, i.disabled_reason, i.config AS instance_config,
             a.name, a.slug, a.description, a.category, a.icon, a.icon_bg, a.config
      FROM agent_instances i
      JOIN agents a ON a.id = i.agent_id
-     WHERE i.user_id = ?1${includeCanceled ? "" : " AND i.status != 'canceled'"}${includePaused ? "" : " AND i.status != 'paused'"}
+     WHERE i.user_id = ?1${statusWhere}
      ORDER BY COALESCE(i.last_activity_at, i.updated_at) DESC`,
 	)
 		.bind(session.uid)
@@ -410,7 +417,7 @@ instanceRoutes.get("/my/instances", async (c) => {
 	const pins = await resolveRunnerPins(c.env, session.uid, resolved.map((e) => ({ id: e.row.id as string, config: e.row.instance_config as string | null })));
 	const environments = await environmentsForNodes(c.env, session.uid, [...pins.values()].map((p) => p.node)).catch(() => new Map()); // #405: one query for the list
 	const instances = resolved.map(({ row: r, caps: fullCaps }) => {
-		const { config, instance_config, last_activity_at, ...rest } = r;
+		const { config, instance_config, last_activity_at, disabled_at, disabled_by, disabled_reason, ...rest } = r;
 		const view = instanceListView(instance_config as string | null);
 		// Full capabilities (with boardColumns + settingsSchema) cost ~83 KB for 28
 		// instances. The list only needs the routing fields; heavy config lives on the
@@ -428,6 +435,9 @@ instanceRoutes.get("/my/instances", async (c) => {
 			...environmentFields(pins.get(r.id as string)?.node, environments),
 			...(view.tags.length ? { tags: view.tags } : {}),
 			lastActivityAt: last_activity_at ?? null,
+			// The record of a disable (#1383), present only on a paused instance: when, by whom (a verified uid) and why. All three read
+			// null for an instance paused by plain `pause_instance`, which asked for no record — it is shown as paused, never invented.
+			...(r.status === "paused" ? { disabled: { at: disabled_at ?? null, by: disabled_by ?? null, reason: disabled_reason ?? null } } : {}),
 			// A RETIRED workflow, with the owner's own replacement instances attached (#979). Present
 			// only for a retired agent, so every other card is byte-identical to before — and it is on
 			// THIS response because it is the one the console renders instances from and the one MCP's
@@ -473,6 +483,9 @@ const ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 instanceRoutes.get("/my/activity", async (c) => {
 	const session = await requireUser(c);
 	const now = Date.now();
+	// #1383: only ACTIVE instances by default. A paused (= disabled) one is not "doing" anything and has no business in a what-is-running view;
+	// `?include_paused=1` brings it back. A canceled one never shows.
+	const includePaused = ["1", "true", "yes"].includes((c.req.query("include_paused") ?? "").toLowerCase());
 
 	const since = now - ACTIVITY_LOOKBACK_MS;
 	const [runs, queueDepths, nameRows] = await Promise.all([
@@ -481,23 +494,29 @@ instanceRoutes.get("/my/activity", async (c) => {
 		// Name and slug (#923): a bare id is unreadable on a roster of dozens, and `recent_instances`
 		// already names each entry. One flat query over the caller's instances, whatever has activity.
 		c.env.DB.prepare(
-			`SELECT i.id, i.config, a.name, a.slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.user_id = ?1`,
+			`SELECT i.id, i.status, i.config, a.name, a.slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.user_id = ?1`,
 		)
 			.bind(session.uid)
-			.all<{ id: string; config: string | null; name: string | null; slug: string | null }>(),
+			.all<{ id: string; status: string | null; config: string | null; name: string | null; slug: string | null }>(),
 	]);
+	const shown = new Set((nameRows.results ?? []).filter((r) => r.status === "active" || (includePaused && r.status === "paused")).map((r) => r.id));
+	const hiddenIds = new Set([...runs.map((r) => r.instanceId), ...queueDepths.keys()].filter((id) => !shown.has(id)));
+	const visibleRuns = runs.filter((r) => shown.has(r.instanceId));
+	const visibleDepths = new Map([...queueDepths].filter(([id]) => shown.has(id)));
 	const names = new Map((nameRows.results ?? []).map((r) => [r.id, { name: instanceListName(r.config, r.name), slug: r.slug ?? null }] as const));
 
 	// `asOf` is not decoration: every value here is time-relative, so a poll that failed and left
 	// the last response on screen is indistinguishable from a fresh one without it (#291).
-	const instances = composeInstanceActivity(runs, queueDepths, now).map(({ instanceId, ...rest }) => ({
+	const instances = composeInstanceActivity(visibleRuns, visibleDepths, now).map(({ instanceId, ...rest }) => ({
 		instanceId,
 		name: names.get(instanceId)?.name ?? null,
 		slug: names.get(instanceId)?.slug ?? null,
 		...rest,
 	}));
-	return c.json({ asOf: now, instances });
+	// `hiddenInactive`: instances with a run or queued work that were left out because they are paused or canceled — absence is explained, not silent.
+	return c.json({ asOf: now, ...(hiddenIds.size ? { hiddenInactive: hiddenIds.size } : {}), instances });
 });
+registerDisabledInstancesRoutes(instanceRoutes); // the Disabled list (#1383) — `/my/disabled-instances`, before `/:instanceId/…`
 registerFleetHistoryRoutes(instanceRoutes); // the owner-wide coding history (#1335) — `/my/coding-history`, also before `/:instanceId/…`
 registerFleetRoutes(instanceRoutes); // tags + the fleet snapshot (#961) — `/my/snapshot` must precede `/:instanceId/…`
 

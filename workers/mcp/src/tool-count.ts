@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 404;
+export const MCP_TOOL_COUNT = 407;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 375;
+export const MCP_TOOL_ALWAYS_ON = 378;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -57,4 +57,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 402, issue: "#1343", date: "2026-10-26", reason: "verify_provider_key: the console's Profile → API Keys → Verify (one four-token request against the stored Anthropic or Cloudflare key; a pass lifts an automatic-run pause). No existing tool reaches POST /v1/keys/:provider/verify: coding_diagnostics only reports the recorded providerAccount, so a client diagnosing a paused coder could not get a live answer. Not a sibling of keys_status (names only, no request)." },
 	{ count: 403, issue: "#1367", date: "2026-10-26", reason: "actions_runner_recover requests a scoped, durable recovery of one PAGS-managed Actions listener through its supervisor. No existing tool can request that action: actions_runner_status only reads, actions_runner_setup registers or removes a runner, and runner_restart restarts the separate pags up runtime." },
 	{ count: 404, issue: "#1335", date: "2026-10-26", reason: "coding_fleet_history reads the owner's coding history across every instance: picker decisions and the issues it passed over, attempts versus real runs, correlation and coverage. coding_loop_lifecycle reconstructs ONE objective on ONE instance by a handle you already hold, and coding_loop_queue / coding_loop_status page one instance; none can filter across instances by repo, issue, time or outcome, summarise a whole range, or state what is not recorded." },
+	{ count: 407, issue: "#1383", date: "2026-10-27", reason: "disable_instance, enable_instance and list_disabled_instances give the disabled state its own verbs and its own list. pause_instance and resume_instance stop and restart an instance but record no reason or actor and offer no way to see only the instances that are switched off; my_instances can include paused ones but cannot show ONLY them, with who disabled them, when and why, their repos, pinned machine and last run." },
 ];

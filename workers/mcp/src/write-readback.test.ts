@@ -288,6 +288,7 @@ const READBACK: Record<string, string | null> = {
 	"browser_takeover_request.subject_kind": "browser_takeover_list",
 	"browser_takeover_request.subject_id": "browser_takeover_list",
 	"browser_takeover_request.reason": "browser_takeover_list",
+	"disable_instance.reason": "list_disabled_instances", // #1383: the Disabled list returns each instance's recorded reason
 	"browser_takeover_transition.state": "browser_takeover_get",
 	"browser_takeover_transition.takeover_id": "browser_takeover_get",
 	// The caller's own statement of where it is, checked against the preference and not kept.

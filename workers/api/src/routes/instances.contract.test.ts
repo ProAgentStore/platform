@@ -232,6 +232,7 @@ const ROUTES = [
 	"POST /:agentId/subscribe",
 	"GET /my/instances",
 	"GET /my/activity",
+	"GET /my/disabled-instances",
 	"GET /my/coding-history",
 	"GET /:instanceId/tags",
 	"PUT /:instanceId/tags",
@@ -442,6 +443,8 @@ const ROUTES = [
 	// Pause / resume (#825) — registered by `instances-lifecycle.ts` right after the knowledge group.
 	"POST /:instanceId/pause",
 	"POST /:instanceId/resume",
+	"POST /:instanceId/enable",
+	"POST /:instanceId/disable",
 	"POST /:instanceId/cancel",
 ];
 
@@ -569,7 +572,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-native.ts": ["GET /:instanceId/native/preflight"],
 	"instances-browser-screenshots.ts": ["GET /:instanceId/browser-screenshots", "PUT /:instanceId/browser-screenshots"],
-	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
+	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume", "POST /:instanceId/enable", "POST /:instanceId/disable"],
 	"instances-job-leads.ts": ["GET /:instanceId/job-leads/browser-verifications", "POST /:instanceId/job-leads/:recordId/browser-verification", "POST /:instanceId/job-leads/manual-url", "POST /:instanceId/job-leads/:recordId/triage"],
 	"instances-gmail-scout.ts": [
 		"GET /:instanceId/gmail-scout/config",
@@ -711,6 +714,7 @@ const INSTANCES_TS = [
 	"POST /:agentId/subscribe",
 	"GET /my/instances",
 	"GET /my/activity",
+	"GET /my/disabled-instances",
 	"GET /my/coding-history",
 	"GET /:instanceId/tags",
 	"PUT /:instanceId/tags",
@@ -775,6 +779,8 @@ const GATES: Record<string, [number, number]> = {
 	// gets 200 and an empty list rather than a 404 about someone else's instances.
 	"GET /my/activity": [401, 200],
 	// #1335: the owner-wide coding history reads every source by `user_id = ?1`, so a stranger gets 200 and an empty history.
+	// #1383: the Disabled list reads `user_id = ?1` only, so a stranger gets 200 and an empty list.
+	"GET /my/disabled-instances": [401, 200],
 	"GET /my/coding-history": [401, 200],
 	// #961: the snapshot is the tenant query too — a stranger gets 200 and no instances.
 	"GET /:instanceId/tags": [401, 404],
@@ -1022,6 +1028,9 @@ const GATES: Record<string, [number, number]> = {
 	"POST /:instanceId/loop-decide": [401, 404],
 	"POST /:instanceId/pause": [401, 404],
 	"POST /:instanceId/resume": [401, 404],
+	// #1383: disable and enable are the owner's alone, like pause and resume.
+	"POST /:instanceId/enable": [401, 404],
+	"POST /:instanceId/disable": [401, 404],
 	"POST /:instanceId/system-message": [401, 404],
 	"GET /:instanceId/messages": [401, 404],
 	"POST /:instanceId/knowledge": [401, 404],
@@ -1057,6 +1066,7 @@ describe("what a stranger gets from every route", () => {
 	const ANSWERS_A_STRANGER: Record<string, string> = {
 		"GET /my/instances": "IS the tenant query (WHERE i.user_id = ?1) — answers with an empty list",
 		"GET /my/activity": "both its queries ARE the tenant query (WHERE user_id = ?1) — answers with an empty list",
+		"GET /my/disabled-instances": "the tenant query (WHERE i.user_id = ?1, and every enrichment read is scoped to the caller) — answers with an empty list",
 		"GET /my/coding-history": "every source it reads is filtered by the tenant (user_id = ?1, in the shared CTE and every enrichment query) — a stranger gets an empty history and zero counts; an instance_id that is not theirs is a 404",
 		"GET /my/snapshot": "every query is the tenant query (WHERE user_id = ?1) — answers with an empty list",
 		"GET /behaviour-schema": "the behaviour field table: the same static vocabulary for every agent, public by design",

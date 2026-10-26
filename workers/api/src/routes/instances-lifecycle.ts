@@ -19,7 +19,7 @@
 // subscription, the config, the repos, the documents, the timeline and the run history all stay
 // exactly as they are, which is what makes this reversible and cancel not.
 
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { listActiveRuns, requestCancel } from "../lib/agent-loop-store.js";
 import { drainPendingQueues } from "../lib/objective-queue-start.js";
@@ -67,10 +67,71 @@ async function writePaused(env: Env, instanceId: string): Promise<void> {
 		.run();
 }
 
+/**
+ * An instance that is active carries no disabled record (#1383): enabling — and a plain resume — clear all three columns in the same
+ * statement that flips the status, so the two can never disagree. Nothing else on the row is touched, which is what makes a disable→enable
+ * round trip restore the pins, repos, queue and schedules exactly (they live in `config` and other tables, none of which is written here).
+ */
 async function writeActive(env: Env, instanceId: string): Promise<void> {
-	await env.DB.prepare("UPDATE agent_instances SET status = 'active', updated_at = datetime('now') WHERE id = ?1")
+	await env.DB.prepare("UPDATE agent_instances SET status = 'active', disabled_at = NULL, disabled_by = NULL, disabled_reason = NULL, updated_at = datetime('now') WHERE id = ?1")
 		.bind(instanceId)
 		.run();
+}
+
+/**
+ * Disable = pause + the record of the decision (#1383). The status is the same literal `'paused'` the pause writer uses, so every gate that
+ * refuses work for a paused instance refuses it for a disabled one. Repeating it keeps the ORIGINAL time and actor (COALESCE) and only
+ * replaces the reason when a new one is given, so a retry after a dropped response cannot rewrite who disabled it, or when.
+ */
+async function writeDisabled(env: Env, instanceId: string, by: string, reason: string | null): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE agent_instances SET status = 'paused', disabled_at = COALESCE(disabled_at, datetime('now')), disabled_by = COALESCE(disabled_by, ?2),
+		        disabled_reason = COALESCE(?3, disabled_reason), updated_at = datetime('now') WHERE id = ?1`,
+	)
+		.bind(instanceId, by, reason)
+		.run();
+}
+
+const REASON_MAX = 500;
+
+/** The optional `reason` of a disable: absent or blank is none; a non-string, or one past the bound, is a 400 rather than a quiet clip. */
+async function reasonOf(c: { req: { json(): Promise<unknown> } }): Promise<string | null> {
+	const body = (await c.req.json().catch(() => null)) as { reason?: unknown } | null;
+	const raw = body?.reason;
+	if (raw === undefined || raw === null) return null;
+	if (typeof raw !== "string") throw new HttpError(400, "reason must be a string");
+	const reason = raw.trim();
+	if (reason.length > REASON_MAX) throw new HttpError(400, `reason must be at most ${REASON_MAX} characters`);
+	return reason || null;
+}
+
+interface DisabledRow {
+	id: string;
+	status: string | null;
+	disabled_at: string | null;
+	disabled_reason: string | null;
+}
+
+async function ownedDisabledRow(env: Env, instanceId: string, userId: string): Promise<DisabledRow> {
+	const row = await env.DB.prepare("SELECT id, status, disabled_at, disabled_reason FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, userId)
+		.first<DisabledRow>();
+	if (!row) throw new HttpError(404, "Instance not found");
+	return row;
+}
+
+/**
+ * Cooperative, and reported as such. `requestCancel` only matches a row still `running`, so this is naturally idempotent and a second call asks
+ * nothing of a run that already stopped. It does not reset the clock on a run that is ignoring an earlier request either — `cancel_requested_at`
+ * is COALESCEd at the store. Shared by pause and disable: the same stop, with or without the record.
+ */
+async function askRunsToStop(env: Env, userId: string, instanceId: string): Promise<number> {
+	const running = await listActiveRuns(env, userId, instanceId).catch(() => []);
+	let asked = 0;
+	for (const run of running) {
+		if (await requestCancel(env, userId, run.runId).catch(() => false)) asked++;
+	}
+	return asked;
 }
 
 export function registerInstanceLifecycleRoutes(router: Hono<{ Bindings: Env }>): void {
@@ -91,15 +152,7 @@ export function registerInstanceLifecycleRoutes(router: Hono<{ Bindings: Env }>)
 		refuse(verdict);
 		if (verdict.changed) await writePaused(c.env, instanceId);
 
-		// Cooperative, and reported as such. `requestCancel` only matches a row still `running`, so
-		// this is naturally idempotent and a second pause asks nothing of a run that already
-		// stopped. It does not reset the clock on a run that is ignoring an earlier request either
-		// — `cancel_requested_at` is COALESCEd at the store.
-		const running = await listActiveRuns(c.env, session.uid, instanceId).catch(() => []);
-		let asked = 0;
-		for (const run of running) {
-			if (await requestCancel(c.env, session.uid, run.runId).catch(() => false)) asked++;
-		}
+		const asked = await askRunsToStop(c.env, session.uid, instanceId);
 
 		return c.json({
 			success: true,
@@ -122,14 +175,16 @@ export function registerInstanceLifecycleRoutes(router: Hono<{ Bindings: Env }>)
 	 * #806's resume note exists to prevent from the other direction. `continue_instance_run` is the
 	 * deliberate, per-run way to carry one forward, and the response points at it.
 	 */
-	router.post("/:instanceId/resume", async (c) => {
+	const resumeHandler = async (c: Context<{ Bindings: Env }>) => {
 		const session = await requireUser(c);
-		const instanceId = c.req.param("instanceId");
+		const instanceId = c.req.param("instanceId") as string;
 		const row = await ownedStatusRow(c.env, instanceId, session.uid);
 
 		const verdict = resumeVerdict(row.status);
 		refuse(verdict);
-		if (verdict.changed) await writeActive(c.env, instanceId);
+		// Always written, even when the status already reads active: an instance that is active must carry no disabled record, and the
+		// clear is a no-op on a row that never had one. `changed` still reports only whether the STATUS moved.
+		await writeActive(c.env, instanceId);
 		// Queued objectives the pause held back start now (#1015): nothing else would drain them.
 		const drained = verdict.changed ? await drainPendingQueues(c.env, instanceId, session.uid) : [];
 
@@ -138,7 +193,41 @@ export function registerInstanceLifecycleRoutes(router: Hono<{ Bindings: Env }>)
 			success: true,
 			status: ACTIVE_INSTANCE_STATUS,
 			changed: verdict.changed,
+			disabled: null,
 			note: "Runs stopped by the pause are not restarted — continue one with POST /v1/instances/:id/loop/:runId/continue, or start fresh work as usual.",
+		});
+	};
+	router.post("/:instanceId/resume", resumeHandler);
+	/** `enable` is `resume` under the name the Disabled list and the console use (#1383): the same handler, so they cannot drift apart. */
+	router.post("/:instanceId/enable", resumeHandler);
+
+	/**
+	 * Disable one instance (#1383): pause it, and record when, by whom and why. Idempotent — disabling a disabled instance succeeds and
+	 * keeps the original time and actor. Never deletes anything; `enable` reverses it exactly. Only the OWNER's own session can do it
+	 * (`disabled_by` is the verified session uid, never anything in the request body).
+	 */
+	router.post("/:instanceId/disable", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		const reason = await reasonOf(c);
+		const row = await ownedDisabledRow(c.env, instanceId, session.uid);
+
+		const verdict = pauseVerdict(row.status);
+		refuse(verdict);
+		const recordChanged = !row.disabled_at || (reason !== null && reason !== row.disabled_reason);
+		// Status BEFORE asking runs to stop — the order is load-bearing, exactly as for pause.
+		if (verdict.changed || recordChanged) await writeDisabled(c.env, instanceId, session.uid, reason);
+		const asked = await askRunsToStop(c.env, session.uid, instanceId);
+		const after = await c.env.DB.prepare("SELECT disabled_at, disabled_by, disabled_reason FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+			.bind(instanceId, session.uid)
+			.first<{ disabled_at: string | null; disabled_by: string | null; disabled_reason: string | null }>();
+
+		return c.json({
+			success: true,
+			status: PAUSED_INSTANCE_STATUS,
+			changed: verdict.changed || recordChanged,
+			disabled: { at: after?.disabled_at ?? null, by: after?.disabled_by ?? null, reason: after?.disabled_reason ?? null },
+			runsAskedToStop: asked,
 		});
 	});
 }

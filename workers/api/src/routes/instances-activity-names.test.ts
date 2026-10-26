@@ -30,7 +30,7 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES
 	  ('i-fas', 'ag-coder', 'u1', 'active', '{"displayName":"FAS FreeAppStore Coder"}'),
 	  ('i-plain', 'ag-coder', 'u1', 'active', '{}'),
-	  ('i-op', 'ag-op', 'u1', 'paused', '{}'),
+	  ('i-op', 'ag-op', 'u1', 'active', '{}'), -- active: a paused instance is hidden from this view by default (#1383), and this test is about NAMES
 	  ('i-other', 'ag-op', 'u2', 'active', '{}')`);
 	const run = (id: string, inst: string, user = "u1") =>
 		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at) VALUES ('${id}', '${user}', '${inst}', 'x', 'running', 10, ${Date.now()})`);

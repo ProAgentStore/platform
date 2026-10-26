@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isPaused, MY_INSTANCES_WITH_PAUSED, pausePanel } from "./instancePause";
+import { DISABLE_REASON_MAX, DISABLED_INSTANCES_PATH, describeDisabled, isPaused, MY_INSTANCES_WITH_PAUSED, pausePanel } from "./instancePause";
 
 /**
  * The Pause control's words and its one comparison (#825).
@@ -12,16 +12,17 @@ import { isPaused, MY_INSTANCES_WITH_PAUSED, pausePanel } from "./instancePause"
  * about the control existing and saying the right thing as about the function.
  */
 describe("pausePanel", () => {
-	it("offers PAUSE for an active instance", () => {
+	it("offers DISABLE for an active instance", () => {
 		const p = pausePanel("active");
-		expect(p.action).toBe("pause");
-		expect(p.button).toMatch(/Pause/);
+		expect(p.action).toBe("disable");
+		expect(p.button).toMatch(/Disable/);
 	});
 
-	it("offers RESUME for a paused one", () => {
+	it("offers ENABLE for a disabled (paused) one", () => {
 		const p = pausePanel("paused");
-		expect(p.action).toBe("resume");
-		expect(p.button).toMatch(/Resume/);
+		expect(p.action).toBe("enable");
+		expect(p.button).toMatch(/Enable/);
+		expect(p.title).toBe("Disabled");
 	});
 
 	it("shows the pause half for a status this build has not been taught", () => {
@@ -29,7 +30,7 @@ describe("pausePanel", () => {
 		// state, where the server refuses what it cannot do. Defaulting to RESUME would show an
 		// agent as paused because the console did not recognise a word.
 		for (const status of ["suspended", "", null, undefined]) {
-			expect(pausePanel(status).action, String(status)).toBe("pause");
+			expect(pausePanel(status).action, String(status)).toBe("disable");
 		}
 	});
 
@@ -43,7 +44,7 @@ describe("pausePanel", () => {
 		expect(p.statement).toMatch(/chat/i);
 	});
 
-	it("says resume does NOT restart what the pause stopped", () => {
+	it("says enable does NOT restart what the disable stopped", () => {
 		expect(pausePanel("paused").statement).toMatch(/does not restart/i);
 	});
 
@@ -78,10 +79,10 @@ describe("the control is wired in", () => {
 	it("writes BOTH paths out in full, so the parity check can see them", () => {
 		// A template segment the extractor cannot resolve reports as one unmeasurable capability
 		// `POST /v1/instances/{}/{}`, which made `check-mcp-parity.mjs` fail on a gap that does not
-		// exist — `pause_instance` and `resume_instance` cover these. Two literals keep the
+		// exist — `disable_instance` and `enable_instance` cover these. Two literals keep the
 		// measurement true.
-		expect(card).toContain("/pause`");
-		expect(card).toContain("/resume`");
+		expect(card).toContain("/disable`");
+		expect(card).toContain("/enable`");
 		// Written without the interpolation braces: spelling them here trips
 		// `noTemplateCurlyInString`, which is the lint doing its job on a test that forbids the
 		// very pattern it has to name.
@@ -115,5 +116,49 @@ describe("the control is wired in", () => {
 		expect(MY_INSTANCES_WITH_PAUSED).toBe("/v1/instances/my/instances?includePaused=1");
 		expect(hook).toContain("MY_INSTANCES_WITH_PAUSED");
 		expect(tab).toContain("MY_INSTANCES_WITH_PAUSED");
+	});
+});
+
+describe("the record of a disable (#1383)", () => {
+	it("says when, by whom and why — only the parts that are known", () => {
+		expect(describeDisabled({ at: "2026-10-27 01:02:03", by: "u1", reason: "duplicate" }, "u1")).toBe("Disabled 2026-10-27 by you — duplicate");
+		expect(describeDisabled({ at: "2026-10-27 01:02:03", by: "u9", reason: null }, "u1")).toBe("Disabled 2026-10-27 by another session");
+		expect(describeDisabled({ at: null, by: null, reason: "idle" })).toBe("Disabled — idle");
+	});
+
+	it("an instance paused without a record says so, rather than inventing one", () => {
+		for (const none of [null, undefined, { at: null, by: null, reason: null }]) {
+			expect(describeDisabled(none)).toMatch(/no record of when, by whom or why/);
+		}
+	});
+
+	it("bounds the reason input to what the server accepts", () => {
+		expect(DISABLE_REASON_MAX).toBe(500);
+	});
+});
+
+describe("the Disabled page is wired in (#1383)", () => {
+	const src = (...parts: string[]) => readFileSync(join(import.meta.dirname, "..", ...parts), "utf8");
+	const page = src("pages", "Disabled.tsx");
+
+	it("reads the dedicated list and enables with the literal route, so the parity check can see it", () => {
+		expect(DISABLED_INSTANCES_PATH).toBe("/v1/instances/my/disabled-instances");
+		expect(page).toContain("DISABLED_INSTANCES_PATH");
+		expect(page).toContain("/enable`");
+		expect(page).not.toContain("panel.action}");
+	});
+
+	it("is routed and reachable from the nav, and the card links to it", () => {
+		expect(src("App.tsx")).toContain('<Route path="disabled" element={<Disabled />} />');
+		expect(src("components", "Layout.tsx")).toContain('to: "/disabled"');
+		expect(src("components", "PauseCard.tsx")).toContain('to="/disabled"');
+	});
+
+	it("refreshes from the server after an enable rather than dropping the row locally", () => {
+		expect(page).toMatch(/await load\(\)/);
+	});
+
+	it("never offers a delete: the page enables and nothing else", () => {
+		expect(page).not.toMatch(/method: "DELETE"|cancel_instance|\/cancel/);
 	});
 });

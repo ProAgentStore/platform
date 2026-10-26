@@ -1,5 +1,9 @@
 /**
- * The Pause / Resume control's words (#825).
+ * The Disable / Enable control's words (#825, #1383).
+ *
+ * "Disabled" IS the paused state (`status = 'paused'`): the control used to be called Pause and Resume, and #1383 gave the same state a
+ * name owners reach for, a recorded reason, and a list of its own (`pages/Disabled.tsx`). The server's routes are `/disable` and `/enable`;
+ * `/pause` and `/resume` still exist for callers that never asked for a record.
  *
  * A module rather than inline JSX for the reason `unsubscribeScope.ts` next door is one: this
  * panel states what a lifecycle control WILL DO, and that sentence is the thing most worth
@@ -23,23 +27,23 @@ export interface PausePanel {
 	/** The button label. */
 	button: string;
 	/** `POST /v1/instances/:id/<action>` — the route half, so the caller does not re-derive it. */
-	action: "pause" | "resume";
+	action: "disable" | "enable";
 }
 
 const PAUSED: PausePanel = {
-	title: "Paused",
+	title: "Disabled",
 	statement:
-		"This agent is paused: no new runs can start, and its scheduled work, inbound webhooks and teamwork deliveries are all held. Nothing has been lost — the subscription, documents, repos and history are exactly as they were. Resuming lets it start work again; it does not restart the runs the pause stopped.",
-	button: "Resume this agent",
-	action: "resume",
+		"This agent is disabled: it is hidden from your lists, no new runs or queued objectives can start, and its scheduled work, inbound webhooks and teamwork deliveries are all held. Nothing has been lost — the subscription, documents, repos, queue, schedules and pinned machine are all kept exactly as they were. Enabling it restores them; it does not restart runs the disable stopped.",
+	button: "Enable this agent",
+	action: "enable",
 };
 
 const ACTIVE: PausePanel = {
-	title: "Pause",
+	title: "Disable",
 	statement:
-		"Stop this agent for now without unsubscribing. New runs are blocked, anything in flight is asked to stop, and its scheduled work, inbound webhooks and teamwork deliveries are held. You can still chat with it — everything is kept, and Resume puts it straight back.",
-	button: "Pause this agent",
-	action: "pause",
+		"Switch this agent off without unsubscribing. It is hidden from your lists, new runs are blocked, anything in flight is asked to stop, and its scheduled work, inbound webhooks and teamwork deliveries are held. Everything is kept — the subscription, documents, repos, queue and history — and you can still chat with it to find out what went wrong. You can enable it again at any time from here or from the Disabled page.",
+	button: "Disable this agent",
+	action: "disable",
 };
 
 /**
@@ -62,13 +66,32 @@ export function isPaused(status: string | null | undefined): boolean {
 }
 
 /**
- * What `POST /v1/instances/:id/{pause,resume}` answers.
+ * What `POST /v1/instances/:id/{disable,enable}` (and pause/resume) answers.
  *
  * Named rather than declared inline at the call: `check-console-types.mjs` ratchets every
  * anonymous shape a console API call declares, and naming one is the only direction that ratchet
  * moves. (Do not write the generic-call form out in a comment here — that guard's scanner reads
  * block comments, so demonstrating the pattern it forbids IS a finding.)
  */
+/** When, by whom (a verified account id) and why an instance was disabled. Each part is null on an instance paused without a record. */
+export interface DisabledRecord {
+	at: string | null;
+	by: string | null;
+	reason: string | null;
+}
+
+/** One line for a disabled instance's record: "Disabled 2026-10-27 by you — duplicate", with only the parts that are known. */
+export function describeDisabled(record: DisabledRecord | null | undefined, me?: string | null): string {
+	if (!record || (!record.at && !record.by && !record.reason)) return "Disabled — no record of when, by whom or why (it was paused, which records none).";
+	const when = record.at ? ` ${record.at.slice(0, 10)}` : "";
+	const who = record.by ? ` by ${me && record.by === me ? "you" : "another session"}` : "";
+	const why = record.reason ? ` — ${record.reason}` : "";
+	return `Disabled${when}${who}${why}`;
+}
+
+/** The longest reason the server accepts; the input is bounded to match so a long one is stopped here, not by a 400. */
+export const DISABLE_REASON_MAX = 500;
+
 export interface PauseResponse {
 	success?: boolean;
 	/** The status that now holds — read from the RESPONSE, never assumed from which button was pressed. */
@@ -77,7 +100,32 @@ export interface PauseResponse {
 	runsAskedToStop?: number;
 	/** False when the state already held — a retry or a double-click, not a failure. */
 	changed?: boolean;
+	/** The record that now holds (disable) or null (enable). */
+	disabled?: DisabledRecord | null;
 }
+
+/** One entry of `GET /v1/instances/my/disabled-instances`. */
+export interface DisabledInstance {
+	id: string;
+	name: string | null;
+	slug: string | null;
+	repos: Array<{ name: string; githubRepo: string | null }>;
+	pinnedMachine: { node: string; machineId: string | null } | null;
+	disabled: DisabledRecord;
+	lastActivityAt: string | null;
+	lastRun: { runId: string; status: string; stopReason: string | null; startedAt: number; finishedAt: number | null } | null;
+	queuedObjectives: number;
+}
+
+export interface DisabledInstancesResponse {
+	asOf: number;
+	total: number;
+	truncated: boolean;
+	instances: DisabledInstance[];
+}
+
+/** The Disabled list's endpoint. */
+export const DISABLED_INSTANCES_PATH = "/v1/instances/my/disabled-instances";
 
 /**
  * Roster endpoint for a view that must resolve a specific owned instance, including one paused

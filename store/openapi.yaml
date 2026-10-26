@@ -3002,6 +3002,8 @@ paths:
         so absence means idle and an empty list means the account is quiet.
       operationId: getMyInstanceActivity
       tags: [Instances]
+      parameters:
+        - { name: include_paused, in: query, required: false, schema: { type: boolean }, description: "Include paused (disabled) instances. Default false: only active ones are listed, and `hiddenInactive` counts what was left out (#1383)." }
       responses:
         "200":
           description: Activity per instance, plus the instant it was read
@@ -3039,6 +3041,29 @@ paths:
                               description: >
                                 With startedAt, what "last active" is computed from. The instance's own
                                 last_activity_at moves only on owner-driven events, so it cannot answer it alone.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/instances/my/disabled-instances:
+    get:
+      summary: My disabled instances (#1383)
+      description: |
+        Only the instances the owner has disabled (paused), newest-disabled first, bounded to 200 (`truncated` says so). Each carries its repos,
+        the pinned machine, `disabled: { at, by, reason }` (null parts mean it was paused with plain pause, which records nothing), its last run
+        and the number of objectives queued behind it. Owner-scoped; read-only.
+      operationId: listMyDisabledInstances
+      tags: [Instances]
+      responses:
+        "200":
+          description: The disabled instances
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asOf: { type: integer }
+                  total: { type: integer }
+                  truncated: { type: boolean }
+                  instances: { type: array, items: { type: object } }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/instances/my/coding-history:
@@ -3101,6 +3126,9 @@ paths:
       description: List all agent instances the authenticated user is subscribed to.
       operationId: listMyInstances
       tags: [Instances]
+      parameters:
+        - { name: includePaused, in: query, required: false, schema: { type: boolean }, description: Also list paused (disabled) instances, hidden by default (#826). }
+        - { name: disabled_only, in: query, required: false, schema: { type: boolean }, description: "Only the disabled (paused) instances, each with `disabled: { at, by, reason }` (#1383)." }
       responses:
         "200":
           description: Subscribed instances
@@ -3800,6 +3828,91 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: The instance is cancelled, not paused — there is nothing to resume.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/instances/{instanceId}/disable:
+    post:
+      summary: Disable an instance, with a recorded reason (#1383)
+      description: |
+        Switch an instance OFF without deleting anything. "Disabled" is the paused state (`status: paused`), so every gate that refuses work for a
+        paused instance refuses it for a disabled one: no new runs, no queue starts, no triage, no background work, and any run in flight is
+        ASKED to stop. It is hidden from `my_instances`, `recent_instances`, `account_activity`, `fleet_snapshot` and `list_runner_nodes` unless
+        paused ones are requested, and it is listed by `GET /v1/instances/my/disabled-instances`.
+
+        Records `disabled_at`, `disabled_by` (the verified session uid, never anything in the body) and the optional `reason` (at most 500
+        characters; a longer or non-string reason is a 400). Idempotent: disabling a disabled instance answers 200 and keeps the original time
+        and actor, replacing the reason only when a new one is given. `POST /v1/instances/{instanceId}/enable` reverses it exactly; the
+        subscription, config, repos, queue, schedules and pinned machine are never touched. A CANCELLED instance cannot be disabled.
+      operationId: disableInstance
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: The instance is disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  status: { type: string, example: paused }
+                  changed: { type: boolean, description: Whether the status or the record changed. }
+                  disabled:
+                    type: object
+                    properties:
+                      at: { type: string, nullable: true }
+                      by: { type: string, nullable: true }
+                      reason: { type: string, nullable: true }
+                  runsAskedToStop: { type: integer }
+        "400": { description: reason is not a string, or is longer than 500 characters. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The instance is cancelled; there is nothing to disable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/instances/{instanceId}/enable:
+    post:
+      summary: Enable a disabled instance (#1383)
+      description: |
+        The same action as `POST /v1/instances/{instanceId}/resume`, under the Disabled list's name: new runs may start, queued objectives start, and
+        background work resumes. Clears `disabled_at`, `disabled_by` and `disabled_reason`. Does NOT restart runs the disable stopped (continue one
+        with `POST /v1/instances/{instanceId}/loop/{runId}/continue`). Idempotent. A CANCELLED instance cannot be enabled.
+      operationId: enableInstance
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The instance is active again
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  status: { type: string, example: active }
+                  changed: { type: boolean }
+                  disabled: { nullable: true, description: Always null once enabled. }
+                  queueStarted: { type: integer }
+                  note: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The instance is cancelled; there is nothing to enable.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -14136,6 +14249,8 @@ paths:
         wedged runtime behind it times out every command.
       operationId: listTerminalNodes
       tags: [Terminals]
+      parameters:
+        - { name: include_paused, in: query, required: false, schema: { type: boolean }, description: "List paused (disabled) instances under each machine too. Default false: each machine lists only active instances and sessions, the machine itself is never hidden, and `pausedHidden` counts what was left out (#1383)." }
       responses:
         "200":
           description: Machines, each with the instances it serves and the coding sessions pinned to it
