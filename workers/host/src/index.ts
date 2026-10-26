@@ -12,6 +12,7 @@ import {
 } from "./pages.js";
 import { pinnedManifest } from "./manifest.js";
 import { publicListingResponse, publishedSitemapEntries } from "./seo.js";
+import { publicCatalogueResponse } from "./catalogue-html.js";
 
 const PAGES: Record<string, string> = {
 	"/": homepage,
@@ -267,6 +268,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 	}
 
 	// Static pages
+	if (path === "/") return publicCatalogueResponse(env.API, homepage, HTML_HEADERS);
 	const page = PAGES[path];
 	if (page) {
 		return new Response(page, { headers: /^\/(console|admin)\/?$/.test(path) ? CONSOLE_HEADERS : HTML_HEADERS });

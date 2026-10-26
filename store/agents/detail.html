@@ -127,6 +127,7 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
 
   <main class="container">
     <a href="/" class="back">&larr; All agents</a>
+    <!-- public-agent-summary -->
     <div id="loading" class="loading">Loading agent dashboard...</div>
     <div id="content" style="display:none">
       <section class="hero">
@@ -470,12 +471,18 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
           agent.__ownerView = true;
         }
         renderPublic(agent);
+        $('public-agent-summary')?.remove();
         $('loading').style.display = 'none';
         $('content').style.display = '';
         checkHealth(agent);
         loadOwnerData(agent);
 	      } catch (error) {
+	        if ($('public-agent-summary')) {
+	          $('public-agent-summary').insertAdjacentHTML('beforeend', '<p role="status">The interactive dashboard could not load. Reload to try again.</p>');
+	          return;
+	        }
 	        agent = renderPrivatePlaceholder(agentId, 'This agent is private, draft, or not published yet. Sign in as the owner to open the full dashboard.');
+	        $('public-agent-summary')?.remove();
 	        $('loading').style.display = 'none';
 	        $('content').style.display = '';
 	        checkHealth(agent);

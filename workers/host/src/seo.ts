@@ -1,4 +1,5 @@
 /** Public listing metadata comes only from the anonymous catalogue — never the visitor's session. */
+import { publicAgentSummary } from "./catalogue-html.js";
 type PublicApi = { fetch(input: Request | string): Promise<Response> };
 const ORIGIN = "https://proagentstore.online";
 
@@ -49,7 +50,8 @@ export async function publicListingResponse(
 	if (!name || !slug) throw new Error(`Public ${kind} metadata is incomplete`);
 	const title = profile ? `${name} — ProAgentStore Developer` : `${name} — ProAgentStore`;
 	const description = (profile ? profile.bio : data.description) || (profile ? `Published ProAgentStore agents by ${name}.` : `${name}, a server-powered AI agent on ProAgentStore.`);
-	return new Response(listingMetadata(template, title, description, `${ORIGIN}/${kind}/${encodeURIComponent(slug)}/`), { headers });
+	const html = listingMetadata(template, title, description, `${ORIGIN}/${kind}/${encodeURIComponent(slug)}/`);
+	return new Response(profile ? html : publicAgentSummary(html, { slug, name, description }), { headers });
 }
 
 /** Page through the same published-only list used by the storefront, including beyond page one. */
