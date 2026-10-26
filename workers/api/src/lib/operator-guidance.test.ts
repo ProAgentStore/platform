@@ -13,6 +13,7 @@ import { realSchemaD1, type RealSchemaD1, seedTenant } from "./d1-sqlite.js";
 import { allToolPolicyInputs, projectToolListing, resolveToolPolicy } from "./instance-tool-policy.js";
 import { buildOperatorGuidance, environmentSection, OPERATOR_GUIDANCE_MAX_CHARS, toolPurpose } from "./operator-guidance.js";
 import type { Env } from "../types.js";
+import type { RunnerEnvironment } from "./runner-resources.js";
 
 vi.mock("./auth.js", async () => {
 	const actual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
@@ -192,13 +193,16 @@ describe("operator manual and instance list carry the pinned machine's environme
 		await pin("dell-laptop");
 		node("dell-laptop", sampleJson);
 		const list = await call("/v1/instances/my/instances");
-		const mine = (Array.isArray(list) ? list : (list.instances ?? [])).find((i) => i.id === INSTANCE);
+		// The route answers a bare array or `{ instances }`; `call` types it as both at once, which narrows one branch to `never`.
+		type Row = { id: string; environment?: Record<string, unknown> };
+		const rows = list as unknown as Row[] | { instances?: Row[] };
+		const mine = (Array.isArray(rows) ? rows : (rows.instances ?? [])).find((i) => i.id === INSTANCE);
 		expect(mine?.environment).toMatchObject({ os: "win32", arch: "x64", shell: "msys-bash" });
 	});
 });
 
 describe("the runner environment section (#405)", () => {
-	const e = { node: "dell-laptop", os: "win32", arch: "x64", shell: "msys-bash", home: "C:\\Users\\admin", nodeVersion: "v22.4.0", sampledAt: "2026-10-26T01:00:00.000Z" };
+	const e: RunnerEnvironment = { node: "dell-laptop", os: "win32", arch: "x64", shell: "msys-bash", home: "C:\\Users\\admin", nodeVersion: "v22.4.0", sampledAt: "2026-10-26T01:00:00.000Z" };
 	const c = caps({ surfaces: [], runtime: null });
 	const withEnv = (environment: typeof e | null | undefined) => buildOperatorGuidance({ instanceId: INSTANCE, surfaces: c.surfaces, runtime: c.runtime, tools: rowsFor(c), ...(environment === undefined ? {} : { environment }) });
 
