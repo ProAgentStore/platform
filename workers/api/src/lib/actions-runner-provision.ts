@@ -378,8 +378,10 @@ export type InstalledRunner = {
 	serviceMode?: string;
 	serviceState?: string;
 	acRecoveryEnabled?: boolean;
-	supervisor?: { updatedAt: number; health: string; [key: string]: unknown } | null;
+	supervisor?: { updatedAt: number; health: string; cliVersion?: string; approvedCliVersion?: string; [key: string]: unknown } | null;
 	supervisorNote?: string;
+	/** The supervisor is alive but still running a CLI version other than the approved one. */
+	versionSkew?: boolean;
 	/** A stale sample is never evidence of current local readiness. */
 	localHealth?: "current" | "stale" | "unknown";
 	/** GitHub's view of this runner (#1213): online, busy, its labels, whether jobs can be routed to it. Absent when it could not be read — see `ciNote`. */
@@ -424,10 +426,11 @@ export async function actionsRunnerStatus(
 	}
 	const installed = await Promise.all(
 		r.installed.map(async (i): Promise<InstalledRunner> => {
+			const versionSkew = typeof i.supervisor?.cliVersion === "string" && typeof i.supervisor.approvedCliVersion === "string" && i.supervisor.cliVersion !== i.supervisor.approvedCliVersion;
 			const localHealth = i.supervisor && typeof i.supervisor.updatedAt === "number"
-				? (Date.now() - i.supervisor.updatedAt <= 60_000 && i.supervisor.updatedAt <= Date.now() + 5_000 ? "current" : "stale")
+				? (Date.now() - i.supervisor.updatedAt <= 60_000 && i.supervisor.updatedAt <= Date.now() + 5_000 && !versionSkew ? "current" : "stale")
 				: "unknown";
-			const local = { ...i, localHealth } as InstalledRunner;
+			const local = { ...i, localHealth, ...(versionSkew ? { versionSkew } : {}) } as InstalledRunner;
 			const scope = scopeFromRunnerUrl(i.url);
 			if (!i.name || !scope) return { ...local, ciNote: "GitHub's view is unknown because the local runner name or scope is missing." };
 			try {

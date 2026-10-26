@@ -33,6 +33,7 @@ export function ActionsRunnerStatusView({ status, busy, note, onRefresh, onRecov
 					<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 mt-2 text-xs">
 						<dt className="text-muted">Service</dt><dd>{item.serviceMode || "unknown"}{item.serviceState ? ` · ${item.serviceState}` : ""}</dd>
 						<dt className="text-muted">Local</dt><dd>{item.localHealth === "current" ? item.supervisor?.health || "unknown" : item.localHealth || "unknown"}{item.localHealth === "stale" ? " (stale sample)" : ""}{item.supervisor?.activeJob ? " · active job" : ""}</dd>
+						{item.supervisor?.cliVersion && <><dt className="text-muted">PAGS supervisor</dt><dd>{item.supervisor.cliVersion}{item.supervisor.approvedCliVersion ? ` · approved ${item.supervisor.approvedCliVersion}` : " · approved version unknown"}{item.versionSkew ? " · update pending" : ""}</dd></>}
 						<dt className="text-muted">GitHub</dt><dd>{item.ci ? item.ci.registered ? `${item.ci.online ? "online" : "offline"} · ${item.ci.busy ? "busy" : "idle"} · ${item.ci.routable ? "routable" : "not routable"}` : "not registered" : `unknown${item.ciNote ? ` — ${item.ciNote}` : ""}`}</dd>
 						<dt className="text-muted">AC recovery</dt><dd>{item.acRecoveryEnabled === undefined ? "unknown" : item.acRecoveryEnabled ? "on" : "off"}{item.supervisor?.acPower ? ` · power ${item.supervisor.acPower}` : ""}</dd>
 						<dt className="text-muted">Last AC return</dt><dd>{when(item.supervisor?.lastAcReturnAt)}</dd>

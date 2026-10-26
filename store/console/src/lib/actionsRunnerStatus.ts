@@ -15,9 +15,12 @@ export interface ActionsRunnerItem {
 	serviceState?: string;
 	acRecoveryEnabled?: boolean;
 	localHealth?: "current" | "stale" | "unknown";
+	versionSkew?: boolean;
 	supervisor?: {
 		health: string;
 		updatedAt: number;
+		cliVersion?: string;
+		approvedCliVersion?: string;
 		acPower?: string;
 		activeJob?: boolean;
 		lastAcReturnAt?: number;

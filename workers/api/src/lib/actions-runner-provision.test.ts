@@ -209,6 +209,12 @@ describe("local supervisor status and explicit recovery (#1367)", () => {
 		expect(s.installed[0]).toMatchObject({ serviceMode: "macos_system", localHealth: "stale", supervisor: { health: "ready" }, ci: { online: true, busy: false } });
 	});
 
+	it("marks a fresh supervisor stale when its CLI differs from the approved payload", async () => {
+		const d = deps({ call: async <T>() => ({ job: null, installed: [{ dir: "/x", managed: true, name: "pink-laptop", url: "https://github.com/proappstore-online/interns", supervisor: { health: "ready", updatedAt: Date.now(), cliVersion: "0.4.184", approvedCliVersion: "0.4.185" } }] }) as T });
+		const s = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, d);
+		expect(s.installed[0]).toMatchObject({ localHealth: "stale", versionSkew: true, supervisor: { cliVersion: "0.4.184", approvedCliVersion: "0.4.185" } });
+	});
+
 	it("targets one scope and returns the machine's durable receipt without minting a token", async () => {
 		const d = deps({ call: async <T>(_conn: RunnerConn, path: string, _body: unknown) => {
 			if (path === "/coding/actions-runner/recover") return { id: "rec-1", state: "deferred_active_job", requestedAt: 123 } as T;

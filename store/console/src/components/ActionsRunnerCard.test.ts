@@ -36,6 +36,12 @@ describe("Actions runner console status (#1367)", () => {
 		expect(markup({ ...managed, localHealth: "stale" })).not.toContain("Request recovery");
 	});
 
+	it("shows supervisor version skew as stale and withholds recovery", () => {
+		const skewed: ActionsRunnerItem = { ...managed, localHealth: "stale", versionSkew: true, supervisor: { ...managed.supervisor!, cliVersion: "0.4.184", approvedCliVersion: "0.4.185" } };
+		expect(markup(skewed)).toContain("0.4.184 · approved 0.4.185 · update pending");
+		expect(canRequestActionsRecovery(skewed)).toBe(false);
+	});
+
 	it("names active-job deferral and does not take a path from the browser", () => {
 		expect(markup({ ...managed, supervisor: { ...managed.supervisor!, activeJob: true } })).toContain("Queue recovery after job");
 		expect(actionsScope("https://github.com/example-org/a-repo")).toEqual({ repo: "example-org/a-repo" });
