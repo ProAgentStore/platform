@@ -179,7 +179,12 @@ the trial the first time its relay registers or heartbeats. The stub gives it up
 version, when any of these happens:
 
 - it throws while it is being loaded. The previous version then starts at once, in the same process.
-- it has not registered **5 minutes** after its first start. If something restarts this process (a
+- it has not registered after **5 minutes of running** (#1382). The window counts time the release was awake, not
+  wall-clock time: a laptop that sleeps through it (macOS maintenance sleep on AC lasted 590 s of one trial) is not
+  a release that failed to register. The trial records that it is still being observed every 15 seconds, and a silence
+  much longer than that is counted as the machine asleep: the clock pauses, the update log says so, and the rollback
+  receipt, if there is one, says how long the machine slept. A release that never registers is still ended by a
+  wall-clock bound of **60 minutes** from its first start. If something restarts this process (a
   `pags up` supervising its runner, the Windows launcher, or a service), the stub exits with the restart
   code (75) and the next start runs the previous version. If nothing restarts it, the stub records the
   verdict and the next `pags up` runs the previous version.

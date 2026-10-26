@@ -11,16 +11,27 @@
  *     back by busy work is not judged by its install time.
  *   - The payload clears the trial once its relay registers with the platform ({@link markPayloadHealthy}).
  *   - A trial version that crashes on import, has been started {@link MAX_TRIAL_STARTS} times, or is
- *     still unproven {@link TRIAL_MS} after its first start is marked BAD: the stub never picks it
+ *     still unproven after {@link TRIAL_MS} of RUNNING is marked BAD: the stub never picks it
  *     again, never re-fetches it, and leaves a rollback notice the previous version reports.
+ *   - The window is AWAKE time (#1382). A laptop that sleeps through it — pink slept 590 s of a 300 s window, 8 seconds
+ *     after the restart — was failed for time it never spent running, and rolled back a healthy release. The trial records
+ *     what it observed (a tick every {@link TRIAL_TICK_MS}) and counts a gap longer than {@link TRIAL_SLEEP_GAP_MS} as the
+ *     machine being asleep, not as the release failing to register. A genuinely broken release is still bounded: a
+ *     wall-clock limit of {@link TRIAL_MAX_WALL_MS} from its first start, and the start-count limit, are unchanged.
  *
  * Node builtins ONLY, like payload.ts: the stub imports this, so it must never need replacing.
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** How long a trial version has, from its first start, to register with the platform. */
+/** How long a trial version has, of time it was actually running, to register with the platform. */
 export const TRIAL_MS = 5 * 60_000;
+/** How often a running trial records that it is still being observed. */
+export const TRIAL_TICK_MS = 15_000;
+/** A silence longer than this between two observations is the machine asleep (or the process suspended), not time the release ran. */
+export const TRIAL_SLEEP_GAP_MS = 3 * TRIAL_TICK_MS;
+/** The finite bound on a release that never registers, however much of it the machine spent asleep. */
+export const TRIAL_MAX_WALL_MS = 60 * 60_000;
 /** Starts of an unproven version (`pags up` and its `runner connect` both count) before it is given up on. */
 export const MAX_TRIAL_STARTS = 6;
 
@@ -32,6 +43,12 @@ export interface Trial {
 	/** The first start of `version`; absent until it has been started once. */
 	startedAt?: number;
 	starts: number;
+	/** Time the trial has actually been observed running (#1382). Absent on a record written before this was kept. */
+	awakeMs?: number;
+	/** Time the machine was observed asleep during the trial — kept so the receipt can say so (#1382). */
+	sleptMs?: number;
+	/** The last time the trial was observed, as above. */
+	seenAt?: number;
 }
 
 export interface RollbackNotice {
@@ -82,6 +99,9 @@ export function readTrial(root: string): Trial | null {
 		installedAt: t.installedAt,
 		...(typeof t.startedAt === "number" ? { startedAt: t.startedAt } : {}),
 		starts: typeof t.starts === "number" && t.starts >= 0 ? t.starts : 0,
+		...(typeof t.awakeMs === "number" && t.awakeMs >= 0 ? { awakeMs: t.awakeMs } : {}),
+		...(typeof t.sleptMs === "number" && t.sleptMs >= 0 ? { sleptMs: t.sleptMs } : {}),
+		...(typeof t.seenAt === "number" ? { seenAt: t.seenAt } : {}),
 	};
 }
 
@@ -170,6 +190,49 @@ export function takeRollbackNotice(root: string): RollbackNotice | null {
 
 export type TrialVerdict = { kind: "none" } | { kind: "trial"; trial: Trial } | { kind: "give-up"; reason: string };
 
+/** What the clock says about a trial observed at `now`: time awake, time asleep, and when it was last seen. Pure. */
+export function accrueTrial(trial: Trial, now: number): { awakeMs: number; sleptMs: number; seenAt: number; sleptNow: number } {
+	if (trial.startedAt === undefined) return { awakeMs: 0, sleptMs: 0, seenAt: now, sleptNow: 0 };
+	const seen = trial.seenAt ?? trial.startedAt;
+	const gap = Math.max(0, now - seen);
+	const awake = trial.awakeMs ?? 0;
+	const slept = trial.sleptMs ?? 0;
+	// A normal tick is a short gap: all of it ran. A long silence was the machine asleep: one tick of it ran, the rest was not running.
+	if (gap <= TRIAL_SLEEP_GAP_MS) return { awakeMs: awake + gap, sleptMs: slept, seenAt: now, sleptNow: 0 };
+	return { awakeMs: awake + TRIAL_TICK_MS, sleptMs: slept + (gap - TRIAL_TICK_MS), seenAt: now, sleptNow: gap - TRIAL_TICK_MS };
+}
+
+const minutes = (ms: number) => Math.round(ms / 60_000);
+
+/** Has the trial run out — of awake time, or of the wall-clock bound? The reason says which, and how much of it was sleep. */
+export function trialExpiry(trial: Trial, now: number): { reason: string } | null {
+	const a = accrueTrial(trial, now);
+	const sleep = a.sleptMs >= 60_000 ? ` (the machine slept about ${minutes(a.sleptMs)} minute${minutes(a.sleptMs) === 1 ? "" : "s"} of that; sleep does not count against it)` : "";
+	if (a.awakeMs >= TRIAL_MS) return { reason: `it did not register with the platform within ${TRIAL_MS / 60_000} minutes of running${sleep}` };
+	if (trial.startedAt !== undefined && now - trial.startedAt >= TRIAL_MAX_WALL_MS) {
+		return { reason: `it had still not registered ${TRIAL_MAX_WALL_MS / 60_000} minutes after first starting (the wall-clock limit; ${minutes(a.awakeMs)} minutes of that awake${sleep ? `, the rest asleep` : ""})` };
+	}
+	return null;
+}
+
+/**
+ * One observation of a running trial: record the awake/asleep time and say whether it has run out. Returns what the caller should
+ * report — `slept` when a gap was the machine asleep (so the update log can say the clock paused), `expired` when the trial is over.
+ * Does nothing for a version that is not on trial.
+ */
+export function advanceTrial(root: string, version: string, now = Date.now()): { expired: { reason: string } | null; slept: number } {
+	const trial = readTrial(root);
+	if (!trial || trial.version !== version || trial.startedAt === undefined) return { expired: null, slept: 0 };
+	const a = accrueTrial(trial, now);
+	const next: Trial = { ...trial, awakeMs: a.awakeMs, sleptMs: a.sleptMs, seenAt: a.seenAt };
+	try {
+		writeJson(root, trialPath(root), next);
+	} catch {
+		/* best-effort */
+	}
+	return { expired: trialExpiry(trial, now), slept: a.sleptNow };
+}
+
 /**
  * What a start of `version` means for its trial — and records the start. `give-up` when it is past its
  * starts or its clock; `trial` while it is still being proven; `none` when it is not on trial.
@@ -177,13 +240,16 @@ export type TrialVerdict = { kind: "none" } | { kind: "trial"; trial: Trial } | 
 export function noteTrialStart(root: string, version: string, now = Date.now()): TrialVerdict {
 	const trial = readTrial(root);
 	if (!trial || trial.version !== version) return { kind: "none" };
-	if (trial.startedAt !== undefined && now - trial.startedAt >= TRIAL_MS) {
-		return { kind: "give-up", reason: `it did not register with the platform within ${TRIAL_MS / 60_000} minutes of first starting` };
+	if (trial.startedAt !== undefined) {
+		// The gap since the last observation is judged like any other: asleep, not running (#1382), unless it was a short one.
+		const expiry = trialExpiry(trial, now);
+		if (expiry) return { kind: "give-up", reason: expiry.reason };
 	}
 	if (trial.starts >= MAX_TRIAL_STARTS) {
 		return { kind: "give-up", reason: `it was started ${trial.starts} times without registering with the platform` };
 	}
-	const next: Trial = { ...trial, startedAt: trial.startedAt ?? now, starts: trial.starts + 1 };
+	const a = accrueTrial(trial, now);
+	const next: Trial = { ...trial, startedAt: trial.startedAt ?? now, starts: trial.starts + 1, awakeMs: a.awakeMs, sleptMs: a.sleptMs, seenAt: a.seenAt };
 	try {
 		writeJson(root, trialPath(root), next);
 	} catch {

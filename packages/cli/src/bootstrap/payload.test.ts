@@ -121,10 +121,11 @@ describe("Actions approval", () => {
 	// #1374 — "reboot during handoff": a supervisor that died without unpinning protects nothing, so the cache can still be pruned.
 	it("a pin left by a dead or stale supervisor (a reboot mid-handoff) protects no payload; a live fresh one does", () => {
 		pinActionsPayload("0.5.1", 4242, root);
-		const now = Date.now();
+		// A moment after the pins are written (a pin stamped later than `now` is ignored as clock skew, so `now` must not trail them).
+		const now = Date.now() + 1000;
 		expect(pinnedActionsVersions(root, now, () => true)).toEqual(new Set(["0.5.1"]));
 		expect(pinnedActionsVersions(root, now, () => false)).toEqual(new Set());
-		expect(pinnedActionsVersions(root, now + 90_001, () => true)).toEqual(new Set());
+		expect(pinnedActionsVersions(root, now + 90_000, () => true)).toEqual(new Set());
 		// Pins are per process: another supervisor's pin on the same version does not keep this one's alive.
 		pinActionsPayload("0.5.1", 5252, root);
 		unpinActionsPayload("0.5.1", 4242, root);

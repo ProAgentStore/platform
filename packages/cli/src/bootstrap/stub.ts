@@ -22,7 +22,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { approvedActionsPayload, BOOTSTRAP_ENV, cachedPayloads, newestPayload, payloadRoot, type Payload } from "./payload.js";
-import { activatedVersion, badVersions, markBad, noteTrialStart, readTrial, TRIAL_MS } from "./trial.js";
+import { activatedVersion, advanceTrial, badVersions, markBad, noteTrialStart, readTrial, TRIAL_TICK_MS } from "./trial.js";
 import { logUpdateStep } from "./update-log.js";
 
 /** `runner connect`'s ask-for-a-respawn exit code (self-update.ts `RUNNER_RESTART_EXIT_CODE`), restated: the stub imports nothing else. */
@@ -118,17 +118,33 @@ export async function runStub(deps: StubDeps): Promise<Payload> {
  * The trial window (#1141): if `version` has not registered by the end of it, give it up — and, when
  * something will start this process again, leave with the restart code so that start runs the previous
  * version. Unsupervised, it only records the verdict: the next `pags` runs the previous version.
+ *
+ * The window is time the release was RUNNING (#1382). A tick every {@link TRIAL_TICK_MS} records that it is still being observed; a
+ * silence much longer than a tick was the machine asleep, so the clock did not run and the update log says so. A wall-clock bound
+ * still ends a release that never registers.
  */
 function watchTrial(root: string, version: string, deps: StubDeps, log: (line: string) => void, now: () => number, env: NodeJS.ProcessEnv): void {
-	const startedAt = readTrial(root)?.startedAt ?? now();
-	const timer = (deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms)))(() => {
+	const schedule = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+	const arm = () => schedule(tick, TRIAL_TICK_MS).unref?.();
+	const tick = () => {
 		const given = badVersions(root)[version];
 		if (readTrial(root)?.version !== version && !given) return; // proven: its relay registered
-		const reason = `it did not register with the platform within ${TRIAL_MS / 60_000} minutes of first starting`;
-		if (!given) markBad(root, version, reason, readTrial(root)?.previous ?? null, now());
+		let reason = given;
+		if (!given) {
+			const previous = readTrial(root)?.previous ?? null;
+			const seen = advanceTrial(root, version, now());
+			if (seen.slept > 0) {
+				const line = `the machine slept about ${Math.round(seen.slept / 1000)}s while ${version} was on trial; its trial clock did not run during it`;
+				log(`pags: ${line}`);
+				logUpdateStep(`stub: ${line}`);
+			}
+			if (!seen.expired) return arm();
+			reason = seen.expired.reason;
+			markBad(root, version, reason, previous, now());
+		}
 		const supervised = RESTARTED_BY.some((k) => !!env[k]);
-		log(`pags: giving up on ${version} — ${given ?? reason}.${supervised ? " Restarting on the previous version." : ' The next "pags up" runs the previous version.'}`);
+		log(`pags: giving up on ${version} — ${reason}.${supervised ? " Restarting on the previous version." : ' The next "pags up" runs the previous version.'}`);
 		if (supervised) (deps.exit ?? ((code: number) => process.exit(code)))(STUB_RESTART_EXIT_CODE);
-	}, Math.max(0, startedAt + TRIAL_MS - now()));
-	timer.unref?.();
+	};
+	arm();
 }
