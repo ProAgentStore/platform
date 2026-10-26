@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { parseAccountPreferences, sanitizeCodingPreferences } from "../lib/preferences.js";
-import { autoResumeEnabled } from "../lib/credit-auto-resume.js";
+import { autoResumeEnabled } from "../lib/account-stop-resume.js";
 import type { Env } from "../types.js";
 
 vi.mock("../lib/auth.js", async () => {

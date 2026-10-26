@@ -5,7 +5,7 @@ import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { encryptKey } from "./crypto.js";
 import { automaticProviderHold, observeProviderAccount, providerCredentialId } from "./provider-account-hold.js";
 import { runUserWorkersAi } from "./user-ai.js";
-import { probeProviderKey } from "./credit-auto-resume.js";
+import { probeProviderKey } from "./provider-hold-probe.js";
 import { keysRoutes } from "../routes/keys.js";
 import { HttpError } from "./auth.js";
 import { signSession } from "./session.js";

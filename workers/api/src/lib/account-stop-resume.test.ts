@@ -5,7 +5,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { encryptKey } from "./crypto.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { AUTO_RESUME_WINDOW_MS, CLAIM_TTL_MS, type CreditResumeDeps, MAX_RESUME_ATTEMPTS, PER_OWNER_PER_MINUTE, probeDelayMs, PROBE_GIVE_UP_MS, probeFailingKeys, resumeDelayMs, resumeRecoveredCreditRuns, runCreditAutoResume } from "./credit-auto-resume.js";
+import { AUTO_RESUME_WINDOW_MS, CLAIM_TTL_MS, type CreditResumeDeps, MAX_RESUME_ATTEMPTS, PER_OWNER_PER_MINUTE, resumeRecoveredCreditRuns, runCreditAutoResume } from "./account-stop-resume.js";
+import { probeFailingKeys } from "./provider-hold-probe.js";
+import { probeDelayMs, PROBE_GIVE_UP_MS, resumeDelayMs } from "./retry-policy.js";
 import { classifyCodingFailure, DRIVER_RESUME_POLICY } from "./coding-failure.js";
 import { getLoopRun } from "./agent-loop-store.js";
 import { providerCredentialId } from "./provider-account-hold.js";

@@ -100,7 +100,7 @@ import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runDueGmailScoutScans } from "./lib/gmail-scout/scan.js";
 import { runDueCoderQuestions } from "./lib/coder-question-sweep.js";
-import { runCreditAutoResume } from "./lib/credit-auto-resume.js";
+import { runCreditAutoResume } from "./lib/account-stop-resume.js";
 import { runFleetHealth } from "./lib/fleet-health.js";
 import { runRunnerReconcile } from "./lib/runner-reconcile-run.js";
 import { failExpiredOfflineWaits, runDueOverloadRetries } from "./lib/objective-queue-start.js";

@@ -1,7 +1,7 @@
 /** #1356 — the one verify, from the hold's side: which model it names, what "nothing was sent" means, and the probe built on top of it. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encryptKey } from "./crypto.js";
-import { probeProviderKey } from "./credit-auto-resume.js";
+import { probeProviderKey } from "./provider-hold-probe.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { isVerifiableProvider, VERIFY_MODEL, verifyProviderKey } from "./provider-key-verify.js";
 import { encodeCloudflareAiCredentials } from "./user-ai.js";

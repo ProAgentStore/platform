@@ -37,6 +37,7 @@
  * every future stall to `unknown`.
  */
 import { providerErrorKind } from "./provider-error-kind.js";
+import { AUTO_RESUME_WINDOW_MS, durationText, probeScheduleText } from "./retry-policy.js";
 import { countInterruption } from "./agent-loop-store.js";
 import { INCOMPLETE_TOOL_ARGS_MARKER, TRANSPORT_EOF_MARKER } from "./anthropic-stream.js";
 import { logError } from "./error-log.js";
@@ -439,7 +440,7 @@ export const DRIVER_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
 	},
 	// Not replayed in flight: an identical request a second later is refused identically. But a 403 refusal has been measured to
 	// clear by itself within minutes (#1326), so the platform re-checks the key on a backoff and continues the run once it works.
-	provider_credentials: { resume: false, why: "the AI provider refused the key (no key, an invalid key, or a refused request). The stopped run is not replayed, but the platform re-checks the key automatically and continues it once the key works (re-checked after 5m, 15m, 1h, then every 6h; runs stopped within the last 7 days are continued); if it stays refused, fix or replace the key in Profile → API Keys" },
+	provider_credentials: { resume: false, why: `the AI provider refused the key (no key, an invalid key, or a refused request). The stopped run is not replayed, but the platform re-checks the key automatically and continues it once the key works (re-checked after ${probeScheduleText()}; runs stopped within the last ${durationText(AUTO_RESUME_WINDOW_MS)} are continued); if it stays refused, fix or replace the key in Profile → API Keys` },
 	provider_rate_limit: { resume: false, why: "the provider is throttling this key and wants a backoff, not an immediate replay" },
 	provider_error: { resume: false, why: "the provider answered with an error we have not split out; retrying an unread error is a guess" },
 	// The runner guard (#341) has already waited for this machine and concluded it is gone. Resuming
