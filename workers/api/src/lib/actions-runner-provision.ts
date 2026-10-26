@@ -387,6 +387,16 @@ export type InstalledRunner = {
 	ciNote?: string;
 };
 
+function validInstalledRunners(value: unknown): value is InstalledRunner[] {
+	return Array.isArray(value) && value.every((item: unknown) => {
+		if (!item || typeof item !== "object") return false;
+		const r = item as Record<string, unknown>;
+		return typeof r.dir === "string" && typeof r.managed === "boolean"
+			&& (typeof r.name === "string" || r.name === null)
+			&& (typeof r.url === "string" || r.url === null);
+	});
+}
+
 /**
  * One job (when `jobId` is given) and every runner configured on the agent's machine, each with what GitHub says about it (#1213).
  * GitHub's side is best effort: a runner it cannot be asked about (the App is not installed there, or lacks the runner permission,
@@ -400,16 +410,20 @@ export async function actionsRunnerStatus(
 	const conn = await deps.conn(input.instanceId, input.userId);
 	if (!conn?.runnerNode) return { node: conn?.runnerNode ?? null, machineHealth: "unknown", machineNote: "The pinned machine is not connected, so local Actions service and recovery status cannot be read.", job: null, installed: [] };
 	const node = conn.runnerNode;
-	let r: { job: RunnerJobView | null; installed: InstalledRunner[] };
+	let r: { job?: RunnerJobView | null; installed: InstalledRunner[] };
 	try {
-		r = await deps.call<{ job: RunnerJobView | null; installed: InstalledRunner[] }>(conn, "/coding/actions-runner/status", input.jobId ? { jobId: input.jobId } : {});
+		const response = await deps.call<unknown>(conn, "/coding/actions-runner/status", input.jobId ? { jobId: input.jobId } : {});
+		if (!response || typeof response !== "object" || !validInstalledRunners((response as Record<string, unknown>).installed)) {
+			throw new Error("the machine returned an invalid Actions runner list");
+		}
+		r = response as { job?: RunnerJobView | null; installed: InstalledRunner[] };
 	} catch (e) {
 		return { node, machineHealth: "unknown", machineNote: oldRunner(e)
 			? `This machine's CLI cannot report Actions runners (needs ${ACTIONS_RUNNER_MIN_CLI} or newer). Update it with runner_update.`
 			: `Local Actions service and recovery status could not be read: ${e instanceof Error ? e.message : "unknown relay error"}`, job: null, installed: [] };
 	}
 	const installed = await Promise.all(
-		(r.installed ?? []).map(async (i): Promise<InstalledRunner> => {
+		r.installed.map(async (i): Promise<InstalledRunner> => {
 			const localHealth = i.supervisor && typeof i.supervisor.updatedAt === "number"
 				? (Date.now() - i.supervisor.updatedAt <= 60_000 && i.supervisor.updatedAt <= Date.now() + 5_000 ? "current" : "stale")
 				: "unknown";

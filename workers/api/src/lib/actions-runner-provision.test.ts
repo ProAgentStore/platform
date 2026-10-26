@@ -193,6 +193,13 @@ describe("local supervisor status and explicit recovery (#1367)", () => {
 		expect(unreachable).toMatchObject({ node: NODE, machineHealth: "unknown", installed: [], machineNote: expect.stringMatching(/relay timed out/) });
 	});
 
+	it("treats an incomplete runner list as unknown instead of claiming none are installed", async () => {
+		for (const body of [{}, { installed: null }, { installed: [null] }]) {
+			const status = await actionsRunnerStatus(env, { userId: "u1", instanceId: "inst-1" }, deps({ call: async <T>() => body as T }));
+			expect(status).toMatchObject({ node: NODE, machineHealth: "unknown", installed: [], machineNote: expect.stringMatching(/invalid Actions runner list/) });
+		}
+	});
+
 	it("keeps the GitHub view separate and marks an old local sample stale", async () => {
 		const d = deps({
 			call: async <T>() => ({ job: null, installed: [{ dir: "/x", managed: true, name: "pink-laptop", url: "https://github.com/proappstore-online/interns", serviceMode: "macos_system", supervisor: { health: "ready", updatedAt: Date.now() - 120_000, lastReadyAt: Date.now() - 120_000 } }] }) as T,
