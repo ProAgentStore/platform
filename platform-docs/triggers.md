@@ -1,3 +1,7 @@
+---
+description: "Configure private-instance webhooks and cron schedules for tasks, knowledge updates, connector syncs, and event logging."
+---
+
 # Triggers
 
 Triggers let a private ProAgentStore instance start work from outside the chat UI.

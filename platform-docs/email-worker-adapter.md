@@ -1,3 +1,7 @@
+---
+description: "Implement the email-worker/v1 HTTPS contract for identity, mailbox operations, sending, and inbound delivery events."
+---
+
 # Worker-backed email adapter contract (`email-worker/v1`)
 
 Implemented by a **customer-owned HTTPS Worker** (or any HTTPS server) standing in for a mailbox

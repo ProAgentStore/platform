@@ -1,3 +1,7 @@
+---
+description: "Diagnose MCP tool-catalog mismatches using server identity, schema revisions, endpoint scope, and client discovery evidence."
+---
+
 # MCP discovery investigation — #905
 
 Observed 2026-10-03. This records evidence, not a reconstruction of the external host's cache internals.

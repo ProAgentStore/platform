@@ -1,3 +1,7 @@
+---
+description: "Run pags up for local browser and CLI capabilities, outbound relay connections, background operation, and runtime diagnostics."
+---
+
 # ProAgentStore Browser Runtime
 
 Runtime-backed agents use `pags up`, which runs local browser and CLI capabilities from `packages/browser-runner`.

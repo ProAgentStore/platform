@@ -1,3 +1,7 @@
+---
+description: "Understand ProAgentStore’s Cloudflare services, control and runtime planes, private-instance state, and repository structure."
+---
+
 # Architecture
 
 ProAgentStore is a Cloudflare-native marketplace and runtime platform for server-powered AI agents.

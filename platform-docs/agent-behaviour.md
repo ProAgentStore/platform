@@ -1,3 +1,7 @@
+---
+description: "Customize an agent’s communication style, reasoning, formatting, interaction, and guardrails through settings or chat."
+---
+
 # Agent Behaviour
 
 Every agent has a **Behaviour** tab. It controls *how the agent communicates* — how technical it

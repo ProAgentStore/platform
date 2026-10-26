@@ -1,3 +1,7 @@
+---
+description: "Install and run pags up on Windows, configure startup and power settings, and check runtime support and update procedures."
+---
+
 # Running `pags up` on Windows
 
 `pags up` runs natively on Windows 10 and 11. No WSL is needed for the browser runtime. This page

@@ -1,3 +1,7 @@
+---
+description: "Use tap-to-talk or hands-free agent chat and configure speech recognition, voice replies, vocabulary, and interaction modes."
+---
+
 # Voice & hands-free
 
 Every agent chat surface — the **Assistant** tab and the Coder **Co-pilot** — is fully

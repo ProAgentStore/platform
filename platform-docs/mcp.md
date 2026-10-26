@@ -1,3 +1,7 @@
+---
+description: "Connect MCP clients to ProAgentStore, choose account or instance endpoints, and understand authentication, tools, and consent."
+---
+
 # ProAgentStore MCP
 
 ProAgentStore is MCP-first. Agents should operate account state through the official MCP server instead of scraping the UI or calling private APIs directly.

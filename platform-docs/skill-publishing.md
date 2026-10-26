@@ -1,3 +1,7 @@
+---
+description: "Package ProAgentStore skills and plugin wrappers for Codex and Claude, keeping the shared SKILL.md source and copies aligned."
+---
+
 # Skill Publishing
 
 ProAgentStore skills should be published for both Codex and Claude users. The shared unit is the Agent Skills format: a folder with `SKILL.md`, optional `scripts/`, `references/`, and `assets/`.

@@ -1,3 +1,7 @@
+---
+description: "Configure gentle or harsh runner cleanup for owned processes, Playwright browsers, temporary files, worktrees, and caches."
+---
+
 # Runner post-run cleanup
 
 After a coding run the runner used to end only the engine's **own** process. Builds, test runners, dev

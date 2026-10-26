@@ -1,3 +1,7 @@
+---
+description: "Connect account integrations, grant per-instance access, and manage knowledge imports, Gmail, worker-backed email, and tool consent."
+---
+
 # Connectors
 
 ProAgentStore has two connector layers, for two different jobs.

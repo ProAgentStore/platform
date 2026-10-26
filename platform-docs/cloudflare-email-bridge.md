@@ -1,3 +1,7 @@
+---
+description: "Deploy a customer-owned Cloudflare email bridge, configure senders and routes, and connect it to a private PAGS agent."
+---
+
 # Cloudflare Email Sending and Email Routing
 
 A Cloudflare address such as `admin@freeappstore.online` is often a **routed alias**, not a Gmail

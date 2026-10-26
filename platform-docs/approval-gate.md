@@ -1,3 +1,7 @@
+---
+description: "Require phone approval for selected account configuration changes and understand held requests, expiry, and state checks."
+---
+
 # Approval gate
 
 The **approval gate** (#1268) is a per-account setting that stops major configuration changes from taking effect until

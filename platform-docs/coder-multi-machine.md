@@ -1,3 +1,7 @@
+---
+description: "Connect multiple runner machines, bind agents with the Runs on picker, and understand machine placement and connectivity."
+---
+
 # Coder Multi-Machine Runtime
 
 You can connect more than one local machine to the same private agent instance. Each machine runs `pags up` and registers as a **runner node**, usually under its hostname.

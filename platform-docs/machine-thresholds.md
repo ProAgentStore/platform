@@ -1,3 +1,7 @@
+---
+description: "Set per-machine session, CPU, memory, and disk thresholds that control admission of new local agent runs."
+---
+
 # Machine admission thresholds
 
 The runner **admission gate** (#1264) refuses a *new* coding session on a machine that is overloaded, instead of

@@ -1,3 +1,7 @@
+---
+description: "Explore ProAgentStore agent templates, private instances, account connections, MCP tools, and local runtimes."
+---
+
 # ProAgentStore Docs
 
 ProAgentStore is an MCP-first marketplace and runtime platform for server-powered AI agents.

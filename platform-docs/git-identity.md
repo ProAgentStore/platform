@@ -1,3 +1,7 @@
+---
+description: "Configure runner GitHub credentials, diagnose clone identity mismatches, and understand which identity agent git operations use."
+---
+
 # Git identity on a runner
 
 A machine running `pags up` can hold **more than one GitHub identity at the same time**, and which

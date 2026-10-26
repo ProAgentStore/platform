@@ -1,3 +1,7 @@
+---
+description: "Understand AI provider and coding-engine errors, retry behavior, recorded diagnostics, and failures that require your action."
+---
+
 # Provider Errors
 
 An agent run talks to AI providers in two places, and a provider refusal can reach it from either one:

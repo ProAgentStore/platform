@@ -1,3 +1,7 @@
+---
+description: "Interpret run health, heartbeat and progress timestamps, parked states, repository CI, and pre-run checkout and engine checks."
+---
+
 # Run Lifecycle
 
 A **run** is one autonomous unit of work an agent started for you — a Loop objective, a coding session's Pilot, an apply workflow. While it is going, the platform reports it through a small, fixed vocabulary: a verdict called `health`, three timestamps, and a park.
