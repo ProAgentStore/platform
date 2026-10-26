@@ -54,6 +54,7 @@ describe("PAGS Actions supervisor", () => {
     f.child.stdout.emit("data", Buffer.from("2026-10-26: Listening for Jobs\n"));
     expect(readSupervisorStatus(dir)?.health).toBe("ready");
     expect(readSupervisorStatus(dir)?.lastReadyAt).toBe(1000);
+    expect(readSupervisorStatus(dir)?.approvedCliVersion).toBe(readSupervisorStatus(dir)?.cliVersion);
     f.busy = true; abort.abort(); await f.tick();
     expect(readSupervisorStatus(dir)?.health).toBe("deferred_active_job");
     expect(f.signals).toEqual([]);

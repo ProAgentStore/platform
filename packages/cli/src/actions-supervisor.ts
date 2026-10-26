@@ -312,7 +312,8 @@ export async function runActionsSupervisor(dir: string, runtime: SupervisorRunti
     while (!stopped && !stopSignal?.aborted) {
       runtime.pinPayload();
       const now = runtime.now();
-      status.approvedCliVersion = runtime.approvedUpdate() ?? undefined;
+      const approvedUpdate = runtime.approvedUpdate();
+      status.approvedCliVersion = approvedUpdate ?? cliVersion;
       const ac = runtime.acPower();
       const previousAc = status.acPower;
       if (ac !== "unknown") status.acPower = ac;
@@ -363,7 +364,7 @@ export async function runActionsSupervisor(dir: string, runtime: SupervisorRunti
       }
       // Keep the old payload pinned while a job or recovery is active. launchd's
       // KeepAlive starts the approved release after this service exits cleanly.
-      if (status.approvedCliVersion && !status.activeJob && !pending && status.health === "ready") stopped = true;
+      if (approvedUpdate && !status.activeJob && !pending && status.health === "ready") stopped = true;
       save();
       await runtime.sleep(2000);
     }
