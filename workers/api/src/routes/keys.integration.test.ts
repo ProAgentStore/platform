@@ -390,6 +390,20 @@ describe("POST /v1/keys/cloudflare/verify probes Cloudflare, not Anthropic (#892
 		expect(calls.every((u) => u.startsWith("https://api.cloudflare.com/"))).toBe(true);
 	});
 
+	it("a refused Anthropic key comes back classified for the person: the provider's words, no machine tag (#1356)", async () => {
+		const { app, env } = buildApp();
+		const tok = await tokenFor("u1");
+		await json(app, env, "PUT", "/v1/keys/anthropic", { key: ANTHROPIC_KEY }, tok);
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, { status: 401, headers: { "request-id": "req_9" } })));
+		const res = await json(app, env, "POST", "/v1/keys/anthropic/verify", undefined, tok);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(res.status).toBe(400);
+		expect(body.ok).toBe(false);
+		expect(body.failureClass).toBe("provider_credentials"); // read from the adapter's kind, not re-guessed from the sentence
+		expect(String(body.error)).toContain("invalid x-api-key");
+		expect(String(body.error)).not.toContain("provider-error:");
+	});
+
 	it("404s plainly when no Cloudflare credentials are stored, rather than verifying the Anthropic key", async () => {
 		const { app, env } = buildApp();
 		const tok = await tokenFor("u1");

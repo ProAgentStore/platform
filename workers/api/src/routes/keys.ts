@@ -17,15 +17,11 @@ import { logEvent } from "../lib/events.js";
 import { recordVoiceUsage } from "../lib/usage.js";
 import { estimateTtsMicros, estimateSttMicros, secondsFromAudioBytes } from "../lib/ai-pricing.js";
 import {
-	type AiProvider,
 	encodeCloudflareAiCredentials,
-	getUserCloudflareAiCredentials,
-	getUserProviderKey,
-	runUserWorkersAi,
-	UserAiCredentialsError,
-	UserAiProviderError,
 } from "../lib/user-ai.js";
 import { classifyCodingFailure, DRIVER_RESUME_POLICY } from "../lib/coding-failure.js";
+import { withoutProviderErrorTag } from "../lib/provider-error-kind.js";
+import { isVerifiableProvider, verifyProviderKey } from "../lib/provider-key-verify.js";
 import type { Env } from "../types.js";
 
 export const keysRoutes = new Hono<{ Bindings: Env }>();
@@ -303,14 +299,6 @@ keysRoutes.put("/:provider", async (c) => {
 	return c.json({ success: true, provider: providerId });
 });
 
-/** The providers a stored key can be verified against, and the model the probe names for each. */
-const VERIFIABLE_PROVIDERS: Record<string, string> = {
-	cloudflare: "@cf/meta/llama-3.2-3b-instruct",
-	// `runAnthropic` names its own model; the id here is documentary. Four output tokens against the
-	// owner's key is the cheapest honest reading of "does this account work right now" (#773).
-	anthropic: "claude-sonnet-4-6",
-};
-
 /**
  * Verify a stored provider key with a minimal provider request.
  *
@@ -330,65 +318,27 @@ const VERIFIABLE_PROVIDERS: Record<string, string> = {
 keysRoutes.post("/:provider/verify", async (c) => {
 	const session = await requireUser(c);
 	const providerId = c.req.param("provider");
-	const model = VERIFIABLE_PROVIDERS[providerId];
-	if (!model) {
+	if (!isVerifiableProvider(providerId)) {
 		throw new HttpError(400, `Verification not available for ${providerId}`);
 	}
-	// The probe is PINNED to the provider the route names (#892). Unpinned, `runUserWorkersAi` picks
-	// Anthropic first whenever an Anthropic key is stored, so `verify cloudflare` spent Anthropic
-	// tokens and reported Cloudflare OK whatever the Cloudflare credentials were. Pinned, a missing
-	// credential would surface as the mid-turn sentence the pin was written for, so it is answered
-	// here first, plainly.
-	if (providerId === "anthropic" && !(await getUserProviderKey(c.env, session.uid, "anthropic"))) {
-		throw new HttpError(404, "No Anthropic key stored. Add one in Profile → API Keys → Anthropic");
-	}
-	if (providerId === "cloudflare") {
-		const stored = await getUserCloudflareAiCredentials(c.env, session.uid).catch((e: unknown) => e);
-		if (stored instanceof UserAiCredentialsError) {
-			const missing = stored.message === new UserAiCredentialsError().message;
-			throw new HttpError(missing ? 404 : 400, missing ? "No Cloudflare Workers AI credentials stored. Add your account ID and API token in Profile → API Keys → Cloudflare Workers AI" : stored.message);
-		}
-		if (stored instanceof Error) throw stored;
-	}
-
-	try {
-		await runUserWorkersAi(
-			c.env,
-			session.uid,
-			model,
-			{
-				messages: [
-					{ role: "system", content: "Reply with exactly: ok" },
-					{ role: "user", content: "verify" },
-				],
-				max_tokens: 4,
-				maxTokens: 4,
-			},
-			undefined,
-			{ provider: providerId as AiProvider },
-		);
-		return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() } satisfies KeyVerifyResponse);
-	} catch (err) {
-		if (err instanceof UserAiCredentialsError) {
-			throw new HttpError(err.status, err.message);
-		}
-		if (err instanceof UserAiProviderError) {
-			const failure = classifyCodingFailure(err);
-			return c.json({
-				ok: false,
-				provider: providerId,
-				error: err.message,
-				upstreamStatus: err.upstreamStatus,
-				details: err.details,
-				// The same class and sentence a dead run files (#773), so "what is wrong with this key"
-				// reads identically here and on `coding_loop_status`.
-				failureClass: failure.class,
-				remedy: DRIVER_RESUME_POLICY[failure.class].why,
-				checkedAt: new Date().toISOString(),
-			} satisfies KeyVerifyResponse, 400);
-		}
-		throw err;
-	}
+	// The ONE implementation of the request (`lib/provider-key-verify.ts`), shared with the hold's re-check; this route only shapes the answer.
+	const verdict = await verifyProviderKey(c.env, session.uid, providerId);
+	if (verdict.ok) return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() } satisfies KeyVerifyResponse);
+	if (verdict.reason === "unavailable") throw new HttpError(verdict.status, verdict.message);
+	const err = verdict.error;
+	const failure = classifyCodingFailure(err);
+	return c.json({
+		ok: false,
+		provider: providerId,
+		// The adapter's kind tag is for machines; the person reading this sees the provider's words.
+		error: withoutProviderErrorTag(err.message),
+		upstreamStatus: err.upstreamStatus,
+		details: err.details,
+		// The same class and sentence a dead run files (#773), so "what is wrong with this key" reads identically here and on `coding_loop_status`.
+		failureClass: failure.class,
+		remedy: DRIVER_RESUME_POLICY[failure.class].why,
+		checkedAt: new Date().toISOString(),
+	} satisfies KeyVerifyResponse, 400);
 });
 
 /**

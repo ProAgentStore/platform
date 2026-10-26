@@ -34,9 +34,8 @@ import { getLoopRun, type LoopRunView } from "./agent-loop-store.js";
 import { startRefusalIsWaitable } from "./loop-drivers.js";
 import { readProviderAccountHealth } from "./provider-account-health.js";
 import { providerCredentialId, selectedProviderAccount, type HeldProvider } from "./provider-account-hold.js";
-import { runUserWorkersAi } from "./user-ai.js";
+import { verifyProviderKey } from "./provider-key-verify.js";
 import { decryptKey } from "./crypto.js";
-import { anthropicModelProblem, type AnthropicModelId } from "./anthropic-model-routing.js";
 import { readInstanceConfigPair } from "./instance-config.js";
 import { parseAccountPreferences } from "./preferences.js";
 
@@ -218,21 +217,17 @@ async function currentCredentialId(env: Env, userId: string, provider: HeldProvi
 	return providerCredentialId(provider, credential);
 }
 
-/** The model each held provider's probe names when the hold recorded none — the same pair `POST /v1/keys/:provider/verify` uses. */
-const PROBE_MODEL: Record<HeldProvider, string> = { anthropic: "claude-sonnet-4-6", cloudflare: "@cf/meta/llama-3.2-3b-instruct" };
-
 export interface ProbeOutcome { ok: boolean; error?: string }
 
 /**
- * The verify request: four tokens against the owner's key, on the MODEL the refused request named (#1344) — a 403 that only
- * one model gets used to pass a probe on the default model, clear the hold, and fail again. A success clears the hold as any
- * real call does; a failure is "not yet", with the provider's words for the record.
+ * The hold's re-check: the verify request (`lib/provider-key-verify.ts`, the same one the console's Verify button sends) on the MODEL the
+ * refused request named (#1344). A success clears the hold as any real call does; a failure is "not yet", with the provider's words for the record.
  */
 export async function probeProviderKey(env: Env, userId: string, provider: HeldProvider, model?: string | null): Promise<ProbeOutcome> {
-	const anthropicModel = provider === "anthropic" && model && !anthropicModelProblem(model) ? (model as AnthropicModelId) : undefined;
 	try {
-		await runUserWorkersAi(env, userId, model && provider === "cloudflare" ? model : PROBE_MODEL[provider], { messages: [{ role: "system", content: "Reply with exactly: ok" }, { role: "user", content: "verify" }], max_tokens: 4, maxTokens: 4 }, undefined, { provider, ...(anthropicModel ? { anthropicModel } : {}) });
-		return { ok: true };
+		const verdict = await verifyProviderKey(env, userId, provider, { model });
+		if (verdict.ok) return { ok: true };
+		return { ok: false, error: clipMarked(verdict.reason === "unavailable" ? verdict.message : verdict.error.message, 400, { within: true }) };
 	} catch (e) {
 		return { ok: false, error: clipMarked(e instanceof Error ? e.message : String(e), 400, { within: true }) };
 	}
