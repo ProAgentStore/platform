@@ -1256,4 +1256,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.187": "sha256:9659ba1dfcae122f6fa13eb1986a910e352f110a7fc3c1404b98e67e6b71574b", // #1343: verify_provider_key (the console's key Verify over MCP: one four-token request against the stored Anthropic or Cloudflare key; a refusal returns the classified body).
 	"0.1.188": "sha256:b7e5e309e9c1e3f14765953ddda6de8a331e735a644666c0f3aec067b9c2f97e", // #1316: Pilot schema describes Sonnet-only coding; Haiku is permitted only for non-coding ticket work.
 	"0.1.189": "sha256:db901f99baade254896d4a383f0ae519d5141e4469c07ffd864d37e5ccb10906", // #1367/#1209: scoped Actions recovery control and explicit macOS system service opt-in.
+	"0.1.190": "sha256:f1733fbfa9327ce3e3607573c2d99284ac007030b2a8e7cfe3f76102ca4fb89e", // #1230: set_application_runner_settings gains accountCreation (create a site account when none exists; default off).
 };

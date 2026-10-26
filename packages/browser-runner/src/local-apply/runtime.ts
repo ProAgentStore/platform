@@ -36,6 +36,7 @@ import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js"
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
 import { runEmailCodeStep } from "./email-code.js";
+import { runAccountCreationStep } from "./account-creation.js";
 import { runVaultSignIn } from "./vault-sign-in.js";
 import type { SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
@@ -55,6 +56,7 @@ import {
 	type LocalApplyBlockReason,
 	type LocalApplyDirectiveRequest,
 	type LocalApplyEmailCodeResult,
+	type LocalApplyAccountCreationResult,
 	type LocalApplyVaultSignInResult,
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
@@ -680,6 +682,13 @@ export class LocalApplyRuntime {
 		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
 		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
 		return runVaultSignIn({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);
+	}
+
+	/** Account creation (#1230) on a run paused for a sign-in on a host with no account: its own browser, its trace, and its release. */
+	accountCreation(raw: unknown): Promise<LocalApplyAccountCreationResult> {
+		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
+		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
+		return runAccountCreationStep({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);
 	}
 
 	/** The owner acted: add their answers to what values may be grounded in, admit any site they allowed, release. */

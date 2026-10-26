@@ -65,6 +65,24 @@ reaching the sign-in is an outcome with a reason, and you then get the ordinary 
 - SEEK refusing the code;
 - a runner older than CLI 0.4.138.
 
+**A site where you have no account gets one (#1230, off by default).** Turn on `accountCreation` in the Runner's
+settings and a fill that pauses for a sign-in on a listed job board, where your vault holds no login for it,
+creates the account instead of handing you a sign-in that has nothing to sign in to. The sites are listed in
+`workers/api/src/lib/local-apply/account-creation-hosts.json`: SEEK and Indeed are on; LinkedIn and Glassdoor are
+listed but off, because their terms restrict automated sign-up. Add a host there to extend it; an unlisted host is
+never touched.
+- The account is registered under the Gmail this Runner is pinned to (email access on), with your profile's
+  name, phone, location and LinkedIn. Nothing is made up: a field your profile lacks ends the attempt.
+- The password (24 random characters) is saved to your vault BEFORE the form is submitted, marked unconfirmed
+  and never used to sign in. When the site accepts the registration it is confirmed and used for this run at once.
+  A site that signs in with an emailed code and asks for no password stores only a note of the address.
+- A verification code is read from the pinned Gmail the same way the SEEK sign-in reads its code.
+- A CAPTCHA, a terms box (unless the entry sets `acceptTerms`), an address that already has an account, or a page
+  that is not as expected ends the attempt with its reason and you get the ordinary sign-in handoff, once. A
+  site is tried once.
+- Every attempt is an audit event (`credential.account_creation_started`, `credential.account_created`,
+  `credential.account_creation_failed`) naming the host and the outcome, never a value.
+
 There is one try per run.
 
 **Any site signs in from the vault (#1229).** If a login for the site is stored under Knowledge → Credentials

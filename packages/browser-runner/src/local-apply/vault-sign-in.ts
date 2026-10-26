@@ -60,6 +60,9 @@ const passwordBox = (cs: Control[]) => cs.find((c) => (c.role === "textbox" || c
 const usernameBox = (cs: Control[]) => cs.find((c) => c.role === "textbox" && USERNAME_FIELD.test(c.name) && !PASSWORD_FIELD.test(c.name));
 const submitButton = (cs: Control[]) => cs.find((c) => c.role === "button" && SUBMIT_BUTTON.test(c.name.trim()) && !NOT_SUBMIT.test(c.name));
 
+/** Does the page ask for proof of a human? Shared with account creation (#1230), which stops at the same wall. */
+export const looksLikeCaptcha = (text: string): boolean => CAPTCHA.test(text);
+
 /** What the page says stands in the way: a challenge, a second factor, or a refused password. Null when none. */
 export function obstacleOn(text: string, controls: Control[]): "captcha" | "two_factor" | "wrong_password" | null {
 	if (CAPTCHA.test(text)) return "captcha";

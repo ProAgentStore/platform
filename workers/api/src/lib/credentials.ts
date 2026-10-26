@@ -19,6 +19,8 @@ export interface CredentialInput {
 	recoveryCodes?: string;
 	comments?: string;
 	recoveryHistory?: string;
+	/** A password stored BEFORE the site accepted the registration it belongs to (#1230): not used to sign in until confirmed. */
+	provisional?: boolean;
 }
 
 /** What the client list view sees — never the secret values, only whether they're set. */
@@ -32,6 +34,8 @@ export interface CredentialSummary {
 	hasPassword: boolean;
 	hasPin: boolean;
 	hasRecoveryCodes: boolean;
+	/** True while the Runner has stored a password for an account it has not yet confirmed exists (#1230). */
+	provisional: boolean;
 	createdAt: string;
 	updatedAt: string;
 	lastUsedAt?: string;
@@ -47,6 +51,7 @@ interface CredRow {
 	secrets_iv: ArrayBuffer | null;
 	comments: string | null;
 	recovery_history: string | null;
+	provisional?: number | null;
 	created_at: string;
 	updated_at: string;
 	last_used_at: string | null;
@@ -109,6 +114,7 @@ function rowToSummary(row: CredRow): CredentialSummary {
 		hasPassword: false, // filled by listCredentials after a lightweight decrypt
 		hasPin: false,
 		hasRecoveryCodes: false,
+		provisional: row.provisional === 1,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		lastUsedAt: row.last_used_at ?? undefined,
@@ -202,6 +208,8 @@ export async function findCredentialForHost(env: Env, instanceId: string, userId
 		.bind(instanceId, userId)
 		.all<CredRow>();
 	const ranked = (res.results ?? [])
+		// A provisional password belongs to an account the site has not confirmed (#1230): never signed in with.
+		.filter((r) => r.provisional !== 1)
 		.map((r) => ({ row: r, rank: credentialMatchRank(h, String(r.domain)) }))
 		.filter((m): m is { row: CredRow; rank: number } => m.rank !== null)
 		.sort((a, b) => a.rank - b.rank);
@@ -241,7 +249,7 @@ export async function findCredentialForHost(env: Env, instanceId: string, userId
 export async function passwordLoginForHost(env: Env, instanceId: string, userId: string, host: string): Promise<{ id: string; updatedAt: string } | null> {
 	const h = credDomain(host);
 	if (!h) return null;
-	const res = await env.DB.prepare("SELECT id, domain, updated_at FROM agent_credentials WHERE instance_id = ?1 AND user_id = ?2 AND username IS NOT NULL AND username <> '' AND secrets_ciphertext IS NOT NULL ORDER BY created_at DESC, id")
+	const res = await env.DB.prepare("SELECT id, domain, updated_at FROM agent_credentials WHERE instance_id = ?1 AND user_id = ?2 AND username IS NOT NULL AND username <> '' AND secrets_ciphertext IS NOT NULL AND provisional = 0 ORDER BY created_at DESC, id")
 		.bind(instanceId, userId)
 		.all<{ id: string; domain: string; updated_at: string }>();
 	const best = (res.results ?? [])
@@ -255,12 +263,42 @@ export async function createCredential(env: Env, instanceId: string, userId: str
 	const id = crypto.randomUUID();
 	const enc = await encryptSecretsFor(env, input);
 	await env.DB.prepare(
-		`INSERT INTO agent_credentials (id, instance_id, user_id, domain, login_url, username, secrets_ciphertext, secrets_dek, secrets_iv, comments, recovery_history, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'), datetime('now'))`,
+		`INSERT INTO agent_credentials (id, instance_id, user_id, domain, login_url, username, secrets_ciphertext, secrets_dek, secrets_iv, comments, recovery_history, provisional, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'), datetime('now'))`,
 	)
-		.bind(id, instanceId, userId, credDomain(input.domain), input.loginUrl ?? null, input.username ?? null, enc?.c ?? null, enc?.d ?? null, enc?.i ?? null, input.comments ?? null, input.recoveryHistory ?? null)
+		.bind(id, instanceId, userId, credDomain(input.domain), input.loginUrl ?? null, input.username ?? null, enc?.c ?? null, enc?.d ?? null, enc?.i ?? null, input.comments ?? null, input.recoveryHistory ?? null, input.provisional ? 1 : 0)
 		.run();
 	return id;
+}
+
+/** The site accepted the registration this credential was stored for (#1230): it is now an ordinary login, used to sign in. */
+export async function confirmCredential(env: Env, instanceId: string, userId: string, id: string, note?: string): Promise<boolean> {
+	const res = await env.DB.prepare("UPDATE agent_credentials SET provisional = 0, comments = COALESCE(?4, comments), updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND provisional = 1")
+		.bind(id, instanceId, userId, note ?? null)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
+/** Replace a credential's comment (#1230: the Runner says whether the account it stored is confirmed). Touches nothing else. */
+export async function noteCredential(env: Env, instanceId: string, userId: string, id: string, note: string): Promise<boolean> {
+	const res = await env.DB.prepare("UPDATE agent_credentials SET comments = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(id, instanceId, userId, note)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
+/** Is there ANY credential row for this host — provisional or not (#1230: one account per site)? Names no secret. */
+export async function anyCredentialForHost(env: Env, instanceId: string, userId: string, host: string): Promise<{ id: string; provisional: boolean } | null> {
+	const h = credDomain(host);
+	if (!h) return null;
+	const res = await env.DB.prepare("SELECT id, domain, provisional FROM agent_credentials WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, id")
+		.bind(instanceId, userId)
+		.all<{ id: string; domain: string; provisional: number | null }>();
+	const best = (res.results ?? [])
+		.map((r) => ({ r, rank: credentialMatchRank(h, String(r.domain)) }))
+		.filter((m): m is { r: { id: string; domain: string; provisional: number | null }; rank: number } => m.rank !== null)
+		.sort((a, b) => a.rank - b.rank)[0];
+	return best ? { id: best.r.id, provisional: best.r.provisional === 1 } : null;
 }
 
 export async function updateCredential(env: Env, instanceId: string, userId: string, id: string, input: CredentialInput): Promise<boolean> {

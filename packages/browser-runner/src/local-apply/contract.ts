@@ -59,6 +59,48 @@ export const LOCAL_APPLY_VAULT_SIGN_IN_PATH = "/local-apply/vault-sign-in";
 export type LocalApplyVaultSignInFailure = "host_mismatch" | "no_username_field" | "no_password_field" | "no_submit_button" | "captcha" | "two_factor" | "wrong_password" | "not_signed_in";
 export type LocalApplyVaultSignInResult = { state: "signed_in" } | { state: "failed"; reason: LocalApplyVaultSignInFailure };
 
+/**
+ * Account creation (#1230, #1226 ask 2), on a run paused `login_required` on an allow-listed host where the owner has no account. Three
+ * steps on the paused run's own page, each one request:
+ *   `{runId, step: "prepare", host, profile}`  open the site's sign-up form and fill what is NOT secret (name, email, phone, location);
+ *                                              report whether the form asks for a password. NOTHING is submitted.
+ *   `{runId, step: "submit", host, password?, acceptTerms}` type the password the cloud generated AND already stored in the vault, tick
+ *                                              the terms box only when `acceptTerms` is true, and press the form's own button.
+ *   `{runId, step: "enter", host, code}`       type the verification code the cloud read from the owner's Gmail.
+ * The profile and the password pass through the request and are never stored by the runner, traced, logged or shown to the CLI. A CAPTCHA
+ * or any anti-bot challenge, a required field the profile does not have, or a terms box the owner has not authorised ends the attempt with
+ * its reason and the owner gets the ordinary sign-in handoff — nothing is worked around.
+ */
+export const LOCAL_APPLY_ACCOUNT_CREATION_PATH = "/local-apply/account-creation";
+export interface LocalApplyAccountProfile {
+	firstName: string;
+	lastName: string;
+	email: string;
+	phone?: string;
+	location?: string;
+	linkedin?: string;
+}
+export type LocalApplyAccountCreationFailure =
+	| "host_mismatch"
+	| "no_signup_link"
+	| "no_signup_form"
+	| "no_email_field"
+	| "no_password_field"
+	| "password_not_prepared"
+	| "no_submit_button"
+	| "captcha"
+	| "terms_required"
+	| "field_required"
+	| "email_taken"
+	| "no_code_field"
+	| "code_rejected"
+	| "not_created";
+export type LocalApplyAccountCreationResult =
+	| { state: "prepared"; needsPassword: boolean }
+	| { state: "code_requested" }
+	| { state: "created" }
+	| { state: "failed"; reason: LocalApplyAccountCreationFailure };
+
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];
 

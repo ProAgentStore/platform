@@ -62,6 +62,11 @@ export interface ApplicationRunnerSettings {
 	 * same address. Null: every sign-in waits for the owner, as before.
 	 */
 	signInEmail: string | null;
+	/**
+	 * May the Runner create an account on an allow-listed job site (`account-creation-hosts.json`) when a fill pauses for a sign-in and the
+	 * owner has none (#1230)? OFF by default and turned on by the owner: it registers them on a third-party site, which they should choose.
+	 */
+	accountCreation: boolean;
 }
 
 export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
@@ -77,6 +82,7 @@ export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
 	maxActions: 300,
 	autoSubmit: { enabled: false, roles: [], locations: [], exclude: [], minSalary: null, dailyCap: 0, acknowledgedAt: null },
 	signInEmail: null,
+	accountCreation: false,
 };
 export const RUNNER_SETTINGS_KEY = "applicationRunner";
 
@@ -133,6 +139,10 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 		const e = typeof p.signInEmail === "string" ? p.signInEmail.trim().toLowerCase() : p.signInEmail;
 		if (e !== null && e !== "" && (typeof e !== "string" || e.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))) return { error: "signInEmail must be an email address, or null" };
 		next.signInEmail = e || null;
+	}
+	if (p.accountCreation !== undefined) {
+		if (typeof p.accountCreation !== "boolean") return { error: "accountCreation must be true or false" };
+		next.accountCreation = p.accountCreation;
 	}
 	if (p.stallMinutes !== undefined) {
 		if (p.stallMinutes !== null && !intIn(p.stallMinutes, 1, 60)) return { error: "stallMinutes must be a whole number from 1 to 60, or null for automatic" };

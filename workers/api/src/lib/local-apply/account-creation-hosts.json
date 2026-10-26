@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "note": "The sites where the Application Runner may create an account when a fill pauses for a sign-in and the owner has none (#1230). Edit this file to extend it; a host that is not listed here is never touched. Every entry is OFF unless `enabled` is true, and the whole feature is OFF unless the owner turns on `accountCreation` in the Runner's settings.",
+  "hosts": [
+    { "host": "seek.com.au", "enabled": true, "acceptTerms": false, "reason": "Signs in with an emailed code (#1106); an account is created the same way." },
+    { "host": "seek.com", "enabled": true, "acceptTerms": false, "reason": "As seek.com.au." },
+    { "host": "indeed.com", "enabled": true, "acceptTerms": false, "reason": "In the Runner's own allow-list; signs in with an emailed code or Google." },
+    { "host": "linkedin.com", "enabled": false, "acceptTerms": false, "reason": "OFF: LinkedIn's User Agreement restricts automated account creation and use. Turn it on only if you accept that risk to your account." },
+    { "host": "glassdoor.com", "enabled": false, "acceptTerms": false, "reason": "OFF: not in the Runner's allow-list, and Glassdoor's terms restrict automated sign-up. Turn it on only if you accept that risk." }
+  ]
+}

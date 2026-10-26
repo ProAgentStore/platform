@@ -139,6 +139,8 @@ export const INSTANCE_CHILD_TABLES = [
 	"local_apply_email_sign_ins",
 	// #1229 — the vault sign-in of a fill run references the run (FK): before it. No credential value is stored.
 	"local_apply_vault_sign_ins",
+	// #1230 — the account creation of a fill run references the run (FK): before it. No password, code or profile value is stored.
+	"local_apply_account_creations",
 	// #957 — the Runner's fill runs (no FK: their application is on the Tailor's instance) and the
 	// lifecycle audit, keyed to the application's instance and deleted before it (FK).
 	"local_apply_runs",
