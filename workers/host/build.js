@@ -102,6 +102,7 @@ function docsFileMap(docsDir) {
 }
 
 const docsFiles = docsFileMap(path.join(storeDir, "docs"));
+if (!docsFiles["/docs/sitemap.xml"]) throw new Error("Generated public docs sitemap is missing — run pnpm docs:build first");
 
 // ── Other pages ─────────────────────────────────────────────────
 const pages = {

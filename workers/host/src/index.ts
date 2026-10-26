@@ -11,7 +11,7 @@ import {
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
 import { pinnedManifest } from "./manifest.js";
-import { publicListingResponse, publishedSitemapEntries } from "./seo.js";
+import { publicListingResponse, publishedSitemapEntries, publishedDocumentationPaths } from "./seo.js";
 import { publicCatalogueResponse } from "./catalogue-html.js";
 
 const PAGES: Record<string, string> = {
@@ -347,7 +347,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
 	// Dynamic sitemap — fetches published agents from API
 	if (path === "/sitemap.xml") {
-		const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/docs/coder-multi-machine/", "/docs/architecture/", "/docs/skill-publishing/", "/changelog/"];
+		const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/changelog/", ...publishedDocumentationPaths(docsFiles)];
 		let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 		for (const u of staticUrls) {
 			xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;

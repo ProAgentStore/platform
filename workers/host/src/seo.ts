@@ -3,6 +3,21 @@ import { publicAgentSummary } from "./catalogue-html.js";
 type PublicApi = { fetch(input: Request | string): Promise<Response> };
 const ORIGIN = "https://proagentstore.online";
 
+/** Zensical's public sitemap is the approval list; the built file must also exist. */
+export function publishedDocumentationPaths(files: Record<string, string>): string[] {
+	const paths = new Set<string>();
+	const xml = atob(files["/docs/sitemap.xml"] || "");
+	for (const [, location] of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) {
+		try {
+			const url = new URL(location);
+			if (url.origin !== ORIGIN || url.search || url.hash || url.username || url.password) continue;
+			if (!url.pathname.startsWith("/docs/") || !url.pathname.endsWith("/")) continue;
+			if (files[`${url.pathname}index.html`]) paths.add(url.pathname);
+		} catch { /* An invalid location cannot become a discovery destination. */ }
+	}
+	return [...paths].sort();
+}
+
 function escapeHtml(value: string): string {
 	return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
