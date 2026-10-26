@@ -2,6 +2,10 @@ import { createServer } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
+// One Vite fixture per browser project, reused by this file's tests (#1376).
+// Global fullyParallel would start a server per test and starve fixture startup.
+test.describe.configure({ mode: "default" });
+
 let vite: ChildProcess | undefined;
 let fixtureBase = "";
 
