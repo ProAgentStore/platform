@@ -1,9 +1,6 @@
 /**
- * The bootstrap stub (#862): installed once, it moves onto the latest release by itself on `pags up`.
- *
- * The first test is the issue's own acceptance case — a stub from an OLD release, facing a newer
- * published CLI it knows nothing about (a different entry file, even), still fetches it and runs it.
- * It runs for real: real cache folders, a real `import()` of the fetched entry. Only npm is simulated.
+ * The bootstrap stub loads cached releases after the connected runner's policy-gated updater
+ * installs them. Actions services take only relay-proven releases.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

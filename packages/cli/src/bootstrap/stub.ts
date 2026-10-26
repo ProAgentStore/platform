@@ -1,19 +1,19 @@
 /**
- * The `pags` bootstrap stub (#862): pick the newest CLI this machine has, fetching a newer one first
- * on `pags up`, and run it.
+ * The `pags` bootstrap stub (#862): run a cached CLI release. The connected runner's updater
+ * fetches new releases only under the authoritative Auto-update policy.
  *
  * A remote update (`runner_update`, #859) cannot reach a CLI that predates it, so every machine that
- * fell behind before it had the command needed a person at the keyboard. The stub closes that for
- * good: installed once by hand (`npm i -g @proagentstore/cli`), it asks npm for the latest release on
- * every `pags up` and moves onto it by itself — whatever version it was installed at, and whether or
- * not the payload it was running knows about `runner_update`.
+ * fell behind before it had the command needed a person at the keyboard. Installed once by hand
+ * (`npm i -g @proagentstore/cli`), this stable stub can load newer verified payloads without
+ * replacing the global package. It never fetches at boot, where the account policy is unavailable.
  *
- * It stays deliberately small and stable — version check, fetch, run — so it never needs replacing:
+ * It stays deliberately small and stable — choose and run — so it never needs replacing:
  * everything else is the payload's, which is what both the stub and `runner_update` replace.
  *
  * "Run" is an in-process `import()`, not a child: the payload keeps this process's terminal, signals
  * and exit code, and `process.argv[1]` stays the stub — so every `pags` the payload spawns (the
- * `runner connect` child, the `r` restart) comes back through here and gets the newest payload too.
+ * `runner connect` child, the `r` restart) comes back through here. An Actions service loads only
+ * a relay-proven cached payload; it keeps its current release until a job-safe handoff.
  *
  * A newly installed version runs on TRIAL (#1141, trial.ts): one that crashes on import is given up
  * on and the previous version is run in its place, in the same process; one that has not registered
