@@ -130,6 +130,7 @@ const INTERNET = new Set<string>([
 	// ── discord ── bot messages leave the platform; grants only constrain which channel ──
 	"discord_read_messages",
 	"discord_read_reactions",
+	"discord_list_members", // #1387 — one server's member list, read from Discord with the owner's bot
 	"discord_send_message",
 	"discord_add_reaction",
 	// ── google calendar (#1313) ── even the grant listing mints a token at Google ──

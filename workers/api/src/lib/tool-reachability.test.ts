@@ -146,6 +146,8 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 		"Discord reads require a creator-declared agent and an owner-granted exact channel, rather than adding broad chat reads to a seeded agent.",
 	discord_read_reactions:
 		"Reading who reacted needs a creator-declared agent and an owner-granted exact channel; no seeded agent has a reason to read a community's reactions.",
+	discord_list_members:
+		"Listing a server's members (#1387) needs a creator-declared agent (the owner's Internship Coordinator is one, a D1 row) holding an exact channel grant in that server; no seeded agent has a reason to read a community's roster.",
 	discord_send_message:
 		"Sending as the owner's bot is available to creator-declared agents only after an exact channel grant and connector write consent.",
 	// Google Calendar (#1313) is a building block for owner-created hiring agents: a creator declares the

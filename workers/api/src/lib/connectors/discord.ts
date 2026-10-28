@@ -10,7 +10,7 @@ const API = "https://discord.com/api/v10";
 const SNOWFLAKE = /^\d{16,22}$/;
 const MAX_MESSAGE_LENGTH = 2_000;
 
-type DiscordReply = { ok: true; data: unknown } | { ok: false; status: number; message: string };
+type DiscordReply = { ok: true; data: unknown } | { ok: false; status: number; message: string; /** Discord's own error code (50001 Missing Access, ...), when it sent one. */ code?: number };
 
 /**
  * The two kinds of Discord channel grant (#1218), told apart by `resourceType`.
@@ -81,10 +81,10 @@ async function discordRequest(token: string, path: string, init: RequestInit = {
 	if (init.body) headers.set("Content-Type", "application/json");
 	try {
 		const res = await safeFetch(`${API}${path}`, { ...init, headers });
-		const data = await res.json().catch(() => null) as { message?: unknown } | null;
+		const data = await res.json().catch(() => null) as { message?: unknown; code?: unknown } | null;
 		if (!res.ok) {
 			const detail = typeof data?.message === "string" ? data.message : "request failed";
-			return { ok: false, status: res.status, message: discordFailure(res.status, detail).message };
+			return { ok: false, status: res.status, message: discordFailure(res.status, detail).message, ...(typeof data?.code === "number" ? { code: data.code } : {}) };
 		}
 		return { ok: true, data };
 	} catch {
@@ -236,6 +236,84 @@ const addReaction: ToolDef["handler"] = async (ctx, input) => {
 		: { content: result.message, success: false };
 };
 
+// ── members of one server (#1387) ───────────────────────────────────────────────────────────────────────────────────────────────────
+const DEFAULT_MEMBERS = 100;
+const MAX_MEMBERS = 1_000;
+const MAX_ROLES_LOOKUPS = 5;
+
+/** What the owner must do when Discord will not list members. Shown for any 403 from the members endpoint, which is how a missing intent surfaces. */
+export const DISCORD_MEMBERS_INTENT_HELP =
+	"Discord would not list this server's members. The bot needs the privileged Server Members Intent: in the Discord Developer Portal open the application, then Bot, then Privileged Gateway Intents, turn on SERVER MEMBERS INTENT and save. (If it is already on, the bot is not in this server or lacks access to it.)";
+
+/** The servers (guild ids) this instance may list: those holding one of its OWN granted channels — never a guild the owner's bot is merely in. */
+async function grantedGuilds(ctx: RegistryToolCtx, token: string): Promise<Set<string>> {
+	const guilds = new Set<string>();
+	if (!ctx.instanceId || !ctx.userId) return guilds;
+	const grants = (await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord")).filter((g) => g.resourceType === DISCORD_AGENT_GRANT);
+	let lookups = 0;
+	for (const g of grants) {
+		const fromUrl = /^https:\/\/discord\.com\/channels\/(\d{16,22})\/\d{16,22}$/.exec(g.resourceUrl ?? "")?.[1];
+		if (fromUrl) {
+			guilds.add(fromUrl);
+			continue;
+		}
+		// A grant made before its URL was recorded: ask Discord which server the channel is in, a few times at most.
+		const channel = snowflake(g.resourceId);
+		if (!channel || lookups++ >= MAX_ROLES_LOOKUPS) continue;
+		const found = await discordRequest(token, `/channels/${channel}`);
+		const guildId = found.ok ? snowflake((found.data as { guild_id?: unknown } | null)?.guild_id) : null;
+		if (guildId) guilds.add(guildId);
+	}
+	return guilds;
+}
+
+const listMembers: ToolDef["handler"] = async (ctx, input) => {
+	if (!ctx.instanceId || !ctx.userId) return { content: "Discord members are available only from a subscribed agent instance.", success: false };
+	const guildId = snowflake(input.guildId);
+	if (typeof input.guildId !== "string" || !guildId) return { content: "guildId must be a Discord server id (a string of 16-22 digits). The server of one of this agent's granted channels is in discord_list_granted_channels (url).", success: false };
+	let after = "";
+	if (input.after !== undefined && input.after !== null && input.after !== "") {
+		const a = typeof input.after === "string" ? snowflake(input.after) : null;
+		if (!a) return { content: "after must be a Discord user id (the next_after of the previous page).", success: false };
+		after = a;
+	}
+	const limit = Math.min(Math.max(Math.trunc(Number(input.limit) || DEFAULT_MEMBERS), 1), MAX_MEMBERS);
+	const token = await botToken(ctx);
+	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
+	// Authorization: only a server that holds a channel this instance was granted. The owner's bot may be in many more.
+	if (!(await grantedGuilds(ctx, token)).has(guildId)) {
+		return { content: `This agent holds no Discord channel grant in server ${guildId}, so it may not list that server's members. Grant one of its channels to this agent first (grant_instance_discord_channel).`, success: false };
+	}
+	const page = await discordRequest(token, `/guilds/${guildId}/members?limit=${limit}${after ? `&after=${after}` : ""}`);
+	if (!page.ok) return { content: page.status === 403 ? DISCORD_MEMBERS_INTENT_HELP : page.message, success: false };
+	// Role names, when the bot can read them; the ids are returned either way.
+	const rolesReply = await discordRequest(token, `/guilds/${guildId}/roles`);
+	const roleNames = new Map<string, string>();
+	if (rolesReply.ok && Array.isArray(rolesReply.data)) for (const r of rolesReply.data as Array<{ id?: unknown; name?: unknown }>) if (typeof r.id === "string" && typeof r.name === "string") roleNames.set(r.id, r.name);
+	const raw = Array.isArray(page.data) ? (page.data as Array<{ user?: { id?: unknown; username?: unknown; global_name?: unknown; bot?: unknown }; nick?: unknown; roles?: unknown; joined_at?: unknown }>) : [];
+	const members = raw.flatMap((m) => {
+		const id = snowflake(m.user?.id);
+		if (!id) return [];
+		const roleIds = Array.isArray(m.roles) ? m.roles.filter((r): r is string => typeof r === "string") : [];
+		// Only these fields are passed on: avatar, flags, email and the rest of what Discord sends stay behind.
+		return [
+			{
+				userId: id,
+				username: typeof m.user?.username === "string" ? m.user.username : null,
+				globalName: typeof m.user?.global_name === "string" ? m.user.global_name : null,
+				nick: typeof m.nick === "string" ? m.nick : null,
+				bot: m.user?.bot === true,
+				roleIds,
+				roles: roleIds.map((r) => roleNames.get(r) ?? null),
+				joinedAt: typeof m.joined_at === "string" ? m.joined_at : null,
+			},
+		];
+	});
+	// Discord pages members by ascending user id: a full page may have more after it, a short one is the end.
+	const last = members.at(-1)?.userId ?? null;
+	return { content: JSON.stringify({ guildId, next_after: raw.length >= limit && last ? last : null, count: members.length, members }, null, 2), success: true };
+};
+
 export const DISCORD_CONNECTOR: Connector = {
 	id: "discord",
 	label: "Discord bot",
@@ -276,6 +354,17 @@ export const DISCORD_CONNECTOR: Connector = {
 			mutates: false,
 			untrustedOutput: true,
 			handler: readReactions,
+		},
+		{
+			name: "discord_list_members",
+			description: "List the members of ONE Discord server (guildId) in which this agent holds a granted channel: user id, username, global name, server nick, bot flag, role ids and role names, and joined_at. Pages of up to 1000 (limit, default 100) in ascending user-id order; pass the returned next_after as `after` for the next page (null means that was the last). Needs the bot's Server Members Intent switched on in the Discord Developer Portal; the error says so when it is not. Read-only.",
+			jsonSchema: { type: "object", properties: { guildId: { type: "string", description: "The server id; see the url of a channel in discord_list_granted_channels (discord.com/channels/<guildId>/<channelId>)." }, limit: { type: "number" }, after: { type: "string", description: "Optional. The next_after of the previous page." } }, required: ["guildId"] },
+			tier: "connector",
+			connector: "discord",
+			scope: "read",
+			mutates: false,
+			untrustedOutput: true,
+			handler: listMembers,
 		},
 		{
 			name: "discord_send_message",

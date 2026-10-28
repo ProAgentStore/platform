@@ -45,6 +45,7 @@ describe("Discord bot connector", () => {
 			"discord_list_granted_channels",
 			"discord_read_messages",
 			"discord_read_reactions",
+			"discord_list_members",
 			"discord_send_message",
 			"discord_add_reaction",
 		]);

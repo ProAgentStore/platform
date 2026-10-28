@@ -48,7 +48,7 @@ resolved before the run and is refused at dispatch instead.
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 | `email-worker` | bearer token **per connection** (owner-pasted, endpoint-keyed like `mcp`) | read + write | `email_worker_list_messages`, `email_worker_read_message`, `email_worker_send` (write), `email_worker_reply` (write), `email_worker_identities`, `email_worker_list_events` against a customer-owned Worker implementing the [adapter contract](email-worker-adapter.md) — see [Worker-backed email](#worker-backed-email) |
-| `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_read_reactions`, `discord_send_message`, `discord_add_reaction` |
+| `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_read_reactions`, `discord_list_members`, `discord_send_message`, `discord_add_reaction` |
 
 To connect Discord, store a **Discord bot token** in **Profile → API Keys & connector credentials**.
 Then, on the particular agent's **Permissions** tab, select a server and text channel to grant.
@@ -64,6 +64,17 @@ when it left any out (`emojiOmitted`, `usersOmittedAfterEmoji`), and `usersCompl
 reactors than were fetched. It is read-only — read permission and the same per-channel grant, no write consent — and the
 bot needs View Channel and Read Message History there. If the users call fails for one emoji the counts are still
 returned, with `usersError` on that emoji.
+
+**Listing a server's members (#1387).** `discord_list_members` takes a `guildId` (the server id, in the `url` of a channel from
+`discord_list_granted_channels`: `discord.com/channels/<guildId>/<channelId>`) and returns that server's members through the owner's
+existing bot, with no new token: `userId`, `username`, `globalName`, server `nick`, `bot`, `roleIds` and role names (`roles`, null for
+a role the bot cannot read), and `joinedAt` — nothing else Discord sends about a member. It pages by Discord's ascending user id: `limit`
+(default 100, at most 1000) and `after`, the `next_after` of the previous page; `next_after: null` means that was the last page. It is
+read-only (read permission, no write consent) and the output is untrusted text. It works only for a server in which this instance holds
+a granted channel (the owner's bot may be in many more); any other server is refused before Discord is asked. Discord only lists members
+for a bot with the privileged **Server Members Intent**: switch it on in the Discord Developer Portal (Application, Bot, Privileged Gateway
+Intents). Until then the call fails with a message saying exactly that. Like every Discord tool it is declared by an agent
+(`set_instance_tool` enables it on an instance that declares it) and the owner grants the channels.
 
 **Replying to a message (#1273).** `discord_send_message` takes an optional `replyToMessageId` — a message id
 (a string of 16-22 digits, as `discord_read_messages` returns it) from the *same* granted channel. The message is then posted
