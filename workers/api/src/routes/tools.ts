@@ -67,6 +67,7 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
 import { clampIterations, effectiveMaxObjectiveChars, MAX_CONFIGURABLE_ITERATIONS, objectiveCapView, objectiveTooLong } from "../lib/loop-limits.js";
 import { readLoopLimits, writeLoopLimits } from "../lib/loop-limits-store.js";
+import { listQuestionDecisions, parseQuestionsPolicy } from "../lib/question-policy.js";
 import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
 import type { TriggerAction } from "../lib/triggers.js";
@@ -1265,7 +1266,13 @@ toolRoutes.post("/:id/loop", async (c) => {
 		/** What the machine must be able to do (#1312): `webkit`, `node>=22`, `wrangler`… Refused at once, naming what is missing. */
 		requires?: unknown;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
+		/** What the run does with a question it would park on (#1385): `ask` (default) or `decide`. Absent ⇒ the instance default, else `ask`. */
+		questions?: unknown;
 	};
+	// Refused before a budget is opened or anything is queued: a typo here must not silently become `ask` on a run the caller meant to leave unattended.
+	const parsedQuestions = parseQuestionsPolicy(body.questions);
+	if (!parsedQuestions.ok) return c.json({ error: parsedQuestions.error, startState: "not_started" }, 400);
+	const questions = parsedQuestions.value;
 	if (body.requires !== undefined && (!Array.isArray(body.requires) || body.requires.length > 20 || body.requires.some((r) => typeof r !== "string" || !r.trim() || r.length > 60))) throw new HttpError(400, "requires must be a list of at most 20 requirements, each 1-60 characters (for example webkit, node>=22, wrangler, docker).");
 	const requires = Array.isArray(body.requires) ? (body.requires as string[]).map((r) => r.trim()) : undefined;
 	if (body.queuePosition !== undefined && body.queuePosition !== "end" && body.queuePosition !== "next") throw new HttpError(400, "queuePosition must be end or next");
@@ -1345,6 +1352,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 			maxIterations,
 			repoId,
 			requireRepoChoice,
+			questions,
 			budgetId: budget.id,
 			depth: 0,
 			repairCheckout,
@@ -1362,7 +1370,8 @@ toolRoutes.post("/:id/loop", async (c) => {
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dedupeRepoId, objective, issue });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
-				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, position: body.queuePosition });
+				// A start that names `questions` keeps it through the wait (#1385); one that does not inherits the instance default when the drain starts it.
+				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition });
 				// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
 				// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
 				// it is waiting.
@@ -1382,7 +1391,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 	const clientClaimed = clientClaimFrom(c.req.header("X-PAGS-Client"));
 	const tracked = () => trackStartOutcome(c.env, { userId: session.uid, instanceId, requestId: body.requestId ?? null, clientClaimed }, start);
 	return body.requestId
-		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, issue: issue ?? null, force: body.force === true, forceReason: body.forceReason ?? null, budget: body.budget ?? null }, tracked, (operation) => c.executionCtx.waitUntil(operation), clientClaimed)
+		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, issue: issue ?? null, force: body.force === true, forceReason: body.forceReason ?? null, budget: body.budget ?? null, ...(questions ? { questions } : {}) }, tracked, (operation) => c.executionCtx.waitUntil(operation), clientClaimed)
 		: tracked();
 });
 
@@ -1423,18 +1432,23 @@ toolRoutes.get("/:id/loop-limits", async (c) => {
 		readLoopLimits(c.env, instanceId, session.uid),
 		resolveAccountCeilings(c.env, session.uid),
 	]);
-	return c.json({ limits, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS, ...objectiveCapView(limits) });
+	return c.json({ limits, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS, ...objectiveCapView(limits), effectiveQuestions: limits.questions ?? "ask" });
 });
 
 toolRoutes.put("/:id/loop-limits", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("id");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { minIterations?: unknown; maxIterations?: unknown; maxObjectiveChars?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { minIterations?: unknown; maxIterations?: unknown; maxObjectiveChars?: unknown; questions?: unknown };
+	// An unrecognised value is a 400, not a quiet "no change": this setting decides whether runs may go unattended (#1385).
+	if ("questions" in body) {
+		const parsed = parseQuestionsPolicy(body.questions);
+		if (!parsed.ok) throw new HttpError(400, parsed.error);
+	}
 	const saved = await writeLoopLimits(c.env, instanceId, session.uid, body);
 	if (!saved) throw new HttpError(404, "instance not found");
 	const ceilings = await resolveAccountCeilings(c.env, session.uid);
-	return c.json({ limits: saved, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS, ...objectiveCapView(saved) });
+	return c.json({ limits: saved, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS, ...objectiveCapView(saved), effectiveQuestions: saved.questions ?? "ask" });
 });
 
 toolRoutes.put("/:id/loop-presets", async (c) => {
@@ -1517,7 +1531,7 @@ toolRoutes.get("/:id/loop/:runId", async (c) => {
 	if (!run) throw new HttpError(404, "loop run not found");
 	const repoCi = await instanceRepoCi(c.env, c.req.param("id"), session.uid);
 	const now = Date.now();
-	return c.json({ ...reconcileRunWithSession(withHealth(run, now, await answersPendingFor(c.env, [run.runId])), await sessionFactsFor(c.env, session.uid, [run.sessionId ?? ""]), now), ...(repoCi ? { repoCi } : {}) });
+	return c.json({ ...reconcileRunWithSession(withHealth(run, now, await answersPendingFor(c.env, [run.runId])), await sessionFactsFor(c.env, session.uid, [run.sessionId ?? ""]), now), ...(repoCi ? { repoCi } : {}), decisions: await listQuestionDecisions(c.env, session.uid, run.runId) });
 });
 
 toolRoutes.post("/:id/loop/:runId/cancel", async (c) => {

@@ -324,7 +324,7 @@ const TABLE: Record<string, Row> = {
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	clear_instance_voice_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,token"],
 	delete_instance_task: ["runtime", "destructive", "delete_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
-	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,force,force_reason,instance_id,issue,max_iterations,objective,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,requires,token"],
+	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,force,force_reason,instance_id,issue,max_iterations,objective,questions,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,requires,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).
@@ -608,7 +608,7 @@ const TABLE: Record<string, Row> = {
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
 	set_instance_auto_resume: ["composition", "write", null, "envelope", "dry_run,instance_id,mode,token"],
-	set_instance_loop_limits: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,max_objective_chars,min_iterations,token"],
+	set_instance_loop_limits: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,max_objective_chars,min_iterations,questions,token"],
 	set_instance_loop_presets: ["composition", "write", null, "envelope", "dry_run,instance_id,presets,token"],
 	replay_connection_delivery: ["composition", "runtime", null, "envelope", "delivery_id,dry_run,instance_id,token"],
 	end_instance_takeover: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
@@ -629,7 +629,7 @@ const TABLE: Record<string, Row> = {
 		"envelope",
 		"commands_enabled,disabled_commands,dry_run,instance_id,keep_awake,language,max_dictation_ms,provider,sensitivity,silence_ms,speed,stt_mode,stt_model,token,tts_max_chars,vocabulary",
 	],
-	start_instance_loop: ["coding", "runtime", null, "envelope", "dry_run,force,force_reason,instance_id,issue,max_iterations,objective,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,requires,token"],
+	start_instance_loop: ["coding", "runtime", null, "envelope", "dry_run,force,force_reason,instance_id,issue,max_iterations,objective,questions,queue_if_busy,queue_position,repair_checkout,repo_id,request_id,requires,token"],
 	continue_instance_run: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,note,run_id,token"],
 	preview_instance_run_continue: ["composition", "read", null, null, "instance_id,run_id,token"],
 	my_agent: ["agentAuthoring", "none", null, null, "agent_id,token"],

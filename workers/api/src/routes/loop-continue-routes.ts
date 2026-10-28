@@ -229,6 +229,8 @@ export async function startAutomaticContinuation(env: Env, run: LoopRunView, use
 		objective: run.objective,
 		maxIterations,
 		repoId,
+		// An unattended run stays unattended when the platform continues it (#1385); an `ask` run follows the instance default.
+		questions: run.questions === "decide" ? "decide" : undefined,
 		budgetId: budget.id,
 		depth: 0,
 		resumeLookbackMs: CONTINUE_RESUME_LOOKBACK_MS,
@@ -315,6 +317,7 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 			objective,
 			maxIterations,
 			repoId,
+			questions: run.questions === "decide" ? "decide" : undefined, // as above (#1385)
 			budgetId: budget.id,
 			depth: 0,
 			// The one thing that makes this a continue rather than a restart (#806 item 4).

@@ -20,6 +20,12 @@ export interface LoopLimitsConfig {
 	maxIterations?: number;
 	/** The longest objective a run on this instance accepts (#854). Absent ⇒ `DEFAULT_MAX_OBJECTIVE_CHARS`. */
 	maxObjectiveChars?: number;
+	/**
+	 * The instance's default for what a run does with a question it would park on (#1385): `ask` (the default, a person answers) or `decide` (the run
+	 * takes the most reversible option itself — never for a credential, a destructive act, spend or a step that needs the owner's computer).
+	 * A run started with its own `questions` overrides this. Absent ⇒ `ask`.
+	 */
+	questions?: "ask" | "decide";
 }
 
 /**
@@ -102,6 +108,8 @@ export function sanitizeLoopLimitsConfig(raw: unknown): LoopLimitsConfig {
 	if (min !== undefined) out.minIterations = max !== undefined ? Math.min(min, max) : min;
 	const chars = objectiveBound(r.maxObjectiveChars);
 	if (chars !== undefined) out.maxObjectiveChars = chars;
+	// Only a value we recognise is kept: a hand-edited blob must degrade to "ask", never to something that skips a question.
+	if (r.questions === "ask" || r.questions === "decide") out.questions = r.questions;
 	return out;
 }
 
@@ -121,9 +129,12 @@ export function mergeLoopLimits(stored: LoopLimitsConfig, raw: unknown): LoopLim
 	const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 	const speaksIterations = body.minIterations !== undefined || body.maxIterations !== undefined;
 	const speaksObjective = "maxObjectiveChars" in body;
-	const iterations = speaksIterations || !speaksObjective ? body : stored;
+	// `questions` is a patch of its own, like the objective cap (#1385): absent keeps it, `null` returns it to the default (`ask`). An empty body clears all.
+	const speaksQuestions = "questions" in body;
+	const iterations = speaksIterations || (!speaksObjective && !speaksQuestions) ? body : stored;
 	const chars = speaksObjective ? body.maxObjectiveChars : Object.keys(body).length ? stored.maxObjectiveChars : undefined;
-	return sanitizeLoopLimitsConfig({ minIterations: iterations.minIterations, maxIterations: iterations.maxIterations, maxObjectiveChars: chars });
+	const questions = speaksQuestions ? body.questions : Object.keys(body).length ? stored.questions : undefined;
+	return sanitizeLoopLimitsConfig({ minIterations: iterations.minIterations, maxIterations: iterations.maxIterations, maxObjectiveChars: chars, questions });
 }
 
 function bound(raw: unknown): number | undefined {

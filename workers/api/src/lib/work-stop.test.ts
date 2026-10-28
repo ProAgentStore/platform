@@ -12,6 +12,7 @@ import {
 const run = (over: Partial<LoopRunView> = {}): LoopRunView => ({
 	runId: "r1",
 	instanceId: "i1",
+	questions: "ask",
 	objective: "fix the failing test",
 	status: "running",
 	stopReason: null,

@@ -1407,6 +1407,14 @@ components:
           properties:
             minIterations: { type: integer, minimum: 1, maximum: 1000 }
             maxIterations: { type: integer, minimum: 1, maximum: 1000 }
+            questions:
+              type: string
+              enum: [ask, decide]
+              description: The instance default for what a run does with a question it would park on (#1385). Absent means `ask`.
+        effectiveQuestions:
+          type: string
+          enum: [ask, decide]
+          description: The policy runs on this instance get when a start names none (`questions`, else `ask`).
         accountCeiling:
           type: integer
           description: The account-wide maximum. An instance bound may narrow it, never widen it.
@@ -12166,6 +12174,15 @@ paths:
                     response; do not submit another key to infer whether the first start landed.
                 objective: { type: string, maxLength: 2000 }
                 maxIterations: { type: integer, description: Clamped to the platform ceiling. }
+                questions:
+                  type: string
+                  enum: [ask, decide]
+                  description: >
+                    What this run does with a question it would park on (#1385). `ask` (the default) parks and waits for the owner. `decide` answers a
+                    reversible decision question itself with the most reversible option, posts the decision on the linked issue and continues;
+                    credentials, destructive acts, spend over a limit and anything needing the owner's computer still park. Absent inherits the
+                    instance's loop limit `questions`, else `ask`. Kept through the queue and a continue. Anything else is a 400
+                    (`startState: not_started`). See docs/question-autonomy.md.
                 repoId:
                   type: string
                   description: >
@@ -12631,7 +12648,10 @@ paths:
         - { name: runId, in: path, required: true, schema: { type: string } }
       responses:
         "200":
-          description: The run, with `repoCi` beside its `health` when the instance has GitHub repos.
+          description: >
+            The run, with `repoCi` beside its `health` when the instance has GitHub repos. `questions` is the run's policy (`ask` or `decide`) and
+            `decisions` lists what a `decide` run answered itself or kept for the owner (newest 50): question, options, decision, alternatives,
+            excluded options, reason, guardrail, the issue it was posted on and whether the comment landed (#1385).
           content:
             application/json:
               schema: { type: object, additionalProperties: true }
@@ -12951,6 +12971,13 @@ paths:
                   minimum: 1
                   maximum: 1000
                   description: Clamp every run down to at most this. Omit to leave the account ceiling alone in charge.
+                questions:
+                  type: string
+                  nullable: true
+                  enum: [ask, decide]
+                  description: >
+                    The instance default for `questions` (#1385). `decide` lets a run answer its own reversible decision questions; `null` clears it
+                    back to `ask`; absent keeps the stored value. Anything else is a 400. See docs/question-autonomy.md.
       responses:
         "200":
           description: The bounds as stored, and the account ceiling

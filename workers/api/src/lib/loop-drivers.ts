@@ -47,6 +47,7 @@ import { currentGateState, DEFAULT_GATE_STATE, describeRejection, rejectionFor }
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { checkStartIdempotency, quarantineRefusal, startIssueFor } from "./start-idempotency.js";
 import type { Env } from "../types.js";
+import { effectiveQuestionsPolicy, type QuestionsPolicy } from "./question-policy.js";
 
 /**
  * How many iterations this run actually gets: the caller's request, the account's ceiling (#477)
@@ -83,6 +84,12 @@ export interface LoopStartInput {
 	userId: string;
 	objective: string;
 	maxIterations?: number;
+	/**
+	 * What the run does with a question it would park on (#1385): `ask` (a person answers) or `decide` (it takes the most reversible option
+	 * itself; a credential, a destructive act, spend and anything needing the owner's computer still park). Absent ⇒ the instance's default
+	 * (`loopLimits.questions`), else `ask`. Coding driver only: a chat run has no park to avoid.
+	 */
+	questions?: QuestionsPolicy;
 	budgetId: string;
 	/** Depth in the supervision tree. 0 when the owner starts it from their own chat. */
 	depth: number;
@@ -556,6 +563,9 @@ const codingDriver: LoopDriver = {
 				// The atomic repo lock (#1253): the checks above are reads, so two starts can both pass them. The
 				// INSERT itself refuses while another run holds this repo, and the loser queues like any busy start.
 				exclusiveRepoId: repo.id,
+				// #1385: this start's value, else the instance default, else `ask` — resolved HERE so every way a run starts (the route, the queue
+				// drain, an automatic resume, a continuation) gets the same rule without each re-reading the limits.
+				questionsPolicy: effectiveQuestionsPolicy(input.questions, limits.questions),
 			});
 		} catch (e) {
 			await releaseSessionDriver(env, instanceId, userId, session.id, driverId).catch(() => undefined);

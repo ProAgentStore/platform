@@ -14,6 +14,8 @@ import { codingPauseStatus } from "../../lib/coding-answer.js";
 import { answerEventType, recordParkedWorkflow, recordParkMachine, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
 import { askAnnouncement } from "../../lib/coding-ask.js";
 import { codingQuestionSource } from "../../lib/coding-question-source.js";
+import { postIssueComment } from "../../lib/github-issues.js";
+import { applyQuestionsPolicy, runQuestionsPolicy } from "../../lib/question-policy.js";
 import type { CodingGoal } from "../../lib/coding-loop.js";
 import { callRunner, getRunnerConnIgnoringLiveness, type RunnerConn } from "../../lib/runner-client.js";
 import type { RunStep } from "../../lib/runner-availability.js";
@@ -86,6 +88,17 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 		now: () => Date.now(),
 		// Journalled (#1362): a park's plan must be the same plan on every replay — see `PauseDeps.stamp`.
 		stamp: (label) => runRetry(label, async () => Date.now()) as Promise<number>,
+		// `questions: decide` (#1385). The run's setting is immutable, so it is read plainly here — and ONLY a `decide` run takes the journalled step below,
+		// so an `ask` run's step sequence is exactly what it was (the goldens in workflow-step-names.test.ts). The step records the decision and posts it on
+		// the issue once: a replay returns the journalled verdict instead of deciding, recording and commenting a second time.
+		questionPolicy: loopRunId
+			? async (q) => {
+					if ((await runQuestionsPolicy(env, loopRunId)) !== "decide") return { decided: false };
+					return (await runRetry(`decide-${round}`, () =>
+						applyQuestionsPolicy(env, { runId: loopRunId, instanceId, userId, round, issue: q.issue, postComment: (repo, number, body) => postIssueComment(env, userId, repo, number, body) }, { question: q.question, options: q.options }),
+					)) as { decided: true; note: string } | { decided: false };
+				}
+			: undefined,
 		takeover: (label, reason) => {
 			parkedQuestionId = null;
 			return runRetry(`handoff-${round}`, () => callRunner(getConn(), "/coding/takeover", { sessionId, label, reason })).then(() => undefined);

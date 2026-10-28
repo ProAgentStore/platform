@@ -496,7 +496,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// getting it wrong, which is exactly why it must not be the one deciding.
 	server.tool(
 		"get_instance_loop_limits",
-		"Read the iteration floor and ceiling configured on an instance — the bounds the platform applies to EVERY run it starts, whatever `max_iterations` the caller passes. `limits.minIterations` clamps a request up, `limits.maxIterations` clamps it down; either may be absent, and `{}` means none are configured (a run then gets whatever the caller asked for, defaulting to 10). `accountCeiling` is the account-wide maximum these sit under and can only narrow — read it before judging a floor, since 30 means one thing under a ceiling of 50 and nothing under a ceiling of 20. Also the objective cap: `maxObjectiveChars` is the longest objective a run on this instance accepts right now (the instance's own `limits.maxObjectiveChars`, else the default), and `objectiveChars` gives the default and the range it may be set to.",
+		"Read the iteration floor and ceiling configured on an instance — the bounds the platform applies to EVERY run it starts, whatever `max_iterations` the caller passes. `limits.minIterations` clamps a request up, `limits.maxIterations` clamps it down; either may be absent, and `{}` means none are configured (a run then gets whatever the caller asked for, defaulting to 10). `accountCeiling` is the account-wide maximum these sit under and can only narrow — read it before judging a floor, since 30 means one thing under a ceiling of 50 and nothing under a ceiling of 20. Also the objective cap: `maxObjectiveChars` is the longest objective a run on this instance accepts right now (the instance's own `limits.maxObjectiveChars`, else the default), and `objectiveChars` gives the default and the range it may be set to. It also carries the instance default for questions (limits.questions, and effectiveQuestions: ask or decide, #1385) — what a run does with a question it would park on when it is not started with its own setting.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -582,12 +582,17 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				.describe(
 					`The longest objective a run on this instance accepts (#854), ${MIN_CONFIGURABLE_OBJECTIVE_CHARS}–${MAX_CONFIGURABLE_OBJECTIVE_CHARS} (a smaller positive number is stored as ${MIN_CONFIGURABLE_OBJECTIVE_CHARS}); 0 returns it to the default of ${DEFAULT_MAX_OBJECTIVE_CHARS}. Sent on its own it leaves the iteration bounds as they are.`,
 				),
+			questions: z
+				.enum(["ask", "decide"])
+				.nullable()
+				.optional()
+				.describe("The instance's default for what a run does with a question it would park on (#1385): `ask` (parks, a person answers) or `decide` (a reversible decision question is answered by the run itself — the platform takes the most reversible option and posts it on the linked issue; a credential, a destructive act, spend and anything needing your computer still park). A run started with its own `questions` overrides it. null returns to `ask`; omit to leave it as it is."),
 			dry_run: z.boolean().optional().describe("Report the bounds that would be saved, without saving them."),
 		},
-		async ({ token, instance_id, min_iterations, max_iterations, max_objective_chars, dry_run }) => {
+		async ({ token, instance_id, min_iterations, max_iterations, max_objective_chars, questions, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, min_iterations, max_iterations, max_objective_chars };
+			const input = { instance_id, min_iterations, max_iterations, max_objective_chars, questions };
 			const denied = await requirePermission(safetyFor(token), "write", "set_instance_loop_limits", input);
 			if (denied) return denied;
 			// Refused here rather than repaired by the route. The route is total on purpose — it also
@@ -600,17 +605,24 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				);
 			}
 			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/loop-limits`;
-			const onlyObjective = min_iterations === undefined && max_iterations === undefined && max_objective_chars !== undefined;
+			// The objective cap and `questions` are patches of their own: speaking only about them leaves the iteration bounds as they are.
+			const onlyObjective = min_iterations === undefined && max_iterations === undefined && (max_objective_chars !== undefined || questions !== undefined);
 			const body = JSON.stringify({
 				minIterations: min_iterations,
 				maxIterations: max_iterations,
 				// `null` is the route's "back to the default"; absent keeps what is stored.
 				...(max_objective_chars === undefined ? {} : { maxObjectiveChars: max_objective_chars || null }),
+				// `null` returns it to `ask`; absent keeps what is stored (#1385).
+				...(questions === undefined ? {} : { questions }),
 			});
-			const objectiveEffect =
-				max_objective_chars === undefined
+			const questionsEffect =
+				questions === undefined
 					? ""
-					: ` Objectives would be capped at ${max_objective_chars || DEFAULT_MAX_OBJECTIVE_CHARS} characters${max_objective_chars ? "" : " (the default)"}.`;
+					: ` Runs would ${questions === "decide" ? "answer a reversible decision question themselves instead of parking (credentials, destructive acts, spend and anything needing your computer still park)" : "park on a question and wait for a person"} unless a run says otherwise.`;
+			const objectiveEffect =
+				(max_objective_chars === undefined
+					? ""
+					: ` Objectives would be capped at ${max_objective_chars || DEFAULT_MAX_OBJECTIVE_CHARS} characters${max_objective_chars ? "" : " (the default)"}.`) + questionsEffect;
 			const describe =
 				onlyObjective
 					? `${instance_id}'s iteration bounds would stay as they are.${objectiveEffect}`

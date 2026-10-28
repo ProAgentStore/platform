@@ -60,6 +60,7 @@ function stubEnv(
 	} = {},
 ) {
 	const sql: string[] = [];
+	const binds: Array<{ q: string; args: unknown[] }> = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
 	const commands: Array<{ path?: string; body?: unknown }> = [];
 	const runnerOnline = opts.runnerOnline ?? true;
@@ -76,7 +77,8 @@ function stubEnv(
 			prepare(q: string) {
 				sql.push(q);
 				return {
-					bind() {
+					bind(...args: unknown[]) {
+						binds.push({ q, args });
 						return {
 							// A claim whose predicate matched nothing = somebody else holds it.
 							async run() {
@@ -126,7 +128,7 @@ function stubEnv(
 		AGENT_LOOP: wf("AGENT_LOOP"),
 		CODING_SESSION: wf("CODING_SESSION"),
 	} as unknown as Env;
-	return { env, sql, created, commands };
+	return { env, sql, binds, created, commands };
 }
 
 const base = { objective: "get the suite green", budgetId: "b1", depth: 0, instanceId: "i1", userId: "u1" };
@@ -200,6 +202,20 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 		// Absent, not zero: the workflow falls back to the six-hour default, which is every
 		// ordinary start and must stay byte-identical.
 		expect(b.created[0].params.resumeLookbackMs).toBeUndefined();
+	});
+
+	it("the coding driver records the run's `questions` policy: the start's own, else the instance default, else `ask` (#1385)", async () => {
+		const policyOf = async (input: { questions?: "ask" | "decide" }) => {
+			const { env, binds } = stubEnv({ repos: [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }], session: { id: "s1", client_type: "claude", status: "active" } });
+			await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, ...input });
+			const insert = binds.find((b) => b.q.includes("INSERT INTO agent_loop_runs"));
+			expect(insert, "the run row was written").toBeDefined();
+			return insert?.args[10];
+		};
+		expect(await policyOf({ questions: "decide" })).toBe("decide");
+		expect(await policyOf({ questions: "ask" })).toBe("ask");
+		// No instance default is stored on this stub, so the absent case is the default, `ask` (stored as such, never silently NULL-and-different).
+		expect(await policyOf({})).toBe("ask");
 	});
 
 	it("the coding driver does, and threads the SAME run id into the Pilot", async () => {

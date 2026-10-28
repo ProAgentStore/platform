@@ -119,6 +119,16 @@ describe("the happy path", () => {
 		expect(start.mock.calls[0][0].objectiveOrigin).toBeUndefined();
 	});
 
+	it("a continuation keeps what its run did with questions: `decide` stays `decide`, and a default run passes nothing (#1385)", async () => {
+		getLoopRun.mockResolvedValue({ ...stoppedRun, questions: "decide" });
+		await post("/i1/loop/run-1/continue", {});
+		expect(start.mock.calls[0][0].questions).toBe("decide");
+		start.mockClear();
+		getLoopRun.mockResolvedValue({ ...stoppedRun, questions: "ask" });
+		await post("/i1/loop/run-1/continue", {});
+		expect(start.mock.calls[0][0].questions).toBeUndefined();
+	});
+
 	it("widens the resume-note lookback — the whole difference from a restart", async () => {
 		await post("/i1/loop/run-1/continue", {});
 		expect(start.mock.calls[0][0].resumeLookbackMs).toBe(CONTINUE_RESUME_LOOKBACK_MS);

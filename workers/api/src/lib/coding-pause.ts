@@ -102,6 +102,13 @@ export interface PauseDeps {
 	 * with nothing to publish to still pauses; the workflow always provides it.
 	 */
 	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string; fullQuestion?: string; parts?: AskPart[]; issue?: CodingQuestionIssue; issueStatus?: CodingQuestionSource["status"] }) => Promise<unknown>;
+	/**
+	 * The run's `questions` setting (#1385). Offered a real QUESTION (`needs_input`, never a stuck handoff, a sign-in or the spend ask) before
+	 * anything is announced or parked. `{ decided: true, note }`: the run took the most reversible option itself — the decision is recorded and
+	 * posted by the callee — and carries on with `note` (attributed to the platform). `{ decided: false }`: park as always. Absent for a caller
+	 * with no run to record against; an `ask` run answers `{ decided: false }` and touches nothing.
+	 */
+	questionPolicy?: (q: { round: number; question: string; options: string[]; why: string; issue: { repo: string; number: number } | null }) => Promise<{ decided: true; note: string } | { decided: false }>;
 	/** Has the human resolved it, and with what value? */
 	takeoverStatus: () => Promise<{ resolved: boolean; value?: string }>;
 	/** Close the takeover once it is resolved. */
@@ -277,6 +284,17 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// Never blocks the question: a lookup that fails is reported as such ("unavailable"), which is not the same as nothing linked.
 	const source = await resolveSource(deps);
 	const issue = source.issue;
+
+	// `questions: decide` (#1385): a REAL question — not a stuck handoff (that needs the owner's computer or hands), and not the iteration-cap ask
+	// (`keepCheckout`, which is spend) — may be answered by the run itself, so it never parks, never pages the owner and never flips the card to
+	// "needs you". Before `takeover`, the card and the pushes below, for that reason. A failure of the policy is a park, never a lost question.
+	if (reason === "needs_input" && !opts.keepCheckout && deps.questionPolicy) {
+		const decided = await deps
+			.questionPolicy({ round, question: label, options, why: result.detail?.trim() ?? "", issue: issue ? { repo: issue.repo, number: issue.number } : null })
+			.catch(() => ({ decided: false as const }));
+		// `resumeNote`, not `userHint`/`ownerTurn`: this is the platform's decision, and a run report must not credit the owner with it.
+		if (decided.decided) return { resume: true, resumeNote: decided.note };
+	}
 
 	await deps.takeover(label, reason);
 	// A QUESTION is published as one (#960): its event on the card and its park on the run, before the

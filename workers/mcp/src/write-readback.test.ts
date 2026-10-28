@@ -562,6 +562,7 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_loop_limits.min_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_objective_chars": "get_instance_loop_limits",
+	"set_instance_loop_limits.questions": "get_instance_loop_limits", // #1385: limits.questions / effectiveQuestions
 	"set_instance_loop_presets.presets": "get_instance_loop_presets",
 	// When `queue_if_busy` parks it instead of starting it, the SAME objective reads back through
 	// `coding_loop_queue` until it becomes a run — at which point this reader is the right one
@@ -570,6 +571,8 @@ const READBACK: Record<string, string | null> = {
 	"coding_loop_start.queue_position": "coding_loop_queue", // #1097: the queued entry's place and `next`
 	"coding_loop_start.request_id": "coding_loop_status",
 	"coding_loop_start.max_iterations": "coding_loop_status",
+	"coding_loop_start.questions": "coding_loop_status", // #1385: the run view carries `questions` and its `decisions`
+	"start_instance_loop.questions": "coding_loop_status", // the deprecated alias of coding_loop_start
 	// A repair run's record carries the platform's fixed objective label, which is what the status
 	// tool reads back (#804).
 	"coding_loop_start.repair_checkout": "coding_loop_status",

@@ -12,6 +12,7 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 		instanceId: "inst-1",
 		objective: "Run `git pull` in ~/dev/stores/fas/platform",
 		status: "completed",
+	questions: "ask",
 		stopReason: "done",
 		detail: "Already up to date on branch main.",
 		iteration: 1,

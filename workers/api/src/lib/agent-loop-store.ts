@@ -60,6 +60,8 @@ export interface LoopRunRow {
 	session_id: string | null;
 	queue_entry_id?: string | null;
 	request_id?: string | null;
+	/** `ask` | `decide` (0307, #1385); null on a run that predates it, which reads as `ask`. */
+	questions_policy?: string | null;
 	/** When a run parked on a question let go of its checkout (0246, #1077); null while it holds it. */
 	checkout_released_at?: number | null;
 	/** Automatic continue after a credit stop (0283, #1318): claim time, state, successor, tries, next try, last reason. */
@@ -253,6 +255,8 @@ export interface LoopRunView {
 	 * working, so the queue runs past it. It resumes once answered, on the next free cycle. Status views
 	 * list it apart from working runs, so an instance with a question pending is never just "waiting".
 	 */
+	/** What this run does with a question it would park on (#1385). `ask` unless it was started with, or inherited, `decide`. */
+	questions: "ask" | "decide";
 	blockedOnAnswer: boolean;
 	/**
 	 * Where its parked work is (#1242), while it has any: on a run still parked, or one that stopped with
@@ -295,6 +299,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		// Where it came from (#1017): the queue entry a drain started it from, and the start request.
 		queueEntryId: row.queue_entry_id ?? null,
 		requestId: row.request_id ?? null,
+		questions: row.questions_policy === "decide" ? "decide" : "ask",
 		blockedOnAnswer: row.status === "running" && row.waiting_reason === "decision" && row.checkout_released_at != null,
 		parked: parkedWork(row),
 		autoResume: row.auto_resume_state
@@ -323,15 +328,17 @@ export async function createLoopRun(
 		sessionId?: string | null;
 		/** #1253: insert only if no other run holds this repo's checkout — one statement, so racing starts cannot both win. */
 		exclusiveRepoId?: string | null;
+		/** What this run does with a question it would park on (#1385): `ask` (default) or `decide`. Null/absent is `ask`. */
+		questionsPolicy?: "ask" | "decide" | null;
 	},
 ): Promise<boolean> {
 	const exclusive = input.exclusiveRepoId
 		? `WHERE NOT EXISTS (SELECT 1 FROM agent_loop_runs o JOIN coding_sessions os ON os.id = o.session_id
-		     WHERE o.instance_id = ?3 AND os.repo_id = ?11 AND ${ownsCheckoutSql("o", "?12")})`
+		     WHERE o.instance_id = ?3 AND os.repo_id = ?12 AND ${ownsCheckoutSql("o", "?13")})`
 		: "";
 	const res = await env.DB.prepare(
-		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id, issue_number)
-		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?10 ${exclusive}`,
+		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id, issue_number, questions_policy)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?10, ?11 ${exclusive}`,
 	)
 		.bind(
 			input.runId,
@@ -344,6 +351,7 @@ export async function createLoopRun(
 			input.delegatedBy ?? null,
 			input.sessionId ?? null,
 			referencedIssue(input.objective),
+			input.questionsPolicy ?? null,
 			...(input.exclusiveRepoId ? [input.exclusiveRepoId, awayCutoffSeconds(Date.now())] : []),
 		)
 		.run();

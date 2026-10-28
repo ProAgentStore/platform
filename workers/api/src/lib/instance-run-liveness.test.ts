@@ -23,6 +23,7 @@ const NOW = 1_700_000_000_000;
 const run = (over: Partial<LoopRunView> = {}): LoopRunView => ({
 	runId: "run-1",
 	instanceId: "i1",
+	questions: "ask",
 	objective: "work through the open issues",
 	status: "running",
 	stopReason: null,

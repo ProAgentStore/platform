@@ -1259,4 +1259,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.190": "sha256:f1733fbfa9327ce3e3607573c2d99284ac007030b2a8e7cfe3f76102ca4fb89e", // #1230: set_application_runner_settings gains accountCreation (create a site account when none exists; default off).
 	"0.1.191": "sha256:c802a7052575641d3df8898f53ebdfa53f8e8591f18f93a523efb41b8a72c251", // #1335: coding_fleet_history (read) - the owner's coding history across every instance: picker decisions, attempts vs real runs, correlation, full-range summary and coverage.
 	"0.1.192": "sha256:f2ee7f16afa3cb1b590a1cc1e47cb77d1f6a2a0a009dd9fb7a5b736deac9fef3", // #1383: disable_instance (optional reason), enable_instance and list_disabled_instances; include_paused on account_activity, recent_instances and list_runner_nodes.
+	"0.1.193": "sha256:14118af3cc33e2a48ae016f473caa2fee0cfec06583502eeba06618059a13812", // #1385: coding_loop_start (and its alias start_instance_loop) and set_instance_loop_limits gain `questions` ("ask" | "decide").
 };

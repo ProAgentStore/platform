@@ -35,6 +35,7 @@ import { recordDrainRefusal } from "./issue-attempt-hooks.js";
 import { markWokenForCheckout, releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
 import type { ObjectiveQueueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
+import { questionsFromMetadata } from "./question-policy.js";
 
 export type QueueDrainResult =
 	/** Nothing was waiting for this instance/repo. The common case, and one cheap SELECT. */
@@ -126,6 +127,8 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 			// which is what "any" means at the moment of draining. Both null leaves the choice to
 			// `pickLoopRepo`, the same as a supervisor's `delegate_goal`.
 			repoId: entry.repoId ?? repoId ?? undefined,
+			// What the caller asked for when it queued this (#1385); none ⇒ the driver applies the instance default.
+			questions: questionsFromMetadata(entry.metadata),
 			budgetId,
 			// Depth 0: the queue is the OWNER's, not a subordinate's. A queued objective is not
 			// delegated by the run that drained it, and inheriting that run's depth would make the
