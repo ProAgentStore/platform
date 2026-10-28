@@ -45,7 +45,9 @@ async function desktopDestinations(page: Page): Promise<string[]> {
 	return links.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? "").filter(Boolean));
 }
 
-test.describe("mobile app-shell navigation, against the real shell (#1292)", () => {
+// The `mobile — ` prefix puts every test below in the WebKit project too (playwright.config.ts greps for it): WebKit is the engine every
+// phone runs, and these measure phone geometry (375px) — scripts/check-e2e-projects.mjs fails the build when a block like that lacks it (#740, #1386).
+test.describe("mobile — app-shell navigation, against the real shell (#1292)", () => {
 	test.beforeEach(async ({ page }) => {
 		await signedIn(page);
 	});
