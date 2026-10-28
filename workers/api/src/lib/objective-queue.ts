@@ -129,6 +129,11 @@ export interface EnqueueInput {
 	metadata?: string | null;
 	/** `next` (#1097) puts it at the top of the board's Waiting column, so it starts before every queued entry. */
 	position?: "end" | "next";
+	/**
+	 * Why it is queued at all (#1388): the refusal the start hit, when WAITING fixes it. An entry queued because the machine is overloaded or
+	 * did not answer carries its reason and first retry time from the moment it exists — before, it sat with neither until a run ended.
+	 */
+	deferral?: { reason: string; note?: string | null };
 }
 
 /**
@@ -142,12 +147,16 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 	const id = `objq-${crypto.randomUUID()}`;
 	const createdAt = Date.now();
 	const objective = input.objective.slice(0, OBJECTIVE_MAX);
+	const timed = input.deferral && TIMED_BACKOFF_REASONS.has(input.deferral.reason);
+	const deferReason = timed ? (input.deferral?.reason ?? null) : null;
+	const nextRetryAt = timed ? createdAt + overloadBackoffMs(1) : null;
+	const note = timed && input.deferral?.note ? clipMarked(input.deferral.note, QUEUE_NOTE_CHARS) : null;
 	await env.DB.prepare(
 		`INSERT INTO instance_objective_queue
-		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at, deferral_count, issue_number)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0, ?9)`,
+		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at, deferral_count, issue_number, defer_reason, next_retry_at, stop_reason)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0, ?9, ?10, ?11, ?12)`,
 	)
-		.bind(id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt, referencedIssue(objective))
+		.bind(id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt, referencedIssue(objective), deferReason, nextRetryAt, note)
 		.run();
 	if (input.position === "next") {
 		// Above every placed card on the instance — so above everything in its column, placed or not.
@@ -173,8 +182,8 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 		createdAt,
 		startedAt: null,
 		finishedAt: null,
-		deferReason: null,
-		nextRetryAt: null,
+		deferReason,
+		nextRetryAt,
 	};
 }
 
@@ -242,6 +251,41 @@ async function dropObjectiveCard(env: Env, id: string): Promise<void> {
 	await env.DB.prepare("DELETE FROM board_items WHERE job_key = ?1").bind(objectiveJobKey(id)).run();
 }
 
+/**
+ * The earliest pending entry on this repo that is waiting out a TIMED backoff (#1388), or null. A start that arrives while one exists
+ * must queue BEHIND it rather than start ahead of it: the entries were queued in an order (#507 → #508 → #509 depend on each other),
+ * and the machine being briefly unwell is no reason to run the later one first. Only a timed backoff counts — it is guaranteed a wake
+ * (the per-minute retry tick), so nothing waits behind an entry nobody will ever drain.
+ */
+export async function backingOffAhead(env: Env, instanceId: string, repoId: string | null, now: number = Date.now()): Promise<{ id: string; deferReason: string | null; nextRetryAt: number } | null> {
+	const row = await env.DB.prepare(
+		`SELECT q.id, q.defer_reason, q.next_retry_at FROM ${ORDERED_FROM}
+		  WHERE q.instance_id = ?1 AND q.status = 'pending' AND (q.repo_id IS NULL OR q.repo_id = ?2 OR ?2 IS NULL)
+		    AND q.next_retry_at IS NOT NULL AND q.next_retry_at > ?3
+		  ORDER BY ${ORDER}
+		  LIMIT 1`,
+	)
+		.bind(instanceId, repoId ?? null, now)
+		.first<{ id: string; defer_reason: string | null; next_retry_at: number }>();
+	return row ? { id: row.id, deferReason: row.defer_reason ?? null, nextRetryAt: row.next_retry_at } : null;
+}
+
+/**
+ * The runner answered: end the clock on entries that were waiting for it to (#1388). A `runner_unresponsive` entry backs off because
+ * nothing announces a runner recovering from a missed ping; a (re)connect is exactly that announcement, so its entries are eligible now
+ * rather than at the end of a backoff the machine has already outlived. Entries waiting on a CLOCK for another reason
+ * (`runner_overloaded`) are left alone — a reconnect says nothing about CPU. Returns how many it freed.
+ */
+export async function clearUnresponsiveBackoff(env: Env, instanceId: string, userId: string): Promise<number> {
+	const res = await env.DB.prepare(
+		`UPDATE instance_objective_queue SET next_retry_at = NULL
+		  WHERE instance_id = ?1 AND user_id = ?2 AND status = 'pending' AND defer_reason = 'runner_unresponsive' AND next_retry_at IS NOT NULL`,
+	)
+		.bind(instanceId, userId)
+		.run();
+	return res.meta?.changes ?? 0;
+}
+
 /** How many candidates one dequeue will try before giving up to a concurrent drain. */
 const CLAIM_CANDIDATES = 5;
 
@@ -258,18 +302,19 @@ const CLAIM_CANDIDATES = 5;
 export async function dequeueNext(env: Env, instanceId: string, repoId: string | null, now: number = Date.now()): Promise<ObjectiveQueueEntry | null> {
 	const candidates = await env.DB.prepare(
 		// The linearization point of a reorder (#1097): one committed before this SELECT decides this start.
-		// `next_retry_at` (#1264) excludes an entry on a TIMED backoff — the only one it must wait out is
-		// `runner_overloaded`, which is the only reason that ever sets it; every other pending entry has it
-		// NULL and is exactly as eligible as it always was.
+		// Entries on a TIMED backoff (#1264, #1388) stay in this list on purpose: they are not skipped in SQL, because skipping lets a LATER
+		// entry overtake one that is merely waiting for the machine — the order dependent objectives were queued in. They are judged in order below.
 		`SELECT ${ORDERED_COLUMNS} FROM ${ORDERED_FROM}
 		  WHERE q.instance_id = ?1 AND q.status = 'pending' AND (q.repo_id IS NULL OR q.repo_id = ?2)
-		    AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?4)
 		  ORDER BY ${ORDER}
 		  LIMIT ?3`,
 	)
-		.bind(instanceId, repoId ?? null, CLAIM_CANDIDATES, now)
+		.bind(instanceId, repoId ?? null, CLAIM_CANDIDATES)
 		.all<ObjectiveQueueRow>();
 	for (const row of candidates.results ?? []) {
+		// The first entry in order that is still backing off holds the line (#1388): nothing behind it on this repo starts until its time comes
+		// — or the owner reorders it. Every entry with no clock (`next_retry_at` NULL) is exactly as eligible as it always was.
+		if (row.next_retry_at != null && row.next_retry_at > now) return null;
 		const startedAt = Date.now();
 		const claimed = await env.DB.prepare(
 			`UPDATE instance_objective_queue
@@ -336,6 +381,12 @@ export interface Requeued {
  */
 export const OVERLOAD_BACKOFF_MS = [60_000, 120_000, 300_000, 600_000] as const;
 
+/**
+ * The reasons that wait on a CLOCK rather than an event (#1264, #1388): an overloaded machine recovers on its own schedule, and a
+ * runner that missed a ping comes back without any reconnect announcing it. Every other waitable reason is woken by an event.
+ */
+export const TIMED_BACKOFF_REASONS: ReadonlySet<string> = new Set(["runner_overloaded", "runner_unresponsive"]);
+
 export function overloadBackoffMs(deferralCount: number): number {
 	const i = Math.max(1, Math.trunc(deferralCount)) - 1;
 	return OVERLOAD_BACKOFF_MS[Math.min(i, OVERLOAD_BACKOFF_MS.length - 1)];
@@ -350,7 +401,7 @@ export async function requeueEntry(env: Env, id: string, note?: string | null, o
 	// above is overwritten by `finishQueueEntry`, and this column is not, so a lost `deferred` event is
 	// still a named gap after admission, cancellation or failure.
 	// `deferral_count + 1` stays NULL on a pre-0218 row: one more deferral of an uncounted history is not a count.
-	// `next_retry_at` (#1264): ONLY `runner_overloaded` sets it — see `OVERLOAD_BACKOFF_MS` above for
+	// `next_retry_at` (#1264, #1388): ONLY `runner_overloaded` and `runner_unresponsive` set it — see `OVERLOAD_BACKOFF_MS` above for
 	// why these four literals must match it. Every other reason keeps it NULL, unchanged from before
 	// this column existed: those entries are woken by an EVENT (a run finishing, a relay reconnecting),
 	// never a clock, and must stay eligible the instant that event drains the queue.
@@ -359,7 +410,7 @@ export async function requeueEntry(env: Env, id: string, note?: string | null, o
 		    SET status = 'pending', started_at = NULL, stop_reason = ?2, deferred_at = ?3, deferral_count = deferral_count + 1,
 		        defer_reason = ?4,
 		        offline_since = CASE WHEN ?4 = 'runner_offline' THEN COALESCE(offline_since, ?3) ELSE NULL END,
-		        next_retry_at = CASE WHEN ?4 = 'runner_overloaded' THEN ?3 + (CASE WHEN deferral_count + 1 <= 1 THEN 60000 WHEN deferral_count + 1 = 2 THEN 120000 WHEN deferral_count + 1 = 3 THEN 300000 ELSE 600000 END) ELSE NULL END
+		        next_retry_at = CASE WHEN ?4 IN ('runner_overloaded', 'runner_unresponsive') THEN ?3 + (CASE WHEN deferral_count + 1 <= 1 THEN 60000 WHEN deferral_count + 1 = 2 THEN 120000 WHEN deferral_count + 1 = 3 THEN 300000 ELSE 600000 END) ELSE NULL END
 		  WHERE id = ?1 AND status = 'running'
 		  RETURNING deferral_count`,
 	)

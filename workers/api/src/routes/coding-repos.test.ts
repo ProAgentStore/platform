@@ -1113,7 +1113,7 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		// The unpinned case is what `--force` is the answer to, and it must read exactly as before.
 		const { body } = await listRepos([row()], { registered: true });
 		expect(reasonOf(body)).toBe(
-			"The machine is online but this agent isn't attached — another runner on it may already hold this agent. Try: `pags up --force`",
+			"The machine is online but this agent isn't attached. A busy machine that missed the relay's ping reconnects on its own within a minute or two; if it stays detached, another runner on it may already hold this agent. Try: `pags up --force`",
 		);
 		expect(liveNodeIgnoringPin).not.toHaveBeenCalled();
 	});

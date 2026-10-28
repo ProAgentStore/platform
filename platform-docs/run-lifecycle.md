@@ -102,6 +102,26 @@ Two consequences of the clock being one field with one meaning:
 
 A park also outranks the heartbeat test. A run parked on an interruption is mid-resume and has nothing ticking *by design*, so reading its silence as death would report a recovery in progress as a failure.
 
+## The Queue And A Runner That Goes Quiet (#1388)
+
+A runner can hold its relay socket and still miss the relay's 1.5 second ping — a busy or reconnecting machine. That is "gone for now",
+not a refusal: it heals on its own, and the platform treats it as a wait everywhere it can meet one.
+
+- **A start** that meets it is refused with `reason: "runner_unresponsive"` (no socket at all is `runner_offline`). With `queue_if_busy`
+  it is queued, not answered `refused`; without, the reply still names the reason so a caller can tell a stall from a structural no.
+- **The queue** defers the entry instead of failing it, on the same timed backoff as `runner_overloaded` — 1, 2, 5, then 10 minutes by
+  its deferral count — woken by the per-minute retry tick, or at once when the runner's relay connects (a runner that answers has
+  recovered). An entry queued by the route for one of these reasons carries `deferReason` and `nextRetryAt` from the moment it exists.
+- **Order is kept.** An entry that is backing off holds the line: nothing behind it on that repo starts until its time comes, and a
+  `queue_if_busy` start that arrives meanwhile is queued behind it rather than started ahead. Objectives queued in order because
+  each depends on the last stay in that order. Reorder the queue to change it; `queue_position: "next"` goes first by request.
+  Only a *timed* backoff holds the line: it is guaranteed a wake, so nothing waits behind an entry nobody will ever drain.
+- **A run's start-of-run sync check** that meets it waits for the runner (parked at zero compute past the poll) and reads again, in the
+  same run, rather than ending it at iteration 0 as "could not be confirmed". A checkout that is genuinely not a git repository, or a
+  runner too old to serve the route, is still blocked at once.
+- **Structural refusals** — no repository, an unusable checkout, a diverged branch — still fail immediately and hold nothing.
+
+
 ## Before A Coding Run Starts: The Checkout Must Be Confirmed Current
 
 A coding run builds on a local checkout, and a checkout that is behind its upstream plans a diff against code that has already changed. So before the Pilot's first instruction, the platform reads where the checkout stands against its upstream (the runner fetches remote-tracking refs — it never pulls on its own) and decides whether the run may start.

@@ -198,6 +198,17 @@ export function isRunnerUnresponsive(e: unknown): boolean {
 	return code === "UNRESPONSIVE" || code === "RELAY_TIMEOUT" || code === "DRAINING";
 }
 
+/**
+ * What a START refused by a runner that is "gone for now" should WAIT for (#1388): `runner_offline` when the relay held no socket at
+ * dispatch (its reconnecting drains the queue), `runner_unresponsive` for every other retryable failure — a socket that missed the
+ * relay's ping, a dropped command, a draining runner — which no reconnect announces, so it is retried on a timed backoff. Null for
+ * anything that is not a transient runner failure: a structural refusal must still fail at once.
+ */
+export function unreachableWaitReason(e: unknown): "runner_offline" | "runner_unresponsive" | null {
+	if (!isRunnerUnreachable(e) || isRunnerGone(e)) return null;
+	return runnerErrorCode(e) === "NO_SOCKET" ? "runner_offline" : "runner_unresponsive";
+}
+
 export function isRunnerGone(e: unknown): boolean {
 	return e instanceof RunnerGoneError || (e as { runnerGone?: unknown } | null)?.runnerGone === true || runnerErrorCode(e) === "GONE";
 }

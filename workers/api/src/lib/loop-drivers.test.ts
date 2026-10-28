@@ -57,6 +57,8 @@ function stubEnv(
 		gateState?: string | null;
 		/** The machine's reported capability record (#1312), as the platform stores it; absent = never reported. */
 		capabilities?: Record<string, unknown> | null;
+		/** A relay that answers a runner command with a failure (#1388): the response for that path, or null to let it through. */
+		relayFailure?: (path: string) => Response | null;
 	} = {},
 ) {
 	const sql: string[] = [];
@@ -119,6 +121,8 @@ function stubEnv(
 					if (new URL(req.url).pathname === "/status") return new Response(JSON.stringify({ connected: runnerOnline }));
 					const cmd = (await req.clone().json().catch(() => ({}))) as { path?: string; body?: unknown };
 					commands.push({ path: cmd.path, body: cmd.body });
+					const failure = opts.relayFailure?.(cmd.path ?? "");
+					if (failure) return failure;
 					if (cmd.path === "/coding/repo-check" && opts.repoCheck) return new Response(JSON.stringify(opts.repoCheck));
 					if (cmd.path === "/coding/engine-check" && opts.engineCheck) return new Response(JSON.stringify(opts.engineCheck));
 					return new Response(JSON.stringify({ ok: true }));
@@ -506,6 +510,55 @@ describe("the coding driver's preconditions are refusals, not crashes", () => {
 		// one either) since there is no running session for this test to leave untouched.
 		expect(created).toHaveLength(0);
 		expect(commands.filter((c) => c.path?.startsWith("/coding/"))).toHaveLength(0);
+	});
+
+	describe("a runner that is gone for now is a WAIT, not a refusal (#1388)", () => {
+		const repos = [{ id: "r1", name: "fws/platform" }];
+		/** What RelayDO answers when the socket exists but the runner missed the ping — the code `callRunner` reads. */
+		const missedPong = (path: string) => (path === "/coding/start" ? Response.json({ error: "runner did not answer ping", code: "RUNNER_RELAY_UNRESPONSIVE" }, { status: 503 }) : null);
+
+		it("a missed pong on /coding/start is reason: \"runner_unresponsive\" — waitable, so queue_if_busy queues it and the drain defers it", async () => {
+			const { env, created } = stubEnv({ repos, session: null, relayFailure: missedPong });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+			expect(out).toMatchObject({ ok: false, status: 409, reason: "runner_unresponsive" });
+			expect(startRefusalIsWaitable(out.ok ? undefined : out.reason)).toBe(true);
+			// Nothing started: no workflow, and the refusal names the stall rather than blaming the repo.
+			expect(created).toHaveLength(0);
+			if (!out.ok) expect(out.error).toMatch(/not responding/);
+		});
+
+		it("the message no longer claims the relay has no socket when one exists, nor sends the owner to `pags up --force`", async () => {
+			const { env } = stubEnv({ repos, session: null, relayFailure: missedPong });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+			if (out.ok) throw new Error("expected a refusal");
+			expect(out.error).not.toMatch(/no live socket/);
+			expect(out.error).not.toMatch(/pags up --force/);
+			expect(out.error).toMatch(/did not answer the relay's ping/);
+		});
+
+		it("no socket at dispatch on /coding/start is `runner_offline` — woken by the relay reconnecting, as before", async () => {
+			const noSocket = (path: string) => (path === "/coding/start" ? Response.json({ error: "No runner connected", code: "RUNNER_RELAY_NO_SOCKET" }, { status: 503 }) : null);
+			const { env } = stubEnv({ repos, session: null, relayFailure: noSocket });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+			expect(out).toMatchObject({ ok: false, status: 409, reason: "runner_offline" });
+		});
+
+		it("a failure that is the repo's or the engine's own is NOT waited for: the runner answered, so it has no reason and fails at once", async () => {
+			const broken = (path: string) => (path === "/coding/start" ? Response.json({ error: "clone failed: repository not found" }, { status: 500 }) : null);
+			const { env } = stubEnv({ repos, session: null, relayFailure: broken });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+			expect(out).toMatchObject({ ok: false, status: 409 });
+			if (!out.ok) {
+				expect(out.reason).toBeUndefined();
+				expect(startRefusalIsWaitable(out.reason)).toBe(false);
+			}
+		});
+
+		it("a missed pong on a REUSED session's re-attach is the same wait, not a refusal", async () => {
+			const { env } = stubEnv({ repos, session: { id: "s1", client_type: "claude", status: "active", repo_id: "r1" }, relayFailure: missedPong });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+			expect(out).toMatchObject({ ok: false, status: 409, reason: "runner_unresponsive" });
+		});
 	});
 
 	describe("capability requirements fail fast (#1312)", () => {

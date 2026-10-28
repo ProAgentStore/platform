@@ -16,7 +16,7 @@ makes a replayed event, a retried step or a second wake a no-op.
 
 | Never counts |
 |---|
-| A deferral or wait (`busy`, `paused`, `runner_offline`, `runner_overloaded`, `recovery_required`), polling, a duplicate receipt |
+| A deferral or wait (`busy`, `paused`, `runner_offline`, `runner_overloaded`, `runner_unresponsive`, `recovery_required`), polling, a duplicate receipt |
 | A cancellation |
 | A start-guard refusal: `duplicate`, `issue_closed`, `already_done`, `quarantined` — the guard doing its job |
 | Provider credit, credentials, a usage window, a machine that stayed away, an unanswered owner question, a platform interruption — those have their own holds (#1314) and are not the issue's fault |

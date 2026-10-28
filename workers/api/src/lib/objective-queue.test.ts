@@ -194,11 +194,22 @@ describe("dequeueNext", () => {
 		expect(calls[0].args[1]).toBeNull();
 	});
 
-	it("excludes an entry whose timed backoff has not elapsed yet (#1264), and binds `now`", async () => {
-		const { env, calls } = buildEnv({ rows: [] });
-		await dequeueNext(env, "i1", "r1", 5000);
-		expect(calls[0].sql).toContain("next_retry_at IS NULL OR q.next_retry_at <= ?4");
-		expect(calls[0].args[3]).toBe(5000);
+	// #1264 / #1388 — a timed backoff is judged IN ORDER, not skipped in SQL: skipping let a later entry overtake an earlier one that was only waiting.
+	it("holds the line at the first entry still backing off: nothing behind it is claimed, and no write is made (#1388)", async () => {
+		const { env, calls } = buildEnv({ rows: [row({ id: "objq-a", next_retry_at: 9000, defer_reason: "runner_unresponsive" }), row({ id: "objq-b" })], changes: [1, 1] });
+		expect(await dequeueNext(env, "i1", "r1", 5000)).toBeNull();
+		expect(calls).toHaveLength(1); // the SELECT only — objq-b was never claimed
+		expect(calls[0].sql).not.toContain("next_retry_at IS NULL OR"); // the old skip is gone
+	});
+
+	it("starts the entry once its backoff has elapsed, and then the ones behind it in turn (#1388)", async () => {
+		const { env } = buildEnv({ rows: [row({ id: "objq-a", next_retry_at: 4000, defer_reason: "runner_unresponsive" }), row({ id: "objq-b" })], changes: [1] });
+		expect((await dequeueNext(env, "i1", "r1", 5000))?.id).toBe("objq-a");
+	});
+
+	it("an entry with no clock is claimed exactly as before (#1388)", async () => {
+		const { env } = buildEnv({ rows: [row({ id: "objq-b", next_retry_at: null })], changes: [1] });
+		expect((await dequeueNext(env, "i1", "r1", 5000))?.id).toBe("objq-b");
 	});
 });
 
@@ -238,11 +249,11 @@ describe("requeueEntry", () => {
 		expect(calls[0].sql).toContain("status = 'running'");
 	});
 
-	it("leaves next_retry_at NULL for every reason except runner_overloaded (#1264) — busy/paused/etc. stay EVENT-woken", async () => {
+	it("leaves next_retry_at NULL for every reason except the two timed ones (#1264, #1388) — busy/paused/etc. stay EVENT-woken", async () => {
 		const { env, calls } = buildEnv();
 		await requeueEntry(env, "objq-1", "the repo is busy", { reason: "busy" });
 		expect(calls[0].args[3]).toBe("busy");
-		expect(calls[0].sql).toContain("WHEN ?4 = 'runner_overloaded' THEN");
+		expect(calls[0].sql).toContain("WHEN ?4 IN ('runner_overloaded', 'runner_unresponsive') THEN");
 		expect(calls[0].sql).toContain("ELSE NULL END");
 	});
 

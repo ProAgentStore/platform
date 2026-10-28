@@ -23,7 +23,7 @@ import { IDLE_SESSION_MS, lastIdleReapForRepo } from "./coding-session-sweeper.j
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { resolveSessionContinuity, type SessionContinuity } from "./coding-session-continuity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
-import { isRunnerUnreachable } from "./runner-unreachable.js";
+import { isRunnerUnreachable, unreachableWaitReason } from "./runner-unreachable.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { CodingRepo, CodingSessionRecord } from "./coding-types.js";
@@ -50,6 +50,12 @@ export interface StartOnRunnerResult {
 	 * old, and would be relayed to the owner as the reason their session did not start.
 	 */
 	startError?: string | null;
+	/**
+	 * Set when the launch failed because the runner was "gone for now" (#1388): a socket that missed the relay's ping, a dropped command, no
+	 * socket at dispatch. It is read off the error itself, not the `startError` text — which is cut to 300 characters, and its trailing
+	 * `[runner-unreachable:…]` tag goes first. A start that sees it should WAIT, never be refused as if the repo were at fault.
+	 */
+	waitReason?: "runner_offline" | "runner_unresponsive";
 	/**
 	 * The machine definitely cannot run this session's engine — not installed, or not signed in
 	 * (#879). Set only by a launch that asked for `preflightEngine`; `startError` carries the
@@ -406,7 +412,7 @@ export async function startSessionOnRunner(
 			await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
 			if (checkoutOn) await upsertCheckout(env, instanceId, uid, repo.id, checkoutOn.machineId, { cloneStatus: "error", cloneError: msg }).catch(() => undefined);
 		}
-		return { conn: null, resumed: false, seeded: false, startError: msg };
+		return { conn: null, resumed: false, seeded: false, startError: msg, ...(unreachableWaitReason(e) ? { waitReason: unreachableWaitReason(e) as "runner_offline" | "runner_unresponsive" } : {}) };
 	}
 }
 
@@ -469,6 +475,8 @@ export type EnsureSessionResult =
 	| {
 			ok: false;
 			startError: string | null;
+			/** The start failed on a runner that is gone for now (#1388) — see {@link StartOnRunnerResult.waitReason}. */
+			waitReason?: "runner_offline" | "runner_unresponsive";
 			session?: CodingSessionRecord | null;
 			/**
 			 * The machine definitely cannot run the engine (#879/#891) — the preflight's verdict, and the
@@ -518,7 +526,7 @@ export async function ensureActiveSession(
 		// never got as far as raising one (a `.catch(() => null)` above, or a session that could
 		// not be created), and it is no longer the primary source: since a transport failure is
 		// not written to the row, reading it would report the last filesystem verdict instead.
-		if (started?.startError) return { ok: false, startError: started.startError, session: s };
+		if (started?.startError) return { ok: false, startError: started.startError, session: s, ...(started.waitReason ? { waitReason: started.waitReason } : {}) };
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null, session: s };
 	};
@@ -575,7 +583,7 @@ export async function ensureActiveSession(
 		// since #440 the row is not written for a transport failure, so the answer comes from the
 		// call and the row is only the fallback.
 		if (started.engineState) return { ok: false, startError: started.startError ?? null, engine: { state: started.engineState, sessionId: session.id } };
-		if (started.startError) return { ok: false, startError: started.startError };
+		if (started.startError) return { ok: false, startError: started.startError, ...(started.waitReason ? { waitReason: started.waitReason } : {}) };
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null };
 	}

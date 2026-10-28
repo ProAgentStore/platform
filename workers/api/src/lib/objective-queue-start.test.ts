@@ -231,6 +231,16 @@ describe("when the start is refused", () => {
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
 	});
 
+	it("runner_unresponsive is WAITED FOR the same way: a runner that missed a ping heals on its own, so the entry is requeued with the reason, never failed (#1388)", async () => {
+		dequeueNext.mockResolvedValue(entry());
+		const error = "tiny-laptop could not start: Runner relay is connected but not responding [runner-unreachable:UNRESPONSIVE@/coding/start]";
+		start.mockResolvedValue({ ok: false, status: 409, reason: "runner_unresponsive", error });
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", error, { reason: "runner_unresponsive" });
+		expect(finishQueueEntry).not.toHaveBeenCalled();
+		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
+	});
+
 	it("a structural refusal FAILS the entry with the driver's own sentence", async () => {
 		// No repo, an unusable checkout — waiting fixes neither, and an entry left pending forever
 		// with nobody told why is the loss this issue is about wearing a new hat.

@@ -32,6 +32,15 @@ describe("diagnoseAttachment", () => {
 		expect(d.message).toMatch(/another runner/i);
 	});
 
+	// A runner too busy to answer the relay's ping reads as "no socket" here too, and heals within a minute or two (#1388).
+	// The sentence has to say so before it sends the owner to take the agent over with --force.
+	it("says a busy machine that missed the relay's ping reconnects on its own, before it names another runner holding the agent", () => {
+		const d = diagnoseAttachment({ hasRuntimeRow: true, relayConnected: false, lastSeenAt: secondsAgo(10), now: NOW });
+		expect(d.message).toMatch(/missed the relay's ping reconnects on its own within a minute or two/);
+		expect(d.message.indexOf("reconnects on its own")).toBeLessThan(d.message.indexOf("another runner"));
+		expect(d.message).toMatch(/if it stays detached, another runner on it may already hold this agent/);
+	});
+
 	it("uses the heartbeat window as the boundary between the two", () => {
 		const justFresh = secondsAgo(HEARTBEAT_FRESH_MS / 1000 - 5);
 		const justStale = secondsAgo(HEARTBEAT_FRESH_MS / 1000 + 5);

@@ -33,6 +33,7 @@ import { accountTimeZone } from "../../lib/account-timezone.js";
 import type { EngineWaitState } from "../../lib/coding-wait.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../../lib/repo-state.js";
 import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../../lib/repo-sync.js";
+import { isRunnerUnreachable, RunnerUnreachableError } from "../../lib/runner-unreachable.js";
 import { attemptSyncSelfHealWithStash, autoStashApproved, readAutoStashPolicy } from "../../lib/checkout-actions.js";
 import { describeSyncHeal, gateRunOnSync, readWorkingStateWithRetry, REPAIR_RUN_OBJECTIVE, repairCheckoutObjective, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../../lib/repo-sync-gate.js";
 import { enforceRepoPolicies } from "../../lib/repo-policy-act.js";
@@ -689,7 +690,13 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// has already changed, and nothing in the state note could say so. The runner fetches
 		// (remote-tracking refs only — never the branch, never the tree) and counts; the platform
 		// TELLS, in the same voice as the state note, and pulls nothing itself.
-		const repoStart = (await step.do("repo-state-start", async () => {
+		// GUARDED (#1388): a runner that missed the relay's ping while this read ran is "gone for now", not a checkout that cannot be
+		// confirmed. `readRepoSync` never throws — it folds the failure into an `unverified` verdict carrying the runner's tagged message —
+		// which the gate below reads as unconfirmed and ends the run with zero steps; the next queued objective, drained at its end, met the
+		// same stall and failed the same way. So a verdict that is `unverified` BECAUSE the runner was unreachable is raised again here, and
+		// the guard waits for the runner (parking the run at zero compute past its poll), reconnects and reads again. Any OTHER unverified
+		// verdict — a checkout that is not a git repository, a runner too old to know the route — still reaches the gate and blocks as before.
+		const repoStart = (await guard(runRetry, "repo-state-start", async () => {
 			const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
 			if (!repo) return { state: null, sync: null, stateError: null };
 			const [read, sync] = await Promise.all([
@@ -699,6 +706,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				// round trip, whatever the cache holds.
 				readRepoSync(conn, { workDir: repo.workdir, sessionId, branch: repo.branch, forceFetch: true }).catch(() => null),
 			]);
+			if (sync?.state === "unverified" && sync.error && isRunnerUnreachable({ message: sync.error })) throw new RunnerUnreachableError(sync.error);
 			return { state: read.state, sync: sync ?? null, stateError: read.error };
 		})) as { state: RepoWorkingState | null; sync: RepoSyncVerdict | null; stateError?: string | null };
 		const repoState = repoStart.state;

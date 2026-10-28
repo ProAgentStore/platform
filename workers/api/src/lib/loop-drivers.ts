@@ -200,10 +200,14 @@ export type LoopStartResult =
 			 * Nothing fixes it by itself the way a reconnect does; it is waited on a TIMED backoff
 			 * instead (`objective-queue.ts`'s `next_retry_at`), which only this reason sets.
 			 *
+			 * `runner_unresponsive` (#1388) is the fifth: the runner's socket is up but it missed the relay's ping (or dropped the command), the
+			 * "gone for now" failure `RunnerUnreachableError` documents as healing on its own. A reconnect does not announce it, so it takes the
+			 * same TIMED backoff as `runner_overloaded`.
+			 *
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "capability_missing" | "duplicate" | "issue_closed" | "already_done" | "quarantined";
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "runner_unresponsive" | "capability_missing" | "duplicate" | "issue_closed" | "already_done" | "quarantined";
 			/** Set with `duplicate` / `issue_closed` / `already_done` (#1253): the prior run, issue and times. */
 			detail?: Record<string, unknown>;
 			/**
@@ -226,7 +230,8 @@ export function startRefusalIsWaitable(reason: string | undefined): boolean {
 	// `runner_offline` (#1161): the machine is away; its relay reconnecting drains the queue.
 	// `runner_overloaded` (#1264): the machine is over its admission gate's thresholds; a timed
 	// backoff retries it as the metric recovers — see `objective-queue.ts`'s `next_retry_at`.
-	return reason === "busy" || reason === "recovery_required" || reason === "paused" || reason === "runner_offline" || reason === "runner_overloaded";
+	// `runner_unresponsive` (#1388): the runner missed a ping; a transient failure waits on the same timed backoff.
+	return reason === "busy" || reason === "recovery_required" || reason === "paused" || reason === "runner_offline" || reason === "runner_overloaded" || reason === "runner_unresponsive";
 }
 
 export interface LoopDriver {
@@ -491,7 +496,9 @@ const codingDriver: LoopDriver = {
 			return { ok: false, status: 409, reason: "engine_auth", runId, error: message };
 		}
 		if (!ensured.ok) {
-			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity, startError: ensured.startError }) };
+			// A runner that is gone for now (#1388) is a WAIT, not a refusal: the connectivity check above passed, and the start then met a socket
+			// that missed the relay's ping. Without a reason the route answered `refused` and the queue drain failed the entry.
+			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity, startError: ensured.startError }), ...(ensured.waitReason ? { reason: ensured.waitReason } : {}) };
 		}
 		const { session, opened } = ensured;
 

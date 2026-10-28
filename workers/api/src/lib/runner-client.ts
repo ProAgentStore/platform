@@ -351,7 +351,7 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 			if (unresponsive) await recordUnresponsive(conn, path);
 			throw new RunnerUnreachableError(
 				(unresponsive
-					? `Runner relay is ${UNRESPONSIVE_MARKER} — ${NO_SOCKET_MARKER} for this agent.`
+					? `Runner relay is ${UNRESPONSIVE_MARKER} — its socket is up, but the runner did not answer the relay's ping in time. A busy or reconnecting machine usually recovers on its own.`
 					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`) + runnerErrorTag(code, true, path),
 				{ code, dispatched: res.status !== 503, path },
 			);

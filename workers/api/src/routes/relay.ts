@@ -1,3 +1,4 @@
+import { clearUnresponsiveBackoff } from "../lib/objective-queue.js";
 import { drainPendingQueues } from "../lib/objective-queue-start.js";
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
@@ -83,7 +84,8 @@ relayRoutes.get("/:instanceId/connect", async (c) => {
 	// because the drain's admission asks the relay whether a socket is live — at startup the runner
 	// registers BEFORE it connects, so a drain on registration would meet "offline" and requeue.
 	if (res.status === 101) {
-		const drain = drainPendingQueues(c.env, instanceId, relay.uid).catch(() => []);
+		// Entries that backed off because the runner missed a ping are eligible the moment it answers (#1388).
+		const drain = clearUnresponsiveBackoff(c.env, instanceId, relay.uid).catch(() => 0).then(() => drainPendingQueues(c.env, instanceId, relay.uid)).catch(() => []);
 		try {
 			c.executionCtx.waitUntil(drain);
 		} catch {

@@ -11,6 +11,7 @@ import type { Env } from "../types.js";
 
 const driverStart = vi.fn();
 const enqueueObjective = vi.fn();
+const backingOffAhead = vi.fn();
 
 vi.mock("../lib/auth.js", async () => {
 	const actual = await vi.importActual<typeof import("../lib/auth.js")>("../lib/auth.js");
@@ -42,7 +43,8 @@ vi.mock("../lib/loop-drivers.js", async () => {
 });
 vi.mock("../lib/objective-queue.js", async () => {
 	const actual = await vi.importActual<typeof import("../lib/objective-queue.js")>("../lib/objective-queue.js");
-	return { ...actual, enqueueObjective: (...a: unknown[]) => enqueueObjective(...a) };
+	// `backingOffAhead` (#1388) reads the queue for an earlier entry waiting out a timed backoff; none here, so a start proceeds as it always did.
+	return { ...actual, enqueueObjective: (...a: unknown[]) => enqueueObjective(...a), backingOffAhead: (...a: unknown[]) => backingOffAhead(...a) };
 });
 
 const { toolRoutes } = await import("./tools.js");
@@ -60,6 +62,7 @@ const startInput = () => driverStart.mock.calls[0][0] as { repoId?: string; requ
 beforeEach(() => {
 	vi.clearAllMocks();
 	driverStart.mockResolvedValue({ ok: true, runId: "run-1", driver: "coding" });
+	backingOffAhead.mockResolvedValue(null);
 	enqueueObjective.mockImplementation(async (_env: unknown, input: { repoId?: string }) => ({ id: "qe-1", repoId: input.repoId ?? null, status: "pending" }));
 });
 
@@ -72,6 +75,62 @@ describe("POST /:id/loop — the objective's origin (#1019)", () => {
 	it("a caller cannot claim an origin: a body `objectiveOrigin` is ignored", async () => {
 		expect((await post({ objective: "fix it", objectiveOrigin: { kind: "owner" } })).status).toBe(201);
 		expect(driverStart.mock.calls[0][0]).toMatchObject({ objectiveOrigin: { kind: "account" } });
+	});
+});
+
+describe("POST /:id/loop — a runner that is gone for now is queued, not refused (#1388)", () => {
+	const MISSED = "r1 could not start: Runner relay is connected but not responding [runner-unreachable:UNRESPONSIVE@/coding/start]";
+
+	it("queue_if_busy + a start that meets UNRESPONSIVE: queued with its reason and first retry, not answered `refused`", async () => {
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "runner_unresponsive", error: MISSED });
+		const res = await post({ objective: "step one", repoId: "r1", queueIfBusy: true });
+		expect(res.status).toBe(202);
+		expect(enqueueObjective).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ objective: "step one", deferral: { reason: "runner_unresponsive", note: MISSED } }));
+		expect(await res.json()).toMatchObject({ queued: true, blocked: MISSED });
+	});
+
+	it("an overloaded machine queues the same way, with its own reason (an entry queued by the route used to carry neither reason nor retry time)", async () => {
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "runner_overloaded", error: "tiny-laptop is overloaded" });
+		expect((await post({ objective: "step one", queueIfBusy: true })).status).toBe(202);
+		expect(enqueueObjective).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ deferral: { reason: "runner_overloaded", note: "tiny-laptop is overloaded" } }));
+	});
+
+	it("without queue_if_busy the refusal names its reason instead of the opaque `refused`, so the caller can tell a stall from a structural no", async () => {
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "runner_unresponsive", error: MISSED });
+		const res = await post({ objective: "step one" });
+		expect(res.status).toBe(409);
+		expect(await res.json()).toMatchObject({ reason: "runner_unresponsive", startState: "not_started" });
+		expect(enqueueObjective).not.toHaveBeenCalled();
+	});
+
+	it("an earlier objective is waiting out a backoff: a queue_if_busy start queues BEHIND it and the driver is never asked (step one → step two stay in order)", async () => {
+		backingOffAhead.mockResolvedValue({ id: "objq-507", deferReason: "runner_unresponsive", nextRetryAt: Date.now() + 90_000 });
+		const res = await post({ objective: "step two", repoId: "r1", queueIfBusy: true });
+		expect(res.status).toBe(202);
+		expect(driverStart).not.toHaveBeenCalled();
+		expect(enqueueObjective).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ objective: "step two", repoId: "r1" }));
+		const body = (await res.json()) as { queued: boolean; blocked: string };
+		expect(body.queued).toBe(true);
+		expect(body.blocked).toMatch(/earlier queued objective is waiting to retry \(runner_unresponsive, in 2 min\).*queued behind it/);
+		expect(backingOffAhead).toHaveBeenCalledWith(expect.anything(), "i1", "r1");
+	});
+
+	it("…but only for a start that ASKED to queue: a plain start is the caller's explicit choice and goes to the driver as before", async () => {
+		backingOffAhead.mockResolvedValue({ id: "objq-507", deferReason: "runner_unresponsive", nextRetryAt: Date.now() + 90_000 });
+		expect((await post({ objective: "step two", repoId: "r1" })).status).toBe(201);
+		expect(driverStart).toHaveBeenCalledTimes(1);
+		expect(backingOffAhead).not.toHaveBeenCalled();
+	});
+
+	it("…and a start that asks to go FIRST (queuePosition: next) is not held behind it", async () => {
+		backingOffAhead.mockResolvedValue({ id: "objq-507", deferReason: "runner_unresponsive", nextRetryAt: Date.now() + 90_000 });
+		expect((await post({ objective: "step two", repoId: "r1", queueIfBusy: true, queuePosition: "next" })).status).toBe(201);
+		expect(driverStart).toHaveBeenCalledTimes(1);
+	});
+
+	it("nothing backing off: a queue_if_busy start goes to the driver exactly as before", async () => {
+		expect((await post({ objective: "step two", repoId: "r1", queueIfBusy: true })).status).toBe(201);
+		expect(driverStart).toHaveBeenCalledTimes(1);
 	});
 });
 

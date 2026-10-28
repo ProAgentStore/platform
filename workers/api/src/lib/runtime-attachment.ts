@@ -107,7 +107,9 @@ export function diagnoseAttachment(input: {
 	// this one was rejected with 4409, which `--force` is exactly the answer to.
 	return {
 		state: "machine-online-agent-detached",
-		message: "The machine is online but this agent isn't attached — another runner on it may already hold this agent.",
+		// A runner too busy to answer the relay's ping reads the same as one that lost its socket, and reconnects by itself within a minute or two (#1388):
+		// so the sentence says to wait first, and `--force` is for the case that does not clear.
+		message: "The machine is online but this agent isn't attached. A busy machine that missed the relay's ping reconnects on its own within a minute or two; if it stays detached, another runner on it may already hold this agent.",
 		remedy: "pags up --force",
 	};
 }

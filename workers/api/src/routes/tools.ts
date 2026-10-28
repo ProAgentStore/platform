@@ -59,7 +59,7 @@ import { findDuplicateObjective } from "../lib/objective-dedupe.js";
 import { BUSY_NEXT, describeBusyHolder } from "../lib/loop-busy.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
-import { enqueueObjective } from "../lib/objective-queue.js";
+import { backingOffAhead, enqueueObjective } from "../lib/objective-queue.js";
 import { registerLoopQueueRoutes } from "./loop-queue-routes.js";
 import { registerLoopContinueRoutes } from "./loop-continue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
@@ -1342,6 +1342,19 @@ toolRoutes.post("/:id/loop", async (c) => {
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, reason: "duplicate", objective: dup.objective, startState: "not_started" }, 200);
 			}
 		}
+		// Queued behind an earlier objective that is waiting out a timed backoff (#1388): do not start ahead of it. Objectives queued in
+		// order (#507 → #508 → #509) depend on each other, and a runner that briefly missed a ping must not reorder them.
+		if (driver.id === "coding" && body.queueIfBusy === true && body.queuePosition !== "next") {
+			const ahead = await backingOffAhead(c.env, instanceId, dedupeRepoId ?? null);
+			if (ahead) {
+				const blocked = `An earlier queued objective is waiting to retry (${ahead.deferReason ?? "deferred"}, in ${Math.max(1, Math.ceil((ahead.nextRetryAt - Date.now()) / 60_000))} min), so this one is queued behind it to keep the order. Reorder the queue to change that.`;
+				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dedupeRepoId, objective, issue });
+				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked }, 202);
+				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
+				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition });
+				return c.json({ queued: true, entry, blocked }, 202);
+			}
+		}
 		const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
 		const started = await driver.start({
 			env: c.env,
@@ -1371,7 +1384,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
 				// A start that names `questions` keeps it through the wait (#1385); one that does not inherits the instance default when the drain starts it.
-				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition });
+				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition, deferral: started.reason ? { reason: started.reason, note: started.error } : undefined });
 				// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
 				// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
 				// it is waiting.

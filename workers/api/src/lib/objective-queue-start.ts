@@ -168,8 +168,8 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 			}
 			// Only a requeue that moved the claimed row is a deferral, and its event carries the ordinal that
 			// row now counts (#1017), so a repeated bookkeeping write for it lands on the same deferral.
-			// The reason rides along (#1264): only `runner_overloaded` turns it into a TIMED backoff —
-			// see `objective-queue.ts`'s `requeueEntry`.
+			// The reason rides along (#1264, #1388): `runner_overloaded` and `runner_unresponsive` turn it into a TIMED backoff —
+			// see `objective-queue.ts`'s `requeueEntry`. The entry goes back to its own place, and `dequeueNext` will not start anything behind it meanwhile.
 			const requeue = await requeueEntry(env, entry.id, started.error, { reason: started.reason ?? null });
 			if (requeue.requeued) await recordLifecycle(env, { ...lifecycleOf(entry), event: "deferred", reason: started.error, deferralSeq: requeue.deferralSeq });
 			return { drained: true, entryId: entry.id, started: false, requeued: requeue.requeued, error: started.error };
@@ -225,10 +225,10 @@ export async function drainPendingQueues(env: Env, instanceId: string, userId: s
 }
 
 /**
- * The TIMED half of the `runner_overloaded` backoff (#1264). Every other waitable reason is woken
+ * The TIMED half of the `runner_overloaded` / `runner_unresponsive` backoff (#1264, #1388). Every other waitable reason is woken
  * by an EVENT — a run finishing, a relay reconnecting — which already calls `drainPendingQueues`.
- * Nothing wakes an overloaded machine recovering on its own clock, so this is its own per-minute
- * cron tick (`scheduled()` in index.ts): find the instances with a `runner_overloaded` entry whose
+ * Nothing wakes an overloaded machine, or a runner that missed a ping, recovering on its own clock, so this is its own per-minute
+ * cron tick (`scheduled()` in index.ts): find the instances with such an entry whose
  * backoff has elapsed, and drain each — which re-asks the gate fresh and either starts it or
  * requeues it again at the next step of the schedule. Never throws; bounded per tick like every
  * other sweep here.
@@ -236,7 +236,7 @@ export async function drainPendingQueues(env: Env, instanceId: string, userId: s
 export async function runDueOverloadRetries(env: Env, now: number = Date.now()): Promise<number> {
 	const rows = await env.DB.prepare(
 		`SELECT DISTINCT instance_id, user_id FROM instance_objective_queue
-		  WHERE status = 'pending' AND defer_reason = 'runner_overloaded' AND next_retry_at IS NOT NULL AND next_retry_at <= ?1
+		  WHERE status = 'pending' AND defer_reason IN ('runner_overloaded', 'runner_unresponsive') AND next_retry_at IS NOT NULL AND next_retry_at <= ?1
 		  LIMIT 200`,
 	)
 		.bind(now)

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { captureSaysSessionAbsent } from "./coding-ownership.js";
 import { callRunner } from "./runner-client.js";
 import { classifyHealthProbeFailure } from "./runner-health.js";
-import { isRunnerUnreachable, isRunnerUnresponsive, relayFailureIsDisconnect, runnerErrorCode, runnerErrorTag, RunnerUnreachableError } from "./runner-unreachable.js";
+import { isRunnerUnreachable, isRunnerUnresponsive, relayFailureIsDisconnect, runnerErrorCode, runnerErrorTag, RunnerGoneError, RunnerUnreachableError, unreachableWaitReason } from "./runner-unreachable.js";
 import type { RunnerConn } from "./runner-client.js";
 import type { Env } from "../types.js";
 
@@ -46,6 +46,17 @@ describe("every relay answer carries its code through callRunner and across a st
 		}
 		// The tag is appended, so the patterns anchored on `Runner /path → status:` still read the head of the message.
 		if (!unreachable) expect(e.message).toMatch(/^Runner \/coding\/\S+ → \d{3}: /);
+	});
+
+	it("a silent socket says so: its socket IS up, the runner missed the ping — it never claims the relay has no socket (#1388)", async () => {
+		const e = await failure("/coding/start", () => Response.json({ error: "Runner relay is connected but not responding", code: "RUNNER_RELAY_UNRESPONSIVE" }, { status: 503 }));
+		expect(e.message).toMatch(/connected but not responding/);
+		expect(e.message).toMatch(/did not answer the relay's ping in time/);
+		expect(e.message).not.toMatch(/no live socket/);
+		expect(e.message).toMatch(/\[runner-unreachable:UNRESPONSIVE@\/coding\/start\]$/);
+		// …and it is still read as a silent socket from the message alone, once a step boundary has flattened it.
+		expect(runnerErrorCode(flat(e))).toBe("UNRESPONSIVE");
+		expect(isRunnerUnreachable(flat(e))).toBe(true);
 	});
 
 	it("a runner body that happens to contain the relay's words is still the runner's (#1344's class of bug)", async () => {
@@ -99,5 +110,28 @@ describe("readers that used to match words", () => {
 		expect(relayFailureIsDisconnect(504, '{"error":"Runner disconnected"}')).toBe(true);
 		expect(relayFailureIsDisconnect(503, '{"error":"No runner connected"}')).toBe(true);
 		expect(relayFailureIsDisconnect(503, '{"error":"Service Unavailable"}')).toBe(false);
+	});
+});
+
+describe("what a start refused by a runner that is gone for now should wait for (#1388)", () => {
+	it("no socket at dispatch waits for the relay to reconnect; every other transient failure waits on a timed backoff", () => {
+		expect(unreachableWaitReason(new RunnerUnreachableError("No runner connected" + runnerErrorTag("NO_SOCKET", true, "/coding/start")))).toBe("runner_offline");
+		for (const code of ["UNRESPONSIVE", "RELAY_TIMEOUT", "DROPPED", "DRAINING"] as const) {
+			expect(unreachableWaitReason(new RunnerUnreachableError(`x${runnerErrorTag(code, true, "/coding/start")}`)), code).toBe("runner_unresponsive");
+		}
+	});
+
+	it("reads a message flattened across a Workflow step boundary, and a message from before the tags (a run in flight across the deploy)", () => {
+		expect(unreachableWaitReason(new Error(`Runner relay is connected but not responding${runnerErrorTag("UNRESPONSIVE", true, "/coding/sync")}`))).toBe("runner_unresponsive");
+		expect(unreachableWaitReason(new Error("Runner relay is connected but not responding — the relay has no live socket for this agent."))).toBe("runner_unresponsive");
+		expect(unreachableWaitReason(new Error("No runner connected — the relay has no live socket for this agent."))).toBe("runner_offline");
+	});
+
+	it("nothing else is waited for: a runner's own error, a runner waited for and gone, and a plain failure all fail at once", () => {
+		expect(unreachableWaitReason(new Error(`Runner /coding/start → 500: clone failed${runnerErrorTag("RUNNER_HTTP", false, "/coding/start")}`))).toBeNull();
+		expect(unreachableWaitReason(new RunnerGoneError("The runner did not come back."))).toBeNull();
+		expect(unreachableWaitReason(new Error("repository not found"))).toBeNull();
+		expect(unreachableWaitReason(null)).toBeNull();
+		expect(unreachableWaitReason("a string")).toBeNull();
 	});
 });
