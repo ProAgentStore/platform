@@ -77,6 +77,16 @@ export function askAnnouncement(ask: { question: string; parts?: AskPart[]; full
 }
 
 /**
+ * The "why it asks" for the issue comment (#1261): null when the announced question already says it. An
+ * iteration-cap ask carries its whole report as BOTH the uncut question and the `why` (the console and
+ * `waitNote` read it from `why`), so printing both put the exact blocker and the plan on the ticket twice.
+ */
+export function whyBeyond(announced: string, why: string | null | undefined): string | null {
+	const w = why?.trim();
+	return w && !announced.includes(w) ? w : null;
+}
+
+/**
  * The ask as the Pilot wrote it (#1224): the question, then its parts and its options, one per line,
  * verbatim. What the owner can expand to — and the only record of it, since a parked run's pane is
  * gone (`coding_terminal` held zero snapshots for TradePort run 78971d03). Non-strings are left out.

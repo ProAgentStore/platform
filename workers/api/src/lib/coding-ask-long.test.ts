@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { getLoopRun, recordLiveness, type WaitingAsk } from "./agent-loop-store.js";
-import { ASK_OPTION_MAX, ASK_QUESTION_MAX, askAnnouncement, askOptions } from "./coding-ask.js";
+import { ASK_OPTION_MAX, ASK_QUESTION_MAX, askAnnouncement, askOptions, whyBeyond } from "./coding-ask.js";
 import { runCodingLoop, toDecision, type CodingDeps, type CodingPaneSnapshot } from "./coding-loop.js";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
@@ -106,6 +106,18 @@ describe("a question that introduces choices and has none (#1224)", () => {
 describe("the uncut ask reaches every reader (#1224)", () => {
 	it("the issue comment / coder question announces the ask as written", () => {
 		expect(askAnnouncement({ question: "Which?", fullQuestion: "Which?\n- the long first option\n- the second" })).toBe("Which?\n- the long first option\n- the second");
+	});
+
+	it("whyBeyond: the issue comment prints a why only when the announced question does not already say it (#1261)", () => {
+		const report = "What it did: edited a.ts\n\nBlocker: build fails\n\nPlan: add the dependency";
+		// An iteration-cap ask carries its report as the uncut question AND as the why; the comment shows it once.
+		expect(whyBeyond(`This run reached its cap.\n\n${report}`, report)).toBeNull();
+		// An ordinary ask's why is a separate thought and still gets its line.
+		expect(whyBeyond("Which table layout?", "denser list")).toBe("denser list");
+		expect(whyBeyond("Which table layout?", "  denser list  ")).toBe("denser list");
+		expect(whyBeyond("Which table layout?", "")).toBeNull();
+		expect(whyBeyond("Which table layout?", null)).toBeNull();
+		expect(whyBeyond("Which table layout?", undefined)).toBeNull();
 	});
 
 	it("coding_loop_status's run view keeps the uncut question and the parts the park stored — it dropped them on read", async () => {

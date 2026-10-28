@@ -73,9 +73,21 @@ export function questionOptions(data: { options?: unknown } | null | undefined, 
 	return [...new Set(legacyText.slice(fromIdx + 5).split(",").map((s) => s.trim().replace(/\)$/, "")).filter(Boolean))].slice(0, 16);
 }
 
-/** The agent's `why`, without the `from: …` options list it carries for older consoles — those render as buttons. */
-export function whyWithoutOptions(why: string): string {
+/**
+ * The agent's `why`, without the `from: …` options list it carries for older consoles — those render as buttons.
+ * Given the options, the list is removed exactly as the platform appended it, from the end (#1261): an iteration-cap
+ * report quotes the coder's error, and an error that says "from: …" must not take the rest of the report with it.
+ * Without them (an event with no structured options), everything from the first `from:` goes, as it always did.
+ */
+export function whyWithoutOptions(why: string, options: string[] = []): string {
+	const list = options.length ? `from: ${options.join(", ")}` : "";
+	if (list && why.endsWith(list)) return why.slice(0, why.length - list.length).replace(/\s*—\s*$/, "").trim();
 	return why.replace(/\s*(?:—\s*)?from:.*$/is, "").trim();
+}
+
+/** The uncut question, when opened, already holds the `why` text — printing both would show the report twice (#1261). */
+export function whyAlreadyShown(fullQuestion: string, whyText: string, fullOpen: boolean): boolean {
+	return fullOpen && !!whyText && fullQuestion.includes(whyText);
 }
 
 /** One decision of a multi-part question (#1129): its own question and its own options. */

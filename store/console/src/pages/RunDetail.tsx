@@ -16,7 +16,7 @@ import Card from "../components/Card";
 import ActionLog from "../components/ActionLog";
 import MarkdownText from "../components/MarkdownText";
 import QuestionIssueContext, { resolveQuestionIssue, verifiedQuestionIssue, type QuestionIssue } from "../components/QuestionIssueContext";
-import { partsAnswer, questionOptions, questionParts, whyWithoutOptions } from "../lib/agentText";
+import { partsAnswer, questionOptions, questionParts, whyAlreadyShown, whyWithoutOptions } from "../lib/agentText";
 
 /**
  * A real, routed run-detail page (not a popup) for any browser-runtime task: a
@@ -382,7 +382,7 @@ export default function RunDetail() {
 	const paren = why || (detail.match(/\(([^)]*)\)/)?.[1] ?? "");
 	// The agent's own options first (#1129) — the `from:` text is only an older runner's fallback.
 	const options = questionOptions(needsInputData, paren);
-	const whyText = whyWithoutOptions(why);
+	const whyText = whyWithoutOptions(why, options);
 	// #1129: the question uncut, when the phone-sized `field` had to be cut; and a multi-part question's
 	// decisions, each answered with its own button group and sent together.
 	const fullQuestion = typeof needsInputData?.fullQuestion === "string" && needsInputData.fullQuestion.trim() ? needsInputData.fullQuestion : "";
@@ -506,7 +506,7 @@ export default function RunDetail() {
 							{showFullQuestion ? "Show less" : "Show the full question"}
 						</button>
 					)}
-					{whyText && <MarkdownText text={whyText} className="text-sm text-muted mt-1" />}
+					{whyText && !whyAlreadyShown(fullQuestion, whyText, fullOpen) && <MarkdownText text={whyText} className="text-sm text-muted mt-1" />}
 					{/* A question holding several decisions (#1129): one button group per decision, then one Send. */}
 					{parts.length > 0 && (
 						<div className="mt-3 flex flex-col gap-4" data-testid="question-parts">

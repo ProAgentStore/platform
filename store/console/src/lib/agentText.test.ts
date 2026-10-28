@@ -1,7 +1,7 @@
 /** #1129 — agent text renders as markdown, and a question's options always become buttons. */
 import { describe, expect, it } from "vitest";
 import { renderMd } from "@proagentstore/sdk/ui";
-import { partsAnswer, plainMarkdown, questionOptions, questionParts, splitInlineNumberedList, whyWithoutOptions } from "./agentText";
+import { partsAnswer, plainMarkdown, questionOptions, questionParts, splitInlineNumberedList, whyAlreadyShown, whyWithoutOptions } from "./agentText";
 
 describe("splitInlineNumberedList (#1129)", () => {
 	it("puts an inline 1. 2. 3. sequence on its own lines, so it renders as a list", () => {
@@ -31,6 +31,22 @@ describe("questionOptions (#1129)", () => {
 	it("whyWithoutOptions drops the options list the text carries for older consoles", () => {
 		expect(whyWithoutOptions("needed for the form — from: a, b")).toBe("needed for the form");
 		expect(whyWithoutOptions("from: a, b")).toBe("");
+	});
+
+	it("an iteration-cap report that quotes 'from:' keeps everything after it (#1261)", () => {
+		const options = ["Approve 4 more iterations", "Deny — stop the run here"];
+		const report = "Blocker: fetch failed from: https://registry.example/x — status 502\n\nPlan: retry the install, then rerun the suite.";
+		const why = `${report} — from: ${options.join(", ")}`;
+		expect(whyWithoutOptions(why, options)).toBe(report);
+		// Without the structured options the old rule still applies, so older events render as before.
+		expect(whyWithoutOptions(why)).toBe("Blocker: fetch failed");
+	});
+
+	it("whyAlreadyShown: the opened full question holds the report, so it is not printed again beside it", () => {
+		expect(whyAlreadyShown("Approve 4 more?\n\nBlocker: x", "Blocker: x", true)).toBe(true);
+		expect(whyAlreadyShown("Approve 4 more?\n\nBlocker: x", "Blocker: x", false)).toBe(false);
+		expect(whyAlreadyShown("Approve 4 more?", "needed for the form", true)).toBe(false);
+		expect(whyAlreadyShown("anything", "", true)).toBe(false);
 	});
 });
 

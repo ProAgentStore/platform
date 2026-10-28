@@ -13,7 +13,12 @@
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { callRunner, decideCodingAction } = vi.hoisted(() => ({ callRunner: vi.fn(), decideCodingAction: vi.fn() }));
+const { callRunner, decideCodingAction, postIssueComment } = vi.hoisted(() => ({ callRunner: vi.fn(), decideCodingAction: vi.fn(), postIssueComment: vi.fn() }));
+// The one outward call the ask makes besides the runner: the comment on the linked issue (#1025). Recorded, never sent.
+vi.mock("../lib/github-issues.js", async () => {
+	const actual = await vi.importActual<typeof import("../lib/github-issues.js")>("../lib/github-issues.js");
+	return { ...actual, postIssueComment: (...a: unknown[]) => postIssueComment(...a) };
+});
 vi.mock("../lib/runner-client.js", async () => {
 	const actual = await vi.importActual<typeof import("../lib/runner-client.js")>("../lib/runner-client.js");
 	const conn = { kind: "relay", instanceId: "i1", runnerNode: "n1", relayName: "i1:node:n1" };
@@ -77,6 +82,8 @@ beforeEach(() => {
 	pause = { open: false, resolved: false };
 	acts = [];
 	callRunner.mockReset();
+	postIssueComment.mockReset();
+	postIssueComment.mockResolvedValue(true);
 	callRunner.mockImplementation(async (_conn: unknown, path: string, body: Record<string, unknown> = {}) => {
 		if (path === "/coding/takeover") pause = { open: true, resolved: false };
 		else if (path === "/coding/takeover/s1/resolve") {
@@ -313,6 +320,25 @@ describe("a run at its iteration cap asks the owner instead of failing (#1236, #
 		expect(note).toContain("Cannot find module 'left-pad'");
 		expect(note).toContain('answer_instance_input (task_id csess-s1, value "approve" or a number of iterations)');
 		expect(note).toContain('"deny" to stop it here');
+	});
+
+	it("linked to an issue: the ticket comment carries the whole report once, with the exact blocker and the plan (#1261)", async () => {
+		d1.exec("UPDATE coding_repos SET github_repo = 'owner/repo' WHERE id = 'r1'");
+		d1.exec("UPDATE coding_sessions SET issue_number = 1261 WHERE id = 's1'");
+		decisions = [send("step one"), send("step two"), capReport()];
+		await runToCap("timeout");
+		const posts = postIssueComment.mock.calls.filter((c) => /coder stopped on a question/.test(String(c[4])));
+		expect(posts).toHaveLength(1);
+		const [, , repo, number, body] = posts[0] as [unknown, unknown, string, number, string];
+		expect([repo, number]).toEqual(["owner/repo", 1261]);
+		expect(body).toContain("What it did: Edited src/api.ts and ran the test suite.");
+		expect(body).toContain("Blocker: The build fails with: \"Cannot find module 'left-pad'\".");
+		expect(body).toContain("Plan: Add the missing dependency to package.json, reinstall, and re-run the suite.");
+		expect(body).toContain("Asking for 4 more steps — One install and one retry");
+		expect(body).toContain("`Approve 4 more iterations`");
+		// The report is ONE section of the comment, not repeated under "Why it asks".
+		expect(body.match(/Blocker:/g)).toHaveLength(1);
+		expect(body).not.toContain("Why it asks");
 	});
 
 	it("no concrete plan: the brain says so plainly rather than inventing one (#1261)", async () => {

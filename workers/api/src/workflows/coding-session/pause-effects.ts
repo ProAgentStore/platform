@@ -12,7 +12,7 @@ import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-
 import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
 import { answerEventType, recordParkedWorkflow, recordParkMachine, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
-import { askAnnouncement } from "../../lib/coding-ask.js";
+import { askAnnouncement, whyBeyond } from "../../lib/coding-ask.js";
 import { codingQuestionSource } from "../../lib/coding-question-source.js";
 import { postIssueComment } from "../../lib/github-issues.js";
 import { applyQuestionsPolicy, runQuestionsPolicy } from "../../lib/question-policy.js";
@@ -126,7 +126,7 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 				if (loopRunId) await recordLiveness(env, loopRunId, Date.now(), { reason: "decision", ask });
 				// #1025: the question, durably — posted on the issue, timed by the minute sweep. Inside
 				// the step, so a replay returns the journalled wait instead of capturing it twice.
-				const captured = await captureAndAnnounceQuestion(env, { instanceId, userId, sessionId, runId: loopRunId ?? null, taskId: ask.taskId, question: askAnnouncement(ask), options: ask.options, why: ask.why || null }).catch(() => null);
+				const captured = await captureAndAnnounceQuestion(env, { instanceId, userId, sessionId, runId: loopRunId ?? null, taskId: ask.taskId, question: askAnnouncement(ask), options: ask.options, why: whyBeyond(askAnnouncement(ask), ask.why) }).catch(() => null);
 				return captured ? { waitMs: captured.waitMs, humanMs: captured.humanMs, brain: captured.waitMs > HUMAN_ONLY_WAIT_MS, questionId: captured.question.id } : null;
 			}).then((w) => {
 				parkedQuestionId = (w as { questionId?: string } | null)?.questionId ?? null; // journalled, so a replay knows the row too

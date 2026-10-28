@@ -492,13 +492,26 @@ export function readIterationAnswer(value: string | undefined, requested: number
  */
 export function renderCapSummary(s: CapSummary): string {
 	const plan = s.plan.trim() || "No concrete plan: it did not state one.";
-	const text = [
-		`What it did: ${s.did.trim() || "(not stated)"}`,
-		`Blocker: ${s.blocker.trim() || "(not stated)"}`,
-		`Plan: ${plan}`,
-		`Asking for ${s.steps > 0 ? s.steps : "more"} more steps — ${s.reason.trim() || "(no reason given)"}`,
-	].join("\n\n");
-	return clipMarked(text, ASK_QUESTION_FULL_MAX, { within: true });
+	const asking = `Asking for ${s.steps > 0 ? s.steps : "more"} more steps — `;
+	const labels = ["What it did: ", "Blocker: ", "Plan: ", asking];
+	const bodies = [s.did.trim() || "(not stated)", s.blocker.trim() || "(not stated)", plan, s.reason.trim() || "(no reason given)"];
+	// Over the bound, every section keeps its fair share and only the one over it is cut, marked where it was cut — a long
+	// account of what it did must not push the blocker and the plan, the parts the owner decides on, off the end.
+	const room = ASK_QUESTION_FULL_MAX - labels.reduce((n, l) => n + l.length, 0) - 2 * (labels.length - 1);
+	const shares = fairShare(bodies.map((b) => b.length), room);
+	return labels.map((l, i) => l + clipMarked(bodies[i], shares[i], { within: true })).join("\n\n");
+}
+
+/** Split `budget` among sections of these lengths: a short one keeps all it has, the rest divide what is left evenly. */
+function fairShare(lengths: number[], budget: number): number[] {
+	const out: number[] = [];
+	let left = budget;
+	const order = lengths.map((_, i) => i).sort((a, b) => lengths[a] - lengths[b]);
+	order.forEach((i, k) => {
+		out[i] = Math.min(lengths[i], Math.floor(left / (order.length - k)));
+		left -= out[i];
+	});
+	return out;
 }
 
 /**

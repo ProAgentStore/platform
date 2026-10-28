@@ -640,10 +640,25 @@ describe("renderCapSummary — the iteration-cap report, in full (#1261)", () =>
 		expect(text).toContain("Asking for more more steps — (no reason given)");
 	});
 
-	it("never cuts silently: a report over the bound is marked, like any other uncut ask (#1129)", () => {
+	it("never cuts silently: a section over the bound is marked where it was cut, and the whole stays within the bound (#1129)", () => {
 		const text = renderCapSummary(s({ blocker: "x".repeat(ASK_QUESTION_FULL_MAX * 2) }));
 		expect(text.length).toBeLessThanOrEqual(ASK_QUESTION_FULL_MAX);
-		expect(text).toMatch(/\[cut: showing the first \d+ of \d+ characters\]$/);
+		expect(text).toMatch(/\[cut: showing the first \d+ of 8000 characters\]/);
+	});
+
+	it("a long account of what it did cannot push the blocker or the plan off the end", () => {
+		const text = renderCapSummary(s({ did: "ran a command; ".repeat(600), blocker: 'deploy: "migration 0002_channels is not listed in migrations.json"', plan: "list 0002_channels in migrations.json, rerun the check, redeploy" }));
+		expect(text.length).toBeLessThanOrEqual(ASK_QUESTION_FULL_MAX);
+		expect(text).toContain('Blocker: deploy: "migration 0002_channels is not listed in migrations.json"');
+		expect(text).toContain("Plan: list 0002_channels in migrations.json, rerun the check, redeploy");
+		expect(text).toContain("Asking for 6 more steps — ");
+		expect(text).toMatch(/What it did: [\s\S]*\[cut: showing the first \d+ of 8999 characters\]\n\nBlocker:/); // the cut is in "what it did", marked
+	});
+
+	it("under the bound nothing is cut, however many sections are long", () => {
+		const text = renderCapSummary(s({ did: "d".repeat(900), blocker: "b".repeat(1200), plan: "p".repeat(700), reason: "r".repeat(300) }));
+		expect(text).not.toContain("[cut:");
+		expect(text).toContain("b".repeat(1200));
 	});
 });
 
