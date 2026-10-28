@@ -25,6 +25,7 @@ import { automaticProviderHold } from "./provider-account-hold.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { codingRunRefusal } from "./billing.js";
 import { clipMarked } from "./clip-marked.js";
+import { CHECKOUT_WAKE_GRACE_MS } from "./coding-park.js";
 import { readCoderBrain } from "./coder-brain.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
@@ -274,14 +275,20 @@ function defaultNotify(env: Env, uid: string, iid: string, slot: string) {
  * Has this coder nothing to do (#1232)? No objective pending in its queue, and no open run that holds a
  * repo or is about to resume one — a run parked on an unanswered question with its checkout released
  * holds nothing (#1228), while one whose answer is in is about to take its repo back.
+ *
+ * "About to" only while it is still coming: an answered run a drain woke more than
+ * {@link CHECKOUT_WAKE_GRACE_MS} ago and that never took its checkout back (its Workflow is gone) holds
+ * nothing either, or one dead resume would keep the coder busy for ever — the same cut-off
+ * `releasedRunAwaitingCheckout` applies.
  */
-export async function coderIsIdle(env: Pick<Env, "DB">, instanceId: string): Promise<boolean> {
+export async function coderIsIdle(env: Pick<Env, "DB">, instanceId: string, now = Date.now()): Promise<boolean> {
 	const busy = await env.DB.prepare(
 		`SELECT (SELECT COUNT(*) FROM instance_objective_queue WHERE instance_id = ?1 AND status = 'pending')
 		      + (SELECT COUNT(*) FROM agent_loop_runs r WHERE r.instance_id = ?1 AND r.status = 'running'
-		           AND (r.checkout_released_at IS NULL OR EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')))) AS n`,
+		           AND (r.checkout_released_at IS NULL OR ((r.checkout_wake_at IS NULL OR r.checkout_wake_at > ?2)
+		             AND EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved'))))) AS n`,
 	)
-		.bind(instanceId)
+		.bind(instanceId, now - CHECKOUT_WAKE_GRACE_MS)
 		.first<{ n: number }>();
 	return !busy?.n;
 }

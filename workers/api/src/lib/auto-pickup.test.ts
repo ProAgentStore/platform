@@ -8,6 +8,8 @@ import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { AUTO_PICKUP_DEFAULTS, autoPickupObjective, RESERVATION_TTL_MS, recoverReservations, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
 import { paidTokensSince } from "./usage.js";
 import { setCoderBrain } from "./coder-brain.js";
+import { CHECKOUT_WAKE_GRACE_MS } from "./coding-park.js";
+import { coderIsIdle } from "./po-triage-wake.js";
 import type { IssueSummary } from "./github-issues.js";
 import type { Env } from "../types.js";
 
@@ -417,5 +419,22 @@ describe("the token ceiling, skips and the timer (#1276)", () => {
 		expect(woken).toContain("quiet");
 		expect(woken).not.toContain("busy");
 		expect(woken).not.toContain("off");
+	});
+
+	it("an answered parked run is woken by the timer, and once its resume is past the grace it no longer keeps the coder busy", async () => {
+		const now = Date.now();
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status) VALUES ('s1', 'coder', 'r1', 'u1', 'claude', 'suspended')`);
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id, checkout_released_at, parked_since)
+		  VALUES ('parked', 'u1', 'coder', 'x', 'running', 10, 1, 's1', 2, 2)`);
+		d1.exec(`INSERT INTO coder_questions (id, instance_id, user_id, session_id, run_id, task_id, question, state, asked_at, expires_at, answered_at)
+		  VALUES ('q1', 'coder', 'u1', 's1', 'parked', 'csess-s1', 'Which one?', 'answered_human', 2, 3, 4)`);
+		const woken: string[] = [];
+		const wake = async (_e: Env, iid: string) => void woken.push(iid) as unknown as string;
+		await sweepAutoPickup(env, now, wake);
+		expect(woken).toEqual(["coder"]); // not skipped as busy: the wake is what resumes the answered run
+		// The wake took it (checkout_wake_at set) and the resume never arrived: past the grace the coder is idle again.
+		d1.sqlite.prepare("UPDATE agent_loop_runs SET checkout_wake_at = ? WHERE run_id = 'parked'").run(now);
+		expect(await coderIsIdle(env, "coder", now + 60_000)).toBe(false);
+		expect(await coderIsIdle(env, "coder", now + CHECKOUT_WAKE_GRACE_MS + 1)).toBe(true);
 	});
 });

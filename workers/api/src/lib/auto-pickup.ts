@@ -311,7 +311,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 			return settleStart(await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(pendingAdmission.repoId), pendingAdmission);
 		}
 		const observedAdmission = await autoPickupAdmissionCursor(env, iid);
-		if (!(await coderIsIdle(env, iid))) {
+		if (!(await coderIsIdle(env, iid, now))) {
 			// #1323: a run parked on a question and now answered is first in line. It counts as running work, so without
 			// this auto-pickup saw a busy coder for ever while the answer waited. Wake it; its own end drains next.
 			const answered = await releasedRunAwaitingCheckout(env, iid, null, now).catch(() => null);
@@ -479,7 +479,10 @@ export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof w
 		for (const r of results ?? []) {
 			try {
 				await recoverReservations(env, r.id, now);
-				if (!(await coderIsIdle(env, r.id)) && !(await pendingAutoPickupAdmission(env, r.id, r.user_id, now))) continue;
+				// A run parked on a question whose answer is in counts as work, but only the wake resumes it (#1323):
+				// skipping its coder here left the answer waiting and the coder busy for ever.
+				if (!(await coderIsIdle(env, r.id, now)) && !(await pendingAutoPickupAdmission(env, r.id, r.user_id, now))
+					&& !(await releasedRunAwaitingCheckout(env, r.id, null, now))) continue;
 				await wake(env, r.id, r.user_id);
 				woken++;
 			} catch (e) {
