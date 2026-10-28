@@ -53,6 +53,7 @@ import type { Env } from "../types.js";
 // The runnable statuses and the queue switch live with the ordering rule the board shares (#1097).
 export { QUEUE_RUNNABLE_STATUSES, isQueueRunnable, ticketQueueEnabled } from "./board-order.js";
 import { boardOrderSql, isQueueRunnable, ticketQueueEnabled } from "./board-order.js";
+import { awayCutoffSeconds, ownsCheckoutSql } from "./checkout-hold.js";
 
 export type TicketAuthority = "human" | "agent";
 
@@ -201,8 +202,8 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 
 		// One run at a time per instance. The coding driver refuses a second Pilot on a session by
 		// itself; the chat loop has no such claim, so the queue holds the line for every driver.
-		const running = await env.DB.prepare("SELECT 1 AS n FROM agent_loop_runs WHERE instance_id = ?1 AND user_id = ?2 AND status = 'running' AND checkout_released_at IS NULL LIMIT 1")
-			.bind(instanceId, userId)
+		const running = await env.DB.prepare(`SELECT 1 AS n FROM agent_loop_runs r WHERE r.instance_id = ?1 AND r.user_id = ?2 AND ${ownsCheckoutSql("r", "?3")} LIMIT 1`)
+			.bind(instanceId, userId, awayCutoffSeconds(Date.now()))
 			.first<{ n: number }>();
 		if (running) return { started: false, reason: "busy" };
 

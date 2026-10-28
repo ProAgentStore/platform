@@ -6,6 +6,7 @@ import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 import type { ProviderAccountIdentity } from "./provider-account-hold.js";
 import { RESERVATION_TTL_MS } from "./auto-pickup-legacy-reservations.js";
+import { awayCutoffSeconds, graceCutoffMs, keepsCoderBusySql } from "./checkout-hold.js";
 
 /** Attempts (queue entries, whether or not a run followed) allowed per day, as a multiple of the run allowance (#1334). */
 export const AUTO_PICKUP_ATTEMPT_FACTOR = 3;
@@ -57,11 +58,9 @@ export async function admitAutoPickup(env: Pick<Env, "DB">, a: AutoPickupAdmissi
 		   AND NOT EXISTS (SELECT 1 FROM auto_pickup_admissions previous WHERE previous.instance_id = i.id
 		     AND previous.repo_id = ?4 AND previous.issue_number = ?6 AND previous.admission_id > ?12)
 		   AND NOT EXISTS (SELECT 1 FROM instance_objective_queue q WHERE q.instance_id = i.id AND q.status IN ('pending', 'running'))
-		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.instance_id = i.id AND r.status = 'running'
-		     AND (r.checkout_released_at IS NULL OR EXISTS (SELECT 1 FROM coder_questions cq WHERE cq.run_id = r.run_id
-		       AND cq.applied_at IS NULL AND (cq.answered_at IS NOT NULL OR cq.state = 'unresolved'))))`,
+		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.instance_id = i.id AND ${keepsCoderBusySql("r", "?16", "?17")})`,
 	)
-		.bind(a.entryId, a.instanceId, a.userId, a.repoId, a.repo, a.issue, a.objective, a.maxIterations, a.detail, a.now, a.now - 86_400_000, a.observedAdmission, a.providerAccount?.provider ?? null, a.providerAccount?.credentialId ?? null, a.now - RESERVATION_TTL_MS)
+		.bind(a.entryId, a.instanceId, a.userId, a.repoId, a.repo, a.issue, a.objective, a.maxIterations, a.detail, a.now, a.now - 86_400_000, a.observedAdmission, a.providerAccount?.provider ?? null, a.providerAccount?.credentialId ?? null, a.now - RESERVATION_TTL_MS, awayCutoffSeconds(a.now), graceCutoffMs(a.now))
 		.run();
 	// Pending rows include the first wake's trigger-written objective, even while it is being
 	// admitted (queue.status=running, before agent_loop_runs exists). No model or runner is started here.
@@ -79,10 +78,8 @@ export async function pendingAutoPickupAdmission(env: Pick<Env, "DB">, instanceI
 		 WHERE l.instance_id = ?1 AND l.user_id = ?2 AND l.outcome = 'started' AND l.reserved = 0
 		   AND q.repo_id IS NOT NULL AND l.repo IS NOT NULL AND l.issue_number IS NOT NULL AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3)
 		   AND NOT EXISTS (SELECT 1 FROM instance_objective_queue busy WHERE busy.instance_id = ?1 AND busy.status = 'running')
-		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.instance_id = ?1 AND r.status = 'running'
-		     AND (r.checkout_released_at IS NULL OR EXISTS (SELECT 1 FROM coder_questions cq WHERE cq.run_id = r.run_id
-		       AND cq.applied_at IS NULL AND (cq.answered_at IS NOT NULL OR cq.state = 'unresolved'))))
+		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.instance_id = ?1 AND ${keepsCoderBusySql("r", "?4", "?5")})
 		 ORDER BY l.created_at, l.entry_id LIMIT 1`,
-	).bind(instanceId, userId, now).first<{ entryId: string; repoId: string; repo: string; issue: number }>();
+	).bind(instanceId, userId, now, awayCutoffSeconds(now), graceCutoffMs(now)).first<{ entryId: string; repoId: string; repo: string; issue: number }>();
 	return row;
 }

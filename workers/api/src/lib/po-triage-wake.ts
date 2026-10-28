@@ -25,7 +25,7 @@ import { automaticProviderHold } from "./provider-account-hold.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { codingRunRefusal } from "./billing.js";
 import { clipMarked } from "./clip-marked.js";
-import { CHECKOUT_WAKE_GRACE_MS } from "./coding-park.js";
+import { awayCutoffSeconds, CHECKOUT_WAKE_GRACE_MS, coderBlocker, ownsCheckoutSql } from "./checkout-hold.js";
 import { readCoderBrain } from "./coder-brain.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
@@ -212,9 +212,9 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 async function repoHasRunningCoder(env: Env, iid: string, uid: string, repoId: string): Promise<boolean> {
 	const row = await env.DB.prepare(
 		`SELECT 1 AS hit FROM agent_loop_runs r LEFT JOIN coding_sessions s ON s.id = r.session_id
-		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND r.status = 'running' AND r.checkout_released_at IS NULL AND (s.repo_id = ?3 OR s.repo_id IS NULL) LIMIT 1`,
+		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND ${ownsCheckoutSql("r", "?4")} AND (s.repo_id = ?3 OR s.repo_id IS NULL) LIMIT 1`,
 	)
-		.bind(uid, iid, repoId)
+		.bind(uid, iid, repoId, awayCutoffSeconds(Date.now()))
 		.first<{ hit: number }>();
 	return !!row;
 }
@@ -278,19 +278,14 @@ function defaultNotify(env: Env, uid: string, iid: string, slot: string) {
  *
  * "About to" only while it is still coming: an answered run a drain woke more than
  * {@link CHECKOUT_WAKE_GRACE_MS} ago and that never took its checkout back (its Workflow is gone) holds
- * nothing either, or one dead resume would keep the coder busy for ever — the same cut-off
- * `releasedRunAwaitingCheckout` applies.
+ * nothing either, or one dead resume would keep the coder busy for ever.
+ *
+ * And a run parked on a machine that has been away for {@link PARKED_MACHINE_AWAY_MS} holds nothing (#1384): nothing can resume it
+ * until that machine returns, so counting it starved the coder for hours. The rule is `checkout-hold.ts`'s, shared with the auto-pickup
+ * admission and the repo start lock, so they cannot disagree about it again; this is just "is there a blocker".
  */
 export async function coderIsIdle(env: Pick<Env, "DB">, instanceId: string, now = Date.now()): Promise<boolean> {
-	const busy = await env.DB.prepare(
-		`SELECT (SELECT COUNT(*) FROM instance_objective_queue WHERE instance_id = ?1 AND status = 'pending')
-		      + (SELECT COUNT(*) FROM agent_loop_runs r WHERE r.instance_id = ?1 AND r.status = 'running'
-		           AND (r.checkout_released_at IS NULL OR ((r.checkout_wake_at IS NULL OR r.checkout_wake_at > ?2)
-		             AND EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved'))))) AS n`,
-	)
-		.bind(instanceId, now - CHECKOUT_WAKE_GRACE_MS)
-		.first<{ n: number }>();
-	return !busy?.n;
+	return (await coderBlocker(env, instanceId, now)) === null;
 }
 
 /** The reason a queue-empty wake gives when triage is off — the cue for auto-pickup (#1233) to act instead. */

@@ -30,6 +30,7 @@ import { machineDisplayNames } from "./machine-names.js";
 import { callRunner, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { normalizeMachineId, normalizeRunnerNode } from "./runtime-nodes.js";
 import { resyncBeforeAnswer } from "./coding-resume-sync.js";
+import { awayCutoffSeconds, CHECKOUT_WAKE_GRACE_MS, ownsCheckoutSql } from "./checkout-hold.js";
 
 /**
  * How long a parked question waits before the run stops (`decision`, which is continuable). Thirty
@@ -131,14 +132,14 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 		          SELECT 1 FROM coding_sessions mine JOIN coding_sessions other ON other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
 		           WHERE mine.id = r.session_id
 		             AND (other.driver_id IS NOT NULL OR other.direct_turn_id IS NOT NULL
-		                  OR EXISTS (SELECT 1 FROM agent_loop_runs o WHERE o.session_id = other.id AND o.status = 'running' AND o.checkout_released_at IS NULL))))
+		                  OR EXISTS (SELECT 1 FROM agent_loop_runs o WHERE o.session_id = other.id AND ${ownsCheckoutSql("o", "?3")}))))
 		    -- #1242: a run resumes only on the machine it parked on. While that machine is quiet, a wake could
 		    -- only find it away again (each costing Workflow steps); its registration wakes it instead.
 		    AND NOT (r.parked_machine_id IS NOT NULL AND r.cancel_requested = 0 AND NOT EXISTS (
 		          SELECT 1 FROM instance_runtime_nodes n WHERE n.user_id = r.user_id AND n.machine_id = r.parked_machine_id AND n.last_seen_at >= datetime(?2, 'unixepoch')))
 		  LIMIT 25`,
 	)
-		.bind(due, Math.floor((now - PARKED_MACHINE_FRESH_MS) / 1000))
+		.bind(due, Math.floor((now - PARKED_MACHINE_FRESH_MS) / 1000), awayCutoffSeconds(now))
 		.all<{ run_id: string }>();
 	let woken = 0;
 	for (const r of results ?? []) {
@@ -371,7 +372,7 @@ export async function resumeFromPark(
  * How long a run a drain woke for its checkout has to take it back before the drain stops waiting for
  * it (#1228). A resume that works takes seconds; this is the margin for a slow machine.
  */
-export const CHECKOUT_WAKE_GRACE_MS = 5 * 60_000;
+export { CHECKOUT_WAKE_GRACE_MS };
 
 /**
  * A run on this repo that released its checkout and now has its answer, waiting to take it back. A

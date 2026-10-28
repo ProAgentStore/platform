@@ -39,11 +39,12 @@ import { AUTO_PICKUP_ATTEMPT_FACTOR, admitAutoPickup, autoPickupAdmissionCursor,
 export { AUTO_PICKUP_ATTEMPT_FACTOR, NOT_REJECTED_BEFORE_RUN };
 import { tryDequeueAndStart } from "./objective-queue-start.js";
 import { markWokenForCheckout, releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
-import { coderIsIdle, PO_TRIAGE_OFF, queueGate, wakePoTriageIfIdle } from "./po-triage-wake.js";
+import { PO_TRIAGE_OFF, queueGate, wakePoTriageIfIdle } from "./po-triage-wake.js";
 import { notifyUser } from "../routes/push.js";
 import { selectedProviderAccount } from "./provider-account-hold.js";
 import { recoverReservations } from "./auto-pickup-legacy-reservations.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
+import { type CoderBlocker, coderBlocker } from "./checkout-hold.js";
 export { RESERVATION_TTL_MS, recoverReservations } from "./auto-pickup-legacy-reservations.js";
 
 export interface AutoPickupSettings {
@@ -233,6 +234,27 @@ async function logSkip(env: Env, iid: string, uid: string, outcome: "skipped_gat
 	}
 }
 
+/** A busy coder's skip is written at most this often while the blocker is unchanged (#1384): enough to read, not one row per sweep. */
+export const BUSY_LOG_DEBOUNCE_MS = 30 * 60_000;
+
+/**
+ * Record why a coder was skipped as busy, naming the blocker (#1384). The row starts `<reason> — run <id>:` (or `entry <id>`), and the
+ * debounce keys on that prefix, not the whole sentence: the sentence carries ages that change every sweep, the blocker does not. A different
+ * blocker, or the same one after the window, is a new row. Never throws.
+ */
+export async function logBusySkip(env: Env, iid: string, uid: string, blocker: CoderBlocker, now: number): Promise<void> {
+	try {
+		const who = blocker.runId ? `run ${blocker.runId}` : `entry ${blocker.entryId}`;
+		const prefix = `${blocker.reason} — ${who}:`;
+		const seen = await env.DB.prepare("SELECT 1 AS x FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'skipped_busy' AND substr(detail, 1, ?2) = ?3 AND created_at > ?4 LIMIT 1")
+			.bind(iid, prefix.length, prefix, now - BUSY_LOG_DEBOUNCE_MS)
+			.first<{ x: number }>();
+		if (!seen) await log(env, iid, uid, "skipped_busy", clipMarked(`${prefix} ${blocker.detail}`, 300), null, null, now);
+	} catch {
+		// The log is a trace of the decision; failing to write it must not change the decision.
+	}
+}
+
 /**
  * An eligible issue the picker passed over because the start guard refused it (#1335): one row per issue and reason, so "why did it
  * skip #N" is a row an owner can filter on, not a sentence inside another row. Written at most once an hour per issue and reason,
@@ -311,7 +333,8 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 			return settleStart(await (deps.startQueued ?? ((id: string) => tryDequeueAndStart(env, iid, id, uid)))(pendingAdmission.repoId), pendingAdmission);
 		}
 		const observedAdmission = await autoPickupAdmissionCursor(env, iid);
-		if (!(await coderIsIdle(env, iid, now))) {
+		const blocker = await coderBlocker(env, iid, now);
+		if (blocker) {
 			// #1323: a run parked on a question and now answered is first in line. It counts as running work, so without
 			// this auto-pickup saw a busy coder for ever while the answer waited. Wake it; its own end drains next.
 			const answered = await releasedRunAwaitingCheckout(env, iid, null, now).catch(() => null);
@@ -322,7 +345,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 				return { started: false, reason };
 			}
 			const reason = "the coder still has queued or running work";
-			await logSkip(env, iid, uid, "skipped_busy", reason, now);
+			await logBusySkip(env, iid, uid, blocker, now);
 			return { started: false, reason };
 		}
 		const warn: { note?: string } = {};
@@ -481,8 +504,12 @@ export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof w
 				await recoverReservations(env, r.id, now);
 				// A run parked on a question whose answer is in counts as work, but only the wake resumes it (#1323):
 				// skipping its coder here left the answer waiting and the coder busy for ever.
-				if (!(await coderIsIdle(env, r.id, now)) && !(await pendingAutoPickupAdmission(env, r.id, r.user_id, now))
-					&& !(await releasedRunAwaitingCheckout(env, r.id, null, now))) continue;
+				const blocker = await coderBlocker(env, r.id, now);
+				if (blocker && !(await pendingAutoPickupAdmission(env, r.id, r.user_id, now)) && !(await releasedRunAwaitingCheckout(env, r.id, null, now))) {
+					// Skipped as busy: say by what (#1384). This was a bare `continue`, so a coder could sit for hours with no row to read.
+					await logBusySkip(env, r.id, r.user_id, blocker, now);
+					continue;
+				}
 				await wake(env, r.id, r.user_id);
 				woken++;
 			} catch (e) {

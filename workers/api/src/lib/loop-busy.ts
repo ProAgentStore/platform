@@ -13,6 +13,7 @@
 // else's run.
 
 import type { Env } from "../types.js";
+import { awayCutoffSeconds, ownsCheckoutSql } from "./checkout-hold.js";
 
 /** What a caller does about a busy refusal (#1243): the one refusal a queue answers. */
 export const BUSY_NEXT = "Retry the same call with queue_if_busy: true (the same request_id is safe) to queue this objective; it starts by itself when the active run ends.";
@@ -46,11 +47,11 @@ export async function describeBusyHolder(
 		          LIMIT 1) AS request_id
 		   FROM agent_loop_runs r
 		   LEFT JOIN coding_sessions s ON s.id = r.session_id
-		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND r.status = 'running'
-		    AND r.checkout_released_at IS NULL -- parked with its checkout released: not the holder (#1077)
+		  WHERE r.user_id = ?1 AND r.instance_id = ?2
+		    AND ${ownsCheckoutSql("r", "?3")} -- parked with its checkout released (#1077), or on a machine that has been away (#1384): not the holder
 		  ORDER BY r.started_at DESC`,
 	)
-		.bind(input.userId, input.instanceId)
+		.bind(input.userId, input.instanceId, awayCutoffSeconds(now))
 		.all<{ run_id: string; objective: string; started_at: number; session_id: string | null; repo_id: string | null; request_id: string | null }>();
 	const run = (runs.results ?? []).find((r) => sameRepo(r.repo_id, input.repoId));
 

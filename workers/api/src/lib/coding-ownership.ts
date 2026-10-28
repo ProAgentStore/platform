@@ -20,6 +20,7 @@
  * requeued, never failed) until the watcher that follows the turn sees it finish.
  */
 import type { Env } from "../types.js";
+import { awayCutoffSeconds, ownsCheckoutSql } from "./checkout-hold.js";
 import { clipMarked } from "./clip-marked.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
@@ -41,14 +42,17 @@ interface Scope {
 }
 
 /** Every current owner of this repo's checkout, oldest first. Reads only. */
-export async function repoOwners(env: Env, scope: Scope): Promise<RepoOwner[]> {
+export async function repoOwners(env: Env, scope: Scope, now: number = Date.now()): Promise<RepoOwner[]> {
+	// A run running with its checkout held owns the repo; one parked on a question that let go of it (#1077), or parked on a machine that has
+	// been away (#1384), owns nothing. The rule is the one in checkout-hold.ts, shared with the idle check and the admission. (Kept out of
+	// the SQL string: an apostrophe in a SQL comment reads as an open quote to the interpolation guard in sql.test.ts.)
 	const runs = await env.DB.prepare(
 		`SELECT r.run_id, r.session_id, r.started_at FROM agent_loop_runs r
 		   JOIN coding_sessions s ON s.id = r.session_id
-		  WHERE r.instance_id = ?1 AND r.user_id = ?2 AND s.repo_id = ?3 AND r.status = 'running'
-		    AND r.checkout_released_at IS NULL -- a run parked on a question that let go of the checkout (#1077) owns nothing`,
+		  WHERE r.instance_id = ?1 AND r.user_id = ?2 AND s.repo_id = ?3
+		    AND ${ownsCheckoutSql("r", "?4")}`,
 	)
-		.bind(scope.instanceId, scope.userId, scope.repoId)
+		.bind(scope.instanceId, scope.userId, scope.repoId, awayCutoffSeconds(now))
 		.all<{ run_id: string; session_id: string | null; started_at: number }>();
 	const sessions = await env.DB.prepare(
 		`SELECT id, driver_id, driver_at, direct_turn_id, direct_turn_at, direct_turn_delivered_at FROM coding_sessions
@@ -87,10 +91,10 @@ export async function releaseStaleActiveSessions(env: Env, scope: Scope & { exce
 		  WHERE instance_id = ?1 AND user_id = ?2 AND repo_id = ?3 AND status = 'active' AND id <> ?4
 		    AND driver_id IS NULL AND direct_turn_id IS NULL
 		    AND updated_at < datetime(?5, 'unixepoch')
-		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.session_id = coding_sessions.id AND r.status = 'running' AND r.checkout_released_at IS NULL)
+		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.session_id = coding_sessions.id AND ${ownsCheckoutSql("r", "?6")})
 		  RETURNING id`,
 	)
-		.bind(scope.instanceId, scope.userId, scope.repoId, scope.exceptSessionId ?? "", Math.floor((now - STALE_SESSION_IDLE_MS) / 1000))
+		.bind(scope.instanceId, scope.userId, scope.repoId, scope.exceptSessionId ?? "", Math.floor((now - STALE_SESSION_IDLE_MS) / 1000), awayCutoffSeconds(now))
 		.all<{ id: string }>();
 	return (results ?? []).map((r) => r.id);
 }
@@ -200,9 +204,9 @@ export async function admitDirectTurn(env: Env, scope: Scope & { sessionId: stri
 		`UPDATE coding_sessions SET direct_turn_id = ?5, direct_turn_at = ?6, direct_turn_delivered_at = NULL
 		  WHERE id = ?4 AND instance_id = ?1 AND user_id = ?2 AND repo_id = ?3
 		    AND NOT EXISTS (SELECT 1 FROM coding_sessions o WHERE o.instance_id = ?1 AND o.repo_id = ?3 AND o.id <> ?4 AND (o.driver_id IS NOT NULL OR o.direct_turn_id IS NOT NULL))
-		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r JOIN coding_sessions rs ON rs.id = r.session_id WHERE r.instance_id = ?1 AND rs.repo_id = ?3 AND rs.id <> ?4 AND r.status = 'running' AND r.checkout_released_at IS NULL)`,
+		    AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r JOIN coding_sessions rs ON rs.id = r.session_id WHERE r.instance_id = ?1 AND rs.repo_id = ?3 AND rs.id <> ?4 AND ${ownsCheckoutSql("r", "?7")})`,
 	)
-		.bind(scope.instanceId, scope.userId, scope.repoId, scope.sessionId, turnId, now)
+		.bind(scope.instanceId, scope.userId, scope.repoId, scope.sessionId, turnId, now, awayCutoffSeconds(now))
 		.run();
 	const after = await repoOwners(env, scope);
 	if ((res.meta?.changes ?? 0) > 0) {
