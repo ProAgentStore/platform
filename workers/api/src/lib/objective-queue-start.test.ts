@@ -28,8 +28,10 @@ const start = vi.fn();
 const openBudget = vi.fn();
 const resolveAccountCeilings = vi.fn();
 const logError = vi.fn();
+const notifyUser = vi.fn();
 
 vi.mock("./provider-account-hold.js", () => ({ automaticProviderHold: async () => null }));
+vi.mock("../routes/push.js", () => ({ notifyUser: (...a: unknown[]) => notifyUser(...a) }));
 
 vi.mock("./objective-queue.js", () => ({
 	dequeueNext: (...a: unknown[]) => dequeueNext(...a),
@@ -250,6 +252,44 @@ describe("when the start is refused", () => {
 		expect(finishQueueEntry).toHaveBeenCalledWith(env, "objq-1", "failed", "This checkout is not a git working tree.");
 		expect(requeueEntry).not.toHaveBeenCalled();
 		expect(out).toMatchObject({ drained: true, started: false, requeued: false });
+		// Not THIS admission failure (#1404) — a person told nothing is a different incident than a
+		// person told nothing about a closed issue specifically.
+		expect(notifyUser).not.toHaveBeenCalled();
+	});
+
+	it("issue_closed — the queued objective's linked issue closed while it waited — notifies the owner (#1404)", async () => {
+		// "the repo freed up, admission failed: Issue #1249 is closed on GitHub. No notification
+		// reached the owner" — the exact gap the issue reports. `checkStartIdempotency`'s cache read
+		// is what refuses it here (pinned in `start-idempotency.test.ts`); this is only the wiring
+		// from that refusal to the owner being told.
+		dequeueNext.mockResolvedValue(entry({ userId: "owner-1" }));
+		start.mockResolvedValue({ ok: false, status: 409, reason: "issue_closed", error: "Issue #1249 is closed on GitHub. Pass force: true with force_reason to start it anyway." });
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(finishQueueEntry).toHaveBeenCalledWith(env, "objq-1", "failed", expect.stringContaining("Issue #1249 is closed"));
+		expect(out).toMatchObject({ drained: true, started: false, requeued: false });
+		expect(notifyUser).toHaveBeenCalledWith(
+			env,
+			"owner-1",
+			"coding",
+			expect.stringContaining("closed"),
+			expect.stringContaining("Issue #1249 is closed"),
+			expect.anything(),
+			expect.objectContaining({ kind: "alert", instanceId: "i1" }),
+		);
+	});
+
+	it("issue_closed notifies the ENTRY's owner, not whoever's finishing run happened to drain the queue", async () => {
+		dequeueNext.mockResolvedValue(entry({ userId: "owner-1" }));
+		start.mockResolvedValue({ ok: false, status: 409, reason: "issue_closed", error: "Issue #9 is closed on GitHub." });
+		await tryDequeueAndStart(env, "i1", "r1", "someone-else");
+		expect(notifyUser).toHaveBeenCalledWith(env, "owner-1", expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything());
+	});
+
+	it("already_done is a different refusal from issue_closed and does not notify", async () => {
+		dequeueNext.mockResolvedValue(entry());
+		start.mockResolvedValue({ ok: false, status: 409, reason: "already_done", error: "Issue #9 was finished by run run-1 within the last 7 days." });
+		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(notifyUser).not.toHaveBeenCalled();
 	});
 });
 

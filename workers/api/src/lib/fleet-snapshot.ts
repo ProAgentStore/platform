@@ -95,6 +95,12 @@ export interface FleetFacts {
 	ownerSecrets: number;
 	/** Null when the instance has no GitHub repo bound — there is no backlog to report. */
 	issues: IssueTally | null;
+	/**
+	 * The newest queued objective the drain could not start (#1404), within the snapshot's lookback.
+	 * Null once something more pressing — or simply newer work — has happened since; see the ordering
+	 * note on {@link deriveFleetStatus}.
+	 */
+	admissionFailure?: { reason: string | null; failedAt: number } | null;
 }
 
 /** Parks a person has to clear by hand: a session takeover, or a CLI sign-in on the machine. */
@@ -136,6 +142,11 @@ export function deriveFleetStatus(f: FleetFacts): { status: FleetStatus; reason:
 	if (f.ownerSecrets > 0) return { status: "hard_blocked", reason: `${f.ownerSecrets} secret value${f.ownerSecrets === 1 ? "" : "s"} waiting to be entered in the console.` };
 	if (f.health === "working" || f.health === "waiting") return { status: "working", reason: f.health === "waiting" ? "The run is parked and resumes on its own." : "A run is in progress." };
 	if (f.queueDepth > 0) return { status: "working", reason: `${f.queueDepth} objective${f.queueDepth === 1 ? "" : "s"} queued to start.` };
+	// #1404: checked only once nothing is actively working or queued — a run that started since
+	// supersedes it, and a stale failure must not outrank real work in progress. This is the gap a
+	// closed-while-queued issue fell into: queueDepth read 0 (it left `pending` the moment it failed)
+	// and there was no run to report, so the instance read as plain idle with nothing said about it.
+	if (f.admissionFailure) return { status: "hard_blocked", reason: `A queued run could not start: ${f.admissionFailure.reason ?? "admission failed"}. Fix it, or start over with force: true.` };
 	const i = f.issues;
 	if (!i) return { status: "idle", reason: "Idle, and no GitHub repository is bound — there is no backlog to read." };
 	if (i.actionable > 0) return { status: "idle_needs_work", reason: `Idle with ${i.actionable}${i.openMore ? "+" : ""} open issue${i.actionable === 1 ? "" : "s"} it could take.` };

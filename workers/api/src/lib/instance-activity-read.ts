@@ -64,3 +64,42 @@ export async function readQueueDepths(env: Env, userId: string): Promise<Map<str
 		.all<Record<string, unknown>>();
 	return new Map((rows.results ?? []).map((r) => [String(r.instance_id), Number(r.depth) || 0] as const));
 }
+
+/** A queue entry the drain tried and could not start — the record kept once it is no longer pending. */
+export interface AdmissionFailure {
+	queueEntryId: string;
+	reason: string | null;
+	objective: string;
+	failedAt: number;
+}
+
+/**
+ * Each instance's newest FAILED admission (#1404), bounded the same lookback a closed run is.
+ *
+ * An entry that never became a run is otherwise invisible to `recent_instances` / `fleet_snapshot`:
+ * it carries no `run_id`, so `readLatestRuns` never sees it, and it left `pending` the moment it
+ * failed, so `readQueueDepths` does not count it either. Zero depth and no run reads as plain idle —
+ * exactly how an issue closing while its objective sat queued went unnoticed for hours (#1404): the
+ * drain recorded `admission_failed` and the owner's only view of their fleet still said nothing ran
+ * because nothing was WAITING to.
+ */
+export async function readLatestAdmissionFailures(env: Env, userId: string, since: number): Promise<Map<string, AdmissionFailure>> {
+	const rows = await env.DB.prepare(
+		`SELECT instance_id, id, objective, stop_reason, finished_at
+		   FROM (
+		     SELECT q.*, ROW_NUMBER() OVER (
+		              PARTITION BY q.instance_id ORDER BY q.finished_at DESC
+		            ) AS rn
+		       FROM instance_objective_queue q
+		      WHERE q.user_id = ?1 AND q.status = 'failed' AND q.finished_at >= ?2
+		   )
+		  WHERE rn = 1`,
+	)
+		.bind(userId, since)
+		.all<{ instance_id: string; id: string; objective: string; stop_reason: string | null; finished_at: number }>();
+	return new Map(
+		(rows.results ?? []).map(
+			(r) => [r.instance_id, { queueEntryId: r.id, reason: r.stop_reason, objective: r.objective, failedAt: r.finished_at }] as const,
+		),
+	);
+}

@@ -19,7 +19,7 @@
 
 import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
-import { postIssueComment } from "./github-issues.js";
+import { postIssueComment, readIssue } from "./github-issues.js";
 import { namesOtherRepo, parseIssueCache } from "./issue-tickets.js";
 import { referencedIssue } from "./objective-dedupe.js";
 import { issueQuarantine } from "./issue-attempts.js";
@@ -50,6 +50,28 @@ export async function quarantineRefusal(env: Env, input: { userId: string; githu
 		reason: "quarantined",
 		error: `Issue #${input.issue} was stopped after ${q.attemptCount} unsuccessful attempts (limit ${q.threshold}) and will not be started again until its owner releases it or a run on it succeeds. Other issues are unaffected.`,
 		detail: { issue: input.issue, repoId: input.repoId, incident_id: q.incidentId ?? undefined, attempts: q.attemptCount, threshold: q.threshold },
+	};
+}
+
+/**
+ * A LIVE read of the linked issue's state (#1404) — for the one decision where the CACHED state
+ * being stale costs hours rather than nothing: about to QUEUE an objective rather than run it now.
+ * `checkStartIdempotency` above deliberately reads only the cache, because it runs on every start;
+ * this runs only on the enqueue decision (a rarer path — reached only when the repo is busy), so one
+ * extra GitHub round trip there does not repeat the cost that rule exists to avoid. A queued
+ * objective whose issue had already closed used to be discovered only at drain time, sometimes
+ * hours later, with nothing told to the owner in between.
+ */
+export async function liveIssueClosedRefusal(
+	env: Env,
+	input: { userId: string; githubRepo: string; repoId: string; issue: number },
+): Promise<StartIdempotencyRefusal | null> {
+	const detail = await readIssue(env, input.userId, input.githubRepo, input.issue).catch(() => null);
+	if (detail?.state !== "closed") return null;
+	return {
+		reason: "issue_closed",
+		error: `Issue #${input.issue} is closed on GitHub. Pass force: true with force_reason to start it anyway.`,
+		detail: { issue: input.issue, repoId: input.repoId, issue_url: detail.url || undefined },
 	};
 }
 

@@ -70,4 +70,39 @@ describe("deriveFleetStatus (#961)", () => {
 		const sorted = (["idle", "paused", "working", "decision_blocked", "hard_blocked", "unknown", "idle_needs_work"] as const).slice().sort(fleetOrder);
 		expect(sorted).toEqual(["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "paused", "idle"]);
 	});
+
+	describe("a recent admission failure (#1404)", () => {
+		// "the repo freed up, admission failed... No notification reached the owner. The fleet-wide
+		// router migration was believed to be running for hours when it never started." — queueDepth
+		// read 0 (the entry left pending the moment it failed) and there was no run, so the snapshot
+		// had nothing but "idle" to say about it.
+		const failed = { reason: "Issue #1249 is closed on GitHub.", failedAt: 1_000 };
+
+		it("otherwise-idle reports hard_blocked, naming the failure", () => {
+			expect(deriveFleetStatus(facts({ admissionFailure: failed }))).toMatchObject({
+				status: "hard_blocked",
+				reason: expect.stringContaining("Issue #1249 is closed on GitHub"),
+			});
+		});
+
+		it("still names it even with open issues otherwise offered as idle_needs_work — the failure is the more pressing fact", () => {
+			expect(deriveFleetStatus(facts({ admissionFailure: failed, issues: repo(3, 1) })).status).toBe("hard_blocked");
+		});
+
+		it("is superseded by a run or queued work that happened SINCE — stale news does not outrank real work", () => {
+			expect(deriveFleetStatus(facts({ admissionFailure: failed, health: "working" })).status).toBe("working");
+			expect(deriveFleetStatus(facts({ admissionFailure: failed, queueDepth: 1 })).status).toBe("working");
+		});
+
+		it("is superseded by anything more pressing — a question, a hard park, a stall, a secret", () => {
+			expect(deriveFleetStatus(facts({ admissionFailure: failed, decisions: 1 })).status).toBe("decision_blocked");
+			expect(deriveFleetStatus(facts({ admissionFailure: failed, health: "waiting", waitingReason: "human" })).status).toBe("hard_blocked");
+			expect(deriveFleetStatus(facts({ admissionFailure: failed, ownerSecrets: 1 })).status).toBe("hard_blocked");
+		});
+
+		it("absent or null changes nothing — every existing verdict in this file is untouched", () => {
+			expect(deriveFleetStatus(facts({ admissionFailure: null, issues: repo(3, 1) })).status).toBe("idle_needs_work");
+			expect(deriveFleetStatus(facts()).status).toBe("idle");
+		});
+	});
 });

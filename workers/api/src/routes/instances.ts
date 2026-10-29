@@ -6,7 +6,7 @@ import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { GMAIL_SCOUT_SOURCE_MODE, gmailScoutSourceMode } from "../lib/gmail-scout/config.js";
 import { staleRegistration } from "../lib/runner-attach-report.js";
 import { composeInstanceActivity } from "../lib/instance-activity.js";
-import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
+import { readLatestAdmissionFailures, readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { applySettingsPatch, settingsPatchRefusal, resolveSettingsValues } from "../lib/instance-settings.js";
 import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
 import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
@@ -488,9 +488,10 @@ instanceRoutes.get("/my/activity", async (c) => {
 	const includePaused = ["1", "true", "yes"].includes((c.req.query("include_paused") ?? "").toLowerCase());
 
 	const since = now - ACTIVITY_LOOKBACK_MS;
-	const [runs, queueDepths, nameRows] = await Promise.all([
+	const [runs, queueDepths, admissionFailures, nameRows] = await Promise.all([
 		readLatestRuns(c.env, session.uid, since),
 		readQueueDepths(c.env, session.uid),
+		readLatestAdmissionFailures(c.env, session.uid, since),
 		// Name and slug (#923): a bare id is unreadable on a roster of dozens, and `recent_instances`
 		// already names each entry. One flat query over the caller's instances, whatever has activity.
 		c.env.DB.prepare(
@@ -500,14 +501,15 @@ instanceRoutes.get("/my/activity", async (c) => {
 			.all<{ id: string; status: string | null; config: string | null; name: string | null; slug: string | null }>(),
 	]);
 	const shown = new Set((nameRows.results ?? []).filter((r) => r.status === "active" || (includePaused && r.status === "paused")).map((r) => r.id));
-	const hiddenIds = new Set([...runs.map((r) => r.instanceId), ...queueDepths.keys()].filter((id) => !shown.has(id)));
+	const hiddenIds = new Set([...runs.map((r) => r.instanceId), ...queueDepths.keys(), ...admissionFailures.keys()].filter((id) => !shown.has(id)));
 	const visibleRuns = runs.filter((r) => shown.has(r.instanceId));
 	const visibleDepths = new Map([...queueDepths].filter(([id]) => shown.has(id)));
+	const visibleAdmissionFailures = new Map([...admissionFailures].filter(([id]) => shown.has(id)));
 	const names = new Map((nameRows.results ?? []).map((r) => [r.id, { name: instanceListName(r.config, r.name), slug: r.slug ?? null }] as const));
 
 	// `asOf` is not decoration: every value here is time-relative, so a poll that failed and left
 	// the last response on screen is indistinguishable from a fresh one without it (#291).
-	const instances = composeInstanceActivity(visibleRuns, visibleDepths, now).map(({ instanceId, ...rest }) => ({
+	const instances = composeInstanceActivity(visibleRuns, visibleDepths, now, visibleAdmissionFailures).map(({ instanceId, ...rest }) => ({
 		instanceId,
 		name: names.get(instanceId)?.name ?? null,
 		slug: names.get(instanceId)?.slug ?? null,

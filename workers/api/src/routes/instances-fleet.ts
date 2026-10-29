@@ -17,7 +17,7 @@ import { listIssuesPage } from "../lib/github-issues.js";
 import { answersPendingFor } from "../lib/agent-loop-store.js";
 import { autoPickupFrom } from "../lib/auto-pickup.js";
 import { instanceHealthFor } from "../lib/instance-activity.js";
-import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
+import { readLatestAdmissionFailures, readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { instanceListName, parseConfigBlob, patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
 import { matchesTags, normalizeTags, tagsOf, wantedTags } from "../lib/instance-tags.js";
 import { mapWithConcurrency } from "../lib/map-concurrency.js";
@@ -87,9 +87,10 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 		// #1028: a paused instance's repos are not read — its backlog is not work anyone can take.
 		const workable = new Set(members.filter((m) => m.instanceStatus !== "paused").map((m) => m.id));
 
-		const [runs, queueDepths, decisionRows, owner, repoRows] = await Promise.all([
+		const [runs, queueDepths, admissionFailures, decisionRows, owner, repoRows] = await Promise.all([
 			readLatestRuns(c.env, uid, now - LOOKBACK_MS),
 			readQueueDepths(c.env, uid),
+			readLatestAdmissionFailures(c.env, uid, now - LOOKBACK_MS),
 			c.env.DB.prepare(
 				`SELECT instance_id, COUNT(*) AS n, MIN(message) AS message FROM mcp_input_requests
 				  WHERE user_id = ?1 AND status = 'pending' AND expires_at > ?2 GROUP BY instance_id`,
@@ -130,6 +131,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 			const repos = reposOf.get(m.id);
 			const issues = repos?.length ? tallyIssues(repos.map(repoIssues)) : null;
 			const decision = decisions.get(m.id) ?? null;
+			const admissionFailure = admissionFailures.get(m.id) ?? null;
 			const verdict = deriveFleetStatus({
 				instanceStatus: m.instanceStatus,
 				health,
@@ -140,6 +142,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				answerPending: open ? pending.has(open.runId) : false,
 				ownerSecrets: secrets.get(m.id) ?? 0,
 				issues,
+				admissionFailure: admissionFailure ? { reason: admissionFailure.reason, failedAt: admissionFailure.failedAt } : null,
 			});
 			return {
 				instanceId: m.id,
@@ -156,6 +159,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				queueDepth: queueDepths.get(m.id) ?? 0,
 				decision,
 				ownerSecrets: secrets.get(m.id) ?? 0,
+				admissionFailure,
 				issues,
 			};
 		});

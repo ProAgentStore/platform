@@ -6,6 +6,8 @@ import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
 const posted: Array<{ number: number; body: string }> = [];
+/** What a LIVE `readIssue` answers, per test (#1404) — null means "not found / a network failure". */
+let liveIssues: Record<number, { state: string; url?: string } | null> = {};
 vi.mock("./github-issues.js", async () => {
 	const actual = await vi.importActual<typeof import("./github-issues.js")>("./github-issues.js");
 	return {
@@ -14,10 +16,14 @@ vi.mock("./github-issues.js", async () => {
 			posted.push({ number, body });
 			return true;
 		},
+		readIssue: async (_e: unknown, _u: string, _r: string, number: number) => {
+			const found = liveIssues[number];
+			return found ? { number, title: "T", state: found.state, labels: [], comments: 0, updatedAt: "", url: found.url ?? `https://github.com/o/r/issues/${number}`, body: "" } : null;
+		},
 	};
 });
 
-const { checkStartIdempotency } = await import("./start-idempotency.js");
+const { checkStartIdempotency, liveIssueClosedRefusal } = await import("./start-idempotency.js");
 const { createLoopRun } = await import("./agent-loop-store.js");
 
 let d1: RealSchemaD1;
@@ -55,8 +61,30 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name) VALUES ('r1', 'i1', 'u1', 'a'), ('r2', 'i1', 'u1', 'b')`);
 	env = { DB: d1.DB } as unknown as Env;
 	posted.length = 0;
+	liveIssues = {};
 });
 afterEach(() => d1.close());
+
+describe("liveIssueClosedRefusal — the LIVE check made only at the enqueue decision (#1404)", () => {
+	it("a closed issue is refused, naming it and hinting at force — the same sentence the cached check uses", async () => {
+		liveIssues[5] = { state: "closed", url: "https://github.com/o/r/issues/5" };
+		expect(await liveIssueClosedRefusal(env, { userId: "u1", githubRepo: "o/r", repoId: "r1", issue: 5 })).toMatchObject({
+			reason: "issue_closed",
+			error: "Issue #5 is closed on GitHub. Pass force: true with force_reason to start it anyway.",
+			detail: { issue: 5, repoId: "r1", issue_url: "https://github.com/o/r/issues/5" },
+		});
+	});
+
+	it("an open issue is not refused", async () => {
+		liveIssues[5] = { state: "open" };
+		expect(await liveIssueClosedRefusal(env, { userId: "u1", githubRepo: "o/r", repoId: "r1", issue: 5 })).toBeNull();
+	});
+
+	it("an issue GitHub cannot be read (not found, or the call failed) is not refused — unreadable is not evidence of closed", async () => {
+		liveIssues[5] = null;
+		expect(await liveIssueClosedRefusal(env, { userId: "u1", githubRepo: "o/r", repoId: "r1", issue: 5 })).toBeNull();
+	});
+});
 
 describe("a start for work already in flight (#1253)", () => {
 	it("is refused as a duplicate of the running run — the explicit issue decides, whatever the text says", async () => {

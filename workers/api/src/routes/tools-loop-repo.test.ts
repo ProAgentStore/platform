@@ -12,6 +12,8 @@ import type { Env } from "../types.js";
 const driverStart = vi.fn();
 const enqueueObjective = vi.fn();
 const backingOffAhead = vi.fn();
+const listRepos = vi.fn();
+const liveIssueClosedRefusal = vi.fn();
 
 vi.mock("../lib/auth.js", async () => {
 	const actual = await vi.importActual<typeof import("../lib/auth.js")>("../lib/auth.js");
@@ -46,6 +48,23 @@ vi.mock("../lib/objective-queue.js", async () => {
 	// `backingOffAhead` (#1388) reads the queue for an earlier entry waiting out a timed backoff; none here, so a start proceeds as it always did.
 	return { ...actual, enqueueObjective: (...a: unknown[]) => enqueueObjective(...a), backingOffAhead: (...a: unknown[]) => backingOffAhead(...a) };
 });
+vi.mock("../lib/coding-store.js", async () => {
+	const actual = await vi.importActual<typeof import("../lib/coding-store.js")>("../lib/coding-store.js");
+	return { ...actual, listRepos: (...a: unknown[]) => listRepos(...a) };
+});
+vi.mock("../lib/objective-dedupe.js", async () => {
+	const actual = await vi.importActual<typeof import("../lib/objective-dedupe.js")>("../lib/objective-dedupe.js");
+	// A real repo (from the mocked `listRepos` above) makes the route read D1 for a duplicate; this
+	// file's dummy `{ DB: {} }` env has none to read. No duplicate in any of these tests.
+	return { ...actual, findDuplicateObjective: async () => null };
+});
+vi.mock("../lib/start-idempotency.js", async () => {
+	const actual = await vi.importActual<typeof import("../lib/start-idempotency.js")>("../lib/start-idempotency.js");
+	// `startIssueFor` stays real (pure); only the LIVE GitHub check (#1404) is faked here — its own
+	// correctness is pinned in `lib/start-idempotency.test.ts`. Defaults to "not closed" so every
+	// test above this file's #1404 block, none of which sets it, is unaffected.
+	return { ...actual, liveIssueClosedRefusal: (...a: unknown[]) => liveIssueClosedRefusal(...a) };
+});
 
 const { toolRoutes } = await import("./tools.js");
 
@@ -64,6 +83,8 @@ beforeEach(() => {
 	driverStart.mockResolvedValue({ ok: true, runId: "run-1", driver: "coding" });
 	backingOffAhead.mockResolvedValue(null);
 	enqueueObjective.mockImplementation(async (_env: unknown, input: { repoId?: string }) => ({ id: "qe-1", repoId: input.repoId ?? null, status: "pending" }));
+	listRepos.mockResolvedValue([]);
+	liveIssueClosedRefusal.mockResolvedValue(null);
 });
 
 describe("POST /:id/loop — the objective's origin (#1019)", () => {
@@ -165,5 +186,59 @@ describe("POST /:id/loop — repo targeting (#877)", () => {
 			expect(((await res.json()) as { error: string }).error).toBe(error);
 		}
 		expect(enqueueObjective).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * #1404: queueing is the one decision whose cache being stale costs hours, not nothing — "the repo
+ * freed up, admission failed: Issue #1249 is closed on GitHub" with the owner told nothing in
+ * between. The route now asks a LIVE check (`liveIssueClosedRefusal`, pinned on its own in
+ * `lib/start-idempotency.test.ts`) at both places that are about to queue rather than run, and
+ * refuses immediately instead.
+ */
+describe("POST /:id/loop — a closed linked issue is refused immediately, never queued (#1404)", () => {
+	const CLOSED = {
+		reason: "issue_closed" as const,
+		error: "Issue #9 is closed on GitHub. Pass force: true with force_reason to start it anyway.",
+		detail: { issue: 9, repoId: "r1", issue_url: "https://github.com/acme/widget/issues/9" },
+	};
+
+	beforeEach(() => {
+		listRepos.mockResolvedValue([{ id: "r1", name: "widget", githubRepo: "acme/widget" }]);
+	});
+
+	it("a BUSY repo with queue_if_busy and a closed linked issue is refused at once — not queued", async () => {
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "busy", error: "widget is already being worked on" });
+		liveIssueClosedRefusal.mockResolvedValue(CLOSED);
+		const res = await post({ objective: "fix #9", repoId: "r1", issue: 9, queueIfBusy: true });
+		expect(res.status).toBe(409);
+		expect(await res.json()).toMatchObject({ error: CLOSED.error, reason: "issue_closed", startState: "not_started", issue: 9, repoId: "r1" });
+		expect(enqueueObjective).not.toHaveBeenCalled();
+		expect(liveIssueClosedRefusal).toHaveBeenCalledWith(expect.anything(), { userId: "u1", githubRepo: "acme/widget", repoId: "r1", issue: 9 });
+	});
+
+	it("queued behind an earlier backing-off entry: the closed check runs before the driver is even asked", async () => {
+		backingOffAhead.mockResolvedValue({ id: "objq-1", deferReason: "runner_unresponsive", nextRetryAt: Date.now() + 60_000 });
+		liveIssueClosedRefusal.mockResolvedValue(CLOSED);
+		const res = await post({ objective: "fix #9", repoId: "r1", issue: 9, queueIfBusy: true });
+		expect(res.status).toBe(409);
+		expect(await res.json()).toMatchObject({ error: CLOSED.error, reason: "issue_closed" });
+		expect(driverStart).not.toHaveBeenCalled();
+		expect(enqueueObjective).not.toHaveBeenCalled();
+	});
+
+	it("an OPEN linked issue queues exactly as before — the live check is not a new way to refuse a working queue", async () => {
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "busy", error: "widget is already being worked on" });
+		liveIssueClosedRefusal.mockResolvedValue(null);
+		const res = await post({ objective: "fix #9", repoId: "r1", issue: 9, queueIfBusy: true });
+		expect(res.status).toBe(202);
+		expect(enqueueObjective).toHaveBeenCalled();
+	});
+
+	it("force: true skips the live check entirely — it is the caller's explicit override", async () => {
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "busy", error: "widget is already being worked on" });
+		const res = await post({ objective: "fix #9", repoId: "r1", issue: 9, queueIfBusy: true, force: true });
+		expect(res.status).toBe(202);
+		expect(liveIssueClosedRefusal).not.toHaveBeenCalled();
 	});
 });

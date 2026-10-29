@@ -60,6 +60,7 @@ import { BUSY_NEXT, describeBusyHolder } from "../lib/loop-busy.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { backingOffAhead, enqueueObjective } from "../lib/objective-queue.js";
+import { liveIssueClosedRefusal, startIssueFor } from "../lib/start-idempotency.js";
 import { registerLoopQueueRoutes } from "./loop-queue-routes.js";
 import { registerLoopContinueRoutes } from "./loop-continue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
@@ -1333,21 +1334,37 @@ toolRoutes.post("/:id/loop", async (c) => {
 		// Same issue already waiting or running in the repo this start resolves to (#925, #1253): hand THAT back on
 		// every path, not only when the repo is busy. Resolved the way the driver resolves it, so repo-qualified.
 		let dedupeRepoId = repoId;
+		let dedupeGithubRepo: string | null = null;
 		if (driver.id === "coding") {
 			const repos = await listRepos(c.env, instanceId, session.uid).catch(() => []);
 			const dupRepo = pickLoopRepo(repos, repoId, { requireChoice: requireRepoChoice });
-			if (dupRepo.ok) dedupeRepoId = dupRepo.repo.id;
+			if (dupRepo.ok) {
+				dedupeRepoId = dupRepo.repo.id;
+				dedupeGithubRepo = dupRepo.repo.githubRepo ?? null;
+			}
 			if (dupRepo.ok && !repairCheckout) {
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dupRepo.repo.id, objective, issue });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, reason: "duplicate", startState: "not_started" }, 202);
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, reason: "duplicate", objective: dup.objective, startState: "not_started" }, 200);
 			}
 		}
+		// About to queue rather than run now (#1404): a LIVE check, not the cache `driver.start()` reads below,
+		// because a stale cache is exactly how an already-closed issue got queued and only failed admission at
+		// drain time, hours later, with the owner told nothing in between. `force` still overrides it.
+		const refuseIfLinkedIssueClosed = async (): Promise<Response | null> => {
+			if (body.force === true || !dedupeGithubRepo) return null;
+			const liveIssue = startIssueFor({ issue, objective, githubRepo: dedupeGithubRepo });
+			if (liveIssue == null) return null;
+			const refusal = await liveIssueClosedRefusal(c.env, { userId: session.uid, githubRepo: dedupeGithubRepo, repoId: dedupeRepoId ?? "", issue: liveIssue });
+			return refusal ? c.json({ error: refusal.error, reason: refusal.reason, startState: "not_started", ...(refusal.detail ?? {}) }, 409) : null;
+		};
 		// Queued behind an earlier objective that is waiting out a timed backoff (#1388): do not start ahead of it. Objectives queued in
 		// order (#507 → #508 → #509) depend on each other, and a runner that briefly missed a ping must not reorder them.
 		if (driver.id === "coding" && body.queueIfBusy === true && body.queuePosition !== "next") {
 			const ahead = await backingOffAhead(c.env, instanceId, dedupeRepoId ?? null);
 			if (ahead) {
+				const closed = await refuseIfLinkedIssueClosed();
+				if (closed) return closed;
 				const blocked = `An earlier queued objective is waiting to retry (${ahead.deferReason ?? "deferred"}, in ${Math.max(1, Math.ceil((ahead.nextRetryAt - Date.now()) / 60_000))} min), so this one is queued behind it to keep the order. Reorder the queue to change that.`;
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dedupeRepoId, objective, issue });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked }, 202);
@@ -1380,6 +1397,8 @@ toolRoutes.post("/:id/loop", async (c) => {
 			// holding a closed run's unfinished work (#984) and a machine that is away (#1161) can.
 			// The drain opens its own budget; this unspent pool is not reused.
 			if (body.queueIfBusy === true && startRefusalIsWaitable(started.reason)) {
+				const closed = await refuseIfLinkedIssueClosed();
+				if (closed) return closed;
 				// Same issue already waiting or running on this repo (#925): hand THAT back, not a second entry.
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dedupeRepoId, objective, issue });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);

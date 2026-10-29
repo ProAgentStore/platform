@@ -24,7 +24,9 @@ import { sanitizeMaxIterations } from "./agent-loop.js";
 import { clampIterations } from "./loop-limits.js";
 import { readLoopLimits } from "./loop-limits-store.js";
 import { openBudget, resolveAccountCeilings } from "./delegation-budget-store.js";
+import { deepLinkFor } from "./console-links.js";
 import { logError } from "./error-log.js";
+import { notifyUser } from "../routes/push.js";
 import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { dequeueNext, failOfflineEntry, finishQueueEntry, requeueEntry } from "./objective-queue.js";
 import { offlineWaitExpired, offlineWaitSentence, QUEUE_OFFLINE_MAX_MS } from "./objective-queue-offline.js";
@@ -183,6 +185,22 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		await finishQueueEntry(env, entry.id, "failed", started.error);
 		await recordLifecycle(env, { ...lifecycleOf(entry), event: "admission_failed", reason: started.error });
 		await recordDrainRefusal(env, entry, repoId, started.reason, started.error); // #1336: an attempt with no run, unless it was the start guard
+		// #1404: the one admission failure that is INVISIBLE otherwise — the issue closed between the
+		// request being queued (its cache read clean) and the queue draining, and the owner was told
+		// nothing; `recent_instances`/`fleet_snapshot` learn of it from the failed queue row itself
+		// (`instance-activity.ts`, `fleet-snapshot.ts`), but neither pushes, so a notification is the
+		// only timely signal.
+		if (started.reason === "issue_closed") {
+			await notifyUser(
+				env,
+				owner,
+				"coding",
+				"⚠️ Queued run could not start — issue closed",
+				started.error,
+				deepLinkFor({ kind: "coding-tab", instanceId }),
+				{ kind: "alert", instanceId, key: `admission-failed:${entry.id}` },
+			).catch(() => undefined);
+		}
 		return { drained: true, entryId: entry.id, started: false, requeued: false, error: started.error };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);

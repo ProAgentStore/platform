@@ -64,7 +64,7 @@ describe("composeInstanceActivity", () => {
 
 	it("gives an instance with only a queue entry idle health and its depth", () => {
 		const [rec] = composeInstanceActivity([], new Map([["b", 3]]), NOW);
-		expect(rec).toEqual({ instanceId: "b", health: "idle", queueDepth: 3, lastOutcome: null });
+		expect(rec).toEqual({ instanceId: "b", health: "idle", queueDepth: 3, lastOutcome: null, lastAdmissionFailure: null });
 	});
 
 	it("defaults queueDepth to 0 for an instance that never queues", () => {
@@ -124,5 +124,34 @@ describe("composeInstanceActivity", () => {
 		const out = composeInstanceActivity([run({ instanceId: "a" })], new Map([["a", 4]]), NOW);
 		expect(out).toHaveLength(1);
 		expect(out[0]).toMatchObject({ instanceId: "a", health: "working", queueDepth: 4 });
+	});
+
+	describe("lastAdmissionFailure (#1404)", () => {
+		const failure = (over: Partial<{ queueEntryId: string; reason: string | null; objective: string; failedAt: number }> = {}) => ({
+			queueEntryId: "objq-1",
+			reason: "Issue #9 is closed on GitHub.",
+			objective: "fix #9",
+			failedAt: NOW - MIN,
+			...over,
+		});
+
+		it("is the only signal for an instance that never became a run and never had a queue depth — otherwise plain idle", () => {
+			// The exact gap the issue reports: a closed-while-queued objective left `pending` the
+			// moment it failed (depth 0) and never got a run row (no `lastOutcome`), so without this
+			// the instance was indistinguishable from one that was simply never used.
+			const [rec] = composeInstanceActivity([], new Map(), NOW, new Map([["a", failure()]]));
+			expect(rec).toMatchObject({ instanceId: "a", health: "idle", queueDepth: 0, lastOutcome: null, lastAdmissionFailure: failure() });
+		});
+
+		it("defaults to null when nothing failed admission", () => {
+			const [rec] = composeInstanceActivity([run({ instanceId: "a" })], new Map(), NOW);
+			expect(rec.lastAdmissionFailure).toBeNull();
+		});
+
+		it("merges onto the same record as a run or queue entry on that instance, not a separate row", () => {
+			const out = composeInstanceActivity([run({ instanceId: "a" })], new Map([["a", 2]]), NOW, new Map([["a", failure()]]));
+			expect(out).toHaveLength(1);
+			expect(out[0]).toMatchObject({ instanceId: "a", queueDepth: 2, lastAdmissionFailure: failure() });
+		});
 	});
 });

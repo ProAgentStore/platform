@@ -233,6 +233,32 @@ describe("instance tags (#961)", () => {
 	});
 });
 
+/**
+ * #1404: "the repo freed up, admission failed: Issue #1249 is closed on GitHub. ... No notification
+ * reached the owner. The fleet-wide router migration was believed to be running for hours when it
+ * never started." A queue entry own `beforeEach`-free, own tag — it must not perturb the exact-match
+ * status maps the `store` tag's tests above hold.
+ */
+describe("GET /my/snapshot — a recent admission failure, not plain idle (#1404)", () => {
+	it("reports hard_blocked naming the failure for an instance with no run and no queue depth", async () => {
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-admfail', 'ag', 'u1', 'active', '${JSON.stringify({ displayName: "i-admfail", tags: ["admfail"] })}')`);
+		d1.exec(
+			`INSERT INTO instance_objective_queue (id, instance_id, user_id, objective, status, stop_reason, created_at, finished_at)
+			 VALUES ('objq-1404', 'i-admfail', 'u1', 'Implement GitHub issue #1249', 'failed', 'Issue #1249 is closed on GitHub. Pass force: true with force_reason to start it anyway.', ${now - 60_000}, ${now - 1000})`,
+		);
+		const { body } = await call("/v1/instances/my/snapshot?tag=admfail");
+		const rows = body.instances as Array<Snap & { admissionFailure: { reason: string; failedAt: number } | null; queueDepth: number }>;
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			instanceId: "i-admfail",
+			status: "hard_blocked",
+			reason: expect.stringContaining("Issue #1249 is closed on GitHub"),
+			queueDepth: 0,
+			admissionFailure: { reason: "Issue #1249 is closed on GitHub. Pass force: true with force_reason to start it anyway.", failedAt: now - 1000 },
+		});
+	});
+});
+
 describe("my/instances names a Gmail Scout by source_mode, never by its Gmail tools (#1115)", () => {
 	it("agent or instance source_mode gmail lists sourceMode; the Runner with the same Gmail reads does not", async () => {
 		const tools = { capabilities: { runtime: "local_apply", tools: ["gmail_search", "gmail_read_message"] } };

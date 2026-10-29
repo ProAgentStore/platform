@@ -63,12 +63,22 @@ export interface LastOutcome {
 	lastAliveAt: number | null;
 }
 
+/** A queued objective that never became a run (#1404) — no `run_id`, so it is not a {@link LastOutcome}. */
+export interface AdmissionFailureOutcome {
+	queueEntryId: string;
+	reason: string | null;
+	objective: string;
+	failedAt: number;
+}
+
 export interface InstanceActivity {
 	instanceId: string;
 	health: InstanceHealth;
 	/** Objectives parked behind this instance. 0 for every agent type that never queues. */
 	queueDepth: number;
 	lastOutcome: LastOutcome | null;
+	/** The newest queued objective the drain could not start, within the same lookback as `lastOutcome`. */
+	lastAdmissionFailure: AdmissionFailureOutcome | null;
 }
 
 /** `runHealth`'s four states, collapsed to the instance's. The ONLY judgement in this module. */
@@ -93,6 +103,7 @@ export function composeInstanceActivity(
 	runs: readonly ActivityRunRow[],
 	queueDepths: ReadonlyMap<string, number>,
 	now: number,
+	admissionFailures: ReadonlyMap<string, AdmissionFailureOutcome> = new Map(),
 ): InstanceActivity[] {
 	const byInstance = new Map<string, ActivityRunRow>();
 	for (const run of runs) {
@@ -102,7 +113,7 @@ export function composeInstanceActivity(
 		if (!seen || run.startedAt > seen.startedAt) byInstance.set(run.instanceId, run);
 	}
 
-	const ids = new Set<string>([...byInstance.keys(), ...queueDepths.keys()]);
+	const ids = new Set<string>([...byInstance.keys(), ...queueDepths.keys(), ...admissionFailures.keys()]);
 	const out: InstanceActivity[] = [];
 	for (const instanceId of [...ids].sort()) {
 		const run = byInstance.get(instanceId) ?? null;
@@ -120,6 +131,7 @@ export function composeInstanceActivity(
 						lastAliveAt: run.lastAliveAt ?? null,
 					}
 				: null,
+			lastAdmissionFailure: admissionFailures.get(instanceId) ?? null,
 		});
 	}
 	return out;
