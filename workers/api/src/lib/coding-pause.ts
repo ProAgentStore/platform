@@ -84,6 +84,12 @@ export interface PauseDeps {
 	 * actually parks on a transient provider failure ever looks it up. Absent: the defaults, no spread.
 	 */
 	providerRetry?: () => Promise<{ policy: ProviderRetryPolicy; seed?: string }>;
+	/**
+	 * Switch THIS session to another model and restart its engine on it (#1392): the model is rewritten in the session's stored launch command, the engine
+	 * is ended and started again, and the original command is remembered so teardown can put it back. `ok: false` says why it could not — the engine's
+	 * command takes no model flag, the session already runs that model, the restart failed — and nothing was changed. Absent: no fallback is possible.
+	 */
+	switchModel?: (model: string) => Promise<{ ok: true; from: string | null } | { ok: false; why: string }>;
 	/** Write one structured provider-retry fact to the run's durable trace (#1391). Absent: nothing is recorded (a test, an old caller). */
 	trace?: (name: string, message: string, data: Record<string, unknown>) => Promise<void>;
 	/** Repo label, for the notification body. */
@@ -247,7 +253,7 @@ function asQuestionWait(v: unknown): QuestionWait | null {
 export const BRAIN_WAIT_POLL_MS = 60_000;
 
 export type PauseVerdict =
-	| { resume: true; userHint?: string; resumeNote?: string; ownerTurn?: boolean; /** The owner's answer as given (#1236). */ answer?: string; /** #1236: steps the owner granted for the next round. */ grantSteps?: number }
+	| { resume: true; /** The run switched to its configured fallback model (#1392): the workflow tells the turn reducer so a recovery is recorded as one. */ fallbackModel?: string; userHint?: string; resumeNote?: string; ownerTurn?: boolean; /** The owner's answer as given (#1236). */ answer?: string; /** #1236: steps the owner granted for the next round. */ grantSteps?: number }
 	| { resume: false; result: CodingResult; stopReason?: LoopStopReason };
 
 /**
@@ -582,7 +588,10 @@ async function waitForEngineReset(
 	// waits it ends as a continuable engine error saying so — not as "the CLI's usage limit", which it never was.
 	const transient = result.waitKind === "transient";
 	const now = deps.stamp ? await deps.stamp(`ewait-${round}-at`) : deps.now();
-	const retry = transient && deps.providerRetry ? await deps.providerRetry() : undefined;
+	const configured = transient && deps.providerRetry ? await deps.providerRetry() : undefined;
+	// The fallback model's retries get their OWN spread (#1392): the same run and attempt number would otherwise wake at the same instants as the first
+	// model's did.
+	const retry = configured && state.fallback ? { ...configured, seed: configured.seed ? `${configured.seed}:fallback` : undefined } : configured;
 	const plan = transient ? planTransientWait(state, now, retry) : planEngineWait({ resetsAt: result.waitUntil, resetHint: result.resetHint, now, state, timeZone: deps.timeZone });
 	const err = result.providerError;
 	if (!plan.wait) {
@@ -590,19 +599,55 @@ async function waitForEngineReset(
 			// Out of attempts (#1391): the ending says what was tried — every wait, in order — and quotes the provider's own words in full, and the
 			// same facts are written to the run's durable trace, where the 2,000-character run detail cannot cut them.
 			const taken = state.transientWaits ?? 0;
-			const waits = retrySchedule(retry?.policy ?? { attempts: taken, baseMs: 0, maxMs: 0, jitter: 0 }, retry?.seed).slice(0, taken);
-			const history = waits.length ? ` after ${waits.length} retr${waits.length === 1 ? "y" : "ies"} (waits: ${waits.map(sayWait).join(", ")})` : "";
-			const head = `The coding CLI's AI provider${err ? ` (${err.provider})` : ""} kept failing${history}, so the run stopped instead of waiting longer.`;
+			const waits = retrySchedule(retry?.policy ?? { attempts: taken, baseMs: 0, maxMs: 0, jitter: 0, fallbackModel: null }, retry?.seed).slice(0, taken);
 			const text = (err?.text ?? result.detail ?? "").trim();
-			await deps.trace?.("provider_retry_exhausted", `${head} ${plan.why}.`, { attempts: retry?.policy.attempts ?? taken, taken, waitsMs: waits, stopReason: "engine_error", ...(err ? { rule: err.rule, kind: err.kind, provider: err.provider, exitCode: err.exitCode } : {}), error: text });
-			return { resume: false, result: { ...result, outcome: "engine_error", detail: `${head}${text ? ` Its last output, in full:\n${text}` : ""}` } };
+			const errFacts = err ? { rule: err.rule, kind: err.kind, provider: err.provider, exitCode: err.exitCode } : {};
+
+			// THE FALLBACK (#1392): once, only when the owner configured a model, never the platform's own pick.
+			const wanted = state.fallback ? null : (configured?.policy.fallbackModel ?? null);
+			let unavailable: string | null = null;
+			if (wanted) {
+				const switched = deps.switchModel ? await deps.switchModel(wanted) : ({ ok: false, why: "this run cannot switch models" } as const);
+				if (switched.ok) {
+					state.fallback = { from: switched.from, to: wanted, at: now, taken, waitsMs: waits, error: clipMarked(text, 800, { keep: "tail" }) };
+					state.transientWaits = 0; // the fallback model gets its own full ladder
+					await deps.trace?.("provider_fallback_attempt", `Retries on ${switched.from ?? "the default model"} are spent (${taken} of ${configured?.policy.attempts ?? taken}); trying the configured fallback ${wanted}.`, {
+						attempt: 0, from: switched.from, to: wanted, afterRetries: taken, waitsMs: waits, at: now, ...errFacts, error: text,
+					});
+					await deps.announce(`🔁 **Switching model** on ${deps.repo}: ${switched.from ?? "the default model"} kept failing at ${err?.provider ?? "the provider"} after ${taken} retries, so this session now runs your configured fallback **${wanted}** and the instruction is resent. It goes back to ${switched.from ?? "the default model"} when the run ends.`);
+					return { resume: true, fallbackModel: wanted, resumeNote: `The platform switched this session's engine from ${switched.from ?? "its default model"} to ${wanted} — the fallback the owner configured — because ${err?.provider ?? "the provider"} kept failing on the first after ${taken} retries. It is the same session and the same working tree. Send your last instruction again. The switch is undone when this run ends.` };
+				}
+				unavailable = switched.why;
+				await deps.trace?.("provider_fallback_unavailable", `The configured fallback ${wanted} could not be used: ${unavailable}.`, { attempt: 0, to: wanted, why: unavailable, ...errFacts });
+			}
+
+			const fb = state.fallback;
+			const say = (n: number, w: number[]) => `${n} retr${n === 1 ? "y" : "ies"}${w.length ? ` (waits: ${w.map(sayWait).join(", ")})` : ""}`;
+			const chain = fb
+				? ` The attempts, in order: (1) ${fb.from ?? "the default model"} — ${say(fb.taken, fb.waitsMs)}, then the session was switched to the configured fallback; (2) ${fb.to} — ${say(waits.length, waits)}.`
+				: waits.length
+					? ` after ${say(waits.length, waits)}`
+					: "";
+			const fallbackNote = unavailable ? ` A fallback model (${wanted}) was configured but could not be used: ${unavailable}.` : "";
+			const head = fb
+				? `The coding CLI's AI provider${err ? ` (${err.provider})` : ""} kept failing on every model it was given, so the run stopped.${chain}`
+				: `The coding CLI's AI provider${err ? ` (${err.provider})` : ""} kept failing${chain}, so the run stopped instead of waiting longer.${fallbackNote}`;
+			const lastOutput = text ? `${fb ? ` The last output, from ${fb.to}, in full:` : " Its last output, in full:"}\n${text}` : "";
+			const firstOutput = fb?.error ? `\nThe first model (${fb.from ?? "the default model"}) last said:\n${fb.error}` : "";
+			await deps.trace?.("provider_retry_exhausted", `${head} ${plan.why}.`, {
+				attempts: retry?.policy.attempts ?? taken, taken, waitsMs: waits, stopReason: "engine_error", ...errFacts, error: text,
+				...(fb ? { chain: [{ model: fb.from, retries: fb.taken, waitsMs: fb.waitsMs, error: fb.error }, { model: fb.to, retries: taken, waitsMs: waits, error: clipMarked(text, 800, { keep: "tail" }) }] } : {}),
+			});
+			if (fb) await deps.trace?.("provider_fallback_outcome", `The fallback ${fb.to} also kept failing; the run stopped.`, { attempt: 0, model: fb.to, outcome: "failed", retries: taken });
+			return { resume: false, result: { ...result, outcome: "engine_error", detail: `${head}${lastOutput}${firstOutput}` } };
 		}
 		return { resume: false, result: { ...result, detail: engineWaitExhausted(result.detail, plan.why) } };
 	}
 	if (transient) {
 		const attempt = (state.transientWaits ?? 0) + 1;
 		const of = retry?.policy.attempts ?? attempt;
-		await deps.trace?.("provider_retry_scheduled", `Retry ${attempt} of ${of} in ${sayWait(plan.ms)} (${err?.provider ?? "provider"}).`, { attempt, of, waitMs: plan.ms, nextAttemptAt: plan.until, ...(err ? { rule: err.rule, kind: err.kind, provider: err.provider, exitCode: err.exitCode, error: err.text } : {}) });
+		const on = state.fallback ? ` on ${state.fallback.to}` : "";
+		await deps.trace?.("provider_retry_scheduled", `Retry ${attempt} of ${of}${on} in ${sayWait(plan.ms)} (${err?.provider ?? "provider"}).`, { attempt, of, waitMs: plan.ms, nextAttemptAt: plan.until, ...(state.fallback ? { model: state.fallback.to } : {}), ...(err ? { rule: err.rule, kind: err.kind, provider: err.provider, exitCode: err.exitCode, error: err.text } : {}) });
 	}
 
 	await deps.announce(enginePauseMessage(plan, result.detail ?? "", deps.timeZone));
@@ -630,7 +675,7 @@ async function waitForEngineReset(
 
 	if (transient) {
 		state.transientWaits = (state.transientWaits ?? 0) + 1;
-		await deps.trace?.("provider_retry_attempt", `Retry ${state.transientWaits} of ${retry?.policy.attempts ?? state.transientWaits}: resending after ${sayWait(plan.ms)}.`, { attempt: state.transientWaits, of: retry?.policy.attempts ?? state.transientWaits, waitedMs: plan.ms });
+		await deps.trace?.("provider_retry_attempt", `Retry ${state.transientWaits} of ${retry?.policy.attempts ?? state.transientWaits}: resending after ${sayWait(plan.ms)}.`, { attempt: state.transientWaits, of: retry?.policy.attempts ?? state.transientWaits, waitedMs: plan.ms, ...(state.fallback ? { model: state.fallback.to } : {}) });
 	} else {
 		state.waits += 1;
 		state.spentMs += plan.ms;

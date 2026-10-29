@@ -1408,6 +1408,16 @@ components:
         baseMs: { type: integer, minimum: 5000, maximum: 600000, description: "The first wait in ms; each next one doubles (default 120000)." }
         maxMs: { type: integer, minimum: 5000, maximum: 3600000, description: "No wait is longer than this, jitter included (default 900000)." }
         jitter: { type: number, minimum: 0, maximum: 0.5, description: "The spread either side of each wait, as a fraction (default 0.2). Fixed per run, so a replay agrees with itself." }
+        fallbackModel:
+          type: string
+          nullable: true
+          maxLength: 100
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]*$'
+          description: >
+            OPT-IN (#1392): a model id to try ONCE when every attempt on the first model is spent. Only ever a model the owner names here — the platform never
+            picks one. The session is switched to it and its engine restarted for that run only, and put back when the run ends. `null` or absent: no fallback
+            (the default). A malformed value is a 400, not a quiet no-op. Because the object replaces the stored policy, omitting it when changing another
+            field turns the fallback off.
 
     LoopLimits:
       type: object

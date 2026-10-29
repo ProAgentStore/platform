@@ -493,6 +493,17 @@ export async function getLastFinishedSessionForRepo(
 	};
 }
 
+/**
+ * Replace the command a session relaunches its engine with (#1392). The only caller is the model fallback, which rewrites the model flag for one run and puts
+ * the original back; the session's other fields are untouched. Returns whether a row changed.
+ */
+export async function setSessionLaunchCommand(env: Env, instanceId: string, userId: string, sessionId: string, command: string): Promise<boolean> {
+	const r = await env.DB.prepare("UPDATE coding_sessions SET launch_command = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(sessionId, instanceId, userId, command)
+		.run();
+	return (r.meta?.changes ?? 0) > 0;
+}
+
 export async function getSession(env: Env, instanceId: string, userId: string, sessionId: string): Promise<CodingSessionRecord | null> {
 	const row = await env.DB.prepare(
 		"SELECT * FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",

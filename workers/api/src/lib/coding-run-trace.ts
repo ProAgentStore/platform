@@ -66,6 +66,14 @@ export type CodingRunEvent =
 	| "coding.run.provider_retry_attempt"
 	/** The attempts ran out: the final status, every wait served, and the provider's whole error (#1391). */
 	| "coding.run.provider_retry_exhausted"
+	/** Retries on the first model are spent and the owner's configured fallback model is being tried: from, to, after how many retries, the error (#1392). */
+	| "coding.run.provider_fallback_attempt"
+	/** A fallback was configured and could not be used, and why — the model flag is missing, it is already running it, the restart failed (#1392). */
+	| "coding.run.provider_fallback_unavailable"
+	/** How the fallback ended: `recovered` (a turn worked on it) or `failed` (it kept failing too) (#1392). */
+	| "coding.run.provider_fallback_outcome"
+	/** The run ended and the session's original model was put back, so no later run inherits the fallback (#1392). */
+	| "coding.run.provider_fallback_restored"
 	/** The run reached a terminal state. Carries the outcome and the stop reason. */
 	| "coding.run.end";
 

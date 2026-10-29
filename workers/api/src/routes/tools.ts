@@ -67,7 +67,7 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
 import { clampIterations, effectiveMaxObjectiveChars, MAX_CONFIGURABLE_ITERATIONS, objectiveCapView, objectiveTooLong } from "../lib/loop-limits.js";
 import { readLoopLimits, writeLoopLimits } from "../lib/loop-limits-store.js";
-import { providerRetryView } from "../lib/provider-retry.js";
+import { fallbackModelProblem, providerRetryView } from "../lib/provider-retry.js";
 import { listQuestionDecisions, parseQuestionsPolicy } from "../lib/question-policy.js";
 import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
@@ -1456,7 +1456,12 @@ toolRoutes.put("/:id/loop-limits", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as { minIterations?: unknown; maxIterations?: unknown; maxObjectiveChars?: unknown; questions?: unknown; providerRetry?: unknown };
 	// The provider-retry policy (#1391) is an object of numbers or `null` (back to the defaults); anything else is a 400, not a quiet "no change".
 	if ("providerRetry" in body && body.providerRetry !== null && (typeof body.providerRetry !== "object" || Array.isArray(body.providerRetry))) {
-		throw new HttpError(400, "providerRetry must be an object ({ attempts, baseMs, maxMs, jitter }) or null");
+		throw new HttpError(400, "providerRetry must be an object ({ attempts, baseMs, maxMs, jitter, fallbackModel }) or null");
+	}
+	// The fallback model (#1392) is the one field a typo must not quietly lose: refused, not dropped.
+	if (body.providerRetry && typeof body.providerRetry === "object" && "fallbackModel" in body.providerRetry) {
+		const problem = fallbackModelProblem((body.providerRetry as Record<string, unknown>).fallbackModel);
+		if (problem) throw new HttpError(400, problem);
 	}
 	// An unrecognised value is a 400, not a quiet "no change": this setting decides whether runs may go unattended (#1385).
 	if ("questions" in body) {

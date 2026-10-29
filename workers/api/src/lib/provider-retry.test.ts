@@ -3,18 +3,18 @@
  * parks on it is replayed — the same instant every time it is computed for the same run.
  */
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PROVIDER_RETRY, PROVIDER_RETRY_BOUNDS, providerRetryView, resolveProviderRetry, retryDelayMs, retrySchedule, sanitizeProviderRetry, sayWait } from "./provider-retry.js";
+import { DEFAULT_PROVIDER_RETRY, fallbackModelProblem, PROVIDER_RETRY_BOUNDS, providerRetryView, resolveProviderRetry, retryDelayMs, retrySchedule, sanitizeProviderRetry, sayWait } from "./provider-retry.js";
 
 describe("the defaults", () => {
 	it("are four waits — 2, 4, 8 then the 15-minute ceiling — spread 20% (the issue asks for 3-5 attempts)", () => {
-		expect(DEFAULT_PROVIDER_RETRY).toEqual({ attempts: 4, baseMs: 120_000, maxMs: 900_000, jitter: 0.2 });
+		expect(DEFAULT_PROVIDER_RETRY).toEqual({ attempts: 4, baseMs: 120_000, maxMs: 900_000, jitter: 0.2, fallbackModel: null });
 		expect(retrySchedule(DEFAULT_PROVIDER_RETRY)).toEqual([120_000, 240_000, 480_000, 900_000]);
 	});
 });
 
 describe("sanitizeProviderRetry — what an owner may set", () => {
 	it("keeps the recognised numeric fields and nothing else", () => {
-		expect(sanitizeProviderRetry({ attempts: 5, baseMs: 30_000, maxMs: 600_000, jitter: 0.1, fallbackModel: "gpt-x", extra: 1 })).toEqual({ attempts: 5, baseMs: 30_000, maxMs: 600_000, jitter: 0.1 });
+		expect(sanitizeProviderRetry({ attempts: 5, baseMs: 30_000, maxMs: 600_000, jitter: 0.1, fallbackModel: "gpt-x", extra: 1 })).toEqual({ attempts: 5, baseMs: 30_000, maxMs: 600_000, jitter: 0.1, fallbackModel: "gpt-x" });
 	});
 
 	it("clamps each field to its bound instead of refusing", () => {
@@ -59,7 +59,7 @@ describe("resolveProviderRetry — the policy a run uses", () => {
 });
 
 describe("retryDelayMs — exponential, capped, spread, deterministic", () => {
-	const policy = { attempts: 6, baseMs: 60_000, maxMs: 600_000, jitter: 0.25 };
+	const policy = { attempts: 6, baseMs: 60_000, maxMs: 600_000, jitter: 0.25, fallbackModel: null };
 
 	it("doubles per wait and stops at the ceiling (no seed: the exact backoff)", () => {
 		expect([0, 1, 2, 3, 4, 5].map((i) => retryDelayMs(i, policy))).toEqual([60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);
@@ -98,14 +98,14 @@ describe("retryDelayMs — exponential, capped, spread, deterministic", () => {
 	});
 
 	it("is never shorter than a second", () => {
-		expect(retryDelayMs(0, { attempts: 1, baseMs: 5_000, maxMs: 5_000, jitter: 0.5 }, "x")).toBeGreaterThanOrEqual(1_000);
+		expect(retryDelayMs(0, { attempts: 1, baseMs: 5_000, maxMs: 5_000, jitter: 0.5, fallbackModel: null }, "x")).toBeGreaterThanOrEqual(1_000);
 	});
 });
 
 describe("retrySchedule and sayWait", () => {
 	it("lists one wait per attempt", () => {
-		expect(retrySchedule({ attempts: 3, baseMs: 60_000, maxMs: 900_000, jitter: 0 })).toEqual([60_000, 120_000, 240_000]);
-		expect(retrySchedule({ attempts: 3, baseMs: 60_000, maxMs: 900_000, jitter: 0.2 }, "run-1")).toHaveLength(3);
+		expect(retrySchedule({ attempts: 3, baseMs: 60_000, maxMs: 900_000, jitter: 0, fallbackModel: null })).toEqual([60_000, 120_000, 240_000]);
+		expect(retrySchedule({ attempts: 3, baseMs: 60_000, maxMs: 900_000, jitter: 0.2, fallbackModel: null }, "run-1")).toHaveLength(3);
 	});
 
 	it("says a wait the way a person would", () => {
@@ -119,5 +119,33 @@ describe("providerRetryView — what the limits routes read back", () => {
 	it("is the effective policy with the waits it serves; the defaults when nothing is set", () => {
 		expect(providerRetryView({})).toEqual({ effectiveProviderRetry: { ...DEFAULT_PROVIDER_RETRY, scheduleMs: [120_000, 240_000, 480_000, 900_000] } });
 		expect(providerRetryView({ providerRetry: { attempts: 2, baseMs: 30_000 } }).effectiveProviderRetry).toMatchObject({ attempts: 2, baseMs: 30_000, scheduleMs: [30_000, 60_000] });
+	});
+});
+
+describe("the fallback model is opt-in and only ever what the owner wrote (#1392)", () => {
+	it("is OFF by default: no model, not even in the policy a run resolves", () => {
+		expect(DEFAULT_PROVIDER_RETRY.fallbackModel).toBeNull();
+		expect(resolveProviderRetry(null).fallbackModel).toBeNull();
+		expect(resolveProviderRetry({ attempts: 5 }).fallbackModel).toBeNull();
+		expect(providerRetryView({}).effectiveProviderRetry.fallbackModel).toBeNull();
+	});
+
+	it("keeps a real model id and nothing else — a typo cannot become a fragment of a command line", () => {
+		expect(sanitizeProviderRetry({ fallbackModel: "gpt-5.1-codex-mini" })).toEqual({ fallbackModel: "gpt-5.1-codex-mini" });
+		expect(sanitizeProviderRetry({ fallbackModel: "claude-opus-5[1m]" })).toEqual({ fallbackModel: "claude-opus-5[1m]" });
+		for (const bad of ["", " ", "gpt 5", "gpt-5 --dangerously", "a;b", "$(id)", '"x"', "x".repeat(101), 5, true, null, [], {}]) {
+			expect(sanitizeProviderRetry({ fallbackModel: bad }), JSON.stringify(bad)).toEqual({});
+		}
+	});
+
+	it("reaches the resolved policy and the read-back view", () => {
+		expect(resolveProviderRetry({ fallbackModel: "gpt-x" }).fallbackModel).toBe("gpt-x");
+		expect(providerRetryView({ providerRetry: { fallbackModel: "gpt-x" } }).effectiveProviderRetry).toMatchObject({ fallbackModel: "gpt-x", attempts: 4 });
+	});
+
+	it("fallbackModelProblem names what is wrong with a value, and accepts null (no fallback)", () => {
+		expect(fallbackModelProblem(null)).toBeNull();
+		expect(fallbackModelProblem("gpt-x")).toBeNull();
+		for (const bad of ["gpt x", "", 7, undefined, "$(rm -rf /)"]) expect(fallbackModelProblem(bad), String(bad)).toMatch(/fallbackModel must be a model id/);
 	});
 });

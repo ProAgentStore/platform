@@ -42,7 +42,7 @@ describe("the policy a run on this instance will use (#1391)", () => {
 	it("with nothing set, the defaults — four waits of 2, 4, 8 and 15 minutes, ±20% — are what is reported", async () => {
 		const r = await get();
 		expect(r.body.limits).toEqual({});
-		expect(r.body.effectiveProviderRetry).toEqual({ attempts: 4, baseMs: 120_000, maxMs: 900_000, jitter: 0.2, scheduleMs: [120_000, 240_000, 480_000, 900_000] });
+		expect(r.body.effectiveProviderRetry).toEqual({ attempts: 4, baseMs: 120_000, maxMs: 900_000, jitter: 0.2, fallbackModel: null, scheduleMs: [120_000, 240_000, 480_000, 900_000] });
 	});
 
 	it("stores what the owner sets, merges it over the defaults, and reads it back as both the setting and the effective policy", async () => {
@@ -87,5 +87,47 @@ describe("the policy a run on this instance will use (#1391)", () => {
 
 	it("another account's instance is not found, and nothing is written to it", async () => {
 		expect((await call("PUT", "/v1/instances/x1/loop-limits", { providerRetry: { attempts: 3 } })).status).toBe(404);
+	});
+});
+
+describe("the fallback model (#1392)", () => {
+	it("is off by default, and the effective policy says so", async () => {
+		expect((await get()).body.effectiveProviderRetry.fallbackModel).toBeNull();
+	});
+
+	it("is stored when the owner names one, and read back as the setting and the effective policy", async () => {
+		const r = await put({ providerRetry: { attempts: 3, fallbackModel: "gpt-5.1-codex-mini" } });
+		expect(r.status).toBe(200);
+		expect(r.body.limits.providerRetry).toEqual({ attempts: 3, fallbackModel: "gpt-5.1-codex-mini" });
+		expect(r.body.effectiveProviderRetry).toMatchObject({ attempts: 3, fallbackModel: "gpt-5.1-codex-mini" });
+		expect((await get()).body.effectiveProviderRetry.fallbackModel).toBe("gpt-5.1-codex-mini");
+	});
+
+	it.each([["a space", "gpt 5"], ["a flag smuggled in", "gpt-5 --dangerously-skip-permissions"], ["a shell fragment", "$(id)"], ["a number", 5], ["empty", ""], ["too long", "x".repeat(101)]])("a bad model id is REFUSED (400), not quietly dropped — %s", async (_n, fallbackModel) => {
+		const r = await put({ providerRetry: { attempts: 3, fallbackModel } });
+		expect(r.status).toBe(400);
+		expect(r.body.error).toMatch(/fallbackModel must be a model id/);
+		expect((await get()).body.limits).toEqual({}); // nothing was saved
+	});
+
+	it("`fallbackModel: null` inside the object means no fallback, and saves the rest", async () => {
+		const r = await put({ providerRetry: { attempts: 2, fallbackModel: null } });
+		expect(r.status).toBe(200);
+		expect(r.body.limits.providerRetry).toEqual({ attempts: 2 });
+		expect(r.body.effectiveProviderRetry.fallbackModel).toBeNull();
+	});
+
+	it("the object REPLACES the stored policy, so changing another field without repeating the fallback turns the fallback OFF — the safe direction", async () => {
+		await put({ providerRetry: { attempts: 3, fallbackModel: "gpt-x" } });
+		const r = await put({ providerRetry: { attempts: 5 } });
+		expect(r.body.limits.providerRetry).toEqual({ attempts: 5 });
+		expect(r.body.effectiveProviderRetry.fallbackModel).toBeNull();
+	});
+
+	it("`providerRetry: null` clears the fallback with the rest; a call about something else keeps it", async () => {
+		await put({ providerRetry: { fallbackModel: "gpt-x" } });
+		await put({ questions: "decide" });
+		expect((await get()).body.effectiveProviderRetry.fallbackModel).toBe("gpt-x");
+		expect((await put({ providerRetry: null })).body.effectiveProviderRetry.fallbackModel).toBeNull();
 	});
 });

@@ -142,6 +142,22 @@ export interface EngineWaitState {
 	spentMs: number;
 	/** Short parks taken for a provider that failed transiently (#1344) — counted apart, so they never spend the usage-limit budget. */
 	transientWaits?: number;
+	/** The run's one model fallback, once it has happened (#1392): what it left, what it switched to, and how the first model fared. Absent until then. */
+	fallback?: FallbackRecord;
+}
+
+/** The first model's whole story, kept so the run's ending can show the full chain of attempts (#1392). */
+export interface FallbackRecord {
+	/** The model the session ran before the switch; null when it ran the CLI's own default. */
+	from: string | null;
+	to: string;
+	/** When the switch happened (epoch ms, from the journalled clock). */
+	at: number;
+	/** Retries the first model got, and the waits they served. */
+	taken: number;
+	waitsMs: number[];
+	/** The first model's last output, clipped — the chain shows both models' errors. */
+	error: string;
 }
 
 /**

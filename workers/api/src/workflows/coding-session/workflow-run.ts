@@ -903,6 +903,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// The human answered the handoff — this run has an owner turn in it, so a report that
 			// says "the user chose" may well be true and is left alone (#505).
 			if (pause.ownerTurn) ownerTurns++;
+			// The run switched to its configured fallback model (#1392): the first worked turn on it is recorded as the fallback recovering.
+			if (pause.fallbackModel) turnCarry.fallbackModel = pause.fallbackModel;
 			grantedSteps = pause.grantSteps ?? null;
 			if (grantedSteps && event.payload.loopRunId) await runRetry(`grant-${round}`, () => grantRunIterations(env, event.payload.loopRunId as string, grantedSteps as number));
 			goal.userHint = pause.userHint;
@@ -1034,6 +1036,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// Sent but never confirmed read is reported as such before the run ends (#1019) — never as delivered.
 		const unconfirmed = objective?.finish();
 		if (unconfirmed) await reportObjective(unconfirmed);
+		// A run that switched to its fallback model puts the session's own back (#1392) — after the closing drain, before the session is ended, so a later run
+		// on a session that outlives this one starts on the configured model. Never allowed to fail the teardown.
+		await pauseEffects.restoreFallback({ endEngine: event.payload.sessionOpenedByRun !== true }).catch(() => undefined);
 		await step.do("end", async () => {
 			// A run closes only the session it OPENED (#271). Ending one a human opened made
 			// delegation single-use and took away a thing the user had created.

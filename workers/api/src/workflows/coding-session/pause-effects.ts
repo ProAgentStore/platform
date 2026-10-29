@@ -13,8 +13,11 @@ import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
 import { answerEventType, recordParkedWorkflow, recordParkMachine, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
 import { askAnnouncement, whyBeyond } from "../../lib/coding-ask.js";
+import { clipMarked } from "../../lib/clip-marked.js";
 import { traceCodingRun, type CodingRunEvent } from "../../lib/coding-run-trace.js";
 import { readLoopLimits } from "../../lib/loop-limits-store.js";
+import { commandEngineParts } from "../../lib/coding-command.js";
+import { modelFlagEngine, readEngineModel, writeEngineModel } from "../../lib/coding-engine-model.js";
 import { type ProviderRetryPolicy, resolveProviderRetry } from "../../lib/provider-retry.js";
 import { codingQuestionSource } from "../../lib/coding-question-source.js";
 import { postIssueComment } from "../../lib/github-issues.js";
@@ -23,7 +26,7 @@ import type { CodingGoal } from "../../lib/coding-loop.js";
 import { callRunner, getRunnerConnIgnoringLiveness, type RunnerConn } from "../../lib/runner-client.js";
 import type { RunStep } from "../../lib/runner-availability.js";
 import type { ObjectiveDelivery } from "../../lib/coding-objective-delivery.js";
-import { touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
+import { getSession, setSessionLaunchCommand, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import type { PauseDeps } from "../../lib/coding-pause.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
 import { normalizeRunnerNode } from "../../lib/runtime-nodes.js";
@@ -71,6 +74,11 @@ export interface PauseEffects {
 	deps: (round: number, wait: RunWaitReason) => PauseDeps;
 	/** The park ended: forget the question it was waiting on. */
 	clearAsk: () => void;
+	/**
+	 * Put the session's own model back after a fallback (#1392), at the end of the run. A no-op when the run never switched. With `endEngine` the runner's
+	 * engine is ended too, so the next use of a session that outlives the run relaunches on the configured model instead of inheriting the fallback.
+	 */
+	restoreFallback: (opts: { endEngine: boolean }) => Promise<void>;
 }
 
 export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
@@ -79,6 +87,9 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 	let parkedAsk: WaitingAsk | null = null;
 	/** The instance's provider-retry policy, read once per run and only when a transient park needs it (#1391). */
 	let retryPolicy: { policy: ProviderRetryPolicy; seed?: string } | null = null;
+	/** The session's launch command before the run switched its model (#1392), or null when it never did. Set from a JOURNALLED read, so a replay agrees. */
+	let originalCommand: string | null = null;
+	let switchedTo: string | null = null;
 	/** The `coder_questions` row that park's answer is read from (#1075); null for a takeover with no question. */
 	let parkedQuestionId: string | null = null;
 	/** Resume attempts on a park (#1077): each its own step, since a busy checkout is a retry, not a journalled answer. */
@@ -95,6 +106,33 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 				retryPolicy = { policy: resolveProviderRetry(stored), seed: loopRunId ?? sessionId };
 			}
 			return retryPolicy;
+		},
+		// The configured fallback (#1392): the model rewritten in the session's stored launch command, the engine ended and started on it. Every step is
+		// journalled, the command it replaces is read through a journalled step (so a replay still knows the ORIGINAL), and a failed restart puts the old
+		// command back so nothing is left half-switched.
+		switchModel: async (model) => {
+			const cmd = (await runRetry(`fallback-read-${round}`, async () => (await getSession(env, instanceId, userId, sessionId))?.launchCommand ?? null)) as string | null;
+			if (!cmd) return { ok: false, why: "the session has no recorded launch command to change" };
+			if (!modelFlagEngine(cmd)) return { ok: false, why: `the engine's command (${commandEngineParts(cmd).bin || "unknown"}) takes no --model flag` };
+			const from = readEngineModel(cmd);
+			if (from === model) return { ok: false, why: `the session already runs ${model}` };
+			const next = writeEngineModel(cmd, model);
+			if (next === cmd) return { ok: false, why: "the model could not be written into the launch command" };
+			try {
+				await runRetry(`fallback-set-${round}`, async () => {
+					await setSessionLaunchCommand(env, instanceId, userId, sessionId, next);
+					return null;
+				});
+				originalCommand ??= cmd;
+				await runRetry(`fallback-end-${round}`, () => callRunner(getConn(), "/coding/end", { sessionId }));
+				getObjective()?.replaced();
+				await runRetry(`fallback-start-${round}`, () => startOnRunner());
+			} catch (e) {
+				await setSessionLaunchCommand(env, instanceId, userId, sessionId, cmd).catch(() => undefined);
+				return { ok: false, why: `the restart on ${model} failed: ${e instanceof Error ? clipMarked(e.message, 200, { within: true }) : String(e)}` };
+			}
+			switchedTo = model;
+			return { ok: true, from };
 		},
 		// One structured fact on the run's durable trace, once however often the park replays (#1391).
 		trace: async (name, message, data) => {
@@ -235,6 +273,19 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 		deps,
 		clearAsk: () => {
 			parkedAsk = null;
+		},
+		restoreFallback: async ({ endEngine }) => {
+			if (!originalCommand) return;
+			const original = originalCommand;
+			const model = switchedTo;
+			await runRetry("fallback-restore", async () => {
+				await setSessionLaunchCommand(env, instanceId, userId, sessionId, original);
+				if (endEngine) await callRunner(getConn(), "/coding/end", { sessionId }).catch(() => undefined);
+				await traceCodingRun(env, { userId, instanceId, sessionId, runId: loopRunId ?? null, repo: goal.repo, cardId }, "coding.run.provider_fallback_restored", `The session's model was put back to ${readEngineModel(original) ?? "the default"} after the fallback ${model ?? ""}.`, {
+					attempt: 0, fallbackModel: model, restoredTo: readEngineModel(original), endedEngine: endEngine,
+				});
+				return null;
+			});
 		},
 	};
 }

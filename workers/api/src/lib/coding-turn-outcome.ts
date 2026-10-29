@@ -248,6 +248,8 @@ export interface TurnCarry {
 	 * ladder bounds one outage: three short outages hours apart used to spend it, and the fourth ended the run.
 	 */
 	okTurnSeen?: boolean;
+	/** The run is on its configured fallback model and no turn has worked on it yet (#1392). The first one that does is recorded as the fallback recovering. */
+	fallbackModel?: string;
 }
 
 /** How a snapshot's failed turn ends the run, if it does. `reauth` carries the prompt the loop words itself (#881). */
@@ -276,7 +278,14 @@ export function foldTurn(carry: TurnCarry, snap: { lastTurn?: EngineTurnReport |
 	const seen = observeTurn(carry.turns, snap.lastTurn);
 	let next: TurnCarry = { ...carry, turns: seen.streak };
 	// A NEW turn that worked ends a transient run of failures; a re-read of the same turn changes nothing.
-	if (seen.streak.lastAt !== carry.turns.lastAt && classifyTurn(snap.lastTurn) === "ok") next = { ...next, transientStreak: 0, okTurnSeen: true };
+	if (seen.streak.lastAt !== carry.turns.lastAt && classifyTurn(snap.lastTurn) === "ok") {
+		next = { ...next, transientStreak: 0, okTurnSeen: true };
+		// The first worked turn on the fallback model is its outcome (#1392): recorded once, then the carry forgets it.
+		if (carry.fallbackModel) {
+			effects.push({ event: { name: "provider_fallback_outcome", detail: `A turn worked on the fallback ${carry.fallbackModel}.`, data: { attempt: 0, model: carry.fallbackModel, outcome: "recovered" } } });
+			next = { ...next, fallbackModel: undefined };
+		}
+	}
 	if (!seen.newFailure) return { carry: next, effects, ending: null };
 
 	// A turn refused on a dead login is not one of three strikes — no instruction and no retry changes it, and only the owner signing the engine in does (#881).

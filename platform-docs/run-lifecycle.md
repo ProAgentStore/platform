@@ -118,11 +118,21 @@ against a table of provider messages (`engine-provider-error.ts`) and decides:
 - **The policy is per instance**: `PUT /v1/instances/:id/loop-limits { providerRetry: { attempts, baseMs, maxMs, jitter } }`, or `provider_retry`
   on `set_instance_loop_limits`. `GET` returns what was set and the `effectiveProviderRetry` a run will use, with its `scheduleMs`.
 
+**An opt-in model fallback (#1392).** When the owner names a `fallbackModel` in the policy, the run does not stop at the end of the attempts: it
+tries that one model, once. The model is rewritten in the session's stored launch command, the engine is ended and started on it, the instruction is
+resent, and the fallback gets its own full ladder (with its own spread). Nothing is chosen for the owner: with no `fallbackModel` — the default — the
+run ends exactly as above. If the fallback also keeps failing, the run ends `engine_error` with the whole chain: both models, every retry and wait, and
+both errors. It is not tried for a usage limit or a billing failure, and not when the engine's command takes no model flag or the session already runs
+that model: those are recorded as `provider_fallback_unavailable` with the reason, and the run ends as it would have. The switch lasts for the run: at
+the end the session's own command is put back, and a session that outlives the run has its engine ended so the next use relaunches on the configured
+model rather than inheriting the fallback. (If the workflow itself is lost before it can restore, the stored command stays on the fallback until the
+session is next restarted.)
+
 Every step is a **durable, structured event** on the run's unified trace (`agent_trace` with the run id; `coding.run.*`, 4 KB per row, kept 14
 days), never only a line in a pane: `provider_error_classified` (kind, provider, the matched rule, exit code, the error text),
 `provider_retry_decision` (resend, park, end or strike — and **why**: `first_transient_failure`, `repeated_transient`, `usage_limit`, `billing`,
 `no_rule_matched`, or `tail_not_reported` when the runner is too old to send the turn's output), `provider_retry_scheduled` (attempt n of m, the wait,
-the next attempt's time), `provider_retry_attempt`, and `provider_retry_exhausted` (the final status, the waits served, the whole error).
+the next attempt's time), `provider_retry_attempt`, and `provider_retry_exhausted` (the final status, the waits served, the whole error, and with a fallback the `chain` of both models). The fallback adds `provider_fallback_attempt` (from, to, after how many retries, the error), `provider_fallback_outcome` (`recovered` or `failed`), `provider_fallback_unavailable` and `provider_fallback_restored`.
 
 
 ## The Queue And A Runner That Goes Quiet (#1388)

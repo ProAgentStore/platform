@@ -35,7 +35,7 @@ interface Fact {
 }
 
 /** The workflow's two steps, with the park's side effects recorded. */
-function harness(over: { policy?: ProviderRetryPolicy; seed?: string; cancelAfterTicks?: number; withoutHooks?: boolean } = {}) {
+function harness(over: { policy?: ProviderRetryPolicy; seed?: string; cancelAfterTicks?: number; withoutHooks?: boolean; switchModel?: PauseDeps["switchModel"] } = {}) {
 	const facts: Fact[] = [];
 	const slept: number[] = [];
 	const announced: string[] = [];
@@ -57,6 +57,7 @@ function harness(over: { policy?: ProviderRetryPolicy; seed?: string; cancelAfte
 		},
 		reauthCompletedSince: async () => false,
 		restartEngine: async () => undefined,
+		...(over.switchModel ? { switchModel: over.switchModel } : {}),
 		...(over.withoutHooks ? {} : { providerRetry: async () => ({ policy: over.policy ?? DEFAULT_PROVIDER_RETRY, seed: over.seed }), trace: async (name: string, message: string, data: Record<string, unknown>) => void facts.push({ name, message, data }) }),
 	};
 	let carry: TurnCarry = { turns: EMPTY_STREAK, transientStreak: 0 };
@@ -81,7 +82,10 @@ function harness(over: { policy?: ProviderRetryPolicy; seed?: string; cancelAfte
 			const { kind: _kind, ...result } = folded.ending as { kind: string } & CodingResult;
 			const res = { ...result, steps: 4 } as CodingResult;
 			if (res.outcome !== "waiting") return { ending: res };
-			return { ending: res, pause: await resolvePause(deps, { round: 0, result: res, state }) };
+			const pause = await resolvePause(deps, { round: 0, result: res, state });
+			// What the workflow does with a switch to the fallback: the turn reducer is told, so a recovery on it is recorded as one.
+			if (pause.resume && pause.fallbackModel) carry = { ...carry, fallbackModel: pause.fallbackModel };
+			return { ending: res, pause };
 		},
 		next: () => ++at,
 	};
@@ -154,7 +158,7 @@ describe("a Codex turn that dies on 'Selected model is at capacity' and exits 1 
 	});
 
 	it("gives up only after the configured attempts, and then says so: engine_error, every wait served, the provider's whole error", async () => {
-		const policy: ProviderRetryPolicy = { attempts: 3, baseMs: 60_000, maxMs: 15 * 60_000, jitter: 0 };
+		const policy: ProviderRetryPolicy = { attempts: 3, baseMs: 60_000, maxMs: 15 * 60_000, jitter: 0, fallbackModel: null };
 		const h = harness({ policy });
 		let last: Awaited<ReturnType<typeof h.turn>> = { ending: null };
 		// Each cycle is a free resend, then a park; after the third wait the next park is refused.
@@ -180,7 +184,7 @@ describe("a Codex turn that dies on 'Selected model is at capacity' and exits 1 
 	});
 
 	it("never ends silently: the run is stopped with an explicit outcome, not left to the next poll", async () => {
-		const h = harness({ policy: { attempts: 1, baseMs: 60_000, maxMs: 60_000, jitter: 0 } });
+		const h = harness({ policy: { attempts: 1, baseMs: 60_000, maxMs: 60_000, jitter: 0, fallbackModel: null } });
 		await h.turn(capacityReport(h.next()));
 		await h.turn(capacityReport(h.next())); // park 1 (the only attempt)
 		await h.turn(capacityReport(h.next()));
@@ -230,7 +234,7 @@ describe("when nothing was retried, the decision says why (#1391)", () => {
 });
 
 describe("jitter spreads the waits without making them unpredictable (#1391)", () => {
-	const policy: ProviderRetryPolicy = { attempts: 3, baseMs: 120_000, maxMs: 900_000, jitter: 0.2 };
+	const policy: ProviderRetryPolicy = { attempts: 3, baseMs: 120_000, maxMs: 900_000, jitter: 0.2, fallbackModel: null };
 	const waitsFor = async (seed: string) => {
 		const h = harness({ policy, seed });
 		for (let i = 0; i < 3; i++) {
@@ -275,5 +279,142 @@ describe("a caller with no retry hooks behaves as it always did (#1391)", () => 
 			}
 		}
 		throw new Error("the run never gave up");
+	});
+});
+
+// ── #1392: the opt-in fallback model ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("the fallback model, once every attempt on the first is spent (#1392)", () => {
+	const base: ProviderRetryPolicy = { attempts: 2, baseMs: 60_000, maxMs: 15 * 60_000, jitter: 0, fallbackModel: null };
+	const withFallback: ProviderRetryPolicy = { ...base, fallbackModel: "gpt-5.1-codex-mini" };
+	/** Fail until the pause refuses or switches; returns the verdict of the park that decided. */
+	async function failUntilDecided(h: ReturnType<typeof harness>, max = 12) {
+		for (let i = 0; i < max; i++) {
+			await h.turn(capacityReport(h.next()));
+			const out = await h.turn(capacityReport(h.next()));
+			if (out.pause && (!out.pause.resume || out.pause.fallbackModel)) return out;
+		}
+		throw new Error("the pause never decided");
+	}
+	const switchOk = (calls: string[], from: string | null = "gpt-5.1-codex") => async (model: string) => {
+		calls.push(model);
+		return { ok: true as const, from };
+	};
+	const fact = (h: ReturnType<typeof harness>, name: string) => h.facts.find((f) => f.name === name);
+
+	it("is OFF unless the owner configured a model: the run ends exactly as before and the switch is never even asked for", async () => {
+		const calls: string[] = [];
+		const h = harness({ policy: base, switchModel: switchOk(calls) });
+		const out = await failUntilDecided(h);
+		expect(out.pause).toMatchObject({ resume: false, result: { outcome: "engine_error" } });
+		expect(calls).toEqual([]);
+		expect(names(h.facts).filter((n) => n.startsWith("provider_fallback"))).toEqual([]);
+		expect(out.pause && !out.pause.resume ? out.pause.result.detail : "").not.toMatch(/fallback/i);
+	});
+
+	it("when the retries are spent it switches ONCE to the configured model, resumes, and records the attempt with both models and the error", async () => {
+		const calls: string[] = [];
+		const h = harness({ policy: withFallback, switchModel: switchOk(calls) });
+		const out = await failUntilDecided(h);
+		expect(calls).toEqual(["gpt-5.1-codex-mini"]);
+		expect(out.pause).toMatchObject({ resume: true, fallbackModel: "gpt-5.1-codex-mini" });
+		const note = out.pause?.resume ? out.pause.resumeNote : "";
+		expect(note).toContain("from gpt-5.1-codex to gpt-5.1-codex-mini");
+		expect(note).toMatch(/Send your last instruction again/);
+		const attempt = fact(h, "provider_fallback_attempt");
+		expect(attempt?.data).toMatchObject({ from: "gpt-5.1-codex", to: "gpt-5.1-codex-mini", afterRetries: 2, waitsMs: [60_000, 120_000], rule: "openai (codex)/transient", exitCode: 1 });
+		expect(String(attempt?.data.error)).toContain(`[error] ${CAPACITY}`);
+		expect(typeof attempt?.data.at).toBe("number");
+		// The owner is told in the thread, not only the trace.
+		expect(h.announced.join("\n")).toMatch(/Switching model.*gpt-5\.1-codex-mini.*goes back to gpt-5\.1-codex when the run ends/s);
+		// …and it did not end the run.
+		expect(names(h.facts)).not.toContain("provider_retry_exhausted");
+	});
+
+	it("the fallback model gets its OWN full ladder, with its own spread — the first model's waits are not spent twice", async () => {
+		const h = harness({ policy: { ...withFallback, jitter: 0.2 }, seed: "run-fb", switchModel: switchOk([]) });
+		await failUntilDecided(h);
+		expect(h.state.transientWaits).toBe(0);
+		const before = h.facts.filter((f) => f.name === "provider_retry_scheduled").map((f) => f.data.waitMs as number);
+		for (let i = 0; i < 2; i++) {
+			await h.turn(capacityReport(h.next()));
+			await h.turn(capacityReport(h.next()));
+		}
+		const all = h.facts.filter((f) => f.name === "provider_retry_scheduled");
+		const onFallback = all.filter((f) => f.data.model === "gpt-5.1-codex-mini").map((f) => f.data.waitMs as number);
+		expect(onFallback).toHaveLength(2); // attempts: 2, again
+		expect(onFallback).not.toEqual(before); // a different seed, so not the same instants
+		expect(all.slice(0, 2).every((f) => f.data.model === undefined)).toBe(true); // the first model's attempts carry no model tag
+		expect(h.facts.filter((f) => f.name === "provider_retry_attempt").slice(2).every((f) => f.data.model === "gpt-5.1-codex-mini")).toBe(true);
+	});
+
+	it("a turn that works on the fallback is recorded as the fallback recovering — once", async () => {
+		const h = harness({ policy: withFallback, switchModel: switchOk([]) });
+		await failUntilDecided(h);
+		await h.turn(okReport(h.next()));
+		await h.turn(okReport(h.next()));
+		const outcomes = h.facts.filter((f) => f.name === "provider_fallback_outcome");
+		expect(outcomes).toHaveLength(1);
+		expect(outcomes[0].data).toMatchObject({ model: "gpt-5.1-codex-mini", outcome: "recovered" });
+	});
+
+	it("if the fallback ALSO keeps failing the run ends failed with the whole chain: both models, every retry, every wait, both errors", async () => {
+		const calls: string[] = [];
+		const h = harness({ policy: withFallback, switchModel: switchOk(calls) });
+		await failUntilDecided(h); // first model spent → switched
+		let last: Awaited<ReturnType<typeof h.turn>> = { ending: null };
+		for (let i = 0; i < 8 && !(last.pause && !last.pause.resume); i++) {
+			await h.turn(capacityReport(h.next()));
+			last = await h.turn(capacityReport(h.next()));
+		}
+		expect(calls).toEqual(["gpt-5.1-codex-mini"]); // switched once and never again
+		const result = last.pause && !last.pause.resume ? last.pause.result : null;
+		expect(result?.outcome).toBe("engine_error");
+		const detail = result?.detail ?? "";
+		expect(detail).toContain("kept failing on every model it was given");
+		expect(detail).toMatch(/\(1\) gpt-5\.1-codex — 2 retries \(waits: 1 min, 2 min\), then the session was switched to the configured fallback/);
+		expect(detail).toMatch(/\(2\) gpt-5\.1-codex-mini — 2 retries \(waits: 1 min, 2 min\)/);
+		expect(detail).toContain(`[codex] error: ${CAPACITY}`); // the last output, in full
+		expect(detail).toMatch(/The first model \(gpt-5\.1-codex\) last said:/);
+		const exhausted = fact(h, "provider_retry_exhausted");
+		expect(exhausted?.data.chain).toEqual([
+			{ model: "gpt-5.1-codex", retries: 2, waitsMs: [60_000, 120_000], error: expect.stringContaining(CAPACITY) },
+			{ model: "gpt-5.1-codex-mini", retries: 2, waitsMs: [60_000, 120_000], error: expect.stringContaining(CAPACITY) },
+		]);
+		expect(fact(h, "provider_fallback_outcome")?.data).toMatchObject({ model: "gpt-5.1-codex-mini", outcome: "failed", retries: 2 });
+		expect(names(h.facts).at(-1)).toBe("provider_fallback_outcome");
+	});
+
+	it.each([
+		["the engine's command takes no model flag", "the engine's command (ollama) takes no --model flag"],
+		["the session already runs it", "the session already runs gpt-5.1-codex-mini"],
+		["the restart failed", "the restart on gpt-5.1-codex-mini failed: relay dropped"],
+	])("when the switch cannot be made (%s) nothing changes, the reason is recorded and the run ends with it said", async (_name, why) => {
+		const calls: string[] = [];
+		const h = harness({ policy: withFallback, switchModel: async (m) => {
+			calls.push(m);
+			return { ok: false as const, why };
+		} });
+		const out = await failUntilDecided(h);
+		expect(calls).toEqual(["gpt-5.1-codex-mini"]);
+		expect(out.pause).toMatchObject({ resume: false, result: { outcome: "engine_error" } });
+		expect(fact(h, "provider_fallback_unavailable")?.data).toMatchObject({ to: "gpt-5.1-codex-mini", why });
+		expect(names(h.facts)).not.toContain("provider_fallback_attempt");
+		expect(out.pause && !out.pause.resume ? out.pause.result.detail : "").toContain(`A fallback model (gpt-5.1-codex-mini) was configured but could not be used: ${why}.`);
+		expect(names(h.facts)).toContain("provider_retry_exhausted");
+	});
+
+	it("a caller that cannot switch models at all is told so rather than silently skipped", async () => {
+		const h = harness({ policy: withFallback }); // no switchModel dependency
+		const out = await failUntilDecided(h);
+		expect(out.pause).toMatchObject({ resume: false });
+		expect(fact(h, "provider_fallback_unavailable")?.data.why).toBe("this run cannot switch models");
+	});
+
+	it("a usage limit or a billing failure never triggers it: only an exhausted TRANSIENT ladder does", async () => {
+		const calls: string[] = [];
+		const h = harness({ policy: withFallback, switchModel: switchOk(calls) });
+		await h.turn({ verdict: "failed", exitCode: 1, signal: null, at: 1, detail: "You exceeded your current quota", tail: ["You exceeded your current quota, please check your plan and billing"] });
+		await h.turn({ verdict: "failed", exitCode: 1, signal: null, at: 2, detail: "You've hit your usage limit. Try again in 2 hours", tail: ["You've hit your usage limit. Try again in 2 hours"] });
+		expect(calls).toEqual([]);
 	});
 });

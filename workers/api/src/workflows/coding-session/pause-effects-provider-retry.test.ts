@@ -3,15 +3,22 @@
  * replay agrees with the first pass, seeded by the run so two runs do not wake together, and every retry fact lands on the run's DURABLE trace
  * (`agent_events`, keyed by run id), where the runner's bounded event ring and the 2,000-character run detail cannot cut it.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../../lib/d1-sqlite.js";
 import { DEFAULT_PROVIDER_RETRY } from "../../lib/provider-retry.js";
 import type { Env } from "../../types.js";
-import { makePauseEffects } from "./pause-effects.js";
+const { callRunner } = vi.hoisted(() => ({ callRunner: vi.fn() }));
+vi.mock("../../lib/runner-client.js", async () => {
+	const actual = await vi.importActual<typeof import("../../lib/runner-client.js")>("../../lib/runner-client.js");
+	return { ...actual, callRunner: (...a: unknown[]) => callRunner(...a) };
+});
+
+const { makePauseEffects } = await import("./pause-effects.js");
 
 let d1: RealSchemaD1;
 let env: Env;
 let labels: string[];
+let starts: number;
 
 const effects = (loopRunId: string | null = "run-9") =>
 	makePauseEffects({
@@ -39,7 +46,9 @@ const effects = (loopRunId: string | null = "run-9") =>
 		getConn: () => ({}) as never,
 		setConn: () => {},
 		nextN: () => 0,
-		startOnRunner: async () => undefined,
+		startOnRunner: async () => {
+			starts++;
+		},
 		getObjective: () => null,
 	});
 const events = () =>
@@ -50,6 +59,9 @@ beforeEach(() => {
 	seedTenant(d1, { userId: "u1", instanceIds: ["i1"] });
 	env = { DB: d1.DB } as unknown as Env;
 	labels = [];
+	starts = 0;
+	callRunner.mockReset();
+	callRunner.mockResolvedValue({ ok: true });
 });
 afterEach(() => d1.close());
 
@@ -142,5 +154,126 @@ describe("every retry fact is written to the run's durable trace (#1391)", () =>
 		await d.trace?.("provider_retry_scheduled", "Retry 1 of 4", { attempt: 1 }); // the replay
 		await d.trace?.("provider_retry_scheduled", "Retry 2 of 4", { attempt: 2 }); // the next attempt is a new fact
 		expect(events()).toHaveLength(2);
+	});
+});
+
+// ── #1392: switching the session's model for the run, and putting it back ───────────────────────────────────────────────────────────────
+describe("the model switch rewrites the session's stored command and restarts its engine (#1392)", () => {
+	const CODEX = "codex exec --model gpt-5.1-codex --json --sandbox danger-full-access";
+	const sessionCommand = () => (d1.sqlite.prepare("SELECT launch_command FROM coding_sessions WHERE id = 's1'").get() as { launch_command: string | null }).launch_command;
+	const seedSession = (command: string | null = CODEX) => {
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, workdir, clone_status) VALUES ('r1', 'i1', 'u1', 'owner/repo', '/w/repo', 'ready')`);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, launch_command) VALUES ('s1', 'i1', 'r1', 'u1', 'active', 'codex', ${command === null ? "NULL" : `'${command}'`})`);
+	};
+
+	it("writes the fallback model into the stored command, ends the engine on the runner and starts it again — each a journalled step, in that order", async () => {
+		seedSession();
+		const out = await effects().deps(2, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+		expect(out).toEqual({ ok: true, from: "gpt-5.1-codex" });
+		expect(sessionCommand()).toBe("codex exec --model gpt-5.1-codex-mini --json --sandbox danger-full-access");
+		expect(callRunner.mock.calls.map((c) => [c[1], c[2]])).toEqual([["/coding/end", { sessionId: "s1" }]]);
+		expect(starts).toBe(1); // the relaunch reads the command just stored
+		expect(labels).toEqual(["fallback-read-2", "fallback-set-2", "fallback-end-2", "fallback-start-2"]);
+	});
+
+	it("changes nothing when the command takes no model flag: no write, no restart, and the reason names the engine", async () => {
+		seedSession("ollama run llama3");
+		const out = await effects().deps(0, "platform_interrupt").switchModel?.("gpt-x");
+		expect(out).toEqual({ ok: false, why: "the engine's command (ollama) takes no --model flag" });
+		expect(sessionCommand()).toBe("ollama run llama3");
+		expect(callRunner).not.toHaveBeenCalled();
+		expect(starts).toBe(0);
+	});
+
+	it("changes nothing when the session already runs that model", async () => {
+		seedSession();
+		expect(await effects().deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex")).toEqual({ ok: false, why: "the session already runs gpt-5.1-codex" });
+		expect(sessionCommand()).toBe(CODEX);
+		expect(starts).toBe(0);
+	});
+
+	it("changes nothing when the session has no recorded command, or no row at all", async () => {
+		seedSession(null);
+		expect(await effects().deps(0, "platform_interrupt").switchModel?.("gpt-x")).toMatchObject({ ok: false, why: expect.stringContaining("no recorded launch command") });
+		d1.exec("DELETE FROM coding_sessions");
+		expect(await effects().deps(0, "platform_interrupt").switchModel?.("gpt-x")).toMatchObject({ ok: false });
+	});
+
+	it("a restart that fails puts the stored command back, so nothing is left half-switched", async () => {
+		seedSession();
+		callRunner.mockRejectedValue(new Error("relay dropped"));
+		const out = await effects().deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+		expect(out).toMatchObject({ ok: false, why: expect.stringMatching(/the restart on gpt-5\.1-codex-mini failed: relay dropped/) });
+		expect(sessionCommand()).toBe(CODEX);
+		expect(starts).toBe(0);
+	});
+
+	it("never touches another session's command", async () => {
+		seedSession();
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, launch_command) VALUES ('s2', 'i1', 'r1', 'u1', 'ended', 'codex', '${CODEX}')`);
+		await effects().deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+		expect((d1.sqlite.prepare("SELECT launch_command FROM coding_sessions WHERE id = 's2'").get() as { launch_command: string }).launch_command).toBe(CODEX);
+	});
+});
+
+describe("the run's end puts the session's own model back (#1392)", () => {
+	const CODEX = "codex exec --model gpt-5.1-codex --json --sandbox danger-full-access";
+	const sessionCommand = () => (d1.sqlite.prepare("SELECT launch_command FROM coding_sessions WHERE id = 's1'").get() as { launch_command: string | null }).launch_command;
+	beforeEach(() => {
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, workdir, clone_status) VALUES ('r1', 'i1', 'u1', 'owner/repo', '/w/repo', 'ready')`);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, launch_command) VALUES ('s1', 'i1', 'r1', 'u1', 'active', 'codex', '${CODEX}')`);
+	});
+
+	it("is a no-op when the run never switched: no step, no write, no runner call", async () => {
+		await effects().restoreFallback({ endEngine: true });
+		expect(labels).toEqual([]);
+		expect(callRunner).not.toHaveBeenCalled();
+		expect(sessionCommand()).toBe(CODEX);
+	});
+
+	it("restores the ORIGINAL command, so a later run on this session starts on the configured model, and records that it did", async () => {
+		const e = effects();
+		await e.deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+		expect(sessionCommand()).toContain("gpt-5.1-codex-mini");
+		callRunner.mockClear();
+		await e.restoreFallback({ endEngine: false });
+		expect(sessionCommand()).toBe(CODEX);
+		expect(callRunner).not.toHaveBeenCalled(); // a session the run opened is about to be ended anyway
+		const row = events().find((r) => r.event === "coding.run.provider_fallback_restored");
+		expect(row?.trace_id).toBe("run-9");
+		expect(JSON.parse(row?.context ?? "{}")).toMatchObject({ fallbackModel: "gpt-5.1-codex-mini", restoredTo: "gpt-5.1-codex", endedEngine: false });
+	});
+
+	it("also ends the runner's engine when the session outlives the run, so the next use relaunches on the original model instead of inheriting the fallback", async () => {
+		const e = effects();
+		await e.deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+		callRunner.mockClear();
+		await e.restoreFallback({ endEngine: true });
+		expect(callRunner.mock.calls.map((c) => c[1])).toEqual(["/coding/end"]);
+		expect(sessionCommand()).toBe(CODEX);
+	});
+
+	it("a replayed workflow still restores the ORIGINAL: the command it replaces is read through a journalled step", async () => {
+		const journal = new Map<string, unknown>();
+		const build = () =>
+			makePauseEffects({
+				env, step: {} as never, goal: { repo: "acme/app" } as never, instanceId: "i1", userId: "u1", sessionId: "s1", repoId: "r1", boardTaskId: undefined, loopRunId: "run-9", driverId: null,
+				workflowInstanceId: undefined, cloneUrl: undefined, branch: undefined, token: undefined, tokenUsername: undefined, cardId: null,
+				runRetry: (async (label: string, fn: () => Promise<unknown>) => {
+					if (journal.has(label)) return journal.get(label);
+					const v = await fn();
+					journal.set(label, v);
+					return v;
+				}) as never,
+				postToChat: async () => {}, getConn: () => ({}) as never, setConn: () => {}, nextN: () => 0, startOnRunner: async () => undefined, getObjective: () => null,
+			});
+		await build().deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini"); // the first pass
+		expect(sessionCommand()).toContain("gpt-5.1-codex-mini");
+		// The Workflow is replayed from its journal: a fresh closure, the database already holding the FALLBACK command.
+		const replay = build();
+		const again = await replay.deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+		expect(again).toEqual({ ok: true, from: "gpt-5.1-codex" }); // not "the session already runs it"
+		await replay.restoreFallback({ endEngine: false });
+		expect(sessionCommand()).toBe(CODEX);
 	});
 });

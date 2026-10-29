@@ -1,3 +1,5 @@
+import { isValidModelId } from "./coding-engine-model.js";
+
 /**
  * How a coding run retries an AI provider that failed transiently (#1391) — attempts, exponential backoff, jitter, all per instance.
  *
@@ -21,9 +23,14 @@ export interface ProviderRetryPolicy {
 	maxMs: number;
 	/** The spread either side of the backoff, as a fraction: 0.2 is ±20%. */
 	jitter: number;
+	/**
+	 * The model to try ONCE when every attempt is spent (#1392), or null for none — the default. Never chosen by the platform: it is only ever a model the
+	 * owner wrote here. It applies to the run that needs it and is put back afterwards, so a later run starts on the instance's configured model.
+	 */
+	fallbackModel: string | null;
 }
 
-export const DEFAULT_PROVIDER_RETRY: Readonly<ProviderRetryPolicy> = { attempts: 4, baseMs: 2 * 60_000, maxMs: 15 * 60_000, jitter: 0.2 };
+export const DEFAULT_PROVIDER_RETRY: Readonly<ProviderRetryPolicy> = { attempts: 4, baseMs: 2 * 60_000, maxMs: 15 * 60_000, jitter: 0.2, fallbackModel: null };
 
 /** The bounds a configured value is held to — wide enough for any real outage, narrow enough that a typo cannot park a run for a week. */
 export const PROVIDER_RETRY_BOUNDS = {
@@ -35,6 +42,11 @@ export const PROVIDER_RETRY_BOUNDS = {
 
 /** What an instance stores: only the fields its owner set. Absent fields inherit the defaults. */
 export type ProviderRetryConfig = Partial<ProviderRetryPolicy>;
+
+/** Why a fallback model is refused, or null when it is a model id. Exposed so the route can say it instead of quietly dropping a typo from an opt-in setting. */
+export function fallbackModelProblem(v: unknown): string | null {
+	return v === null || isValidModelId(v) ? null : "fallbackModel must be a model id (letters, digits and . _ : / @ [ ] -, no spaces, at most 100 characters) or null";
+}
 
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const within = (v: number, b: { min: number; max: number }) => Math.min(b.max, Math.max(b.min, v));
@@ -51,6 +63,8 @@ export function sanitizeProviderRetry(raw: unknown): ProviderRetryConfig {
 	if (finite(r.baseMs)) out.baseMs = within(Math.round(r.baseMs), PROVIDER_RETRY_BOUNDS.baseMs);
 	if (finite(r.maxMs)) out.maxMs = within(Math.round(r.maxMs), PROVIDER_RETRY_BOUNDS.maxMs);
 	if (finite(r.jitter)) out.jitter = within(r.jitter, PROVIDER_RETRY_BOUNDS.jitter);
+	// Only a real model id is kept (a typo must not become a command-line fragment); the route refuses a bad one before it gets here.
+	if (isValidModelId(r.fallbackModel)) out.fallbackModel = r.fallbackModel;
 	if (out.baseMs !== undefined && out.maxMs !== undefined && out.maxMs < out.baseMs) out.maxMs = out.baseMs;
 	return out;
 }

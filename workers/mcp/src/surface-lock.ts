@@ -1262,4 +1262,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.193": "sha256:14118af3cc33e2a48ae016f473caa2fee0cfec06583502eeba06618059a13812", // #1385: coding_loop_start (and its alias start_instance_loop) and set_instance_loop_limits gain `questions` ("ask" | "decide").
 	"0.1.194": "sha256:20b9a30842fd927301e7113709c9f8082dcfe929fe4f8a4828a9944ef71e9ea4", // #1131: secure_input_sudo (runtime) runs the owner-approved command of a `sudo` secure input with the password on sudo's stdin, never typed; secure_input_request gains destination_scope "sudo" and its `command` argv.
 	"0.1.195": "sha256:4f9ed9e41375331c0e765733263ff77a61fd9b515c11411c60c73696b8d5ab4a", // #1391: set_instance_loop_limits gains `provider_retry` (attempts, base_ms, max_ms, jitter) - how a run retries an AI provider that failed transiently.
+	"0.1.196": "sha256:2e31cd60125ee2373cc5023e99eb5283c3810fb279e8495854e41245055e2bbc", // #1392: set_instance_loop_limits `provider_retry` gains `fallback_model` - an opt-in model to try once when the retries are spent.
 };

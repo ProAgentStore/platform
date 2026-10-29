@@ -1197,3 +1197,119 @@ describe("a transient provider outage gets the short wait ladder per OUTAGE, not
 		expect(new Set(parks.map((s) => s.ms)).size).toBe(1);
 	});
 });
+
+// ── #1392: the opt-in model fallback, through the real workflow ──────────────────────────────────────────────────────────────────────
+describe("a model fallback when every retry on the first model is spent (#1392)", () => {
+	const CODEX = "codex exec --model gpt-5.1-codex --json --sandbox danger-full-access";
+	const CAPACITY = "Selected model is at capacity. Please try a different model.";
+	const down = (at: number) => ({ verdict: "failed", exitCode: 1, signal: null, at, detail: "[codex exited with code 1]", tail: [`[codex] error: ${CAPACITY}`, `[error] ${CAPACITY}`, "[codex exited with code 1]"] });
+	const sessionCommand = () => one<{ launch_command: string | null }>("SELECT launch_command FROM coding_sessions WHERE id = 's1'").launch_command;
+	const traced = () => rows<{ event: string; context: string; trace_id: string }>("SELECT event, context, trace_id FROM agent_events WHERE source = 'coding' ORDER BY ts, rowid").filter((r) => r.event.startsWith("coding.run.provider_"));
+	const events = () => traced().map((r) => r.event.replace("coding.run.", ""));
+
+	/** A Codex session whose instance retries once and, only if the owner said so, falls back; the turns follow `script`. */
+	function arrange(opts: { fallback: boolean; script: Array<"down" | "up"> }) {
+		d1.exec(`UPDATE coding_sessions SET launch_command = '${CODEX}', client_type = 'codex' WHERE id = 's1'`);
+		const retry = { attempts: 1, baseMs: 5_000, maxMs: 5_000, jitter: 0, ...(opts.fallback ? { fallbackModel: "gpt-5.1-codex-mini" } : {}) };
+		d1.exec(`UPDATE agent_instances SET config = '${JSON.stringify({ loopLimits: { providerRetry: retry } })}' WHERE id = 'i1'`);
+		let turn = 0;
+		let at = 1_000;
+		let lastTurn: Record<string, unknown> | undefined;
+		runner["/coding/act"] = () => {
+			const kind = opts.script[turn++] ?? "up";
+			at += 1_000;
+			lastTurn = kind === "up" ? { verdict: "ok", exitCode: 0, signal: null, at } : down(at);
+			return { ...IDLE, lastTurn };
+		};
+		runner["/coding/capture"] = () => ({ ...IDLE, ...(lastTurn ? { lastTurn } : {}) });
+		let n = 0;
+		decisions = [{ action: { kind: "message", text: "step" } }];
+		decideCodingAction.mockImplementation(async (_e: unknown, _u: unknown, p: { goal: CodingGoal }) => {
+			decided.push({ goal: structuredClone(p.goal) }); // what the Pilot was told, round by round
+			return turn >= opts.script.length ? { finish: { status: "done", detail: "all green" } } : { action: { kind: "message", text: `step ${++n}` } };
+		});
+		seedLoopRun();
+	}
+	const go = () => run(params({ loopRunId: "run-1" } as Partial<CodingSessionParams>, { clientType: "codex" }));
+
+	it("THE WHOLE PATH: retries spent → switched to the configured model and restarted → a turn works on it → the session's own model is put back at the end", async () => {
+		arrange({ fallback: true, script: ["down", "down", "down", "down", "up"] });
+		const { journal } = await go();
+		expect(loopRun().stop_reason).toBe("done");
+		// The switch: the engine was ended and relaunched with the fallback model in its command…
+		const starts = runnerCalls.filter((c) => c.path === "/coding/start");
+		expect(starts).toHaveLength(2);
+		expect(String(starts[0].body.command ?? "")).not.toContain("gpt-5.1-codex-mini");
+		expect(String(starts[1].body.command)).toBe("codex exec --model gpt-5.1-codex-mini --json --sandbox danger-full-access");
+		expect(journal.order).toEqual(expect.arrayContaining([expect.stringMatching(/^fallback-read-/), expect.stringMatching(/^fallback-set-/), expect.stringMatching(/^fallback-end-/), expect.stringMatching(/^fallback-start-/), "fallback-restore"]));
+		// …and the run ended with the session back on the model the owner configured, the engine ended so the next use relaunches on it.
+		expect(sessionCommand()).toBe(CODEX);
+		expect(runnerCalls.filter((c) => c.path === "/coding/end")).toHaveLength(2); // the switch, and the restore (the session outlives this run)
+		// Every step is a structured fact on the run, in the order it happened.
+		expect(events()).toEqual([
+			"provider_error_classified", "provider_retry_decision", // the free resend
+			"provider_error_classified", "provider_retry_decision", // the repeat parks
+			"provider_retry_scheduled", "provider_retry_attempt", // the one wait on the first model
+			"provider_error_classified", "provider_retry_decision", // resend
+			"provider_error_classified", "provider_retry_decision", // repeat: attempts spent
+			"provider_fallback_attempt", // → the switch
+			"provider_fallback_outcome", // a turn worked on it
+			"provider_fallback_restored",
+		]);
+		const attempt = traced().find((r) => r.event.endsWith("provider_fallback_attempt"));
+		expect(attempt?.trace_id).toBe("run-1");
+		expect(JSON.parse(attempt?.context ?? "{}")).toMatchObject({ from: "gpt-5.1-codex", to: "gpt-5.1-codex-mini", afterRetries: 1, rule: "openai (codex)/transient" });
+		expect(JSON.parse(traced().find((r) => r.event.endsWith("provider_fallback_outcome"))?.context ?? "{}")).toMatchObject({ model: "gpt-5.1-codex-mini", outcome: "recovered" });
+	});
+
+	it("the Pilot is told the model changed, that it is the owner's fallback, and to resend — and that the switch is undone at the end", async () => {
+		arrange({ fallback: true, script: ["down", "down", "down", "down", "up"] });
+		await go();
+		expect(decided.some((d) => /the fallback the owner configured/.test(String(d.goal.resumeNote ?? "")) && /undone when this run ends/.test(String(d.goal.resumeNote ?? "")))).toBe(true);
+		expect(decided.some((d) => /switched this session's engine from gpt-5\.1-codex to gpt-5\.1-codex-mini/.test(String(d.goal.resumeNote ?? "")))).toBe(true);
+	});
+
+	it("if the fallback model ALSO keeps failing the run ends failed with the whole chain — and the session is still put back", async () => {
+		arrange({ fallback: true, script: Array.from({ length: 12 }, () => "down" as const) });
+		await go();
+		const end = loopRun();
+		expect(end.stop_reason).toBe("engine_error");
+		expect(end.detail).toContain("kept failing on every model it was given");
+		expect(end.detail).toMatch(/\(1\) gpt-5\.1-codex — 1 retry/);
+		expect(end.detail).toMatch(/\(2\) gpt-5\.1-codex-mini — 1 retry/);
+		expect(events()).toEqual(expect.arrayContaining(["provider_fallback_attempt", "provider_retry_exhausted", "provider_fallback_outcome", "provider_fallback_restored"]));
+		expect(JSON.parse(traced().find((r) => r.event.endsWith("provider_retry_exhausted"))?.context ?? "{}").chain).toHaveLength(2);
+		expect(runnerCalls.filter((c) => c.path === "/coding/start")).toHaveLength(2); // switched once, never twice
+		expect(sessionCommand()).toBe(CODEX);
+	});
+
+	it("NEVER unless the owner configured one: the same outage ends as before, with no switch, no restart and no fallback fact", async () => {
+		arrange({ fallback: false, script: Array.from({ length: 12 }, () => "down" as const) });
+		await go();
+		expect(loopRun().stop_reason).toBe("engine_error");
+		expect(loopRun().detail).not.toMatch(/fallback|every model/i);
+		expect(runnerCalls.filter((c) => c.path === "/coding/start")).toHaveLength(1);
+		expect(runnerCalls.filter((c) => c.path === "/coding/end")).toHaveLength(0);
+		expect(events().filter((e) => e.startsWith("provider_fallback"))).toEqual([]);
+		expect(sessionCommand()).toBe(CODEX);
+	});
+
+	it("an engine whose command takes no model flag is not switched: the reason is recorded and the run ends as it would have", async () => {
+		arrange({ fallback: true, script: Array.from({ length: 12 }, () => "down" as const) });
+		d1.exec(`UPDATE coding_sessions SET launch_command = 'ollama run llama3' WHERE id = 's1'`);
+		await go();
+		expect(loopRun().stop_reason).toBe("engine_error");
+		expect(loopRun().detail).toMatch(/A fallback model \(gpt-5\.1-codex-mini\) was configured but could not be used: the engine's command \(ollama\) takes no --model flag/);
+		expect(JSON.parse(traced().find((r) => r.event.endsWith("provider_fallback_unavailable"))?.context ?? "{}")).toMatchObject({ to: "gpt-5.1-codex-mini" });
+		expect(sessionCommand()).toBe("ollama run llama3");
+		expect(runnerCalls.filter((c) => c.path === "/coding/start")).toHaveLength(1);
+	});
+
+	it("a run that never meets the outage takes none of these steps", async () => {
+		arrange({ fallback: true, script: ["up", "up"] });
+		const { journal } = await go();
+		expect(loopRun().stop_reason).toBe("done");
+		expect(journal.order.filter((n) => n.startsWith("fallback-") || n === "provider-retry-policy")).toEqual([]);
+		expect(events()).toEqual([]);
+	});
+});
