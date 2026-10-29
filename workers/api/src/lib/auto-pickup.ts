@@ -30,7 +30,8 @@ import { deepLinkFor } from "./console-links.js";
 import { listIssuesPage, postIssueComment, type IssueSummary } from "./github-issues.js";
 import { patchInstanceConfig, parseConfigBlob } from "./instance-config.js";
 import { issueJobKey } from "./issue-tickets.js";
-import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS } from "./label-vocabulary.js"; // the label vocabulary's single source (#1245)
+import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS, HIGH_SIGNAL_TYPE_LABELS, LOW_SIGNAL_TYPE_LABELS } from "./label-vocabulary.js"; // the label vocabulary's single source (#1245)
+import { handleAlreadyDoneOpenIssue } from "./auto-pickup-already-done.js";
 import { referencedIssue } from "./objective-dedupe.js";
 import { checkStartIdempotency } from "./start-idempotency.js";
 import { ISSUE_ATTEMPT_THRESHOLD_DEFAULT, ISSUE_ATTEMPT_THRESHOLD_MAX, ISSUE_ATTEMPT_THRESHOLD_MIN, sanitizeAttemptThreshold } from "./issue-attempts.js";
@@ -142,10 +143,10 @@ export function priorityRank(labels: string[], priorityLabels: string[]): number
 	const i = priorityLabels.findIndex((p) => labels.some((l) => labelMatches(l, p)));
 	return i < 0 ? priorityLabels.length : i;
 }
-/** `bug` before unlabelled before `enhancement`. */
+/** A bug/security/regression signal before unlabelled before an enhancement signal (#1407). Still a RANK, never an exclusion — an issue with none of these labels is always kind-rank 1, never dropped. */
 export function kindRank(labels: string[]): number {
-	if (labels.some((l) => labelMatches(l, "bug"))) return 0;
-	if (labels.some((l) => labelMatches(l, "enhancement"))) return 2;
+	if (HIGH_SIGNAL_TYPE_LABELS.some((w) => labels.some((l) => labelMatches(l, w)))) return 0;
+	if (LOW_SIGNAL_TYPE_LABELS.some((w) => labels.some((l) => labelMatches(l, w)))) return 2;
 	return 1;
 }
 
@@ -194,6 +195,8 @@ export interface AutoPickupDeps {
 	postComment?: (repo: string, number: number, body: string) => Promise<boolean>;
 	notify?: (title: string, body: string) => Promise<void>;
 	startQueued?: (repoId: string) => Promise<unknown>;
+	/** #1407: what to do with an `already_done`-refused issue that is still open. Defaults to the real GitHub-backed handler; injectable because that handler's own GitHub calls are what a test replaces. */
+	handleAlreadyDone?: typeof handleAlreadyDoneOpenIssue;
 }
 
 export type AutoPickupResult = { started: false; reason: string } | { started: true; repo: string; issue: number; entryId: string };
@@ -212,7 +215,7 @@ export function settleStart(drain: unknown, work: { repo: string; issue: number;
 	return { started: true, ...work }; // a caller-supplied starter that reports nothing (tests): trust the enqueue as before
 }
 
-type PickupOutcome = "started" | "none_eligible" | "skipped_failed" | "capped" | "skipped_gate" | "skipped_busy" | "error" | "passed_over";
+type PickupOutcome = "started" | "none_eligible" | "skipped_failed" | "capped" | "skipped_gate" | "skipped_busy" | "error" | "passed_over" | "closed_done" | "flagged_review";
 
 /** A skip repeated with the same reason is written once an hour, so a blocked coder leaves a row to read, not one per sweep (#1276). */
 export const SKIP_LOG_DEBOUNCE_MS = 60 * 60_000;
@@ -265,6 +268,22 @@ async function logPassedOver(env: Env, iid: string, uid: string, repo: string, i
 		const detail = clipMarked(reason, 300);
 		const seen = await env.DB.prepare("SELECT 1 AS x FROM auto_pickup_log WHERE instance_id = ?1 AND outcome = 'passed_over' AND repo = ?2 AND issue_number = ?3 AND detail = ?4 AND created_at > ?5 LIMIT 1").bind(iid, repo, issue, detail, now - SKIP_LOG_DEBOUNCE_MS).first<{ x: number }>();
 		if (!seen) await log(env, iid, uid, "passed_over", detail, repo, issue, now);
+	} catch {
+		// The log is a trace of the decision; failing to write it must not change the decision.
+	}
+}
+
+/**
+ * What `handleAlreadyDoneOpenIssue` did with an already-finished-but-still-open issue (#1407): one
+ * row per issue, naming the action. `skipped` writes nothing — it is already a no-op (closed by a
+ * human since, or a GitHub write that failed), and `passed_over` right after this call already
+ * records the cycle moved on. Never throws.
+ */
+async function logAlreadyDoneHandling(env: Env, iid: string, uid: string, repo: string, issue: number, handled: { action: "closed" | "flagged" | "skipped"; runId?: string; sha?: string; reason?: string }, now: number): Promise<void> {
+	if (handled.action === "skipped") return;
+	try {
+		const detail = clipMarked(handled.action === "closed" ? `closed, citing run ${handled.runId} (commit ${handled.sha?.slice(0, 7)})` : (handled.reason ?? "flagged for review"), 300);
+		await log(env, iid, uid, handled.action === "closed" ? "closed_done" : "flagged_review", detail, repo, issue, now);
 	} catch {
 		// The log is a trace of the decision; failing to write it must not change the decision.
 	}
@@ -403,6 +422,13 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 			if (!refusal) {
 				chosen = c;
 				break;
+			}
+			// Still open and finished `done`: don't just log past it forever (#1407) — close it when CI is
+			// green on what the finishing run delivered, else flag it `needs-human` so a person decides and
+			// the picker stops meeting the identical refusal on this issue every sweep.
+			if (refusal.reason === "already_done" && refusal.detail.run_id) {
+				const handled = await (deps.handleAlreadyDone ?? handleAlreadyDoneOpenIssue)(env, { userId: uid, instanceId: iid, githubRepo: c.repo, issue: c.issue.number, issueLabels: c.issue.labels, runId: refusal.detail.run_id });
+				await logAlreadyDoneHandling(env, iid, uid, c.repo, c.issue.number, handled, now);
 			}
 			passedOver.push(`#${c.issue.number} (${refusal.reason})`);
 			await logPassedOver(env, iid, uid, c.repo, c.issue.number, refusal.reason, now);

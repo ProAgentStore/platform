@@ -7,7 +7,7 @@ import { GITHUB_TOOLS } from "./connectors/github.js";
 import { AUTO_PICKUP_DEFAULTS, exclusionReason, kindRank, pickNextIssue, priorityRank, type PickCandidate } from "./auto-pickup.js";
 import { isNeedsHumanLabel } from "./fleet-snapshot.js";
 import { coerceListFields, validateAgainstSchema } from "./json-schema-validate.js";
-import { AREA_LABELS, BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS, LABEL_FILTER_HINT, LABEL_LIST_FORMAT, LABEL_VOCABULARY } from "./label-vocabulary.js";
+import { AREA_LABELS, BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS, HIGH_SIGNAL_TYPE_LABELS, LABEL_FILTER_HINT, LABEL_LIST_FORMAT, LABEL_VOCABULARY, LOW_SIGNAL_TYPE_LABELS } from "./label-vocabulary.js";
 
 const tool = (name: string) => {
 	const t = GITHUB_TOOLS.find((x) => x.name === name);
@@ -47,10 +47,11 @@ describe("the vocabulary names exactly what the code acts on (#1245)", () => {
 		for (const p of ["P0", "P1", "P2", "P3"]) expect(LABEL_VOCABULARY).toContain(`\`${p}\``);
 	});
 
-	it("`bug` starts before an unlabelled issue and `enhancement` after, as the text says", () => {
-		expect(kindRank(["bug"])).toBeLessThan(kindRank([]));
-		expect(kindRank([])).toBeLessThan(kindRank(["enhancement"]));
-		expect(LABEL_VOCABULARY).toMatch(/`bug` is started before an unlabelled issue, `enhancement` after/);
+	it("bug/security/regression start before an unlabelled issue and enhancement after, as the text says (#1407)", () => {
+		for (const high of HIGH_SIGNAL_TYPE_LABELS) expect(kindRank([high]), high).toBeLessThan(kindRank([]));
+		for (const low of LOW_SIGNAL_TYPE_LABELS) expect(kindRank([]), low).toBeLessThan(kindRank([low]));
+		for (const high of HIGH_SIGNAL_TYPE_LABELS) expect(LABEL_VOCABULARY, high).toContain(`\`${high}\``);
+		expect(LABEL_VOCABULARY).toMatch(/`bug`, `security`, `regression` are started before an unlabelled issue, `enhancement` after/);
 	});
 
 	it("each area label is named once, with a meaning, and said to be this repo's own", () => {

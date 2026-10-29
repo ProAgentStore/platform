@@ -34,6 +34,11 @@ export const BUILTIN_EXCLUDE_LABELS = ["needs-human", "blocked-on-serge", "block
 /** Priority labels, highest first. A label matches one exactly, or as a prefix followed by `:`, ` ` or `-` (`P1: blocks external users`). */
 export const DEFAULT_PRIORITY_LABELS = ["P0", "P1", "P2", "P3"] as const;
 
+/** Labels auto-pickup ranks ahead of an unlabelled issue, by what they signal rather than by priority (#1407). */
+export const HIGH_SIGNAL_TYPE_LABELS = ["bug", "security", "regression"] as const;
+/** Labels auto-pickup ranks after an unlabelled issue — lower urgency than "nobody said". */
+export const LOW_SIGNAL_TYPE_LABELS = ["enhancement"] as const;
+
 /** The area labels ProAgentStore/platform uses, with the one-line meaning its own label list gives them. */
 export const AREA_LABELS: ReadonlyArray<readonly [name: string, meaning: string]> = [
 	["mcp", "the MCP server surface"],
@@ -67,7 +72,7 @@ export const LABEL_VOCABULARY = [
 	"`needs-human`, `human-only`, `blocked` and `blocked-…` (e.g. `blocked-on-serge`) mean a person has to act — the coder's product-owner triage and the fleet snapshot leave them to the owner.",
 	`Auto-pickup never starts an issue labelled ${BUILTIN_EXCLUDE_LABELS.map((l) => `\`${l}\``).join(", ")}.`,
 	"Priority, highest first: `P0` (wrong today), `P1` (blocks external users), `P2` (correctness), `P3` (later) — auto-pickup starts the highest first, and the repo's labels read like `P1: blocks external users`.",
-	"Kind: `bug` is started before an unlabelled issue, `enhancement` after.",
+	`Kind: ${HIGH_SIGNAL_TYPE_LABELS.map((l) => `\`${l}\``).join(", ")} are started before an unlabelled issue, \`enhancement\` after.`,
 	`Area labels in ProAgentStore/platform (other repos have their own): ${AREA_LABELS.map(([n, m]) => `\`${n}\` (${m})`).join(", ")}.`,
 	"Use an existing label rather than a new spelling; github_read_issue shows what a similar issue carries.",
 ].join(" ");

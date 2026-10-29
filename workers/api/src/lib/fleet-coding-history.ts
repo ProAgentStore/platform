@@ -42,7 +42,7 @@ export type FleetKind = (typeof FLEET_KINDS)[number];
 export const FLEET_OUTCOMES = [
 	"running", "completed", "failed", "needs_human", "cancelled",
 	"queued", "deferred", "claimed", "queue_cancelled", "admission_failed",
-	"started", "none_eligible", "skipped_failed", "capped", "skipped_gate", "skipped_busy", "error", "passed_over",
+	"started", "none_eligible", "skipped_failed", "capped", "skipped_gate", "skipped_busy", "error", "passed_over", "closed_done", "flagged_review",
 	"duplicate", "not_started", "outcome_unknown",
 ] as const;
 export type FleetOutcome = (typeof FLEET_OUTCOMES)[number];
