@@ -95,7 +95,7 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 			? async (q) => {
 					if ((await runQuestionsPolicy(env, loopRunId)) !== "decide") return { decided: false };
 					return (await runRetry(`decide-${round}`, () =>
-						applyQuestionsPolicy(env, { runId: loopRunId, instanceId, userId, round, issue: q.issue, postComment: (repo, number, body) => postIssueComment(env, userId, repo, number, body) }, { question: q.question, options: q.options }),
+						applyQuestionsPolicy(env, { runId: loopRunId, instanceId, userId, round, issue: q.issue, postComment: (repo, number, body) => postIssueComment(env, userId, repo, number, body), constraintTexts: [goal.objective, goal.userHint, goal.standingInstructions, ...(goal.ownerDirectives ?? []).map((d) => d.text)] }, { question: q.question, options: q.options }),
 					)) as { decided: true; note: string } | { decided: false };
 				}
 			: undefined,

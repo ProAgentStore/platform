@@ -28,6 +28,7 @@
  */
 import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
+import { closesSomething, closingGate, mentionsClosing } from "./question-objective-constraints.js";
 import { GUARDRAILS } from "./coder-brain-decide.js";
 
 export const QUESTIONS_POLICIES = ["ask", "decide"] as const;
@@ -100,11 +101,16 @@ export function reversibilityScore(option: string): number {
  * reversible engineering call, however mild the options read, and it parks. Then each option is checked alone, so a question that offers one
  * guarded option among safe ones ("…or delete it, your call") is decided among the safe ones instead of parking — which is the case in the issue.
  */
-export function judgeQuestion(input: { question: string; options: string[] }): Judgement {
+export function judgeQuestion(input: { question: string; options: string[]; constraints?: ReadonlyArray<string | null | undefined> }): Judgement {
 	const asked = guard(input.question);
 	if (asked) return { park: true, guardrail: asked.id, why: `the question is about something that ${asked.why}` };
+	// The run's own words (#1390): when its objective or a hint makes closing conditional or forbids it, no option that closes is chosen for the run —
+	// whether the condition holds is the run's to check, and "close" is not "the most reversible" of anything the objective has already gated.
+	const gate = closingGate(input.constraints ?? []);
 	const options = input.options.map((o) => o.trim()).filter(Boolean);
 	if (!options.length) {
+		// A question about closing, with a gate and nothing to choose between, is not decided: the run is not to be told to "take the most reversible approach" on it.
+		if (gate && mentionsClosing(input.question)) return { park: true, guardrail: "objective_constraint", why: `the run's objective gates closing ("${gate}"), and this question asks whether to close` };
 		return { park: false, decision: null, alternatives: [], excluded: [], reason: "it offered no options, so the run is told to take the most reversible approach itself" };
 	}
 	const excluded: ExcludedOption[] = [];
@@ -113,10 +119,14 @@ export function judgeQuestion(input: { question: string; options: string[] }): J
 		const g = guard(o);
 		if (g) excluded.push({ option: o, why: `it ${g.why}` });
 		else if (ASKS_THE_OWNER.test(o)) excluded.push({ option: o, why: "it hands the question back to the owner" });
+		else if (gate && closesSomething(o, input.question)) excluded.push({ option: o, why: `it closes, and the run's objective gates closing ("${gate}") on a condition only the run can check` });
 		else safe.push(o);
 	}
 	if (!safe.length) {
 		const first = guard(options[0]);
+		if (!first && gate && excluded.some((e) => e.why.startsWith("it closes"))) {
+			return { park: true, guardrail: "objective_constraint", why: `every option closes or needs the owner, and the run's objective gates closing ("${gate}")` };
+		}
 		return { park: true, guardrail: first?.id ?? "owner_input", why: "every option either needs the owner or is a guarded act" };
 	}
 	let best = 0;
@@ -151,7 +161,7 @@ export function decisionComment(runId: string, question: string, options: string
 	if (options.length) lines.push("", "Options:", bullet(options));
 	lines.push("", j.decision === null ? "**Decision:** left to the run, which was told to take the most reversible approach and record it here." : `**Decided:** ${clipMarked(j.decision, 500, { within: true })} — ${j.reason}.`);
 	if (j.alternatives.length) lines.push("", "Alternatives not taken:", bullet(j.alternatives));
-	if (j.excluded.length) lines.push("", "Not considered (they need you):", bullet(j.excluded.map((e) => `${e.option} — ${e.why}`)));
+	if (j.excluded.length) lines.push("", "Not considered:", bullet(j.excluded.map((e) => `${e.option} — ${e.why}`)));
 	lines.push("", "_This run is set to decide reversible questions itself. A credential, a destructive act, spend over a limit and anything that needs your computer still wait for you. Comment here if you want it changed._");
 	return lines.join("\n");
 }
@@ -239,6 +249,8 @@ export interface DecideContext {
 	round: number;
 	issue: { repo: string; number: number } | null;
 	postComment: (repo: string, number: number, body: string) => Promise<boolean>;
+	/** The run's own words that can rule options out (#1390): its goal's objective, hints and standing rules. The stored objective is always read too. */
+	constraintTexts?: ReadonlyArray<string | null | undefined>;
 	now?: number;
 }
 
@@ -249,7 +261,9 @@ export interface DecideContext {
  */
 export async function applyQuestionsPolicy(env: Env, ctx: DecideContext, q: { question: string; options: string[] }): Promise<{ decided: true; note: string } | { decided: false }> {
 	if ((await runQuestionsPolicy(env, ctx.runId)) !== "decide") return { decided: false };
-	const j = judgeQuestion(q);
+	// The objective as the run was started with it, from its row — so a caller that passes nothing is still held to it.
+	const stored = await env.DB.prepare("SELECT objective FROM agent_loop_runs WHERE run_id = ?1").bind(ctx.runId).first<{ objective: string | null }>().catch(() => null);
+	const j = judgeQuestion({ ...q, constraints: [stored?.objective, ...(ctx.constraintTexts ?? [])] });
 	const id = `qd-${ctx.runId}-${ctx.round}`;
 	const now = ctx.now ?? Date.now();
 	const repo = ctx.issue?.repo ?? null;

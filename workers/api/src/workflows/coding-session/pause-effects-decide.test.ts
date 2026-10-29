@@ -22,11 +22,11 @@ let d1: RealSchemaD1;
 let env: Env;
 const labels: string[] = [];
 
-const effects = (loopRunId: string | null) =>
+const effects = (loopRunId: string | null, goal: Record<string, unknown> = {}) =>
 	makePauseEffects({
 		env,
 		step: {} as never,
-		goal: { repo: "acme/app" } as never,
+		goal: { repo: "acme/app", ...goal } as never,
 		instanceId: "i1",
 		userId: "u1",
 		sessionId: "s1",
@@ -92,5 +92,35 @@ describe("makePauseEffects.questionPolicy (#1385)", () => {
 		await e.questionPolicy?.(q);
 		expect(posted).toHaveLength(1);
 		expect((d1.sqlite.prepare("SELECT count(*) AS n FROM run_question_decisions WHERE run_id = 'run-d'").get() as { n: number }).n).toBe(1);
+	});
+});
+
+// #1390: the goal the workflow holds is what the judge reads — the objective, the owner's hints, the standing rules.
+describe("makePauseEffects.questionPolicy reads the run's own words (#1390)", () => {
+	const close = { round: 4, question: "The production E2E failed. How should I finish #243?", options: ["Close #243 and note the failure in a comment", "Leave #243 open and report what failed"], why: "", issue: { repo: "acme/app", number: 243 } };
+	const decided = async (goal: Record<string, unknown>) => {
+		const out = await effects("run-d", goal).deps(4, "decision").questionPolicy?.(close);
+		return out && "note" in out ? out.note : null;
+	};
+
+	it("with no words about closing, the ranking is unchanged — the closing option still wins on 'note'", async () => {
+		expect(await decided({ objective: "Work #243." })).toContain("Decision: Close #243 and note the failure in a comment");
+	});
+
+	it("the goal's objective gates closing: the run is told to keep #243 open", async () => {
+		const note = await decided({ objective: "Close #243 only if all three are green; otherwise leave it open and report what failed." });
+		expect(note).toContain("Decision: Leave #243 open and report what failed");
+		expect(posted[0].body).toContain("Not considered:");
+	});
+
+	it("a hint carried on the goal gates it, and so does an owner directive sent mid-run", async () => {
+		expect(await decided({ objective: "Work #243.", userHint: "Close #243 only when the production E2E is fully green." })).toContain("Decision: Leave #243 open");
+		posted.length = 0;
+		d1.exec("DELETE FROM run_question_decisions");
+		expect(await decided({ objective: "Work #243.", ownerDirectives: [{ text: "Do not close #243 yet.", at: 1, delivery: "now", processed: true }] })).toContain("Decision: Leave #243 open");
+	});
+
+	it("the standing rules gate it", async () => {
+		expect(await decided({ objective: "Work #243.", standingInstructions: "Never close an issue unless its production check is green." })).toContain("Decision: Leave #243 open");
 	});
 });

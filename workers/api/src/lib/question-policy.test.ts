@@ -163,7 +163,7 @@ describe("the words the run and the owner read", () => {
 		expect(c).toContain("run `run-1`");
 		expect(c).toContain("**Decided:** (c) Treat it as out of scope");
 		expect(c).toContain("Alternatives not taken:");
-		expect(c).toContain("Not considered (they need you):");
+		expect(c).toContain("Not considered:");
 		expect(c).toMatch(/credential, a destructive act, spend over a limit and anything that needs your computer still wait for you/);
 	});
 
@@ -263,5 +263,151 @@ describe("recording and posting", () => {
 	it("is owner-scoped: another account cannot read a run's decisions", async () => {
 		await applyQuestionsPolicy(env, ctx(), ORPHAN);
 		expect(await listQuestionDecisions(env, "u2", "run-d")).toEqual([]);
+	});
+});
+
+// ── #1390: what the run's own objective has already ruled out ────────────────────────────────────────────────────────────────────────────
+// Run 31555ee5 (ChessClubs-online/chess-clubs#243): the objective said close only if CI, deploy and a production E2E are all green, otherwise leave it
+// open and report. The E2E failed; decide took "close" as the most reversible option, and the run closed the issue.
+const GATED_OBJECTIVE =
+	"Work #243. Close #243 only if all three are green (CI, deploy, and a dispatched production E2E); otherwise leave it open and report what failed.";
+const HINT = "Close #243 only when the production E2E is fully green.";
+const CLOSE_OR_KEEP = {
+	question: "The production E2E failed. How should I finish #243?",
+	options: ["Close #243 as done and file a separate issue for the failing E2E", "Leave #243 open and report what failed", "Close #243 and note the failure in a comment"],
+};
+
+describe("an objective that gates closing is not decided around (#1390)", () => {
+	it("THE INCIDENT: without the run's words a closing option wins on a keyword ('note' reads as reversible); with them, close is set aside and the run keeps #243 open", () => {
+		// Baseline: why the run closed it. Nothing in the judge knew the objective, so "Close #243 and note the failure…" outscored "Leave #243 open…".
+		expect(judgeQuestion(CLOSE_OR_KEEP)).toMatchObject({ park: false, decision: CLOSE_OR_KEEP.options[2] });
+		// With the objective and the hint: close is never chosen for the run.
+		const j = judgeQuestion({ ...CLOSE_OR_KEEP, constraints: [GATED_OBJECTIVE, HINT] });
+		expect(j).toMatchObject({ park: false, decision: "Leave #243 open and report what failed" });
+		if (j.park) throw new Error("expected a decision");
+		expect(j.excluded.map((e) => e.option)).toEqual([CLOSE_OR_KEEP.options[0], CLOSE_OR_KEEP.options[2]]);
+		expect(j.excluded[0].why).toMatch(/it closes, and the run's objective gates closing \("Work #243\. Close #243 only if|Close #243 only if all three are green/);
+		expect(j.excluded[0].why).toMatch(/only the run can check/);
+	});
+
+	it("the order the options are offered in does not matter", () => {
+		const reversed = { ...CLOSE_OR_KEEP, options: [...CLOSE_OR_KEEP.options].reverse() };
+		expect(judgeQuestion({ ...reversed, constraints: [GATED_OBJECTIVE] })).toMatchObject({ park: false, decision: "Leave #243 open and report what failed" });
+	});
+
+	it("a hint alone gates it: an objective that says nothing about closing, and a later 'only when green'", () => {
+		expect(judgeQuestion({ ...CLOSE_OR_KEEP, constraints: ["Fix the flaky E2E in #243.", HINT] })).toMatchObject({ park: false, decision: "Leave #243 open and report what failed" });
+	});
+
+	it("a plain 'do not close' or 'keep it open' gates it too", () => {
+		for (const words of ["Do not close #243 — I will review it myself.", "Don't close #243 yet.", "Keep #243 open until I say so.", "Leave the issue open."]) {
+			expect(judgeQuestion({ ...CLOSE_OR_KEEP, constraints: [words] }), words).toMatchObject({ park: false, decision: "Leave #243 open and report what failed" });
+		}
+	});
+
+	it("when EVERY option closes, it parks for the owner rather than closing — and says why", () => {
+		const j = judgeQuestion({ question: "How do I finish?", options: ["Close #243 as done", "Close #243 and file a follow-up"], constraints: [GATED_OBJECTIVE] });
+		expect(j).toMatchObject({ park: true, guardrail: "objective_constraint" });
+		expect(j.park ? j.why : "").toMatch(/gates closing/);
+	});
+
+	it("a yes/no question about closing: 'yes' closes, so it is set aside and 'no' is taken", () => {
+		const j = judgeQuestion({ question: "Should I close #243 now?", options: ["Yes", "No — leave it open"], constraints: [GATED_OBJECTIVE] });
+		expect(j).toMatchObject({ park: false, decision: "No — leave it open" });
+		// …and with nothing else to choose, it parks instead of telling the run to 'take the most reversible approach' on a closing question.
+		expect(judgeQuestion({ question: "Should I close #243 now?", options: ["Yes"], constraints: [GATED_OBJECTIVE] })).toMatchObject({ park: true, guardrail: "objective_constraint" });
+		expect(judgeQuestion({ question: "Should I close #243 now?", options: [], constraints: [GATED_OBJECTIVE] })).toMatchObject({ park: true, guardrail: "objective_constraint" });
+	});
+
+	it("an option that says NOT to close is not a closing option", () => {
+		const j = judgeQuestion({ question: "What now?", options: ["Close #243", "Do not close #243; file the failure as a new issue", "Wait for the E2E to be re-run"], constraints: [GATED_OBJECTIVE] });
+		expect(j.park).toBe(false);
+		if (j.park) return;
+		expect(j.excluded.map((e) => e.option)).toEqual(["Close #243"]);
+		expect(j.decision).not.toBe("Close #243");
+	});
+
+	it("nothing changes for a run whose objective does not gate closing, or for a question that is not about closing", () => {
+		expect(judgeQuestion({ ...CLOSE_OR_KEEP, constraints: ["Fix the flaky E2E in #243 and close it when done."] })).toMatchObject({ park: false, decision: CLOSE_OR_KEEP.options[2] });
+		expect(judgeQuestion({ ...CLOSE_OR_KEEP, constraints: [] })).toMatchObject({ decision: CLOSE_OR_KEEP.options[2] });
+		const unrelated = judgeQuestion({ question: "Which table layout?", options: ["compact", "comfortable"], constraints: [GATED_OBJECTIVE, HINT] });
+		expect(unrelated).toMatchObject({ park: false, decision: "compact", excluded: [] });
+	});
+
+	it("the guardrails still come first: a gated objective does not turn a credential question into a decision", () => {
+		expect(judgeQuestion({ question: "Should I rotate the API key?", options: ["Yes", "No"], constraints: [GATED_OBJECTIVE] })).toMatchObject({ park: true, guardrail: "privileges" });
+	});
+
+	describe("through the real store: the objective is read from the run, and the decision explains itself", () => {
+		let d1: RealSchemaD1;
+		let env: Env;
+		const posted: string[] = [];
+		const ctx = (extra: Record<string, unknown> = {}) => ({
+			runId: "run-g",
+			instanceId: "i1",
+			userId: "u1",
+			round: 0,
+			issue: { repo: "ChessClubs-online/chess-clubs", number: 243 },
+			postComment: async (_r: string, _n: number, body: string) => {
+				posted.push(body);
+				return true;
+			},
+			now: 1_800_000_000_000,
+			...extra,
+		});
+		const startRun = (objective: string) =>
+			d1.sqlite.prepare("INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, questions_policy) VALUES ('run-g', 'u1', 'i1', ?, 'running', 10, 1, 'decide')").run(objective);
+
+		beforeEach(() => {
+			d1 = realSchemaD1();
+			seedTenant(d1, { userId: "u1", instanceIds: ["i1"] });
+			env = { DB: d1.DB } as unknown as Env;
+			posted.length = 0;
+		});
+		afterEach(() => d1.close());
+
+		it("a caller that passes nothing is still held to the objective stored on the run", async () => {
+			startRun(GATED_OBJECTIVE);
+			const out = await applyQuestionsPolicy(env, ctx(), CLOSE_OR_KEEP);
+			expect(out).toMatchObject({ decided: true });
+			expect(out.decided && out.note).toContain("Decision: Leave #243 open and report what failed");
+			const [row] = await listQuestionDecisions(env, "u1", "run-g");
+			expect(row).toMatchObject({ outcome: "decided", decision: "Leave #243 open and report what failed" });
+			expect(row.excluded.map((e) => e.option)).toEqual([CLOSE_OR_KEEP.options[0], CLOSE_OR_KEEP.options[2]]);
+		});
+
+		it("the comment on the issue says which options were set aside and why — quoting the objective's own sentence", async () => {
+			startRun(GATED_OBJECTIVE);
+			await applyQuestionsPolicy(env, ctx(), CLOSE_OR_KEEP);
+			expect(posted).toHaveLength(1);
+			expect(posted[0]).toContain("**Decided:** Leave #243 open and report what failed");
+			expect(posted[0]).toContain("Not considered:");
+			expect(posted[0]).toContain("Close #243 as done and file a separate issue for the failing E2E — it closes, and the run's objective gates closing");
+			expect(posted[0]).not.toContain("(they need you)"); // these options were set aside by the objective, not because they need the owner
+		});
+
+		it("a hint the run was given (carried by the goal, not the stored objective) gates it as well", async () => {
+			startRun("Work #243 and report.");
+			const out = await applyQuestionsPolicy(env, ctx({ constraintTexts: [undefined, HINT] }), CLOSE_OR_KEEP);
+			expect(out).toMatchObject({ decided: true });
+			expect(out.decided && out.note).toContain("Decision: Leave #243 open");
+		});
+
+		it("when every option would close, it parks, records why, and posts nothing", async () => {
+			startRun(GATED_OBJECTIVE);
+			const out = await applyQuestionsPolicy(env, ctx(), { question: "How do I finish?", options: ["Close #243 as done", "Close #243 and follow up"] });
+			expect(out).toEqual({ decided: false });
+			expect(posted).toEqual([]);
+			const [row] = await listQuestionDecisions(env, "u1", "run-g");
+			expect(row).toMatchObject({ outcome: "parked", guardrail: "objective_constraint", decision: null });
+			expect(row.reason).toMatch(/gates closing/);
+		});
+
+		it("a run whose objective does not gate closing decides as before", async () => {
+			startRun("Fix #243 and close it.");
+			expect(await applyQuestionsPolicy(env, ctx(), CLOSE_OR_KEEP)).toMatchObject({ decided: true });
+			const [row] = await listQuestionDecisions(env, "u1", "run-g");
+			expect(row.decision).toBe(CLOSE_OR_KEEP.options[2]);
+		});
 	});
 });
