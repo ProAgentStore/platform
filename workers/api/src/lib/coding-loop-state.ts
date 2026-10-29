@@ -71,5 +71,5 @@ export function newLoopCounters(): LoopCounters {
 export interface LoopEffect {
 	log?: string;
 	transcript?: string;
-	event?: { name: string; detail: string };
+	event?: { name: string; detail: string; data?: unknown };
 }

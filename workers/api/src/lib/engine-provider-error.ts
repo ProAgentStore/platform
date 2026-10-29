@@ -37,7 +37,26 @@ export interface EngineProviderError {
 	provider: string;
 	/** The line of the engine's output that matched, verbatim (already redacted upstream). */
 	evidence: string;
+	/** Which row matched, as `provider/kind` (#1391) — so a trace can say WHICH rule fired, not only that one did. */
+	rule: string;
+	/** The turn's own output as the runner reported it (already redacted upstream), kept long and cut from the front when it must be cut (#1391). */
+	text: string;
 }
+
+/**
+ * What the platform recorded about a provider error, for the run's durable trace and the run's ending (#1391): the classification and the whole
+ * error text, not the 300-character clip the owner-facing sentences use.
+ */
+export interface ProviderErrorRecord {
+	kind: EngineProviderErrorKind;
+	provider: string;
+	rule: string;
+	exitCode: number | null;
+	text: string;
+}
+
+/** The longest provider text kept on a record: the runner already bounds a turn's tail (60 lines, 8 KB), and the trace row that carries it is bounded at 4 KB, so 3 KB leaves room for the structured fields beside it. */
+export const PROVIDER_TEXT_MAX = 3000;
 
 interface Row {
 	kind: EngineProviderErrorKind;
@@ -105,7 +124,11 @@ export function engineProviderError(detail: string | undefined, tail: readonly s
 	if (detail) lines.unshift(detail);
 	for (const row of ENGINE_PROVIDER_ERRORS) {
 		for (const line of lines) {
-			if (row.match.test(line)) return { kind: row.kind, provider: row.provider, evidence: clipMarked(line.trim(), 300, { within: true }) };
+			if (row.match.test(line)) {
+				// The whole of what the turn printed, oldest first: the tail when there is one, else the one line that was reported.
+				const text = clipMarked((tail?.length ? tail.join("\n") : (detail ?? line)).trim(), PROVIDER_TEXT_MAX, { keep: "tail" });
+				return { kind: row.kind, provider: row.provider, evidence: clipMarked(line.trim(), 300, { within: true }), rule: `${row.provider}/${row.kind}`, text };
+			}
 		}
 	}
 	return null;

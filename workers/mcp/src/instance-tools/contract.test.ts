@@ -610,7 +610,7 @@ const TABLE: Record<string, Row> = {
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
 	set_instance_auto_resume: ["composition", "write", null, "envelope", "dry_run,instance_id,mode,token"],
-	set_instance_loop_limits: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,max_objective_chars,min_iterations,questions,token"],
+	set_instance_loop_limits: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,max_objective_chars,min_iterations,provider_retry,questions,token"],
 	set_instance_loop_presets: ["composition", "write", null, "envelope", "dry_run,instance_id,presets,token"],
 	replay_connection_delivery: ["composition", "runtime", null, "envelope", "delivery_id,dry_run,instance_id,token"],
 	end_instance_takeover: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],

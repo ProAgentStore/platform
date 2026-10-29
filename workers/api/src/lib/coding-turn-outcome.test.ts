@@ -13,6 +13,8 @@ import {
 
 const failedAt = (at: number, detail?: string) => ({ verdict: "failed", exitCode: 1, signal: null, at, ...(detail ? { detail } : {}) });
 const okAt = (at: number) => ({ verdict: "ok", exitCode: 0, signal: null, at });
+/** The effects the Pilot and the owner read — the structured `provider_*` events (#1391) are set aside; their own tests pin them. */
+const legacy = <T extends { event?: { name: string } }>(effects: T[]): T[] => effects.filter((e) => !e.event?.name.startsWith("provider_"));
 
 describe("classifyTurn — absence is not a verdict (#545)", () => {
 	it("reads a runner that does not report the field as UNKNOWN, never as failed", () => {
@@ -209,9 +211,9 @@ describe("foldTurn — the loop's failed-turn handling as a pure reducer (#1359)
 	it("reports a NEW failure once, and a re-read of the same turn not at all", () => {
 		const first = foldTurn(fresh(), { lastTurn: failedAt(10, "invalid model") }, ctx());
 		expect(first.ending).toBeNull();
-		expect(first.effects).toHaveLength(1);
-		expect(first.effects[0]).toMatchObject({ event: { name: "engine_failed" } });
-		expect(first.effects[0].log).toBe(first.effects[0].transcript);
+		expect(legacy(first.effects)).toHaveLength(1);
+		expect(legacy(first.effects)[0]).toMatchObject({ event: { name: "engine_failed" } });
+		expect(legacy(first.effects)[0].log).toBe(legacy(first.effects)[0].transcript);
 		expect(first.carry.turns.consecutive).toBe(1);
 		const again = foldTurn(first.carry, { lastTurn: failedAt(10, "invalid model") }, ctx());
 		expect(again.effects).toEqual([]);
@@ -228,7 +230,7 @@ describe("foldTurn — the loop's failed-turn handling as a pure reducer (#1359)
 		}
 		expect(last.ending).toMatchObject({ kind: "result", outcome: "engine_error" });
 		expect(last.effects.at(-1)?.transcript).toMatch(/^finish: engine_error — /);
-		expect(last.effects[0]?.event?.name).toBe("engine_failed");
+		expect(legacy(last.effects)[0]?.event?.name).toBe("engine_failed");
 	});
 
 	it("a worked turn resets the streak between failures", () => {
@@ -248,20 +250,20 @@ describe("foldTurn — the loop's failed-turn handling as a pure reducer (#1359)
 	it("the provider's own words: a usage limit parks without spending a strike, a first transient failure retries, a second parks, billing ends", () => {
 		const limit = foldTurn(fresh(), { lastTurn: failedAt(1, "You've hit your weekly limit · resets Mon 9am") }, ctx());
 		expect(limit.ending).toMatchObject({ kind: "result", outcome: "waiting", waitKind: "limit" });
-		expect(limit.effects[0]).toMatchObject({ event: { name: "waiting" } });
+		expect(legacy(limit.effects)[0]).toMatchObject({ event: { name: "waiting" } });
 		expect(limit.carry.turns.consecutive).toBe(0);
 
 		const retry = foldTurn(fresh(), { lastTurn: failedAt(1, "API Error: 529 overloaded_error") }, ctx());
 		expect(retry.ending).toBeNull();
 		expect(retry.carry.transientStreak).toBe(1);
 		expect(retry.carry.turns.consecutive).toBe(0);
-		expect(retry.effects[0]).toMatchObject({ event: { name: "engine_failed" } });
+		expect(legacy(retry.effects)[0]).toMatchObject({ event: { name: "engine_failed" } });
 		const park = foldTurn(retry.carry, { lastTurn: failedAt(2, "API Error: 529 overloaded_error") }, ctx());
 		expect(park.ending).toMatchObject({ kind: "result", outcome: "waiting", waitKind: "transient" });
 
 		const billing = foldTurn(fresh(), { lastTurn: failedAt(1, "You're out of usage credits") }, ctx());
 		expect(billing.ending).toMatchObject({ kind: "result", outcome: "engine_error" });
-		expect(billing.effects).toEqual([{ transcript: expect.stringMatching(/^finish: engine_error — /) }]);
+		expect(legacy(billing.effects)).toEqual([{ transcript: expect.stringMatching(/^finish: engine_error — /) }]);
 	});
 
 	it("a worked turn after a transient failure resets the ladder and marks it", () => {

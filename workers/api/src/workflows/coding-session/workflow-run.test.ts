@@ -1186,8 +1186,14 @@ describe("a transient provider outage gets the short wait ladder per OUTAGE, not
 		seedLoopRun();
 		const { journal } = await run(params({ loopRunId: "run-1" } as Partial<CodingSessionParams>));
 		expect(loopRun().stop_reason).toBe("done");
-		// Four transient parks, each the FIRST rung (2 minutes): the ladder restarted after every working turn.
+		// Four transient parks, each the FIRST rung (2 minutes, spread ±20% by the run, #1391): the ladder restarted after every working turn.
 		const parks = journal.sleeps.filter((s) => s.name.startsWith("ewait-"));
-		expect(parks.map((s) => s.ms)).toEqual([120_000, 120_000, 120_000, 120_000]);
+		expect(parks).toHaveLength(4);
+		for (const park of parks) {
+			expect(park.ms).toBeGreaterThanOrEqual(96_000);
+			expect(park.ms).toBeLessThanOrEqual(144_000);
+		}
+		// …and it is the SAME instant each time, because the spread comes from the run and the attempt: a ladder that restarted lands where it did before.
+		expect(new Set(parks.map((s) => s.ms)).size).toBe(1);
 	});
 });

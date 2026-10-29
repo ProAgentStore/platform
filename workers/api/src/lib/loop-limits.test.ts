@@ -252,3 +252,24 @@ describe("the objective cap (#854)", () => {
 		});
 	});
 });
+
+describe("providerRetry in the instance's limits (#1391)", () => {
+	it("is kept, clamped to the retry bounds, and an empty result is no setting", () => {
+		expect(sanitizeLoopLimitsConfig({ providerRetry: { attempts: 5, baseMs: 30_000 } })).toEqual({ providerRetry: { attempts: 5, baseMs: 30_000 } });
+		expect(sanitizeLoopLimitsConfig({ providerRetry: { attempts: 500 } })).toEqual({ providerRetry: { attempts: 8 } });
+		expect(sanitizeLoopLimitsConfig({ providerRetry: {} })).toEqual({});
+		expect(sanitizeLoopLimitsConfig({ providerRetry: "often" })).toEqual({});
+	});
+
+	it("is a patch of its own: absent keeps it, an object replaces it, null returns it to the defaults, an empty body clears everything", () => {
+		const stored = { maxIterations: 20, providerRetry: { attempts: 3 } };
+		expect(mergeLoopLimits(stored, { maxObjectiveChars: 4000 })).toEqual({ maxIterations: 20, maxObjectiveChars: 4000, providerRetry: { attempts: 3 } });
+		expect(mergeLoopLimits(stored, { providerRetry: { jitter: 0.1 } })).toEqual({ maxIterations: 20, providerRetry: { jitter: 0.1 } });
+		expect(mergeLoopLimits(stored, { providerRetry: null })).toEqual({ maxIterations: 20 });
+		expect(mergeLoopLimits(stored, {})).toEqual({});
+	});
+
+	it("speaking only about the retry policy leaves the iteration bounds alone", () => {
+		expect(mergeLoopLimits({ minIterations: 5, maxIterations: 20 }, { providerRetry: { attempts: 2 } })).toEqual({ minIterations: 5, maxIterations: 20, providerRetry: { attempts: 2 } });
+	});
+});

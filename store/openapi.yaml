@@ -1398,6 +1398,17 @@ components:
         label: { type: string, maxLength: 60, description: The button text. }
         objective: { type: string, description: What gets put in the objective box when it is pressed. }
 
+    ProviderRetryPolicy:
+      type: object
+      description: >
+        How a coding run retries an AI provider that failed transiently, e.g. Codex "Selected model is at capacity" (#1391). Every field is optional;
+        an omitted field is its default. Values outside a bound are brought inside it.
+      properties:
+        attempts: { type: integer, minimum: 1, maximum: 8, description: "Backoff waits before the run gives up (default 4)." }
+        baseMs: { type: integer, minimum: 5000, maximum: 600000, description: "The first wait in ms; each next one doubles (default 120000)." }
+        maxMs: { type: integer, minimum: 5000, maximum: 3600000, description: "No wait is longer than this, jitter included (default 900000)." }
+        jitter: { type: number, minimum: 0, maximum: 0.5, description: "The spread either side of each wait, as a fraction (default 0.2). Fixed per run, so a replay agrees with itself." }
+
     LoopLimits:
       type: object
       properties:
@@ -1411,6 +1422,17 @@ components:
               type: string
               enum: [ask, decide]
               description: The instance default for what a run does with a question it would park on (#1385). Absent means `ask`.
+            providerRetry: { $ref: "#/components/schemas/ProviderRetryPolicy" }
+        effectiveProviderRetry:
+          allOf:
+            - { $ref: "#/components/schemas/ProviderRetryPolicy" }
+            - type: object
+              properties:
+                scheduleMs:
+                  type: array
+                  items: { type: integer }
+                  description: The waits a run serves, in order, before the per-run spread (#1391).
+          description: The policy a run on this instance uses when its AI provider fails transiently — the defaults with the owner's fields on top.
         effectiveQuestions:
           type: string
           enum: [ask, decide]
@@ -13029,6 +13051,13 @@ paths:
                   description: >
                     The instance default for `questions` (#1385). `decide` lets a run answer its own reversible decision questions; `null` clears it
                     back to `ask`; absent keeps the stored value. Anything else is a 400. See docs/question-autonomy.md.
+                providerRetry:
+                  allOf:
+                    - { $ref: "#/components/schemas/ProviderRetryPolicy" }
+                  nullable: true
+                  description: >
+                    The instance's provider-retry policy (#1391). An object REPLACES the stored one (omit a field to inherit its default); `null`
+                    returns the whole policy to the defaults; absent keeps the stored value. Anything that is not an object or `null` is a 400.
       responses:
         "200":
           description: The bounds as stored, and the account ceiling

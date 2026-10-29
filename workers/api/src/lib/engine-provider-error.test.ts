@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { stopReasonFor } from "./coding-pause.js";
 import { type CodingDecision, type CodingDeps, type CodingGoal, type CodingPaneSnapshot, runCodingLoop } from "./coding-loop.js";
-import { engineProviderError, resetHintFromLine } from "./engine-provider-error.js";
+import { engineProviderError, PROVIDER_TEXT_MAX, resetHintFromLine } from "./engine-provider-error.js";
 import { planEngineWait, planTransientWait, resetInstantFromHint, TRANSIENT_WAIT_MS } from "./coding-wait.js";
 import { EMPTY_STREAK } from "./coding-turn-outcome.js";
 import type { TurnCarry } from "./coding-loop.js";
@@ -90,7 +90,7 @@ describe("the table: what each engine's provider says, and what it means", () =>
 	});
 
 	it("quotes the matching line as evidence and names who the row was written for", () => {
-		expect(engineProviderError(undefined, ["  error: usage_limit_reached  "])).toEqual({ kind: "limit", provider: "openai (codex)", evidence: "error: usage_limit_reached" });
+		expect(engineProviderError(undefined, ["  error: usage_limit_reached  "])).toEqual({ kind: "limit", provider: "openai (codex)", evidence: "error: usage_limit_reached", rule: "openai (codex)/limit", text: "error: usage_limit_reached" });
 	});
 });
 
@@ -295,5 +295,34 @@ describe("reset times at the edges (#1362)", () => {
 		expect(resetHintFromLine("in 3 dogs")).toBeNull();
 		expect(resetHintFromLine("You've hit your weekly limit · resets Aug 17 at 4pm")).toEqual({ far: true });
 		expect(resetHintFromLine("You hit your weekly limit · resets Mon 9am")).toEqual({ far: true });
+	});
+});
+
+describe("the matched rule and the whole text are returned with the classification (#1391)", () => {
+	const CAPACITY = "Selected model is at capacity. Please try a different model.";
+
+	it("names the row that matched as provider/kind, so a trace can say WHICH rule fired", () => {
+		expect(engineProviderError("[codex exited with code 1]", [`[codex] error: ${CAPACITY}`, "[codex exited with code 1]"])).toMatchObject({ kind: "transient", provider: "openai (codex)", rule: "openai (codex)/transient" });
+		expect(engineProviderError("You've hit your usage limit", [])).toMatchObject({ rule: "openai (codex)/limit" });
+		expect(engineProviderError("Credit balance is too low", [])).toMatchObject({ rule: "anthropic (claude)/billing" });
+	});
+
+	it("carries the turn's whole output, oldest first, not the one clipped line the sentence quotes", () => {
+		const tail = [`[codex] error: ${CAPACITY}`, `[error] ${CAPACITY}`, "[codex exited with code 1]"];
+		const e = engineProviderError("[codex exited with code 1]", tail);
+		expect(e?.text).toBe(tail.join("\n"));
+		expect(e?.evidence).toBe(`[error] ${CAPACITY}`); // unchanged: the newest matching line
+	});
+
+	it("falls back to the one reported line when the runner sent no tail", () => {
+		expect(engineProviderError(`error: ${CAPACITY}`, undefined)?.text).toBe(`error: ${CAPACITY}`);
+	});
+
+	it("a very long turn is kept from its END (where a CLI says why it stopped), marked, within the ceiling", () => {
+		const long = Array.from({ length: 400 }, (_, i) => `line ${i} ${"z".repeat(30)}`);
+		const e = engineProviderError("x", [...long, `[codex] error: ${CAPACITY}`]);
+		expect(e?.text.length).toBeLessThanOrEqual(PROVIDER_TEXT_MAX + 80);
+		expect(e?.text).toMatch(/^\[cut: showing the last \d+ of \d+ characters\]/);
+		expect(e?.text).toContain(CAPACITY);
 	});
 });

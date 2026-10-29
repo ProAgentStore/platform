@@ -56,6 +56,16 @@ export type CodingRunEvent =
 	| "coding.run.input_unknown"
 	/** A turn a runner restart or engine relaunch cut off: resumed exactly once, or the run stopped `turn_lost` (#1053). */
 	| "coding.run.turn_recovery"
+	/** A failed engine turn's words were matched to a provider rule (kind, provider, rule, exit code, the whole error text) (#1391). */
+	| "coding.run.provider_error_classified"
+	/** What was decided about a failed turn and WHY — resend, park, end, or a strike because no rule matched / the runner sent no output (#1391). */
+	| "coding.run.provider_retry_decision"
+	/** A transient provider failure parked the run for a backoff: attempt n of m, the wait, the next attempt's time (#1391). */
+	| "coding.run.provider_retry_scheduled"
+	/** The backoff elapsed and the run resumed to resend (#1391). */
+	| "coding.run.provider_retry_attempt"
+	/** The attempts ran out: the final status, every wait served, and the provider's whole error (#1391). */
+	| "coding.run.provider_retry_exhausted"
 	/** The run reached a terminal state. Carries the outcome and the stop reason. */
 	| "coding.run.end";
 
@@ -120,7 +130,7 @@ export async function traceCodingRun(
 		// draws, so a reader filtering `level` gets one consistent answer across both writers.
 		// A BLOCKED run joins them: it is the third way a run can exist without progressing, and an
 		// operator filtering `level` for "why is nothing happening" has to find all three (#801).
-		level: event === "coding.run.park" || event === "coding.run.interrupted" || event === "coding.run.blocked" ? "warn" : "info",
+		level: event === "coding.run.park" || event === "coding.run.interrupted" || event === "coding.run.blocked" || event === "coding.run.provider_retry_exhausted" ? "warn" : "info",
 		message: message.slice(0, 400),
 		userId: ctx.userId,
 		instanceId: ctx.instanceId,

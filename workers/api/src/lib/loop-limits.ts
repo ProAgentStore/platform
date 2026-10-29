@@ -12,6 +12,8 @@
 // the arithmetic that decides how long an autonomous run may spend someone's tokens is worth
 // testing without a database in the room.
 
+import { type ProviderRetryConfig, sanitizeProviderRetry } from "./provider-retry.js";
+
 /** An owner's configured bounds for one instance. Either half may be absent — most are. */
 export interface LoopLimitsConfig {
 	/** Clamp a request UP to this. Absent ⇒ no floor (effectively 1). */
@@ -26,6 +28,11 @@ export interface LoopLimitsConfig {
 	 * A run started with its own `questions` overrides this. Absent ⇒ `ask`.
 	 */
 	questions?: "ask" | "decide";
+	/**
+	 * How a run retries an AI provider that failed transiently (#1391): how many waits, the first wait, the longest, and the spread. Only the fields the
+	 * owner set are stored; the rest are the defaults (`provider-retry.ts`). Absent ⇒ all defaults.
+	 */
+	providerRetry?: ProviderRetryConfig;
 }
 
 /**
@@ -110,6 +117,9 @@ export function sanitizeLoopLimitsConfig(raw: unknown): LoopLimitsConfig {
 	if (chars !== undefined) out.maxObjectiveChars = chars;
 	// Only a value we recognise is kept: a hand-edited blob must degrade to "ask", never to something that skips a question.
 	if (r.questions === "ask" || r.questions === "decide") out.questions = r.questions;
+	// Clamped to the retry bounds; an empty result is no setting at all (#1391).
+	const retry = sanitizeProviderRetry(r.providerRetry);
+	if (Object.keys(retry).length) out.providerRetry = retry;
 	return out;
 }
 
@@ -131,10 +141,13 @@ export function mergeLoopLimits(stored: LoopLimitsConfig, raw: unknown): LoopLim
 	const speaksObjective = "maxObjectiveChars" in body;
 	// `questions` is a patch of its own, like the objective cap (#1385): absent keeps it, `null` returns it to the default (`ask`). An empty body clears all.
 	const speaksQuestions = "questions" in body;
-	const iterations = speaksIterations || (!speaksObjective && !speaksQuestions) ? body : stored;
+	// `providerRetry` is a patch of its own too (#1391): absent keeps it, `null` returns it to the defaults, an object REPLACES it (omit a field to inherit its default).
+	const speaksRetry = "providerRetry" in body;
+	const iterations = speaksIterations || (!speaksObjective && !speaksQuestions && !speaksRetry) ? body : stored;
 	const chars = speaksObjective ? body.maxObjectiveChars : Object.keys(body).length ? stored.maxObjectiveChars : undefined;
 	const questions = speaksQuestions ? body.questions : Object.keys(body).length ? stored.questions : undefined;
-	return sanitizeLoopLimitsConfig({ minIterations: iterations.minIterations, maxIterations: iterations.maxIterations, maxObjectiveChars: chars, questions });
+	const providerRetry = speaksRetry ? body.providerRetry : Object.keys(body).length ? stored.providerRetry : undefined;
+	return sanitizeLoopLimitsConfig({ minIterations: iterations.minIterations, maxIterations: iterations.maxIterations, maxObjectiveChars: chars, questions, providerRetry });
 }
 
 function bound(raw: unknown): number | undefined {

@@ -23,7 +23,7 @@
  */
 import type { LoopEffect } from "./coding-loop-state.js";
 import type { EngineAuthPrompt } from "./engine-auth-prompt.js";
-import { engineProviderError, providerTurnVerdict, type ProviderTurnVerdict } from "./engine-provider-error.js";
+import { engineProviderError, type ProviderErrorRecord, providerTurnVerdict, type ProviderTurnVerdict } from "./engine-provider-error.js";
 import { redactText } from "./redact.js";
 
 /** The runner's report, widened to what arrives over HTTP from a machine we do not control. */
@@ -253,7 +253,7 @@ export interface TurnCarry {
 /** How a snapshot's failed turn ends the run, if it does. `reauth` carries the prompt the loop words itself (#881). */
 export type TurnEnding =
 	| { kind: "reauth"; block: EngineAuthPrompt }
-	| { kind: "result"; outcome: "engine_error" | "waiting"; detail: string; waitKind?: ProviderTurnVerdict["waitKind"]; resetHint?: ProviderTurnVerdict["resetHint"] };
+	| { kind: "result"; outcome: "engine_error" | "waiting"; detail: string; waitKind?: ProviderTurnVerdict["waitKind"]; resetHint?: ProviderTurnVerdict["resetHint"]; providerError?: ProviderErrorRecord };
 
 export interface TurnVerdict {
 	/** The carry after this snapshot. The loop copies it onto the workflow's object, which outlives the round. */
@@ -285,21 +285,37 @@ export function foldTurn(carry: TurnCarry, snap: { lastTurn?: EngineTurnReport |
 
 	// THE PROVIDER'S OWN WORDS (#1326): a usage window parks, a transient failure is retried, an empty account ends —
 	// none is the engine refusing to run, so none spends one of the strikes below.
-	const verdict = providerTurnVerdict(engineProviderError(next.turns.lastDetail, next.turns.lastTail), next.transientStreak, ctx.repo);
+	const provider = engineProviderError(next.turns.lastDetail, next.turns.lastTail);
+	const verdict = providerTurnVerdict(provider, next.transientStreak, ctx.repo);
+	const exitCode = next.turns.lastExitCode ?? null;
+	const record: ProviderErrorRecord | undefined = provider ? { kind: provider.kind, provider: provider.provider, rule: provider.rule, exitCode, text: provider.text } : undefined;
+	// Structured, durable facts (#1391): what the turn's words were classified as, and — always — what was decided about them and why. A run that
+	// did NOT retry has to be able to say whether no rule matched, the runner sent no output to match, or a rule decided something else.
+	if (record) {
+		effects.push({ event: { name: "provider_error_classified", detail: `${record.provider} (${record.kind}): ${provider?.evidence ?? ""}`, data: { ...record, evidence: provider?.evidence, exitCode } } });
+	}
+	const decide = (decision: string, why: string, detail: string) =>
+		effects.push({ event: { name: "provider_retry_decision", detail, data: { decision, why, exitCode, consecutiveFailures: next.turns.consecutive, transientStreak: verdict?.transientStreak ?? 0, ...(record ? { rule: record.rule, kind: record.kind } : {}) } } });
 	next = { ...next, transientStreak: verdict?.transientStreak ?? 0 };
 	if (verdict) next = { ...next, turns: { ...next.turns, consecutive: Math.max(0, next.turns.consecutive - 1) } };
 	if (verdict?.end) {
+		decide("end", "billing", `ending: ${record?.provider} reports no credit or quota`);
 		effects.push({ transcript: `finish: engine_error — ${verdict.end}` });
-		return { carry: next, effects, ending: { kind: "result", outcome: "engine_error", detail: verdict.end } };
+		return { carry: next, effects, ending: { kind: "result", outcome: "engine_error", detail: verdict.end, ...(record ? { providerError: record } : {}) } };
 	}
 	if (verdict?.park) {
+		decide("park", verdict.waitKind === "limit" ? "usage_limit" : "repeated_transient", `parking on ${record?.provider} (${verdict.waitKind})`);
 		effects.push({ transcript: `waiting: ${verdict.park}`, event: { name: "waiting", detail: verdict.park } });
-		return { carry: next, effects, ending: { kind: "result", outcome: "waiting", detail: verdict.park, waitKind: verdict.waitKind, ...(verdict.resetHint ? { resetHint: verdict.resetHint } : {}) } };
+		return { carry: next, effects, ending: { kind: "result", outcome: "waiting", detail: verdict.park, waitKind: verdict.waitKind, ...(verdict.resetHint ? { resetHint: verdict.resetHint } : {}), ...(record ? { providerError: record } : {}) } };
 	}
 	if (verdict?.retry) {
+		decide("resend", "first_transient_failure", `the Pilot is told to resend the same instruction once (${record?.provider})`);
 		effects.push({ log: verdict.retry, transcript: verdict.retry, event: { name: "engine_failed", detail: verdict.retry } });
 		return { carry: next, effects, ending: null };
 	}
+	// No rule matched. WHY matters: a runner that sent no output (older CLI) cannot be classified at all, which is a different fault from output
+	// that no row recognises.
+	decide("strike", next.turns.lastTail === undefined ? "tail_not_reported" : "no_rule_matched", `the failed turn matched no provider rule; strike ${next.turns.consecutive} of ${MAX_ENGINE_FAILURES}`);
 	const note = engineFailureNote(next.turns);
 	effects.push({ log: note, transcript: note, event: { name: "engine_failed", detail: note } });
 	// `failed`, not `stuck`: no human takeover fixes a CLI that refuses on every invocation. The bound is CONSECUTIVE, so a run that recovers is untouched.

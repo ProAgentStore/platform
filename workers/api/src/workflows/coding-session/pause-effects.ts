@@ -13,6 +13,9 @@ import { markAnswerApplied } from "../../lib/coder-question-store.js";
 import { codingPauseStatus } from "../../lib/coding-answer.js";
 import { answerEventType, recordParkedWorkflow, recordParkMachine, releaseCheckout, resumeFromPark } from "../../lib/coding-park.js";
 import { askAnnouncement, whyBeyond } from "../../lib/coding-ask.js";
+import { traceCodingRun, type CodingRunEvent } from "../../lib/coding-run-trace.js";
+import { readLoopLimits } from "../../lib/loop-limits-store.js";
+import { type ProviderRetryPolicy, resolveProviderRetry } from "../../lib/provider-retry.js";
 import { codingQuestionSource } from "../../lib/coding-question-source.js";
 import { postIssueComment } from "../../lib/github-issues.js";
 import { applyQuestionsPolicy, runQuestionsPolicy } from "../../lib/question-policy.js";
@@ -74,6 +77,8 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 	const { env, step, goal, instanceId, userId, sessionId, repoId, boardTaskId, loopRunId, driverId, workflowInstanceId, cloneUrl, branch, token, tokenUsername, cardId, runRetry, postToChat, getConn, setConn, nextN, startOnRunner, getObjective } = ctx;
 	/** The question a `decision` park is waiting on (#960), set by `ask` and carried by every tick of that park. */
 	let parkedAsk: WaitingAsk | null = null;
+	/** The instance's provider-retry policy, read once per run and only when a transient park needs it (#1391). */
+	let retryPolicy: { policy: ProviderRetryPolicy; seed?: string } | null = null;
 	/** The `coder_questions` row that park's answer is read from (#1075); null for a takeover with no question. */
 	let parkedQuestionId: string | null = null;
 	/** Resume attempts on a park (#1077): each its own step, since a busy checkout is a retry, not a journalled answer. */
@@ -82,6 +87,22 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 		repo: goal.repo,
 		sourceIssue: () => codingQuestionSource(env, { instanceId, userId, sessionId, runId: loopRunId ?? null }, { askedAt: Date.now() }),
 		timeZone: goal.timeZone,
+		// Read lazily and JOURNALLED, and only on a transient park (#1391): a run that never meets a provider outage takes no extra step, and a replay of a
+		// park that did reads the policy the first pass chose even if the owner changed it meanwhile (the number of sleeps depends on it).
+		providerRetry: async () => {
+			if (!retryPolicy) {
+				const stored = (await runRetry("provider-retry-policy", async () => ((await readLoopLimits(env, instanceId, userId).catch(() => ({}))) as { providerRetry?: unknown }).providerRetry ?? null)) as Record<string, number> | null;
+				retryPolicy = { policy: resolveProviderRetry(stored), seed: loopRunId ?? sessionId };
+			}
+			return retryPolicy;
+		},
+		// One structured fact on the run's durable trace, once however often the park replays (#1391).
+		trace: async (name, message, data) => {
+			await runRetry(`ptrace-${round}-${name.replace("provider_", "")}-${String(data.attempt ?? 0)}`, async () => {
+				await traceCodingRun(env, { userId, instanceId, sessionId, runId: loopRunId ?? null, repo: goal.repo, cardId }, `coding.run.${name}` as CodingRunEvent, message, data);
+				return null;
+			});
+		},
 		instanceId,
 		taskId: boardTaskId,
 		sessionId,

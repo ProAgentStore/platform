@@ -63,7 +63,7 @@ import { finishLoopRun, settledRunStatus, grantRunIterations, recordIteration, t
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
 import { wakeIdleCoder } from "../../lib/auto-pickup.js";
 import { type PilotDecideOutcome, pilotDecide, unwrapPilotDecide } from "../../lib/pilot-decide.js";
-import { traceCodingRun } from "../../lib/coding-run-trace.js";
+import { type CodingRunEvent, traceCodingRun } from "../../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, runOutcomeNote } from "../../lib/coding-run-report.js";
 import { statusFor, type LoopRunStatus, type LoopStopReason } from "../../lib/agent-loop.js";
 import { PILOT_DEFAULT_MAX_STEPS } from "../../lib/loop-limits.js";
@@ -555,6 +555,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			const postProgress = type === "thought" && (++pilotThoughts === 1 || pilotThoughts % 4 === 0);
 			return step.do(`s${n++}-event`, async () => {
 				await callRunner(conn, "/coding/event", { sessionId, type, message, data }).catch(() => undefined);
+				// The provider-retry facts (#1391) are DURABLE, structured and untrimmed: written to the run's unified trace beside the runner's own
+				// (ephemeral, bounded) event ring, so "was it classified, why did it not retry" is answerable by run id long after the pane has moved on.
+				if (type.startsWith("provider_")) await traceCodingRun(env, traceCtx, `coding.run.${type}` as CodingRunEvent, message, (data ?? {}) as Record<string, unknown>);
 				// The supervisor's progress signal. No extra durable step — it rides the event
 				// hook the loop already calls.
 				if (type === "action" && event.payload.loopRunId) {

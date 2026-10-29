@@ -28,6 +28,7 @@ import {
 	planTransientWait,
 	type EngineWaitState,
 } from "./coding-wait.js";
+import { type ProviderRetryPolicy, retrySchedule, sayWait } from "./provider-retry.js";
 import type { LoopStopReason } from "./agent-loop.js";
 import { clipMarked } from "./clip-marked.js";
 import { ASK_QUESTION_FULL_MAX, type AskPart } from "./coding-ask.js";
@@ -78,6 +79,13 @@ function handoffLink(deps: Pick<PauseDeps, "instanceId" | "taskId" | "sessionId"
 }
 
 export interface PauseDeps {
+	/**
+	 * The instance's provider-retry policy and the seed that spreads its waits (#1391). Read lazily and journalled by the caller, so only a run that
+	 * actually parks on a transient provider failure ever looks it up. Absent: the defaults, no spread.
+	 */
+	providerRetry?: () => Promise<{ policy: ProviderRetryPolicy; seed?: string }>;
+	/** Write one structured provider-retry fact to the run's durable trace (#1391). Absent: nothing is recorded (a test, an old caller). */
+	trace?: (name: string, message: string, data: Record<string, unknown>) => Promise<void>;
 	/** Repo label, for the notification body. */
 	repo: string;
 	/** The run's trusted linked issue, if any. A read failure must not block a question. */
@@ -574,10 +582,27 @@ async function waitForEngineReset(
 	// waits it ends as a continuable engine error saying so — not as "the CLI's usage limit", which it never was.
 	const transient = result.waitKind === "transient";
 	const now = deps.stamp ? await deps.stamp(`ewait-${round}-at`) : deps.now();
-	const plan = transient ? planTransientWait(state, now) : planEngineWait({ resetsAt: result.waitUntil, resetHint: result.resetHint, now, state, timeZone: deps.timeZone });
+	const retry = transient && deps.providerRetry ? await deps.providerRetry() : undefined;
+	const plan = transient ? planTransientWait(state, now, retry) : planEngineWait({ resetsAt: result.waitUntil, resetHint: result.resetHint, now, state, timeZone: deps.timeZone });
+	const err = result.providerError;
 	if (!plan.wait) {
-		if (transient) return { resume: false, result: { ...result, outcome: "engine_error", detail: `The coding CLI's AI provider kept failing and ${plan.why}. ${result.detail ?? ""}`.trim() } };
+		if (transient) {
+			// Out of attempts (#1391): the ending says what was tried — every wait, in order — and quotes the provider's own words in full, and the
+			// same facts are written to the run's durable trace, where the 2,000-character run detail cannot cut them.
+			const taken = state.transientWaits ?? 0;
+			const waits = retrySchedule(retry?.policy ?? { attempts: taken, baseMs: 0, maxMs: 0, jitter: 0 }, retry?.seed).slice(0, taken);
+			const history = waits.length ? ` after ${waits.length} retr${waits.length === 1 ? "y" : "ies"} (waits: ${waits.map(sayWait).join(", ")})` : "";
+			const head = `The coding CLI's AI provider${err ? ` (${err.provider})` : ""} kept failing${history}, so the run stopped instead of waiting longer.`;
+			const text = (err?.text ?? result.detail ?? "").trim();
+			await deps.trace?.("provider_retry_exhausted", `${head} ${plan.why}.`, { attempts: retry?.policy.attempts ?? taken, taken, waitsMs: waits, stopReason: "engine_error", ...(err ? { rule: err.rule, kind: err.kind, provider: err.provider, exitCode: err.exitCode } : {}), error: text });
+			return { resume: false, result: { ...result, outcome: "engine_error", detail: `${head}${text ? ` Its last output, in full:\n${text}` : ""}` } };
+		}
 		return { resume: false, result: { ...result, detail: engineWaitExhausted(result.detail, plan.why) } };
+	}
+	if (transient) {
+		const attempt = (state.transientWaits ?? 0) + 1;
+		const of = retry?.policy.attempts ?? attempt;
+		await deps.trace?.("provider_retry_scheduled", `Retry ${attempt} of ${of} in ${sayWait(plan.ms)} (${err?.provider ?? "provider"}).`, { attempt, of, waitMs: plan.ms, nextAttemptAt: plan.until, ...(err ? { rule: err.rule, kind: err.kind, provider: err.provider, exitCode: err.exitCode, error: err.text } : {}) });
 	}
 
 	await deps.announce(enginePauseMessage(plan, result.detail ?? "", deps.timeZone));
@@ -603,8 +628,10 @@ async function waitForEngineReset(
 		}
 	}
 
-	if (transient) state.transientWaits = (state.transientWaits ?? 0) + 1;
-	else {
+	if (transient) {
+		state.transientWaits = (state.transientWaits ?? 0) + 1;
+		await deps.trace?.("provider_retry_attempt", `Retry ${state.transientWaits} of ${retry?.policy.attempts ?? state.transientWaits}: resending after ${sayWait(plan.ms)}.`, { attempt: state.transientWaits, of: retry?.policy.attempts ?? state.transientWaits, waitedMs: plan.ms });
+	} else {
 		state.waits += 1;
 		state.spentMs += plan.ms;
 	}

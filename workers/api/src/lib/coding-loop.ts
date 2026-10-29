@@ -5,6 +5,7 @@ import { engineSignInBlock, type EngineAuthPrompt } from "./engine-auth-prompt.j
 import { deadSessionDetail } from "./coding-dead-session.js";
 import { instructionAttributionNote } from "./run-attribution.js";
 import { EMPTY_STREAK, engineErrorEnding, foldTurn, type TurnCarry } from "./coding-turn-outcome.js";
+import type { ProviderErrorRecord } from "./engine-provider-error.js";
 import { CompletionEvidence, evidenceNote, finishRefusalNote, judgeCompletion } from "./coding-completion-evidence.js";
 import { describeWriteRefusal } from "./write-scope-refusals.js";
 import { LEARNED_PREFIX } from "./coding-pilot.js";
@@ -41,6 +42,8 @@ export interface CodingResult {
 	resetHint?: ResetHint;
 	/** On `waiting` (#1344): `transient` parks on a short ladder of its own, never the usage-limit budget. */
 	waitKind?: "limit" | "transient";
+	/** On a provider-caused `waiting` / `engine_error` (#1391): the classification and the whole error text, for the park's events and the final detail. */
+	providerError?: ProviderErrorRecord;
 	steps: number;
 	transcript?: string[];
 	/** On `max_steps`, when the brain answered the cap decision (#1261) — absent falls back to the generic ending. */
@@ -69,7 +72,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	const say = async (e: LoopEffect): Promise<void> => {
 		if (e.log !== undefined) actionLog.push(e.log);
 		if (e.transcript !== undefined) transcript.push(e.transcript);
-		if (e.event) await deps.onEvent?.(e.event.name, e.event.detail);
+		if (e.event) await deps.onEvent?.(e.event.name, e.event.detail, e.event.data);
 	};
 	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545), carried across rounds (#1344). */
 	const carry: TurnCarry = opts.turnCarry ?? { turns: EMPTY_STREAK, transientStreak: 0 };

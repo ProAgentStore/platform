@@ -496,7 +496,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// getting it wrong, which is exactly why it must not be the one deciding.
 	server.tool(
 		"get_instance_loop_limits",
-		"Read the iteration floor and ceiling configured on an instance — the bounds the platform applies to EVERY run it starts, whatever `max_iterations` the caller passes. `limits.minIterations` clamps a request up, `limits.maxIterations` clamps it down; either may be absent, and `{}` means none are configured (a run then gets whatever the caller asked for, defaulting to 10). `accountCeiling` is the account-wide maximum these sit under and can only narrow — read it before judging a floor, since 30 means one thing under a ceiling of 50 and nothing under a ceiling of 20. Also the objective cap: `maxObjectiveChars` is the longest objective a run on this instance accepts right now (the instance's own `limits.maxObjectiveChars`, else the default), and `objectiveChars` gives the default and the range it may be set to. It also carries the instance default for questions (limits.questions, and effectiveQuestions: ask or decide, #1385) — what a run does with a question it would park on when it is not started with its own setting.",
+		"Read the iteration floor and ceiling configured on an instance — the bounds the platform applies to EVERY run it starts, whatever `max_iterations` the caller passes. `limits.minIterations` clamps a request up, `limits.maxIterations` clamps it down; either may be absent, and `{}` means none are configured (a run then gets whatever the caller asked for, defaulting to 10). `accountCeiling` is the account-wide maximum these sit under and can only narrow — read it before judging a floor, since 30 means one thing under a ceiling of 50 and nothing under a ceiling of 20. Also the objective cap: `maxObjectiveChars` is the longest objective a run on this instance accepts right now (the instance's own `limits.maxObjectiveChars`, else the default), and `objectiveChars` gives the default and the range it may be set to. It also carries the instance default for questions (limits.questions, and effectiveQuestions: ask or decide, #1385) — what a run does with a question it would park on when it is not started with its own setting. Also `limits.providerRetry` (what the owner set) and `effectiveProviderRetry` (the policy a run uses when its AI provider fails transiently: attempts, baseMs, maxMs, jitter, and the `scheduleMs` of the waits before the per-run spread, #1391).",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -587,12 +587,22 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				.nullable()
 				.optional()
 				.describe("The instance's default for what a run does with a question it would park on (#1385): `ask` (parks, a person answers) or `decide` (a reversible decision question is answered by the run itself — the platform takes the most reversible option and posts it on the linked issue; a credential, a destructive act, spend and anything needing your computer still park). A run started with its own `questions` overrides it. null returns to `ask`; omit to leave it as it is."),
+			provider_retry: z
+				.object({
+					attempts: z.coerce.number().int().min(1).max(8).optional().describe("How many backoff waits before the run gives up on a failing AI provider (default 4; the Pilot's one free resend comes before the first)."),
+					base_ms: z.coerce.number().int().min(5000).max(600000).optional().describe("The first wait, in milliseconds (default 120000 = 2 min). Each next wait doubles."),
+					max_ms: z.coerce.number().int().min(5000).max(3600000).optional().describe("No wait is longer than this, in milliseconds (default 900000 = 15 min)."),
+					jitter: z.coerce.number().min(0).max(0.5).optional().describe("The random spread either side of each wait, as a fraction (default 0.2 = ±20%); fixed per run, so a replay agrees with itself."),
+				})
+				.nullable()
+				.optional()
+				.describe("How a run retries an AI provider that failed transiently, e.g. Codex `Selected model is at capacity` (#1391): the number of waits, the first wait, the longest, and the spread. Omit a field to keep its default; `null` returns the whole policy to the defaults; omit the argument to leave it as it is. Read the effective policy back with get_instance_loop_limits (`effectiveProviderRetry`)."),
 			dry_run: z.boolean().optional().describe("Report the bounds that would be saved, without saving them."),
 		},
-		async ({ token, instance_id, min_iterations, max_iterations, max_objective_chars, questions, dry_run }) => {
+		async ({ token, instance_id, min_iterations, max_iterations, max_objective_chars, questions, provider_retry, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, min_iterations, max_iterations, max_objective_chars, questions };
+			const input = { instance_id, min_iterations, max_iterations, max_objective_chars, questions, provider_retry };
 			const denied = await requirePermission(safetyFor(token), "write", "set_instance_loop_limits", input);
 			if (denied) return denied;
 			// Refused here rather than repaired by the route. The route is total on purpose — it also
@@ -606,7 +616,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 			}
 			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/loop-limits`;
 			// The objective cap and `questions` are patches of their own: speaking only about them leaves the iteration bounds as they are.
-			const onlyObjective = min_iterations === undefined && max_iterations === undefined && (max_objective_chars !== undefined || questions !== undefined);
+			const onlyObjective = min_iterations === undefined && max_iterations === undefined && (max_objective_chars !== undefined || questions !== undefined || provider_retry !== undefined);
 			const body = JSON.stringify({
 				minIterations: min_iterations,
 				maxIterations: max_iterations,
@@ -614,15 +624,23 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				...(max_objective_chars === undefined ? {} : { maxObjectiveChars: max_objective_chars || null }),
 				// `null` returns it to `ask`; absent keeps what is stored (#1385).
 				...(questions === undefined ? {} : { questions }),
+				// The route's own names (#1391); `null` returns the whole policy to the defaults, absent keeps what is stored.
+				...(provider_retry === undefined ? {} : { providerRetry: provider_retry === null ? null : { attempts: provider_retry.attempts, baseMs: provider_retry.base_ms, maxMs: provider_retry.max_ms, jitter: provider_retry.jitter } }),
 			});
 			const questionsEffect =
 				questions === undefined
 					? ""
 					: ` Runs would ${questions === "decide" ? "answer a reversible decision question themselves instead of parking (credentials, destructive acts, spend and anything needing your computer still park)" : "park on a question and wait for a person"} unless a run says otherwise.`;
+			const retryEffect =
+				provider_retry === undefined
+					? ""
+					: provider_retry === null
+						? " A failing AI provider would be retried on the default policy (4 waits: 2, 4, 8, then 15 minutes, ±20%)."
+						: ` A failing AI provider would be retried with ${provider_retry.attempts ?? "the default number of"} waits${provider_retry.base_ms ? ` starting at ${Math.round(provider_retry.base_ms / 1000)} s` : ""}${provider_retry.max_ms ? ` and none longer than ${Math.round(provider_retry.max_ms / 1000)} s` : ""}${provider_retry.jitter !== undefined ? `, spread ±${Math.round(provider_retry.jitter * 100)}%` : ""}; fields left out keep their defaults.`;
 			const objectiveEffect =
 				(max_objective_chars === undefined
 					? ""
-					: ` Objectives would be capped at ${max_objective_chars || DEFAULT_MAX_OBJECTIVE_CHARS} characters${max_objective_chars ? "" : " (the default)"}.`) + questionsEffect;
+					: ` Objectives would be capped at ${max_objective_chars || DEFAULT_MAX_OBJECTIVE_CHARS} characters${max_objective_chars ? "" : " (the default)"}.`) + questionsEffect + retryEffect;
 			const describe =
 				onlyObjective
 					? `${instance_id}'s iteration bounds would stay as they are.${objectiveEffect}`

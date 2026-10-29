@@ -67,6 +67,8 @@
 // live in the workflow, so every rule below is testable as a rule.
 
 /** Shortest park. A reset "already past" still gets a beat rather than an immediate re-decide. */
+
+import { DEFAULT_PROVIDER_RETRY, type ProviderRetryPolicy, retryDelayMs, retrySchedule } from "./provider-retry.js";
 export const MIN_ENGINE_WAIT_MS = 60_000;
 
 /**
@@ -187,14 +189,21 @@ export function resetInstantFromHint(hint: ResetHint | undefined, now: number, o
 }
 
 
-/** Parks for a provider failing transiently (#1344): short, because an overloaded provider recovers in minutes, not hours. */
-export const TRANSIENT_WAIT_MS = [2 * 60_000, 5 * 60_000, 15 * 60_000] as const;
+/**
+ * The default waits for a provider failing transiently (#1344, #1391): 2, 4, 8, then 15 minutes — short, because an overloaded provider recovers in
+ * minutes, not hours. The policy (`provider-retry.ts`) is the source; a run's own policy and spread are passed to {@link planTransientWait}.
+ */
+export const TRANSIENT_WAIT_MS: readonly number[] = retrySchedule(DEFAULT_PROVIDER_RETRY);
 
-/** One transient park, or a refusal once the short ladder is spent. */
-export function planTransientWait(state: EngineWaitState, now: number): EngineWaitPlan | EngineWaitRefusal {
+/**
+ * One transient park, or a refusal once the run's attempts are spent. `retry` is the instance's policy and the seed that spreads its waits (the run
+ * id): the same run and attempt always land on the same instant, so a replay of the park agrees with the first pass.
+ */
+export function planTransientWait(state: EngineWaitState, now: number, retry: { policy?: ProviderRetryPolicy; seed?: string } = {}): EngineWaitPlan | EngineWaitRefusal {
+	const policy = retry.policy ?? DEFAULT_PROVIDER_RETRY;
 	const taken = state.transientWaits ?? 0;
-	if (taken >= TRANSIENT_WAIT_MS.length) return { wait: false, why: `the provider was still failing after ${taken} short waits` };
-	const ms = TRANSIENT_WAIT_MS[taken];
+	if (taken >= policy.attempts) return { wait: false, why: `the provider was still failing after ${taken} waits (${taken} of ${policy.attempts} attempts)` };
+	const ms = retryDelayMs(taken, policy, retry.seed);
 	return { wait: true, ms, until: now + ms, source: "backoff", capped: false };
 }
 

@@ -102,6 +102,29 @@ Two consequences of the clock being one field with one meaning:
 
 A park also outranks the heartbeat test. A run parked on an interruption is mid-resume and has nothing ticking *by design*, so reading its silence as death would report a recovery in progress as a failure.
 
+## When The AI Provider Fails Transiently (#1391)
+
+A coding CLI talks to its provider itself, so an outage such as Codex's `Selected model is at capacity` reaches the platform as the CLI's printed
+error and a non-zero exit. The runner reports the turn (exit code and its own last lines); the platform reads those words, whatever the exit code,
+against a table of provider messages (`engine-provider-error.ts`) and decides:
+
+- **A transient failure is resent once** — the Pilot is told the instruction was not at fault and to send the same one again. A **repeat parks**
+  the run on a backoff: `attempts` waits (default 4), the first `baseMs` (2 minutes) and doubling up to `maxMs` (15 minutes), each spread by
+  `jitter` (±20%). The spread comes from a hash of the run and the attempt, so a replay of the park lands on the instant the first pass chose, and
+  two runs that met the same outage do not wake together. A turn that works in between ends the outage and restarts the ladder.
+- **Out of attempts, the run ends `engine_error` and says so**: how many retries it made, every wait in order, and the provider's own output in full.
+  It is continuable. It never sits `working` and silent.
+- **Billing** (no credit or quota) ends the run at once; a **usage limit** parks until the window reopens, on its own budget.
+- **The policy is per instance**: `PUT /v1/instances/:id/loop-limits { providerRetry: { attempts, baseMs, maxMs, jitter } }`, or `provider_retry`
+  on `set_instance_loop_limits`. `GET` returns what was set and the `effectiveProviderRetry` a run will use, with its `scheduleMs`.
+
+Every step is a **durable, structured event** on the run's unified trace (`agent_trace` with the run id; `coding.run.*`, 4 KB per row, kept 14
+days), never only a line in a pane: `provider_error_classified` (kind, provider, the matched rule, exit code, the error text),
+`provider_retry_decision` (resend, park, end or strike — and **why**: `first_transient_failure`, `repeated_transient`, `usage_limit`, `billing`,
+`no_rule_matched`, or `tail_not_reported` when the runner is too old to send the turn's output), `provider_retry_scheduled` (attempt n of m, the wait,
+the next attempt's time), `provider_retry_attempt`, and `provider_retry_exhausted` (the final status, the waits served, the whole error).
+
+
 ## The Queue And A Runner That Goes Quiet (#1388)
 
 A runner can hold its relay socket and still miss the relay's 1.5 second ping — a busy or reconnecting machine. That is "gone for now",

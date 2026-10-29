@@ -9,6 +9,7 @@ import {
 	stopReasonFor,
 	type PauseDeps,
 } from "./coding-pause.js";
+import { DEFAULT_PROVIDER_RETRY } from "./provider-retry.js";
 import { ASK_QUESTION_FULL_MAX } from "./coding-ask.js";
 import { ENGINE_WAIT_TICK_MS, ENGINE_WAIT_TOTAL_MS, MAX_ENGINE_WAITS } from "./coding-wait.js";
 import { statusFor } from "./agent-loop.js";
@@ -677,7 +678,7 @@ describe("resolvePause — a provider failing transiently is not the CLI's usage
 
 	it("out of short waits it ends as a continuable engine error saying the provider kept failing — never as engine_limit", async () => {
 		const s = spy();
-		const v = await resolvePause(s.deps, { round: 3, result: transient, state: { waits: 0, spentMs: 0, transientWaits: 3 } });
+		const v = await resolvePause(s.deps, { round: 3, result: transient, state: { waits: 0, spentMs: 0, transientWaits: DEFAULT_PROVIDER_RETRY.attempts } });
 		expect(v.resume).toBe(false);
 		expect(v.resume === false && v.result.outcome).toBe("engine_error");
 		expect(v.resume === false && v.result.detail).toMatch(/kept failing/);

@@ -40,7 +40,7 @@ export async function writeLoopLimits(
 	const limits = mergeLoopLimits(await readLoopLimits(env, instanceId, userId), raw);
 	// `hasLoopLimits` is iteration-only on purpose (it decides the Pilot's step default), so the
 	// objective cap is asked about separately before "nothing configured" removes the key.
-	const ok = hasLoopLimits(limits) || limits.maxObjectiveChars !== undefined || limits.questions !== undefined
+	const ok = hasLoopLimits(limits) || limits.maxObjectiveChars !== undefined || limits.questions !== undefined || limits.providerRetry !== undefined
 		? await patchInstanceConfig(env, instanceId, userId, KEY, limits)
 		: await removeInstanceConfigKey(env, instanceId, userId, KEY);
 	return ok ? limits : null;
