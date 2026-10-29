@@ -468,6 +468,7 @@ const READBACK: Record<string, string | null> = {
 	"secure_input_request.destination_scope": "secure_input_status",
 	"secure_input_request.one_shot": "secure_input_status",
 	"secure_input_request.target": "secure_input_status", // #966: the session a tmux request is for
+	"secure_input_request.command": "secure_input_status", // #1131: the argv a sudo request will run, shown back with `commandApproved`
 	// #966: inject's `target` and `submit` steer ONE delivery and are not stored; the verdict echoes the target.
 	"secure_input_inject.target": null,
 	"secure_input_inject.submit": null,

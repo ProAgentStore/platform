@@ -1,6 +1,6 @@
 {
   "name": "@proagentstore/cli",
-  "version": "0.4.189",
+  "version": "0.4.190",
   "description": "CLI for creating, publishing, and running ProAgentStore agents",
   "license": "MIT",
   "type": "module",

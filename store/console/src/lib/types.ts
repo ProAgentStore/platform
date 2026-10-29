@@ -620,6 +620,10 @@ export interface SecureInputView {
 	sourceNode?: string;
 	/** The runner node that wrote the value out (`tmux_secure_get`). */
 	consumedNode?: string;
+	/** `sudo` scope only (#1131): the program and arguments the platform will run as root, fixed at creation. Shown to the owner, who approves it with the value. */
+	command?: string[];
+	/** `sudo` scope only: the owner has approved exactly this command. */
+	commandApproved?: boolean;
 }
 
 export interface ListSecureInputsResponse {

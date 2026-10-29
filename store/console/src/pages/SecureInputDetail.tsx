@@ -4,7 +4,7 @@ import { api } from "@proagentstore/sdk/client";
 import { AlertCircle, Loader2, CheckCircle, ArrowLeft } from "lucide-react";
 import Button from "../components/Button";
 import type { SecureInputView } from "../lib/types";
-import { isMachineDeposit, secureInputStatusLine } from "../lib/secureInput";
+import { canSubmitSecureInput, isMachineDeposit, needsCommandApproval, secureInputStatusLine, secureInputSubmitBody, sudoCommandLine } from "../lib/secureInput";
 
 /** A stored `datetime('now')` (UTC, no zone) or an ISO time, in the reader's own clock. */
 function stamp(at: string): string {
@@ -17,6 +17,8 @@ export default function SecureInputDetail() {
 	const navigate = useNavigate();
 	const [request, setRequest] = useState<SecureInputView | null>(null);
 	const [value, setValue] = useState("");
+	/** A sudo request: the owner has ticked that they approve running exactly the command shown (#1131). */
+	const [approved, setApproved] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState("");
@@ -51,15 +53,15 @@ export default function SecureInputDetail() {
 	}, [open, load]);
 
 	const handleSubmit = async () => {
-		if (!instanceId || !requestId || !value) return;
+		if (!instanceId || !requestId || !request || !canSubmitSecureInput(request, { value, approved })) return;
 		setSubmitting(true);
 		setError("");
 		try {
 			await api(`/v1/instances/${instanceId}/secure-inputs/${requestId}/submit`, {
 				method: "POST",
-				body: JSON.stringify({ value }),
+				body: JSON.stringify(secureInputSubmitBody(request as SecureInputView, value)),
 			});
-			setRequest((prev) => (prev ? { ...prev, status: "ready" } : null));
+			setRequest((prev) => (prev ? { ...prev, status: "ready", commandApproved: needsCommandApproval(prev) ? true : prev.commandApproved } : null));
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Failed to submit");
 		} finally {
@@ -120,7 +122,11 @@ export default function SecureInputDetail() {
 						<CheckCircle size={48} className="text-success" />
 						<div className="text-center">
 							<p className="font-semibold mb-1">Submitted successfully</p>
-							<p className="text-sm text-muted">Your value has been received and is ready for injection.</p>
+							<p className="text-sm text-muted">
+								{needsCommandApproval(request)
+									? `Your value is stored and you approved ${sudoCommandLine(request.command as string[])}. The agent can run exactly that, once.`
+									: "Your value has been received and is ready for injection."}
+							</p>
 						</div>
 					</div>
 				) : request.status === "consumed" ? (
@@ -147,6 +153,19 @@ export default function SecureInputDetail() {
 						}}
 						className="space-y-4"
 					>
+						{needsCommandApproval(request) && (
+							<div className="rounded-lg border border-warning bg-panel p-4 space-y-3" data-testid="sudo-approval">
+								<p className="font-semibold text-sm">This runs as root on your machine</p>
+								<pre className="whitespace-pre-wrap break-all rounded bg-paper border border-line px-3 py-2 text-sm font-mono" data-testid="sudo-command">{sudoCommandLine(request.command as string[])}</pre>
+								<p className="text-xs text-muted">
+									Your password is handed to <code>sudo</code> for this command only — it is never typed into a terminal and the agent never sees it. It cannot be used for any other command.
+								</p>
+								<label className="flex items-start gap-2 text-sm">
+									<input type="checkbox" checked={approved} onChange={(e) => setApproved(e.target.checked)} disabled={submitting} className="mt-1" />
+									<span>I approve running exactly this command.</span>
+								</label>
+							</div>
+						)}
 						<div className="flex flex-col gap-2">
 							<label htmlFor="value" className="font-semibold text-sm">
 								Enter value <span className="text-warning">*</span>
@@ -168,7 +187,7 @@ export default function SecureInputDetail() {
 						<div className="flex gap-2 pt-4">
 							<Button
 								variant="primary"
-								disabled={!value || submitting}
+								disabled={!canSubmitSecureInput(request, { value, approved }) || submitting}
 								onClick={(e) => {
 									e.preventDefault();
 									void handleSubmit();

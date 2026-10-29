@@ -97,6 +97,8 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	"/secure/write": once(),
 	"/secure/scrub": once(),
 	"/secure/type": once(),
+	// One sudo attempt (#1131): every dispatch can use up one of sudo's three tries, so a command that was sent is never sent again by itself.
+	"/secure/sudo": once(),
 
 	// ── the browser: every click, keystroke and completion is a side effect on a live page ──
 	"/browser/snapshot": readSlow(),

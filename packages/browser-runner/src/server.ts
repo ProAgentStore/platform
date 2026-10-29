@@ -1,6 +1,7 @@
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { readRecordAck } from "./coding/record-cursor.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
+import { secureSudoRoute } from "./coding/secure-sudo.js";
 import { codingSessionRefusal, instanceOf, readJson } from "./request-instance.js";
 import {
 	createServer,
@@ -101,6 +102,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// Panes leave this machine redacted (#1166, coding/pane-redact.ts); a delivered secret is scrubbed.
 	redactPanesOf(res, path, req.method === "POST" && /^\/(tmux|terminal)\//.test(path) ? await readJson<{ unmasked?: unknown }>(req) : undefined);
 	if (req.method === "POST" && (path === "/secure/scrub" || path === "/secure/type")) return json(res, 200, await secureTerminalRoute(path, await readJson(req)));
+	// #1131: one owner-approved command under `sudo -S`, the password on stdin — never typed into a pane. The body is never logged.
+	if (req.method === "POST" && path === "/secure/sudo") return json(res, 200, await secureSudoRoute(await readJson(req)));
 
 	if ((req.method === "GET" || req.method === "POST") && path === "/health") {
 		// #896: a health check that cannot say WHO answered is not enough to decide anything with.

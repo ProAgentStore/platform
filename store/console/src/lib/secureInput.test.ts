@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMachineDeposit, secureInputStatusLine } from "./secureInput";
+import { canSubmitSecureInput, isMachineDeposit, needsCommandApproval, secureInputStatusLine, secureInputSubmitBody, sudoCommandLine } from "./secureInput";
 
 describe("secure input wording (#906, #918)", () => {
 	it("tells an owner entry from a machine deposit by where the value came from", () => {
@@ -34,3 +34,40 @@ describe("a deposit is a deposit even when its machine had no name (#929 finding
 	});
 });
 
+
+describe("a sudo request: the owner approves the exact command with the value (#1131)", () => {
+	const PMSET = ["pmset", "-a", "autorestart", "1"];
+	const sudo = { destinationScope: "sudo", command: PMSET };
+	const tmux = { destinationScope: "tmux" };
+
+	it("shows the command as the owner reads it, quoting what needs it so they can see where an argument ends", () => {
+		expect(sudoCommandLine(PMSET)).toBe("sudo -- pmset -a autorestart 1");
+		expect(sudoCommandLine(["sh", "-c", "echo $HOME; id"])).toBe("sudo -- sh -c 'echo $HOME; id'");
+		expect(sudoCommandLine(["echo", "it's"])).toBe("sudo -- echo 'it'\\''s'");
+	});
+
+	it("only a sudo request that carries a command needs an approval", () => {
+		expect(needsCommandApproval(sudo)).toBe(true);
+		expect(needsCommandApproval(tmux)).toBe(false);
+		expect(needsCommandApproval({ destinationScope: "sudo" })).toBe(false); // nothing to approve: the server will not deliver it either
+		expect(needsCommandApproval({ destinationScope: "sudo", command: [] })).toBe(false);
+	});
+
+	it("Submit stays disabled until the value is entered AND the command is approved", () => {
+		expect(canSubmitSecureInput(sudo, { value: "", approved: true })).toBe(false);
+		expect(canSubmitSecureInput(sudo, { value: "pw", approved: false })).toBe(false);
+		expect(canSubmitSecureInput(sudo, { value: "pw", approved: true })).toBe(true);
+	});
+
+	it("every other request needs only a value, exactly as before", () => {
+		expect(canSubmitSecureInput(tmux, { value: "123456", approved: false })).toBe(true);
+		expect(canSubmitSecureInput(tmux, { value: "", approved: false })).toBe(false);
+	});
+
+	it("the submit sends the argv exactly as it was shown — a copy, so the page cannot change what it approved", () => {
+		const body = secureInputSubmitBody(sudo, "pw");
+		expect(body).toEqual({ value: "pw", approvedCommand: PMSET });
+		expect(body.approvedCommand).not.toBe(PMSET);
+		expect(secureInputSubmitBody(tmux, "123456")).toEqual({ value: "123456" });
+	});
+});

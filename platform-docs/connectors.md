@@ -281,6 +281,39 @@ The rules:
   from `mac-mini` to `pink-laptop`" once it is retrieved. There is no input box and no way to view
   the value. `secure_input_status` reports the same status (`ready` → `consumed`, or `expired`).
 
+### A `sudo` password — delivered to sudo's stdin, never typed (#1131)
+
+A masked prompt (`sudo`, `su`, `ssh`, `gpg`) echoes nothing, so typing a stored secret into a pane with `secure_input_inject` cannot be
+confirmed: the only check is the prompt's reaction after Enter, and a wrong guess has already used one of sudo's three tries. For `sudo`
+the platform does not type at all. The runner starts `sudo -S -p '' -- <command>` itself and writes the value to its stdin.
+
+1. The agent: `secure_input_request { destination_scope: "sudo", command: ["pmset", "-a", "autorestart", "1"], label: "Mac mini sudo password" }`.
+   `command` is the program and its arguments as an array — not a shell string, not starting with `sudo` or an option, no control
+   characters. It is fixed when the request is created.
+2. The owner opens the request in the console. It shows the exact line it will run (`sudo -- pmset -a autorestart 1`) and an approval
+   checkbox; **submitting the password is the approval of that command**, sent back as `approvedCommand`. A value submitted without it, or
+   against any other command, is refused and nothing is stored — the store enforces this, not only the page.
+3. The agent: `secure_input_sudo { instance_id, request_id }`. It takes no command. The platform claims the value, the runner runs the
+   approved argv with no shell and the value on stdin, and the answer is `{ delivered, reason?, consumedValue, status, command,
+   commandLine, exitCode?, timedOut?, stdout?, stderr?, length? }`.
+
+The rules:
+
+- **The value is in no argument list, environment variable, tmux buffer, pane, scrollback, log or result.** It travels platform → relay
+  → runner → sudo's stdin. What comes back is the command's output and sudo's stderr, bounded, with the value cut out.
+- **Success is the exit code.** `delivered: true` only when sudo exits 0, and only then is the value spent.
+- **Any other outcome leaves the request `ready`** and says why in sudo's own words: a wrong password (one incorrect attempt counted), a
+  command the machine's sudo policy refuses, a timeout (45 s; the command may have partly run), `sudo` missing, a runner that could not be
+  reached or that dropped with the command in flight. **Nothing retries it** — not the platform, not the relay: `/secure/sudo` is a
+  never-resend route. A wrong password cannot be fixed by sending it again; ask for a new request.
+- **One attempt at a time.** The value is claimed before the runner is called, so two simultaneous calls make one sudo attempt.
+- **Only the approved command can run.** The delivery route and tool take no command, target or value; the argv is the one stored on the
+  request. Not gated on the tmux/terminal write consent either: that consent exists because the agent chooses the pane it types into,
+  and here it chooses nothing.
+- **Runner version.** The runner needs CLI `0.4.190` or newer; an older one is named, with its version, and the value is put back.
+  There is no fallback to typing.
+- `secure_input_inject` still exists for a prompt you can see (it verifies by echo); its description now says not to use it for `sudo`.
+
 ### Interactive sign-ins in a tmux pane — one clean attempt at a time
 
 A login that prints a link and asks for a code (`gcloud auth login --no-launch-browser`, any

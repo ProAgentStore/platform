@@ -549,6 +549,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	run_instance_task: "runtime",
 	run_instance_trigger: "runtime",
 	secure_input_inject: "runtime",
+	// #1131: runs the owner-approved command as root on the owner's machine with the stored password on sudo's stdin; `runtime` like the terminal path it replaces.
+	secure_input_sudo: "runtime",
 	// STRICTER than its gate (`write`): starting a loop hands the agent an objective and
 	// lets it act unattended until it stops.
 	start_instance_loop: "runtime",

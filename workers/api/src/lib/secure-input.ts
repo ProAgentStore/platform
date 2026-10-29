@@ -44,6 +44,8 @@ interface SecureInputRow {
 	value_length?: number | null;
 	value_edge_whitespace?: number | null;
 	target?: string | null;
+	command?: string | null;
+	command_approved_at?: string | null;
 }
 
 /** What a client (console or agent) sees — metadata only, never the secret. */
@@ -78,6 +80,13 @@ export interface SecureInputView {
 	hasLeadingTrailingWhitespace?: boolean;
 	/** The tmux session this request is meant for, when the requester named one (#966). */
 	target?: string;
+	/**
+	 * `sudo` scope only (#1131): the program and arguments the platform will run under `sudo -S`, as argv. Fixed at creation. NOT a secret —
+	 * the owner reads it in the console and approves it by submitting the value; an agent reads it back to see what it asked for.
+	 */
+	command?: string[];
+	/** `sudo` scope only: the owner has approved exactly this command, so the request can be delivered once its value is ready. */
+	commandApproved?: boolean;
 }
 
 /** Input to create a new secure input request. */
@@ -86,17 +95,29 @@ export interface CreateSecureInputInput {
 	userId: string;
 	label: string;
 	purpose?: string;
-	destinationScope: "tmux" | "env" | "stdin" | "file";
+	destinationScope: "tmux" | "env" | "stdin" | "file" | "sudo";
 	oneShot?: boolean;
 	/** `tmux` only: the session the value is for (#966). */
 	target?: string;
+	/** `sudo` only (#1131): the validated argv (`validateSudoCommand`). Written once; there is no way to change it afterwards. */
+	command?: string[];
 }
 
 /** The longest a machine deposit may wait for its retrieval. Shorter than the console path's day on purpose. */
 export const DEPOSIT_MAX_TTL_MS = TTL_MS;
 
 const VIEW_COLUMNS =
-	"id, instance_id, user_id, status, label, purpose, destination_scope, one_shot, expires_at, created_at, updated_at, consumed_at, source_node, consumed_node, value_length, value_edge_whitespace, target";
+	"id, instance_id, user_id, status, label, purpose, destination_scope, one_shot, expires_at, created_at, updated_at, consumed_at, source_node, consumed_node, value_length, value_edge_whitespace, target, command, command_approved_at";
+
+/** The stored argv, or null for a value that is not a JSON array of strings (a row this code did not write). */
+function parseCommand(raw: string): string[] | null {
+	try {
+		const v = JSON.parse(raw) as unknown;
+		return Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string") ? (v as string[]) : null;
+	} catch {
+		return null;
+	}
+}
 
 function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped" | "iv">, now: number): SecureInputView {
 	let status: "pending" | "ready" | "consumed" | "expired" = (row.status as "pending" | "ready" | "consumed" | "expired") || "pending";
@@ -126,6 +147,11 @@ function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped"
 		view.hasLeadingTrailingWhitespace = row.value_edge_whitespace === 1;
 	}
 	if (row.target) view.target = row.target;
+	if (row.command) {
+		const argv = parseCommand(row.command);
+		if (argv) view.command = argv;
+		view.commandApproved = Boolean(row.command_approved_at);
+	}
 
 	return view;
 }
@@ -148,10 +174,10 @@ export async function createSecureInputRequest(env: Env, input: CreateSecureInpu
 	await env.DB.prepare(
 		`INSERT INTO secure_input_requests (
       id, instance_id, user_id, status, label, purpose, destination_scope,
-      one_shot, expires_at, created_at, updated_at, target
-    ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'), ?9)`,
+      one_shot, expires_at, created_at, updated_at, target, command
+    ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'), ?9, ?10)`,
 	)
-		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, input.destinationScope, input.oneShot ? 1 : 0, expiresAt, input.target ?? null)
+		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, input.destinationScope, input.oneShot ? 1 : 0, expiresAt, input.target ?? null, input.command ? JSON.stringify(input.command) : null)
 		.run();
 
 	return id;
@@ -248,19 +274,25 @@ export async function storeSecretValue(
 	instanceId: string,
 	userId: string,
 	secretValue: string,
+	opts: { approvedCommand?: string[] } = {},
 ): Promise<boolean> {
 	if (!env.KEY_ENCRYPTION_KEY) throw new Error("Key encryption not configured");
 
 	// Verify the request exists and is pending
 	const existing = await env.DB.prepare(
-		`SELECT id, status FROM secure_input_requests WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
+		`SELECT id, status, destination_scope, command FROM secure_input_requests WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
 	)
 		.bind(requestId, instanceId, userId)
-		.first<{ id: string; status: string }>();
+		.first<{ id: string; status: string; destination_scope: string; command: string | null }>();
 
 	if (existing?.status !== "pending") {
 		return false; // Not found or already consumed
 	}
+	// A `sudo` request takes its value only WITH the owner's approval of the exact command stored on it (#1131). Enforced here, where the
+	// value is stored, so no route, client or future caller can store one without it: a stored password cannot be pointed at a command the
+	// owner did not read.
+	const sudo = existing.destination_scope === "sudo";
+	if (sudo && !commandApproved(existing.command, opts.approvedCommand)) return false;
 
 	// Encrypt the secret
 	const { ciphertext, dekWrapped, iv } = await encryptKey(secretValue, env.KEY_ENCRYPTION_KEY);
@@ -269,13 +301,20 @@ export async function storeSecretValue(
 	const shape = valueShape(secretValue);
 	await env.DB.prepare(
 		`UPDATE secure_input_requests
-     SET status = 'ready', secret_ciphertext = ?1, dek_wrapped = ?2, iv = ?3, value_length = ?7, value_edge_whitespace = ?8, updated_at = datetime('now')
-     WHERE id = ?4 AND instance_id = ?5 AND user_id = ?6`,
+     SET status = 'ready', secret_ciphertext = ?1, dek_wrapped = ?2, iv = ?3, value_length = ?7, value_edge_whitespace = ?8, updated_at = datetime('now'),
+         command_approved_at = CASE WHEN ?9 = 1 THEN datetime('now') ELSE command_approved_at END
+     WHERE id = ?4 AND instance_id = ?5 AND user_id = ?6 AND status = 'pending'`,
 	)
-		.bind(ciphertext, dekWrapped, iv, requestId, instanceId, userId, shape.length, shape.edgeWhitespace)
+		.bind(ciphertext, dekWrapped, iv, requestId, instanceId, userId, shape.length, shape.edgeWhitespace, sudo ? 1 : 0)
 		.run();
 
 	return true;
+}
+
+/** Is `approved` exactly the argv stored on the request (JSON, element for element)? Anything else — absent, reordered, extended — is no approval. */
+export function commandApproved(stored: string | null | undefined, approved: string[] | undefined): boolean {
+	const argv = stored ? parseCommand(stored) : null;
+	return argv != null && Array.isArray(approved) && approved.length === argv.length && approved.every((a, i) => a === argv[i]);
 }
 
 /**

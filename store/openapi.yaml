@@ -3543,8 +3543,14 @@ paths:
                   description: Optional description of why this secret is needed
                 destinationScope:
                   type: string
-                  enum: [tmux, env, stdin, file]
-                  description: Where the secret will be injected
+                  enum: [tmux, env, stdin, file, sudo]
+                  description: "Where the secret will be injected. `sudo` (#1131) is the password for `sudo` on the instance's machine, delivered by `POST …/sudo` to the `command` the owner approves; it requires `command`."
+                command:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  items: { type: string, minLength: 1, maxLength: 2048 }
+                  description: "`sudo` scope only (#1131): the program and its arguments as argv, e.g. [\"pmset\",\"-a\",\"autorestart\",\"1\"] — not a shell string, not starting with `sudo` or an option, no control characters. Fixed when the request is created; the owner is shown it and approves it by submitting the value. Refused (400) on any other scope."
                 oneShot:
                   type: boolean
                   default: true
@@ -3694,6 +3700,10 @@ paths:
                 value:
                   type: string
                   description: The plaintext secret value
+                approvedCommand:
+                  type: array
+                  items: { type: string }
+                  description: "`sudo`-scoped requests only (#1131): the exact argv the owner was shown, sent back as their approval. The value is stored only when it equals the command stored on the request, element for element; otherwise 400 and nothing is stored."
       responses:
         "200":
           description: Secret stored
@@ -3705,6 +3715,12 @@ paths:
                   status:
                     type: string
                     enum: [ready]
+        "400":
+          description: "A `sudo` request submitted without the owner's approval of its exact command (#1131)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           description: Request not found or already consumed
           content:
@@ -3749,6 +3765,41 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/OkObject" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/secure-inputs/{requestId}/sudo:
+    post:
+      summary: Run a sudo request's owner-approved command with the stored password on sudo's stdin
+      description: |
+        Runs the command stored on a `sudo`-scoped request (#1131) as `sudo -S -p '' -- <command>` on the
+        instance's machine, with the owner's stored value written to sudo's STDIN by the runner. It is never
+        typed into a terminal: the value is not in any pane, scrollback, process argument, environment
+        variable or log. The body carries nothing — the command is the one fixed when the request was created
+        and approved by the owner when they submitted the value (`approvedCommand`), so a caller cannot
+        point a stored password at another command.
+
+        Success is sudo's exit code. `delivered` is true only for exit 0, and only then is the value spent.
+        Any other outcome — a wrong password, a command sudo's policy refuses, a timeout, a runner that
+        cannot be reached or predates `POST /secure/sudo` (CLI 0.4.190) — answers 200 with `delivered:false`,
+        a `reason` (sudo's own words, the value cut out), and leaves the request `ready`. Nothing retries it:
+        each attempt can use one of sudo's three tries. `sudo`-scoped requests only; a terminal uses `…/inject`.
+        The answer is `{delivered, reason?, consumedValue, status, command, commandLine, exitCode?, timedOut?,
+        stdout?, stderr?, length?}` and never the value.
+      operationId: sudoSecureInput
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, description: "Empty. Any field sent (a command, a target, a value) is ignored." }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/pause:

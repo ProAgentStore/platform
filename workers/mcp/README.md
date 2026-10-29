@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**407 tool registrations.** 378 are always registered; 29 are gated to the console
+**408 tool registrations.** 379 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -635,7 +635,8 @@ immediately instead of a whole transcript.
 |---|---|---|---|---|
 | `secure_input_request` | Request a secure input from the instance owner (e.g., auth code, OTP, password). Owner submits the plaintext via console UI; agent receives an opaque request ID and metadata only — never the secret. The plaintext is envelope-encrypted at rest and deleted immediately after one-shot consumption | write | yes | |
 | `secure_input_status` | Check whether the owner has supplied the secure input — returns pending/ready/consumed/expired status, and once ready `length`, `empty` and `hasLeadingTrailingWhitespace` (metadata only, never the plaintext, #966) | read | | |
-| `secure_input_inject` | Type a ready tmux secure input into the named session (`target`) and optionally press Enter (`submit`, default true) — VERIFIED on the pane. Answers `delivered` / `reason` / `consumedValue`; an unverified delivery is cleared, not submitted, and NOT consumed. Never returns the value (#966) | runtime | yes | |
+| `secure_input_inject` | Type a ready tmux secure input into the named session (`target`) and optionally press Enter (`submit`, default true) — VERIFIED on the pane. Answers `delivered` / `reason` / `consumedValue`; an unverified delivery is cleared, not submitted, and NOT consumed. Never returns the value (#966). Not for `sudo`: a masked prompt cannot be confirmed — use `secure_input_sudo` (#1131) | runtime | yes | |
+| `secure_input_sudo` | Run the command a `sudo` secure input was created for (`secure_input_request` `destination_scope: "sudo"` + `command` argv) as root on the instance's machine, the owner's stored password delivered to sudo's stdin by the runner — NEVER typed into a pane. The owner approved that exact command in the console with the value; this takes no command of its own. `delivered:true` only when sudo exits 0 (then the value is spent); any failure — wrong password, a command sudo's policy refuses, a timeout, a runner unreachable or too old — returns `reason` (sudo's words, value cut out), `exitCode`, bounded output, leaves the request `ready` and is never retried automatically (#1131) | runtime | yes | |
 
 ### Agent-to-agent
 

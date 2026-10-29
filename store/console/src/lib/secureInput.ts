@@ -50,3 +50,27 @@ export function secureInputBannerText(waiting: readonly Pick<SecureInputView, "l
 		? `This agent is waiting for you to enter a value: ${first}.`
 		: `This agent is waiting for you to enter ${waiting.length} values, starting with ${first}.`;
 }
+
+/**
+ * A `sudo` request's command, as the owner reads it before approving (#1131): `sudo -- pmset -a autorestart 1`. Display only — what is approved
+ * and run is the argv array, never this string. An argument with a space or a shell character is quoted so the owner can see where it ends.
+ */
+export function sudoCommandLine(argv: readonly string[]): string {
+	const quote = (a: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, "'\\''")}'`);
+	return `sudo -- ${argv.map(quote).join(" ")}`;
+}
+
+/** Does this request run a command as root, and so need the owner's approval of it with the value? */
+export function needsCommandApproval(r: Pick<SecureInputView, "destinationScope" | "command">): boolean {
+	return r.destinationScope === "sudo" && Array.isArray(r.command) && r.command.length > 0;
+}
+
+/** May the owner press Submit? A value is needed, and for a sudo request the exact command must be approved too. */
+export function canSubmitSecureInput(r: Pick<SecureInputView, "destinationScope" | "command">, state: { value: string; approved: boolean }): boolean {
+	return state.value.length > 0 && (!needsCommandApproval(r) || state.approved);
+}
+
+/** The body of the submit call: the value, and for a sudo request the argv exactly as it was shown — the server stores nothing unless it matches. */
+export function secureInputSubmitBody(r: Pick<SecureInputView, "destinationScope" | "command">, value: string): { value: string; approvedCommand?: string[] } {
+	return needsCommandApproval(r) ? { value, approvedCommand: [...(r.command as string[])] } : { value };
+}

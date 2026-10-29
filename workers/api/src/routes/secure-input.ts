@@ -9,11 +9,12 @@
 
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { countSecureInputRequests, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
+import { commandApproved, countSecureInputRequests, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
 import { deepLinkFor, secureInputLink } from "../lib/console-links.js";
 import { instanceListName } from "../lib/instance-config.js";
 import { notifyUser } from "./push.js";
 import { injectSecureInputToTmux } from "../lib/secure-input-inject.js";
+import { commandLine, runSecureInputSudo, validateSudoCommand } from "../lib/secure-input-sudo.js";
 import type { Env } from "../types.js";
 
 export const secureInputRoutes = new Hono<{ Bindings: Env }>();
@@ -40,8 +41,17 @@ secureInputRoutes.post("/:instanceId/secure-inputs", async (c) => {
 	const purpose = typeof body.purpose === "string" ? body.purpose.trim() : undefined;
 	const destinationScope = body.destinationScope as string | undefined;
 
-	if (!label || !["tmux", "env", "stdin", "file"].includes(destinationScope ?? "")) {
-		throw new HttpError(400, "label and destinationScope (tmux|env|stdin|file) are required");
+	if (!label || !["tmux", "env", "stdin", "file", "sudo"].includes(destinationScope ?? "")) {
+		throw new HttpError(400, "label and destinationScope (tmux|env|stdin|file|sudo) are required");
+	}
+	// A `sudo` request names the exact command the owner will be asked to approve (#1131) — and only a `sudo` request does.
+	let command: string[] | undefined;
+	if (destinationScope === "sudo") {
+		const checked = validateSudoCommand(body.command);
+		if (!checked.ok) throw new HttpError(400, checked.error);
+		command = checked.argv;
+	} else if (body.command !== undefined && body.command !== null) {
+		throw new HttpError(400, "command is for a sudo-scoped request only");
 	}
 
 	const target = targetOf(body.target);
@@ -53,9 +63,10 @@ secureInputRoutes.post("/:instanceId/secure-inputs", async (c) => {
 		userId: uid,
 		label,
 		purpose,
-		destinationScope: destinationScope as "tmux" | "env" | "stdin" | "file",
+		destinationScope: destinationScope as "tmux" | "env" | "stdin" | "file" | "sudo",
 		oneShot: body.oneShot !== false,
 		...(target ? { target } : {}),
+		...(command ? { command } : {}),
 	});
 
 	const consoleUrl = secureInputLink(instanceId, requestId);
@@ -129,7 +140,14 @@ secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/submit", async (c)
 	const value = typeof body.value === "string" ? body.value : "";
 	if (!value) throw new HttpError(400, "value is required");
 
-	const success = await storeSecretValue(c.env, requestId, instanceId, uid, value);
+	// A sudo request's value is stored only with the owner's approval of the exact command on it (#1131): the console sends back the argv it
+	// showed. Said as its own refusal, so a missing or stale approval is not read as "not found".
+	const approvedCommand = Array.isArray(body.approvedCommand) && body.approvedCommand.every((a) => typeof a === "string") ? (body.approvedCommand as string[]) : undefined;
+	const current = await getSecureInputStatus(c.env, requestId, instanceId, uid);
+	if (current?.destinationScope === "sudo" && current.status === "pending" && !commandApproved(JSON.stringify(current.command ?? []), approvedCommand)) {
+		throw new HttpError(400, `This request runs ${current.command ? `\`${commandLine(current.command)}\`` : "a command"} as root. Submit the value together with approvedCommand — the exact command shown — to approve it.`);
+	}
+	const success = await storeSecretValue(c.env, requestId, instanceId, uid, value, { approvedCommand });
 	if (!success) throw new HttpError(404, "Request not found or already consumed");
 
 	const status = await getSecureInputStatus(c.env, requestId, instanceId, uid);
@@ -168,6 +186,24 @@ secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/inject", async (c)
 	if (hp !== undefined && hp !== null && typeof hp !== "boolean") throw new HttpError(400, "hiddenPrompt must be a boolean");
 	const hidden = typeof hp === "boolean" ? hp : undefined;
 	const result = await injectSecureInputToTmux(c.env, { instanceId, userId: uid, requestId, target, submit: body.submit !== false, hidden });
+	if (!result) throw new HttpError(404, "Request not found");
+	return c.json(result);
+});
+
+/**
+ * POST /:instanceId/secure-inputs/:requestId/sudo  `{}`
+ * Run the request's owner-approved command under `sudo -S -p '' --` on the agent's machine, with the stored value on sudo's stdin — never
+ * typed into a pane (#1131). The body carries NOTHING: the command is the one stored on the request, fixed at creation and approved by
+ * the owner when they submitted the value, so a caller cannot point a stored password at a different command.
+ *
+ * Answers `{ delivered, reason?, consumedValue, status, command, commandLine, exitCode?, timedOut?, stdout?, stderr?, length? }`.
+ * `delivered` is true only when sudo exited 0, and only then is the value spent; any other outcome leaves it `ready` and says why, with
+ * sudo's words and the value cut out. It is never retried by the platform.
+ */
+secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/sudo", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const requestId = c.req.param("requestId") ?? "";
+	const result = await runSecureInputSudo(c.env, { instanceId, userId: uid, requestId });
 	if (!result) throw new HttpError(404, "Request not found");
 	return c.json(result);
 });
