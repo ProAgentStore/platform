@@ -696,6 +696,36 @@ describe("github connector — github_create_issue dispatch", () => {
 		expect(sent).not.toHaveProperty("labels");
 	});
 
+	/** #1405: a human-only ticket used to need a second github_update_issue call just to assign it. */
+	it("accepts assignees on creation, split/trimmed like labels, and reports who GitHub actually assigned", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ number: 14, html_url: "u14", assignees: [{ login: "serge-ivo" }] }));
+		const r = await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "t", assignees: "serge-ivo, " });
+		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+		expect(sent.assignees).toEqual(["serge-ivo"]);
+		expect(r.success).toBe(true);
+		expect(r.content).toBe("Opened issue #14 — assignees: serge-ivo — u14");
+	});
+
+	it("accepts an array of logins too, same as github_update_issue (#1263)", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ number: 15, html_url: "u15", assignees: [{ login: "a" }, { login: "b" }] }));
+		await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "t", assignees: ["a", "b"] });
+		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+		expect(sent.assignees).toEqual(["a", "b"]);
+	});
+
+	it("omits the assignees key entirely when none are supplied", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ number: 16, html_url: "u16" }));
+		await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "No assignees" });
+		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+		expect(sent).not.toHaveProperty("assignees");
+	});
+
+	it("reports the RESULTING assignees, not the requested ones — GitHub silently drops a login without push access", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ number: 17, html_url: "u17", assignees: [] }));
+		const r = await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "t", assignees: "someone-with-no-access" });
+		expect(r.content).toBe("Opened issue #17 — assignees: none — u17");
+	});
+
 	it("requires a non-empty title WITHOUT fetching", async () => {
 		const r = await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "   " });
 		expect(r.success).toBe(false);

@@ -437,19 +437,32 @@ const createIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
 	const labels = String(input.labels || "").split(",").map((s) => s.trim()).filter(Boolean);
+	const assignees = csvArg(input.assignees);
 	const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
 		method: "POST",
 		headers: { ...GH(r.token), "Content-Type": "application/json" },
-		body: JSON.stringify({ title, body: input.body ? String(input.body) : undefined, ...(labels.length ? { labels } : {}) }),
+		body: JSON.stringify({
+			title,
+			body: input.body ? String(input.body) : undefined,
+			...(labels.length ? { labels } : {}),
+			...(assignees ? { assignees } : {}),
+		}),
 	});
 	if (!res.ok) return { content: `GitHub returned ${res.status} creating the issue in ${repo}${await githubReason(res)}`, success: false };
-	const data = (await res.json()) as { number?: number; html_url?: string };
+	const data = (await res.json()) as { number?: number; html_url?: string; assignees?: Array<{ login?: string }> };
 	// The platform just changed this list, so this user's cached copy of it is wrong (#401). An
 	// agent that opens an issue and then calls github_list_issues would otherwise read its own
 	// pre-write copy and conclude the write did not happen — the get_tasks-after-create_task
 	// failure `agent-think.ts` documents for the dedup guard, one layer out. One line here beats a
 	// TTL short enough to hide it. Best-effort: a failed invalidation must not fail a real write.
 	await invalidateIssuesCache(ctx.env, ctx.userId ?? "", repo).catch(() => undefined);
+	// Report who GitHub actually assigned, not who was asked for (#1405) — same reasoning as
+	// updateIssueHandler below: a login without push access is accepted and silently dropped, so
+	// echoing the request back would turn that into a confident false claim.
+	if (assignees) {
+		const who = (data.assignees ?? []).map((a) => a?.login ?? "").filter(Boolean);
+		return { content: `Opened issue #${data.number} — assignees: ${who.length ? who.join(", ") : "none"} — ${data.html_url}`, success: true };
+	}
 	return { content: `Opened issue #${data.number} — ${data.html_url}`, success: true };
 };
 
@@ -702,7 +715,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 		},
 		{
 			name: "github_create_issue",
-			listFields: ["labels"],
+			listFields: ["labels", "assignees"],
 			untrustedOutput: false,
 			scope: "write",
 			description: `Open a new GitHub issue in a repo. WRITE — the issue is really created. ${LABEL_VOCABULARY}`,
@@ -712,6 +725,11 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 				title: { type: "string", required: true, description: "Issue title." },
 				body: { type: "string", description: "Issue body (markdown)." },
 				labels: { type: "string", description: `Labels to apply. ${LABEL_LIST_FORMAT}` },
+				assignees: {
+					type: "string",
+					description:
+						"Comma-separated GitHub logins to assign on creation (an array of logins is accepted too). GitHub accepts a login without push access and silently drops it rather than erroring — the reply names who was actually assigned, not who was asked for.",
+				},
 			},
 		},
 		{
