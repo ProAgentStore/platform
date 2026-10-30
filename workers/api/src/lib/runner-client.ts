@@ -276,6 +276,29 @@ export async function relayConnected(env: Env, instanceId: string, runnerNode?: 
 }
 
 /**
+ * A VERIFIED online check (#1401): waits for an actual pong, unlike {@link relayConnected}'s
+ * fire-a-ping-and-judge-on-the-last-one. `nodeOnline` could read `true` off a round trip from
+ * before the runner froze, with nothing short of a second poll — which may never come, if nobody is
+ * driving that instance — to notice. Pink-laptop's "Pink Laptop Terminal" showed `nodeOnline: true`
+ * while its terminal tool calls timed out; this is the bounded wait that makes a status READ say so.
+ *
+ * For a status/dashboard read ONLY — `relayConnected` stays the one the hot per-tool-call loop and
+ * chat context builder use, for the latency reason its own docstring states.
+ */
+export async function verifyRunnerResponsive(env: Env, instanceId: string, runnerNode?: string | null): Promise<boolean> {
+	try {
+		if (!env.RELAY) return false;
+		const stub = env.RELAY.get(env.RELAY.idFromName(relayNameForInstance(instanceId, runnerNode)));
+		const res = await stub.fetch(new Request("https://relay/status?verify=1"));
+		if (!res.ok) return false;
+		const data = (await res.json()) as { connected?: boolean };
+		return data.connected === true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Free one agent's relay slot on one machine of a socket nobody answers behind (#856).
  *
  * The relay's own ping probe decides, so a live socket is never touched — `alive: true` means the

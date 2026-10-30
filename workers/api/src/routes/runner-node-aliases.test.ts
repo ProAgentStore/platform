@@ -25,14 +25,25 @@ const MINI = "8de74159-5e07-4e44-8472-56cc7b728cef";
 const PINK = "e4fdf96a-0ebc-4dd6-bbd1-1f3a4b69599e";
 let d1: RealSchemaD1;
 let live: Set<string>;
+/** The VERIFIED (`?verify=1`, #1401) answer, independently of `live` — null (the default) means
+ *  "agrees with `live`", so every test that never touches this is unaffected. Set it to diverge:
+ *  a socket `live` counts as connected that does NOT answer a real, waited-for probe. */
+let verifiedLive: Set<string> | null = null;
 const relay = {
 	idFromName: (n: string) => n,
-	get: (name: string) => ({ fetch: async () => Response.json({ connected: live.has(name) }) }),
+	get: (name: string) => ({
+		fetch: async (req: Request) => {
+			const verify = new URL(req.url).searchParams.get("verify") === "1";
+			const set = verify && verifiedLive ? verifiedLive : live;
+			return Response.json({ connected: set.has(name) });
+		},
+	}),
 };
 
 beforeEach(() => {
 	d1 = realSchemaD1();
 	live = new Set();
+	verifiedLive = null;
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('coder', 'u1', 't949-coder', 'Coder', '{"capabilities":{"surfaces":["coding"],"runtime":"coding"}}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('fgs', 'coder', 'u1', 'active', '{"runnerNode":"pink-laptop"}'), ('other', 'coder', 'u1', 'active', '{}')`);
@@ -152,5 +163,40 @@ describe("nodeOnline agrees with list_runner_nodes (#1055)", () => {
 	it("still offline when no instance holds a socket under any name", async () => {
 		const detail = await expectAgreement("other");
 		expect(detail.every((n) => n.nodeOnline === false)).toBe(true);
+	});
+});
+
+/**
+ * #1401: pink-laptop (this file's PINK fixture) read `nodeOnline: true` for its own "Pink Laptop
+ * Terminal" instance while its tmux tool calls timed out — the relay's optimistic last-known-pong
+ * answering `connected`/`nodeOnline` true from before the runner froze, with nothing short of a
+ * second poll to notice. `responsive` is the VERIFIED, waited-for check that tells the two apart.
+ */
+describe("instance_runner_node's responsive — a VERIFIED check, distinct from the optimistic connected/nodeOnline (#1401)", () => {
+	it("a socket that answers the optimistic check but NOT a real probe: connected true, responsive false — the exact pink-laptop shape", async () => {
+		live.add("fgs:node:pink-laptop"); // last known pong says connected...
+		verifiedLive = new Set(); // ...but nothing answers a waited-for probe right now
+		const body = await runnerNode("fgs");
+		expect(body.nodesDetail.find((n) => n.node === "pink-laptop")).toMatchObject({ connected: true, responsive: false, nodeOnline: true });
+	});
+
+	it("a genuinely live socket: both checks agree", async () => {
+		live.add("fgs:node:pink-laptop");
+		verifiedLive = new Set(["fgs:node:pink-laptop"]);
+		const body = await runnerNode("fgs");
+		expect(body.nodesDetail.find((n) => n.node === "pink-laptop")).toMatchObject({ connected: true, responsive: true, nodeOnline: true });
+	});
+
+	it("no socket at all: responsive is null, not false — nothing of this agent's to verify", async () => {
+		const body = await runnerNode("fgs");
+		expect(body.nodesDetail.find((n) => n.node === "pink-laptop")).toMatchObject({ connected: false, responsive: null });
+	});
+
+	it("never consulted for a machine online only through ANOTHER agent's socket — nodeOnline stays the any-agent signal", async () => {
+		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at)
+		         VALUES ('other', 'u1', 'pink-laptop', 'relay://', '0.4.69', '${PINK}', 'online', '2026-10-06 22:07:52')`);
+		live.add("other:node:pink-laptop"); // another agent's socket, not fgs's
+		const body = await runnerNode("fgs");
+		expect(body.nodesDetail.find((n) => n.node === "pink-laptop")).toMatchObject({ connected: false, responsive: null, nodeOnline: true });
 	});
 });

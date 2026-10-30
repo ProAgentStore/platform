@@ -81,7 +81,7 @@ export class RelayDO extends DurableObject<Env> {
 		const url = new URL(request.url);
 		try {
 			if (url.pathname === "/connect") return await this.handleConnect(request);
-			if (url.pathname === "/status") return this.handleStatus();
+			if (url.pathname === "/status") return await this.handleStatus(url.searchParams.get("verify") === "1");
 			if (url.pathname === "/command" && request.method === "POST") return await this.handleCommand(request);
 			if (url.pathname === "/evict-stale" && request.method === "POST") return await this.handleEvictStale();
 		} catch (err) {
@@ -204,18 +204,26 @@ export class RelayDO extends DurableObject<Env> {
 		return Response.json(verdict);
 	}
 
-	private handleStatus(): Response {
+	private async handleStatus(verify: boolean): Promise<Response> {
 		const sockets = this.ctx.getWebSockets("runner");
 		// A socket in the list may be half-closed (server kept the reference but the client went
 		// away between heartbeats), or open to a peer that is frozen and will never answer again.
 		//
-		// This asks WITHOUT waiting: it pings now and judges on the previous round trip (#497).
-		// `relayConnected` runs in a per-node loop on every tool-call resolution path and on the
-		// chat context builder, so a 1.5s pong wait per offline node would add seconds to every
+		// By default this asks WITHOUT waiting: it pings now and judges on the previous round trip
+		// (#497). `relayConnected` runs in a per-node loop on every tool-call resolution path and on
+		// the chat context builder, so a 1.5s pong wait per offline node would add seconds to every
 		// agent turn. The cost of not waiting is that the first call after a peer freezes still
 		// answers "connected"; the next one tells the truth, instead of the ~5 minutes of
 		// "connected: true" measured against a SIGSTOPped holder in production.
 		// A socket the send cannot even reach is closed inside the probe, as it was here before.
+		//
+		// `?verify=1` (#1401) trades that latency for an authoritative answer: a status/dashboard
+		// read — `instance_runner_node`, never the hot per-turn loop above — can afford to actually
+		// WAIT for a pong instead of trusting the last one. Without it, `nodeOnline` could read
+		// `true` off a round trip from before a runner froze, with nothing short of a second poll
+		// (which may never come, if nobody is driving that instance) to notice — a laptop placement
+		// and failover trusted to do work it could not.
+		if (verify) return Response.json({ connected: await this.liveness.probe(sockets, { deadlineMs: PONG_DEADLINE_MS }) });
 		return Response.json({ connected: this.liveness.observe(sockets) });
 	}
 

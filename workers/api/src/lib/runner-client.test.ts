@@ -7,6 +7,7 @@ import {
 	isRunnerOnline,
 	relayConnected,
 	READ_TIMEOUT_MS,
+	verifyRunnerResponsive,
 	type RunnerConn,
 } from "./runner-client.js";
 import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
@@ -73,6 +74,42 @@ describe("isRunnerOnline", () => {
 			get: () => ({ fetch: async () => Response.json({ connected: true }) }),
 		};
 		expect(await relayConnected(envWith(relay), "inst-1", "macbook")).toBe(true);
+		expect(seenName).toBe("inst-1:node:macbook");
+	});
+});
+
+describe("verifyRunnerResponsive (#1401) — a VERIFIED check, distinct from relayConnected's optimistic one", () => {
+	const envWith = (RELAY: unknown) => ({ RELAY }) as unknown as Env;
+
+	it("asks /status?verify=1 — the waited-for probe, not the optimistic one relayConnected reads", async () => {
+		let seenUrl = "";
+		const relay = mockRelay(async (req) => {
+			seenUrl = req.url;
+			return Response.json({ connected: true });
+		});
+		expect(await verifyRunnerResponsive(envWith(relay), "inst-1")).toBe(true);
+		expect(new URL(seenUrl).pathname).toBe("/status");
+		expect(new URL(seenUrl).searchParams.get("verify")).toBe("1");
+	});
+
+	it("false when the relay's VERIFIED probe found nothing answering — the exact pink-laptop shape: a socket listed, but dead", async () => {
+		const relay = mockRelay(async () => Response.json({ connected: false }));
+		expect(await verifyRunnerResponsive(envWith(relay), "inst-1")).toBe(false);
+	});
+
+	it("false (never throws) with no RELAY binding or on a DO error", async () => {
+		expect(await verifyRunnerResponsive(envWith(undefined), "inst-1")).toBe(false);
+		const boom = mockRelay(async () => { throw new Error("DO down"); });
+		expect(await verifyRunnerResponsive(envWith(boom), "inst-1")).toBe(false);
+	});
+
+	it("is node-scoped exactly like relayConnected", async () => {
+		let seenName = "";
+		const relay = {
+			idFromName: (name: string) => { seenName = name; return { name }; },
+			get: () => ({ fetch: async () => Response.json({ connected: true }) }),
+		};
+		expect(await verifyRunnerResponsive(envWith(relay), "inst-1", "macbook")).toBe(true);
 		expect(seenName).toBe("inst-1:node:macbook");
 	});
 });

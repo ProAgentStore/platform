@@ -57,7 +57,7 @@ import { registerFleetHistoryRoutes } from "./instances-fleet-history.js";
 import { registerDisabledInstancesRoutes } from "./instances-disabled.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
-import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
+import { liveAliasForPin, liveNodeIgnoringPin, relayConnected, verifyRunnerResponsive } from "../lib/runner-client.js";
 import { instanceSocketsUnder } from "../lib/machine-sockets.js";
 import type { Env } from "../types.js";
 import {
@@ -722,6 +722,14 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 				node,
 				...(names.length > 1 ? { aka: names.slice(1) } : {}),
 				connected,
+				// #1401: `connected` is optimistic — the LAST known pong, possibly from before a
+				// freeze (see relay-do.ts's non-verified `/status`). `responsive` is a VERIFIED,
+				// waited-for probe, only when there is a socket of THIS agent's to verify (`null`
+				// otherwise — nothing of ours to ask). Deliberately NOT folded into `nodeOnline`,
+				// which stays the any-agent signal `runner-failover.ts` reads for failover
+				// candidates; this is the distinct "is it actually there right now" the issue asks
+				// for — a machine can read `nodeOnline: true` while THIS agent's own socket is dead.
+				responsive: connected ? await verifyRunnerResponsive(c.env, instanceId, socketName.get(node)).catch(() => false) : null,
 				nodeOnline: connected ? true : await machineOnline(names),
 				...runnerVersionView(freshestVersion(names, registrations)),
 				// Old registration (#1114): flagged for the owner, never pruned — forget_runner_node removes one.
