@@ -7,7 +7,7 @@ import { instructionAttributionNote } from "./run-attribution.js";
 import { EMPTY_STREAK, engineErrorEnding, foldTurn, type TurnCarry } from "./coding-turn-outcome.js";
 import type { ProviderErrorRecord } from "./engine-provider-error.js";
 import { CompletionEvidence, evidenceNote, finishRefusalNote, judgeCompletion } from "./coding-completion-evidence.js";
-import { describeWriteRefusal } from "./write-scope-refusals.js";
+import { describePushTimeout, describeWriteRefusal } from "./write-scope-refusals.js";
 import { LEARNED_PREFIX } from "./coding-pilot.js";
 import { newLoopCounters, LOOP_FALLBACK_MAX_STEPS, type LoopEffect } from "./coding-loop-state.js";
 import { screenAction } from "./coding-screens.js";
@@ -100,6 +100,12 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		for (const r of evidence.takeRefusals()) {
 			actionLog.push(describeWriteRefusal(r));
 			await deps.onEvent?.("write_refused", describeWriteRefusal(r), r);
+		}
+		// A push the push guard's bounded wait gave up on (#1403) — the same per-step visibility, so
+		// the Pilot can retry it instead of a run silently stalling until the Engine's own outer kill.
+		for (const t of evidence.takePushTimeouts()) {
+			actionLog.push(describePushTimeout(t));
+			await deps.onEvent?.("push_timeout", describePushTimeout(t), t);
 		}
 
 		// THE ENGINE'S OWN VERDICT ON THE LAST TURN (#545), read BEFORE the brain is asked what to

@@ -55,6 +55,22 @@ export const PUSH_REFUSED_EXIT = 3;
  */
 export const PUSH_REFUSED_MARKER = "pags: refused write-scope:";
 
+/** Distinct from both the refusal exit and a bare `timeout(1)` rc=124 (#1403). */
+export const PUSH_TIMEOUT_EXIT = 4;
+/**
+ * The timeout line. The cloud parses `pags: push timed out: <url>` out of a tool result
+ * (`workers/api/src/lib/write-scope-refusals.ts`), so its shape is a contract: change both.
+ */
+export const PUSH_TIMEOUT_MARKER = "pags: push timed out:";
+/**
+ * How long the helper waits on the REAL transport before giving up (#1403): comfortably under the
+ * Engine's own ~120s outer tool-call timeout, so this message is what the Pilot sees instead of the
+ * opaque rc=124 from that outer kill. A genuinely slow but working push (a large first push) still
+ * has this long; one that needs longer is exactly the "report what it was waiting on, then let the
+ * Pilot retry" case the issue asks for, not a reason to raise this closer to the outer bound.
+ */
+export const PUSH_DELEGATE_TIMEOUT_SECONDS = 45;
+
 /** The transport name the HTTPS rewrite routes through (`git-remote-<name>`). */
 export const PUSH_HELPER_TRANSPORT = "pags-push";
 
@@ -113,9 +129,10 @@ exec ${sq(opts.realSsh)} "$@"
 }
 
 /** `git-remote-pags-push <remote> <url>` — refuse, or become git's own https transport. */
-export function renderPushHelper(opts: { scope: readonly string[]; realHelperDir: string }): string {
+export function renderPushHelper(opts: { scope: readonly string[]; realHelperDir: string; timeoutSeconds?: number }): string {
+	const timeoutSeconds = opts.timeoutSeconds ?? PUSH_DELEGATE_TIMEOUT_SECONDS;
 	return `#!/bin/sh
-# ProAgentStore push guard (#1252) — GENERATED. Source of truth:
+# ProAgentStore push guard (#1252, #1403) — GENERATED. Source of truth:
 # packages/browser-runner/src/coding/push-guard.ts.
 ${checkScope(opts.scope.map(normalizeRepo).join(" "))}
 url="$2"
@@ -124,7 +141,33 @@ case "$url" in http://*) transport=http ;; *) transport=https ;; esac
 # Nobody can see a terminal prompt in an Engine's tool call: a push with no usable credential fails
 # NOW, with git's own reason, instead of waiting on a Username prompt until the tool times out.
 GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT
-exec ${sq(opts.realHelperDir)}/git-remote-$transport "$1" "$url"
+# #1403: the real transport has no bound of its own — a stalled credential helper, a DNS lookup or a
+# TLS handshake hangs here with NOTHING on stderr, until the Engine's own outer tool-call timeout
+# kills the whole call with the opaque rc=124. Bounded here in portable sh, deliberately not
+# \`timeout(1)\`: it ships on neither macOS nor every base image a runner machine might use.
+real=${sq(opts.realHelperDir)}/git-remote-$transport
+# Job control (#1403), so the backgrounded delegate gets its OWN process group: \`sh -c 'sleep 300'\`
+# may fork rather than exec-replace itself depending on the shell and how it was invoked, and a
+# plain \`kill "$cpid"\` then kills only the interpreter — the actual delegate survives as an orphan,
+# still holding git's end of the pipe open, which hangs the WHOLE call past this timeout rather than
+# fixing it. Killing the group (\`kill -- "-$cpid"\`) reaches every descendant it forked, not just
+# the one PID $! happens to name.
+set -m 2>/dev/null || true
+"$real" "$1" "$url" &
+cpid=$!
+waited=0
+while kill -0 "$cpid" 2>/dev/null; do
+  if [ "$waited" -ge ${timeoutSeconds} ]; then
+    kill -- "-$cpid" 2>/dev/null
+    kill "$cpid" 2>/dev/null
+    echo "${PUSH_TIMEOUT_MARKER} $(norm "$url") did not complete within ${timeoutSeconds}s — delegated to git-remote-$transport for auth, network and the remote's own response; nothing further is known from here. Check credential.helper / network / github.com reachability, then retry." >&2
+    exit ${PUSH_TIMEOUT_EXIT}
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+wait "$cpid"
+exit $?
 `;
 }
 
@@ -164,14 +207,14 @@ function gitExecPath(env: NodeJS.ProcessEnv, root: string): string | null {
 const installed = new Map<string, { ssh: string; bin: string }>();
 
 /** Install (idempotently) the wrapper and helper for `scope`; null when they cannot be. */
-export function installPushGuard(scope: readonly string[], env: NodeJS.ProcessEnv, root = pushGuardRoot(), realHelperDir?: string): { ssh: string; bin: string } | null {
+export function installPushGuard(scope: readonly string[], env: NodeJS.ProcessEnv, root = pushGuardRoot(), realHelperDir?: string, timeoutSeconds?: number): { ssh: string; bin: string } | null {
 	const repos = scope.map(normalizeRepo).filter(Boolean);
 	if (!repos.length) return null;
 	const realSsh = findOnPath("ssh", env.PATH, root) ?? "ssh";
 	const helperDir = realHelperDir ?? gitExecPath(env, root);
 	if (!helperDir) return null;
 	const wrapper = renderSshWrapper({ scope: repos, realSsh });
-	const helper = renderPushHelper({ scope: repos, realHelperDir: helperDir });
+	const helper = renderPushHelper({ scope: repos, realHelperDir: helperDir, timeoutSeconds });
 	const key = createHash("sha256").update(`${root} ${wrapper} ${helper}`).digest("hex").slice(0, 16);
 	const cached = installed.get(key);
 	if (cached) return cached;
@@ -196,8 +239,8 @@ export function installPushGuard(scope: readonly string[], env: NodeJS.ProcessEn
  * `env` with every push checked against `scope`; untouched when no scope was named or the guard
  * could not be installed. Existing `GIT_CONFIG_COUNT` entries are kept and appended to.
  */
-export function pushGuardEnv(env: NodeJS.ProcessEnv, scope: readonly string[] | undefined, root = pushGuardRoot(), realHelperDir?: string): NodeJS.ProcessEnv {
-	const dirs = installPushGuard(scope ?? [], env, root, realHelperDir);
+export function pushGuardEnv(env: NodeJS.ProcessEnv, scope: readonly string[] | undefined, root = pushGuardRoot(), realHelperDir?: string, timeoutSeconds?: number): NodeJS.ProcessEnv {
+	const dirs = installPushGuard(scope ?? [], env, root, realHelperDir, timeoutSeconds);
 	if (!dirs) return env;
 	const out: NodeJS.ProcessEnv = { ...env, PATH: `${dirs.bin}:${env.PATH ?? ""}`, GIT_SSH_COMMAND: sq(join(dirs.ssh, "ssh")) };
 	// The machine's own choice of ssh, so the wrapper delegates exactly as git would have — never to itself.

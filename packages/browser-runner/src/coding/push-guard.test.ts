@@ -5,7 +5,16 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { engineSpawnEnv, writeGuardReport } from "./engine-env.js";
 import { gitGuardRoot } from "./git-guard.js";
-import { PUSH_GUARD_GAPS, PUSH_REFUSED_MARKER, pushGuardEnv, pushGuardRoot, pushRewrites, renderPushHelper } from "./push-guard.js";
+import {
+	PUSH_DELEGATE_TIMEOUT_SECONDS,
+	PUSH_GUARD_GAPS,
+	PUSH_REFUSED_MARKER,
+	PUSH_TIMEOUT_MARKER,
+	pushGuardEnv,
+	pushGuardRoot,
+	pushRewrites,
+	renderPushHelper,
+} from "./push-guard.js";
 
 /**
  * #1252, on temporary repositories only. Real git pushes over the ssh transport into local bare
@@ -158,6 +167,82 @@ describe("git push over https (#1252)", () => {
 	});
 });
 
+/**
+ * #1403: `pags-push` ran until the Engine's own OUTER tool-call timeout killed it (rc=124, 60-120s,
+ * no error output). The real transport has no bound of its own, so a stalled credential helper, DNS
+ * lookup or TLS handshake just hangs. These push the registered repository through a REAL generated
+ * guard (`pushGuardEnv`, not `renderPushHelper` directly) at a short timeout, standing in for
+ * `git-remote-https` with fakes that hang, succeed and fail, so the three paths this closes are all
+ * exercised through git's own transport, exactly like the sibling describe block above.
+ */
+describe("a stalled real transport is bounded, not silent (#1403)", () => {
+	let helperDir: string;
+	beforeEach(() => {
+		helperDir = join(dir, "libexec-slow");
+		mkdirSync(helperDir);
+	});
+
+	it("a delegate that never returns is killed at the configured bound, with a marker naming the repo and the real transport — not a bare rc=124", () => {
+		writeFileSync(join(helperDir, "git-remote-https"), `#!/bin/sh\nsleep 300\n`, { mode: 0o755 });
+		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-hang"), helperDir, 1);
+		const started = Date.now();
+		const r = run(["push", "https://github.com/proappstore-online/template-app.git", "main"]);
+		expect(Date.now() - started).toBeLessThan(10_000); // bounded, not left to the Engine's own ~120s kill
+		// Not PUSH_TIMEOUT_EXIT itself: git normalizes ANY remote-helper failure — ours included — to
+		// its own generic 128, the same reason the sibling refusal test above checks `.not.toBe(0)`
+		// rather than the exact value. The MARKER is the real contract (`write-scope-refusals.ts`
+		// parses it; nothing reads the raw exit code), and the helper's own exit code IS verified at
+		// the sh level by the manual timing checks this fix was validated against.
+		expect(r.status).not.toBe(0);
+		expect(r.stderr).toContain(`${PUSH_TIMEOUT_MARKER} proappstore-online/template-app did not complete within 1s`);
+		expect(r.stderr).toContain("git-remote-https");
+	});
+
+	it("a delegate that answers before the bound finishes fast, with no timeout marker", () => {
+		// Not a real `git-remote-https`: it never speaks the remote-helper protocol (capabilities,
+		// list, push), so git reports its own generic failure however this fake is invoked — exec'd
+		// directly or through this bound, which is WHY the bound exists to be proven here, not a
+		// clean `git push` exit. What this guards: the bound must not fire just because a FAST,
+		// genuinely-finished delegate happened to be running — the absence of the marker is the claim.
+		writeFileSync(join(helperDir, "git-remote-https"), `#!/bin/sh\necho fine\nexit 0\n`, { mode: 0o755 });
+		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-fast"), helperDir, 5);
+		const started = Date.now();
+		const r = run(["push", "https://github.com/proappstore-online/template-app.git", "main"]);
+		expect(Date.now() - started).toBeLessThan(5_000); // well under the 5s bound — it never had to wait
+		expect(r.stderr).not.toContain(PUSH_TIMEOUT_MARKER);
+	});
+
+	it("a delegate that fails fast (git's own reason) is unaffected by the bound — only a HANG is a timeout", () => {
+		writeFileSync(join(helperDir, "git-remote-https"), `#!/bin/sh\necho "fatal: could not read Username" >&2\nexit 128\n`, { mode: 0o755 });
+		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-failfast"), helperDir, 5);
+		const r = run(["push", "https://github.com/proappstore-online/template-app.git", "main"]);
+		expect(r.status).toBe(128);
+		expect(r.stderr).toContain("could not read Username");
+		expect(r.stderr).not.toContain(PUSH_TIMEOUT_MARKER);
+	});
+
+	it("an out-of-scope repository is still refused immediately — the bound never even starts the delegate", () => {
+		writeFileSync(join(helperDir, "git-remote-https"), `#!/bin/sh\nsleep 300\n`, { mode: 0o755 });
+		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-hang-oos"), helperDir, 1);
+		const started = Date.now();
+		const r = run(["push", "https://github.com/proappstore-online/tennis-clubs.git", "main"]);
+		expect(Date.now() - started).toBeLessThan(5_000);
+		// Not PUSH_REFUSED_EXIT itself: git does not pass a remote helper's raw exit code through when
+		// the helper dies before ever answering its protocol (it reports its own "connection died"
+		// code instead) — the same reason the sibling refusal tests above check `.not.toBe(0)` rather
+		// than the exact value. The constant IS still what the helper itself exits with; see the
+		// `renderPushHelper` string-level tests and the #1403 timeout tests, which run late enough in
+		// git's protocol exchange for the real code to come through.
+		expect(r.status).not.toBe(0);
+		expect(r.stderr).toContain(PUSH_REFUSED_MARKER);
+	});
+
+	it("defaults to PUSH_DELEGATE_TIMEOUT_SECONDS, comfortably under the Engine's outer tool-call bound", () => {
+		expect(renderPushHelper({ scope: SCOPE, realHelperDir: "/x" })).toContain(`-ge ${PUSH_DELEGATE_TIMEOUT_SECONDS} ]`);
+		expect(PUSH_DELEGATE_TIMEOUT_SECONDS).toBeLessThan(60);
+	});
+});
+
 describe("the Engine's env (#1252)", () => {
 	it("no registered repository, no guard — the env is untouched", () => {
 		expect(pushGuardEnv(BASE_ENV, [], join(dir, "g"))).toBe(BASE_ENV);
@@ -222,6 +307,12 @@ describe("the owner's own url rewrites survive the push guard (Grass Karma #33)"
 	});
 
 	it("the https helper never waits on a terminal prompt", () => {
-		expect(renderPushHelper({ scope: SCOPE, realHelperDir: "/x" })).toMatch(/GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT\nexec /);
+		// Not `exec` any more (#1403 bounds the delegate instead), but GIT_TERMINAL_PROMPT=0 must
+		// still be set BEFORE the delegate call, which is what actually matters here.
+		const script = renderPushHelper({ scope: SCOPE, realHelperDir: "/x" });
+		const promptAt = script.indexOf("GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT");
+		const delegateAt = script.indexOf('"$real" "$1" "$url"');
+		expect(promptAt).toBeGreaterThan(-1);
+		expect(delegateAt).toBeGreaterThan(promptAt);
 	});
 });

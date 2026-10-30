@@ -32,7 +32,7 @@
 import { clipMarked } from "./clip-marked.js";
 import { type EngineToolCall, toolCallsForSnapshot } from "./engine-tool-calls.js";
 import { testInvocations, type TestInvocation } from "./coding-scope-constraints.js";
-import { type WriteRefusal, writeRefusalsIn } from "./write-scope-refusals.js";
+import { type PushTimeout, pushTimeoutsIn, type WriteRefusal, writeRefusalsIn } from "./write-scope-refusals.js";
 
 type Observed =
 	| { kind: "edit"; seq: number; path: string | null }
@@ -61,7 +61,9 @@ type Observed =
 	 */
 	| { kind: "browser"; seq: number; ok: boolean | null; observes: boolean; nav?: string | null; closes?: boolean; page?: string | null }
 	/** A write the runner's write-scope guard refused before anything was sent (#1252), named by its own line. */
-	| ({ kind: "write_refused"; seq: number } & WriteRefusal);
+	| ({ kind: "write_refused"; seq: number } & WriteRefusal)
+	/** A push the push guard's bounded wait gave up on (#1403) — in scope, outcome unknown. */
+	| ({ kind: "push_timeout"; seq: number } & PushTimeout);
 
 /** The run's observed record. Held by the workflow across rounds; fed one snapshot pane at a time. */
 export class CompletionEvidence {
@@ -76,12 +78,22 @@ export class CompletionEvidence {
 	private page: string | null = null;
 	/** How many write refusals {@link takeRefusals} has already handed out. */
 	private refusalsTaken = 0;
+	/** How many push timeouts {@link takePushTimeouts} has already handed out. */
+	private pushTimeoutsTaken = 0;
 
 	/** Write-scope refusals (#1252) observed since the last call — so each is reported exactly once. */
 	takeRefusals(): WriteRefusal[] {
 		const all = refusalsOf(this.observed);
 		const fresh = all.slice(this.refusalsTaken);
 		this.refusalsTaken = all.length;
+		return fresh;
+	}
+
+	/** Push timeouts (#1403) observed since the last call — so each is reported exactly once. */
+	takePushTimeouts(): PushTimeout[] {
+		const all = pushTimeoutsOf(this.observed);
+		const fresh = all.slice(this.pushTimeoutsTaken);
+		this.pushTimeoutsTaken = all.length;
 		return fresh;
 	}
 
@@ -279,6 +291,7 @@ function classify(call: EngineToolCall, seq: number): Observed[] | null {
 	if (ci >= 0) out.push({ kind: "ci", seq: at(ci), ok: call.ok, output: call.output });
 	// The guard's own line names what it refused, whatever command reached it — a script, a temp clone (#1252).
 	for (const r of writeRefusalsIn(call.output)) out.push({ kind: "write_refused", seq: at(command.length), ...r });
+	for (const t of pushTimeoutsIn(call.output)) out.push({ kind: "push_timeout", seq: at(command.length), ...t });
 	return out;
 }
 
@@ -376,6 +389,10 @@ function refusalsOf(obs: readonly Observed[]): WriteRefusal[] {
 	return obs.filter((o): o is Extract<Observed, { kind: "write_refused" }> => o.kind === "write_refused").map(({ how, repo }) => ({ how, repo }));
 }
 
+function pushTimeoutsOf(obs: readonly Observed[]): PushTimeout[] {
+	return obs.filter((o): o is Extract<Observed, { kind: "push_timeout" }> => o.kind === "push_timeout").map(({ repo, seconds }) => ({ repo, seconds }));
+}
+
 /** Judge a `finish(done)` detail against the run's record. Pure. */
 export function judgeCompletion(detail: string, ev: CompletionEvidence): CompletionJudgement {
 	const verdicts: ClaimVerdict[] = [];
@@ -459,7 +476,14 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 	if (CLAIM_PUSHED.test(detail)) {
 		const push = lastOf("push");
 		const lastCommit = lastOf("commit");
+		const timedOut = lastOf("push_timeout");
+		// #1403: a push the guard's own bound gave up on is not a REJECTION — the exit code is
+		// non-zero (which `ok === false` below would otherwise read as "rejected"), but the real
+		// transport never answered at all, so whether it landed is genuinely unknown. Matched by
+		// seq's integer part: both entries come from the SAME call, and `at()`'s fractional part is
+		// only what orders entries WITHIN one call.
 		if (!push) verdicts.push({ claim: "pushed", status: "unverified", why: ev.sawCalls ? "no push appears in this run's record" : "this engine's tool calls are not observable" });
+		else if (timedOut && Math.floor(timedOut.seq) === Math.floor(push.seq)) verdicts.push({ claim: "pushed", status: "unverified", why: "the push did not complete within the guard's bound (#1403) — whether it landed is unknown, not refused" });
 		else if (push.effect === "rejected" || push.ok === false) verdicts.push({ claim: "pushed", status: "contradicted", why: "the last push was rejected" });
 		else if (push.effect === "up_to_date") verdicts.push({ claim: "pushed", status: "contradicted", why: "the last push said \"Everything up-to-date\" — it moved nothing" });
 		else if ((lastCommit && lastCommit.seq > push.seq) || (lastEdit && lastEdit.seq > push.seq)) verdicts.push({ claim: "pushed", status: "contradicted", why: "work was committed or edited after the last push, which therefore does not carry the final revision" });

@@ -56,7 +56,7 @@ import {
 	type MergePolicy,
 } from "../../lib/coding-authority.js";
 import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSlugs, unscopedWrites } from "../../lib/repo-write-scope.js";
-import { recordWriteRefusal, type WriteRefusal } from "../../lib/write-scope-refusals.js";
+import { recordPushTimeout, recordWriteRefusal, type PushTimeout, type WriteRefusal } from "../../lib/write-scope-refusals.js";
 import { actsInWindow } from "../../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../../lib/run-attribution.js";
 import { finishLoopRun, settledRunStatus, grantRunIterations, recordIteration, type RunWaitReason, } from "../../lib/agent-loop-store.js";
@@ -576,8 +576,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// was withheld for being empty (#504), or it is a repeat (#522). Without this the fix
 			// is invisible where the defect was visible — the owner watched one instruction go out
 			// nine times and read a success report eleven minutes later.
-			if (type === "empty" || type === "repeated" || type === "scope_refused" || type === "evidence" || type === "write_refused") await postToChat(`**Loop** — ${message}`);
+			if (type === "empty" || type === "repeated" || type === "scope_refused" || type === "evidence" || type === "write_refused" || type === "push_timeout") await postToChat(`**Loop** — ${message}`);
 				if (type === "write_refused") await recordWriteRefusal(env, { userId, instanceId, sessionId, traceId: event.payload.loopRunId ?? null }, data as WriteRefusal);
+				if (type === "push_timeout") await recordPushTimeout(env, { userId, instanceId, sessionId, traceId: event.payload.loopRunId ?? null }, data as PushTimeout);
 				// Only for a loop the OWNER started (or a supervisor delegated) — a session the
 				// human is driving by hand already shows every keystroke in the terminal, and
 				// echoing it into chat would be noise about work they are watching happen.

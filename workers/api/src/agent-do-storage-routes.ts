@@ -525,7 +525,7 @@ export async function getActivity(
 }
 
 /** Append one `runner.attach` activity event (#1114). The body is the API Worker's own record, not a caller's. */
-export async function logRunnerAttach(engine: Pick<AgentStorageEngine, "logEvent">, request: Request, type: "runner.attach" | "write.refused" = "runner.attach"): Promise<Response> {
+export async function logRunnerAttach(engine: Pick<AgentStorageEngine, "logEvent">, request: Request, type: "runner.attach" | "write.refused" | "push.timeout" = "runner.attach"): Promise<Response> {
 	const body = (await request.json().catch(() => ({}))) as { userId?: unknown; data?: unknown };
 	const data = body.data && typeof body.data === "object" ? (body.data as Record<string, unknown>) : {};
 	const event = await engine.logEvent(type, typeof body.userId === "string" ? body.userId : undefined, data);

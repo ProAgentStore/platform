@@ -172,6 +172,7 @@ export interface ActivityEvent {
 		| "email.confirmation_link_found"
 		| "runner.attach"
 		| "write.refused"
+		| "push.timeout"
 		| "error";
 	agentId: string;
 	userId?: string;
