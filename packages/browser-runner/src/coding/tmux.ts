@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { RunnerInputError } from "../errors.js";
 
 /**
@@ -285,4 +285,161 @@ export function stripAnsi(s: string): string {
 export function capturePane(target: string, lines = 200): string {
 	const captured = tmuxExec(["capture-pane", "-p", "-t", target, "-S", `-${lines}`, "-J"]);
 	return stripAnsi(captured).trim();
+}
+
+// ── Marker-delimited command runs (#1406) ───────────────────────────────────────────────────
+//
+// `tmux_run_command` used to return the whole visible pane — every earlier command and its
+// output, with the new output tacked on the bottom — because `capturePane` has no idea where
+// "before" ends and "this command" begins. The fix is the sentinel trick the issue itself names
+// ("parse sentinels like `echo DONE`"), done ONCE here instead of by every caller: wrap the
+// command in a unique start marker (so we know exactly where its output starts) and an end
+// marker carrying `$?` (so "finished" is an observed fact, not a quiescence guess, and the exit
+// code comes for free).
+
+function escapeRegExp(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export interface RunMarkers {
+	start: string;
+	end: string;
+}
+
+/** A fresh, effectively-unique marker pair for one `tmux_run_command` call. */
+export function makeRunMarkers(): RunMarkers {
+	const id = randomUUID().replace(/-/g, "");
+	return { start: `__pags_run_start_${id}__`, end: `__pags_run_end_${id}__` };
+}
+
+/**
+ * The shell line that actually runs `command`, bracketed by markers that print on their OWN
+ * line — the start one right before it, the end one right after, carrying its exit code.
+ * `command` may itself be `a; b && c`, several statements, etc.; `$?` after it is always the
+ * LAST one's exit status, same as it would be for a human typing the same line.
+ */
+export function wrapWithMarkers(command: string, markers: RunMarkers): string {
+	return `echo ${markers.start}; ${command}; echo ${markers.end}:$?`;
+}
+
+export interface MarkedRun {
+	/** Output strictly between the two marker lines — the command's own stdout/stderr, nothing older. */
+	output: string;
+	/** True once the end marker (and so the command) was actually observed. */
+	completed: boolean;
+	/** Only set when `completed`. */
+	exitCode: number | null;
+	/** True when even the START marker could not be found — `output` is then the raw, undelimited pane. */
+	truncated: boolean;
+}
+
+/**
+ * Pull just the new command's output out of a pane that also carries the line that started it
+ * (echoed back by the terminal as it was typed) and, once done, the next prompt — using the
+ * markers `wrapWithMarkers` sent.
+ *
+ * Markers are matched only as a WHOLE line (`^marker$`), never as a substring: the typed line
+ * that started the command contains both marker strings too, as literal text ("echo
+ * __pags_run_start_…__; …") — but `echo __pags_run_start_…__` on its own only ever PRINTS the
+ * bare marker on a line by itself, which is the only occurrence this must match.
+ */
+export function extractBetweenMarkers(pane: string, markers: RunMarkers): MarkedRun {
+	const startRe = new RegExp(`^${escapeRegExp(markers.start)}$`, "m");
+	const endRe = new RegExp(`^${escapeRegExp(markers.end)}:(-?\\d+)$`, "m");
+	const startMatch = startRe.exec(pane);
+	if (!startMatch) return { output: pane, completed: false, exitCode: null, truncated: true };
+	const afterStart = pane.slice(startMatch.index + startMatch[0].length).replace(/^\n/, "");
+	const endMatch = endRe.exec(afterStart);
+	if (!endMatch) return { output: afterStart, completed: false, exitCode: null, truncated: false };
+	const output = afterStart.slice(0, endMatch.index).replace(/\n$/, "");
+	return { output, completed: true, exitCode: Number(endMatch[1]), truncated: false };
+}
+
+/** How often {@link waitForMarker} polls, and its default/maximum wait — the ceiling the relay route (`once()`, 120s) must outlast. */
+export const RUN_POLL_MS = 150;
+export const RUN_DEFAULT_TIMEOUT_MS = 3_000;
+export const RUN_MAX_TIMEOUT_MS = 90_000;
+/** Capture window while waiting for an end marker: generous, since a command's own output can be long before it finishes. */
+export const RUN_CAPTURE_LINES = 2000;
+
+/**
+ * Poll-capture a pane until `markers.end` appears (the command finished) or `timeoutMs` elapses.
+ *
+ * Unlike {@link waitForPaneSettle}, which infers "done" from the pane going quiet — wrong for a
+ * build that is still running but paused between log lines — this looks for the exact sentinel
+ * `wrapWithMarkers` planted, so "finished" is observed rather than guessed, for as long as the
+ * caller is willing to wait. Pure given `captureFn`, so it is tested without a real tmux session.
+ */
+export async function waitForMarker(
+	target: string,
+	markers: RunMarkers,
+	opts: { timeoutMs?: number; pollMs?: number; lines?: number; captureFn?: (t: string, lines: number) => string } = {},
+): Promise<string> {
+	const timeoutMs = opts.timeoutMs ?? RUN_DEFAULT_TIMEOUT_MS;
+	const pollMs = opts.pollMs ?? RUN_POLL_MS;
+	const lines = opts.lines ?? RUN_CAPTURE_LINES;
+	const capture = opts.captureFn ?? ((t: string, l: number) => capturePane(t, l));
+	const endRe = new RegExp(`^${escapeRegExp(markers.end)}:(-?\\d+)$`, "m");
+	const deadline = Date.now() + timeoutMs;
+	while (true) {
+		const pane = capture(target, lines);
+		if (endRe.test(pane)) return pane;
+		if (Date.now() >= deadline) return pane;
+		await new Promise<void>((r) => setTimeout(r, pollMs));
+	}
+}
+
+// ── Cursor-based polling for tmux_capture_pane (#1406) ──────────────────────────────────────
+//
+// Repeatedly polling a long-running pane with plain `capturePane` re-reads (and the caller
+// re-pays tokens for) everything already seen. The cursor below needs no server-side state: it
+// is the previously captured text's length plus a hash of everything up to it, so the NEXT call
+// can verify it is still looking at the same history before trusting a diff off it.
+
+function hashPrefix(s: string): string {
+	return createHash("sha1").update(s).digest("hex").slice(0, 16);
+}
+
+/** An opaque, self-verifying cursor over a pane's captured text. */
+export function encodeCursor(text: string): string {
+	return `${text.length}:${hashPrefix(text)}`;
+}
+
+function decodeCursor(cursor: string): { length: number; hash: string } | null {
+	const m = /^(\d+):([0-9a-f]{16})$/.exec(cursor.trim());
+	return m ? { length: Number(m[1]), hash: m[2] } : null;
+}
+
+export const SINCE_CAPTURE_LINES = 4000;
+
+export interface SinceCapture {
+	pane: string;
+	cursor: string;
+	/** False when `since` was given but could not be trusted (invalid, or the pane moved past it — cleared, or tmux evicted the history under it); `pane` is then the FULL capture, not a delta. */
+	sinceValid: boolean;
+}
+
+/**
+ * Capture a pane, returning only what is new since a previous call's cursor — so polling a long
+ * build doesn't have to re-read everything already seen.
+ *
+ * Stateless by design: the cursor carries everything needed to verify itself rather than the
+ * runner remembering a position per caller, which would need an owner and an expiry. A pane is
+ * append-only in the common case, so the previous text should be an exact PREFIX of this one;
+ * the hash catches when it is not (cleared, or history tmux evicted) and degrades to returning
+ * everything rather than a silently wrong diff.
+ */
+export function capturePaneSince(
+	target: string,
+	since: string | undefined,
+	lines = SINCE_CAPTURE_LINES,
+	/** Override for testing — avoids needing a live tmux session. */
+	captureFn: (t: string, l: number) => string = capturePane,
+): SinceCapture {
+	const full = captureFn(target, lines);
+	if (!since) return { pane: full, cursor: encodeCursor(full), sinceValid: true };
+	const cursor = decodeCursor(since);
+	const matches = cursor !== null && full.length >= cursor.length && hashPrefix(full.slice(0, cursor.length)) === cursor.hash;
+	if (!matches) return { pane: full, cursor: encodeCursor(full), sinceValid: false };
+	return { pane: full.slice(cursor.length), cursor: encodeCursor(full), sinceValid: true };
 }

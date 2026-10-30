@@ -3,11 +3,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	capturePane,
+	capturePaneSince,
 	createSession,
+	extractBetweenMarkers,
 	killSession,
 	listSessionsDetailed,
+	makeRunMarkers,
 	runCommand,
 	sessionExists,
+	waitForMarker,
+	wrapWithMarkers,
 } from "./tmux.js";
 
 /** Skip the whole suite when tmux isn't installed (CI images without it). */
@@ -79,6 +84,44 @@ describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 		// Until the shell has rendered it — not a fixed beat that a loaded machine outruns.
 		await until(() => capturePane(SESSION, 200).includes("tmux_connector_marker_42"), "the shell to render the command's output");
 		expect(capturePane(SESSION, 200)).toContain("tmux_connector_marker_42");
+	});
+
+	/**
+	 * #1406 end to end, against a real tmux session that already has the PRIOR test's history in
+	 * it — exactly the scenario that was filed: an earlier command's output must not leak into
+	 * this one's result, and the end marker's exit code must be the real one.
+	 */
+	it("a marker-wrapped run returns only its own output and exit code, never the session's earlier history", async () => {
+		const markers = makeRunMarkers();
+		runCommand(SESSION, wrapWithMarkers("echo tmux_connector_marker_NEW", markers));
+		const rawPane = await waitForMarker(SESSION, markers, { timeoutMs: 10_000, pollMs: 50 });
+		const result = extractBetweenMarkers(rawPane, markers);
+		expect(result.completed).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.truncated).toBe(false);
+		expect(result.output).toBe("tmux_connector_marker_NEW");
+		// The prior test's output is still in the pane's scrollback, but not in the extracted result.
+		expect(rawPane).toContain("tmux_connector_marker_42");
+		expect(result.output).not.toContain("tmux_connector_marker_42");
+	});
+
+	it("a marker-wrapped run reports a non-zero exit code", async () => {
+		const markers = makeRunMarkers();
+		runCommand(SESSION, wrapWithMarkers("false", markers));
+		const rawPane = await waitForMarker(SESSION, markers, { timeoutMs: 10_000, pollMs: 50 });
+		const result = extractBetweenMarkers(rawPane, markers);
+		expect(result.completed).toBe(true);
+		expect(result.exitCode).toBe(1);
+	});
+
+	it("tmux_capture_pane's since cursor returns only what a plain command adds next (#1406)", async () => {
+		const first = capturePaneSince(SESSION, undefined);
+		runCommand(SESSION, "echo tmux_connector_since_probe");
+		await until(() => capturePane(SESSION, 200).includes("tmux_connector_since_probe"), "the probe command to render");
+		const second = capturePaneSince(SESSION, first.cursor);
+		expect(second.sinceValid).toBe(true);
+		expect(second.pane).toContain("tmux_connector_since_probe");
+		expect(second.pane).not.toContain("tmux_connector_marker_42"); // already covered by the first cursor
 	});
 
 	it("kills the session", () => {

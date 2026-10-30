@@ -108,11 +108,59 @@ describe("tmux connector — dispatch to the runner", () => {
 		expect(r.success).toBe(true);
 	});
 
+	/** #1406: a `cursor` rides in `tail` so the caller can poll with `since` and get only new output. */
+	it("capture_pane surfaces the cursor in tail for the next poll", async () => {
+		callRunner.mockResolvedValue({ pane: "$ hello\n", cursor: "7:abc123" });
+		const r = await tool("tmux_capture_pane").handler(ctx(), { session: "main" });
+		expect(r.tail).toContain("cursor: 7:abc123");
+	});
+
+	it("capture_pane passes `since` through to /tmux/capture, ignoring `lines`", async () => {
+		callRunner.mockResolvedValue({ pane: "new lines only", cursor: "20:def456", sinceValid: true });
+		const r = await tool("tmux_capture_pane").handler(ctx(), { session: "main", since: "7:abc123" });
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/tmux/capture", { session: "main", lines: undefined, since: "7:abc123" }, expect.objectContaining({ timeoutMs: 30_000 }));
+		expect(r.content).toBe("new lines only");
+	});
+
+	it("capture_pane notes when `since` was stale and the reply fell back to the full pane", async () => {
+		callRunner.mockResolvedValue({ pane: "the whole pane", cursor: "20:def456", sinceValid: false });
+		const r = await tool("tmux_capture_pane").handler(ctx(), { session: "main", since: "garbage" });
+		expect(r.content).toBe("the whole pane");
+		expect(r.tail).toMatch(/stale or invalid/i);
+	});
+
 	it("run_command sends {session, command} to /tmux/run", async () => {
 		callRunner.mockResolvedValue({ pane: "done" });
 		const r = await tool("tmux_run_command").handler(ctx(), { session: "main", command: "npm test" });
-		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/tmux/run", { session: "main", command: "npm test" });
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/tmux/run", { session: "main", command: "npm test", timeout_ms: undefined });
 		expect(r.success).toBe(true);
+	});
+
+	/** #1406: the content is now just the new command's output; completion/exit code ride in `tail`. */
+	it("run_command reports the resulting completed/exitCode in tail, content is just the new output", async () => {
+		callRunner.mockResolvedValue({ pane: "a.txt\nb.txt", changed: true, completed: true, exitCode: 0 });
+		const r = await tool("tmux_run_command").handler(ctx(), { session: "main", command: "ls" });
+		expect(r.content).toBe("a.txt\nb.txt");
+		expect(r.tail).toContain("exit code 0");
+	});
+
+	it("run_command passes timeout_ms through to /tmux/run", async () => {
+		callRunner.mockResolvedValue({ pane: "", completed: true, exitCode: 0 });
+		await tool("tmux_run_command").handler(ctx(), { session: "main", command: "sleep 30", timeout_ms: 60_000 });
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/tmux/run", { session: "main", command: "sleep 30", timeout_ms: 60_000 });
+	});
+
+	it("run_command says the command is still running when not completed within the wait", async () => {
+		callRunner.mockResolvedValue({ pane: "partial output", completed: false, exitCode: null });
+		const r = await tool("tmux_run_command").handler(ctx(), { session: "main", command: "sleep 30" });
+		expect(r.content).toBe("partial output");
+		expect(r.tail).toMatch(/still running/i);
+	});
+
+	it("run_command notes when the start marker could not be found (truncated)", async () => {
+		callRunner.mockResolvedValue({ pane: "raw pane text", completed: false, exitCode: null, truncated: true });
+		const r = await tool("tmux_run_command").handler(ctx(), { session: "main", command: "ls" });
+		expect(r.tail).toMatch(/could not find this command's own start marker/i);
 	});
 
 	it("run_command rejects an empty command WITHOUT calling the runner", async () => {

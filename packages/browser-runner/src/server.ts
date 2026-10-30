@@ -688,13 +688,20 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { sessions: listSessionsDetailed() });
 	}
 	if (req.method === "POST" && path === "/tmux/capture") {
-		const { capturePane, sessionExists } = await import("./coding/tmux.js");
-		const b = await readJson<{ session?: string; lines?: number }>(req);
+		const { capturePane, capturePaneSince, encodeCursor, sessionExists } = await import("./coding/tmux.js");
+		const b = await readJson<{ session?: string; lines?: number; since?: string }>(req);
 		const session = String(b.session || "").trim();
 		if (!session) return json(res, 400, { error: "A `session` name is required." });
 		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
+		// `since` (#1406): return only what's new since a previous capture's cursor, so polling a
+		// long-running pane doesn't re-read (and the caller re-pay tokens for) everything already seen.
+		if (b.since) {
+			const { pane, cursor, sinceValid } = capturePaneSince(session, String(b.since));
+			return json(res, 200, { session, pane, cursor, sinceValid });
+		}
 		const lines = Math.min(Math.max(Number(b.lines) || 200, 1), 2000);
-		return json(res, 200, { session, pane: capturePane(session, lines) });
+		const pane = capturePane(session, lines);
+		return json(res, 200, { session, pane, cursor: encodeCursor(pane) });
 	}
 	if (req.method === "POST" && path === "/tmux/send") {
 		const { sendText, sendKey, capturePane, sessionExists, waitForPaneSettle } = await import("./coding/tmux.js");
@@ -715,18 +722,34 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { session, pane, paneBefore, changed: pane !== paneBefore, activeCommand: activeTerminalCommand(session, "tmux") });
 	}
 	if (req.method === "POST" && path === "/tmux/run") {
-		const { runCommand, capturePane, sessionExists, waitForPaneSettle } = await import("./coding/tmux.js");
-		const b = await readJson<{ session?: string; command?: string }>(req);
+		const { runCommand, capturePane, sessionExists, makeRunMarkers, wrapWithMarkers, waitForMarker, extractBetweenMarkers, RUN_DEFAULT_TIMEOUT_MS, RUN_MAX_TIMEOUT_MS } = await import("./coding/tmux.js");
+		const b = await readJson<{ session?: string; command?: string; timeout_ms?: number }>(req);
 		const session = String(b.session || "").trim();
 		const command = String(b.command ?? "");
 		if (!session) return json(res, 400, { error: "A `session` name is required." });
 		if (!command.trim()) return json(res, 400, { error: "A `command` is required." });
 		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
 		const paneBefore = capturePane(session, 200);
-		runCommand(session, command);
-		const pane = await waitForPaneSettle(session, { quietMs: 750, timeoutMs: 3_000 });
+		// Wrap in start/end markers (#1406) so the result can be trimmed to just THIS command's
+		// output, and "finished" is the end marker actually appearing rather than the pane merely
+		// going quiet for a beat — which also gives the exit code for free.
+		const markers = makeRunMarkers();
+		runCommand(session, wrapWithMarkers(command, markers));
+		const timeoutMs = Math.min(Math.max(Number(b.timeout_ms) || RUN_DEFAULT_TIMEOUT_MS, 0), RUN_MAX_TIMEOUT_MS);
+		const rawPane = await waitForMarker(session, markers, { timeoutMs });
+		const { output, completed, exitCode, truncated } = extractBetweenMarkers(rawPane, markers);
 		const { activeTerminalCommand } = await import("./coding/terminal.js");
-		return json(res, 200, { session, command, pane, paneBefore, changed: pane !== paneBefore, activeCommand: activeTerminalCommand(session, "tmux") });
+		return json(res, 200, {
+			session,
+			command,
+			pane: output,
+			paneBefore,
+			changed: rawPane !== paneBefore,
+			completed,
+			exitCode,
+			truncated,
+			activeCommand: activeTerminalCommand(session, "tmux"),
+		});
 	}
 	if (req.method === "POST" && path === "/tmux/session") {
 		const { createSession, killSession, sessionExists, waitForPaneSettle } = await import("./coding/tmux.js");

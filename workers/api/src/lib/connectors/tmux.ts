@@ -106,12 +106,13 @@ export const TMUX_TOOLS: ToolDef[] = [
 		mutates: false,
 		untrustedOutput: true,
 		description:
-			"Read the current output of a tmux session's active pane (ANSI-stripped, with scrollback). Use this to see what a shell, build, server, or CLI is showing right now.",
+			"Read the current output of a tmux session's active pane (ANSI-stripped, with scrollback). Use this to see what a shell, build, server, or CLI is showing right now. Every reply carries a `cursor`; pass it back as `since` on the NEXT call to get only the lines written after this one instead of re-reading the whole pane (#1406) — useful for polling a long-running command. `since` ignores `lines` and looks back further to verify itself; if it can't (stale, or the pane was cleared), the reply falls back to the full pane and says so.",
 		jsonSchema: {
 			type: "object",
 			properties: {
 				session: { type: "string", description: "The tmux session name (from tmux_list_sessions)." },
-				lines: { type: "number", description: "How many lines of scrollback to include (default 200, max 2000)." },
+				lines: { type: "number", description: "How many lines of scrollback to include (default 200, max 2000). Ignored when `since` is given." },
+				since: { type: "string", description: "A `cursor` value from a previous tmux_capture_pane reply on this session — returns only the output written after it." },
 			},
 			required: ["session"],
 		},
@@ -119,14 +120,17 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const r = await resolveRunner(ctx);
 			if ("error" in r) return { content: r.error, success: false };
 			const session = requireSession(input);
-			const res = await callRunner<{ pane?: string }>(
+			const since = input.since != null ? String(input.since).trim() : "";
+			const res = await callRunner<{ pane?: string; cursor?: string; sinceValid?: boolean }>(
 				r.conn,
 				"/tmux/capture",
-				{ session, lines: input.lines },
+				{ session, lines: input.lines, since: since || undefined },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
 			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
-			return { content: res.pane ?? "", success: true, tail: paneTail(res.pane), origin: `the tmux session "${session}" on your machine` };
+			const cursorNote = res.cursor ? `cursor: ${res.cursor} (pass as \`since\` next time to get only new output)` : "";
+			const staleNote = since && res.sinceValid === false ? "(the `since` cursor was stale or invalid — this is the full pane, not a delta)" : "";
+			return { content: res.pane ?? "", success: true, tail: paneTail(res.pane, cursorNote, staleNote), origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -137,12 +141,13 @@ export const TMUX_TOOLS: ToolDef[] = [
 		mutates: true,
 		untrustedOutput: true,
 		description:
-			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine. Waits until the pane quiesces before returning; result includes `changed` (false means the pane did not react — the CLI may not be ready).",
+			"Type a command line into a tmux session's active pane and press Enter — for shell commands, git, build/test runs, etc. WRITE: runs on the user's machine. The result is only THIS command's own output (#1406), not the pane's whole scrollback — internally delimited by a start/end marker, so the earlier history and later commands never leak in. Waits up to `timeout_ms` for the command to actually finish; result includes `completed` and, once true, `exitCode`. `completed: false` means it is still running after the wait — raise `timeout_ms`, or poll tmux_capture_pane with `since` to keep reading its output. Also includes `changed` (false means the pane did not react at all — the CLI may not be ready).",
 		jsonSchema: {
 			type: "object",
 			properties: {
 				session: { type: "string", description: "The tmux session name to run the command in." },
 				command: { type: "string", description: "The command line to type and execute (sent literally, then Enter)." },
+				timeout_ms: { type: "number", description: "How long to wait for the command to finish (default 3000, max 90000). It returns as soon as the command finishes, even sooner." },
 			},
 			required: ["session", "command"],
 		},
@@ -152,13 +157,23 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const session = requireSession(input);
 			const command = String(input.command ?? "");
 			if (!command.trim()) return { content: "A `command` is required.", success: false };
-			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/tmux/run", { session, command });
+			const res = await callRunner<{
+				pane?: string;
+				paneBefore?: string;
+				changed?: boolean;
+				activeCommand?: string | null;
+				completed?: boolean;
+				exitCode?: number | null;
+				truncated?: boolean;
+			}>(r.conn, "/tmux/run", { session, command, timeout_ms: input.timeout_ms });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
 			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
 			// The landed note is the PLATFORM's judgement about the pane, not the pane — it rides in
 			// `tail`, outside the fence, or the model reads our diagnosis as terminal output.
 			const landed = res.changed === false ? "(pane did not change — the command may not have landed; is the CLI ready?)" : "";
-			return { content: res.pane ?? `Ran in ${session}.`, success: true, tail: paneTail(res.pane, landed), origin: `the tmux session "${session}" on your machine` };
+			const completion = res.completed ? `(exit code ${res.exitCode})` : "(still running — raise timeout_ms, or poll tmux_capture_pane with since to keep reading its output)";
+			const truncatedNote = res.truncated ? "(could not find this command's own start marker in the captured pane — showing the raw pane instead of just its output)" : "";
+			return { content: res.pane ?? `Ran in ${session}.`, success: true, tail: paneTail(res.pane, landed, completion, truncatedNote), origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
