@@ -151,7 +151,8 @@ real=${sq(opts.realHelperDir)}/git-remote-$transport
 # plain \`kill "$cpid"\` then kills only the interpreter — the actual delegate survives as an orphan,
 # still holding git's end of the pipe open, which hangs the WHOLE call past this timeout rather than
 # fixing it. Killing the group (\`kill -- "-$cpid"\`) reaches every descendant it forked, not just
-# the one PID $! happens to name.
+# the one PID $! happens to name. Without a terminal, dash (Linux /bin/sh) leaves job control off and
+# the group kill finds no group, so the delegate's own children are killed by parent too (#1414).
 set -m 2>/dev/null || true
 "$real" "$1" "$url" &
 cpid=$!
@@ -159,6 +160,7 @@ waited=0
 while kill -0 "$cpid" 2>/dev/null; do
   if [ "$waited" -ge ${timeoutSeconds} ]; then
     kill -- "-$cpid" 2>/dev/null
+    pkill -P "$cpid" 2>/dev/null
     kill "$cpid" 2>/dev/null
     echo "${PUSH_TIMEOUT_MARKER} $(norm "$url") did not complete within ${timeoutSeconds}s — delegated to git-remote-$transport for auth, network and the remote's own response; nothing further is known from here. Check credential.helper / network / github.com reachability, then retry." >&2
     exit ${PUSH_TIMEOUT_EXIT}
