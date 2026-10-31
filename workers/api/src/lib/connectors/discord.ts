@@ -132,7 +132,10 @@ const readMessages: ToolDef["handler"] = async (ctx, input) => {
 	const token = await botToken(ctx);
 	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
 	const limit = Math.min(Math.max(Math.trunc(Number(input.limit) || 20), 1), 50);
-	const result = await discordRequest(token, `/channels/${granted.channelId}/messages?limit=${limit}`);
+	// #1415: page back through older history. Only a string snowflake counts, refused before Discord is called.
+	const before = input.before;
+	if (before !== undefined && (typeof before !== "string" || !/^\d{17,20}$/.test(before))) return { content: "before must be a message id from discord_read_messages.", success: false };
+	const result = await discordRequest(token, `/channels/${granted.channelId}/messages?limit=${limit}${before ? `&before=${before}` : ""}`);
 	if (!result.ok) return { content: result.message, success: false };
 	// The shared tool-result cap applies after this; this local cap avoids spending an entire
 	// model turn on a single verbose channel history.
@@ -335,8 +338,8 @@ export const DISCORD_CONNECTOR: Connector = {
 		},
 		{
 			name: "discord_read_messages",
-			description: "Read up to 50 recent messages from one Discord channel explicitly granted to this agent.",
-			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, limit: { type: "number" } }, required: ["grantId"] },
+			description: "Read up to 50 recent messages from one Discord channel explicitly granted to this agent, newest first. Pass before (the id of the oldest message you have seen) to page back through older history.",
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, limit: { type: "number" }, before: { type: "string", description: "Optional. Return messages older than this message id." } }, required: ["grantId"] },
 			tier: "connector",
 			connector: "discord",
 			scope: "read",

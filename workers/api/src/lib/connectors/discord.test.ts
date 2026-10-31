@@ -211,4 +211,17 @@ describe("Discord bot connector", () => {
 		expect(result).toEqual({ content: JSON.stringify([{ id: "m1", content: "untrusted" }], null, 2), success: true });
 		expect(fetch.mock.calls[0][0]).toBe(`https://discord.com/api/v10/channels/${GRANT.resourceId}/messages?limit=50`);
 	});
+
+	it("pages back with before, and refuses a malformed before without calling Discord (#1415)", async () => {
+		const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response("[]", { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		expect((await tool("discord_read_messages").handler(ctx(), { grantId: "grant-1", before: "1503315098650022058" })).success).toBe(true);
+		expect(fetch.mock.calls[0][0]).toBe(`https://discord.com/api/v10/channels/${GRANT.resourceId}/messages?limit=20&before=1503315098650022058`);
+		fetch.mockClear();
+		for (const before of ["1&after=2", 42]) {
+			const result = await tool("discord_read_messages").handler(ctx(), { grantId: "grant-1", before });
+			expect(result.success).toBe(false);
+		}
+		expect(fetch).not.toHaveBeenCalled();
+	});
 });
