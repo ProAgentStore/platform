@@ -22,6 +22,7 @@ export const discordRoutes = new Hono<{ Bindings: Env }>();
 const API = "https://discord.com/api/v10";
 const SNOWFLAKE = /^\d{16,22}$/;
 const TEXT_CHANNEL_TYPES = new Set([0, 5]); // GUILD_TEXT, GUILD_ANNOUNCEMENT
+const CATEGORY_CHANNEL_TYPE = 4; // GUILD_CATEGORY
 
 function requireSnowflake(value: string | undefined, label: string): string {
 	const id = value?.trim() ?? "";
@@ -138,15 +139,14 @@ discordRoutes.get("/guilds/:guildId/channels", async (c) => {
 	const session = await requireUser(c);
 	const guildId = requireSnowflake(c.req.param("guildId"), "guildId");
 	const data = await discordJson(await botToken(c.env, session.uid), `/guilds/${guildId}/channels`);
-	const channels: DiscordChannel[] = Array.isArray(data)
-		? data.flatMap((channel) => {
-			if (!channel || typeof channel !== "object") return [];
-			const row = channel as { id?: unknown; name?: unknown; type?: unknown; guild_id?: unknown };
-			return typeof row.id === "string" && typeof row.name === "string" && typeof row.type === "number" && TEXT_CHANNEL_TYPES.has(row.type)
-				? [{ id: row.id, name: row.name, type: row.type, guildId: typeof row.guild_id === "string" ? row.guild_id : guildId }]
-				: [];
-		})
-		: [];
+	const rows = (Array.isArray(data) ? data : []).filter((channel): channel is { id?: unknown; name?: unknown; type?: unknown; guild_id?: unknown; parent_id?: unknown } => !!channel && typeof channel === "object");
+	// #1413: same-named channels (#ideas under several categories) are told apart by their category.
+	const categories = new Map(rows.flatMap((row) => (row.type === CATEGORY_CHANNEL_TYPE && typeof row.id === "string" && typeof row.name === "string" ? [[row.id, row.name] as const] : [])));
+	const channels: DiscordChannel[] = rows.flatMap((row) => {
+		if (!(typeof row.id === "string" && typeof row.name === "string" && typeof row.type === "number" && TEXT_CHANNEL_TYPES.has(row.type))) return [];
+		const category = typeof row.parent_id === "string" ? categories.get(row.parent_id) : undefined;
+		return [{ id: row.id, name: row.name, type: row.type, guildId: typeof row.guild_id === "string" ? row.guild_id : guildId, ...(category ? { category } : {}) }];
+	});
 	return c.json({ channels } satisfies DiscordChannelListResponse);
 });
 

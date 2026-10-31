@@ -56,7 +56,8 @@ function discord(path: string, method: string, auth: string | null): Response {
 	if (path === "/users/@me/guilds") return json([{ id: GUILD, name: "Ops" }]);
 	if (path === `/guilds/${GUILD}/channels`) {
 		return json([
-			{ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD },
+			{ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD, parent_id: "555555555555555555" },
+			{ id: "555555555555555555", name: "FREE-APPS", type: 4, guild_id: GUILD },
 			{ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD },
 			{ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD },
 		]);
@@ -195,6 +196,8 @@ describe("a newly connected bot, through the agent's own tools (#1132)", () => {
 		// Discovery lists the bot's servers and only its text channels.
 		expect((await call("GET", "/v1/discord/guilds")).json.guilds).toEqual([{ id: GUILD, name: "Ops" }]);
 		expect((await call("GET", `/v1/discord/guilds/${GUILD}/channels`)).json.channels.map((c: { id: string }) => c.id)).toEqual([CH_ALERTS, CH_PRIVATE]);
+		// #1413: a channel under a category carries the category name; one without omits it.
+		expect((await call("GET", `/v1/discord/guilds/${GUILD}/channels`)).json.channels.map((c: { category?: string }) => c.category)).toEqual(["FREE-APPS", undefined]);
 
 		const first = await grant(CH_ALERTS);
 		const again = await grant(CH_ALERTS);

@@ -255,6 +255,8 @@ export interface DiscordGuild {
 export interface DiscordChannel {
 	id: string;
 	name: string;
+	/** Name of the category the channel sits under, when it has one (#1413). */
+	category?: string;
 }
 
 /** One owner-approved Discord channel for one private agent instance. */
