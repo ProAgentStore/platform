@@ -8,7 +8,7 @@ import { needsHuman, statusFor } from "./agent-loop.js";
 import { isResumableStopReason } from "./agent-loop-store.js";
 import { stopReasonFor } from "./coding-pause.js";
 import type { CodingOutcome } from "./coding-loop.js";
-import { LOOP_STOP_REASONS, PROVIDER_ACCOUNT_STOP_REASONS, RESUMABLE_STOP_REASONS, STOP_REASONS, stopReasonFacts, stopReasonsSql } from "./stop-reasons.js";
+import { INFRA_STOP_REASONS, LOOP_STOP_REASONS, PROVIDER_ACCOUNT_STOP_REASONS, RESUMABLE_STOP_REASONS, STOP_REASONS, stopReasonFacts, stopReasonsSql } from "./stop-reasons.js";
 
 describe("the table reproduces the behaviour it replaced, reason by reason", () => {
 	// [reason, statusFor, needsHuman, resumable] — measured on 51e8f80b, before #1354.
@@ -75,6 +75,13 @@ describe("derived lists", () => {
 
 	it("renders a SQL IN list of the table's own keys", () => {
 		expect(stopReasonsSql(PROVIDER_ACCOUNT_STOP_REASONS)).toBe("'provider_credit', 'provider_credentials'");
+	});
+
+	/** #1417: auto-pickup must not count these toward an issue's quarantine or failed-twice tally — the runner, the
+	 *  engine or the platform caused them, not the issue. */
+	it("INFRA_STOP_REASONS is the rows that say so, in table order", () => {
+		expect(INFRA_STOP_REASONS).toEqual(LOOP_STOP_REASONS.filter((r) => STOP_REASONS[r].infraCaused));
+		expect(INFRA_STOP_REASONS).toEqual(["interrupted", "turn_lost", "runner_gone", "engine_error"]);
 	});
 });
 

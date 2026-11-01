@@ -36,6 +36,11 @@ export const BRAIN_WAIT_MARGIN_MS = 10 * 60_000;
 /** The brain-off wait: the handoff's own 15 minutes (coding-pause.ts `HANDOFF_GIVE_UP_MS`). */
 export const HUMAN_ONLY_WAIT_MS = 15 * 60_000;
 
+/** How long a PARKED question (#1076) goes before the owner is re-told it is still waiting (#1417). Independent
+ *  of the brain/human timeouts above: a parked question is exempt from the expiry clock, so without this it could
+ *  go untouched indefinitely once the first post on the issue scrolled out of view. */
+export const PARKED_NUDGE_MS = 24 * 60 * 60_000;
+
 /** How long a run parked on a question should wait, given the instance's brain settings. */
 export function questionWaitMs(brain: CoderBrainSettings | null): number {
 	if (!brain?.enabled) return HUMAN_ONLY_WAIT_MS;
@@ -141,15 +146,16 @@ async function parkedOn(env: Env, q: CoderQuestion): Promise<boolean> {
 }
 
 /** One sweep tick. Returns what it did, for the scheduled() log and the tests. */
-export async function runDueCoderQuestions(env: Env, now = Date.now(), effects?: Partial<CoderQuestionEffects>): Promise<{ checked: number; decided: number; escalated: number; unresolved: number; expired: number }> {
-	const out = { checked: 0, decided: 0, escalated: 0, unresolved: 0, expired: 0 };
+export async function runDueCoderQuestions(env: Env, now = Date.now(), effects?: Partial<CoderQuestionEffects>): Promise<{ checked: number; decided: number; escalated: number; unresolved: number; expired: number; nudged: number }> {
+	const out = { checked: 0, decided: 0, escalated: 0, unresolved: 0, expired: 0, nudged: 0 };
 	const base = defaultEffects(env);
 	for (const q of await openCoderQuestions(env)) {
 		out.checked++;
 		const fx: CoderQuestionEffects = { ...base, ...effects };
 		try {
 			// A question whose run is PARKED on it (#1076) is still being waited for, whatever its clock said.
-			if (now >= q.expiresAt && !(await parkedOn(env, q))) {
+			const parked = await parkedOn(env, q);
+			if (now >= q.expiresAt && !parked) {
 				if (await transitionCoderQuestion(env, q.id, ["waiting_human", "brain_deciding", "escalated"], "expired", "the run stopped waiting with no answer", { resolvedAt: now }, now)) {
 					out.expired++;
 					await fx.audit(q, "Question expired: the run stopped waiting without an answer.");
@@ -159,6 +165,18 @@ export async function runDueCoderQuestions(env: Env, now = Date.now(), effects?:
 			// The instance's own state, read every tick: off, paused or cancelled means hands off.
 			const inst = await env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1").bind(q.instanceId).first<{ status: string }>();
 			if (inst?.status !== "active") continue;
+			// A parked question is otherwise exempt from the expiry clock above — correctly, since it is still
+			// genuinely waiting — which used to also exempt it from ever telling the owner again (#1417): four
+			// runs sat parked on questions for a week with nobody nudged. Re-surface it every PARKED_NUDGE_MS,
+			// independent of the brain (a parked question with the brain off gets no other attention at all).
+			if (parked && now - (q.nudgedAt ?? q.askedAt) >= PARKED_NUDGE_MS) {
+				const days = Math.floor((now - q.askedAt) / 86_400_000);
+				if (await transitionCoderQuestion(env, q.id, [q.state], q.state, `re-surfaced to the owner: parked ${days} day(s) with no answer`, { nudgedAt: now }, now)) {
+					out.nudged++;
+					await fx.notify(q, "⏳ Still parked on your answer", `${repoIssue(q)}: "${q.question}" has been waiting ${days} day(s) for an answer. Answer it on the run's card or with answer_instance_input to continue.`, true);
+					await fx.audit(q, `Nudged the owner: parked ${days} day(s) with no answer.`);
+				}
+			}
 			const brain = await readCoderBrain(env, q.instanceId, q.userId);
 			if (!brain?.enabled) continue;
 			if (q.state === "waiting_human" && now >= q.askedAt + brain.humanTimeoutMinutes * 60_000) {

@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { AUTO_PICKUP_DEFAULTS, autoPickupObjective, RESERVATION_TTL_MS, recoverReservations, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
+import { AUTO_PICKUP_DEFAULTS, autoPickupObjective, NONE_ELIGIBLE_RENOTIFY_MS, RESERVATION_TTL_MS, recoverReservations, type AutoPickupDeps, type PickCandidate, SKIP_LOG_DEBOUNCE_MS, autoPickupFrom, autoPickupPatchProblem, autoPickupStatus, pickNextIssue, priorityRank, recordWakeError, runAutoPickup, setAutoPickup, sweepAutoPickup, wakeIdleCoder } from "./auto-pickup.js";
 import { paidTokensSince } from "./usage.js";
 import { setCoderBrain } from "./coder-brain.js";
 import { CHECKOUT_WAKE_GRACE_MS } from "./coding-park.js";
@@ -161,6 +161,53 @@ describe("the wake, on the real schema (#1233)", () => {
 		d1.exec("UPDATE instance_objective_queue SET status = 'cancelled' WHERE status = 'pending'");
 		await runAutoPickup(env, "coder", "u1", deps());
 		expect(log.comments).toEqual([9]);
+	});
+
+	/** #1417: the old rule told the owner once per idle streak and never again — a coder that stayed none_eligible
+	 *  for days paged nobody after the first alert. Now it re-alerts every NONE_ELIGIBLE_RENOTIFY_MS while idle. */
+	it("none_eligible re-alerts the owner every NONE_ELIGIBLE_RENOTIFY_MS while it stays idle, not just once ever", async () => {
+		open = [issue(1, ["needs-human"])];
+		const t0 = 1_800_000_000_000;
+		expect(await runAutoPickup(env, "coder", "u1", deps(), t0)).toMatchObject({ started: false });
+		expect(log.notes).toHaveLength(1);
+		// Still well inside the window: no second alert, same as the existing "told ONCE" behaviour.
+		await runAutoPickup(env, "coder", "u1", deps(), t0 + 60_000);
+		await runAutoPickup(env, "coder", "u1", deps(), t0 + NONE_ELIGIBLE_RENOTIFY_MS - 1);
+		expect(log.notes).toHaveLength(1);
+		// The window has elapsed, still idle: re-alerted.
+		await runAutoPickup(env, "coder", "u1", deps(), t0 + NONE_ELIGIBLE_RENOTIFY_MS + 1);
+		expect(log.notes).toHaveLength(2);
+		// And again after a second full window.
+		await runAutoPickup(env, "coder", "u1", deps(), t0 + 2 * NONE_ELIGIBLE_RENOTIFY_MS + 2);
+		expect(log.notes).toHaveLength(3);
+	});
+
+	/** #1417: a wedged runner, a coding-CLI crash, a lost turn or a platform cutoff are not the issue's fault —
+	 *  two (or any number) of them must never quarantine it the way two real `failed` runs do. */
+	it("engine_error, runner_gone, turn_lost and interrupted never count toward the failed-twice tally", async () => {
+		open = [issue(9, ["P1", "bug"]), issue(3, ["P3"])];
+		const infraReasons = ["engine_error", "runner_gone", "turn_lost", "interrupted"];
+		for (const [n, reason] of infraReasons.entries()) {
+			d1.exec(`INSERT INTO instance_objective_queue (id, instance_id, repo_id, user_id, objective, metadata, status, created_at) VALUES ('qi${n}', 'coder', 'r1', 'u1', 'Implement GitHub issue #9', '{"autoPickup":{"repo":"acme/app","issue":9}}', 'started', ${n})`);
+			d1.exec(
+				`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, stop_reason, max_iterations, started_at, finished_at, queue_entry_id) VALUES ('fi${n}', 'u1', 'coder', 'Implement GitHub issue #9', 'needs_human', '${reason}', 30, ${n}, ${n + 1}, 'qi${n}')`,
+			);
+		}
+		// All four infra stops piled up, yet #9 is still picked ahead of #3 (P1+bug beats P3) — none of them counted.
+		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
+		expect(log.comments).toEqual([]); // never passed over, so no "passing over this issue" comment either
+	});
+
+	/** #1417: an old failure's cause is presumed gone — it should not keep passing an issue over forever. */
+	it("a failure older than AUTO_FAILURE_LOOKBACK_MS no longer counts", async () => {
+		open = [issue(9, ["P1", "bug"]), issue(3, ["P3"])];
+		const ancient = 1; // 1ms epoch: far more than 14 days before any `now` this test uses
+		for (const n of [1, 2]) {
+			d1.exec(`INSERT INTO instance_objective_queue (id, instance_id, repo_id, user_id, objective, metadata, status, created_at) VALUES ('qo${n}', 'coder', 'r1', 'u1', 'Implement GitHub issue #9', '{"autoPickup":{"repo":"acme/app","issue":9}}', 'started', ${n})`);
+			d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, finished_at, queue_entry_id) VALUES ('fo${n}', 'u1', 'coder', 'Implement GitHub issue #9', 'failed', 30, ${n}, ${ancient}, 'qo${n}')`);
+		}
+		// Both failures are ancient: #9 is still eligible, and starts ahead of #3.
+		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
 	});
 
 	it("stops at the daily cap", async () => {

@@ -142,10 +142,38 @@ describe("how a quarantine ends (#1336)", () => {
 		for (let n = 1; n <= 5; n++) await attempt(n);
 	};
 
-	it("it does not expire: any amount of time later it is still stopped", async () => {
+	it("the age of the ATTEMPTS themselves is irrelevant: only the quarantine's own clock matters", async () => {
 		await stop();
 		d1.exec("UPDATE issue_attempts SET created_at = 1");
 		expect(await quarantineRefusal(env, { userId: "u1", githubRepo: "acme/app", repoId: "r1", issue: 7 })).toMatchObject({ reason: "quarantined" });
+	});
+
+	/** #1417: a quarantine nobody saw used to hold forever. Now it re-admits itself after its own window, whether or
+	 *  not the owner ever released it — "the runner is healthy again" or "a new release shipped" without anyone
+	 *  having to notice the quarantine existed. */
+	describe("the quarantine itself expires after its window (#1417)", () => {
+		it("is still quarantined one hour before the window, and re-admitted one second after it", async () => {
+			await stop();
+			const opened = (d1.sqlite.prepare("SELECT opened_at FROM issue_quarantine WHERE github_repo = 'acme/app' AND issue_number = 7").get() as { opened_at: number }).opened_at;
+			expect(await issueQuarantine(env, "u1", "acme/app", 7, opened + 7 * 86_400_000 - 60 * 60_000)).toMatchObject({ state: "quarantined" });
+			expect(await issueQuarantine(env, "u1", "acme/app", 7, opened + 7 * 86_400_000 + 1_000)).toBeNull();
+		});
+
+		it("an expiry is a real, audited release: re-admitted everywhere, not just to the one caller who happened to check", async () => {
+			await stop();
+			const opened = (d1.sqlite.prepare("SELECT opened_at FROM issue_quarantine WHERE github_repo = 'acme/app' AND issue_number = 7").get() as { opened_at: number }).opened_at;
+			const past = opened + 7 * 86_400_000 + 1_000;
+			expect(await quarantineRefusal(env, { userId: "u1", githubRepo: "acme/app", repoId: "r1", issue: 7 }, past)).toBeNull();
+			const [row] = await listIssueQuarantines(env, "u1", { includeReleased: true });
+			expect(row).toMatchObject({ state: "released", releasedBy: "system:expired" });
+			// Released, so it restarts cleanly: four more attempts do not stop it again.
+			for (let n = 6; n <= 9; n++) expect(await attempt(n)).toMatchObject({ quarantine: "none" });
+		});
+
+		it("does not expire a quarantine opened less than the window ago, however old its incident id looks", async () => {
+			await stop();
+			expect(await issueQuarantine(env, "u1", "acme/app", 7, NOW + 6 * 86_400_000)).toMatchObject({ state: "quarantined" });
+		});
 	});
 
 	it("an owner release is audited, needs a reason, restarts the count, and a second release is a no-op", async () => {

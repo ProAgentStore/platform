@@ -13,7 +13,7 @@ import { type DecisionContext, GUARDRAILS, brainPrompt, declineAfterModel, decli
 import { getCoderQuestion, recordAnswer } from "./coder-question-store.js";
 import { codingQuestionIssue, codingQuestionIssueUrl, withQuestionSources } from "./coding-question-source.js";
 import { getLoopRun, recordLiveness } from "./agent-loop-store.js";
-import { type CoderQuestionEffects, HUMAN_ONLY_WAIT_MS, captureAndAnnounceQuestion, defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
+import { type CoderQuestionEffects, HUMAN_ONLY_WAIT_MS, PARKED_NUDGE_MS, captureAndAnnounceQuestion, defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
 import type { Env } from "../types.js";
 
 const MIN = 60_000;
@@ -385,5 +385,49 @@ describe("source context on the coder_questions surface and the sweep push (#136
 		const broken = { DB: { prepare: () => { throw new Error("D1 down"); } } } as unknown as Env;
 		await defaultEffects(broken).notify(question, "t", "body", false);
 		expect(notifyUser.mock.calls[1][4]).toContain("could not be loaded");
+	});
+});
+
+/**
+ * #1417: a run PARKED on its question (#1076, zero-compute wait) is exempt from the expiry sweep — correctly, it
+ * is still genuinely waiting — but that used to also exempt it from ever telling the owner again. Four FAS Apps
+ * Coder runs sat parked on questions for a week with nobody nudged.
+ */
+describe("parked questions are re-surfaced, not forgotten (#1417)", () => {
+	const parkedAsk = (effects: Partial<CoderQuestionEffects>) => {
+		d1.exec(
+			"INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, iteration, max_iterations, started_at, session_id, waiting_reason, workflow_instance_id) VALUES ('parked-run','u1','coder','work issue 7','running',1,10,1,'s1','decision','wf-1')",
+		);
+		return captureAndAnnounceQuestion(env, { instanceId: "coder", userId: "u1", sessionId: "s1", runId: "parked-run", taskId: "csess-s1", question: "Which table layout?", options: [], why: null }, effects as CoderQuestionEffects);
+	};
+
+	it("re-surfaces a still-parked question after PARKED_NUDGE_MS, again after another window, and never expires it", async () => {
+		const { effects, log } = fakes();
+		const { question } = await parkedAsk(effects);
+		const t0 = question.askedAt;
+		await runDueCoderQuestions(env, t0 + 60_000, effects);
+		expect(log.notified).toHaveLength(0);
+		await runDueCoderQuestions(env, t0 + PARKED_NUDGE_MS - 1, effects);
+		expect(log.notified).toHaveLength(0); // still inside the window — not yet due
+		const r1 = await runDueCoderQuestions(env, t0 + PARKED_NUDGE_MS + 1, effects);
+		expect(r1.nudged).toBe(1);
+		expect(log.notified).toEqual([{ title: "⏳ Still parked on your answer", alert: true }]);
+		// Not nudged again a minute later — the window just reset.
+		await runDueCoderQuestions(env, t0 + PARKED_NUDGE_MS + 60_000, effects);
+		expect(log.notified).toHaveLength(1);
+		// A second full window: nudged again.
+		await runDueCoderQuestions(env, t0 + 2 * PARKED_NUDGE_MS + 2, effects);
+		expect(log.notified).toHaveLength(2);
+		// Still parked throughout, however far past its OWN expiresAt (15 minutes) the clock has gone.
+		expect(question.expiresAt).toBeLessThan(t0 + PARKED_NUDGE_MS);
+		expect(await state(question.id)).toBe("waiting_human");
+	});
+
+	it("does not nudge a question whose run is not parked — it just expires as before, and is never nudged first", async () => {
+		const { effects, log } = fakes();
+		const { question } = await ask(effects); // the default ask's run is never parked
+		await runDueCoderQuestions(env, question.expiresAt + PARKED_NUDGE_MS + 1, effects);
+		expect(log.notified).toEqual([]);
+		expect(await state(question.id)).toBe("expired");
 	});
 });

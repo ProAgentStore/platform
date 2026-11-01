@@ -47,6 +47,9 @@ export interface CoderQuestion {
 	answeredAt: number | null;
 	appliedAt: number | null;
 	appliedRunId: string | null;
+	/** #1417: the last time the sweep re-surfaced a still-parked question to the owner. Independent of
+	 *  askedAt/expiresAt — a nudge changes neither; it only says when the NEXT one is due. */
+	nudgedAt: number | null;
 	history: Array<{ at: number; from: CoderQuestionState | null; to: CoderQuestionState; note: string }>;
 }
 
@@ -91,6 +94,7 @@ function asQuestion(r: Row): CoderQuestion {
 		answeredAt: num(r.answered_at),
 		appliedAt: num(r.applied_at),
 		appliedRunId: r.applied_run_id ? String(r.applied_run_id) : null,
+		nudgedAt: num(r.nudged_at),
 		history: json(r.history, []),
 	};
 }
@@ -174,10 +178,10 @@ export async function transitionCoderQuestion(
 	from: readonly CoderQuestionState[],
 	to: CoderQuestionState,
 	note: string,
-	fields: Partial<{ escalatedAt: number; resolvedAt: number; answeredBy: "human" | "brain"; answeredVia: AnswerVia; answeredAt: number; decision: string; confidence: number; reason: string; model: string; promptHash: string; evidence: string[]; risks: string[] }> = {},
+	fields: Partial<{ escalatedAt: number; resolvedAt: number; answeredBy: "human" | "brain"; answeredVia: AnswerVia; answeredAt: number; decision: string; confidence: number; reason: string; model: string; promptHash: string; evidence: string[]; risks: string[]; nudgedAt: number }> = {},
 	now = Date.now(),
 ): Promise<boolean> {
-	const placeholders = from.map((_, i) => `?${i + 16}`).join(", ");
+	const placeholders = from.map((_, i) => `?${i + 17}`).join(", ");
 	const res = await env.DB.prepare(
 		`UPDATE coder_questions SET state = ?2,
 		        escalated_at = COALESCE(?3, escalated_at), resolved_at = COALESCE(?4, resolved_at), answered_by = COALESCE(?5, answered_by),
@@ -185,6 +189,7 @@ export async function transitionCoderQuestion(
 		        model = COALESCE(?9, model), prompt_hash = COALESCE(?10, prompt_hash),
 		        evidence = COALESCE(?12, evidence), risks = COALESCE(?13, risks),
 		        answered_via = COALESCE(?14, answered_via), answered_at = COALESCE(?15, answered_at),
+		        nudged_at = COALESCE(?16, nudged_at),
 		        history = json_insert(history, '$[#]', json(?11))
 		  WHERE id = ?1 AND state IN (${placeholders})`,
 	)
@@ -204,6 +209,7 @@ export async function transitionCoderQuestion(
 			fields.risks ? JSON.stringify(fields.risks) : null,
 			fields.answeredVia ?? null,
 			fields.answeredAt ?? null,
+			fields.nudgedAt ?? null,
 			...from,
 		)
 		.run();

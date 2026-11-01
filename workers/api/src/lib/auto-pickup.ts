@@ -23,7 +23,7 @@
  * qualifies, the owner is told once — not on every empty queue.
  */
 import type { Env } from "../types.js";
-import { PROVIDER_ACCOUNT_STOP_REASONS, stopReasonsSql } from "./stop-reasons.js";
+import { INFRA_STOP_REASONS, PROVIDER_ACCOUNT_STOP_REASONS, stopReasonsSql } from "./stop-reasons.js";
 import { clipMarked } from "./clip-marked.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
@@ -65,6 +65,13 @@ export interface AutoPickupSettings {
 export const AUTO_PICKUP_DEFAULTS: AutoPickupSettings = { enabled: false, priorityLabels: [...DEFAULT_PRIORITY_LABELS], excludeLabels: [], maxPerDay: 10, maxIterations: 30, maxAttemptsPerIssue: ISSUE_ATTEMPT_THRESHOLD_DEFAULT };
 /** Two auto-picked runs ended failed or needing a human on an issue → it is passed over (#1233's loop guard). */
 export const MAX_AUTO_FAILURES = 2;
+/** A failure this old no longer counts toward {@link MAX_AUTO_FAILURES} (#1417): the cause — a wedged runner, a bad
+ *  release — is presumed gone by then, and an issue should not stay passed over on the strength of old history alone. */
+export const AUTO_FAILURE_LOOKBACK_MS = 14 * 24 * 60 * 60_000;
+/** Infra-classified failures (`error_log.context.failureClass`) that are not the issue's fault either (#1417), beyond
+ *  the provider-credit/credentials ones already excluded: a relay socket drop, a Durable Object reset, or a
+ *  Cloudflare Workflows attempt failure — none of which the issue caused. */
+const INFRA_FAILURE_CLASSES = ["provider_credit", "provider_credentials", "runner_unreachable", "infra_transient", "workflow_internal", "platform_ceiling"] as const;
 const MAX_LABELS = 20;
 
 const labelList = (v: unknown, fallback: string[]): string[] =>
@@ -307,21 +314,27 @@ async function inFlightIssues(env: Env, iid: string, repoId: string): Promise<Se
 	return new Set((results ?? []).map((r) => referencedIssue(r.objective)).filter((n): n is number => n != null));
 }
 
-// Account outages are held by credential (#1314), rather than spending the issue's objective-failure allowance forever.
-async function failuresByIssue(env: Env, iid: string, repo: string, uid: string): Promise<Map<number, number>> {
+// Account outages are held by credential (#1314), and infra/engine/platform failures are not this issue's fault either
+// (#1417) — neither should spend the issue's objective-failure allowance forever. Also bounded to the last
+// AUTO_FAILURE_LOOKBACK_MS (#1417): an old failure's cause is presumed gone, so it should not keep passing an issue
+// over indefinitely on its own.
+async function failuresByIssue(env: Env, iid: string, repo: string, uid: string, now: number): Promise<Map<number, number>> {
 	const { results } = await env.DB.prepare(
 		`SELECT json_extract(q.metadata, '$.autoPickup.issue') AS issue, COUNT(*) AS n FROM agent_loop_runs r JOIN instance_objective_queue q ON q.id = r.queue_entry_id
 		  WHERE q.instance_id = ?1 AND json_extract(q.metadata, '$.autoPickup.repo') = ?2 AND r.status IN ('failed', 'needs_human')
-		    AND COALESCE(r.stop_reason, '') NOT IN (${stopReasonsSql(PROVIDER_ACCOUNT_STOP_REASONS)})
+		    AND COALESCE(r.finished_at, ?4) > ?5
+		    AND COALESCE(r.stop_reason, '') NOT IN (${stopReasonsSql([...PROVIDER_ACCOUNT_STOP_REASONS, ...INFRA_STOP_REASONS])})
 		    AND r.run_id NOT IN (
 		      SELECT COALESCE(json_extract(e.context, '$.runId'), json_extract(e.context, '$.traceId')) FROM error_log e
 		      WHERE e.user_id = ?3 AND e.source = 'coding:session'
-		        AND json_extract(e.context, '$.failureClass') IN ('provider_credit', 'provider_credentials')
+		        AND json_extract(e.context, '$.failureClass') IN (${INFRA_FAILURE_CLASSES.map((c) => `'${c}'`).join(", ")})
 		        AND COALESCE(json_extract(e.context, '$.disposition'), 'ended') = 'ended'
 		        AND COALESCE(json_extract(e.context, '$.runId'), json_extract(e.context, '$.traceId')) IS NOT NULL
 		    ) GROUP BY issue`,
 	)
-		.bind(iid, repo, uid)
+		// A run with no recorded finish time (an incomplete test fixture; never a real one) falls back to `now` — it
+		// is treated as within the window rather than silently dropped, never as ancient.
+		.bind(iid, repo, uid, now, now - AUTO_FAILURE_LOOKBACK_MS)
 		.all<{ issue: number | null; n: number }>();
 	return new Map((results ?? []).filter((r) => r.issue != null).map((r) => [Number(r.issue), Number(r.n)] as const));
 }
@@ -405,7 +418,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 				unreadable.push(r.githubRepo);
 				continue;
 			}
-			const [inFlight, failures] = await Promise.all([inFlightIssues(env, iid, r.id), failuresByIssue(env, iid, r.githubRepo, uid)]);
+			const [inFlight, failures] = await Promise.all([inFlightIssues(env, iid, r.id), failuresByIssue(env, iid, r.githubRepo, uid, now)]);
 			for (const issue of listed.issues) {
 				candidates.push({ repo: r.githubRepo, repoId: r.id, issue, boardPosition: positions.get(issueJobKey(r.id, issue.number)) ?? null, failures: failures.get(issue.number) ?? 0, inFlight: inFlight.has(issue.number) });
 			}
@@ -436,10 +449,14 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		if (!chosen) {
 			const base = verdict.pick ? `every eligible issue was refused by the start guard: ${passedOver.join(", ")}` : verdict.reason;
 			const reason = `${base}${unreadable.length ? ` (could not read ${unreadable.join(", ")})` : ""}`;
-			const last = await env.DB.prepare("SELECT outcome FROM auto_pickup_log WHERE instance_id = ?1 AND outcome IN ('started', 'none_eligible') ORDER BY created_at DESC, rowid DESC LIMIT 1").bind(iid).first<{ outcome: string }>();
 			await log(env, iid, uid, "none_eligible", clipMarked(reason, 300), null, null, now);
-			// Told once: a coder idling with nothing to do does not ping on every empty queue.
-			if (last?.outcome !== "none_eligible") await (deps.notify ?? defaultNotify(env, uid, iid))("Auto-pickup: nothing to start", `The queue is empty and ${reason}, so the coder is idle.`).catch(() => undefined);
+			// Told once per idle streak, then re-alerted every NONE_ELIGIBLE_RENOTIFY_MS while it stays idle (#1417)
+			// — the old rule told the owner once, ever, per streak, so an idle coder went silent for days.
+			const lastNotify = await lastNoneEligibleNotifyAt(env, iid, uid);
+			if (lastNotify == null || now - lastNotify >= NONE_ELIGIBLE_RENOTIFY_MS) {
+				await (deps.notify ?? defaultNotify(env, uid, iid))("Auto-pickup: nothing to start", `The queue is empty and ${reason}, so the coder is idle.`).catch(() => undefined);
+				await markNoneEligibleNotified(env, iid, uid, now);
+			}
 			return { started: false, reason };
 		}
 
@@ -449,6 +466,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		const admitted = await admitAutoPickup(env, { entryId, instanceId: iid, userId: uid, repoId, repo, issue: issue.number,
 			objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations,
 			detail: `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}${passedOver.length ? ` — passed over ${passedOver.join(", ")}` : ""}`, now, observedAdmission, providerAccount });
+		if (admitted) await markNoneEligibleNotified(env, iid, uid, null); // picked something: the next idle spell is news again, not still debounced against the last one
 		if (!admitted) {
 			const gate = await queueGate(env, iid, uid); // includes a provider hold observed after the first gate (#1314)
 			if (gate) {
@@ -479,6 +497,26 @@ async function commentOnFailedOnce(env: Env, iid: string, uid: string, skipped: 
 		const body = `**Auto-pickup is passing over this issue.** ${c.failures} runs it started on it ended failed, so it will not start it again by itself. Add the missing detail and start it by hand, or remove the cause, and it becomes eligible once a run on it succeeds.`;
 		await (deps.postComment ?? ((repo: string, n: number, b: string) => postIssueComment(env, uid, repo, n, b)))(c.repo, c.issue.number, body).catch(() => false);
 	}
+}
+
+/** How often `none_eligible` re-alerts the owner while the coder stays idle (#1417): the old rule told the owner
+ *  once per idle STREAK and never again, so a coder that sat idle for days — every open issue quarantined,
+ *  failed-twice or needs-human — paged nobody after the first alert. Tracked on the instance's own config
+ *  (`autoPickupNotify.lastNoneEligibleAt`) rather than a new table: a cold path, read only while idle. */
+export const NONE_ELIGIBLE_RENOTIFY_MS = 24 * 60 * 60_000;
+
+async function lastNoneEligibleNotifyAt(env: Env, iid: string, uid: string): Promise<number | null> {
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(iid, uid).first<{ config: string | null }>();
+	const cfg = row ? (typeof row.config === "string" ? parseConfigBlob(row.config) : (row.config as Record<string, unknown> | null)) : null;
+	const raw = (cfg as Record<string, unknown> | null)?.autoPickupNotify;
+	const at = raw && typeof raw === "object" ? (raw as Record<string, unknown>).lastNoneEligibleAt : null;
+	return typeof at === "number" ? at : null;
+}
+
+/** Record the moment of a `none_eligible` notify, or clear it (pass `null`) once the coder has started something
+ *  again — so the NEXT idle spell is news again rather than still debounced against the last one. Never throws. */
+async function markNoneEligibleNotified(env: Env, iid: string, uid: string, at: number | null): Promise<void> {
+	await patchInstanceConfig(env, iid, uid, "autoPickupNotify", { lastNoneEligibleAt: at }).catch(() => undefined);
 }
 
 function defaultNotify(env: Env, uid: string, iid: string) {

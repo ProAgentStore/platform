@@ -8,17 +8,20 @@
  *
  * ── What counts
  *   · an admission failure that never became a run (the drain's structural refusal of a queued objective);
- *   · a run that ended failed / escalated / out of iterations / no progress / engine error / constraint refused / turn lost / over budget.
+ *   · a run that ended failed / escalated / out of iterations / no progress / constraint refused / over budget.
  * What does not: a deferral, a poll, a duplicate receipt, a cancellation, a start-guard refusal (done, closed, duplicate,
- * quarantined), and every provider-credit, credential, usage-window, machine-away or owner-question stop — those are not the
- * issue's fault and have their own holds (#1314). A replayed event is a no-op: `attempt_key` is unique per owner.
+ * quarantined), every provider-credit, credential, usage-window or owner-question stop (those have their own holds, #1314),
+ * and every `INFRA_STOP_REASONS` stop — an engine crash, a runner that went away, a turn lost to a runner restart, or
+ * the platform cutting the run off — none of which is the issue's fault (#1417: a wedged runner on one machine quarantined
+ * three issues it had nothing to do with). A replayed event is a no-op: `attempt_key` is unique per owner.
  *
  * ── Key
  * owner + lower-cased `owner/repo` + issue number, so two instances on one repo share one counter and another owner's is separate.
  *
  * ── Reset
- * Nothing expires. The count restarts only at a verified success (a run that ended `done` on the issue) or an explicit owner
- * release, both of which move `floor_attempt_id` past every earlier attempt. Releasing is audited.
+ * A verified success (a run that ended `done` on the issue), an explicit owner release, or the quarantine's own
+ * {@link QUARANTINE_EXPIRY_MS} window running out (#1417) all move `floor_attempt_id` past every earlier attempt. The first
+ * two are audited as the owner's or the issue's own doing; an expiry is audited as the platform's.
  *
  * ── Exactly once
  * The attempt row is `INSERT OR IGNORE` (a duplicate changes nothing). The quarantine row is opened by one conditional statement
@@ -33,12 +36,24 @@ export const ISSUE_ATTEMPT_THRESHOLD_DEFAULT = 5;
 export const ISSUE_ATTEMPT_THRESHOLD_MIN = 1;
 export const ISSUE_ATTEMPT_THRESHOLD_MAX = 50;
 
+/**
+ * A quarantine re-admits itself after this long, win or not (#1417): "the runner is healthy again" and "a new
+ * release shipped" are both real causes a permanently-stuck quarantine used to need an explicit owner release for,
+ * and most owners never see the quarantine to release it. 7 days is long enough that it is never the first thing
+ * that unblocks a real recurring failure (the issue itself usually fails or is released well before then).
+ */
+export const QUARANTINE_EXPIRY_MS = 7 * 24 * 60 * 60_000;
+
 export function sanitizeAttemptThreshold(v: unknown): number {
 	return typeof v === "number" && Number.isInteger(v) && v >= ISSUE_ATTEMPT_THRESHOLD_MIN && v <= ISSUE_ATTEMPT_THRESHOLD_MAX ? v : ISSUE_ATTEMPT_THRESHOLD_DEFAULT;
 }
 
-/** Stop reasons of a run that counts as an unsuccessful attempt. Everything else is not this issue's fault or is not an end. */
-const UNSUCCESSFUL_STOPS = new Set(["failed", "escalated", "max_iterations", "no_progress", "engine_error", "constraint_refused", "turn_lost", "budget"]);
+/**
+ * Stop reasons of a run that counts as an unsuccessful attempt. Everything else is not this issue's fault or is not an
+ * end — in particular never an `INFRA_STOP_REASONS` stop (#1417): `engine_error` and `turn_lost` used to be
+ * listed here, which quarantined an issue after two runner/engine crashes that had nothing to do with it.
+ */
+const UNSUCCESSFUL_STOPS = new Set(["failed", "escalated", "max_iterations", "no_progress", "constraint_refused", "budget"]);
 /** Start refusals that are the guard doing its job, never an attempt. */
 const GUARD_REFUSALS = new Set(["duplicate", "issue_closed", "already_done", "quarantined"]);
 
@@ -77,10 +92,37 @@ const SELECT_Q = `SELECT q.github_repo, q.issue_number, q.state, q.threshold, q.
 
 const view = (r: QRow): Quarantine => ({ githubRepo: r.github_repo, issue: r.issue_number, state: r.state, threshold: r.threshold, attemptCount: r.n, incidentId: r.incident_id, openedAt: r.opened_at, releasedAt: r.released_at, releasedBy: r.released_by, releaseReason: r.release_reason });
 
-/** The open quarantine on this issue, or null. */
-export async function issueQuarantine(env: Pick<Env, "DB">, userId: string, githubRepo: string, issue: number): Promise<Quarantine | null> {
-	const row = await env.DB.prepare(`${SELECT_Q} WHERE q.user_id = ?1 AND q.github_repo = ?2 AND q.issue_number = ?3 AND q.state = 'quarantined'`).bind(userId, canonicalRepo(githubRepo), issue).first<QRow>();
-	return row ? view(row) : null;
+/**
+ * The open quarantine on this issue, or null — lazily expiring it past {@link QUARANTINE_EXPIRY_MS} (#1417) rather
+ * than holding it forever on an incident nobody saw. The expiry is a real release (audited, `floor_attempt_id`
+ * moved), not just a read-side skip, so a stale "quarantined" never lingers for a DIFFERENT reader (the console's
+ * quarantine list, say) once this one has touched it.
+ */
+export async function issueQuarantine(env: Env, userId: string, githubRepo: string, issue: number, now = Date.now()): Promise<Quarantine | null> {
+	const repo = canonicalRepo(githubRepo);
+	const row = await env.DB.prepare(`${SELECT_Q} WHERE q.user_id = ?1 AND q.github_repo = ?2 AND q.issue_number = ?3 AND q.state = 'quarantined'`).bind(userId, repo, issue).first<QRow>();
+	if (!row) return null;
+	if (row.opened_at != null && now - row.opened_at > QUARANTINE_EXPIRY_MS) {
+		await expireQuarantine(env, userId, repo, issue, now);
+		return null;
+	}
+	return view(row);
+}
+
+/** The quarantine's time window ran out (#1417): re-admit the issue rather than hold it on an old incident forever. Never throws. */
+async function expireQuarantine(env: Env, userId: string, repo: string, issue: number, now: number): Promise<void> {
+	try {
+		const days = Math.round(QUARANTINE_EXPIRY_MS / 86_400_000);
+		if (await resetFloor(env, userId, repo, issue, "system:expired", `the quarantine's ${days}-day window ran out`, now)) {
+			await logEvent(env, {
+				source: "issue-attempts", event: "issue_quarantine.expired", level: "info", userId,
+				message: `${repo}#${issue}'s quarantine expired after ${days} days; it is eligible again`,
+				context: { githubRepo: repo, issue },
+			}).catch(() => undefined);
+		}
+	} catch {
+		// the next read tries again; a counter that cannot be written must not fail the caller's own decision
+	}
 }
 
 /** The owner's quarantines (open by default), newest first, bounded. */

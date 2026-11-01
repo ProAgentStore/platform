@@ -42,9 +42,9 @@ export function startIssueFor(input: { issue?: number | null; objective: string;
  * The per-issue hard stop (#1336): an issue with `threshold` unsuccessful attempts is refused on EVERY start path, `force`
  * included — only a verified success or the owner's audited release lifts it. Other issues are untouched.
  */
-export async function quarantineRefusal(env: Env, input: { userId: string; githubRepo: string | null; repoId: string; issue: number }): Promise<StartIdempotencyRefusal | null> {
+export async function quarantineRefusal(env: Env, input: { userId: string; githubRepo: string | null; repoId: string; issue: number }, now = Date.now()): Promise<StartIdempotencyRefusal | null> {
 	if (!input.githubRepo) return null;
-	const q = await issueQuarantine(env, input.userId, input.githubRepo, input.issue);
+	const q = await issueQuarantine(env, input.userId, input.githubRepo, input.issue, now);
 	if (!q) return null;
 	return {
 		reason: "quarantined",
@@ -98,7 +98,7 @@ export async function checkStartIdempotency(
 	const base = [input.userId, input.instanceId, input.repo.id, issue] as const;
 
 	// Before the force branch: a quarantine is the owner's to lift, not a caller's to override.
-	const stopped = await quarantineRefusal(env, { userId: input.userId, githubRepo, repoId: input.repo.id, issue });
+	const stopped = await quarantineRefusal(env, { userId: input.userId, githubRepo, repoId: input.repo.id, issue }, input.now);
 	if (stopped) return stopped;
 
 	const running = await env.DB.prepare(`${where("r.status = 'running' AND COALESCE(r.cancel_requested, 0) = 0")} ORDER BY r.started_at DESC LIMIT 1`).bind(...base).first<{ run_id: string }>();
