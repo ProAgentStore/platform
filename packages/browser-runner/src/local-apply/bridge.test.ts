@@ -164,7 +164,7 @@ describe("the action classes", () => {
 		expect(typeTool.inputSchema.required).toContain("source_quote");
 	});
 
-	it.each(["browser_fill_form", "browser_file_upload", "browser_evaluate", "browser_run_code", "browser_handle_dialog", "browser_drag"])("refuses %s by name, and never forwards it", async (name) => {
+	it.each(["browser_fill_form", "browser_file_upload", "browser_evaluate", "browser_run_code", "browser_run_code_unsafe", "browser_handle_dialog", "browser_drag"])("refuses %s by name, and never forwards it", async (name) => {
 		const { bridge, sent } = await onForm();
 		const res = await bridge.callTool(name, { function: "() => document.forms[0].submit()" });
 		expect(res.isError).toBe(true);

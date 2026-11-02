@@ -80,11 +80,17 @@ const BRIDGE_TOOLS = ["upload_artifact", "request_answer", "ready_for_review", "
 const SESSION_BUTTON = /\b(sign ?in|log ?in|continue|next|verify|confirm|submit|send|email me|text me|get (a |the )?code|resend)\b/i;
 /** The one secret name a model may type that is never provisioned up front: it asks for it with `request_sign_in_code`. */
 const SECRET_NAME = /^PAGS_LOGIN_[A-Z_]+$/;
+// #1420: `browser_run_code` was renamed `browser_run_code_unsafe` in @playwright/mcp 0.0.84; kept
+// here too so a downgrade (or an older runner still speaking the old name) refuses it by the same
+// named message rather than falling through to the generic one. Either way the dispatch allowlist
+// below (READ_TOOLS/FILL_TOOLS/click/press_key/upload_artifact) refuses anything not listed here or
+// there — this set only gives a handful of specifically-dangerous names a clearer reason.
 const REFUSED = new Set([
 	"browser_fill_form",
 	"browser_file_upload",
 	"browser_evaluate",
 	"browser_run_code",
+	"browser_run_code_unsafe",
 	"browser_drag",
 	"browser_hover",
 	"browser_handle_dialog",

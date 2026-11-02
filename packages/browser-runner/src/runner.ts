@@ -1175,7 +1175,14 @@ export class LocalRunner {
 		// auto-dismiss, which @playwright/mcp overrides), so clear it transparently and
 		// report it as a successful, informative step — the brain proceeds on the next
 		// snapshot instead of thrashing into a needless human handoff.
-		if (res.isError && /modal state/i.test(text) && /dialog/i.test(text)) {
+		// #1420 (0.0.84): a dialog opened BY the action itself (e.g. an alert() the
+		// action's own script triggers) now rides on a SUCCESSFUL response — the modal
+		// state is reported informationally ("### Modal state — … can be handled by
+		// browser_handle_dialog"), not as an error. `res.isError` no longer distinguishes
+		// "this call failed because a dialog is blocking" from "this call succeeded and
+		// a dialog is now open"; the text pattern is the only reliable signal either way,
+		// and the dialog blocks the NEXT tool call regardless of which case this was.
+		if (/modal state/i.test(text) && /dialog/i.test(text)) {
 			const dialogMsg = (text.match(/dialog with message "([^"]*)"/)?.[1] || "").slice(0, 160);
 			await mcp.callTool("browser_handle_dialog", { accept: true }).catch(() => undefined);
 			await page.waitForTimeout(400).catch(() => undefined);

@@ -164,7 +164,27 @@ export class McpRuntime {
 		// lives under the runner's data dir (outside the CWD). Lift the file-root guard
 		// (meant to stop an LLM reading arbitrary host files) so browser_file_upload can
 		// attach it — the runner, not the model, chooses the path.
-		this.server = await createConnection({ browser, allowUnrestrictedFileAccess: true, secrets: this.secrets });
+		this.server = await createConnection({
+			browser,
+			allowUnrestrictedFileAccess: true,
+			secrets: this.secrets,
+			// #1420 (0.0.81): idle auto-close defaults to one hour for a headless browser THIS
+			// server launched, but to no timeout for a headed or CDP-attached one — production
+			// (`opts.cdpEndpoint`) is already exempt. Disabled outright so a headless fixture run
+			// can never be auto-closed mid-session either.
+			timeouts: { idle: 0 },
+			// #1420 (0.0.82): a page could otherwise register its own WebMCP tools into the CLI's
+			// tool list — enabled by default upstream. The tool surface is ours to declare, not a
+			// page's to extend.
+			webmcp: false,
+			// #1420 (0.0.84): masks OAuth/session query params in tool TEXT the model reads live —
+			// `traceUrl` (local-apply/contract.ts) already strips every query param from a URL once
+			// it reaches PAGS's own trace/store, but that's a different layer: this is what the
+			// model sees mid-run, before anything is recorded. Same vocabulary as the Worker's own
+			// `SECRET_PARAM` (workers/api/src/lib/remote-auth.ts) — params that only ever carry a
+			// credential or an OAuth leg.
+			redactUrlParams: ["code", "token", "access_token", "id_token", "refresh_token", "code_verifier", "machine_proof", "session", "secret", "password", "jwt", "auth"],
+		});
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		await this.server.connect(serverTransport);
 		this.client = new Client({ name: "pags-runner", version: "1.0.0" });

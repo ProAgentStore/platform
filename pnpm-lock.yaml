@@ -120,11 +120,11 @@ importers:
         specifier: 1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       '@playwright/mcp':
-        specifier: 0.0.77
-        version: 0.0.77
+        specifier: 0.0.84
+        version: 0.0.84
       playwright:
-        specifier: ^1.60.0
-        version: 1.60.0
+        specifier: 1.65.0-alpha-2026-10-30
+        version: 1.65.0-alpha-2026-10-30
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1255,6 +1255,11 @@ packages:
 
   '@playwright/mcp@0.0.77':
     resolution: {integrity: sha512-vf3PmCdOWVvEc3Vmh8DVWvsbz6/rIGi+OG0cyC/2YTn10U8tZMHEiRG62LHdPTTf0qCjoS7/1mbyS5F0RHoTzQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  '@playwright/mcp@0.0.84':
+    resolution: {integrity: sha512-weqLrA7/D8MJzNV9/t3Hnjp100tS2sxFXKeb2gH6Nhktqmdfvx5qRA9AZ5Mhjnre1jY0wltsrRK5VZS5NBgcvw==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -2486,6 +2491,11 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
+  playwright-core@1.65.0-alpha-2026-10-30:
+    resolution: {integrity: sha512-LPMw8B/HRQKMcJeXTqWSrkB/AfCKKmbDQMbu0p7zg8MgibOWaKMjZWR/StAtrQkOxvOmZEju1o1TnPgdoOCwrg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   playwright@1.60.0:
     resolution: {integrity: sha512-hheHdokM8cdqCb0lcE3s+zT4t4W+vvjpGxsZlDnikarzx8tSzMebh3UiFtgqwFwnTnjYQcsyMF8ei2mCO/tpeA==}
     engines: {node: '>=18'}
@@ -2494,6 +2504,11 @@ packages:
   playwright@1.62.0-alpha-2026-06-29:
     resolution: {integrity: sha512-ugaMuh6rAOqmbaxrM7+XQSs7M6yPXykq5gVugJPClHcJ4Cqxmky5rDHhrCt4wmaILUeMdI7kPBCx3zMx2Qu+bg==}
     engines: {node: '>=18'}
+    hasBin: true
+
+  playwright@1.65.0-alpha-2026-10-30:
+    resolution: {integrity: sha512-dmAJMVHKzHvMQjn+XDcaq/pxaZ0W6n8i78rwTM+VGRtQ3WBF5ZiSdB1yL/cyoYUGUMwg3jxN65KqC9cERaCbIg==}
+    engines: {node: '>=20'}
     hasBin: true
 
   postcss-load-config@6.0.1:
@@ -3602,6 +3617,11 @@ snapshots:
       playwright: 1.62.0-alpha-2026-06-29
       playwright-core: 1.62.0-alpha-2026-06-29
 
+  '@playwright/mcp@0.0.84':
+    dependencies:
+      playwright: 1.65.0-alpha-2026-10-30
+      playwright-core: 1.65.0-alpha-2026-10-30
+
   '@playwright/test@1.60.0':
     dependencies:
       playwright: 1.60.0
@@ -4688,6 +4708,8 @@ snapshots:
 
   playwright-core@1.62.0-alpha-2026-06-29: {}
 
+  playwright-core@1.65.0-alpha-2026-10-30: {}
+
   playwright@1.60.0:
     dependencies:
       playwright-core: 1.60.0
@@ -4699,6 +4721,10 @@ snapshots:
       playwright-core: 1.62.0-alpha-2026-06-29
     optionalDependencies:
       fsevents: 2.3.2
+
+  playwright@1.65.0-alpha-2026-10-30:
+    dependencies:
+      playwright-core: 1.65.0-alpha-2026-10-30
 
   postcss-load-config@6.0.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.22.4)(yaml@2.9.0):
     dependencies:
