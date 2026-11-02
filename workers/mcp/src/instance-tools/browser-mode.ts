@@ -13,7 +13,7 @@ export function registerBrowserModeTools(server: McpServer, ctx: InstanceToolsCt
 	};
 	server.tool(
 		"get_instance_browser_mode",
-		"Read browser visibility for one instance: mode (its override), agentDefault, effective and source (instance, agent or runner). headed opens a visible browser on the machine; headless has no desktop window. null effective means the runner fallback decides. Read-only; does not launch a browser.",
+		"Mode-only compatibility tool; use get_instance_browser_settings for browser/profile choices. Read browser visibility for one instance: mode (its override), agentDefault, effective and source (instance, agent or runner). headed opens a visible browser on the machine; headless has no desktop window. null effective means the runner fallback decides. Read-only; does not launch a browser.",
 		address,
 		async ({ token, instance_id }) => {
 			const sessionToken = tokenFor(token);
@@ -26,7 +26,7 @@ export function registerBrowserModeTools(server: McpServer, ctx: InstanceToolsCt
 	);
 	server.tool(
 		"set_instance_browser_mode",
-		"Set one instance's browser visibility override: headed opens a visible browser on its machine, headless runs without a desktop window, null inherits the agent template default (then the runner fallback). Takes effect on a new browser session; does not interrupt an active task or restart the shared runner. Read get_instance_browser_mode first; preview with dry_run.",
+		"Mode-only compatibility tool; use set_instance_browser_settings for browser/profile choices. Set one instance's browser visibility override: headed opens a visible browser on its machine, headless runs without a desktop window, null inherits the agent template default (then the runner fallback). Takes effect on a new browser session; does not interrupt an active task or restart the shared runner. Read get_instance_browser_mode first; preview with dry_run.",
 		{
 			...address,
 			mode: z.enum(["headed", "headless"]).nullable().describe("headed = visible browser; headless = no desktop window; null = inherit the agent default."),

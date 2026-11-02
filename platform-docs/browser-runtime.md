@@ -67,6 +67,47 @@ that runs the agent. A remote machine's browser window appears on that machine.
 The task's **Screenshot replay** provides a timeline slider in the console in either mode,
 when screenshot capture is enabled.
 
+## Browser and profile selection
+
+CLI 0.4.198 adds independent browser and profile settings (#1431). Agent creators
+choose defaults; instance owners can override each field or inherit it in **Settings →
+Browser settings**. Mode, browser choice, and profile persistence are separate choices.
+
+| Browser choice | What actually runs |
+| --- | --- |
+| Installed Google Chrome | The machine's Chrome stable channel. No silent fallback if it cannot launch. |
+| Installed Microsoft Edge | The machine's Edge stable channel. No silent fallback if it cannot launch. |
+| Playwright Chromium | Playwright's matching Chromium build, using its full browser in headed or headless mode. |
+| Playwright Firefox | Playwright's matching patched Firefox build; not an arbitrary installed Firefox. |
+| Playwright WebKit | Playwright's matching WebKit build; not the Safari application. |
+
+A **persistent** profile remembers this instance's sign-ins and browser state, separately
+for each browser choice. A **fresh session** (`ephemeral`) starts with empty browser
+state and discards it when the run ends. Explicit browser/profile configuration uses
+PAGS-owned profiles and does not implicitly copy the owner's everyday Chrome profile.
+Switching browsers preserves old persistent profiles so switching back can reuse them.
+
+When a field inherits all the way down, existing workflow behavior stays intact:
+research's isolated browser is fresh per run, the application's isolated browser keeps
+its own sign-ins, and the general workflow browser keeps its automation profile. The
+legacy Chrome preference and runner environment fallback remain only when no browser
+choice is configured. Choose a browser explicitly when its identity matters.
+
+Through MCP use `get_instance_browser_settings`, `set_instance_browser_settings`, and
+`get_instance_browser_session`. Each setting accepts `null` to clear that override;
+omitted fields stay unchanged. The session read is evidence of the browser actually
+launched, distinct from settings saved for a future session. It reports the engine,
+channel/version, actual visibility and profile policy. An unavailable browser returns
+an actionable launch failure, never a successful receipt for another browser.
+
+The runner supplies its own native Playwright browser context to the standard MCP
+server. Screenshot replay and human takeover use the same page across the supported
+engines. These choices follow [Playwright's browser support](https://playwright.dev/docs/browsers),
+[persistent-context guidance](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context),
+and [MCP context integration](https://github.com/microsoft/playwright-mcp/blob/main/index.d.ts).
+Installed Chrome does not guarantee that websites will allow automation; challenges
+remain visible for a human takeover.
+
 ## Foreground and background (`pags up --background`)
 
 `pags up` is a **foreground** process by default, and stays that way. Its window is where you see what it is doing (`l` shows its log), and closing it, or pressing `q`, stops the runner. Leave it open the way you would a dev server.

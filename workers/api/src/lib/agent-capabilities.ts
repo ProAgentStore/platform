@@ -1,3 +1,4 @@
+import { browserEngineValue, browserProfilePolicyValue, type BrowserEngine, type BrowserProfilePolicy } from "./browser-settings.js";
 /**
  * Agent capability registry.
  *
@@ -108,6 +109,8 @@ export interface BoardColumn {
 export interface AgentCapabilities {
 	/** Default visibility for browser sessions; an instance can override it. */
 	browserMode?: BrowserMode;
+	browserEngine?: BrowserEngine;
+	browserProfilePolicy?: BrowserProfilePolicy;
 	/** Console surfaces this agent shows (e.g. the Coding tab, the apply UI). */
 	surfaces: AgentSurface[];
 	/** Local runner runtime the brain drives. */
@@ -408,6 +411,8 @@ export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser
 export interface DeclaredCapabilities {
 	/** Preserved for validation: null clears the creator default. */
 	browserMode?: unknown;
+	browserEngine?: unknown;
+	browserProfilePolicy?: unknown;
 	surfaces?: AgentSurface[];
 	/** Per-surface options, keyed by surface id. Inert for a surface not in `surfaces`. */
 	surfaceOptions?: Record<string, unknown>;
@@ -428,7 +433,7 @@ export interface DeclaredCapabilities {
 export function sanitizeDeclaredCapabilities(input: unknown): DeclaredCapabilities {
 	const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
 	const out: DeclaredCapabilities = {};
-	if ("browserMode" in o) out.browserMode = o.browserMode;
+	for (const key of ["browserMode", "browserEngine", "browserProfilePolicy"] as const) if (key in o) out[key] = o[key];
 	if (Array.isArray(o.surfaces)) {
 		out.surfaces = [...new Set(o.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface)))];
 	}
@@ -525,7 +530,9 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 	const surfaceOptions = serializeSurfaceOptions(parseSurfaceOptions(surfaceOptionsRaw));
 	const withOptions = Object.keys(surfaceOptions).length ? { surfaceOptions } : {};
 	const mode = browserModeValue(declared?.browserMode);
-	const withBrowserMode = mode ? { browserMode: mode } : {};
+	const engine = browserEngineValue(declared?.browserEngine);
+	const profile = browserProfilePolicyValue(declared?.browserProfilePolicy);
+	const withBrowserMode = { ...(mode ? { browserMode: mode } : {}), ...(engine ? { browserEngine: engine } : {}), ...(profile ? { browserProfilePolicy: profile } : {}) };
 
 	if (declared && Array.isArray(declared.surfaces)) {
 		const surfaces = declared.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface));

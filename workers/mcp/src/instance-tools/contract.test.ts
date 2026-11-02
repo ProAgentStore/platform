@@ -20,6 +20,7 @@ import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerBrowserVerificationTools } from "./browser-verification.js";
 import { registerBrowserModeTools } from "./browser-mode.js";
+import { registerBrowserSettingsTools } from "./browser-settings.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerCoderBrainTools } from "./coder-brain.js";
 import { registerApplicationTools } from "./applications.js";
@@ -498,6 +499,9 @@ const TABLE: Record<string, Row> = {
 	get_instance_local_browser_settings: ["localBrowser", "read", null, null, "instance_id,token"],
 	get_instance_browser_verification: ["browserVerification", "read", null, null, "instance_id,token"],
 	set_instance_browser_verification: ["browserVerification", "write", null, "envelope", "allow_mobile,dry_run,enabled,fallback,instance_id,runtime,takeover,token,wait_limit_minutes"],
+	get_instance_browser_settings: ["browserSettings", "read", null, null, "instance_id,token"],
+	get_instance_browser_session: ["browserSettings", "read", null, null, "instance_id,token"],
+	set_instance_browser_settings: ["browserSettings", "write", null, "envelope", "dry_run,engine,instance_id,mode,profile_policy,token"],
 	get_instance_browser_mode: ["browserMode", "read", null, null, "instance_id,token"],
 	set_instance_browser_mode: ["browserMode", "write", null, "envelope", "dry_run,instance_id,mode,token"],
 	get_browser_screenshots: ["browserVerification", "read", null, null, "instance_id,token"],
@@ -536,7 +540,7 @@ const TABLE: Record<string, Row> = {
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
 	set_account_preferences: ["account", "write", null, "envelope", "attention,coding,dry_run,notifications,releaseNotes,timezone,token,translation,voice"],
 	set_account_operator_manual: ["account", "write", null, "envelope", "dry_run,manual,token"],
-	set_agent_capabilities: ["agentAuthoring", "destructive", "set_agent_capabilities", "envelope", "agent_id,browser_mode,confirm,custom_surfaces,dry_run,local_browser,runtime,surfaces,token,tools,workflow"],
+	set_agent_capabilities: ["agentAuthoring", "destructive", "set_agent_capabilities", "envelope", "agent_id,browser_engine,browser_mode,browser_profile_policy,confirm,custom_surfaces,dry_run,local_browser,runtime,surfaces,token,tools,workflow"],
 	set_agent_settings_schema: ["settings", "write", null, "envelope", "agent_id,dry_run,settings_schema,token"],
 	set_agent_operator_manual: ["settings", "write", null, "envelope", "agent_id,dry_run,manual,token"],
 	set_agent_state: ["agentAuthoring", "destructive", "set_agent_state", "envelope", "agent_id,confirm,dry_run,state,token"],
@@ -725,6 +729,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	localBrowser: registerLocalBrowserTools as any,
 	browserVerification: registerBrowserVerificationTools as any,
 	browserMode: registerBrowserModeTools as any,
+	browserSettings: registerBrowserSettingsTools as any,
 	gmailScout: registerGmailScoutTools as any,
 	coderBrain: registerCoderBrainTools as any,
 	applications: registerApplicationTools as any,

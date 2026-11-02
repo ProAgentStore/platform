@@ -45,7 +45,7 @@ const BY_RUNTIME: Record<string, readonly string[]> = {
 	// login page through `/browser/act` + `/browser/handoff` and its card through `/takeover` (coding-sessions-open.ts).
 	coding: ["/coding/", "/tasks", "/browser/act", "/browser/handoff", "/takeover"],
 	browser: BROWSER,
-	local_browser: ["/local-browser/"],
+	local_browser: ["/local-browser/", "/browser/session"],
 	local_artifact: ["/local-artifact/"],
 	local_apply: ["/local-apply/", ...BROWSER],
 	local_native: ["/native/"],

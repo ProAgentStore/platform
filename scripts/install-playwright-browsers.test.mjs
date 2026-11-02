@@ -4,7 +4,7 @@
  */
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DIAGNOSTICS, INSTALL_COMMAND, installBrowsers, runDiagnostics } from "./install-playwright-browsers.mjs";
+import { DIAGNOSTICS, INSTALL_COMMAND, installCommandFor, installBrowsers, runDiagnostics } from "./install-playwright-browsers.mjs";
 
 const TIMEOUT = 480_000;
 const BEAT = 30_000;
@@ -67,6 +67,11 @@ afterEach(() => vi.useRealTimers());
 describe("installBrowsers (#1047)", () => {
 	it("runs the same command CI ran: both browsers, with their system dependencies", () => {
 		expect(INSTALL_COMMAND).toEqual(["pnpm", ["exec", "playwright", "install", "--with-deps", "chromium", "webkit"]]);
+	});
+
+	it("selects the runtime Playwright version and all managed engines for the native matrix", () => {
+		expect(installCommandFor([])).toEqual(INSTALL_COMMAND);
+		expect(installCommandFor(["--runner"])).toEqual(["pnpm", ["--filter", "@proagentstore/browser-runner", "exec", "playwright", "install", "--with-deps", "chromium", "firefox", "webkit"]]);
 	});
 
 	it("happy path: installs on the first attempt, exit 0, no retry or repair", async () => {

@@ -62,6 +62,17 @@ export async function patchInstanceConfig(
 	return (res.meta?.changes ?? 0) > 0;
 }
 
+/** Atomically set several independent keys, preserving every sibling and explicit null values. */
+export async function patchInstanceConfigFields(env: Env, instanceId: string, userId: string, fields: Record<string, unknown>): Promise<boolean> {
+	const entries = Object.entries(fields);
+	if (!entries.length) return false;
+	for (const [key] of entries) if (!isValidConfigKey(key)) throw new Error(`Invalid config key: ${key}`);
+	const args = entries.flatMap(([key, value]) => [jsonPath(key), JSON.stringify(value ?? null)]);
+	const paths = entries.map((_, i) => `?${i * 2 + 1}, json(?${i * 2 + 2})`).join(", ");
+	const res = await env.DB.prepare(`UPDATE agent_instances SET config = json_set(${CONFIG_OR_EMPTY}, ${paths}), updated_at = datetime('now') WHERE id = ?${args.length + 1} AND user_id = ?${args.length + 2}`).bind(...args, instanceId, userId).run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
 /**
  * Bump `last_activity_at` to now — call this after any real user-driven event
  * (chat, task create, apply start, coding session start). Fire-and-forget: a

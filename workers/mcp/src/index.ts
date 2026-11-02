@@ -493,7 +493,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					.union([z.record(z.unknown()), z.string()])
 					.optional()
 					.describe(
-						"Declarative capabilities, validated server-side: surfaces[], runtime (browser|coding|local_browser|null), workflow, browserMode (headed|headless|null, inherited by instances unless overridden), localBrowser (the local CLI browser research block for runtime local_browser), tools[] allowlist (e.g. delegate_goal/list_subordinates for a supervisor, or the coding runtime for a repo agent). Object, or a JSON string of the same.",
+						"Declarative capabilities, validated server-side: surfaces[], runtime (browser|coding|local_browser|null), workflow, browserMode (headed|headless|null), browserEngine (chrome|msedge|chromium|firefox|webkit|null), browserProfilePolicy (persistent|ephemeral|null), each inherited by instances unless overridden, localBrowser (the local CLI browser research block for runtime local_browser), tools[] allowlist (e.g. delegate_goal/list_subordinates for a supervisor, or the coding runtime for a repo agent). Object, or a JSON string of the same.",
 					),
 				settings_schema: z
 					.union([z.array(z.unknown()), z.string()])
@@ -710,6 +710,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 							// block sent through update_agent never reached the API's validator (#951).
 							localBrowser: z.record(z.unknown()).nullable().optional(),
 							browserMode: z.enum(["headed", "headless"]).nullable().optional(),
+							browserEngine: z.enum(["chrome", "msedge", "chromium", "firefox", "webkit"]).nullable().optional(),
+							browserProfilePolicy: z.enum(["persistent", "ephemeral"]).nullable().optional(),
 							// CANONICAL SOURCE: `workers/api/src/lib/agent-workflows.ts` `AGENT_WORKFLOWS`.
 							// A transport-side mirror (the API re-validates), kept honest by the drift
 							// test in `agent-workflows.test.ts` — this list carried INSURANCE_QUOTES,

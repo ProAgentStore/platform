@@ -131,7 +131,7 @@ describe("agent browser mode relay (#1429)", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const { ws, handle } = await open();
 		try {
-			for (const browserMode of ["headed", "headless", "invalid", undefined]) {
+			for (const browserMode of ["headed", "headless", undefined]) {
 				await ws.onmessage?.({ data: JSON.stringify({ id: "mode", path: "/browser/snapshot", browserMode, body: { instanceId: "forged", browserMode: "headless" } }) });
 				const headers = (fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit])[1].headers as Record<string, string>;
 				expect(headers["X-PAGS-Instance-Id"]).toBe("inst-1");

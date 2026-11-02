@@ -119,9 +119,10 @@ describe("in a real page — the mask changes the rendered pixels (#1067, #1419)
 });
 
 describe("no stored frame bypasses the mask (#1067, #1419)", () => {
-	it("the only direct page.screenshot outside maskedPageScreenshot is the LIVE takeover fallback — and runner shot() masks", async () => {
+	it("only the replay masker and live owner view may call screenshot directly", async () => {
 		const { readdirSync, readFileSync, statSync } = await import("node:fs");
 		const { join, relative } = await import("node:path");
+		const ts = await import("typescript");
 		const root = join(import.meta.dirname, "..");
 		const direct: string[] = [];
 		const walk = (dir: string) => {
@@ -129,21 +130,25 @@ describe("no stored frame bypasses the mask (#1067, #1419)", () => {
 				const full = join(dir, name);
 				if (statSync(full).isDirectory()) walk(full);
 				else if (/\.ts$/.test(name) && !/\.test\.ts$/.test(name)) {
-					readFileSync(full, "utf8")
-						.split("\n")
-						.forEach((line, i) => {
-							if (/\.screenshot\(/.test(line)) direct.push(`${relative(root, full)}:${i + 1}`);
-						});
+					const source = ts.createSourceFile(full, readFileSync(full, "utf8"), ts.ScriptTarget.Latest, true);
+					const visit = (node: import("typescript").Node) => {
+						if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "screenshot") direct.push(relative(root, full));
+						ts.forEachChild(node, visit);
+					};
+					visit(source);
 				}
 			}
 		};
 		walk(root);
-		// replay.ts is maskedPageScreenshot itself. runner.ts's one is `takeoverFrame`'s first-frame
-		// fallback: the person's live control surface, which must show what they are typing into.
-		expect(direct.map((d) => d.split(":")[0]).sort()).toEqual(["local-browser/replay.ts", "runner.ts"]);
-		const runner = readFileSync(join(root, "runner.ts"), "utf8");
-		const takeover = runner.split("\n").findIndex((l) => /\.screenshot\(/.test(l));
-		expect(runner.split("\n").slice(Math.max(0, takeover - 12), takeover).join("\n")).toMatch(/async takeoverFrame\(/);
-		expect(runner).toMatch(/private async shot\(page: Page\)[^}]*maskedPageScreenshot\(page/);
+		// This is an architectural boundary, checked on syntax nodes rather than line spelling.
+		// The live owner control surface is intentionally unmasked; stored evidence is not.
+		expect(direct.sort()).toEqual(["local-browser/replay.ts", "takeover-native.ts"]);
+	});
+
+	it("the workflow runner's stored-shot boundary actually applies the mask", async () => {
+		const { LocalRunner } = await import("../runner.js");
+		const f = fakePage();
+		expect(await LocalRunner.prototype["shot"](f.page as unknown as import("playwright").Page)).toBe(Buffer.from("jpeg-bytes").toString("base64"));
+		expect(f.calls).toEqual([`locator:${MASK_SELECTOR}`, "shot"]);
 	});
 });

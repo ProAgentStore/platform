@@ -296,6 +296,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// Browser verification (#1031): the owner's settings for a declared local browser, and live eligibility.
 	get_instance_browser_verification: "read",
 	set_instance_browser_verification: "write",
+	get_instance_browser_settings: "read",
+	get_instance_browser_session: "read",
+	set_instance_browser_settings: "write",
 	get_instance_browser_mode: "read",
 	set_instance_browser_mode: "write",
 	get_browser_screenshots: "read",

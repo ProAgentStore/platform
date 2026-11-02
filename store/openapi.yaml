@@ -434,6 +434,53 @@ components:
         waitLimitMinutes: { type: integer, minimum: 1, maximum: 1440 }
         takeover: { type: string, enum: [prompt, never] }
         allowMobile: { type: boolean }
+    BrowserSettingsValues:
+      type: object
+      properties:
+        mode: { type: string, nullable: true, enum: [headed, headless, null] }
+        engine: { type: string, nullable: true, enum: [chrome, msedge, chromium, firefox, webkit, null] }
+        profile: { type: string, nullable: true, enum: [persistent, ephemeral, null] }
+    BrowserSettingsView:
+      allOf:
+        - $ref: "#/components/schemas/BrowserSettingsValues"
+        - type: object
+          required: [agentDefaults, effective, sources, requiredCli, explained]
+          properties:
+            agentDefaults: { $ref: "#/components/schemas/BrowserSettingsValues" }
+            effective: { $ref: "#/components/schemas/BrowserSettingsValues" }
+            sources:
+              type: object
+              properties:
+                mode: { type: string, enum: [instance, agent, runner] }
+                engine: { type: string, enum: [instance, agent, runner] }
+                profile: { type: string, enum: [instance, agent, runner] }
+            requiredCli: { type: string }
+            explained: { type: string }
+    BrowserLaunchReceipt:
+      type: object
+      description: Facts measured by the runner when the browser launched, retained after close with active false. These may differ from settings changed during an active run.
+      properties:
+        engine: { type: string, enum: [chrome, msedge, chromium, firefox, webkit] }
+        browserType: { type: string, enum: [chromium, firefox, webkit] }
+        channel: { type: string, nullable: true }
+        version: { type: string }
+        executable: { type: string }
+        mode: { type: string, enum: [headed, headless] }
+        profilePolicy: { type: string, enum: [persistent, ephemeral] }
+        profileId: { type: string }
+        transport: { type: string }
+        launchedAt: { type: string, format: date-time }
+        active: { type: boolean }
+    BrowserSessionView:
+      type: object
+      required: [status, launch, launches]
+      properties:
+        status: { type: string, enum: [connected, offline, unsupported, unavailable] }
+        launch:
+          nullable: true
+          allOf: [{ $ref: "#/components/schemas/BrowserLaunchReceipt" }]
+        launches: { type: array, items: { $ref: "#/components/schemas/BrowserLaunchReceipt" } }
+        detail: { type: string }
     BrowserModeView:
       type: object
       required: [mode, agentDefault, effective, source, explained, requiredCli]
@@ -1253,6 +1300,16 @@ components:
         decides whether the agent needs `pags up` from `runtime`, and the runtime gates tool
         dispatch on `tools`.
       properties:
+        browserEngine:
+          type: string
+          nullable: true
+          enum: [chrome, msedge, chromium, firefox, webkit, null]
+          description: Browser choice; explicit values never fall back. Chrome and Edge select their installed channels, while Chromium, Firefox and WebKit use Playwright-managed builds. Null retains workflow defaults.
+        browserProfilePolicy:
+          type: string
+          nullable: true
+          enum: [persistent, ephemeral, null]
+          description: Persistent retains this agent's own browser state; ephemeral starts fresh each run. Null retains the workflow's existing profile policy. This does not import everyday browser state.
         browserMode:
           type: string
           nullable: true
@@ -8311,6 +8368,63 @@ paths:
       responses:
         "200": { description: The takeover after the move, content: { application/json: { schema: { type: object, properties: { takeover: { $ref: "#/components/schemas/BrowserTakeover" }, changed: { type: boolean } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-settings:
+    get:
+      summary: Read browser choices and independent inheritance sources
+      description: Configuration only; this never contacts or launches a browser. Null effective fields retain workflow defaults. Mode-only needs CLI 0.4.197; explicit browser or profile needs 0.4.198.
+      operationId: getInstanceBrowserSettings
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Overrides, agent defaults and resolved settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserSettingsView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Set this instance's browser mode, engine or profile policy
+      description: Independent partial update; omitted fields remain unchanged and null clears only that override. Changes apply to the next session. An explicit engine never silently falls back; active runs preserve their launch settings.
+      operationId: setInstanceBrowserSettings
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                mode: { type: string, nullable: true, enum: [headed, headless, null] }
+                engine: { type: string, nullable: true, enum: [chrome, msedge, chromium, firefox, webkit, null] }
+                profile: { type: string, nullable: true, enum: [persistent, ephemeral, null] }
+      responses:
+        "200":
+          description: Saved overrides and resolved settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserSettingsView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-settings/session:
+    get:
+      summary: Read the runner's actual browser launch evidence
+      description: Owner-only, pinned-runner read. Never launches or changes a browser. Reports offline or unsupported when no evidence can be obtained; a saved setting is never substituted for measured browser identity.
+      operationId: getInstanceBrowserSession
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Runner availability and its launch receipts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserSessionView" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/browser-mode:

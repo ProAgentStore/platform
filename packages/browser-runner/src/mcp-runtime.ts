@@ -2,14 +2,13 @@ import { createConnection } from "@playwright/mcp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { BrowserContext } from "playwright";
 import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
 
-export interface McpRuntimeOptions {
-	/** Attach to an already-running Chrome over CDP. Every browser is launched by the
-	 *  CALLER (`launchPersistentContext` + `--remote-debugging-port=0`, #1419) — this
-	 *  module only ever attaches; it never launches or owns a profile directory. */
-	cdpEndpoint: string;
-}
+/** The caller owns the browser in either case. Native contexts work across all engines (#1431). */
+export type McpRuntimeOptions =
+	| { context: BrowserContext; cdpEndpoint?: never }
+	| { cdpEndpoint: string; context?: never };
 
 export interface McpToolResult {
 	/** `text` blocks, or an `image` block (base64 `data` + `mimeType`) from `browser_take_screenshot` (#1063). */
@@ -76,17 +75,16 @@ export class McpRuntime {
 
 	async start(opts: McpRuntimeOptions): Promise<void> {
 		if (this.client) return;
+		if ((!opts.context && !opts.cdpEndpoint) || (opts.context && opts.cdpEndpoint)) throw new Error("MCP needs exactly one caller-owned browser context or CDP endpoint.");
 		// The runner is a trusted local process uploading the user's OWN résumé, which
 		// lives under the runner's data dir (outside the CWD). Lift the file-root guard
 		// (meant to stop an LLM reading arbitrary host files) so browser_file_upload can
 		// attach it — the runner, not the model, chooses the path.
 		this.server = await createConnection({
-			browser: { cdpEndpoint: opts.cdpEndpoint },
+			...(opts.context ? {} : { browser: { cdpEndpoint: opts.cdpEndpoint } }),
 			allowUnrestrictedFileAccess: true,
 			secrets: this.secrets,
-			// #1420 (0.0.81): idle auto-close defaults to no timeout for a headed or CDP-attached
-			// browser already — every browser here is CDP-attached (#1419) — but disabled outright
-			// to remove any doubt.
+			// The caller controls browser lifetime, including a paused owner takeover.
 			timeouts: { idle: 0 },
 			// #1420 (0.0.82): a page could otherwise register its own WebMCP tools into the CLI's
 			// tool list — enabled by default upstream. The tool surface is ours to declare, not a
@@ -99,7 +97,7 @@ export class McpRuntime {
 			// `SECRET_PARAM` (workers/api/src/lib/remote-auth.ts) — params that only ever carry a
 			// credential or an OAuth leg.
 			redactUrlParams: ["code", "token", "access_token", "id_token", "refresh_token", "code_verifier", "machine_proof", "session", "secret", "password", "jwt", "auth"],
-		});
+		}, opts.context ? async () => opts.context : undefined);
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		await this.server.connect(serverTransport);
 		this.client = new Client({ name: "pags-runner", version: "1.0.0" });

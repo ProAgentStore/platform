@@ -1,3 +1,4 @@
+import { BROWSER_ENGINES, type BrowserEngine, type BrowserLaunchReceipt, type BrowserProfilePolicy } from "./browser-launch.js";
 import { seedAgentBrowserProfiles } from "./browser-profile.js";
 import { BrowserCallRecorder } from "./browser-call-recorder.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import type { McpRuntime } from "./mcp-runtime.js";
 import { RunnerInputError } from "./errors.js";
-import { createRunnerBrowserFactories } from "./local-apply/live-run-browser.js";
+import { createConfiguredRunBrowser, createRunnerBrowserFactories } from "./local-apply/live-run-browser.js";
 import type { LocalApplyProfile } from "./local-apply/contract.js";
 import type { RunBrowser } from "./local-apply/runtime.js";
 
@@ -15,13 +16,15 @@ export interface BrowserSession {
 	instanceId?: string;
 	dataDir: string;
 	headless: boolean;
+	engine?: BrowserEngine;
+	profilePolicy?: BrowserProfilePolicy;
+	launch?: BrowserLaunchReceipt;
+	stopBrowser?: () => Promise<void>;
 	context: BrowserContext | null;
 	/** The brain and human takeover follow the same live tab within this agent. */
 	activePage: Page | null;
-	/** Standard Playwright MCP attaches over CDP to this session's browser. */
+	/** Standard Playwright MCP attaches directly to this session's browser. */
 	mcp: McpRuntime | null;
-	cdpEndpoint: string | null;
-	launchedProfileDir: string | null;
 	applyResumePath: string | null;
 	suppressAutoAttach: boolean;
 	launching?: Promise<BrowserContext>;
@@ -43,25 +46,28 @@ export class BrowserSessions {
 		const key = instanceId ?? "";
 		let session = this.sessions.get(key);
 		if (!session) {
-			session = { instanceId, dataDir: instanceId ? join(this.dataDir, "agent-browsers", createHash("sha256").update(instanceId).digest("hex")) : this.dataDir, headless: this.fallbackHeadless, context: null, activePage: null, mcp: null, cdpEndpoint: null, launchedProfileDir: null, applyResumePath: null, suppressAutoAttach: false, taskIds: new Set(), leases: 0, calls: new BrowserCallRecorder() };
+			session = { instanceId, dataDir: instanceId ? join(this.dataDir, "agent-browsers", createHash("sha256").update(instanceId).digest("hex")) : this.dataDir, headless: this.fallbackHeadless, context: null, activePage: null, mcp: null, stopBrowser: undefined, applyResumePath: null, suppressAutoAttach: false, taskIds: new Set(), leases: 0, calls: new BrowserCallRecorder() };
 			this.sessions.set(key, session);
 		}
 		return session;
 	}
 
 	/** Serialize each agent's browser requests; different agents remain independent. */
-	run<T>(instanceId: string | undefined, mode: unknown, newRun: boolean, fn: () => Promise<T>, configure = true): Promise<T> {
+	run<T>(instanceId: string | undefined, mode: unknown, newRun: boolean, fn: () => Promise<T>, configure = true, settings: { engine?: unknown; profilePolicy?: unknown } = {}): Promise<T> {
 		if (mode !== undefined && mode !== "headed" && mode !== "headless") return Promise.reject(new RunnerInputError("Browser mode must be headed or headless"));
+		if (settings.engine !== undefined && !BROWSER_ENGINES.includes(settings.engine as BrowserEngine)) return Promise.reject(new RunnerInputError("Unsupported browser engine"));
+		if (settings.profilePolicy !== undefined && settings.profilePolicy !== "persistent" && settings.profilePolicy !== "ephemeral") return Promise.reject(new RunnerInputError("Browser profile policy must be persistent or ephemeral"));
 		const key = instanceId ?? "";
 		if (!configure) return this.scope.run(this.session(instanceId), fn);
 		const next = (this.pending.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
 			const state = this.session(instanceId);
 			const desired = mode === undefined ? this.fallbackHeadless : mode === "headless";
-			if (configure && desired !== state.headless) {
-				const busy = this.localLive(instanceId) || state.leases > 0 || [...state.taskIds].some(this.taskLive);
-				if (busy && newRun) throw new RunnerInputError("This agent's browser is still in use. Its new browser mode takes effect after the current task finishes.", 409);
-				if (!busy) { await this.closeSession(state); state.headless = desired; }
-			}
+			const busy = this.localLive(instanceId) || state.leases > 0 || [...state.taskIds].some(this.taskLive);
+			const changed = desired !== state.headless || settings.engine !== state.engine || settings.profilePolicy !== state.profilePolicy;
+			if (busy && newRun && (changed || settings.engine !== undefined || settings.profilePolicy !== undefined)) throw new RunnerInputError("This agent's browser is still in use. Its new browser settings take effect after the current task finishes.", 409);
+			if (newRun && !busy && !changed && state.profilePolicy === "ephemeral") await this.closeSession(state);
+			if (changed && !busy) { await this.closeSession(state); state.headless = desired; state.engine = settings.engine as BrowserEngine | undefined; state.profilePolicy = settings.profilePolicy as BrowserProfilePolicy | undefined; }
+
 			return this.scope.run(state, fn);
 		});
 		this.pending.set(key, next);
@@ -79,9 +85,17 @@ export class BrowserSessions {
 		const state = this.current;
 		state.leases++;
 		try {
-			if (profile === "default" || apply) seedAgentBrowserProfiles(this.dataDir, state.dataDir, profile);
-			const factories = createRunnerBrowserFactories({ headless: state.headless, dataDir: state.dataDir, defaultTools: this.bind(tools), defaultCookies: this.bind(async () => (await (await context()).cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires }))), sharedPage: () => state.activePage });
-			const browser = await (apply ? factories.applyBrowserFor : factories.browserFor)(profile, runDir);
+			let browser: RunBrowser;
+			if (state.engine || state.profilePolicy) {
+				await this.closeSession(state);
+				const policy = state.profilePolicy ?? (profile === "isolated" && !apply ? "ephemeral" : "persistent");
+				browser = await createConfiguredRunBrowser({ headless: state.headless, engine: state.engine, profilePolicy: policy, preference: profile === "default" ? "default" : "isolated", profileRoot: state.dataDir, onLaunch: (receipt) => { state.launch = receipt; } }, apply);
+			} else {
+				if (profile === "default" || apply) seedAgentBrowserProfiles(this.dataDir, state.dataDir, profile);
+				const factories = createRunnerBrowserFactories({ headless: state.headless, dataDir: state.dataDir, defaultTools: this.bind(tools), defaultCookies: this.bind(async () => (await (await context()).cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires }))), sharedPage: () => state.activePage, onLaunch: (receipt) => { state.launch = receipt; } });
+				browser = await (apply ? factories.applyBrowserFor : factories.browserFor)(profile, runDir);
+			}
+
 			let stopped = false;
 			return { ...browser, stop: async () => { if (stopped) return; stopped = true; try { await browser.stop(); } finally { state.leases--; } } };
 		} catch (error) { state.leases--; throw error; }
@@ -91,8 +105,16 @@ export class BrowserSessions {
 		await state.startingMcp?.catch(() => undefined);
 		await state.launching?.catch(() => undefined);
 		await state.mcp?.stop().catch(() => undefined);
-		await state.context?.close().catch(() => undefined);
-		Object.assign(state, { context: null, activePage: null, mcp: null, cdpEndpoint: null, launchedProfileDir: null, applyResumePath: null, suppressAutoAttach: false });
+		if (state.stopBrowser) await state.stopBrowser().catch(() => undefined);
+		else await state.context?.close().catch(() => undefined);
+		Object.assign(state, { context: null, activePage: null, mcp: null, stopBrowser: undefined, applyResumePath: null, suppressAutoAttach: false });
 	}
+	/** A terminal workflow releases its ephemeral profile; waiting/human handoffs retain it. */
+	async finish(): Promise<void> {
+		const state = this.current;
+		if (state.profilePolicy === "ephemeral" && state.leases === 0 && ![...state.taskIds].some(this.taskLive)) await this.closeSession(state);
+	}
+	managed(): boolean { return !!(this.current.engine || this.current.profilePolicy); }
+	sessionReceipt(): { launch: BrowserLaunchReceipt | null } { return { launch: this.current.launch ?? null }; }
 	async close(): Promise<void> { await Promise.all([...this.sessions.values()].map((state) => this.closeSession(state))); }
 }

@@ -59,6 +59,23 @@ const command = (r: InstanceType<typeof RelayDO>, body: unknown) => r.fetch(new 
 const frames = (sent: string[]) => sent.filter((s) => s !== "ping").map((s) => JSON.parse(s) as { id: string; type?: string; path?: string });
 
 describe("the relay cancels a command it gave up on (#1358)", () => {
+	it.each([
+		{ browserEngine: "firefox", browserProfilePolicy: "ephemeral" },
+		{ browserEngine: "msedge", browserProfilePolicy: "persistent" },
+		{ browserEngine: "safari", browserProfilePolicy: "default" },
+	])("forwards only validated browser engine/profile metadata: %j (#1431)", async (settings) => {
+		let relay!: InstanceType<typeof RelayDO>;
+		const runner = runnerSocket((self) => void relay.webSocketMessage(self, "pong"));
+		relay = relayWith([runner]);
+		const pending = command(relay, { path: "/browser/act", ...settings, timeoutMs: 5_000 });
+		await vi.waitFor(() => expect(frames(runner.sent)).toHaveLength(1));
+		const [cmd] = frames(runner.sent) as Array<{ id: string; browserEngine?: string; browserProfilePolicy?: string }>;
+		if (settings.browserEngine === "safari") { expect(cmd).not.toHaveProperty("browserEngine"); expect(cmd).not.toHaveProperty("browserProfilePolicy"); }
+		else expect(cmd).toMatchObject(settings);
+		await relay.webSocketMessage(runner.socket as unknown as WebSocket, JSON.stringify({ id: cmd.id, status: 200, result: { ok: true } }));
+		expect((await pending).status).toBe(200);
+	});
+
 	it.each(["headed", "headless", "invalid", null])("forwards only validated browser mode metadata: %s (#1429)", async (browserMode) => {
 		let relay!: InstanceType<typeof RelayDO>;
 		const runner = runnerSocket((self) => void relay.webSocketMessage(self, "pong"));

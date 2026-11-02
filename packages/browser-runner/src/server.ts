@@ -271,6 +271,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, await runner.browserComplete(b.taskId, b.outcome, b.detail));
 	}
 
+	if ((req.method === "GET" || req.method === "POST") && path === "/browser/session") return json(res, 200, runner.browsers.sessionReceipt());
+
 	// ── Human takeover (remote view + control) ──────────────────────────────
 	if (req.method === "GET" && path === "/takeover") {
 		return json(res, 200, { takeovers: runner.listTakeovers() });

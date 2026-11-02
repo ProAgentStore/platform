@@ -46,9 +46,10 @@ const browser: BrowserTools = {
 		name === "browser_evaluate" ? { content: [{ text: `### Result\n${JSON.stringify({ url: pageUrl, title: "Jobs" })}` }] } : { content: [{ text: `${name} ${JSON.stringify(args)}` }] },
 };
 
-function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error; onSweepFailure?: (dir: string, error: unknown) => void } = {}) {
+function runtime(over: { managedBrowser?: boolean; retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error; onSweepFailure?: (dir: string, error: unknown) => void } = {}) {
 	return new LocalBrowserRuntime({
 		dataDir: dir,
+		managedBrowser: () => over.managedBrowser === true,
 		homeDir: home,
 		selfUrl: () => "http://127.0.0.1:4999",
 		bridgeScript: "/runner/bridge-stdio.js",
@@ -98,6 +99,15 @@ afterEach(() => {
 });
 
 describe("starting a run", () => {
+	it("explicit managed browser settings do not request personal Chrome profile access", async () => {
+		const rt = runtime({ managedBrowser: true });
+		rt.start(envelope({ browserProfile: "default" }));
+		await settle();
+		expect(spawned).toHaveLength(1);
+		expect(rt.status({ runId: "run-1" }).events.some((event) => event.type === "consent.requested")).toBe(false);
+		rt.closeAll();
+	});
+
 	it("spawns the engine in a scratch folder under the runner, with the bridge as its MCP server", async () => {
 		const rt = runtime();
 		expect(rt.start(envelope())).toEqual({ runId: "run-1", taskId: "run-1", status: "running", existing: false });

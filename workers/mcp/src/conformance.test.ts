@@ -1227,6 +1227,9 @@ describe("the published schemas let a client configure local browser research (#
 	it.each([
 		["set_agent_capabilities", { agent_id: "a1", runtime: "local_browser", local_browser: block, dry_run: true }],
 		["set_agent_capabilities", { agent_id: "a1", browser_mode: "headed", dry_run: true }],
+		["set_agent_capabilities", { agent_id: "a1", browser_engine: "firefox", browser_profile_policy: null, dry_run: true }],
+		["update_agent", { agent_id: "a1", capabilities: { browserEngine: "webkit", browserProfilePolicy: "ephemeral" }, dry_run: true }],
+		["create_agent", { slug: "fox", name: "Firefox", capabilities: { browserEngine: "firefox", browserProfilePolicy: "persistent" }, dry_run: true }],
 		["update_agent", { agent_id: "a1", capabilities: { browserMode: "headed" }, dry_run: true }],
 		["update_agent", { agent_id: "a1", capabilities: { browserMode: null }, dry_run: true }],
 		["create_agent", { slug: "visible", name: "Visible browser", capabilities: { browserMode: "headless" }, dry_run: true }],

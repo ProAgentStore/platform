@@ -1,4 +1,4 @@
-import { browserModeForDispatch } from "./browser-mode.js";
+import { browserSettingsForDispatch } from "./browser-settings-dispatch.js";
 import { decryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
 import { latestResourceSample, resourceHistory, resourcesView } from "./runner-resources.js";
@@ -352,12 +352,12 @@ function routeTimeoutMs(path: string): number | undefined {
  *  for reads so a hung runner can't wedge the UI. */
 export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
 	if (!conn.env.RELAY) throw new Error("RELAY binding not configured");
-	const browserMode = await browserModeForDispatch(conn.env, conn.instanceId, conn.userId, path, conn.runnerNode, undefined, body);
+	const browserSettings = await browserSettingsForDispatch(conn.env, conn.instanceId, conn.userId, path, conn.runnerNode, undefined, body);
 	const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.relayName || conn.instanceId));
 	const res = await stub.fetch(new Request("https://relay/command", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ method: "POST", path, body, ...(browserMode ? { browserMode } : {}), timeoutMs: opts?.timeoutMs ?? routeTimeoutMs(path) }),
+		body: JSON.stringify({ method: "POST", path, body, ...browserSettings, timeoutMs: opts?.timeoutMs ?? routeTimeoutMs(path) }),
 	}));
 	if (!res.ok) {
 		const detail = await res.text().catch(() => "");

@@ -68,6 +68,8 @@ export interface LocalBrowserRuntimeDeps {
 	/** The runner's own local URL, for the bridge forwarder to call back. Null until the server listens. */
 	selfUrl(): string | null;
 	browserFor(profile: LocalBrowserProfile, runDir: string): Promise<RunBrowser>;
+	/** Explicit browser settings use a dedicated managed profile, never the personal Chrome seed. */
+	managedBrowser?(): boolean;
 	spawn?: typeof nodeSpawn;
 	now?: () => number;
 	homeDir?: string;
@@ -297,12 +299,12 @@ export class LocalBrowserRuntime {
 	private async launch(run: Run, selfUrl: string): Promise<void> {
 		const e = run.envelope;
 		// The signed-in profile is the owner's own browser — never without their say-so (#947).
-		if (e.browserProfile === "default" && !run.profileConsented) {
+		if (e.browserProfile === "default" && !this.deps.managedBrowser?.() && !run.profileConsented) {
 			this.emit(run, { type: "consent.requested", detail: { scope: "signed_in_profile" } });
 			const outcome = await this.pause(run, "consent_required", { scope: "signed_in_profile" });
 			if (outcome !== "resumed" || !run.profileConsented) throw new Error("The owner did not allow research in their signed-in browser profile.");
 		}
-		if (e.browserProfile === "default") this.emit(run, { type: "policy.decision", ...this.consentRef(run, "*"), detail: { scope: "signed_in_profile", decision: "consented" } });
+		if (e.browserProfile === "default" && !this.deps.managedBrowser?.()) this.emit(run, { type: "policy.decision", ...this.consentRef(run, "*"), detail: { scope: "signed_in_profile", decision: "consented" } });
 		run.browser = await this.deps.browserFor(e.browserProfile, run.dir);
 		run.browser.tools.setSubject?.({ kind: "local_browser_run", id: run.envelope.runId });
 		run.bridge = new BrowserBridge(

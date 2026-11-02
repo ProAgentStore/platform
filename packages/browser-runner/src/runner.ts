@@ -1,18 +1,16 @@
-import { spawnSync } from "node:child_process";
 import { CrashLog, crashReport, describeError, runtimeCrashIdentity } from "./crash-reports.js";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BrowserContext, CDPSession, Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
-import { resolveRealChromeProfileDir, seedProfileCopy, seedAgentBrowserProfiles } from "./browser-profile.js";
+import { launchRunnerBrowser } from "./browser-launch.js";
 import { isTerminalTaskStatus, settleTaskOutcome } from "./apply-outcome.js";
 import { McpRuntime } from "./mcp-runtime.js";
 import type { BrowserCallsPage } from "./browser-call-recorder.js";
 import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
-import { takeoverNavigation } from "./takeover-nav.js";
+import { type NativeTakeoverSession, nativeTakeoverFrame, nativeTakeoverInput, stopNativeTakeover } from "./takeover-native.js";
 import { resolveHandoffStatus } from "./handoff-status.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
@@ -73,10 +71,8 @@ const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
  * completed.
  */
 
-const require = createRequire(import.meta.url);
 export class LocalRunner {
 	readonly browsers: BrowserSessions;
-	private chromiumInstallChecked = false;
 	private readonly fileAttachArmed = new WeakSet<Page>();
 	readonly store: RunnerStore;
 	/** This runtime's crash reports (#1087) — delivered to the platform by the CLI that runs it. */
@@ -100,7 +96,7 @@ export class LocalRunner {
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
-		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; cssW?: number; cssH?: number; screencasting?: boolean; reason?: string; humanDone?: boolean; inputValue?: string }
+		NativeTakeoverSession & { reason?: string; humanDone?: boolean; inputValue?: string }
 	>();
 
 	constructor(readonly config: RunnerConfig) {
@@ -111,7 +107,7 @@ export class LocalRunner {
 		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
 		const browserFor = (profile: "default" | "isolated", dir: string) => this.browsers.browserFor(profile, dir, false, () => this.getMcp(), () => this.getBrowserContext());
 		const applyBrowserFor = (profile: "default" | "isolated", dir: string) => this.browsers.browserFor(profile, dir, true, () => this.getMcp(), () => this.getBrowserContext());
-		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor, onSweepFailure: (dir, error) => this.crashLog.record(crashReport({ ...runtimeCrashIdentity(), kind: "request_failure", ...describeError(error), route: `sweep ${dir}` })) });
+		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor, managedBrowser: () => this.browsers.managed(), onSweepFailure: (dir, error) => this.crashLog.record(crashReport({ ...runtimeCrashIdentity(), kind: "request_failure", ...describeError(error), route: `sweep ${dir}` })) });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
 		const localApplyTakeover = createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) });
 		this.localApply = new LocalApplyRuntime({
@@ -267,8 +263,8 @@ export class LocalRunner {
 		task.completedAt = task.updatedAt;
 		this.store.putTask(task);
 		this.addTaskEvent(task, "task.cancelled", `Task cancelled: ${task.type}`);
-		// Tear down any live takeover session for this task (free the page + CDP).
-		void this.endTakeover(id).catch(() => undefined);
+		// Tear down any live takeover session for this task (stop native frame streaming).
+		void this.endTakeover(id).then(() => this.browsers.finish()).catch(() => undefined);
 		return task;
 	}
 
@@ -337,6 +333,7 @@ export class LocalRunner {
 			// the runner. Silence here is what let that read as a clean shutdown.
 			console.warn(`[runner] ${e instanceof Error ? e.message : String(e)} — a CLI process may still be running; check \`ps\` if a repo keeps changing`);
 		}
+		await Promise.all([...this.takeovers.keys()].map((id) => this.endTakeover(id).catch(() => undefined)));
 		await this.browsers.close();
 	}
 
@@ -374,6 +371,7 @@ export class LocalRunner {
 			this.store.putTask(task);
 			this.addTaskEvent(task, "task.failed", task.error);
 		}
+		await this.browsers.finish();
 	}
 
 	private addTaskEvent(
@@ -424,114 +422,12 @@ export class LocalRunner {
 		return session;
 	}
 
-	/** Begin a continuous CDP screencast for a takeover (no viewport disruption). */
-	private async ensureScreencast(taskId: string): Promise<void> {
-		const session = this.requireTakeover(taskId);
-		if (!session.cdp) {
-			session.cdp = await session.page.context().newCDPSession(session.page);
-		}
-		if (session.screencasting) return;
-		session.screencasting = true;
-		const cdp = session.cdp;
-		cdp.on("Page.screencastFrame", (params: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
-			session.latestFrame = params.data;
-			if (params.metadata?.deviceWidth) session.width = Math.round(params.metadata.deviceWidth);
-			if (params.metadata?.deviceHeight) session.height = Math.round(params.metadata.deviceHeight);
-			cdp.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined);
-		});
-		await cdp.send("Page.startScreencast", { format: "jpeg", quality: 50, everyNthFrame: 1 });
-	}
-
-	/**
-	 * The latest screencast frame of the taken-over page plus its CSS viewport
-	 * size. Uses a continuous CDP screencast (not page.screenshot, which forces
-	 * a viewport metrics override and makes the real window flicker/zoom).
-	 */
+	/** Native Playwright streaming and input work with every supported browser engine (#1431). */
 	async takeoverFrame(taskId: string): Promise<{ frame: string; width: number; height: number; url: string }> {
-		const session = this.requireTakeover(taskId);
-		await this.ensureScreencast(taskId);
-		// Until the first screencast frame arrives, fall back to a single shot.
-		if (!session.latestFrame) {
-			const buf = await session.page.screenshot({ type: "jpeg", quality: 55 }).catch(() => null);
-			if (buf) session.latestFrame = buf.toString("base64");
-			const viewport = await session.page
-				.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
-				.catch(() => ({ width: 0, height: 0 }));
-			session.width = session.width || viewport.width;
-			session.height = session.height || viewport.height;
-		}
-		// Report the page's real CSS viewport — that is exactly the coordinate
-		// space CDP Input expects, so a relayed click lands precisely on target on
-		// any display (scaled / retina included). Screencast metadata can diverge
-		// from innerWidth on fractional-scale displays; innerWidth never lies.
-		// Re-read the CSS viewport EVERY frame — the real-profile Chrome window can be
-		// resized/zoomed/maximized after takeover starts, and a cached value offsets
-		// every relayed click (the captcha box is small, so even a few px misses).
-		const vp = await session.page
-			.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
-			.catch(() => null);
-		if (vp?.w) {
-			session.cssW = vp.w;
-			session.cssH = vp.h;
-		}
-		return {
-			frame: `data:image/jpeg;base64,${session.latestFrame ?? ""}`,
-			width: session.cssW ?? session.width ?? 1280,
-			height: session.cssH ?? session.height ?? 720,
-			url: session.page.url(), // the live view's address bar (#1105)
-		};
+		return nativeTakeoverFrame(this.requireTakeover(taskId));
 	}
-
-	/** Relay a human's mouse/keyboard input into the real page via CDP. */
 	async takeoverInput(taskId: string, input: TakeoverInput): Promise<void> {
-		const session = this.requireTakeover(taskId);
-		if (!session.cdp) {
-			session.cdp = await session.page.context().newCDPSession(session.page);
-		}
-		const cdp = session.cdp;
-		const x = input.x ?? 0;
-		const y = input.y ?? 0;
-		if (await takeoverNavigation(session.page, input)) return; // back/forward/reload/address bar (#1105)
-		switch (input.type) {
-			case "move":
-				await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-				return;
-			case "down":
-				await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
-				return;
-			case "up":
-				await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
-				return;
-			case "click":
-				await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
-				await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
-				return;
-			case "scroll":
-				await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: input.deltaX ?? 0, deltaY: input.deltaY ?? 0 });
-				return;
-			case "text":
-				await cdp.send("Input.insertText", { text: input.text ?? "" });
-				return;
-			case "key": {
-				// Special keys (Enter, Backspace, Delete, Escape, Tab, arrows…)
-				// need the virtual key code + code to register, not just the name.
-				const key = input.key ?? "";
-				const base: Record<string, unknown> = { key };
-				if (input.code) base.code = input.code;
-				if (typeof input.keyCode === "number") {
-					base.windowsVirtualKeyCode = input.keyCode;
-					base.nativeVirtualKeyCode = input.keyCode;
-				}
-				const text = key === "Enter" ? "\r" : undefined;
-				await cdp.send("Input.dispatchKeyEvent", {
-					type: text ? "keyDown" : "rawKeyDown",
-					...base,
-					...(text ? { text } : {}),
-				});
-				await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
-				return;
-			}
-		}
+		await nativeTakeoverInput(this.requireTakeover(taskId), input);
 	}
 
 	/**
@@ -590,6 +486,7 @@ export class LocalRunner {
 		this.store.putTask(task);
 		this.addTaskEvent(task, "task.completed", `Task completed: ${task.type}`, output);
 		await this.endTakeover(taskId);
+		await this.browsers.finish();
 		// This path only CLEARED a challenge — the form was NOT submitted (output.submitted
 		// is false). Report it accurately so the console doesn't show a false "submitted".
 		return { submitted: false, resumed: true, output };
@@ -649,10 +546,7 @@ export class LocalRunner {
 	/** End a takeover session (human finished or gave up). */
 	async endTakeover(taskId: string): Promise<void> {
 		const session = this.takeovers.get(taskId);
-		if (session?.cdp) {
-			if (session.screencasting) await session.cdp.send("Page.stopScreencast").catch(() => undefined);
-			await session.cdp.detach().catch(() => undefined);
-		}
+		if (session) await stopNativeTakeover(session);
 		this.takeovers.delete(taskId);
 	}
 
@@ -718,93 +612,14 @@ export class LocalRunner {
 		return state.launching;
 	}
 	private async launchBrowserContext(): Promise<BrowserContext> {
-		seedAgentBrowserProfiles(this.config.dataDir, this.browsers.current.dataDir);
-		this.ensureChromiumInstalled();
-		const profileDir = join(this.browsers.current.dataDir, "browser-profile");
-		const downloadsPath = join(this.browsers.current.dataDir, "downloads");
-		mkdirSync(profileDir, { recursive: true });
-		mkdirSync(downloadsPath, { recursive: true });
-		const playwright = await import("playwright").catch((error) => {
-			throw new Error(
-				`Playwright is not installed. Run pnpm install in the PAGS platform repo. ${error instanceof Error ? error.message : String(error)}`,
-			);
-		});
-		const baseOpts = {
-			headless: this.browsers.current.headless,
-			acceptDownloads: true,
-			downloadsPath,
-			// viewport:null + --start-maximized → the page uses the FULL window size
-			// instead of Playwright's cramped 1280x720 default. Without this a
-			// reCAPTCHA challenge popup near the edge overflows and gets cut off the
-			// right in the takeover view, so it can't be solved.
-			viewport: null,
-			// Light anti-detection: drop the most obvious automation tell so fewer
-			// CAPTCHAs trigger in the first place (the human still solves the rest).
-			// --remote-debugging-port=0 → Chrome picks a free CDP port and writes it to
-			// DevToolsActivePort in the profile dir; the standard @playwright/mcp server
-			// attaches to that endpoint so it drives THIS same real-profile browser.
-			// The media-permission pair is POLICY, not a workaround (#425). Nothing in this package
-			// uses audio — `grep -niE "microphone|grantPermissions" src` finds nothing — and the
-			// runner navigates only to job/ATS pages, so any mic prompt from here is a third-party
-			// site asking for something no part of this product needs. Both flags, and in this
-			// order of reasoning:
-			//   --use-fake-ui-for-media-stream   auto-answers the prompt, so the UI never appears…
-			//   --use-fake-device-for-media-stream  …and hands over a SYNTHETIC device, because the
-			//     first flag ALONE auto-GRANTS the real microphone to whatever page asked. That is
-			//     strictly worse than the prompt it removes, which is why it must never ship alone.
-			// The console, where voice actually runs, is a different browser and is untouched: a
-			// real mic grant stays the user's decision.
-			args: [
-				"--disable-blink-features=AutomationControlled",
-				"--start-maximized",
-				"--window-size=1512,982",
-				"--remote-debugging-port=0",
-				"--use-fake-ui-for-media-stream",
-				"--use-fake-device-for-media-stream",
-			],
-		};
-		// Prefer the real Chrome build (better TLS/fingerprint → fewer CAPTCHAs);
-		// fall back to bundled Chromium if Chrome isn't installed. Disable with
-		// PAGS_RUNNER_CHROMIUM=1.
-		//
-		// Real-profile mode (PAGS_RUNNER_REAL_PROFILE=1, or an explicit
-		// PAGS_RUNNER_CHROME_USER_DATA_DIR) uses YOUR actual Chrome profile —
-		// cookies, logins, browsing history — which is the strongest way to look
-		// human to CAPTCHA reputation scoring. Requires your normal Chrome to be
-		// CLOSED (Chrome locks a profile to one running instance). Otherwise we
-		// use a dedicated chrome-profile so we never fight your open browser.
-		const preferChrome = process.env.PAGS_RUNNER_CHROMIUM !== "1";
-		const realProfileDir = resolveRealChromeProfileDir();
-		try {
-			if (!preferChrome) throw new Error("chromium forced");
-			if (realProfileDir) {
-				// The seed is a snapshot; PAGS_RUNNER_REFRESH_PROFILE=1 re-copies it
-				// so logins/cookies pick up changes from your everyday Chrome.
-				const seedDir = join(this.browsers.current.dataDir, "real-profile-copy");
-				if (process.env.PAGS_RUNNER_REFRESH_PROFILE === "1") rmSync(seedDir, { recursive: true, force: true });
-				const seededDir = seedProfileCopy(realProfileDir, seedDir);
-				if (!seededDir) throw new Error(`could not read your real Chrome profile at ${realProfileDir.userDataDir}`);
-				this.browsers.current.context = await playwright.chromium.launchPersistentContext(seededDir, {
-					...baseOpts,
-					channel: "chrome",
-					args: [...baseOpts.args, "--profile-directory=Default"],
-				});
-				this.browsers.current.launchedProfileDir = seededDir;
-				console.log(`[runner] launched a private copy of your real Chrome profile (signed-in sessions seeded from "${realProfileDir.profile}")`);
-			} else {
-				const dedicated = join(this.browsers.current.dataDir, "chrome-profile");
-				this.browsers.current.context = await playwright.chromium.launchPersistentContext(dedicated, { ...baseOpts, channel: "chrome" });
-				this.browsers.current.launchedProfileDir = dedicated;
-			}
-		} catch (err) {
-			if (realProfileDir) {
-				const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
-				console.warn(`[runner] real-profile launch failed (${msg}); falling back to a dedicated profile. Fully quit Chrome (Cmd+Q) to use your real profile.`);
-			}
-			this.browsers.current.context = await playwright.chromium.launchPersistentContext(profileDir, baseOpts);
-			this.browsers.current.launchedProfileDir = profileDir;
-		}
-		await this.browsers.current.context
+		const state = this.browsers.current;
+		const launched = await launchRunnerBrowser({ headless: state.headless, engine: state.engine, profilePolicy: state.profilePolicy ?? "persistent", preference: "default", profileRoot: state.dataDir, ...(!state.engine && !state.profilePolicy ? { legacy: { rootDir: this.config.dataDir, instanceDir: state.dataDir } } : {}), onLaunch: (receipt) => {
+			state.launch = receipt;
+			for (const id of state.taskIds) { const task = this.store.getTask(id); if (task && !isTerminalTaskStatus(task.status)) this.addTaskEvent(task, "browser.launched", `${receipt.engine} launched in ${receipt.mode} mode`, receipt); }
+		} });
+		state.context = launched.context;
+		state.stopBrowser = launched.stop;
+		await launched.context
 			.addInitScript(() => {
 				Object.defineProperty(navigator, "webdriver", { get: () => undefined });
 			})
@@ -812,15 +627,15 @@ export class LocalRunner {
 		// Follow the active page: when the ATS opens a new tab/popup it becomes the
 		// page both the brain and the human takeover act on. Without this, the
 		// runner blindly used pages()[0] and the two could diverge.
-		this.browsers.current.context.on("page", this.browsers.bind((p: Page) => this.trackPage(p)));
-		const initial = this.browsers.current.context.pages()[0];
+		launched.context.on("page", this.browsers.bind((p: Page) => this.trackPage(p)));
+		const initial = launched.context.pages()[0];
 		if (initial) this.trackPage(initial);
 		// A seeded real profile can restore MANY tabs on launch; keep a single clean
 		// workspace tab so the agent's page is unambiguous and visible (not lost among
 		// restored blank tabs — the "why is the window blank?" symptom).
 		await this.closeStalePages().catch(() => undefined);
 		await this.browsers.current.activePage?.bringToFront().catch(() => undefined);
-		return this.browsers.current.context;
+		return launched.context;
 	}
 
 	/** Mark a page as the active one; fall back to the newest remaining page when it closes. */
@@ -861,31 +676,7 @@ export class LocalRunner {
 		return this.browsers.current.activePage;
 	}
 
-	/** The CDP endpoint of the launched Chrome (from DevToolsActivePort in its profile). */
-	private async readCdpEndpoint(): Promise<string> {
-		if (this.browsers.current.cdpEndpoint) return this.browsers.current.cdpEndpoint;
-		const dir = this.browsers.current.launchedProfileDir;
-		if (!dir) throw new Error("browser context not launched yet");
-		const portFile = join(dir, "DevToolsActivePort");
-		for (let i = 0; i < 50; i++) {
-			if (existsSync(portFile)) {
-				const line = readFileSync(portFile, "utf8").split("\n")[0]?.trim();
-				if (line) {
-					this.browsers.current.cdpEndpoint = `http://127.0.0.1:${line}`;
-					return this.browsers.current.cdpEndpoint;
-				}
-			}
-			await new Promise((r) => setTimeout(r, 100));
-		}
-		throw new Error("could not read Chrome CDP port (DevToolsActivePort missing)");
-	}
-
-	/**
-	 * The standard `@playwright/mcp` server, attached over CDP to the runner's own
-	 * real-profile Chrome. Lazily started; every browser action + snapshot goes
-	 * through its standard tools. Because it shares the browser over CDP, actions it
-	 * performs land on the exact page the takeover/screencast machinery drives.
-	 */
+	/** Standard MCP receives the runner-owned native context; no Chromium-only CDP attachment. */
 	private async getMcp(): Promise<McpRuntime> {
 		const state = this.browsers.current;
 		if (state.mcp) return state.mcp;
@@ -893,10 +684,9 @@ export class LocalRunner {
 		return state.startingMcp;
 	}
 	private async startMcp(): Promise<McpRuntime> {
-		await this.getBrowserContext();
-		const cdpEndpoint = await this.readCdpEndpoint();
+		const context = await this.getBrowserContext();
 		const mcp = new McpRuntime(this.browsers.current.calls);
-		await mcp.start({ cdpEndpoint });
+		await mcp.start({ context });
 		this.browsers.current.mcp = mcp;
 		return mcp;
 	}
@@ -1369,26 +1159,10 @@ export class LocalRunner {
 			this.addTaskEvent(task, event, detail || `Application ${outcome}`, { outcome, detail });
 		}
 		await this.closeStalePages().catch(() => undefined);
+		await this.browsers.finish();
 		return { ok: true };
 	}
 
-	private ensureChromiumInstalled(): void {
-		if (this.chromiumInstallChecked) return;
-		this.chromiumInstallChecked = true;
-		if (process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL === "1") return;
-
-		const cli = join(dirname(require.resolve("playwright")), "cli.js");
-		const result = spawnSync(process.execPath, [cli, "install", "chromium"], {
-			stdio: "inherit",
-			env: process.env,
-		});
-
-		if (result.status !== 0) {
-			throw new Error(
-				"Unable to install Playwright Chromium. Run `npx playwright install chromium` and retry.",
-			);
-		}
-	}
 }
 
 function normalizeCreateTaskRequest(request: CreateTaskRequest): Required<CreateTaskRequest> {

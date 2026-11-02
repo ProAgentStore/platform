@@ -15,5 +15,5 @@ export async function withBrowserRequest<T>(runner: LocalRunner, req: IncomingMe
 	const configure = !!approvingBrowser || newRun || /^\/browser\/(act|snapshot|handoff)$/.test(path) || /^\/local-(browser|apply)\/resume$/.test(path);
 	const bodyTask = req.method === "POST" && path.startsWith("/browser/") ? (await readJson<{ taskId?: string }>(req)).taskId : undefined;
 	const trackTask = approvingBrowser ?? (bodyTask && runner.store.getTask(bodyTask) ? bodyTask : undefined);
-	return runner.browsers.run(instanceOf(req), req.headers["x-pags-browser-mode"], newRun, () => { if (trackTask) runner.browsers.current.taskIds.add(trackTask); return fn(); }, configure);
+	return runner.browsers.run(instanceOf(req), req.headers["x-pags-browser-mode"], newRun, () => { if (trackTask) runner.browsers.current.taskIds.add(trackTask); return fn(); }, configure, { engine: req.headers["x-pags-browser-engine"], profilePolicy: req.headers["x-pags-browser-profile-policy"] });
 }

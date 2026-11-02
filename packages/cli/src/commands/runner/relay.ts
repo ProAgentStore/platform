@@ -1,3 +1,4 @@
+import { browserSettingsHeaders } from "./browser-settings.js";
 import { hostname } from "node:os";
 import { CapabilityReporter } from "../../capabilities/detect.js";
 import { probeRuntimeHealth, type ResourceSample, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
@@ -818,9 +819,9 @@ export function openRelaySocket(
 			// Server pings to verify liveness — respond with pong
 			if (text === "ping") { try { ws.send("pong"); } catch { /* closed */ } return; }
 			if (text.startsWith(RTT_ECHO_PREFIX)) { rttWaiters.get(text.slice(RTT_ECHO_PREFIX.length))?.(Date.now()); return; }
-			let cmd: { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown };
+			let cmd: { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown };
 			try {
-				cmd = JSON.parse(text) as { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown };
+				cmd = JSON.parse(text) as { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown };
 			} catch {
 				return;
 			}
@@ -864,7 +865,7 @@ export function openRelaySocket(
 				if (hasBody) headers["Content-Type"] = "application/json";
 				if (runnerToken) headers.Authorization = `Bearer ${runnerToken}`;
 				headers["X-PAGS-Instance-Id"] = instanceId;
-				if (cmd.browserMode === "headed" || cmd.browserMode === "headless") headers["X-PAGS-Browser-Mode"] = cmd.browserMode;
+				Object.assign(headers, browserSettingsHeaders(cmd));
 				// The forward's own limit, and the relay's cancel, both end the same request.
 				const timeout = AbortSignal.timeout(relayLimits.forwardMs);
 				timeout.addEventListener("abort", () => controller.abort(timeout.reason), { once: true });

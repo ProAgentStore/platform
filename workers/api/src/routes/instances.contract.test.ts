@@ -1,3 +1,4 @@
+import { registerBrowserSettingsRoutes } from "./instances-browser-settings.js";
 import { registerBrowserModeRoutes } from "./instances-browser-mode.js";
 /**
  * The instance REST surface, held to a table — every value in it DERIVED by driving the
@@ -334,6 +335,9 @@ const ROUTES = [
 	"POST /:instanceId/runner-attach",
 	"GET /:instanceId/runner-setup",
 	"GET /:instanceId/native/preflight",
+	"GET /:instanceId/browser-settings",
+	"PUT /:instanceId/browser-settings",
+	"GET /:instanceId/browser-settings/session",
 	"GET /:instanceId/browser-mode",
 	"PUT /:instanceId/browser-mode",
 	"GET /:instanceId/browser-screenshots",
@@ -483,6 +487,7 @@ function routesOf(register: (app: Hono<{ Bindings: Env }>) => void): string[] {
 }
 
 const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
+	"instances-browser-settings.ts": registerBrowserSettingsRoutes,
 	"instances-browser-mode.ts": registerBrowserModeRoutes,
 	"instances-apply.ts": registerApplyRoutes,
 	"instances-operator-manual.ts": registerOperatorManualRoutes,
@@ -575,6 +580,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-native.ts": ["GET /:instanceId/native/preflight"],
+	"instances-browser-settings.ts": ["GET /:instanceId/browser-settings", "PUT /:instanceId/browser-settings", "GET /:instanceId/browser-settings/session"],
 	"instances-browser-mode.ts": ["GET /:instanceId/browser-mode", "PUT /:instanceId/browser-mode"],
 	"instances-browser-screenshots.ts": ["GET /:instanceId/browser-screenshots", "PUT /:instanceId/browser-screenshots"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume", "POST /:instanceId/enable", "POST /:instanceId/disable"],
@@ -894,6 +900,9 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/runner-setup": [401, 404],
 	// Owner-scoped before it reads a runner or the machine's opt-in (#1057).
 	"GET /:instanceId/native/preflight": [401, 404],
+	"GET /:instanceId/browser-settings": [401, 404],
+	"PUT /:instanceId/browser-settings": [401, 404],
+	"GET /:instanceId/browser-settings/session": [401, 404],
 	"GET /:instanceId/browser-mode": [401, 404],
 	"PUT /:instanceId/browser-mode": [401, 404],
 	"GET /:instanceId/browser-screenshots": [401, 404],

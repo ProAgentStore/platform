@@ -5,12 +5,13 @@ import { expect, test, type Page } from "@playwright/test";
 // requested patch, render the saved answer, and keep inherited state on reload.
 const API = "https://api.proagentstore.online";
 const INSTANCE = { id: "inst-1", agent_id: "agent-1", name: "Browser QA", status: "active", slug: "browser-qa", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: [], runtime: "browser", workflow: "BROWSER_TASK" } };
-type Mode = "headed" | "headless" | null;
+type Settings = { mode: "headed" | "headless" | null; engine: "chrome" | "msedge" | "chromium" | "firefox" | "webkit" | null; profile: "persistent" | "ephemeral" | null };
+const LAST_LAUNCH = { engine: "chrome", browserType: "chromium", channel: "chrome", version: "142.0.0", executable: null, mode: "headless", profilePolicy: "persistent", profileId: "browser-qa/chrome/profile", transport: "playwright", launchedAt: "2026-11-03T01:00:00Z", active: true };
 
 async function mock(page: Page, refuse = false) {
 	await page.addInitScript(() => window.localStorage.setItem("pags:session", "test-pags-token"));
-	let mode: Mode = null;
-	let agentDefault: Mode = "headless";
+	const stored: Settings = { mode: null, engine: null, profile: null };
+	const defaults: Settings = { mode: "headless", engine: "chrome", profile: null };
 	const instancePuts: unknown[] = [];
 	const agentPuts: unknown[] = [];
 	await page.route(`${API}/**`, async (route) => {
@@ -24,19 +25,23 @@ async function mock(page: Page, refuse = false) {
 			if (req.method() === "PUT") {
 				const body = req.postDataJSON();
 				agentPuts.push(body);
-				agentDefault = body.browserMode;
+				if ("browserMode" in body) defaults.mode = body.browserMode;
+				if ("browserEngine" in body) defaults.engine = body.browserEngine;
+				if ("browserProfilePolicy" in body) defaults.profile = body.browserProfilePolicy;
 			}
-			return json({ ...INSTANCE.capabilities, browserMode: agentDefault });
+			return json({ ...INSTANCE.capabilities, browserMode: defaults.mode, browserEngine: defaults.engine, browserProfilePolicy: defaults.profile });
 		}
-		if (path === "/v1/instances/inst-1/browser-mode") {
+		if (path === "/v1/instances/inst-1/browser-settings") {
 			if (req.method() === "PUT") {
 				const body = req.postDataJSON();
 				instancePuts.push(body);
 				if (refuse) return json({ error: "Mode change refused for this test" }, 400);
-				mode = body.mode;
+				Object.assign(stored, body);
 			}
-			return json({ mode, agentDefault, effective: mode ?? agentDefault, source: mode ? "instance" : agentDefault ? "agent" : "runner", explained: "Visible mode needs a desktop session. Screenshot replay works in either mode." });
+			const keys = ["mode", "engine", "profile"] as const;
+			return json({ ...stored, agentDefaults: defaults, effective: Object.fromEntries(keys.map((key) => [key, stored[key] ?? defaults[key]])), sources: Object.fromEntries(keys.map((key) => [key, stored[key] ? "instance" : defaults[key] ? "agent" : "runner"])), requiredCli: "0.4.198", explained: "Visible mode needs a desktop session. Screenshot replay works in either mode." });
 		}
+		if (path === "/v1/instances/inst-1/browser-settings/session") return json({ status: "connected", launch: LAST_LAUNCH, launches: [LAST_LAUNCH] });
 		if (path === "/v1/instances/inst-1/browser-screenshots") return json({ enabled: true, explained: "Capture screenshots for replay." });
 		if (path === "/v1/agents/agent-1/messages") return json({ messages: [] });
 		if (path === "/v1/agents/agent-1/versions") return json({ versions: [] });
@@ -105,4 +110,55 @@ test("template browser mode saves only its capability and can return to runner d
 	expect(agentPuts).toEqual([{ browserMode: "headed" }, { browserMode: null }]);
 	await openSettings();
 	await expect(select).toHaveValue("");
+});
+
+test("mobile — browser and profile persist independently at 375px while actual launch stays truthful", async ({ page }) => {
+	await page.setViewportSize({ width: 375, height: 812 });
+	const { instancePuts } = await mock(page);
+	await page.goto("/console/instances/inst-1/settings");
+	const card = page.getByTestId("browser-mode-settings");
+	const engine = card.getByRole("combobox", { name: "Browser", exact: true });
+	const profile = card.getByRole("combobox", { name: "Browser profile", exact: true });
+	await expect(card.getByTestId("browser-effective-profile")).toContainText("Workflow default (chosen by workflow)");
+	await engine.selectOption("firefox");
+	await expect(card.getByTestId("browser-effective-engine")).toContainText("Playwright Firefox (instance override)");
+	await profile.selectOption("ephemeral");
+	await expect(card.getByTestId("browser-effective-profile")).toContainText("Ephemeral");
+	expect(instancePuts).toEqual([{ engine: "firefox" }, { profile: "ephemeral" }]);
+	const receipt = page.getByTestId("browser-launch-receipt");
+	await expect(receipt).toContainText("Installed Google Chrome (142.0.0)");
+	await expect(receipt).toContainText("Headless browser");
+	await expect(receipt).not.toContainText("Playwright Firefox");
+	await page.reload();
+	await expect(engine).toHaveValue("firefox");
+	await expect(profile).toHaveValue("ephemeral");
+	await engine.selectOption("");
+	await expect(card.getByTestId("browser-effective-engine")).toContainText("Installed Google Chrome (from agent)");
+	await expect(profile).toHaveValue("ephemeral");
+	await profile.selectOption("");
+	await expect(card.getByTestId("browser-effective-profile")).toContainText("Workflow default (chosen by workflow)");
+	expect(instancePuts).toEqual([{ engine: "firefox" }, { profile: "ephemeral" }, { engine: null }, { profile: null }]);
+	for (const panel of [card, receipt]) {
+		await panel.scrollIntoViewIfNeeded();
+		const box = await panel.boundingBox();
+		expect(box && box.x >= 0 && box.x + box.width <= 375).toBe(true);
+		expect(await panel.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+	}
+});
+
+test("template browser and profile save only their own capability fields", async ({ page }) => {
+	const { agentPuts } = await mock(page);
+	await page.goto("/console/agents/agent-1");
+	await page.getByRole("button", { name: "Settings", exact: true }).click();
+	const card = page.getByTestId("browser-mode-default");
+	await card.getByRole("combobox", { name: "Browser", exact: true }).selectOption("firefox");
+	await expect(card.getByRole("status")).toContainText("Saved");
+	await card.getByRole("combobox", { name: "Browser profile", exact: true }).selectOption("persistent");
+	await expect(card.getByRole("status")).toContainText("Saved");
+	expect(agentPuts).toEqual([{ browserEngine: "firefox" }, { browserProfilePolicy: "persistent" }]);
+	await page.reload();
+	await page.getByRole("button", { name: "Settings", exact: true }).click();
+	await expect(card.getByRole("combobox", { name: "Browser", exact: true })).toHaveValue("firefox");
+	await expect(card.getByRole("combobox", { name: "Browser profile", exact: true })).toHaveValue("persistent");
+	await expect(card.getByRole("combobox", { name: "Browser mode", exact: true })).toHaveValue("headless");
 });

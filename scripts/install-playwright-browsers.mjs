@@ -27,6 +27,9 @@ import { runBoundedCommand, terminateInstallerTree } from "./lib/installer-proce
 import { useHostedUbuntuArchive } from "./lib/installer-ubuntu-mirror.mjs";
 
 export const INSTALL_COMMAND = ["pnpm", ["exec", "playwright", "install", "--with-deps", "chromium", "webkit"]];
+/** The runtime uses its own Playwright version, independent of console E2E (#1431). */
+export const RUNNER_INSTALL_COMMAND = ["pnpm", ["--filter", "@proagentstore/browser-runner", "exec", "playwright", "install", "--with-deps", "chromium", "firefox", "webkit"]];
+export const installCommandFor = (args) => args.includes("--runner") ? RUNNER_INSTALL_COMMAND : INSTALL_COMMAND;
 export const ATTEMPT_TIMEOUT_MS = 480_000;
 export const HEARTBEAT_MS = 30_000;
 export const MAX_ATTEMPTS = 3;
@@ -105,14 +108,14 @@ export function runAttempt(n, deps) {
  * Returns `{ status: "installed" | "installed_after_retry" | "failed", attempts, exitCode }`.
  */
 export async function installBrowsers(deps) {
-	const { log, summary, diagnose, heal, maxAttempts = MAX_ATTEMPTS } = deps;
+	const { log, summary, diagnose, heal, maxAttempts = MAX_ATTEMPTS, command = INSTALL_COMMAND } = deps;
 	const attempts = [];
 	for (let n = 1; n <= maxAttempts; n++) {
 		if (n > 1) {
 			log(`[install] repairing any half-configured dpkg state before attempt ${n}: sudo dpkg --configure -a`);
 			await heal();
 		}
-		log(`[install] attempt ${n} of ${maxAttempts}: ${INSTALL_COMMAND[0]} ${INSTALL_COMMAND[1].join(" ")}`);
+		log(`[install] attempt ${n} of ${maxAttempts}: ${command[0]} ${command[1].join(" ")}`);
 		const result = await runAttempt(n, deps);
 		attempts.push(result);
 		if (result.outcome === "ok") {
@@ -132,7 +135,7 @@ export async function installBrowsers(deps) {
 	}
 	const how = attempts.map((a, i) => `${i + 1}: ${a.outcome}${a.code != null ? ` (exit ${a.code})` : ""}`).join(", ");
 	const where = attempts.some((a) => a.outcome === "timed_out") ? "see the diagnostics above" : "see each attempt's output above";
-	log(`::error title=Playwright browser install failed::No install of chromium + webkit finished in ${attempts.length} attempts (${how}). E2E needs both; ${where}.`);
+	log(`::error title=Playwright browser install failed::No browser install finished in ${attempts.length} attempts (${how}). Every selected browser is required; ${where}.`);
 	summary(`**Playwright browser install: \`failed\`** after ${maxAttempts} attempts (${how}).\n`);
 	return { status: "failed", attempts, exitCode: 1 };
 }
@@ -150,8 +153,10 @@ export async function runDiagnostics(execFn) {
 const shell = (cmd) => runBoundedCommand("/bin/sh", ["-c", cmd], { timeoutMs: DIAGNOSTIC_TIMEOUT_MS });
 
 async function main() {
+	const command = installCommandFor(process.argv.slice(2));
 	const result = await installBrowsers({
-		start: () => spawn(INSTALL_COMMAND[0], INSTALL_COMMAND[1], { stdio: ["ignore", "pipe", "pipe"], detached: true }),
+		command,
+		start: () => spawn(command[0], command[1], { stdio: ["ignore", "pipe", "pipe"], detached: true }),
 		// sudo may create a separate session: a group kill alone leaves root apt alive.
 		killTree: terminateInstallerTree,
 		write: (s) => process.stdout.write(s),

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,7 @@ import { LocalRunner } from "./runner.js";
 import { startRunnerServer } from "./server.js";
 
 const launch = vi.hoisted(() => vi.fn());
-vi.mock("playwright", () => ({ chromium: { launchPersistentContext: launch } }));
+vi.mock("playwright", () => ({ chromium: { launchPersistentContext: launch, executablePath: () => "/playwright/chromium" } }));
 vi.mock("./mcp-runtime.js", () => ({ McpRuntime: class { async start() {} async stop() {} } }));
 let directory: string;
 beforeEach(() => {
@@ -14,8 +14,8 @@ beforeEach(() => {
 	vi.stubEnv("PAGS_SKIP_PLAYWRIGHT_INSTALL", "1");
 	vi.stubEnv("PAGS_RUNNER_CHROMIUM", "1");
 	launch.mockReset().mockImplementation(async (profile: string) => {
-		writeFileSync(join(profile, "DevToolsActivePort"), "12345\n");
-		return { close: vi.fn(async () => undefined), pages: () => [], on: vi.fn(), addInitScript: async () => undefined, newPage: async () => ({ once() {}, isClosed: () => false }) };
+		void profile;
+		return { browser: () => ({ version: () => "test-version" }), close: vi.fn(async () => undefined), pages: () => [], on: vi.fn(), addInitScript: async () => undefined, newPage: async () => ({ once() {}, isClosed: () => false }) };
 	});
 });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true }); });

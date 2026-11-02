@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { launchRunnerBrowser, type BrowserLaunchOptions, type BrowserLaunchReceipt } from "../browser-launch.js";
 import type { BrowserContext, Page } from "playwright";
 import { McpRuntime } from "../mcp-runtime.js";
 import type { LocalApplyProfile } from "./contract.js";
@@ -26,46 +27,22 @@ export function applicationProfileDir(dataDir: string, profile: LocalApplyProfil
  */
 const inUse = new Set<string>();
 
-/**
- * Launch a browser the runner itself owns and attach `McpRuntime` to it over CDP (#1419: every
- * browser the runner drives is launched BY the runner — `@playwright/mcp` only ever attaches, it
- * never launches or owns a profile directory). Shared by the persistent `isolated` apply profile
- * and any throwaway caller; the caller decides whether `profileDir` survives `stop()`.
- *
- * A persistent-context launch (not `.launch()`) either way: `launchPersistentContext` is what
- * exposes `--remote-debugging-port=0` + a `DevToolsActivePort` file to read back, which is how a
- * SEPARATE process (`@playwright/mcp`'s own Node process boundary inside `McpRuntime`) attaches to
- * THIS browser rather than launching its own. A throwaway caller just uses a fresh temp dir and
- * deletes it in its own `stop()`; nothing here assumes the dir is reused.
- */
-export async function launchCdpBrowser(profileDir: string, headless: boolean): Promise<{
+/** Runner-owned browser attached directly to MCP. The legacy export name remains for callers (#1431). */
+export async function launchCdpBrowser(profileDir: string, headless: boolean, options?: Partial<BrowserLaunchOptions>): Promise<{
 	context: BrowserContext;
+	profileDir: string;
+	receipt: BrowserLaunchReceipt;
 	mcp: McpRuntime;
 	/** The currently live page in this context, or null — tracks the newest page, never falls back to another tab once it closes (a lost page is terminal for a handoff). */
 	activePage(): Page | null;
 	stop(): Promise<void>;
 }> {
-	const playwright = await import("playwright");
+	let launched: Awaited<ReturnType<typeof launchRunnerBrowser>> | undefined;
 	let context: BrowserContext | undefined;
 	let mcp: McpRuntime | undefined;
 	try {
-		mkdirSync(profileDir, { recursive: true, mode: 0o700 });
-		// A persistent profile keeps the LAST launch's port file; read before Chrome rewrites it, the
-		// tools would attach to a dead port. Chrome writes a fresh one on every start.
-		rmSync(join(profileDir, "DevToolsActivePort"), { force: true });
-		context = await playwright.chromium.launchPersistentContext(profileDir, {
-			headless,
-			acceptDownloads: true,
-			viewport: null,
-			args: [
-				"--disable-blink-features=AutomationControlled",
-				"--start-maximized",
-				"--window-size=1512,982",
-				"--remote-debugging-port=0",
-				"--use-fake-ui-for-media-stream",
-				"--use-fake-device-for-media-stream",
-			],
-		});
+		launched = await launchRunnerBrowser({ headless, profilePolicy: "persistent", preference: "isolated", profileRoot: dirname(profileDir), persistentDir: profileDir, ...options });
+		context = launched.context;
 		await context.addInitScript(() => {
 			Object.defineProperty(navigator, "webdriver", { get: () => undefined });
 		}).catch(() => undefined);
@@ -82,12 +59,15 @@ export async function launchCdpBrowser(profileDir: string, headless: boolean): P
 		const initial = context.pages().at(-1) ?? await context.newPage();
 		track(initial);
 		mcp = new McpRuntime();
-		await mcp.start({ cdpEndpoint: await cdpEndpoint(profileDir) });
+		await mcp.start({ context });
 		const ctx = context;
+		const owned = launched;
 		const startedMcp = mcp;
 		let stopped = false;
 		return {
 			context: ctx,
+			profileDir: owned.profileDir,
+			receipt: owned.receipt,
 			mcp: startedMcp,
 			activePage: () => (activePage && !activePage.isClosed() ? activePage : null),
 			stop: async () => {
@@ -95,12 +75,12 @@ export async function launchCdpBrowser(profileDir: string, headless: boolean): P
 				stopped = true;
 				activePage = null;
 				await startedMcp.stop().catch(() => undefined);
-				await ctx.close().catch(() => undefined);
+				await owned.stop();
 			},
 		};
 	} catch (error) {
 		await mcp?.stop().catch(() => undefined);
-		await context?.close().catch(() => undefined);
+		await launched?.stop().catch(() => undefined);
 		throw error;
 	}
 }
@@ -112,10 +92,11 @@ export function createLocalApplyBrowserFactory(options: {
 	defaultBrowser(profile: "default", runDir: string): Promise<RunBrowser>;
 	defaultCookies: CookieReader;
 	sharedPage(): Page | null;
+	onLaunch?: (receipt: BrowserLaunchReceipt) => void;
 }): (profile: LocalApplyProfile, runDir: string) => Promise<RunBrowser> {
 	return async (profile, runDir) => {
 		const ledgerPath = join(applicationProfileDir(options.dataDir, profile), "site-sessions.json");
-		if (profile === "isolated") return createPersistentApplyBrowser(join(applicationProfileDir(options.dataDir, profile), "browser"), ledgerPath, options.headless);
+		if (profile === "isolated") return createPersistentApplyBrowser(join(applicationProfileDir(options.dataDir, profile), "browser"), ledgerPath, options.headless, options.onLaunch);
 		const browser = await options.defaultBrowser(profile, runDir);
 		return { ...browser, handoffPage: options.sharedPage, sessions: new SiteSessionLedger(ledgerPath, options.defaultCookies) };
 	};
@@ -131,6 +112,7 @@ export function createRunnerBrowserFactories(options: {
 	defaultTools(): Promise<RunBrowser["tools"]>;
 	defaultCookies: CookieReader;
 	sharedPage(): Page | null;
+	onLaunch?: (receipt: BrowserLaunchReceipt) => void;
 }): {
 	browserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
 	applyBrowserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
@@ -138,11 +120,11 @@ export function createRunnerBrowserFactories(options: {
 	const browserFor = async (profile: LocalApplyProfile, runDir: string): Promise<RunBrowser> => {
 		if (profile === "default") return { tools: await options.defaultTools(), handoffPage: options.sharedPage, stop: async () => undefined };
 		// A throwaway browser for this run alone (#1419): a fresh temp dir, launched and attached
-		// over CDP exactly like the persistent `isolated` profile above, deleted on stop — never
+		// directly to MCP like the persistent `isolated` profile above, deleted on stop — never
 		// launched BY `@playwright/mcp` itself (the `McpRuntime.start` branch that did that, and its
 		// own #274 orphan-cleanup, are gone; `reaper.ts` stays for other people's leftovers).
 		const profileDir = join(runDir, "profile");
-		const launched = await launchCdpBrowser(profileDir, options.headless);
+		const launched = await launchCdpBrowser(profileDir, options.headless, { profilePolicy: "ephemeral", profileRoot: runDir, persistentDir: undefined, onLaunch: options.onLaunch });
 		return {
 			tools: launched.mcp,
 			secrets: launched.mcp,
@@ -161,6 +143,7 @@ export function createRunnerBrowserFactories(options: {
 			defaultBrowser: browserFor,
 			defaultCookies: options.defaultCookies,
 			sharedPage: options.sharedPage,
+			onLaunch: options.onLaunch,
 		}),
 	};
 }
@@ -174,11 +157,11 @@ export function createRunnerBrowserFactories(options: {
  * The profile is still never seeded from, copied to, or shared with the owner's everyday browser: it
  * is a dedicated application browser that now remembers its own sign-ins, like a normal browser.
  */
-export async function createPersistentApplyBrowser(profileDir: string, ledgerPath: string, headless: boolean): Promise<RunBrowser> {
+export async function createPersistentApplyBrowser(profileDir: string, ledgerPath: string, headless: boolean, onLaunch?: (receipt: BrowserLaunchReceipt) => void): Promise<RunBrowser> {
 	if (inUse.has(profileDir)) throw new Error("This machine's application browser profile is in use by another run; try again when it ends.");
 	inUse.add(profileDir);
 	try {
-		const launched = await launchCdpBrowser(profileDir, headless);
+		const launched = await launchCdpBrowser(profileDir, headless, { onLaunch });
 		const context = launched.context;
 		return {
 			tools: launched.mcp,
@@ -196,15 +179,15 @@ export async function createPersistentApplyBrowser(profileDir: string, ledgerPat
 	}
 }
 
-async function cdpEndpoint(profileDir: string): Promise<string> {
-	const portFile = join(profileDir, "DevToolsActivePort");
-	for (let i = 0; i < 50; i++) {
-		if (existsSync(portFile)) {
-			const text = await import("node:fs/promises").then(({ readFile }) => readFile(portFile, "utf8"));
-			const port = text.split("\n", 1)[0]?.trim();
-			if (port) return `http://127.0.0.1:${port}`;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error("could not read the local application browser CDP port");
+
+/** Explicit settings use a clean managed profile; the caller resolves legacy profile aliases first. */
+export async function createConfiguredRunBrowser(options: BrowserLaunchOptions, withLedger = false): Promise<RunBrowser> {
+	const launched = await launchCdpBrowser(join(options.profileRoot, "managed"), options.headless, { ...options, persistentDir: undefined });
+	return {
+		tools: launched.mcp,
+		secrets: launched.mcp,
+		handoffPage: launched.activePage,
+		...(withLedger ? { sessions: new SiteSessionLedger(join(launched.profileDir, "pags-site-sessions.json"), async () => (await launched.context.cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires }))) } : {}),
+		stop: () => launched.stop(),
+	};
 }

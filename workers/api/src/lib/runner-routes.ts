@@ -101,6 +101,7 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	"/secure/sudo": once(),
 
 	// ── the browser: every click, keystroke and completion is a side effect on a live page ──
+	"/browser/session": read(),
 	"/browser/snapshot": readSlow(),
 	"/browser/handoff-status": read(),
 	"/browser/act": once(),
