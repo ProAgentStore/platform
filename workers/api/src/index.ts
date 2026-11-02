@@ -89,7 +89,7 @@ import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { failSilentUpdates } from "./lib/machine-policy.js";
-import { notifySilentMachines } from "./lib/machine-silence.js";
+import { notifySilentMachines, notifySilentWatchdogs } from "./lib/machine-silence.js";
 import { redactStoredPanes } from "./lib/pane-redaction-sweep.js";
 import { notifyMachineWarnings, notifyRecoveredMachines } from "./lib/machine-warnings.js";
 import { expireStaleTakeovers } from "./lib/browser-takeovers.js";
@@ -457,6 +457,8 @@ export default {
 		ctx.waitUntil(failSilentUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-auto-updates", method: "CRON" })));
 		// #1162: and the OWNER is told — once per silence, mid-update or not — instead of finding a grey dot by looking.
 		ctx.waitUntil(notifySilentMachines(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-machines", method: "CRON" })));
+		// #1416: a machine's WATCHDOG going silent too is worse news than the runner alone -- nothing can restart it remotely then.
+		ctx.waitUntil(notifySilentWatchdogs(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-watchdogs", method: "CRON" })));
 		// #1191: what a machine that IS reporting says about itself — a crash loop or rollback, a sign-in about to lapse, CPU /
 		// memory / disk pressure — once per episode; and the all-clear after a silence the owner was told about.
 		ctx.waitUntil(notifyMachineWarnings(env).catch((err) => logUnhandled(env, err, { path: "scheduled:machine-warnings", method: "CRON" })));

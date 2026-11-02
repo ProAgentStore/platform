@@ -35,19 +35,21 @@ export function payloadFacts(root: string = payloadRoot()): PayloadFacts {
 	};
 }
 
-/** A live `pags up` runner, from the account locks in the machine's config folder. */
-export function runnerFromLocks(dir: string = lockDir(), now = Date.now()): { alive: boolean; uptimeSec: number | null; launch: string | null } {
+/** A live `pags up` runner, from the account locks in the machine's config folder. `heartbeatAt` is the lock's own field — kept
+ *  fresh by a successful relay heartbeat (`runner/relay.ts`), not by this read — so the watchdog can tell "alive" apart from
+ *  "alive and actually talking to the platform" without a second channel (#1416). */
+export function runnerFromLocks(dir: string = lockDir(), now = Date.now()): { alive: boolean; uptimeSec: number | null; launch: string | null; heartbeatAt: number | null } {
 	let names: string[] = [];
 	try {
 		names = readdirSync(dir).filter((n) => /^up-.*\.lock$/.test(n));
 	} catch {
-		return { alive: false, uptimeSec: null, launch: null };
+		return { alive: false, uptimeSec: null, launch: null, heartbeatAt: null };
 	}
 	for (const n of names) {
 		const lock = readLock(join(dir, n));
-		if (lock && pidAlive(lock.pid)) return { alive: true, uptimeSec: Math.max(0, Math.round((now - lock.startedAt) / 1000)), launch: lock.launch };
+		if (lock && pidAlive(lock.pid)) return { alive: true, uptimeSec: Math.max(0, Math.round((now - lock.startedAt) / 1000)), launch: lock.launch, heartbeatAt: lock.heartbeatAt ?? null };
 	}
-	return { alive: false, uptimeSec: null, launch: null };
+	return { alive: false, uptimeSec: null, launch: null, heartbeatAt: null };
 }
 
 /** Restarts the service manager's log shows in the last 24 hours (the supervisor writes one `exited (…)` line per death), and the last failure line. */
@@ -101,7 +103,7 @@ export function realWatchdogDeps(log: (line: string) => void, ctx: ServiceContex
 		payloads: () => payloadFacts(),
 		runner: () => {
 			const r = runnerFromLocks();
-			return { alive: r.alive, uptimeSec: r.uptimeSec };
+			return { alive: r.alive, uptimeSec: r.uptimeSec, heartbeatAt: r.heartbeatAt };
 		},
 		history: () => logHistory(logPath),
 		machine: () => {

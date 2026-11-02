@@ -3,9 +3,9 @@
  * make it safe to leave running — a closed command set, an update that cannot half-install, a live runner never cut off by one.
  */
 import { describe, expect, it, vi } from "vitest";
-import { COMMAND_TIMEOUT_MS, type CommandResult, collectStatus, executeCommand, type PayloadFacts, runWatchdogLoop, WATCHDOG_AFTER_COMMAND_MS, WATCHDOG_BACKOFF_MAX_MS, WATCHDOG_BACKOFF_MIN_MS, WATCHDOG_HEARTBEAT_MS, type WatchdogCommand, type WatchdogDeps, type WatchdogLink } from "./core.js";
+import { COMMAND_TIMEOUT_MS, type CommandResult, collectStatus, executeCommand, isWedged, type PayloadFacts, runWatchdogLoop, SELF_HEAL_COOLDOWN_MS, SELF_HEAL_STALE_MS, WATCHDOG_AFTER_COMMAND_MS, WATCHDOG_BACKOFF_MAX_MS, WATCHDOG_BACKOFF_MIN_MS, WATCHDOG_HEARTBEAT_MS, type WatchdogCommand, type WatchdogDeps, type WatchdogLink } from "./core.js";
 
-function deps(over: Partial<WatchdogDeps> & { facts?: Partial<PayloadFacts>; runnerAlive?: boolean } = {}): WatchdogDeps & { lines: string[]; installed: Array<[string, string | null]>; bad: Array<[string, string, string | null]>; restarts: number } {
+function deps(over: Partial<WatchdogDeps> & { facts?: Partial<PayloadFacts>; runnerAlive?: boolean; heartbeatAt?: number | null } = {}): WatchdogDeps & { lines: string[]; installed: Array<[string, string | null]>; bad: Array<[string, string, string | null]>; restarts: number } {
 	const lines: string[] = [];
 	const installed: Array<[string, string | null]> = [];
 	const bad: Array<[string, string, string | null]> = [];
@@ -17,7 +17,7 @@ function deps(over: Partial<WatchdogDeps> & { facts?: Partial<PayloadFacts>; run
 		version: "0.4.177",
 		nodeVersion: "22.4.0",
 		payloads: () => facts,
-		runner: () => ({ alive: over.runnerAlive ?? true, uptimeSec: over.runnerAlive === false ? null : 600 }),
+		runner: () => ({ alive: over.runnerAlive ?? true, uptimeSec: over.runnerAlive === false ? null : 600, heartbeatAt: over.heartbeatAt ?? null }),
 		history: () => ({ crashes24h: 3, lastError: "pags up exited (1)" }),
 		machine: () => ({ cpuLoad1: 0.5, memUsedPct: 61, diskUsedPct: 91, diskFreeGb: 40 }),
 		service: () => "launchd",
@@ -211,5 +211,67 @@ describe("the loop (#1320)", () => {
 	it("never throws, whatever the link does", async () => {
 		const { l } = link([() => { throw new Error("sync throw"); }, async () => ({ commands: [{ id: "x", kind: "restart", args: {} }] })]);
 		await expect(runWatchdogLoop(deps(), l, reporter)).resolves.toBeUndefined();
+	});
+
+	describe("self-heal: a runner alive but silent for a long time (#1416)", () => {
+		it("restarts it, logs why, and does so BEFORE the beat — self-heal does not depend on reaching the platform", async () => {
+			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1 });
+			const { l } = link([async () => ({}), async () => ({})]);
+			await runWatchdogLoop(d, l, reporter);
+			expect(d.restarts).toBe(1);
+			expect(d.lines.some((x) => x.includes("self-heal") && x.includes("restarting it"))).toBe(true);
+			expect(d.lines.some((x) => x.includes("self-heal: restart the runner's LaunchAgent: ok"))).toBe(true);
+		});
+
+		it("does NOT self-heal while within the window — the same 'slow is not dead' caution as the lock's own rule", async () => {
+			const d = deps({ heartbeatAt: 1_000_000 - 1_000 });
+			const { l } = link([async () => ({}), async () => ({})]);
+			await runWatchdogLoop(d, l, reporter);
+			expect(d.restarts).toBe(0);
+		});
+
+		it("does NOT self-heal a runner that is not running at all — that is the service manager's job, not this", async () => {
+			const d = deps({ runnerAlive: false, heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1 });
+			const { l } = link([async () => ({}), async () => ({})]);
+			await runWatchdogLoop(d, l, reporter);
+			expect(d.restarts).toBe(0);
+		});
+
+		it("does NOT self-heal when no heartbeat has ever landed (null is 'nothing to judge', never 'wedged')", async () => {
+			const d = deps({ heartbeatAt: null });
+			const { l } = link([async () => ({}), async () => ({})]);
+			await runWatchdogLoop(d, l, reporter);
+			expect(d.restarts).toBe(0);
+		});
+
+		it("does not hammer the restart every beat — cooldown applies even across several beats", async () => {
+			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1 });
+			const { l } = link([async () => ({}), async () => ({}), async () => ({}), async () => ({})]);
+			await runWatchdogLoop(d, l, reporter);
+			expect(d.restarts).toBe(1);
+			expect(SELF_HEAL_COOLDOWN_MS).toBeGreaterThan(0);
+		});
+
+		it("a restart failure is logged, never thrown, and the beat still happens", async () => {
+			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1, restartRunner: async () => { throw new Error("launchctl: no such process"); } });
+			const { l, beats } = link([async () => ({}), async () => ({})]);
+			await expect(runWatchdogLoop(d, l, reporter)).resolves.toBeUndefined();
+			expect(d.lines.some((x) => x.includes("self-heal: restart failed") && x.includes("no such process"))).toBe(true);
+			expect(beats).toHaveLength(2);
+		});
+	});
+});
+
+describe("isWedged (#1416)", () => {
+	it("is true only when alive, a heartbeat has landed, and it is older than the threshold", () => {
+		expect(isWedged({ alive: true, heartbeatAt: 100 }, 100 + SELF_HEAL_STALE_MS + 1)).toBe(true);
+		expect(isWedged({ alive: true, heartbeatAt: 100 }, 100 + SELF_HEAL_STALE_MS - 1)).toBe(false);
+		expect(isWedged({ alive: false, heartbeatAt: 100 }, 100 + SELF_HEAL_STALE_MS + 1)).toBe(false);
+		expect(isWedged({ alive: true, heartbeatAt: null }, 100 + SELF_HEAL_STALE_MS + 1)).toBe(false);
+	});
+
+	it("takes a custom threshold", () => {
+		expect(isWedged({ alive: true, heartbeatAt: 0 }, 1_000, 500)).toBe(true);
+		expect(isWedged({ alive: true, heartbeatAt: 0 }, 1_000, 2_000)).toBe(false);
 	});
 });

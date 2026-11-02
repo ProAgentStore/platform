@@ -17,6 +17,15 @@ export const WATCHDOG_HEARTBEAT_MS = 30_000;
 export const WATCHDOG_AFTER_COMMAND_MS = 2_000;
 export const WATCHDOG_BACKOFF_MIN_MS = 5_000;
 export const WATCHDOG_BACKOFF_MAX_MS = 300_000;
+/**
+ * How long a `pags up` may run with no successful relay heartbeat before the watchdog treats it as
+ * wedged rather than merely slow (#1416). `runner-lock.ts`'s "slow is not dead" is about a few
+ * seconds of load or sleep; this is an order of magnitude longer on purpose — the watchdog itself
+ * only runs while the machine is awake, so a real sleep/suspend never reaches this check at all.
+ */
+export const SELF_HEAL_STALE_MS = 15 * 60_000;
+/** Don't retry a self-heal faster than this: a restart that did not fix it should not be hammered every beat. */
+export const SELF_HEAL_COOLDOWN_MS = 15 * 60_000;
 export const COMMAND_TIMEOUT_MS = 10 * 60_000;
 export const DIAGNOSE_CHECKS = ["disk", "node", "payloads", "runner", "service", "log_tail"] as const;
 export type DiagnoseCheck = (typeof DIAGNOSE_CHECKS)[number];
@@ -67,8 +76,12 @@ export interface WatchdogDeps {
 	nodeVersion: string;
 	/** What the cache holds. */
 	payloads: () => PayloadFacts;
-	/** Is a `pags up` runner alive, and for how long. */
-	runner: () => { alive: boolean; uptimeSec: number | null };
+	/**
+	 * Is a `pags up` runner alive, for how long, and when it last actually reached the platform.
+	 * `heartbeatAt` is null when there is no lock, or no successful heartbeat has landed yet — never
+	 * read as "now" or as "dead": {@link isWedged} treats null as "nothing to judge", same as no lock.
+	 */
+	runner: () => { alive: boolean; uptimeSec: number | null; heartbeatAt: number | null };
 	/** Restarts and crashes the service manager's log shows in the last 24 hours, and the last failure line. */
 	history: () => { crashes24h: number | null; lastError: string | null };
 	machine: () => { cpuLoad1: number | null; memUsedPct: number | null; diskUsedPct: number | null; diskFreeGb: number | null };
@@ -100,10 +113,13 @@ export function collectStatus(d: WatchdogDeps): WatchdogStatusBody {
 	const m = d.machine();
 	const h = d.history();
 	const live = p.versions.filter((v) => !p.bad[v]);
+	const { alive, uptimeSec: runnerUptimeSec } = d.runner();
 	return {
 		version: d.version || null,
 		uptimeSec: Math.max(0, Math.round((d.now() - d.startedAt) / 1000)),
-		runner: d.runner(),
+		// `heartbeatAt` is local-only (see {@link isWedged}) and never rides the wire — picked out
+		// explicitly rather than passing `d.runner()` through whole.
+		runner: { alive, uptimeSec: runnerUptimeSec },
 		running: live[0] ?? null,
 		payloads: p.versions.filter((_, i) => i < 5),
 		trial: p.trial ? { version: p.trial.version, startsLeft: Math.max(0, 6 - p.trial.starts) } : null,
@@ -214,6 +230,16 @@ export async function executeCommand(c: WatchdogCommand, d: WatchdogDeps): Promi
 	}
 }
 
+/**
+ * Alive but not actually talking to the platform for a long time: the process is there (the OS
+ * says so) but it is not doing its job, which "alive" alone cannot tell apart from "working fine".
+ * `heartbeatAt === null` is "nothing to judge" (no lock, or no successful heartbeat has ever landed
+ * — e.g. just started, or signed out), never treated as wedged. Pure.
+ */
+export function isWedged(runner: { alive: boolean; heartbeatAt: number | null }, now: number, thresholdMs = SELF_HEAL_STALE_MS): boolean {
+	return runner.alive && runner.heartbeatAt !== null && now - runner.heartbeatAt > thresholdMs;
+}
+
 export interface WatchdogLink {
 	/** One heartbeat to the platform. Rejects when it cannot be sent. */
 	beat: (body: { status: WatchdogStatusBody; results: CommandResult[]; capabilityHash?: string; capabilities?: MachineCapabilities }) => Promise<{ commands?: WatchdogCommand[]; capabilitiesStored?: boolean; capabilitiesWanted?: boolean }>;
@@ -227,8 +253,21 @@ export async function runWatchdogLoop(d: WatchdogDeps, link: WatchdogLink, repor
 	let pending: CommandResult[] = [];
 	let backoff = WATCHDOG_BACKOFF_MIN_MS;
 	let failing = false;
+	let lastSelfHealAt = 0;
 	while (!link.stopped()) {
 		let wait = WATCHDOG_HEARTBEAT_MS;
+		// Self-heal BEFORE the beat (#1416): a wedged runner is detected and restarted ON THE MACHINE,
+		// which does not depend on reaching the platform at all — the very case a dead relay link is.
+		const now = d.now();
+		if (isWedged(d.runner(), now) && now - lastSelfHealAt > SELF_HEAL_COOLDOWN_MS) {
+			lastSelfHealAt = now;
+			try {
+				d.log(`self-heal: the runner has been alive but has not reached the platform in over ${Math.round(SELF_HEAL_STALE_MS / 60_000)}m — restarting it`);
+				d.log(`self-heal: ${await d.restartRunner()}`);
+			} catch (e) {
+				d.log(`self-heal: restart failed — ${msg(e)}`);
+			}
+		}
 		try {
 			const answer = await link.beat({ status: collectStatus(d), results: pending, ...reporter.payload() });
 			pending = [];

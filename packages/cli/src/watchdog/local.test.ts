@@ -56,13 +56,13 @@ describe("is a runner alive? (#1320)", () => {
 	const lock = (name: string, pid: number, launch = "service") => writeFileSync(join(dir, name), JSON.stringify({ v: 1, rsid: "r", pid, pidStartedAt: "", startedAt: NOW - 90_000, port: null, node: "n", machineId: null, account: "a", version: "0.4.177", launch, launchDetail: "", childPids: [], nonce: "n", runnerToken: "t", heartbeatAt: NOW }));
 	it("finds a live holder in the machine's lock folder and says how long it has run", () => {
 		lock("up-abc.lock", process.pid);
-		expect(runnerFromLocks(dir, NOW)).toEqual({ alive: true, uptimeSec: 90, launch: "service" });
+		expect(runnerFromLocks(dir, NOW)).toEqual({ alive: true, uptimeSec: 90, launch: "service", heartbeatAt: NOW });
 	});
 	it("a lock whose process is gone, a foreign file and a missing folder all read as not running", () => {
 		lock("up-dead.lock", 2_000_000_000);
 		writeFileSync(join(dir, "other.json"), "{}");
 		expect(runnerFromLocks(dir, NOW).alive).toBe(false);
-		expect(runnerFromLocks(join(dir, "missing"), NOW)).toEqual({ alive: false, uptimeSec: null, launch: null });
+		expect(runnerFromLocks(join(dir, "missing"), NOW)).toEqual({ alive: false, uptimeSec: null, launch: null, heartbeatAt: null });
 	});
 });
 
@@ -73,7 +73,7 @@ describe("rolling back, against the real payload cache (#1320)", () => {
 		version: "0.4.177",
 		nodeVersion: "22.4.0",
 		payloads: () => payloadFacts(root),
-		runner: () => ({ alive: false, uptimeSec: null }),
+		runner: () => ({ alive: false, uptimeSec: null, heartbeatAt: null }),
 		history: () => ({ crashes24h: 0, lastError: null }),
 		machine: () => ({ cpuLoad1: 0, memUsedPct: 10, diskUsedPct: 10, diskFreeGb: 100 }),
 		service: () => "launchd",

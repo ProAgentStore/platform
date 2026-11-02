@@ -21,7 +21,7 @@ import { probeCommand } from "./probe.js";
 import { rootsCommand } from "./roots.js";
 import { thresholdsCommand } from "./thresholds.js";
 import { alreadyRunningLines, identifyPortOccupant, portCollisionLines, RUNNER_ALREADY_RUNNING_EXIT_CODE } from "../../existing-runner.js";
-import { acquireLock, configDir, holderMessage, releaseLock, UNKNOWN_LOCK_ACCOUNT } from "../../runner-lock.js";
+import { acquireLock, configDir, holderMessage, releaseLock, UNKNOWN_LOCK_ACCOUNT, updateLock } from "../../runner-lock.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { CLI_VERSION } from "./process.js";
 import { crashAccountKey } from "../../crash-reports.js";
@@ -220,7 +220,11 @@ export function createRunnerCommand(): Command {
 			try {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
 				writeLine(`Local browser runtime healthy at ${localUrl}`);
-				await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean(opts.force), Boolean(opts.watchInstances));
+				// Keeps the lock's `heartbeatAt` live on every cycle that actually reached the platform (#1416) —
+				// `updateLock` is a no-op once this process is no longer the holder (replaced, or already released).
+				const held = lockHeld;
+				const onHeartbeatOk = held ? () => updateLock(held.path, held.rsid, { heartbeatAt: Date.now() }) : undefined;
+				await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean(opts.force), Boolean(opts.watchInstances), onHeartbeatOk);
 				// Connected, so the platform is reachable: send what waited through an offline stretch or a
 				// restart, then keep sending what the runtime survives — every five minutes, not per crash.
 				void deliver().catch(() => undefined);

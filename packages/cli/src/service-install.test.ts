@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { daemonPlistPath, installService, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
+import { daemonPlistPath, installService, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisedPath, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
 
 const mac: ServiceContext = { platform: "darwin", home: "/Users/serge", nodePath: "/opt/homebrew/bin/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/serge/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin:/bin", uid: 501, user: "serge" };
 const linux: ServiceContext = { platform: "linux", home: "/home/serge", nodePath: "/usr/bin/node", script: "/usr/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/home/serge/.config/proagentstore", pathEnv: "/usr/local/bin:/usr/bin", user: "serge" };
@@ -25,6 +25,9 @@ describe("the service each OS gets (#1141)", () => {
 		expect(plist?.content).toContain("<key>KeepAlive</key><true/>");
 		expect(plist?.content).toContain("<string>/opt/homebrew/bin/node</string>");
 		expect(plist?.content).toContain("<string>/Users/serge/.config/proagentstore/pags-up-supervisor.mjs</string>");
+		// #1416: launchd's own bare environment has no nvm/homebrew node on PATH — this plist needs its own, like the
+		// LaunchDaemon variant and the watchdog's plist already have.
+		expect(plist?.content).toContain("<key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string></dict>");
 		expect(plist?.content).toContain("<key>WorkingDirectory</key><string>/Users/serge</string>"); // #1154: not launchd's `/`
 		expect(plan.commands.map((c) => [c.file, ...c.args].join(" "))).toEqual([
 			`launchctl bootout gui/501/${SERVICE_LABEL}`,
@@ -66,6 +69,37 @@ describe("the service each OS gets (#1141)", () => {
 			expect(supervisor?.content).toContain('[config.script, "up", "--headless"]');
 			expect(supervisor?.content).toContain('PAGS_SERVICE: "1"');
 		}
+	});
+
+	it("the supervisor's baked-in PATH always carries the pinned node's own directory (#1416)", () => {
+		for (const ctx of [mac, linux, win]) {
+			const supervisor = servicePlan(ctx).files.find((f) => f.path === supervisorPath(ctx));
+			expect(supervisor?.content).toContain(JSON.stringify(supervisedPath(ctx)));
+		}
+	});
+});
+
+describe("supervisedPath (#1416): the pinned node's own directory is always on the supervised runner's PATH", () => {
+	it("prepends the pinned node's directory ahead of the install-time captured PATH", () => {
+		expect(supervisedPath({ platform: "linux", nodePath: "/home/serge/.nvm/versions/node/v22.4.0/bin/node", pathEnv: "/home/serge/.nvm/versions/node/v18.0.0/bin:/usr/bin" })).toBe(
+			"/home/serge/.nvm/versions/node/v22.4.0/bin:/home/serge/.nvm/versions/node/v18.0.0/bin:/usr/bin",
+		);
+	});
+
+	it("is self-sufficient (just the node dir) when no PATH was captured at all", () => {
+		expect(supervisedPath({ platform: "linux", nodePath: "/usr/local/bin/node", pathEnv: "" })).toBe("/usr/local/bin");
+	});
+
+	it("uses a semicolon on Windows, a colon everywhere else", () => {
+		expect(supervisedPath({ platform: "win32", nodePath: "C:\\Program Files\\nodejs\\node.exe", pathEnv: "C:\\Windows\\System32" })).toBe("C:\\Program Files\\nodejs;C:\\Windows\\System32");
+		expect(supervisedPath({ platform: "darwin", nodePath: "/opt/homebrew/bin/node", pathEnv: "/usr/bin" })).toBe("/opt/homebrew/bin:/usr/bin");
+	});
+
+	it("this is exactly what fixes nvm drift: the version `default` pointed at WHEN INSTALLED stays on PATH even after `default` moves elsewhere later — the captured PATH string would not", () => {
+		const atInstallTime = supervisedPath({ platform: "darwin", nodePath: "/Users/serge/.nvm/versions/node/v20.0.0/bin/node", pathEnv: "/Users/serge/.nvm/versions/node/v20.0.0/bin:/usr/bin" });
+		// nvm moved `default` to v22 sometime later; the captured PATH (from a NEW install) would no longer mention v20 at all —
+		// but this service was never reinstalled, so its baked-in PATH is still the v20 one computed above, and it still works.
+		expect(atInstallTime).toContain("/Users/serge/.nvm/versions/node/v20.0.0/bin");
 	});
 });
 

@@ -49,6 +49,12 @@ export async function connectViaRelay(
 	/** Poll for newly eligible instances and attach them without a restart (#229). Off for a
 	 *  scoped `pags up --instance X`, which must stay exactly as narrow as the user asked. */
 	watchInstances = false,
+	/**
+	 * Called after a heartbeat cycle where every attached instance's POST succeeded (#1416) — the
+	 * caller keeps the lock's `heartbeatAt` fresh with it, so the watchdog can tell "alive" apart
+	 * from "alive and actually reaching the platform" without this module knowing about the lock.
+	 */
+	onHeartbeatOk?: () => void,
 ): Promise<void> {
 	const apiBase = pagsApiBase(opts.apiBase).replace(/^http/, "ws"); // https → wss
 	// Read per call, not once (#1157): the session refresher swaps the held session while this runs (#1163).
@@ -477,7 +483,8 @@ export async function connectViaRelay(
 				runtime, // #1167: the runtime's own /health, so a wedged runtime no longer reads online off the CLI's heartbeat
 			});
 			const cleanup = await cleanupSync.collect(resources);
-			for (const id of [...attached.keys()]) {
+			const ids = [...attached.keys()];
+			for (const id of ids) {
 				try {
 					const sent = cell.next();
 					const response = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {
@@ -508,6 +515,9 @@ export async function connectViaRelay(
 				writeLine(formatStatusLine({ heartbeat: "ok" }));
 				writeLine("Heartbeat recovered — this machine reads as online again.");
 			}
+			// #1416: a cycle where every attached instance's POST succeeded is "reached the platform" — an
+			// empty cycle (nothing attached yet) proves nothing, so it does not count as one.
+			if (!failure && ids.length > 0) onHeartbeatOk?.();
 			heartbeat();
 		}, 30_000);
 		timer.unref(); // don't keep the process alive just for heartbeats

@@ -74,9 +74,25 @@ export interface ServicePlan {
 	notes: string[];
 }
 
-const pathFor = (ctx: ServiceContext) => (ctx.platform === "win32" ? win32 : posix);
+const pathFor = (ctx: Pick<ServiceContext, "platform">) => (ctx.platform === "win32" ? win32 : posix);
 export const supervisorPath = (ctx: ServiceContext) => pathFor(ctx).join(ctx.configDir, "pags-up-supervisor.mjs");
 export const serviceLogPath = (ctx: ServiceContext) => pathFor(ctx).join(ctx.configDir, "pags-up.log");
+
+/**
+ * PATH for the supervised `pags up`, with the pinned node's OWN directory always on it (#1416).
+ *
+ * `ctx.pathEnv` is captured once, at install time, and never refreshed — so a repeated "env: node:
+ * No such file or directory" in the runner's log is nvm (or fnm/volta/…) having moved its `default`
+ * elsewhere since. `ctx.nodePath` is a weaker thing to keep holding than "the whole captured PATH
+ * is still correct": a version manager does not delete an installed version just because `default`
+ * moved, so the pinned binary's own directory stays valid indefinitely — until that one version is
+ * explicitly uninstalled, which {@link pinnedNodeNote} already tells the owner to reinstall after.
+ */
+export function supervisedPath(ctx: Pick<ServiceContext, "platform" | "nodePath" | "pathEnv">): string {
+	const nodeDir = pathFor(ctx).dirname(ctx.nodePath);
+	const delim = ctx.platform === "win32" ? ";" : ":";
+	return ctx.pathEnv ? `${nodeDir}${delim}${ctx.pathEnv}` : nodeDir;
+}
 
 /**
  * The supervisor every OS runs. Node builtins only, and self-contained: it is written once and must
@@ -84,7 +100,7 @@ export const serviceLogPath = (ctx: ServiceContext) => pathFor(ctx).join(ctx.con
  * shortened by env for tests (`PAGS_SUPERVISOR_MIN_MS`, `…_MAX_MS`, `…_RESET_MS`).
  */
 export function supervisorScript(ctx: ServiceContext): string {
-	const config = JSON.stringify({ node: ctx.nodePath, script: ctx.script, log: serviceLogPath(ctx), path: ctx.pathEnv });
+	const config = JSON.stringify({ node: ctx.nodePath, script: ctx.script, log: serviceLogPath(ctx), path: supervisedPath(ctx) });
 	return `// Written by \`pags up --install-service\` (#1141). Keeps \`pags up\` running; see packages/cli/src/service-install.ts.
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, openSync } from "node:fs";
@@ -263,6 +279,7 @@ export function servicePlan(ctx: ServiceContext): ServicePlan {
 		<string>${xml(ctx.nodePath)}</string>
 		<string>${xml(supervisor)}</string>
 	</array>
+	<key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(ctx.pathEnv)}</string></dict>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
 	<key>ThrottleInterval</key><integer>30</integer>

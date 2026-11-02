@@ -20,7 +20,7 @@
  * reply waits out one poll interval before answering `attached: false`.
  */
 import { aliasNodesFor, type NodeRegistration, stampMs } from "./machine-identity.js";
-import { type AttachCause, type AttachProgress, heartbeatContext, type HeartbeatContext, machineRegistrations, type StaleFlag, staleRegistration } from "./runner-attach-report.js";
+import { type AttachCause, type AttachProgress, heartbeatContext, type HeartbeatContext, machineRegistrations, type StaleFlag, staleRegistration, watchdogRunnerAliveHint } from "./runner-attach-report.js";
 import { callRunner, evictStaleRunnerSocket, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { attachHealthRemedy, classifyHealthProbeFailure, type PostAttachHealth } from "./runner-health.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
@@ -219,7 +219,7 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 	const rows = opts.rows ?? (await nodeRegistrations(env, userId));
 	const result = await attachTransport(env, instanceId, userId, node, { ...opts, rows });
 	if (opts.progress) opts.progress.phase = "done";
-	if (!result.attached) return { ...(await withFailureFacts(env, userId, node, rows, result, now())), transport: "not_attached" };
+	if (!result.attached) return { ...(await withFailureFacts(env, instanceId, userId, node, rows, result, now())), transport: "not_attached" };
 	const health = await healthAfterAttach(env, instanceId, userId, [node, ...aliasNodesFor(node, rows)], (opts.deadline ?? Number.POSITIVE_INFINITY) - now());
 	const remedy = attachHealthRemedy(node, health.state);
 	return { ...result, transport: "attached", health, ...(remedy ? { remedy } : {}) };
@@ -230,13 +230,18 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
  * and, when nothing there held a socket, that staleness IS the cause — and, on a timeout, the last
  * heartbeat as context. Reads only; a failed read adds nothing rather than failing the answer.
  */
-async function withFailureFacts<T extends { cause?: AttachCause; detail?: string }>(env: Env, userId: string, node: string, rows: readonly NodeRegistration[], result: T, now: number): Promise<T & { stale?: StaleFlag; machineAtLastHeartbeat?: HeartbeatContext }> {
+async function withFailureFacts<T extends { cause?: AttachCause; detail?: string }>(env: Env, instanceId: string, userId: string, node: string, rows: readonly NodeRegistration[], result: T, now: number): Promise<T & { stale?: StaleFlag; machineAtLastHeartbeat?: HeartbeatContext }> {
 	const names = [node, ...aliasNodesFor(node, rows)];
 	const stale = staleRegistration(await machineRegistrations(env, userId, names), names, now);
 	const out: T & { stale?: StaleFlag; machineAtLastHeartbeat?: HeartbeatContext } = { ...result, ...(stale ? { stale } : {}) };
 	if (stale && result.cause === "no_socket") {
 		out.cause = "stale_registration";
 		out.detail = `Stale registration on ${node} (${stale.reason}). ${result.detail ?? ""}`.trim();
+	} else if (result.cause === "no_socket") {
+		// #1416: "no socket" alone cannot tell "no process at all" apart from "a process is alive but
+		// wedged" — the machine's separate watchdog channel (#1320) can, when it is itself still reporting.
+		const watchdogAlive = await watchdogRunnerAliveHint(env, userId, instanceId, node).catch(() => null);
+		if (watchdogAlive) out.detail = `${result.detail ?? ""} Its watchdog reports a \`pags up\` process IS alive there, just not connected to the relay — that needs a restart (runner_restart), not a reinstall.`.trim();
 	}
 	if (result.cause === "runner_timeout" || result.cause === "runner_unresponsive") {
 		const heartbeat = await heartbeatContext(env, userId, names, now);

@@ -11,7 +11,7 @@ const { notifyUser } = vi.hoisted(() => ({ notifyUser: vi.fn() }));
 vi.mock("../routes/push.js", () => ({ notifyUser }));
 
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { MACHINE_SILENCE_LOOKBACK_MS, MACHINE_SILENT_MS, notifySilentMachines } from "./machine-silence.js";
+import { MACHINE_SILENCE_LOOKBACK_MS, MACHINE_SILENT_MS, notifySilentMachines, notifySilentWatchdogs } from "./machine-silence.js";
 import { isKnownNotificationType } from "./notifications.js";
 import type { Env } from "../types.js";
 
@@ -30,6 +30,24 @@ function node(instance: string, name: string, seenAgo: number, opts: { machineId
 			 ON CONFLICT(instance_id, runner_node) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
 		)
 		.run(instance, opts.user ?? "u1", name, opts.version ?? "0.4.149", opts.machineId === undefined ? `machine-${name}` : opts.machineId, sqlTime(NOW - seenAgo));
+}
+
+function watchdog(machineId: string, reportedAgo: number, opts: { user?: string; version?: string; label?: string } = {}) {
+	d1.sqlite
+		.prepare(
+			`INSERT INTO machine_watchdog_status (user_id, machine_id, reported_at, first_seen_at, version, status_json)
+			 VALUES (?, ?, ?, ?, ?, '{}')
+			 ON CONFLICT(user_id, machine_id) DO UPDATE SET reported_at = excluded.reported_at`,
+		)
+		.run(opts.user ?? "u1", machineId, NOW - reportedAgo, NOW - reportedAgo, opts.version ?? "0.4.188");
+	if (opts.label) {
+		d1.sqlite
+			.prepare(
+				`INSERT INTO machine_policies (user_id, machine_id, display_name, updated_at) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(user_id, machine_id) DO UPDATE SET display_name = excluded.display_name`,
+			)
+			.run(opts.user ?? "u1", machineId, opts.label, NOW);
+	}
 }
 
 /** What the owner received: [type, title, body, link, key]. */
@@ -122,6 +140,65 @@ describe("mid-update silence is told too, and says so (#1162 covering #1141's sw
 			.run("machine-pink-laptop", "No heartbeat within 5 minutes of installing an update (0.4.149): the machine reported \"installing\" and then stopped reporting.", NOW - 30 * MIN, NOW - 20 * MIN);
 		await notifySilentMachines(env, NOW);
 		expect(received()[0].title).toContain("went silent during an update");
+	});
+});
+
+describe("a machine's WATCHDOG going silent is told too — worse news than the runner alone (#1416)", () => {
+	it("silent past the threshold: one notification naming the watchdog specifically, with its last report", async () => {
+		watchdog("mac-mini-0001", 20 * MIN, { version: "0.4.188", label: "Sergeys-Mac-mini" });
+		expect(await notifySilentWatchdogs(env, NOW)).toBe(1);
+		const [n] = received();
+		expect(n).toMatchObject({ user: "u1", type: "machine", url: "/console/terminals/machines/mac-mini-0001" });
+		expect(n.title).toContain("Sergeys-Mac-mini's watchdog stopped reporting");
+		expect(n.body).toContain("Last heard from 20 minutes ago, running pags 0.4.188");
+		expect(n.body).toContain("nothing on that machine can be reached remotely");
+		expect(n.body).toContain("pags watchdog install");
+	});
+
+	it("falls back to the machine id when no display name is set", async () => {
+		watchdog("mac-mini-0002", 20 * MIN);
+		await notifySilentWatchdogs(env, NOW);
+		expect(received()[0].title).toContain("mac-mini-0002's watchdog stopped reporting");
+	});
+
+	it("ONCE per silence: the next ticks send nothing more", async () => {
+		watchdog("mac-mini-0001", 20 * MIN);
+		await notifySilentWatchdogs(env, NOW);
+		await notifySilentWatchdogs(env, NOW + MIN);
+		await notifySilentWatchdogs(env, NOW + 60 * MIN);
+		expect(notifyUser).toHaveBeenCalledTimes(1);
+	});
+
+	it("a watchdog that reports again and goes quiet later is a NEW silence, and is told again", async () => {
+		watchdog("mac-mini-0001", 20 * MIN);
+		await notifySilentWatchdogs(env, NOW);
+		watchdog("mac-mini-0001", 0); // it reported
+		expect(await notifySilentWatchdogs(env, NOW)).toBe(0);
+		expect(await notifySilentWatchdogs(env, NOW + MACHINE_SILENT_MS + MIN)).toBe(1);
+		expect(notifyUser).toHaveBeenCalledTimes(2);
+	});
+
+	it("a blip is not news: silent under the threshold sends nothing", async () => {
+		watchdog("mac-mini-0001", MACHINE_SILENT_MS - MIN);
+		expect(await notifySilentWatchdogs(env, NOW)).toBe(0);
+	});
+
+	it("a watchdog quiet long before the lookback window is not news either", async () => {
+		watchdog("mac-mini-0001", MACHINE_SILENCE_LOOKBACK_MS + MIN);
+		expect(await notifySilentWatchdogs(env, NOW)).toBe(0);
+	});
+
+	it("is independent of the runner's OWN silence: a quiet runner with a healthy watchdog raises nothing here", async () => {
+		node("i1", "dell-laptop", 20 * MIN, { machineId: "mac-mini-0001" });
+		watchdog("mac-mini-0001", MIN); // the watchdog itself is fine
+		expect(await notifySilentWatchdogs(env, NOW)).toBe(0);
+		expect(await notifySilentMachines(env, NOW)).toBe(1); // the runner-silence sweep still catches the runner
+	});
+
+	it("each owner hears only about their own machines", async () => {
+		watchdog("mac-mini-0001", 20 * MIN, { user: "u2" });
+		await notifySilentWatchdogs(env, NOW);
+		expect(received().map((n) => n.user)).toEqual(["u2"]);
 	});
 });
 

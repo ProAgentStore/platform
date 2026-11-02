@@ -26,7 +26,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { repinNote } from "../lib/coding-run-session.js";
 import { ensureCheckoutsOnRepin } from "../lib/coding-repo-mirror.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
-import { type AttachCause, attachBlocker, heartbeatContext, newAttachProgress, recordAttach, windowExpiredCause } from "../lib/runner-attach-report.js";
+import { type AttachCause, attachBlocker, heartbeatContext, newAttachProgress, recordAttach, watchdogRunnerAliveHint, windowExpiredCause } from "../lib/runner-attach-report.js";
 import { attachedOnMachine, attachOnRepin, attachAgentOnNode } from "../lib/runner-repin.js";
 import { normalizeRunnerNode, readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -142,7 +142,10 @@ export function registerRunnerAttachRoutes(router: Hono<{ Bindings: Env }>): voi
  */
 async function windowAnswer(env: Env, base: { instanceId: string; userId: string; node: string; via: "pin" | "force_attach"; forced: boolean }, progress: ReturnType<typeof newAttachProgress>, prefix: string) {
 	const now = Date.now();
-	const { cause, detail } = windowExpiredCause(progress, base.node, now);
+	// Only worth asking when it would change the message (#1416): every other phase already names a
+	// more specific cause than "no process at all".
+	const watchdogAlive = progress.phase === "no_carrier" ? await watchdogRunnerAliveHint(env, base.userId, base.instanceId, base.node) : null;
+	const { cause, detail } = windowExpiredCause(progress, base.node, now, watchdogAlive);
 	const heartbeat = cause === "runner_timeout" ? await heartbeatContext(env, base.userId, [base.node], now) : null;
 	const answer = { node: base.node, attached: false, unconfirmed: true as const, cause, phase: progress.phase, detail: `${prefix}${detail}`, ...(heartbeat ? { machineAtLastHeartbeat: heartbeat } : {}) };
 	await recordAttach(env, { ...base, outcome: "unconfirmed", cause, detail: answer.detail, durationMs: now - progress.startedAt, ...(heartbeat ? { context: { machineAtLastHeartbeat: heartbeat } } : {}) });

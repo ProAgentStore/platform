@@ -116,3 +116,72 @@ export async function notifySilentMachines(env: Env, now = Date.now()): Promise<
 	}
 	return sent;
 }
+
+interface SilentWatchdog {
+	user_id: string;
+	machine_id: string;
+	label: string | null;
+	version: string | null;
+	reported_at: number;
+}
+
+/**
+ * The notification for a machine's WATCHDOG going silent (#1320, #1416) — worse news than its runner
+ * alone going quiet ({@link notifySilentMachines}): the watchdog is the second, independent channel
+ * that restarts a wedged or dead runner without a human; with it dark too, nothing on that machine
+ * can be reached remotely at all. Pure.
+ */
+export function silentWatchdogMessage(m: Pick<SilentWatchdog, "label" | "machine_id" | "version" | "reported_at">, now: number): { title: string; body: string } {
+	const quiet = silentFor(now - m.reported_at);
+	const label = m.label || m.machine_id;
+	return {
+		title: `🔴 ${label}'s watchdog stopped reporting`,
+		body: `Last heard from ${quiet} ago${m.version ? `, running pags ${m.version}` : ""}. The watchdog is the channel that restarts a wedged or dead \`pags up\` without you — with it dark too, nothing on that machine can be reached remotely. Check it directly (on macOS: \`launchctl list | grep pags-watchdog\`) and run \`pags watchdog install\` again.`,
+	};
+}
+
+/**
+ * Sweep for machines whose watchdog specifically has gone silent after reporting (#1320, #1416) —
+ * independent of {@link notifySilentMachines}, which watches the RUNNER's own heartbeat: a machine's
+ * runner and its watchdog can each go quiet on their own, and the watchdog going dark too is the
+ * case nothing else can recover automatically, so it is the one worth a distinct alert.
+ *
+ * Shares `machine_silence_alerts` with the runner-silence sweep under a `:watchdog`-suffixed key —
+ * no new table — and the same "claim before sending, re-fires only on a genuinely new episode"
+ * dedup. It does not set `resolved_at`: the all-clear push (#1191, `notifyRecoveredMachines`) reads
+ * the RUNNER's own recovery, a different signal than the watchdog's, and wiring that pairing is its
+ * own change — a repeated silence still re-fires correctly here because its `reported_at` differs.
+ */
+export async function notifySilentWatchdogs(env: Env, now = Date.now()): Promise<number> {
+	const silent =
+		(
+			await env.DB.prepare(
+				`SELECT s.user_id, s.machine_id, s.version, s.reported_at, p.display_name AS label
+				   FROM machine_watchdog_status s
+				   LEFT JOIN machine_policies p ON p.user_id = s.user_id AND p.machine_id = s.machine_id
+				  WHERE s.reported_at <= ?1 AND s.reported_at >= ?2
+				  LIMIT ?3`,
+			)
+				.bind(now - MACHINE_SILENT_MS, now - MACHINE_SILENCE_LOOKBACK_MS, SWEEP_LIMIT)
+				.all<SilentWatchdog>()
+		).results ?? [];
+	let sent = 0;
+	for (const m of silent) {
+		const key = `${m.machine_id}:watchdog`;
+		const lastSeenAt = sqlTime(m.reported_at);
+		const claimed = await env.DB.prepare(
+			`INSERT INTO machine_silence_alerts (user_id, machine_key, last_seen_at, notified_at) VALUES (?1, ?2, ?3, ?4)
+			 ON CONFLICT(user_id, machine_key) DO UPDATE SET last_seen_at = excluded.last_seen_at, notified_at = excluded.notified_at
+			  WHERE machine_silence_alerts.last_seen_at <> excluded.last_seen_at`,
+		)
+			.bind(m.user_id, key, lastSeenAt, now)
+			.run();
+		if (!claimed.meta?.changes) continue;
+		const { title, body } = silentWatchdogMessage(m, now);
+		await notifyUser(env, m.user_id, "machine", title, body, deepLinkFor({ kind: "machine", machineId: m.machine_id }), {
+			key: `watchdog-silent:${key}:${lastSeenAt}`,
+		}).catch(() => undefined);
+		sent++;
+	}
+	return sent;
+}

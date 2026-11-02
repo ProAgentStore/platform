@@ -24,8 +24,10 @@
  * alike from here, and the sample cannot tell them apart.
  */
 import { agentCapabilities } from "./agent-capabilities.js";
+import { machineIdForNode } from "./coding-repo-checkouts.js";
 import { logError } from "./error-log.js";
 import { compareCliVersions, stampMs } from "./machine-identity.js";
+import { readWatchdog } from "./machine-watchdog.js";
 import { RUNNER_CONTROL_MIN_CLI } from "./runner-features.js";
 import { latestResourceSample, resourcesView } from "./runner-resources.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
@@ -135,8 +137,15 @@ const secs = (ms: number) => Math.max(0, Math.round(ms / 1000));
 /**
  * The answer for a confirmation window that expired, from what the attach had observed by then.
  * Every branch is a measurement of this attach — the phase it reached and how long it has waited.
+ *
+ * `watchdogAlive` (#1416) distinguishes "no process" from "a process is alive but not connected to
+ * the relay" on a `no_carrier` result: the relay alone cannot tell them apart (no socket reads the
+ * same either way), but the machine's separate watchdog channel (#1320) can — it is a second,
+ * independent heartbeat that keeps working even when the runner's own relay link is wedged. Null
+ * when there is no such signal (no watchdog installed, or it has gone quiet too): the message is
+ * then unchanged from before this existed, never a guess.
  */
-export function windowExpiredCause(progress: AttachProgress, node: string, now = Date.now()): { cause: AttachCause; detail: string } {
+export function windowExpiredCause(progress: AttachProgress, node: string, now = Date.now(), watchdogAlive: boolean | null = null): { cause: AttachCause; detail: string } {
 	switch (progress.phase) {
 		case "sync_sent":
 		case "sync_unanswered":
@@ -150,7 +159,12 @@ export function windowExpiredCause(progress: AttachProgress, node: string, now =
 				detail: `The runner on ${node} answered the attach request ${secs(now - (progress.answeredAt ?? progress.startedAt))}s ago, but this agent's socket has not opened there yet. Call instance_runner_node to see whether it attached.`,
 			};
 		case "no_carrier":
-			return { cause: "no_socket", detail: `Nothing on ${node} holds a relay socket to ask, so the attach waits on that machine's own poll. Call instance_runner_node to confirm.` };
+			return {
+				cause: "no_socket",
+				detail: watchdogAlive
+					? `Nothing on ${node} holds a relay socket to ask — but its watchdog reports a \`pags up\` process IS alive there, just not connected to the relay. This is not "no process running"; it needs a restart (runner_restart), not a reinstall.`
+					: `Nothing on ${node} holds a relay socket to ask, so the attach waits on that machine's own poll. Call instance_runner_node to confirm.`,
+			};
 		case "refused":
 			return { cause: "refused", detail: `The runner on ${node} refused the attach request.` };
 		default:
@@ -159,6 +173,19 @@ export function windowExpiredCause(progress: AttachProgress, node: string, now =
 				detail: `The relay did not finish checking this agent's slot on ${node} within ${secs(now - progress.startedAt)}s, so no runner had been asked yet. Call instance_runner_node before retrying.`,
 			};
 	}
+}
+
+/**
+ * Is this machine's watchdog (#1320, a channel separate from the relay) currently reporting a live
+ * `pags up` process? Null when there is no useful signal to read: no machine id resolved for this
+ * node, no watchdog has ever reported for it, or its own heartbeat has gone stale too (then it
+ * cannot vouch for anything — the machine may simply be off).
+ */
+export async function watchdogRunnerAliveHint(env: Env, userId: string, instanceId: string, node: string): Promise<boolean | null> {
+	const machineId = await machineIdForNode(env, instanceId, userId, node).catch(() => null);
+	if (!machineId) return null;
+	const w = await readWatchdog(env, userId, machineId).catch(() => null);
+	return w?.connected && w.status ? w.status.runner.alive : null;
 }
 
 /** The causes that are a real failure (error log), not an expected state (activity only). */
