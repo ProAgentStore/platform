@@ -60,7 +60,7 @@ export function createRunnerBrowserFactories(options: {
 		if (profile === "default") return { tools: await options.defaultTools(), stop: async () => undefined };
 		const mcp = new McpRuntime();
 		await mcp.start({ userDataDir: join(runDir, "profile"), headless: options.headless });
-		return { tools: mcp, stop: () => mcp.stop() };
+		return { tools: mcp, secrets: mcp, stop: () => mcp.stop() };
 	};
 	return {
 		browserFor,
@@ -128,6 +128,7 @@ export async function createPersistentApplyBrowser(profileDir: string, ledgerPat
 		const ctx = context;
 		return {
 			tools: mcp,
+			secrets: mcp,
 			handoffPage: () => activePage && !activePage.isClosed() ? activePage : null,
 			sessions: new SiteSessionLedger(ledgerPath, async () => (await ctx.cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires }))),
 			stop: async () => {

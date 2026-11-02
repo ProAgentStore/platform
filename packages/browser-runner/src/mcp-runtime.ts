@@ -98,6 +98,27 @@ export class McpRuntime {
 	private client?: Client;
 	/** A profile dir this instance created and is therefore responsible for deleting. */
 	private ownedProfileDir?: string;
+	/**
+	 * Native secret placeholders (#1412). `@playwright/mcp` reads `config.secrets[name]` at call time
+	 * (`browser_type` / `browser_fill_form` substitute the value, responses redact it to
+	 * `<secret>NAME</secret>`), and its config merge keeps this very object, so a value added here
+	 * while the browser is open is honoured by the next call. A model types the NAME; the value
+	 * never reaches it, the trace, a frame or a log. Unknown names are typed literally by the
+	 * library, which is why the apply bridge refuses a name that is not in {@link secretNames}.
+	 */
+	private readonly secrets: Record<string, string> = {};
+
+	provideSecrets(map: Record<string, string>): void {
+		for (const [name, value] of Object.entries(map)) if (value) this.secrets[name] = value;
+	}
+
+	clearSecrets(): void {
+		for (const name of Object.keys(this.secrets)) delete this.secrets[name];
+	}
+
+	secretNames(): string[] {
+		return Object.keys(this.secrets);
+	}
 
 	async start(opts: McpRuntimeOptions): Promise<void> {
 		if (this.client) return;
@@ -143,7 +164,7 @@ export class McpRuntime {
 		// lives under the runner's data dir (outside the CWD). Lift the file-root guard
 		// (meant to stop an LLM reading arbitrary host files) so browser_file_upload can
 		// attach it — the runner, not the model, chooses the path.
-		this.server = await createConnection({ browser, allowUnrestrictedFileAccess: true });
+		this.server = await createConnection({ browser, allowUnrestrictedFileAccess: true, secrets: this.secrets });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		await this.server.connect(serverTransport);
 		this.client = new Client({ name: "pags-runner", version: "1.0.0" });

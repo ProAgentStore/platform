@@ -44,8 +44,14 @@ import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, Lo
 
 export interface ApplyBridgeHost {
 	emit(event: Omit<LocalApplyEvent, "at">): void;
-	/** Pause until the owner resumes ("resumed") or the run is cancelled ("stopped"). */
-	pause(p: LocalApplyPause): Promise<"resumed" | "stopped">;
+	/** Pause until the owner resumes ("resumed"), the run is cancelled ("stopped"), or the cloud provisions sign-in secrets ("sign_in", #1412). */
+	pause(p: LocalApplyPause): Promise<"resumed" | "stopped" | "sign_in">;
+	/** The secret NAMES provisioned for the sign-in in progress (#1412); never a value. */
+	signInSecrets?(): string[];
+	/** The CLI asked for the emailed code: resolves true once `PAGS_LOGIN_CODE` is provisioned, false when the wait ran out. */
+	requestSignInCode?(): Promise<boolean>;
+	/** The sign-in ended (signed in, or given up): the host wipes the secrets. */
+	signInDone?(): void;
 	/** Wait for a durable cloud directive at this exact, runner-observed checkpoint. */
 	supervisorCheckpoint(checkpoint: LocalApplySupervisorCheckpoint): Promise<LocalApplySupervisorDirective>;
 	isAllowed(host: string): boolean;
@@ -69,7 +75,11 @@ export interface ToolResult {
 
 const READ_TOOLS = new Set(["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_wait_for"]);
 const FILL_TOOLS = new Set(["browser_type", "browser_select_option"]);
-const BRIDGE_TOOLS = ["upload_artifact", "request_answer", "ready_for_review", "supervisor_checkpoint"] as const;
+const BRIDGE_TOOLS = ["upload_artifact", "request_answer", "ready_for_review", "supervisor_checkpoint", "request_sign_in_code"] as const;
+/** A sign-in page's own buttons (#1412): pressed only while signing in, on the sign-in site, and never classed as the application's submit. */
+const SESSION_BUTTON = /\b(sign ?in|log ?in|continue|next|verify|confirm|submit|send|email me|text me|get (a |the )?code|resend)\b/i;
+/** The one secret name a model may type that is never provisioned up front: it asks for it with `request_sign_in_code`. */
+const SECRET_NAME = /^PAGS_LOGIN_[A-Z_]+$/;
 const REFUSED = new Set([
 	"browser_fill_form",
 	"browser_file_upload",
@@ -195,6 +205,8 @@ export class ApplyBridge {
 	submitted: { url: string; at: string; gateId: string } | null = null;
 	/** The last thing that stopped the work and was not resolved — the block reason if the run ends here. */
 	blocked: { reason: LocalApplyBlockReason; questions: string[] } | null = null;
+	/** The agent-driven sign-in in progress (#1412): the site, and the secret NAMES the CLI may type. Null otherwise. */
+	signIn: { site: string; names: string[] } | null = null;
 
 	constructor(
 		private readonly browser: BrowserTools,
@@ -278,6 +290,11 @@ export class ApplyBridge {
 				description: "End the run when a fresh browser snapshot shows that this job is expired, closed or unavailable. The runner independently verifies the page notice; it refuses unsupported reports.",
 				inputSchema: { type: "object", properties: { reason: { type: "string", enum: ["expired", "unavailable"] } }, required: ["reason"] },
 			},
+			{
+				name: "request_sign_in_code",
+				description: "Only while PAGS has asked you to sign in: after clicking the button that emails a sign-in code, call this and wait. When it returns, type the name PAGS_LOGIN_CODE into the code box; the runner substitutes the code.",
+				inputSchema: { type: "object", properties: {}, additionalProperties: false },
+			},
 		];
 	}
 
@@ -287,6 +304,7 @@ export class ApplyBridge {
 		if (name === "request_answer") return this.requestAnswer(args);
 		if (name === "supervisor_checkpoint") return this.supervisorCheckpoint(args);
 		if (name === "report_job_unavailable") return this.reportUnavailable(args);
+		if (name === "request_sign_in_code") return this.requestSignInCode();
 		if (REFUSED.has(name)) return this.refuse(name, "read", `${name} is not available to an application run.`);
 		if (!READ_TOOLS.has(name) && !FILL_TOOLS.has(name) && name !== "browser_click" && name !== "browser_press_key" && name !== "upload_artifact") return this.refuse(name, "read", `${name} is not available.`);
 		if (this.host.overTime()) return this.refuse(name, "read", "The run's time limit is reached. Call ready_for_review now.");
@@ -300,6 +318,12 @@ export class ApplyBridge {
 		if (name === "upload_artifact") return this.upload(args);
 		const res = await this.browser.callTool(name, args);
 		if (name === "browser_snapshot") this.lastSnapshot = textOf(res);
+		// Signing in (#1412): some code pages sign in as the code lands, with no click to observe. A snapshot that
+		// shows no wall any more is the same evidence the owner's own sign-in is judged by (`holdFor`'s recheck).
+		if (name === "browser_snapshot" && this.signIn && !res.isError) {
+			const state = await this.inspect();
+			if (state && !this.blockerOf(state)) return this.signedIn(textOf(res), hostOf(state.url) ?? "");
+		}
 		if (name === "browser_navigate_back") {
 			const state = await this.inspect();
 			if (state) return this.landed(textOf(res), state);
@@ -330,10 +354,22 @@ export class ApplyBridge {
 		return s.captcha ? "captcha" : s.antiBot ? "anti_bot" : s.duplicate ? "duplicate_application" : s.login ? "login_required" : null;
 	}
 
-	/** Pause for the owner; true when they resolved it and work may continue. */
+	/**
+	 * Pause for the owner; true when they resolved it and work may continue. A `login_required` pause can also end
+	 * with the cloud provisioning sign-in secrets (#1412): then the run is not resolved but SIGNING IN, `signIn` is
+	 * set, the recheck is skipped, and every caller answers the CLI with {@link signInInstructions} instead.
+	 */
 	private async pauseFor(p: LocalApplyPause, recheck?: () => Promise<boolean>): Promise<boolean> {
 		this.blocked = { reason: p.reason, questions: p.question ? [p.question] : [] };
 		const outcome = await this.host.pause(p);
+		if (outcome === "sign_in") {
+			// A pause raised from a credential FIELD carries no domain: the page it is on is the sign-in site.
+			const host = p.domain ?? hostOf((await this.inspect())?.url ?? "") ?? "";
+			this.signIn = { site: host ? siteKeyOf(host) : "", names: this.host.signInSecrets?.() ?? [] };
+			this.supervisorApproved = false;
+			this.blocked = null;
+			return true;
+		}
 		if (outcome !== "resumed") return false;
 		if (recheck && !(await recheck())) return false;
 		// A person may have changed the page or its answers while handling the pause.
@@ -352,8 +388,55 @@ export class ApplyBridge {
 		const host = hostOf(state.url) ?? "";
 		this.host.emit({ type: "browser.navigated", url: state.url, domain: host });
 		const blocker = this.blockerOf(state);
+		// Signing in (#1412): a page past the sign-in wall means the CLI got in; the wall itself is where it is working.
+		if (this.signIn && !blocker) return this.signedIn(toolText, host);
+		if (this.signIn && blocker === "login_required") return text(`${toolText}\n\nStill on the sign-in page. ${this.signInInstructions()}`);
 		if (!blocker) return text(toolText);
 		return this.holdFor(blocker, state);
+	}
+
+	/** What the CLI is told when a sign-in becomes its job (#1412): names only, and exactly how to use them. */
+	private signInInstructions(): string {
+		const names = this.signIn?.names ?? [];
+		return [
+			`Sign in to ${this.signIn?.site || "the site"} yourself now. PAGS has provisioned these secret names: ${names.join(", ") || "(none yet)"}.`,
+			"Take a browser_snapshot, then type the NAME exactly (for example PAGS_LOGIN_USERNAME) into the matching field with browser_type: the runner substitutes the real value, which you never see. Then click the sign-in / continue button.",
+			"If the site emails a code: click the button that sends it, call request_sign_in_code, and when it returns type PAGS_LOGIN_CODE into the code box.",
+			"Type nothing else into a password or code field, and do not fill the application until you are told you are signed in.",
+		].join(" ");
+	}
+
+	/** The sign-in wall is gone: remember the session, wipe the secrets, and hand the CLI back to the application. */
+	private async signedIn(toolText: string, host: string): Promise<ToolResult> {
+		const site = this.signIn?.site || (host ? siteKeyOf(host) : "");
+		this.signIn = null;
+		this.host.signInDone?.();
+		if (site) await this.recordSignIn(site);
+		this.host.emit({ type: "policy.decision", ...(host ? { domain: host } : {}), detail: { tool: "agent_sign_in", class: "session", decision: "signed_in", site } });
+		return text(`${toolText}\n\nSigned in to ${site || "the site"}. Take a browser_snapshot and continue the application.`);
+	}
+
+	/** `request_sign_in_code` (#1412): only while signing in; waits for the cloud to read the emailed code. */
+	private async requestSignInCode(): Promise<ToolResult> {
+		if (!this.signIn) return this.refuse("request_sign_in_code", "session", "There is no sign-in in progress. Codes are only provisioned during one.");
+		if (!this.host.requestSignInCode) return this.refuse("request_sign_in_code", "session", "This runner cannot wait for a code.");
+		this.host.emit({ type: "policy.decision", detail: { tool: "agent_sign_in", class: "session", decision: "code_requested", site: this.signIn.site } });
+		const ok = await this.host.requestSignInCode();
+		if (!ok || !this.signIn) return text("No sign-in code arrived in time. Do not guess one. Call ready_for_review and say the sign-in is incomplete.", true);
+		this.signIn.names = this.host.signInSecrets?.() ?? this.signIn.names;
+		return text("The code arrived and is available as PAGS_LOGIN_CODE. Type exactly that name into the code box (one box: the whole name; several single-digit boxes are not supported — tell the owner).");
+	}
+
+	/** A sign-in page's own button (#1412): on the sign-in site, pressed as a session action, then the page is re-read. */
+	private async sessionClick(forward: Record<string, unknown>, t: { ref: string; role: string; name: string }, before: PageState): Promise<ToolResult> {
+		const host = hostOf(before.url) ?? "";
+		if (!host || siteKeyOf(host) !== this.signIn?.site) return this.refuse("browser_click", "session", `"${t.name}" is not on the sign-in site (${this.signIn?.site}). Session buttons are pressed there only.`, host || undefined);
+		this.host.emit({ type: "policy.decision", domain: host, detail: { tool: "browser_click", class: "session", decision: "allowed", reason: "sign_in_step", role: t.role } });
+		const res = await this.browser.callTool("browser_click", forward);
+		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
+		const state = await this.inspect();
+		if (state) return this.landed(textOf(res), state);
+		return text(textOf(res));
 	}
 
 	/** A page that needs a person: pause for the owner, and remember a sign-in they complete (#1094). */
@@ -366,6 +449,7 @@ export class ApplyBridge {
 			const after = await this.inspect();
 			return !!after && this.blockerOf(after) === null;
 		});
+		if (ok && this.signIn) return text(this.signInInstructions());
 		if (ok && site) await this.recordSignIn(site);
 		if (!ok) return text(`${host} needs a person (${blocker.replace(/_/g, " ")}) and it was not resolved. Do not work around it. Stop now.`, true);
 		return text("Resumed after the owner handled it. Take a browser_snapshot to read the page.");
@@ -423,6 +507,12 @@ export class ApplyBridge {
 		const t = this.target(args);
 		if (!t) return this.refuse("browser_click", "read", "Click only elements from the latest browser_snapshot, by their ref.");
 		const forward = { element: typeof args.element === "string" ? args.element : t.name, target: t.ref };
+		// Signing in (#1412): the wall's own buttons are session actions — only while the wall is on screen. Off it,
+		// a "Continue" or "Submit" is the application's and goes through the ordinary rules and the commit guard.
+		if (this.signIn && t.role === "button" && SESSION_BUTTON.test(t.name)) {
+			const page = await this.inspect();
+			if (page?.login) return this.sessionClick(forward, t, page);
+		}
 
 		if (FIELD_ROLES.has(t.role)) {
 			if ((t.role === "checkbox" || t.role === "switch") && CONSENT_NAME.test(t.name)) {
@@ -484,11 +574,23 @@ export class ApplyBridge {
 		const t = this.target(args);
 		if (!t || !TYPE_ROLES.has(t.role)) return this.refuse("browser_type", "fill", "Type only into a text field from the latest browser_snapshot, by its ref.");
 		if (args.submit === true) return this.refuse("browser_type", "submit", "Typing may not submit the form (submit: true is refused).");
+		const value = typeof args.text === "string" ? args.text : "";
+		// Signing in (#1412): a provisioned NAME is forwarded as typed — the browser substitutes the value, and the
+		// trace carries the name. Anything else into a credential field is refused, never paused for again. A name
+		// the cloud did not provision is refused too: the library would type it literally.
+		if (this.signIn?.names.includes(value)) {
+			this.host.emit({ type: "policy.decision", detail: { tool: "browser_type", class: "session", decision: "allowed", reason: `secret:${value}`, role: t.role } });
+			const res = await this.browser.callTool("browser_type", { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value });
+			if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
+			return text(textOf(res));
+		}
+		if (SECRET_NAME.test(value)) return this.refuse("browser_type", "session", `${value} is not a provisioned secret name${this.signIn ? ` (provisioned: ${this.signIn.names.join(", ") || "none"})` : ""}. Nothing was typed.`);
+		if (this.signIn && CREDENTIAL_NAME.test(t.name)) return this.refuse("browser_type", "session", `Type only a provisioned secret name into "${t.name}": ${this.signIn.names.join(", ") || "none yet; call request_sign_in_code for the emailed code"}.`);
 		if (CREDENTIAL_NAME.test(t.name)) {
 			const ok = await this.pauseFor({ reason: "login_required", question: `Sign in: ${t.name.slice(0, 200)}` });
+			if (ok && this.signIn) return text(this.signInInstructions());
 			return ok ? text("The owner handled the sign-in. Take a browser_snapshot and continue.") : text("A sign-in needs the owner and was not handled. Stop now.", true);
 		}
-		const value = typeof args.text === "string" ? args.text : "";
 		const refusal = groundingRefusal(value, args.source_quote, this.host.grounding());
 		if (refusal) return this.refuse("browser_type", "fill", refusal);
 		return this.fill("browser_type", t.role, { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value });
@@ -561,7 +663,9 @@ export class ApplyBridge {
 		// on landing. Reported to the cloud as a blocker it was stopped, and ended `incomplete`.
 		if (state?.login && !this.blocked) {
 			const held = await this.holdFor("login_required", state);
-			return held.isError ? held : text("The owner signed in. Take a browser_snapshot to read the page, then call supervisor_checkpoint again.");
+			// The cloud answered with secrets (#1412): the hold's text is the CLI's sign-in instructions, not an owner's sign-in.
+			if (held.isError || this.signIn) return held;
+			return text("The owner signed in. Take a browser_snapshot to read the page, then call supervisor_checkpoint again.");
 		}
 		const blockers = new Set<LocalApplySupervisorBlocker>();
 		if (state?.captcha) blockers.add("captcha");
@@ -798,6 +902,7 @@ export class ApplyBridge {
 			this.blocked = { reason: "login_required", questions: [`Sign in to ${site} on this machine's application browser, then retry. Nothing was submitted.`] };
 			return this.refuse("browser_click", "submit", `${site} needs a sign-in in this browser and the owner did not complete one. Nothing was submitted. Stop now.`, domain);
 		}
+		if (this.signIn) return text(`Not pressed. ${this.signInInstructions()}`);
 		await this.recordSignIn(site);
 		return text(`The owner signed in to ${site}; this browser remembers it. Nothing has been submitted. Open the job page again with browser_navigate (${url.split(/[?#]/, 1)[0]}), take a browser_snapshot, and continue from there.`);
 	}

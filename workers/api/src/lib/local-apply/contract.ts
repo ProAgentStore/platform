@@ -58,6 +58,30 @@ export type LocalApplyEmailCodeResult = { state: "code_requested" } | { state: "
 export const LOCAL_APPLY_VAULT_SIGN_IN_PATH = "/local-apply/vault-sign-in";
 export type LocalApplyVaultSignInFailure = "host_mismatch" | "no_username_field" | "no_password_field" | "no_submit_button" | "captcha" | "two_factor" | "wrong_password" | "not_signed_in";
 export type LocalApplyVaultSignInResult = { state: "signed_in" } | { state: "failed"; reason: LocalApplyVaultSignInFailure };
+/**
+ * The agent-driven sign-in (#1412): on a run paused `login_required`, the cloud provisions what it may hand over for
+ * that host — the vault login and, once the site has emailed one, the code — as NAMED secrets `{runId, secrets: {NAME: value}}`.
+ * The runner puts them in the run's own Playwright MCP, which substitutes a NAME the CLI types with the value, and
+ * releases the pause into a `signing_in` state in which the CLI signs in through its ordinary browser tools. The value
+ * never reaches the CLI, the trace, a frame or the store; the map is wiped when the sign-in ends either way. A later
+ * call adds to the map (the emailed code arrives mid-sign-in). The status response carries `signIn` while it lasts.
+ */
+export const LOCAL_APPLY_SIGN_IN_SECRETS_PATH = "/local-apply/sign-in-secrets";
+export const LOCAL_APPLY_SIGN_IN_SECRET_NAMES = ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD", "PAGS_LOGIN_CODE"] as const;
+export type LocalApplySignInSecretName = (typeof LOCAL_APPLY_SIGN_IN_SECRET_NAMES)[number];
+export interface LocalApplySignInSecretsRequest {
+	runId: string;
+	secrets: Partial<Record<LocalApplySignInSecretName, string>>;
+}
+export interface LocalApplySignInState {
+	state: "signing_in";
+	/** The site the sign-in belongs to (`login.seek.com`): the CLI's session clicks are confined to it. */
+	origin: string;
+	/** The NAMES provisioned so far, never a value. */
+	secrets: LocalApplySignInSecretName[];
+	/** The CLI asked for the emailed code and is waiting for `PAGS_LOGIN_CODE`. */
+	codeRequested: boolean;
+}
 
 /**
  * Account creation (#1230, #1226 ask 2), on a run paused `login_required` on an allow-listed host where the owner has no account. Three
@@ -508,6 +532,8 @@ export interface LocalApplyStatusResponse {
 	runId: string;
 	state: "running" | "paused" | "ended";
 	pause?: LocalApplyPause;
+	/** Present while the CLI is signing in with provisioned secrets (#1412). */
+	signIn?: LocalApplySignInState;
 	events: LocalApplyRunnerEvent[];
 	lastSeq: number;
 	result?: LocalApplyResultEnvelope;

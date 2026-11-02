@@ -50,7 +50,10 @@ import {
 	LOCAL_APPLY_CAPS,
 	LOCAL_APPLY_ENGINES,
 	LOCAL_APPLY_MODES,
+	LOCAL_APPLY_SIGN_IN_SECRET_NAMES,
 	LOCAL_APPLY_TASK_TYPE,
+	type LocalApplySignInSecretName,
+	type LocalApplySignInSecretsRequest,
 	type LocalApplyArtifact,
 	type LocalApplyArtifactKind,
 	type LocalApplyBlockReason,
@@ -77,8 +80,17 @@ import type { LocalApplyHandoffStatus } from "./handoff-contract.js";
 import { applyPrompt, buildApplyEngineSpec, observedApplyAuth, type SourceBlock } from "./engine.js";
 import { LocalApplyHandoffRuntime, type LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
+/** The run browser's native secret placeholders (#1412) — what `McpRuntime` provides. */
+export interface SecretStore {
+	provideSecrets(map: Record<string, string>): void;
+	clearSecrets(): void;
+	secretNames(): string[];
+}
+
 export interface RunBrowser {
 	tools: BrowserTools;
+	/** Absent on a browser that cannot take placeholders (a test stub): the sign-in secrets route refuses. */
+	secrets?: SecretStore;
 	stop(): Promise<void>;
 	/** The currently live page in this run's own browser context, if it has one. */
 	handoffPage?(): Page | null;
@@ -112,6 +124,10 @@ const MAX_ACTIVE = 1;
  * consent, a redirect, the supervisor's checkpoint — needs this exact live page and keeps it.
  */
 const PARKABLE_PAUSES: ReadonlySet<LocalApplyPause["reason"]> = new Set(["missing_answer", "screening_ambiguity"]);
+/** How a pause ends: the owner resumed, the run stopped, or the cloud provisioned sign-in secrets (#1412). */
+export type PauseOutcome = "resumed" | "stopped" | "sign_in";
+/** How long the CLI's `request_sign_in_code` waits for the cloud to read the mailbox — the cloud's own code wait. */
+const SIGN_IN_CODE_WAIT_MS = 5 * 60_000;
 
 interface Run {
 	envelope: LocalApplyTaskEnvelope;
@@ -131,9 +147,11 @@ interface Run {
 	/** Source text, approved materials and the owner's answers — what a value may be grounded in. */
 	grounding: string[];
 	secrets: string[];
+	/** The agent-driven sign-in in progress (#1412): the NAMES provisioned, never a value. */
+	signIn?: { origin: string; names: LocalApplySignInSecretName[]; codeRequested: boolean; codeWaiters: Array<(ok: boolean) => void> };
 	activeSince: number;
 	activeMs: number;
-	waiters: Array<(outcome: "resumed" | "stopped") => void>;
+	waiters: Array<(outcome: PauseOutcome) => void>;
 	output: string[];
 	engineAuth: LocalApplyEngineAuth;
 	cancelled: boolean;
@@ -482,6 +500,9 @@ export class LocalApplyRuntime {
 			mode: e.policy.mode,
 			gateId: e.policy.submitGate?.gateId,
 			sessions: run.browser.sessions,
+			signInSecrets: () => [...(run.signIn?.names ?? [])],
+			requestSignInCode: () => this.requestSignInCode(run),
+			signInDone: () => this.signInDone(run),
 		}, e.policy.screenshots === false ? undefined : run.shots);
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
 
@@ -607,7 +628,7 @@ export class LocalApplyRuntime {
 		run.events.push({ ...rest, ...(url ? { url } : {}), at: new Date(this.now()).toISOString(), seq: ++run.seq });
 	}
 
-	private pause(run: Run, p: LocalApplyPause): Promise<"resumed" | "stopped"> {
+	private pause(run: Run, p: LocalApplyPause): Promise<PauseOutcome> {
 		if (run.state === "ended" || run.cancelled) return Promise.resolve("stopped");
 		// #1121: a question only the owner can answer does not need this page — park it. The run ENDS
 		// `blocked` with the question, the browser and the CLI stop, and the machine's one slot is free
@@ -660,7 +681,7 @@ export class LocalApplyRuntime {
 		return this.pause(run, { reason: "supervisor_checkpoint", checkpoint: supervisor }).then(() => run.checkpoints.get(checkpointId)?.directive ?? "stop");
 	}
 
-	private release(run: Run, outcome: "resumed" | "stopped"): void {
+	private release(run: Run, outcome: PauseOutcome): void {
 		if (run.state === "paused") {
 			run.state = "running";
 			run.pause = undefined;
@@ -668,6 +689,63 @@ export class LocalApplyRuntime {
 			if (outcome === "resumed") this.emit(run, { type: "run.resumed" });
 		}
 		for (const w of run.waiters.splice(0)) w(outcome);
+	}
+
+	/**
+	 * `POST /local-apply/sign-in-secrets` (#1412): the cloud hands the paused run the NAMED secrets it may use to
+	 * sign in. They go into the run's own Playwright MCP and into the result redaction list, nowhere else — not the
+	 * trace, not the store, not a log. The first call releases `login_required` into `signing_in`; a later one adds
+	 * the emailed code and wakes the CLI waiting on `request_sign_in_code`.
+	 */
+	signInSecrets(raw: unknown): LocalApplyStatusResponse {
+		const o = (raw && typeof raw === "object" ? raw : {}) as Partial<LocalApplySignInSecretsRequest>;
+		const run = this.get(String(o.runId ?? ""));
+		const given = o.secrets && typeof o.secrets === "object" ? (o.secrets as Record<string, unknown>) : {};
+		const map: Record<string, string> = {};
+		for (const name of LOCAL_APPLY_SIGN_IN_SECRET_NAMES) {
+			const v = given[name];
+			if (typeof v === "string" && v.length > 0 && v.length <= 512) map[name] = v;
+		}
+		if (!Object.keys(map).length) throw new RunnerInputError(`secrets must carry at least one of ${LOCAL_APPLY_SIGN_IN_SECRET_NAMES.join(", ")}`);
+		const paused = run.state === "paused" && run.pause?.reason === "login_required";
+		if (!paused && !(run.state === "running" && run.signIn)) throw new RunnerInputError("The run is not paused for a sign-in", 409);
+		if (!run.browser?.secrets) throw new RunnerInputError("This run's browser cannot take secret placeholders", 409);
+		run.browser.secrets.provideSecrets(map);
+		// The values, so a result that somehow quotes one is scrubbed (`end()`); the names are what the trace sees.
+		run.secrets.push(...Object.values(map));
+		const names = Object.keys(map) as LocalApplySignInSecretName[];
+		if (paused) {
+			run.signIn = { origin: run.pause?.domain ?? "", names, codeRequested: false, codeWaiters: [] };
+			this.emit(run, { type: "policy.decision", domain: run.signIn.origin || undefined, detail: { tool: "agent_sign_in", class: "session", source: "platform", decision: "started", reason: names.join(",") } });
+			this.release(run, "sign_in");
+		} else if (run.signIn) {
+			for (const n of names) if (!run.signIn.names.includes(n)) run.signIn.names.push(n);
+			this.emit(run, { type: "policy.decision", domain: run.signIn.origin || undefined, detail: { tool: "agent_sign_in", class: "session", source: "platform", decision: "provisioned", reason: names.join(",") } });
+			if (map.PAGS_LOGIN_CODE) for (const w of run.signIn.codeWaiters.splice(0)) w(true);
+		}
+		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
+	}
+
+	/** The CLI asked for the emailed code: wait for the cloud to provision `PAGS_LOGIN_CODE`, bounded. */
+	private requestSignInCode(run: Run): Promise<boolean> {
+		if (!run.signIn) return Promise.resolve(false);
+		if (run.signIn.names.includes("PAGS_LOGIN_CODE")) return Promise.resolve(true);
+		run.signIn.codeRequested = true;
+		return new Promise((done) => {
+			const timer = setTimeout(() => done(false), SIGN_IN_CODE_WAIT_MS);
+			timer.unref?.();
+			run.signIn?.codeWaiters.push((ok) => {
+				clearTimeout(timer);
+				done(ok);
+			});
+		});
+	}
+
+	/** The sign-in ended either way: the secrets are wiped and the run is an ordinary running run again. */
+	private signInDone(run: Run): void {
+		for (const w of run.signIn?.codeWaiters.splice(0) ?? []) w(false);
+		run.signIn = undefined;
+		run.browser?.secrets?.clearSecrets();
 	}
 
 	/** The email-code sign-in (#1106) on a run paused for one: its own browser, its trace, and its release. */
@@ -702,6 +780,8 @@ export class LocalApplyRuntime {
 			if (typeof r.question === "string" && typeof r.answer === "string" && r.answer.trim()) run.grounding.push(`Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars)}`);
 		}
 		for (const d of strList(o.allowDomains)) run.allow.add(d);
+		// The owner took the sign-in over: whatever was provisioned for the CLI is wiped (#1412).
+		if (run.signIn) this.signInDone(run);
 		this.release(run, "resumed");
 		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
 	}
@@ -769,6 +849,7 @@ export class LocalApplyRuntime {
 			runId: run.envelope.runId,
 			state: run.state,
 			...(run.pause ? { pause: run.pause } : {}),
+			...(run.signIn && run.state === "running" ? { signIn: { state: "signing_in" as const, origin: run.signIn.origin, secrets: [...run.signIn.names], codeRequested: run.signIn.codeRequested } } : {}),
 			events: page,
 			lastSeq: page.length < pending.length ? page[page.length - 1].seq : run.seq,
 			...(run.result ? { result: run.result } : {}),
@@ -821,6 +902,7 @@ export class LocalApplyRuntime {
 		// live view and retain the explicit closed state for a caller that polls before restart.
 		if (run.handoff?.state === "ready") void this.handoffs.close(run, "run_ended");
 		if (run.state === "paused") this.release(run, "stopped");
+		if (run.signIn) this.signInDone(run);
 		if (run.timer) clearInterval(run.timer);
 		run.state = "ended";
 		run.endedAt = this.now();

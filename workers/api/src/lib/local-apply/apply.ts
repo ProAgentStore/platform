@@ -43,6 +43,7 @@ import {
 	traceUrl,
 } from "./contract.js";
 import { type ApplicationRunnerSettings, RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, hostOfUrl } from "./policy.js";
+import { advanceAgentSignIn, agentSignInWillTry, parseRunnerSignIn, signedInEventIn } from "./agent-sign-in.js";
 import { advanceEmailCodeSignIn, emailCodeWillTry } from "./email-code-sign-in.js";
 import { advanceVaultSignIn, vaultSignInWillTry } from "./vault-sign-in.js";
 import { accountCreationWillTry, advanceAccountCreation } from "./account-creation.js";
@@ -639,8 +640,10 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		if (timeLimitReached) return stopTimedOutRun(env, runtime, uid, run, now);
 		return lostByTime ? endLost(env, uid, run, "The runner stopped answering for this run.", now) : run;
 	}
-	const body = (await runtimeJson(res)) as { state?: unknown; pause?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
+	const body = (await runtimeJson(res)) as { state?: unknown; pause?: unknown; signIn?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
 	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalApplyEvent).filter((e): e is NonNullable<typeof e> => e !== null) as ApplyTraceEvent[];
+	// #1412: the runner says the CLI is signing in with provisioned secrets (names only), and whether it wants the emailed code.
+	const signInSync = { signIn: body.state === "running" ? parseRunnerSignIn(body.signIn) : null, events };
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	// A submit attempt is recorded the moment PAGS sees it, before anything else can go wrong.
 	if (events.some((e) => e.type === "submit.attempted")) await markSubmitAttempted(env, run.applicationId, uid, now);
@@ -686,7 +689,8 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		// successful login from a redirect.
 		// #1106: a SEEK sign-in the email code can clear is not the owner's yet; they hear of it if it fails.
 		// #1229: nor is one the vault can sign in with a stored password login.
-		if (!(await emailCodeWillTry(env, current, signInSettings)) && !(await vaultSignInWillTry(env, uid, current, signInSettings)) && !(await accountCreationWillTry(env, uid, current, signInSettings))) await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
+		// #1412: nor is one the agent will sign in to itself with provisioned secrets.
+		if (!(await agentSignInWillTry(env, uid, current, signInSettings)) && !(await emailCodeWillTry(env, current, signInSettings)) && !(await vaultSignInWillTry(env, uid, current, signInSettings)) && !(await accountCreationWillTry(env, uid, current, signInSettings))) await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
 	} else if (current.status === "running" && run.status === "paused") {
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
@@ -695,18 +699,26 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	// cannot turn status polling into an unbounded lease; PAGS stops and settles it itself.
 	if (timeLimitReached && current.status === "running") current = await stopTimedOutRun(env, runtime, uid, current, now);
 	if (current.status === "paused" && current.pause?.reason === "login_required") {
-		const signIn = await advanceEmailCodeSignIn(env, uid, current, signInSettings, now);
+		// #1412: the agent signs in itself with provisioned secret names; the macros below are the older runner's path.
+		const agent = await advanceAgentSignIn(env, uid, current, signInSettings, signInSync, now);
+		current = agent.run;
+		const agentHasIt = agent.outcome === "provisioned" || agent.outcome === "waiting" || agent.outcome === "signed_in";
+		const signIn = agentHasIt ? { outcome: "not_applicable" as const, run: current } : await advanceEmailCodeSignIn(env, uid, current, signInSettings, now);
 		current = signIn.run;
 		// #1229: when the email code did not clear it (or does not apply), the stored password login gets one try.
-		const vault = signIn.outcome === "not_applicable" || signIn.outcome === "failed" ? await advanceVaultSignIn(env, uid, current, signInSettings, now) : { outcome: "not_applicable" as const, run: current };
+		const vault = !agentHasIt && (signIn.outcome === "not_applicable" || signIn.outcome === "failed") ? await advanceVaultSignIn(env, uid, current, signInSettings, now) : { outcome: "not_applicable" as const, run: current };
 		current = vault.run;
 		// #1230: no account at all on an allow-listed site: make one, store it, carry on. Only when nothing above had a login to try.
-		const made = vault.outcome === "not_applicable" && signIn.outcome !== "signed_in" && signIn.outcome !== "waiting" ? await advanceAccountCreation(env, uid, current, signInSettings, now) : { outcome: "not_applicable" as const, run: current };
+		const made = !agentHasIt && vault.outcome === "not_applicable" && signIn.outcome !== "signed_in" && signIn.outcome !== "waiting" ? await advanceAccountCreation(env, uid, current, signInSettings, now) : { outcome: "not_applicable" as const, run: current };
 		current = made.run;
-		// The owner hears of it once, when the last automatic try is spent: an email-code failure with nothing else to try, or the vault's or the account creation's own.
-		if (((signIn.outcome === "failed" && vault.outcome === "not_applicable" && made.outcome === "not_applicable") || vault.outcome === "failed" || made.outcome === "failed") && current.pause) await notifyLiveBrowserBlocker(env, uid, current, current.pause, now, attentionDeps).catch(() => undefined);
-		// The runner released its own pause: read it back now rather than a minute later.
-		if (signIn.outcome === "signed_in" || vault.outcome === "signed_in" || made.outcome === "created") return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
+		// The owner hears of it once, when the last automatic try is spent: an email-code failure with nothing else to try, or the agent's, the vault's or the account creation's own.
+		if ((agent.outcome === "failed" || (signIn.outcome === "failed" && vault.outcome === "not_applicable" && made.outcome === "not_applicable") || vault.outcome === "failed" || made.outcome === "failed") && current.pause) await notifyLiveBrowserBlocker(env, uid, current, current.pause, now, attentionDeps).catch(() => undefined);
+		// The runner released its own pause: read it back now rather than a minute later. Only the sync that provisioned
+		// re-reads — a later `waiting` must not, or a release still landing would re-read without end.
+		if (agent.outcome === "provisioned" || signIn.outcome === "signed_in" || vault.outcome === "signed_in" || made.outcome === "created") return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
+	} else if (current.status === "running" && (signInSync.signIn || signedInEventIn(events))) {
+		// #1412: the sign-in is the agent's right now — read the emailed code it asked for, or record that it got in.
+		current = (await advanceAgentSignIn(env, uid, current, signInSettings, signInSync, now)).run;
 	}
 	// Delivery is deliberately best-effort: the directive was persisted first. A later pull retries
 	// an unacknowledged directive with exactly the same checkpoint and decision.

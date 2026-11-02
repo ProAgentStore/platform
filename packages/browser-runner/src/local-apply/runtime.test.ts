@@ -42,6 +42,8 @@ let spawned: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }>;
 let child: FakeChild;
 let clicks: string[];
 let pageUnavailable: "expired" | "unavailable" | null;
+/** The page is a sign-in wall (#1412), when a test sets it. */
+let pageLogin: boolean;
 /**
  * The live SEEK shape (#989), when a test asks for it: a job AD whose only control is the one that
  * OPENS the application, and which reveals the form once that control is pressed. `null` keeps the
@@ -65,7 +67,7 @@ const browser: BrowserTools = {
 			if (args.target === "a1") return { content: [{ text: `### Result\n${JSON.stringify({ submits: false, method: "", name: "Apply", tag: "a", type: "" })}` }] };
 			if (args.target) return { content: [{ text: `### Result\n${JSON.stringify({ submits: true, method: "post", name: "Submit application", tag: "button", type: "submit" })}` }] };
 			const url = seek === "ad" ? SEEK_AD : seek === "form" ? SEEK_FORM : "https://jobs.example.com/apply";
-			return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...(pageUnavailable ? { unavailable: pageUnavailable } : {}) })}` }] };
+			return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...(pageUnavailable ? { unavailable: pageUnavailable } : {}), ...(pageLogin ? { login: true } : {}) })}` }] };
 		}
 		if (name === "browser_snapshot") return { content: [{ text: (pageTitle ? `### Page\n- Page URL: https://jobs.example.com/role/42\n- Page Title: ${pageTitle}\n### Snapshot\n` : "") + (pageUnavailable ? "This job has expired and is no longer accepting applications." : seek === "ad" ? '- link "Apply" [ref=a1]' : '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]') }] };
 		if (name === "browser_click") {
@@ -138,6 +140,7 @@ beforeEach(() => {
 	spawned = [];
 	clicks = [];
 	pageUnavailable = null;
+	pageLogin = false;
 	seek = null;
 	pageTitle = null;
 	takeoverOpen = [];
@@ -773,5 +776,96 @@ describe.each([["claude"], ["codex"]] as const)("%s: a connected-runner applicat
 		expect(st.result?.blockReason).not.toBe("bridge_unused");
 		expect(st.events.map((e) => e.type)).toEqual(expect.arrayContaining(["browser.navigated", "job.unavailable"]));
 		expect(clicks).toEqual([]);
+	});
+});
+
+/**
+ * The agent-driven sign-in (#1412), runtime half: the cloud's named secrets go into the run's own browser and the
+ * result redaction list, release a `login_required` pause into `signing_in`, are named (never valued) in the status
+ * and the trace, wake the CLI waiting for an emailed code, and are wiped the moment the sign-in ends either way.
+ */
+describe("sign-in secrets (#1412)", () => {
+	function secretStore() {
+		const provided: Record<string, string>[] = [];
+		return {
+			provided,
+			cleared: 0,
+			provideSecrets(m: Record<string, string>) { provided.push(m); },
+			clearSecrets() { this.cleared++; },
+			secretNames() { return Object.keys(Object.assign({}, ...provided)); },
+		};
+	}
+	function runtimeWithSecrets(store: ReturnType<typeof secretStore>) {
+		return new LocalApplyRuntime({
+			dataDir: join(dir, "data"),
+			homeDir: home,
+			selfUrl: () => "http://127.0.0.1:4999",
+			bridgeScript: "/runner/bridge-stdio.js",
+			browserFor: async () => ({ tools: browser, secrets: store, stop: async () => undefined, handoffPage: () => runPage }),
+			takeover,
+			spawn: (() => (child = new FakeChild())) as never,
+		});
+	}
+	/** The initial checkpoint reads the page, sees the wall, and holds for the owner (#1100): that is the pause the cloud answers. */
+	async function pausedAtWall(rt: LocalApplyRuntime, runId = "run-1") {
+		pageLogin = true;
+		rt.start(envelope(runId === "run-1" ? {} : { runId, requestId: `t1:lead-1:${runId}:materials` }));
+		await settle();
+		const held = callOn(rt, runId, "supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+		await settle();
+		expect(rt.status({ runId })).toMatchObject({ state: "paused", pause: { reason: "login_required", domain: "jobs.example.com" } });
+		return { held }; // wrapped: returning the pending call itself would make `await` wait on it
+	}
+
+	it("releases the pause into signing_in, names the secrets in the status, wakes the code wait, and wipes on the owner's resume", async () => {
+		const store = secretStore();
+		const rt = runtimeWithSecrets(store);
+		const { held } = await pausedAtWall(rt);
+		expect(() => rt.signInSecrets({ runId: "run-1", secrets: { NOT_A_NAME: "x" } })).toThrow(/at least one of PAGS_LOGIN_USERNAME/);
+		const st = rt.signInSecrets({ runId: "run-1", secrets: { PAGS_LOGIN_USERNAME: "jane@example.com", PAGS_LOGIN_PASSWORD: "hunter2-never-seen", NOT_A_NAME: "dropped" } });
+		expect(st.state).toBe("running");
+		expect(st.signIn).toEqual({ state: "signing_in", origin: "jobs.example.com", secrets: ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD"], codeRequested: false });
+		expect(store.provided).toEqual([{ PAGS_LOGIN_USERNAME: "jane@example.com", PAGS_LOGIN_PASSWORD: "hunter2-never-seen" }]);
+		expect((await held).content[0].text).toMatch(/PAGS_LOGIN_USERNAME, PAGS_LOGIN_PASSWORD/);
+		// The CLI asks for the emailed code; the status says so; the next provisioning wakes it.
+		const wait = call(rt, "request_sign_in_code");
+		await settle();
+		expect(rt.status({ runId: "run-1" }).signIn).toMatchObject({ codeRequested: true });
+		rt.signInSecrets({ runId: "run-1", secrets: { PAGS_LOGIN_CODE: "123456" } });
+		expect((await wait).content[0].text).toMatch(/available as PAGS_LOGIN_CODE/);
+		expect(rt.status({ runId: "run-1" }).signIn?.secrets).toEqual(["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD", "PAGS_LOGIN_CODE"]);
+		// Names in the trace, never a value.
+		const trace = JSON.stringify(rt.status({ runId: "run-1" }));
+		expect(trace).toContain("PAGS_LOGIN_PASSWORD");
+		for (const v of ["hunter2-never-seen", "jane@example.com", "123456"]) expect(trace).not.toContain(v);
+		// The owner takes over: the sign-in is over and the browser's map is wiped.
+		rt.resume({ runId: "run-1" });
+		expect(store.cleared).toBe(1);
+		expect(rt.status({ runId: "run-1" }).signIn).toBeUndefined();
+		expect(() => rt.signInSecrets({ runId: "run-1", secrets: { PAGS_LOGIN_CODE: "1" } })).toThrow(/not paused for a sign-in/);
+	});
+
+	it("is wiped when the run ends, and refused on a run that is not at a wall or whose browser takes no placeholders", async () => {
+		const store = secretStore();
+		const rt = runtimeWithSecrets(store);
+		await pausedAtWall(rt);
+		rt.signInSecrets({ runId: "run-1", secrets: { PAGS_LOGIN_PASSWORD: "hunter2-never-seen" } });
+		rt.cancel({ runId: "run-1" });
+		await settle();
+		expect(rt.status({ runId: "run-1" }).state).toBe("ended");
+		expect(store.cleared).toBe(1);
+
+		const plain = runtime();
+		pageLogin = false;
+		plain.start(envelope({ runId: "run-2", requestId: "t1:lead-1:2:materials" }));
+		await settle();
+		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(/not paused for a sign-in/);
+		pageLogin = true;
+		const held = callOn(plain, "run-2", "supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+		await settle();
+		expect(plain.status({ runId: "run-2" })).toMatchObject({ state: "paused", pause: { reason: "login_required" } });
+		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(/cannot take secret placeholders/);
+		plain.cancel({ runId: "run-2" });
+		await held;
 	});
 });

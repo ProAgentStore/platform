@@ -44,6 +44,10 @@ const SNAPSHOT = [
 	'- textbox "Enter the 6-digit code we emailed you" [ref=e30]',
 	'- textbox "Sign-in code" [ref=e31]',
 	'- textbox "Postcode" [ref=e32]',
+	// #1412: a sign-in page's own controls — the address box, the password submit, and the emailed-code request.
+	'- textbox "Email address" [ref=e40]',
+	'- button "Sign in" [ref=e41]',
+	'- button "Email me a sign in code" [ref=e42]',
 ].join("\n");
 /** What the commit-guard probe reads from the page for each ref. */
 const FACTS: Record<string, { submits: boolean; method: string; name: string }> = {
@@ -57,6 +61,8 @@ const FACTS: Record<string, { submits: boolean; method: string; name: string }> 
 	e21: { submits: true, method: "post", name: "Apply for this job" },
 	e22: { submits: false, method: "", name: "Quick apply" },
 	e23: { submits: true, method: "post", name: "Save and continue" },
+	e41: { submits: true, method: "post", name: "Sign in" },
+	e42: { submits: false, method: "", name: "Email me a sign in code" },
 };
 
 function fakeBrowser(
@@ -97,7 +103,7 @@ function fakeBrowser(
 
 const PROFILE = "Name: Jane Citizen\nEmail: jane@example.com\nWork authorization: Authorized to work in Australia\nRequires sponsorship: No\nNotice period: four weeks";
 
-function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[]; resume?: (p: LocalApplyPause) => "resumed" | "stopped"; artifactError?: string; directive?: "continue" | "request_review" | "stop" } = {}) {
+function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[]; resume?: (p: LocalApplyPause) => "resumed" | "stopped" | "sign_in"; artifactError?: string; directive?: "continue" | "request_review" | "stop" } = {}) {
 	const events: Array<Omit<LocalApplyEvent, "at">> = [];
 	const pauses: LocalApplyPause[] = [];
 	const allow = new Set(o.allow ?? ["jobs.example.com"]);
@@ -153,7 +159,7 @@ describe("the action classes", () => {
 		const { bridge } = await onForm();
 		const tools = await bridge.listTools();
 		const names = tools.map((t) => t.name).sort();
-		expect(names).toEqual(["browser_click", "browser_navigate", "browser_navigate_back", "browser_press_key", "browser_select_option", "browser_snapshot", "browser_type", "browser_wait_for", "ready_for_review", "report_job_unavailable", "request_answer", "supervisor_checkpoint", "upload_artifact"]);
+		expect(names).toEqual(["browser_click", "browser_navigate", "browser_navigate_back", "browser_press_key", "browser_select_option", "browser_snapshot", "browser_type", "browser_wait_for", "ready_for_review", "report_job_unavailable", "request_answer", "request_sign_in_code", "supervisor_checkpoint", "upload_artifact"]);
 		const typeTool = tools.find((t) => t.name === "browser_type") as { inputSchema: { required: string[] } };
 		expect(typeTool.inputSchema.required).toContain("source_quote");
 	});
@@ -725,5 +731,161 @@ describe("replay frames on an application page (#1063)", () => {
 		const { bridge } = await recordedForm();
 		expect((await bridge.listTools()).map((t) => t.name)).not.toContain("browser_take_screenshot");
 		expect((await bridge.callTool("browser_take_screenshot", {})).isError).toBe(true);
+	});
+});
+
+/**
+ * The agent-driven sign-in (#1412). A `login_required` pause the cloud answers with provisioned secret NAMES
+ * becomes the CLI's own job: it types the names (the browser substitutes the values, which the bridge never
+ * holds), presses the sign-in page's buttons, asks for an emailed code when the site sends one, and is handed
+ * back to the application the moment the wall is gone. Everything else into a credential field is refused.
+ */
+describe("the agent-driven sign-in (#1412)", () => {
+	const SIGN_IN = "https://login.seek.com/login";
+	const BACK = "https://jobs.example.com/apply?signed=1";
+	const PASSWORD = "hunter2-never-seen";
+
+	function signInHost(names: string[], o: { code?: boolean | "late" } = {}) {
+		const h = fakeHost({ allow: ["jobs.example.com", "seek.com"], resume: (p) => (p.reason === "login_required" ? "sign_in" : "stopped") });
+		const done: number[] = [];
+		h.host.signInSecrets = () => [...names];
+		h.host.signInDone = () => done.push(1);
+		h.host.requestSignInCode = async () => {
+			if (o.code === "late") return false;
+			if (o.code) names.push("PAGS_LOGIN_CODE");
+			return !!o.code;
+		};
+		return { ...h, done, names };
+	}
+
+	async function atSignIn(names: string[], o: Parameters<typeof signInHost>[1] = {}, clicks: Record<string, string> = { e41: BACK }) {
+		const b = fakeBrowser({ [FORM]: {}, [SIGN_IN]: { login: true }, [BACK]: {} }, { clicks });
+		const h = signInHost(names, o);
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+		const wall = await bridge.callTool("browser_navigate", { url: SIGN_IN });
+		await bridge.callTool("browser_snapshot", {});
+		return { bridge, wall, ...b, ...h };
+	}
+
+	it("a login wall the cloud answers with secrets is handed to the CLI by NAME; names are forwarded, values and strangers are refused, and the session click lands it signed in", async () => {
+		const { bridge, wall, calls, events, pauses, done } = await atSignIn(["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD"]);
+		expect(pauses).toHaveLength(1);
+		expect(pauses[0]).toMatchObject({ reason: "login_required", domain: "login.seek.com" });
+		expect(wall.isError).toBeUndefined();
+		expect(wall.content[0].text).toMatch(/Sign in to seek\.com yourself now.*PAGS_LOGIN_USERNAME, PAGS_LOGIN_PASSWORD.*request_sign_in_code/s);
+		expect(bridge.signIn).toEqual({ site: "seek.com", names: ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD"] });
+
+		// The names go through as typed, with no source_quote: the browser substitutes them.
+		expect((await bridge.callTool("browser_type", { target: "e40", text: "PAGS_LOGIN_USERNAME" })).isError).toBeUndefined();
+		expect((await bridge.callTool("browser_type", { target: "e11", text: "PAGS_LOGIN_PASSWORD" })).isError).toBeUndefined();
+		expect(calls.filter((c) => c.name === "browser_type").map((c) => c.args.text)).toEqual(["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD"]);
+		// A value into a credential field, and a name the cloud never provisioned, are refused and never typed.
+		const literal = await bridge.callTool("browser_type", { target: "e11", text: PASSWORD });
+		expect(literal.isError).toBe(true);
+		expect(literal.content[0].text).toMatch(/only a provisioned secret name/);
+		const stranger = await bridge.callTool("browser_type", { target: "e1", text: "PAGS_LOGIN_TOKEN" });
+		expect(stranger.isError).toBe(true);
+		expect(stranger.content[0].text).toMatch(/not a provisioned secret name/);
+		expect(calls.filter((c) => c.name === "browser_type")).toHaveLength(2);
+		expect(pauses).toHaveLength(1);
+
+		// The sign-in page's button is a session action; the page past the wall ends the sign-in.
+		const signedIn = await bridge.callTool("browser_click", { target: "e41" });
+		expect(signedIn.isError).toBeUndefined();
+		expect(signedIn.content[0].text).toMatch(/Signed in to seek\.com\. Take a browser_snapshot/);
+		expect(bridge.signIn).toBeNull();
+		expect(done).toEqual([1]);
+		const decisions = events.filter((e) => e.type === "policy.decision").map((e) => e.detail as Record<string, unknown>);
+		expect(decisions).toContainEqual(expect.objectContaining({ tool: "browser_click", class: "session", decision: "allowed", reason: "sign_in_step" }));
+		expect(decisions).toContainEqual(expect.objectContaining({ tool: "browser_type", class: "session", decision: "allowed", reason: "secret:PAGS_LOGIN_PASSWORD", role: "textbox" }));
+		expect(decisions).toContainEqual(expect.objectContaining({ tool: "agent_sign_in", decision: "signed_in", site: "seek.com" }));
+		// Leak proof at this layer: the value exists only in the test. Nothing the bridge saw or said carries it.
+		expect(JSON.stringify({ calls, events })).not.toContain(PASSWORD);
+
+		// Back on the application, the ordinary rules apply: the page changed, so a checkpoint comes first; then a
+		// grounded answer passes, and a bare name does not.
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).content[0].text).toMatch(/supervisor_checkpoint/);
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "post:1", phase: "post_navigation" });
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeUndefined();
+		expect((await bridge.callTool("browser_type", { target: "e11", text: "PAGS_LOGIN_PASSWORD" })).isError).toBe(true);
+	});
+
+	it("an emailed code: the CLI asks, the cloud provisions PAGS_LOGIN_CODE, and only then may the name go into the code box", async () => {
+		const { bridge, calls, events } = await atSignIn(["PAGS_LOGIN_USERNAME"], { code: true }, { e42: SIGN_IN, e41: BACK });
+		const early = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+		expect(early.isError).toBe(true);
+		expect(early.content[0].text).toMatch(/not a provisioned secret name/);
+		const sent = await bridge.callTool("browser_click", { target: "e42" });
+		expect(sent.isError).toBeUndefined();
+		expect(sent.content[0].text).toMatch(/Still on the sign-in page/);
+		const code = await bridge.callTool("request_sign_in_code", {});
+		expect(code.isError).toBeUndefined();
+		expect(code.content[0].text).toMatch(/available as PAGS_LOGIN_CODE/);
+		expect(bridge.signIn?.names).toContain("PAGS_LOGIN_CODE");
+		expect((await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" })).isError).toBeUndefined();
+		expect(calls.filter((c) => c.name === "browser_type").map((c) => c.args.text)).toEqual(["PAGS_LOGIN_CODE"]);
+		expect(events.map((e) => (e.detail as Record<string, unknown> | undefined)?.decision)).toContain("code_requested");
+	});
+
+	it("a code that never arrives, and a code asked for outside a sign-in, are both refused honestly", async () => {
+		const late = await atSignIn(["PAGS_LOGIN_USERNAME"], { code: "late" });
+		const r = await late.bridge.callTool("request_sign_in_code", {});
+		expect(r.isError).toBe(true);
+		expect(r.content[0].text).toMatch(/No sign-in code arrived/);
+		const { bridge } = await onForm();
+		const outside = await bridge.callTool("request_sign_in_code", {});
+		expect(outside.isError).toBe(true);
+		expect(outside.content[0].text).toMatch(/no sign-in in progress/);
+	});
+
+	it("a credential field typed on the application page pauses as before, and the same secrets answer that pause", async () => {
+		const b = fakeBrowser({ [FORM]: {} });
+		const h = signInHost(["PAGS_LOGIN_PASSWORD"]);
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		await bridge.callTool("browser_snapshot", {});
+		const r = await bridge.callTool("browser_type", { target: "e11", text: "secret", source_quote: "Name: Jane Citizen" });
+		expect(h.pauses).toEqual([{ reason: "login_required", question: "Sign in: Password" }]);
+		expect(r.content[0].text).toMatch(/PAGS_LOGIN_PASSWORD/);
+		expect(bridge.signIn).toEqual({ site: "example.com", names: ["PAGS_LOGIN_PASSWORD"] });
+		expect(b.calls.filter((c) => c.name === "browser_type")).toHaveLength(0);
+	});
+
+	it("off the wall the sign-in is over: a page without one ends it, and its buttons go through the ordinary rules and the commit guard", async () => {
+		const { bridge, calls, done } = await atSignIn(["PAGS_LOGIN_USERNAME"]);
+		const back = await bridge.callTool("browser_navigate", { url: FORM });
+		expect(back.content[0].text).toMatch(/Signed in to seek\.com/);
+		expect(bridge.signIn).toBeNull();
+		expect(done).toEqual([1]);
+		// "Sign in" is a submitting button on this page: the guard, not a session click, decides it.
+		const r = await bridge.callTool("browser_click", { target: "e41" });
+		expect(r.isError).toBe(true);
+		expect(r.content[0].text).toMatch(/supervisor_checkpoint/);
+		expect(calls.filter((c) => c.name === "browser_click")).toHaveLength(0);
+	});
+
+	it("a code page that signs in as the code lands is noticed at the next snapshot", async () => {
+		// A wall flagged by its password field alone (#1100 would flag `login.*` by address even once it is gone).
+		const WALL = "https://www.seek.com/apply-gate";
+		const pages: Record<string, PageFlags> = { [FORM]: {}, [WALL]: { login: true } };
+		const b = fakeBrowser(pages, { clicks: { e42: WALL } });
+		const h = signInHost(["PAGS_LOGIN_USERNAME"], { code: true });
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		await bridge.callTool("browser_navigate", { url: WALL });
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("browser_click", { target: "e42" });
+		await bridge.callTool("request_sign_in_code", {});
+		expect((await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" })).isError).toBeUndefined();
+		expect(bridge.signIn).not.toBeNull();
+		// The site let the browser in as the code landed: the wall is gone without a click to observe it.
+		pages[WALL] = {};
+		const snap = await bridge.callTool("browser_snapshot", {});
+		expect(snap.content[0].text).toMatch(/Signed in to seek\.com/);
+		expect(bridge.signIn).toBeNull();
+		expect(h.done).toEqual([1]);
 	});
 });
