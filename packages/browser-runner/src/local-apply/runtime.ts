@@ -278,6 +278,16 @@ export function verifyArtifact(workspace: string, home: string, a: LocalApplyArt
 }
 
 /**
+ * #1412/#1422: a test-only gate on the three hardcoded sign-in macros (`emailCode`, `vaultSignIn`,
+ * `accountCreation` below), so a fixture can prove the agent-driven path alone clears a sign-in
+ * wall — not a silent fallback to the macro it is meant to retire. Never set outside a test; the
+ * macros stay live in production until #1422 deletes them.
+ */
+function refuseIfMacrosDisabledForTest(macro: "emailCode" | "vaultSignIn" | "accountCreation"): void {
+	if (process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS === "1") throw new RunnerInputError(`${macro} is disabled for this test run (PAGS_TEST_DISABLE_SIGN_IN_MACROS=1) — the agent-driven path must clear this sign-in by itself.`, 409);
+}
+
+/**
  * What to tell the owner when the CLI put nothing on the page (#975) — built from the diagnostic's
  * own ids, so the advice follows the observation rather than guessing at it.
  */
@@ -750,6 +760,7 @@ export class LocalApplyRuntime {
 
 	/** The email-code sign-in (#1106) on a run paused for one: its own browser, its trace, and its release. */
 	emailCode(raw: unknown): Promise<LocalApplyEmailCodeResult> {
+		refuseIfMacrosDisabledForTest("emailCode");
 		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
 		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
 		return runEmailCodeStep({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);
@@ -757,6 +768,7 @@ export class LocalApplyRuntime {
 
 	/** The vault sign-in (#1229) on a run paused for one: the credential goes into its own browser and nowhere else. */
 	vaultSignIn(raw: unknown): Promise<LocalApplyVaultSignInResult> {
+		refuseIfMacrosDisabledForTest("vaultSignIn");
 		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
 		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
 		return runVaultSignIn({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);
@@ -764,6 +776,7 @@ export class LocalApplyRuntime {
 
 	/** Account creation (#1230) on a run paused for a sign-in on a host with no account: its own browser, its trace, and its release. */
 	accountCreation(raw: unknown): Promise<LocalApplyAccountCreationResult> {
+		refuseIfMacrosDisabledForTest("accountCreation");
 		const run = this.get(String((raw as Record<string, unknown> | null)?.runId ?? ""));
 		if (run.state !== "paused" || run.pause?.reason !== "login_required" || !run.browser) throw new RunnerInputError("The run is not paused for a sign-in", 409);
 		return runAccountCreationStep({ tools: run.browser.tools, emit: (ev) => this.emit(run, ev), resume: () => this.release(run, "resumed") }, raw);

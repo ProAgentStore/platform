@@ -30,9 +30,18 @@ export interface TestJobServerAuth {
 	jobUrl: string;
 	loginUrl: string;
 	registerUrl: string;
+	/** Step 1 of the two-step shape (#1412): email only, no password field — a sign-in page by its URL alone. */
+	twoStepLoginUrl: string;
+	/** Step 1 of the emailed-code shape (#1412): ordinary email+password. */
+	mfaLoginUrl: string;
 	submissions: TestJobSubmission[];
 	users: TestUser[];
 	sessions: Map<string, string>;
+	/**
+	 * The code the server "emailed" for each pending MFA sign-in, keyed by email — a test reads this the
+	 * same way the real Worker reads a Gmail inbox: out of band, never from the page itself.
+	 */
+	pendingMfaCodes: Map<string, string>;
 	close: () => Promise<void>;
 }
 
@@ -40,10 +49,11 @@ export async function startTestJobServerAuth(port = 0): Promise<TestJobServerAut
 	const submissions: TestJobSubmission[] = [];
 	const users: TestUser[] = [];
 	const sessions = new Map<string, string>();
+	const pendingMfaCodes = new Map<string, string>();
 
 	const server = createServer(async (req, res) => {
 		try {
-			await route(req, res, { submissions, users, sessions });
+			await route(req, res, { submissions, users, sessions, pendingMfaCodes });
 		} catch (error) {
 			html(res, 500, page("Error", `<main><h1>Server Error</h1><pre>${escapeHtml(String(error))}</pre></main>`));
 		}
@@ -58,10 +68,17 @@ export async function startTestJobServerAuth(port = 0): Promise<TestJobServerAut
 		jobUrl: `${url}/jobs/software-engineer`,
 		loginUrl: `${url}/login`,
 		registerUrl: `${url}/register`,
+		twoStepLoginUrl: `${url}/login/two-step`,
+		mfaLoginUrl: `${url}/login/mfa`,
 		submissions,
 		users,
 		sessions,
+		pendingMfaCodes,
 		async close() {
+			// `server.close()` otherwise waits forever for a still-open keep-alive socket — a real
+			// browser (unlike a plain `fetch()`, which this fixture's other tests use) can leave one
+			// idle-but-connected after its last navigation, well past this call.
+			server.closeAllConnections();
 			await new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()));
 			});
@@ -73,6 +90,7 @@ interface ServerState {
 	submissions: TestJobSubmission[];
 	users: TestUser[];
 	sessions: Map<string, string>;
+	pendingMfaCodes: Map<string, string>;
 }
 
 async function route(
@@ -163,6 +181,116 @@ async function route(
 		state.sessions.set(newSessionId, found.id);
 		setSessionCookie(res, newSessionId);
 		redirect(res, next);
+		return;
+	}
+
+	// #1412: two-step sign-in — email alone, THEN password alone on a second page. Neither page
+	// shares a route with the one-step /login above; detection by URL ("/login/...") covers step 1,
+	// which carries no password field.
+	if (req.method === "GET" && url.pathname === "/login/two-step") {
+		const error = url.searchParams.get("error") || "";
+		html(res, 200, twoStepEmailPage(error));
+		return;
+	}
+
+	if (req.method === "POST" && url.pathname === "/login/two-step") {
+		const body = await parseFormBody(req);
+		const email = body.email?.trim().toLowerCase();
+		if (!email || !state.users.some((u) => u.email === email)) {
+			redirect(res, "/login/two-step?error=No+account+with+that+email");
+			return;
+		}
+		setStepCookie(res, "twostep_email", email);
+		redirect(res, "/login/two-step/password");
+		return;
+	}
+
+	if (req.method === "GET" && url.pathname === "/login/two-step/password") {
+		const email = parseCookie(req.headers.cookie || "", "twostep_email");
+		if (!email) {
+			redirect(res, "/login/two-step");
+			return;
+		}
+		const error = url.searchParams.get("error") || "";
+		html(res, 200, twoStepPasswordPage(error, email));
+		return;
+	}
+
+	if (req.method === "POST" && url.pathname === "/login/two-step/password") {
+		const email = parseCookie(req.headers.cookie || "", "twostep_email");
+		if (!email) {
+			redirect(res, "/login/two-step");
+			return;
+		}
+		const body = await parseFormBody(req);
+		const password = body.password?.trim();
+		const found = state.users.find((u) => u.email === email && u.password === password);
+		if (!found) {
+			redirect(res, "/login/two-step/password?error=Incorrect+password");
+			return;
+		}
+		clearStepCookie(res, "twostep_email");
+		const newSessionId = `sess_${crypto.randomUUID()}`;
+		state.sessions.set(newSessionId, found.id);
+		setSessionCookie(res, newSessionId);
+		redirect(res, "/dashboard");
+		return;
+	}
+
+	// #1412: emailed-code (MFA) sign-in — ordinary email+password, then a code the server "emails"
+	// (exposed on `pendingMfaCodes` for the test to read out of band, as the real Worker reads Gmail).
+	if (req.method === "GET" && url.pathname === "/login/mfa") {
+		const error = url.searchParams.get("error") || "";
+		html(res, 200, mfaCredentialsPage(error));
+		return;
+	}
+
+	if (req.method === "POST" && url.pathname === "/login/mfa") {
+		const body = await parseFormBody(req);
+		const email = body.email?.trim().toLowerCase();
+		const password = body.password?.trim();
+		const found = state.users.find((u) => u.email === email && u.password === password);
+		if (!found || !email) {
+			redirect(res, "/login/mfa?error=Invalid+email+or+password");
+			return;
+		}
+		const code = String(Math.floor(100_000 + Math.random() * 900_000));
+		state.pendingMfaCodes.set(email, code);
+		setStepCookie(res, "mfa_email", email);
+		redirect(res, "/login/mfa/code");
+		return;
+	}
+
+	if (req.method === "GET" && url.pathname === "/login/mfa/code") {
+		const email = parseCookie(req.headers.cookie || "", "mfa_email");
+		if (!email || !state.pendingMfaCodes.has(email)) {
+			redirect(res, "/login/mfa");
+			return;
+		}
+		const error = url.searchParams.get("error") || "";
+		html(res, 200, mfaCodePage(error));
+		return;
+	}
+
+	if (req.method === "POST" && url.pathname === "/login/mfa/code") {
+		const email = parseCookie(req.headers.cookie || "", "mfa_email");
+		if (!email) {
+			redirect(res, "/login/mfa");
+			return;
+		}
+		const body = await parseFormBody(req);
+		const code = body.code?.trim();
+		const found = state.users.find((u) => u.email === email);
+		if (!found || state.pendingMfaCodes.get(email) !== code) {
+			redirect(res, "/login/mfa/code?error=Incorrect+code");
+			return;
+		}
+		state.pendingMfaCodes.delete(email);
+		clearStepCookie(res, "mfa_email");
+		const newSessionId = `sess_${crypto.randomUUID()}`;
+		state.sessions.set(newSessionId, found.id);
+		setSessionCookie(res, newSessionId);
+		redirect(res, "/dashboard");
 		return;
 	}
 
@@ -264,6 +392,71 @@ function loginPage(error: string, next: string): string {
           <button type="submit">Sign in</button>
         </form>
         <p class="switch">Don't have an account? <a href="/register">Create one</a></p>
+      </section>
+    </main>
+  `);
+}
+
+function twoStepEmailPage(error: string): string {
+	return page("Sign In", `
+    <main>
+      <section class="auth-card">
+        <h1>Sign In</h1>
+        <p class="subtitle">Step 1 of 2 — your email</p>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+        <form action="/login/two-step" method="post" class="auth-form">
+          <label>Email <input name="email" type="email" autocomplete="email" required /></label>
+          <button type="submit">Continue</button>
+        </form>
+      </section>
+    </main>
+  `);
+}
+
+function twoStepPasswordPage(error: string, email: string): string {
+	return page("Sign In", `
+    <main>
+      <section class="auth-card">
+        <h1>Sign In</h1>
+        <p class="subtitle">Step 2 of 2 — password for ${escapeHtml(email)}</p>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+        <form action="/login/two-step/password" method="post" class="auth-form">
+          <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+          <button type="submit">Sign in</button>
+        </form>
+      </section>
+    </main>
+  `);
+}
+
+function mfaCredentialsPage(error: string): string {
+	return page("Sign In", `
+    <main>
+      <section class="auth-card">
+        <h1>Sign In</h1>
+        <p class="subtitle">Sign in to continue your application</p>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+        <form action="/login/mfa" method="post" class="auth-form">
+          <label>Email <input name="email" type="email" autocomplete="email" required /></label>
+          <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+          <button type="submit">Sign in</button>
+        </form>
+      </section>
+    </main>
+  `);
+}
+
+function mfaCodePage(error: string): string {
+	return page("Sign In", `
+    <main>
+      <section class="auth-card">
+        <h1>Check your email</h1>
+        <p class="subtitle">We emailed you a 6-digit code</p>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+        <form action="/login/mfa/code" method="post" class="auth-form">
+          <label>Code <input name="code" autocomplete="one-time-code" required /></label>
+          <button type="submit">Verify</button>
+        </form>
       </section>
     </main>
   `);
@@ -497,6 +690,15 @@ function setSessionCookie(res: ServerResponse, sessionId: string): void {
 
 function clearSessionCookie(res: ServerResponse): void {
 	res.setHeader("Set-Cookie", "session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+}
+
+/** A short-lived step cookie carrying progress between pages of a multi-step sign-in (#1412). */
+function setStepCookie(res: ServerResponse, name: string, value: string): void {
+	res.setHeader("Set-Cookie", `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+}
+
+function clearStepCookie(res: ServerResponse, name: string): void {
+	res.setHeader("Set-Cookie", `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
 function redirect(res: ServerResponse, location: string): void {

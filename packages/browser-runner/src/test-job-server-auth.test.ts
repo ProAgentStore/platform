@@ -219,6 +219,124 @@ describe("test job server with auth", () => {
 		expect(dashHtml).toContain("fixture_app_");
 	});
 
+	it("two-step sign-in (#1412): email alone, then password alone, signs in", async () => {
+		await fetch(`${server.url}/register`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
+			redirect: "manual",
+		});
+
+		const step1 = await fetch(`${server.url}/login/two-step`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "email=candidate@example.com",
+			redirect: "manual",
+		});
+		expect(step1.status).toBe(303);
+		expect(step1.headers.get("location")).toBe("/login/two-step/password");
+		const stepCookie = (step1.headers.get("set-cookie") || "").split(";")[0];
+		expect(stepCookie).toContain("twostep_email=candidate@example.com");
+
+		const step2Page = await fetch(`${server.url}/login/two-step/password`, { headers: { Cookie: stepCookie } });
+		expect(step2Page.status).toBe(200);
+		expect(await step2Page.text()).toContain("Password");
+
+		const step2 = await fetch(`${server.url}/login/two-step/password`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: stepCookie },
+			body: "password=secret123",
+			redirect: "manual",
+		});
+		expect(step2.status).toBe(303);
+		expect(step2.headers.get("location")).toBe("/dashboard");
+		expect(step2.headers.get("set-cookie")).toContain("session=sess_");
+	});
+
+	it("two-step sign-in rejects an unknown email at step 1, and a wrong password at step 2", async () => {
+		await fetch(`${server.url}/register`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
+			redirect: "manual",
+		});
+
+		const unknown = await fetch(`${server.url}/login/two-step`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "email=nobody@example.com",
+			redirect: "manual",
+		});
+		expect(unknown.headers.get("location")).toContain("error=No+account");
+
+		const step1 = await fetch(`${server.url}/login/two-step`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "email=candidate@example.com",
+			redirect: "manual",
+		});
+		const stepCookie = (step1.headers.get("set-cookie") || "").split(";")[0];
+
+		const wrong = await fetch(`${server.url}/login/two-step/password`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: stepCookie },
+			body: "password=wrong",
+			redirect: "manual",
+		});
+		expect(wrong.headers.get("location")).toContain("error=Incorrect+password");
+	});
+
+	it("emailed-code (MFA) sign-in (#1412): password then the code the server 'emailed', read from pendingMfaCodes", async () => {
+		await fetch(`${server.url}/register`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
+			redirect: "manual",
+		});
+
+		const step1 = await fetch(`${server.url}/login/mfa`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "email=candidate@example.com&password=secret123",
+			redirect: "manual",
+		});
+		expect(step1.status).toBe(303);
+		expect(step1.headers.get("location")).toBe("/login/mfa/code");
+		const stepCookie = (step1.headers.get("set-cookie") || "").split(";")[0];
+
+		const code = server.pendingMfaCodes.get("candidate@example.com");
+		expect(code).toMatch(/^\d{6}$/);
+
+		const wrong = await fetch(`${server.url}/login/mfa/code`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: stepCookie },
+			body: "code=000000",
+			redirect: "manual",
+		});
+		expect(wrong.headers.get("location")).toContain("error=Incorrect+code");
+
+		const step2 = await fetch(`${server.url}/login/mfa/code`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: stepCookie },
+			body: `code=${code}`,
+			redirect: "manual",
+		});
+		expect(step2.status).toBe(303);
+		expect(step2.headers.get("location")).toBe("/dashboard");
+		expect(step2.headers.get("set-cookie")).toContain("session=sess_");
+		expect(server.pendingMfaCodes.has("candidate@example.com")).toBe(false);
+	});
+
+	it("emailed-code (MFA) sign-in rejects wrong credentials at step 1", async () => {
+		const res = await fetch(`${server.url}/login/mfa`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "email=nobody@example.com&password=wrong",
+			redirect: "manual",
+		});
+		expect(res.headers.get("location")).toContain("error=Invalid+email+or+password");
+	});
+
 	it("logout clears session", async () => {
 		const regRes = await fetch(`${server.url}/register`, {
 			method: "POST",
