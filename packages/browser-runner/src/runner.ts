@@ -333,7 +333,7 @@ export class LocalRunner {
 			// the runner. Silence here is what let that read as a clean shutdown.
 			console.warn(`[runner] ${e instanceof Error ? e.message : String(e)} — a CLI process may still be running; check \`ps\` if a repo keeps changing`);
 		}
-		await Promise.all([...this.takeovers.keys()].map((id) => this.endTakeover(id).catch(() => undefined)));
+		await Promise.all([...this.takeovers.values()].map((session) => stopNativeTakeover(session).catch(() => undefined)));
 		await this.browsers.close();
 	}
 

@@ -7,8 +7,8 @@ import { startTestJobServer, type TestJobServer } from "./test-job-server.js";
 
 // Proves the runner can host the STANDARD @playwright/mcp server and drive a real browser
 // entirely through its MCP tools — the foundation for replacing the hand-rolled action code.
-// #1419: every browser is launched BY the runner (`launchCdpBrowser`, the same CDP-attach
-// pattern every other path uses) — McpRuntime itself only ever attaches, never launches.
+// #1419/#1431: every browser is launched BY the runner (`launchCdpBrowser` retains its
+// compatibility name, now supplying the native context). MCP never launches the browser.
 describe("McpRuntime (standard @playwright/mcp)", () => {
 	let server: TestJobServer;
 	let profileDir: string;
@@ -47,7 +47,7 @@ describe("McpRuntime (standard @playwright/mcp)", () => {
 		const m = snap.match(/textbox "Full name"[^\n]*\[ref=([\w]+)\]/);
 		expect(m).toBeTruthy();
 		const typed = await launched.mcp.callTool("browser_type", { element: "Full name textbox", target: (m as RegExpMatchArray)[1], text: "Sergey Ivochkin" });
-		expect(typed.isError ?? false).toBe(false); // the standard tool accepted + performed it
+		expect(typed.isError ?? false, launched.mcp.textOf(typed)).toBe(false); // keep the tool's actual failure diagnosis
 		// The field genuinely holds the value (read it back with the standard tool).
 		const evalRes = launched.mcp.textOf(await launched.mcp.callTool("browser_evaluate", { function: "() => document.querySelector('input[name=fullName]').value" }));
 		expect(evalRes).toContain("Sergey Ivochkin");

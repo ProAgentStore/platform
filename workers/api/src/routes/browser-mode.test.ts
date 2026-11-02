@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 afterEach(() => d1.close());
 async function call(path: string, body?: unknown) {
-	const res = await app.request(path, { method: body === undefined ? "GET" : "PUT", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { DB: d1.DB } as Env);
+	const res = await app.request(path, { method: body === undefined ? "GET" : "PUT", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { DB: d1.DB } as unknown as Env);
 	return { status: res.status, body: await res.json() as Record<string, unknown> };
 }
 
@@ -47,7 +47,7 @@ describe("browser mode configuration", () => {
 		for (const body of [{}, { mode: "headfull" }, { mode: false }, { mode: "headed", extra: 1 }]) expect((await call("/instances/i1/browser-mode", body)).status).toBe(400);
 		expect((await call("/agents/agent-1/capabilities", { browserMode: "invalid" })).status).toBe(400);
 		expect((await call("/agents/agent-1", { capabilities: { browserMode: "invalid" } })).status).toBe(400);
-		const create = await app.request("/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug: "bad-mode", name: "Bad mode", capabilities: { browserMode: "invalid" } }) }, { DB: d1.DB } as Env);
+		const create = await app.request("/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug: "bad-mode", name: "Bad mode", capabilities: { browserMode: "invalid" } }) }, { DB: d1.DB } as unknown as Env);
 		expect(create.status).toBe(400);
 		expect((await call("/instances/other/browser-mode")).status).toBe(404);
 		expect((await call("/instances/other/browser-mode", { mode: "headless" })).status).toBe(404);

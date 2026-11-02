@@ -14,7 +14,7 @@ let dir: string;
 function context() {
 	const listeners = new Map<string, Array<() => void>>();
 	const page = { once() {}, isClosed: () => false, bringToFront: async () => undefined, url: () => "https://fixture.test", title: async () => "fixture", locator: () => ({ innerText: async () => "fixture" }) };
-	return { browser: () => ({ version: () => "verified-test-version" }), close: vi.fn(async () => { for (const fn of listeners.get("close") ?? []) fn(); }), on: (event: string, fn: () => void) => { listeners.set(event, [...listeners.get(event) ?? [], fn]); }, pages: () => [], newPage: async () => page, addInitScript: async () => undefined, cookies: async () => [] };
+	return { grantPermissions: vi.fn(), browser: () => ({ version: () => "verified-test-version" }), close: vi.fn(async () => { for (const fn of listeners.get("close") ?? []) fn(); }), on: (event: string, fn: () => void) => { listeners.set(event, [...listeners.get(event) ?? [], fn]); }, pages: () => [], newPage: async () => page, addInitScript: async () => undefined, cookies: async () => [] };
 }
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "pags-engines-"));
@@ -29,6 +29,22 @@ afterEach(() => { vi.unstubAllEnvs(); rmSync(dir, { recursive: true, force: true
 const options = () => ({ headless: true, profilePolicy: "persistent" as const, preference: "default" as const, profileRoot: dir });
 
 describe("explicit engine launches and truthful receipts (#1431)", () => {
+	it.each(BROWSER_ENGINES)("does not automatically grant real media access in %s (#425)", async (engine) => {
+		const owned = await launchRunnerBrowser({ ...options(), engine });
+		try {
+			const kind = engine === "firefox" || engine === "webkit" ? engine : "chromium";
+			const opts = launches[kind].mock.calls[0][1];
+			expect(opts.permissions ?? []).not.toContain("microphone");
+			expect(opts.permissions ?? []).not.toContain("camera");
+			const ctx = await launches[kind].mock.results[0].value;
+			expect(ctx.grantPermissions).not.toHaveBeenCalled();
+			if (kind === "chromium") {
+				expect(opts.args).toContain("--use-fake-ui-for-media-stream");
+				expect(opts.args).toContain("--use-fake-device-for-media-stream");
+			} else expect(opts.args).toBeUndefined();
+		} finally { await owned.stop(); }
+	});
+
 	it.each(BROWSER_ENGINES)("launches %s through its supported Playwright browser/channel", async (engine) => {
 		const owned = await launchRunnerBrowser({ ...options(), engine });
 		try {
