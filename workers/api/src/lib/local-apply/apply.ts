@@ -64,7 +64,9 @@ import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQue
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { clipMarked } from "../clip-marked.js";
 import { cliAtLeast } from "../runner-upgrade.js";
-import { syncApplicationCard } from "../applications/application-board.js";
+import { applicationCardId, syncApplicationCard } from "../applications/application-board.js";
+import { writeActionEntry } from "../task-action-log.js";
+import { computeLoginReadiness, loginReadinessDetail } from "./login-readiness.js";
 import { deepLinkFor } from "../console-links.js";
 import { approvalStageOf, approvalState } from "./approval.js";
 import { requestOwnerAttention } from "../owner-attention.js";
@@ -677,16 +679,37 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	let current = (await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now)) ?? (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
 	const signInSettings = current.pause?.reason === "login_required" ? await runnerSettingsFor(env, run.instanceId, uid).catch(() => RUNNER_DEFAULTS) : RUNNER_DEFAULTS;
+	// #1408: why no automatic sign-in ran, computed from settings and the vault BEFORE any mechanism
+	// below acts — one snapshot, read by both notifications this sync may send (first-pause and
+	// mechanism-failed), so neither guesses at a gate the other already measured.
+	const readiness = current.pause?.reason === "login_required" ? await computeLoginReadiness(env, uid, current, signInSettings).catch(() => null) : null;
 	if (current.status === "paused" && run.status !== "paused" && pause) {
 		// #1079: an answerable pause is a durable decision on this application — answered late, it is kept for the next fill.
 		if (pause.question) await recordPauseDecision(env, { instanceId: run.instanceId, userId: uid, kind: "apply_run", subjectId: run.applicationId, taskId: run.id, scope: run.applicationId, question: pause.question, now }).catch(() => undefined);
 		await move(env, uid, run.applicationId, ["filling"], { ...base, to: "blocked", reason: pause.reason, questions: pause.question ? [pause.question] : [] }, now);
+		if (readiness) {
+			// One readiness event per pause, on the trace this sync already writes to (never a second write path),
+			// and the card's own paper trail — both BEFORE any of the three mechanisms below has acted.
+			current = (await updateApplyRun(env, current, { events: [{ type: "login.readiness", at: iso(now), domain: readiness.host, detail: loginReadinessDetail(readiness) }] }, now)) ?? current;
+			await writeActionEntry(env, {
+				instanceId: run.instanceId,
+				userId: uid,
+				taskId: applicationCardId(run.applicationId),
+				actor: "platform",
+				actionType: "login_readiness",
+				summary: `Login readiness on ${readiness.host}: email ${readiness.email}, vault ${readiness.vault}, account creation ${readiness.accountCreation} → ${readiness.nextAction}.`,
+				status: "ok",
+				dedupeKey: `login-readiness:${run.id}`,
+				at: now,
+			}).catch(() => undefined);
+		}
 		// The runner has already paused on the exact page.  Only then create the bounded mobile
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
 		// successful login from a redirect.
 		// #1106: a SEEK sign-in the email code can clear is not the owner's yet; they hear of it if it fails.
 		// #1229: nor is one the vault can sign in with a stored password login.
-		if (!(await emailCodeWillTry(env, current, signInSettings)) && !(await vaultSignInWillTry(env, uid, current, signInSettings)) && !(await accountCreationWillTry(env, uid, current, signInSettings))) await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
+		if (!(await emailCodeWillTry(env, current, signInSettings)) && !(await vaultSignInWillTry(env, uid, current, signInSettings)) && !(await accountCreationWillTry(env, uid, current, signInSettings)))
+			await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps, readiness?.nextAction).catch(() => undefined);
 	} else if (current.status === "running" && run.status === "paused") {
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
@@ -704,7 +727,8 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		const made = vault.outcome === "not_applicable" && signIn.outcome !== "signed_in" && signIn.outcome !== "waiting" ? await advanceAccountCreation(env, uid, current, signInSettings, now) : { outcome: "not_applicable" as const, run: current };
 		current = made.run;
 		// The owner hears of it once, when the last automatic try is spent: an email-code failure with nothing else to try, or the vault's or the account creation's own.
-		if (((signIn.outcome === "failed" && vault.outcome === "not_applicable" && made.outcome === "not_applicable") || vault.outcome === "failed" || made.outcome === "failed") && current.pause) await notifyLiveBrowserBlocker(env, uid, current, current.pause, now, attentionDeps).catch(() => undefined);
+		if (((signIn.outcome === "failed" && vault.outcome === "not_applicable" && made.outcome === "not_applicable") || vault.outcome === "failed" || made.outcome === "failed") && current.pause)
+			await notifyLiveBrowserBlocker(env, uid, current, current.pause, now, attentionDeps, readiness?.nextAction).catch(() => undefined);
 		// The runner released its own pause: read it back now rather than a minute later.
 		if (signIn.outcome === "signed_in" || vault.outcome === "signed_in" || made.outcome === "created") return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
 	}

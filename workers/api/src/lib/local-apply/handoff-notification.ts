@@ -9,6 +9,7 @@ import { clipMarked } from "../clip-marked.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { type LocalApplyPause } from "./contract.js";
 import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, type LocalApplyHandoffStatus } from "./handoff-contract.js";
+import { nextActionText, type LoginReadinessNextAction } from "./login-readiness.js";
 import { type ApplyRun, createLocalApplyHandoff, markLocalApplyHandoff, usableLocalApplyHandoff } from "./store.js";
 
 const HANDOFF_TTL_MS = 10 * 60_000;
@@ -52,6 +53,8 @@ export async function notifyLiveBrowserBlocker(
 	pause: LocalApplyPause,
 	now: number,
 	attentionDeps: AttentionDeps<Env>,
+	/** #1408: the readiness's next lever, named when the pause will not clear by itself (every call site here, by construction — none fires while a mechanism is still trying). Login-only; a captcha pause has no readiness. */
+	nextAction?: LoginReadinessNextAction,
 ): Promise<void> {
 	if (!( ["login_required", "captcha"] as const).includes(pause.reason as "login_required" | "captcha")) return;
 	const app = await getOwnedApplication(env, uid, run.applicationId);
@@ -83,6 +86,7 @@ export async function notifyLiveBrowserBlocker(
 	}
 	handoff = (await markLocalApplyHandoff(env, { continuityId: handoff.continuityId, instanceId: run.instanceId, userId: uid, state: "ready" }, now)) ?? handoff;
 	const title = pause.reason === "captcha" ? "A CAPTCHA needs your help" : "Sign in to continue an application";
+	const body = "Open the live Application Runner browser on this device, complete the site step, then choose Resume. This does not submit the application.";
 	await requestOwnerAttention(env, {
 		event: "blocker_required",
 		userId: uid,
@@ -91,6 +95,8 @@ export async function notifyLiveBrowserBlocker(
 		about: { kind: "application-handoff", id: handoff.continuityId, state: run.id },
 		notificationType: "apply",
 		title,
-		body: "Open the live Application Runner browser on this device, complete the site step, then choose Resume. This does not submit the application.",
+		// #1408: named only for a login pause with a computed readiness — a captcha pause has none, and
+		// `take_over`/`wait_for_code` are already what `body` says in other words, so nothing is added for them.
+		body: pause.reason === "login_required" && nextAction && nextAction !== "take_over" && nextAction !== "wait_for_code" ? `${body} ${nextActionText(nextAction)}` : body,
 	}, attentionDeps);
 }

@@ -78,7 +78,7 @@ function defaultDeps(env: Env, run: ApplyRun, uid: string): EmailSignInDeps {
 }
 
 /** `au.seek.com` → `seek.com`, `www.seek.com.au` → `seek.com.au`: the longest listed site the host is on. */
-function seekSite(domain: string | undefined): string | null {
+export function seekSite(domain: string | undefined): string | null {
 	const host = (domain ?? "").toLowerCase();
 	return [...EMAIL_CODE_SIGN_IN_SITES].sort((a, b) => b.length - a.length).find((s) => host === s || host.endsWith(`.${s}`)) ?? null;
 }

@@ -408,7 +408,7 @@ export const LOCAL_APPLY_EVENT_TYPES: readonly LocalApplyEventType[] = [
 ];
 
 /** Events PAGS records itself on the same trace — never accepted from a runner. */
-export type LocalApplyPlatformEventType = "run.requested" | "policy.submit_gate" | "runner.dispatched" | "run.ended";
+export type LocalApplyPlatformEventType = "run.requested" | "policy.submit_gate" | "runner.dispatched" | "run.ended" | "login.readiness";
 
 /**
  * A trace event. Detail is a WHITELIST of keys holding a class, a domain, a decision or a handle —
