@@ -15,7 +15,8 @@
  *
  * One row per run (migration 0311): the host, the vault credential id if one was used, when the code was
  * asked for and which message carried it, and the outcome. The trace names the secrets provisioned, never a
- * value. The macros stay beside this for an older runner that does not know the route; they go in #1422.
+ * value. The three hardcoded macros this replaces (emailed code, vault password, account creation) were
+ * retired in #1422 — this is now the only sign-in path.
  */
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import type { Env } from "../../types.js";
@@ -26,7 +27,6 @@ import { findCredentialForHost, passwordLoginForHost } from "../credentials.js";
 import { logEvent } from "../events.js";
 import { getMessage, listMessages } from "../gmail.js";
 import { EMAIL_CODE_SIGN_IN_SITES, LOCAL_APPLY_SIGN_IN_SECRETS_PATH, type LocalApplySignInSecretName } from "./contract.js";
-import { CODE_WAIT_MS, signInCodeIn } from "./email-code-sign-in.js";
 import type { ApplicationRunnerSettings } from "./policy.js";
 import { type ApplyRun, type ApplyTraceEvent, updateApplyRun } from "./store.js";
 
@@ -67,6 +67,22 @@ interface Row {
 
 /** A sign-in the runner stopped reporting on, with the run no longer running, is not still happening. */
 const STALE_MS = 20 * 60_000;
+/** How long after asking for a code it may take to arrive. SEEK's mail usually lands within a minute. */
+export const CODE_WAIT_MS = 5 * 60_000;
+
+/**
+ * The sign-in code in a mail, or null. Anchored to the word "code" — a notification mail is full of job ids
+ * and salaries, and a bare six-digit number is not a code.
+ */
+export function signInCodeIn(subject: string, text: string): string | null {
+	for (const s of [subject, text.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ")]) {
+		const after = s.match(/\bcode\b\D{0,40}?\b(\d{4,8})\b/i);
+		if (after) return after[1];
+		const before = s.match(/\b(\d{4,8})\b\s*(?:is|was)\s+your\b[^.\n]{0,40}\bcode\b/i);
+		if (before) return before[1];
+	}
+	return null;
+}
 /** How long after provisioning a `login_required` pause still reads as the one just answered, not a new wall. */
 const WALL_GRACE_MS = 30_000;
 
@@ -204,11 +220,8 @@ export async function advanceAgentSignIn(
 			const taken = res?.status === 200 && !!parseRunnerSignIn((res.body as { signIn?: unknown } | null)?.signIn);
 			// Each use of a stored login is recorded: the host and what came of it, never the username or the password.
 			if (offer.credentialId) await logEvent(env, { source: "credentials", event: "credential.use", message: `Handed the login for ${host} to the agent's sign-in: ${taken ? "provisioned" : "not taken"}`, userId: uid, instanceId: run.instanceId, context: { host, credentialId: offer.credentialId, runId: run.id, via: "local_apply_agent", outcome: taken ? "provisioned" : "not_taken" } }).catch(() => undefined);
-			if (!taken) {
-				// The macros still get their turn (#1422 retires them): this attempt is recorded and stays out of their way.
-				await fail(res === null ? "runner_unavailable" : res.status === 404 ? "runner_outdated" : "not_at_wall");
-				return { outcome: "not_applicable", run };
-			}
+			// #1422: no macro is left to fall back to — the owner hears of it, through this `failed` outcome, when the runner will not take the secrets.
+			if (!taken) return fail(res === null ? "runner_unavailable" : res.status === 404 ? "runner_outdated" : "not_at_wall");
 			await trace("provisioned", { reason: names.join(","), ...(offer.credentialId ? { basis: "vault" } : { basis: "sign_in_email" }) });
 			return { outcome: "provisioned", run };
 		}

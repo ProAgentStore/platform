@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../../types.js";
 import { createCredential, findCredentialForHost, passwordLoginForHost } from "../credentials.js";
 import { type RealSchemaD1, realSchemaD1, seedTenant } from "../d1-sqlite.js";
-import { type AgentSignInDeps, advanceAgentSignIn, agentSignInApplies, agentSignInWillTry, parseRunnerSignIn, senderQuery, signedInEventIn } from "./agent-sign-in.js";
+import { type AgentSignInDeps, advanceAgentSignIn, agentSignInApplies, agentSignInWillTry, parseRunnerSignIn, senderQuery, signedInEventIn, signInCodeIn } from "./agent-sign-in.js";
 import { type ApplyRun, type ApplyTraceEvent, getApplyRun } from "./store.js";
 
 const UID = "u1";
@@ -187,18 +187,18 @@ describe("the agent-driven sign-in (#1412 acceptance)", () => {
 		expect(g.sent).toHaveLength(1);
 	});
 
-	it("an older runner that does not know the route records the attempt and steps aside for the macros", async () => {
+	it("an older runner that does not know the route records the attempt and fails it (#1422: no macro left to step aside for)", async () => {
 		insertRun(RUN, INDEED_PAUSE);
 		await store();
 		const f = fakes({ status: 404, answer: { error: "no such route" } });
-		expect((await advanceAgentSignIn(env(), UID, await run(), { signInEmail: null }, none, T0, f.deps)).outcome).toBe("not_applicable");
+		expect((await advanceAgentSignIn(env(), UID, await run(), { signInEmail: null }, none, T0, f.deps)).outcome).toBe("failed");
 		expect(await row()).toMatchObject({ state: "failed", failure: "runner_outdated" });
 		expect((await run()).trace.at(-1)?.detail).toMatchObject({ decision: "failed", rule: "runner_outdated" });
 		expect((await advanceAgentSignIn(env(), UID, await run(), { signInEmail: null }, none, T0 + 1000, f.deps)).outcome).toBe("not_applicable");
 		expect(f.sent).toHaveLength(1);
 		const gone = fakes({ answer: null });
 		insertRun("run-2", INDEED_PAUSE);
-		expect((await advanceAgentSignIn(env(), UID, await run("run-2"), { signInEmail: null }, none, T0, gone.deps)).outcome).toBe("not_applicable");
+		expect((await advanceAgentSignIn(env(), UID, await run("run-2"), { signInEmail: null }, none, T0, gone.deps)).outcome).toBe("failed");
 		expect(await row("run-2")).toMatchObject({ state: "failed", failure: "runner_unavailable" });
 	});
 
@@ -228,5 +228,15 @@ describe("the agent-driven sign-in (#1412 acceptance)", () => {
 		expect(signedInEventIn([{ ...SIGNED_IN, detail: { tool: "agent_sign_in", decision: "provisioned" } }])).toBe(false);
 		expect(senderQuery("login.seek.com")).toBe("from:(seek.com.au OR seek.com OR seek.co.nz)");
 		expect(senderQuery("secure.indeed.com")).toBe("from:indeed.com");
+	});
+});
+
+describe("signInCodeIn", () => {
+	it("reads a code named as one, either way round", () => {
+		expect(signInCodeIn("Your SEEK sign in code", "Your sign in code is 482913.")).toBe("482913");
+		expect(signInCodeIn("482913 is your SEEK sign in code", "")).toBe("482913");
+	});
+	it("never takes a job id or a salary for a code", () => {
+		expect(signInCodeIn("20 new jobs for Software Developer", "Job 95289924 pays $120000")).toBeNull();
 	});
 });

@@ -1,8 +1,8 @@
 /**
- * #1412 through the real sync path: a fill that pauses on a sign-in is handed to the AGENT first — the login goes to the runner as
- * named secrets in one request, no macro runs, the owner is not alerted — and the macros get their turn only when the runner does not
- * know the route. Real schema, routes, vault and `syncApplyRun`; the relay to `pags up` is the only fake. The step's own edges are
- * `local-apply/agent-sign-in.test.ts`.
+ * #1412/#1422 through the real sync path: a fill that pauses on a sign-in is handed to the AGENT — the login goes to the runner as
+ * named secrets in one request, and the owner is alerted only once the agent's own attempt is spent (the three hardcoded macros this
+ * used to fall back to are retired). Real schema, routes, vault and `syncApplyRun`; the relay to `pags up` is the only fake. The step's
+ * own edges are `local-apply/agent-sign-in.test.ts`.
  */
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -90,7 +90,7 @@ const alerts = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM notif
 const store = (domain = "indeed.com") => createCredential(env(), "ap", "u1", { domain, username: USERNAME, password: PASSWORD } as Parameters<typeof createCredential>[3]);
 const agentRow = (runId: string) => d1.DB.prepare("SELECT state, host, failure FROM local_apply_agent_sign_ins WHERE run_id = ?1").bind(runId).first<{ state: string; host: string; failure: string | null }>();
 
-describe("a sign-in pause is the agent's before it is a macro's or the owner's (#1412)", () => {
+describe("a sign-in pause is the agent's, and only then the owner's (#1412/#1422)", () => {
 	it("with the host's login stored: the runner gets it as named secrets in ONE request, no macro runs, the owner is not alerted, the run is read back", async () => {
 		await store();
 		const run = await pausedOnSignIn("lead-1412", "www.indeed.com");
@@ -118,18 +118,18 @@ describe("a sign-in pause is the agent's before it is a macro's or the owner's (
 		expect(await alerts()).toBe(0);
 	});
 
-	it("a runner that does not know the route: the attempt is recorded and the vault macro gets its turn, as before", async () => {
+	it("a runner that does not know the route (#1422: no macro left to fall back to): the attempt is recorded and the owner is alerted", async () => {
 		await store();
 		const run = await pausedOnSignIn("lead-1412-old", "www.indeed.com");
-		answers["/local-apply/vault-sign-in"] = { status: 200, body: { state: "signed_in" } };
+		// No "/local-apply/sign-in-secrets" answer stubbed: the relay's default 404 stands in for an older runner.
+		answers["/local-apply/handoff"] = { status: 200, body: { handoffId: "x", runId: run.id, applicationId: "lead-1412-old", browserProfile: "isolated", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
 		await syncApplyRun(env(), "u1", run, Date.now());
 		expect(sent.some((s) => s.path === "/local-apply/sign-in-secrets")).toBe(true);
-		expect(sent.find((s) => s.path === "/local-apply/vault-sign-in")?.body).toEqual({ runId: run.id, host: "www.indeed.com", username: USERNAME, password: PASSWORD });
 		expect(await agentRow(run.id)).toMatchObject({ state: "failed", failure: "runner_outdated" });
-		expect(await alerts()).toBe(0);
+		expect(await alerts()).toBe(1);
 	});
 
-	it("nothing to hand over (no stored login, not a SEEK code site): the macros and then the owner, exactly as before", async () => {
+	it("nothing to hand over (no stored login, not a SEEK code site): straight to the owner", async () => {
 		const run = await pausedOnSignIn("lead-1412-none", "www.indeed.com");
 		answers["/local-apply/handoff"] = { status: 200, body: { handoffId: "x", runId: run.id, applicationId: "lead-1412-none", browserProfile: "isolated", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
 		await syncApplyRun(env(), "u1", run, Date.now());

@@ -874,18 +874,4 @@ describe("sign-in secrets (#1412)", () => {
 		plain.cancel({ runId: "run-2" });
 		await held;
 	});
-
-	it("PAGS_TEST_DISABLE_SIGN_IN_MACROS=1 refuses all three macros before anything else runs — a fixture can prove the agent path alone clears a wall (#1412/#1422)", () => {
-		const rt = runtime();
-		process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS = "1";
-		try {
-			expect(() => rt.emailCode({ runId: "no-such-run" })).toThrow(/emailCode is disabled for this test run/);
-			expect(() => rt.vaultSignIn({ runId: "no-such-run" })).toThrow(/vaultSignIn is disabled for this test run/);
-			expect(() => rt.accountCreation({ runId: "no-such-run" })).toThrow(/accountCreation is disabled for this test run/);
-		} finally {
-			delete process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS;
-		}
-		// Unset (the production default): the same calls reach the ordinary "no such run" check instead.
-		expect(() => rt.emailCode({ runId: "no-such-run" })).not.toThrow(/disabled for this test run/);
-	});
 });

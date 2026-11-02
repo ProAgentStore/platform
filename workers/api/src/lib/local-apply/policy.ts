@@ -63,8 +63,8 @@ export interface ApplicationRunnerSettings {
 	 */
 	signInEmail: string | null;
 	/**
-	 * May the Runner create an account on an allow-listed job site (`account-creation-hosts.json`) when a fill pauses for a sign-in and the
-	 * owner has none (#1230)? OFF by default and turned on by the owner: it registers them on a third-party site, which they should choose.
+	 * Retired (#1422): account creation (#1230) was one of the three hardcoded sign-in macros, and nothing reads this field any more. Kept
+	 * so an owner who set it before keeps a no-op setting rather than a rejected request.
 	 */
 	accountCreation: boolean;
 }

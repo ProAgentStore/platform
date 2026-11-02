@@ -391,3 +391,32 @@ async function encryptSecretsFor(env: Env, input: CredentialInput): Promise<{ c:
 	const { ciphertext, dekWrapped, iv } = await encryptKey(JSON.stringify(secrets), env.KEY_ENCRYPTION_KEY);
 	return { c: ciphertext, d: dekWrapped, i: iv };
 }
+
+const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const LOWER = "abcdefghijkmnopqrstuvwxyz";
+const DIGIT = "23456789";
+const SYMBOL = "!@#$%^&*-_";
+
+/** A strong random password: 24 characters, every class present, from the platform's own CSPRNG. Rejection sampling, so no modulo bias. */
+export function generatePassword(length = 24): string {
+	const pick = (set: string): string => {
+		const limit = 256 - (256 % set.length);
+		for (;;) {
+			const b = crypto.getRandomValues(new Uint8Array(1))[0];
+			if (b < limit) return set[b % set.length];
+		}
+	};
+	const all = UPPER + LOWER + DIGIT + SYMBOL;
+	const chars = [pick(UPPER), pick(LOWER), pick(DIGIT), pick(SYMBOL)];
+	while (chars.length < length) chars.push(pick(all));
+	// Fisher–Yates with the same unbiased draw.
+	for (let i = chars.length - 1; i > 0; i--) {
+		const limit = 256 - (256 % (i + 1));
+		let b: number;
+		do b = crypto.getRandomValues(new Uint8Array(1))[0];
+		while (b >= limit);
+		const j = b % (i + 1);
+		[chars[i], chars[j]] = [chars[j], chars[i]];
+	}
+	return chars.join("");
+}

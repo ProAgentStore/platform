@@ -38,26 +38,8 @@ export const LOCAL_APPLY_CANCEL_PATH = "/local-apply/cancel";
 export const LOCAL_APPLY_PREFLIGHT_PATH = "/local-apply/preflight";
 /** Delivers a cloud-persisted supervisory decision to one paused checkpoint. */
 export const LOCAL_APPLY_DIRECTIVE_PATH = "/local-apply/directive";
-/**
- * The email-code sign-in (#1106), on a run paused `login_required`: `{runId, step: "request", email}` has the runner
- * enter the sign-in email and ask the site for a code; `{runId, step: "enter", code}` types the code PAGS read from
- * the owner's Gmail and, once the site lets the browser in, releases the pause. The code is never stored or traced.
- */
-export const LOCAL_APPLY_EMAIL_CODE_PATH = "/local-apply/email-code";
-/** Sites whose sign-in is a code emailed to the account address. SEEK's page was read live for #1106. */
+/** Sites whose sign-in is a code emailed to the account address. SEEK's page was read live for #1106. Used by the agent-driven sign-in (#1412) to decide which secret to offer; the email-code and vault macros that used to read it were retired in #1422. */
 export const EMAIL_CODE_SIGN_IN_SITES: readonly string[] = ["seek.com", "seek.com.au", "seek.co.nz"];
-export type LocalApplyEmailCodeFailure = "unsupported_site" | "no_email_field" | "no_send_button" | "no_code_field" | "code_rejected";
-export type LocalApplyEmailCodeResult = { state: "code_requested" } | { state: "signed_in" } | { state: "failed"; reason: LocalApplyEmailCodeFailure };
-/**
- * The vault sign-in (#1229), on a run paused `login_required` on a host with a stored password login: `{runId, host, username, password}`
- * has the runner type the credential into the paused run's own sign-in page and, once the site lets the browser in, release the pause.
- * The credential passes through this one request and is never stored by the runner, traced, logged or shown to the CLI. `host` is the site
- * the credential belongs to: the runner refuses to type it anywhere else. A CAPTCHA, a second factor or a refused password ends the
- * attempt with its reason — never a retry — and the owner gets the ordinary sign-in handoff.
- */
-export const LOCAL_APPLY_VAULT_SIGN_IN_PATH = "/local-apply/vault-sign-in";
-export type LocalApplyVaultSignInFailure = "host_mismatch" | "no_username_field" | "no_password_field" | "no_submit_button" | "captcha" | "two_factor" | "wrong_password" | "not_signed_in";
-export type LocalApplyVaultSignInResult = { state: "signed_in" } | { state: "failed"; reason: LocalApplyVaultSignInFailure };
 /**
  * The agent-driven sign-in (#1412): on a run paused `login_required`, the cloud provisions what it may hand over for
  * that host — the vault login and, once the site has emailed one, the code — as NAMED secrets `{runId, secrets: {NAME: value}}`.
@@ -82,48 +64,6 @@ export interface LocalApplySignInState {
 	/** The CLI asked for the emailed code and is waiting for `PAGS_LOGIN_CODE`. */
 	codeRequested: boolean;
 }
-
-/**
- * Account creation (#1230, #1226 ask 2), on a run paused `login_required` on an allow-listed host where the owner has no account. Three
- * steps on the paused run's own page, each one request:
- *   `{runId, step: "prepare", host, profile}`  open the site's sign-up form and fill what is NOT secret (name, email, phone, location);
- *                                              report whether the form asks for a password. NOTHING is submitted.
- *   `{runId, step: "submit", host, password?, acceptTerms}` type the password the cloud generated AND already stored in the vault, tick
- *                                              the terms box only when `acceptTerms` is true, and press the form's own button.
- *   `{runId, step: "enter", host, code}`       type the verification code the cloud read from the owner's Gmail.
- * The profile and the password pass through the request and are never stored by the runner, traced, logged or shown to the CLI. A CAPTCHA
- * or any anti-bot challenge, a required field the profile does not have, or a terms box the owner has not authorised ends the attempt with
- * its reason and the owner gets the ordinary sign-in handoff — nothing is worked around.
- */
-export const LOCAL_APPLY_ACCOUNT_CREATION_PATH = "/local-apply/account-creation";
-export interface LocalApplyAccountProfile {
-	firstName: string;
-	lastName: string;
-	email: string;
-	phone?: string;
-	location?: string;
-	linkedin?: string;
-}
-export type LocalApplyAccountCreationFailure =
-	| "host_mismatch"
-	| "no_signup_link"
-	| "no_signup_form"
-	| "no_email_field"
-	| "no_password_field"
-	| "password_not_prepared"
-	| "no_submit_button"
-	| "captcha"
-	| "terms_required"
-	| "field_required"
-	| "email_taken"
-	| "no_code_field"
-	| "code_rejected"
-	| "not_created";
-export type LocalApplyAccountCreationResult =
-	| { state: "prepared"; needsPassword: boolean }
-	| { state: "code_requested" }
-	| { state: "created" }
-	| { state: "failed"; reason: LocalApplyAccountCreationFailure };
 
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];

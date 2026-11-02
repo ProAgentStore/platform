@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCredential, credDomain, credentialMatchRank, deleteCredential, findCredentialForHost, listCredentials, revealCredential, updateCredential } from "./credentials.js";
+import { createCredential, credDomain, credentialMatchRank, deleteCredential, findCredentialForHost, generatePassword, listCredentials, revealCredential, updateCredential } from "./credentials.js";
 import type { Env } from "../types.js";
 
 // 32-byte (64 hex) master key for AES-KW envelope encryption in tests.
@@ -283,5 +283,17 @@ describe("the apply agent signs in with the RIGHT credential, not the first-stor
 		await createCredential(env, "i1", "u1", { domain: "jobs.acme.com", username: "exact@example.com", password: "pw2" });
 		await findCredentialForHost(env, "i1", "u1", "jobs.acme.com");
 		expect(events(env).filter((e) => e.includes("credential.selected")).length).toBe(1);
+	});
+});
+
+describe("generatePassword", () => {
+	it("is 24 characters with every class, and differs each time", () => {
+		const a = generatePassword();
+		expect(a).toHaveLength(24);
+		expect(a).toMatch(/[A-Z]/);
+		expect(a).toMatch(/[a-z]/);
+		expect(a).toMatch(/[0-9]/);
+		expect(a).toMatch(/[!@#$%^&*\-_]/);
+		expect(generatePassword()).not.toBe(a);
 	});
 });

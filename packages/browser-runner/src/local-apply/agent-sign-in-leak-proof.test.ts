@@ -4,10 +4,10 @@
  * emailed-code shapes, and nothing proved the REAL `@playwright/mcp` secret substitution (not a
  * mocked browser) never lets a value escape. This drives all three shapes — password, two-step
  * username/then/password, and emailed code — through a REAL Chromium via `McpRuntime` against the
- * real `test-job-server-auth.ts` fixture, with `PAGS_TEST_DISABLE_SIGN_IN_MACROS=1` set so the
- * three hardcoded macros (retired in #1422) are provably unreachable: only the agent-driven path
- * in `bridge.ts` can clear the wall. No live site; purely the local synthetic fixture (#1412's own
- * "no live site run is authorised by this ticket").
+ * real `test-job-server-auth.ts` fixture, driving `ApplyBridge` directly: the three hardcoded
+ * macros this once had to be disabled against no longer exist (retired in #1422), so the
+ * agent-driven path in `bridge.ts` is the only way to clear the wall. No live site; purely the
+ * local synthetic fixture (#1412's own "no live site run is authorised by this ticket").
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,7 +37,6 @@ beforeAll(() => ensureTestChromiumInstalled());
 beforeEach(async () => {
 	launched = undefined;
 	profileDir = "";
-	process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS = "1";
 	server = await startTestJobServerAuth();
 	profileDir = mkdtempSync(join(tmpdir(), "pags-agent-sign-in-leak-test-"));
 	launched = await launchCdpBrowser(profileDir, true);
@@ -51,7 +50,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-	delete process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS;
 	try {
 		await launched?.stop();
 	} finally {
