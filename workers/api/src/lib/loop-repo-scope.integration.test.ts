@@ -89,3 +89,51 @@ describe("coding_loop_start repo_id on the real schema (#877)", () => {
 		}
 	});
 });
+
+/**
+ * Write-scope admission (#1402): the SAME incident `repo-write-scope.ts` halts mid-run — an
+ * objective naming a different repo than the one chosen — refused here instead, before `pickLoopRepo`
+ * even hands the run a runner to check. These run on the same real schema and `start()` helper above;
+ * only the objective text (not the fixed `base.objective`) varies, so each call is built directly.
+ */
+describe("coding_loop_start write-scope admission (#1402)", () => {
+	// The fixture repos above are registered with `name` as a human label only (`github_repo` is left
+	// NULL — `pickLoopRepo`'s own refusal text reads `name`, never `github_repo`). Write-scope admission
+	// specifically needs a real `github_repo` slug to compare the objective's text against, so these
+	// two rows get one here rather than changing what the #877 tests above already rely on.
+	beforeEach(() => {
+		d1.exec("UPDATE coding_repos SET github_repo = 'acme/only' WHERE id = 'r-single'");
+		d1.exec("UPDATE coding_repos SET github_repo = 'proappstore-online/platform' WHERE id = 'r-platform'");
+	});
+
+	it("refuses BEFORE connectivity when the objective names a repo this instance did not resolve to, naming the other coder", async () => {
+		const out = await loopDriverFor(coding).start({ ...base, env, instanceId: "single", objective: "Implement proappstore-online/platform#1402: fix admission" });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "write_scope" });
+		if (!out.ok) {
+			expect(out.error).toContain("proappstore-online/platform");
+			expect(out.error).toContain("acme/only"); // the repo this instance actually resolved to
+			expect(out.error).toContain("multi"); // the OTHER instance registered for the named repo
+			expect(out.error).not.toContain("not reachable"); // never got far enough to ask about a runner
+		}
+	});
+
+	it("passes through to the ordinary connectivity refusal when the objective names no repo, or names the resolved one", async () => {
+		for (const objective of ["fix it, no repo named", "Implement acme/only#5: fix it"]) {
+			const out = await loopDriverFor(coding).start({ ...base, env, instanceId: "single", objective });
+			expect(out).toMatchObject({ ok: false, status: 409 });
+			if (!out.ok) {
+				expect(out.reason).not.toBe("write_scope");
+				expect(out.error).toContain("acme/only"); // reached the connectivity refusal, which names the chosen repo
+			}
+		}
+	});
+
+	it("refuses even with no other coder registered for the named repo — says so, and names nobody", async () => {
+		const out = await loopDriverFor(coding).start({ ...base, env, instanceId: "single", objective: "Implement nobody/elsewhere#1: do the thing" });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "write_scope" });
+		if (!out.ok) {
+			expect(out.error).toContain("No coder on this account is registered for it");
+			expect(out.detail).toEqual({ namedRepo: "nobody/elsewhere", githubRepo: "acme/only" });
+		}
+	});
+});

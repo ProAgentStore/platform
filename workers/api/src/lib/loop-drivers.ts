@@ -46,6 +46,7 @@ import { checkJobCapabilityRequirements } from "./machine-capabilities.js";
 import { currentGateState, DEFAULT_GATE_STATE, describeRejection, rejectionFor } from "./runner-admission-gate.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { checkStartIdempotency, quarantineRefusal, startIssueFor } from "./start-idempotency.js";
+import { writeScopeAdmissionRefusal } from "./write-scope-admission.js";
 import type { Env } from "../types.js";
 import { effectiveQuestionsPolicy, type QuestionsPolicy } from "./question-policy.js";
 
@@ -207,8 +208,12 @@ export type LoopStartResult =
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "runner_unresponsive" | "capability_missing" | "duplicate" | "issue_closed" | "already_done" | "quarantined";
-			/** Set with `duplicate` / `issue_closed` / `already_done` (#1253): the prior run, issue and times. */
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused" | "runner_offline" | "runner_overloaded" | "runner_unresponsive" | "capability_missing" | "duplicate" | "issue_closed" | "already_done" | "quarantined" | "write_scope";
+			/**
+			 * Set with `duplicate` / `issue_closed` / `already_done` (#1253): the prior run, issue and
+			 * times. Set with `write_scope` (#1402): the repo the objective actually named and, when
+			 * one exists, the other instance registered for it.
+			 */
 			detail?: Record<string, unknown>;
 			/**
 			 * Set with `reason: "engine_auth"` (#891): the refused run was RECORDED, finished with that
@@ -348,6 +353,14 @@ const codingDriver: LoopDriver = {
 		const chosen = pickLoopRepo(repos, input.repoId, { requireChoice: input.requireRepoChoice });
 		if (!chosen.ok) return { ok: false, status: 409, error: chosen.error };
 		const repo = chosen.repo;
+		// Write-scope admission (#1402), BEFORE any other check: an objective naming a different
+		// repository than the one just resolved is refused here, not after an engine has committed
+		// work against this repo's checkout that can only land on the repo it actually named. Ahead
+		// of idempotency deliberately — a wrong-repo objective is not "this issue already ran," it is
+		// "this run should not happen on this agent at all," and the duplicate check's own cache reads
+		// would otherwise run (and its notions of "the same issue" be judged) against the wrong repo.
+		const scopeRefusal = await writeScopeAdmissionRefusal(env, { userId, instanceId, githubRepo: repo.githubRepo ?? null, objective }).catch(() => null);
+		if (scopeRefusal) return { ok: false, status: 409, reason: scopeRefusal.reason, error: scopeRefusal.error, detail: scopeRefusal.detail };
 		// One unit of work, started once (#1253): the same issue in this repo is not worked twice, whichever
 		// path started it. A repair and an explicit continue are the deliberate exceptions.
 		if (input.repairCheckout !== true && !input.continueFromRunId) {

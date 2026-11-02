@@ -49,6 +49,7 @@
  * slug at all (every repo local-path, no `github_repo`) has no scope to compare against and is
  * likewise left alone.
  */
+import { otherCodersOnRepo } from "./coding-duplicate-coder.js";
 import { logEvent } from "./events.js";
 import { splitHeredocs } from "./heredoc.js";
 import { upsertWorkCard } from "./work-card.js";
@@ -226,14 +227,18 @@ function actPhrase(kind: string): string {
  * The outcome is stated in all three states for the reason `describeViolation` states it: a write
  * whose result was never observed must not be reported as one that landed, nor as one that did not.
  */
-export function describeRepoScopeViolation(
-	refused: string,
-	registered: readonly string[],
-	act: { kind: string; ok?: boolean | null },
-): string {
+/**
+ * `ownerInstanceId` (#1402): which OTHER coder, if any, is registered for the repo that was
+ * refused — resolved by the I/O half (`otherCodersOnRepo`) and passed in so this stays pure. The
+ * run's question previously only said what this agent could NOT do; it is at least as useful to
+ * say where the commits that landed here actually belong, so a human (or `transfer_prepared_application`-
+ * style handoff, were one to exist for coding) knows which instance can finish the job.
+ */
+export function describeRepoScopeViolation(refused: string, registered: readonly string[], act: { kind: string; ok?: boolean | null }, ownerInstanceId?: string | null): string {
 	const outcome = act.ok === false ? " (the command FAILED)" : act.ok === null || act.ok === undefined ? " (outcome not observed)" : "";
 	const scope = registered.length === 1 ? registered[0] : registered.join(", ");
-	return `Attempted write to "${refused}", not permitted: this agent is registered for ${scope}. The agent ${actPhrase(act.kind)} there${outcome}.`;
+	const owner = ownerInstanceId ? ` Coder ${ownerInstanceId} is registered for ${refused} and can land this work instead.` : "";
+	return `Attempted write to "${refused}", not permitted: this agent is registered for ${scope}. The agent ${actPhrase(act.kind)} there${outcome}.${owner}`;
 }
 
 // ── The I/O half ────────────────────────────────────────────────────────────
@@ -295,8 +300,11 @@ export async function recordRepoScopeViolations(
 	const violations = unscopedWrites(registered, acts);
 	if (!violations.length) return null;
 	const now = new Date().toISOString();
+	let stopReason: string | null = null;
 	for (const { act, refused } of violations) {
-		const text = describeRepoScopeViolation(refused, registered, act);
+		const owner = (await otherCodersOnRepo(env, ctx.userId, ctx.instanceId, refused).catch(() => []))[0]?.instanceId;
+		const text = describeRepoScopeViolation(refused, registered, act, owner);
+		stopReason ??= text; // the FIRST violation's own text, owner included — never recomputed without it
 		const id = `repo-scope:${ctx.sessionId}:${act.id}`.slice(0, 200);
 		await logEvent(env, {
 			id,
@@ -327,5 +335,5 @@ export async function recordRepoScopeViolations(
 			},
 		}).catch(() => undefined);
 	}
-	return describeRepoScopeViolation(violations[0].refused, registered, violations[0].act);
+	return stopReason;
 }

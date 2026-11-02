@@ -185,17 +185,18 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		await finishQueueEntry(env, entry.id, "failed", started.error);
 		await recordLifecycle(env, { ...lifecycleOf(entry), event: "admission_failed", reason: started.error });
 		await recordDrainRefusal(env, entry, repoId, started.reason, started.error); // #1336: an attempt with no run, unless it was the start guard
-		// #1404: the one admission failure that is INVISIBLE otherwise — the issue closed between the
+		// #1404: admission failures that are INVISIBLE otherwise — the issue closed between the
 		// request being queued (its cache read clean) and the queue draining, and the owner was told
 		// nothing; `recent_instances`/`fleet_snapshot` learn of it from the failed queue row itself
 		// (`instance-activity.ts`, `fleet-snapshot.ts`), but neither pushes, so a notification is the
-		// only timely signal.
-		if (started.reason === "issue_closed") {
+		// only timely signal. `write_scope` (#1402) joins it for the same reason: this is precisely
+		// the queued-objective-silently-never-ran shape the 15-run incident #1402 cites was built from.
+		if (started.reason === "issue_closed" || started.reason === "write_scope") {
 			await notifyUser(
 				env,
 				owner,
 				"coding",
-				"⚠️ Queued run could not start — issue closed",
+				started.reason === "issue_closed" ? "⚠️ Queued run could not start — issue closed" : "⚠️ Queued run could not start — wrong repository",
 				started.error,
 				deepLinkFor({ kind: "coding-tab", instanceId }),
 				{ kind: "alert", instanceId, key: `admission-failed:${entry.id}` },

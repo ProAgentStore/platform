@@ -291,6 +291,30 @@ describe("when the start is refused", () => {
 		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
 		expect(notifyUser).not.toHaveBeenCalled();
 	});
+
+	it("write_scope — a queued objective named a repo outside this instance's scope — notifies the owner too (#1402)", async () => {
+		// The same invisible-admission-failure shape #1404 fixed for issue_closed: a queue drain that
+		// refuses silently is exactly how the 15-run incident #1402 describes went unnoticed.
+		dequeueNext.mockResolvedValue(entry({ userId: "owner-1" }));
+		start.mockResolvedValue({
+			ok: false,
+			status: 409,
+			reason: "write_scope",
+			error: "This objective names proappstore-online/hiring, not ProAgentStore/platform — refusing before any work starts rather than failing at push, the way #1252's guard does once commits already exist. Coder i2 is registered for it.",
+		});
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(finishQueueEntry).toHaveBeenCalledWith(env, "objq-1", "failed", expect.stringContaining("proappstore-online/hiring"));
+		expect(out).toMatchObject({ drained: true, started: false, requeued: false });
+		expect(notifyUser).toHaveBeenCalledWith(
+			env,
+			"owner-1",
+			"coding",
+			expect.stringContaining("wrong repository"),
+			expect.stringContaining("proappstore-online/hiring"),
+			expect.anything(),
+			expect.objectContaining({ kind: "alert", instanceId: "i1" }),
+		);
+	});
 });
 
 describe("when the budget refuses", () => {

@@ -12,8 +12,13 @@ import {
 import type { EngineActReport } from "./engine-acts.js";
 import type { Env } from "../types.js";
 
-/** A D1 double: writes are recorded, reads answer nothing. Mirrors `coding-authority.test.ts`. */
-function mockEnv(): { env: Env; writes: { sql: string; args: unknown[] }[] } {
+/**
+ * A D1 double: writes are recorded, reads answer nothing by default. Mirrors `coding-authority.test.ts`.
+ * `rows` (#1402) lets a test answer `otherCodersOnRepo`'s own read without needing the full migrated
+ * schema `loop-repo-scope.integration.test.ts` uses — `recordRepoScopeViolations` only ever reads
+ * through that one query shape here.
+ */
+function mockEnv(rows: Array<{ instance_id: string; id: string }> = []): { env: Env; writes: { sql: string; args: unknown[] }[] } {
 	const writes: { sql: string; args: unknown[] }[] = [];
 	const DB = {
 		prepare(sql: string) {
@@ -25,7 +30,7 @@ function mockEnv(): { env: Env; writes: { sql: string; args: unknown[] }[] } {
 							return { meta: { changes: 1 } };
 						},
 						async all() {
-							return { results: [] };
+							return { results: rows };
 						},
 						async first() {
 							return null;
@@ -289,5 +294,41 @@ describe("describeRepoScopeViolation", () => {
 		expect(s).toContain('Attempted write to "ProAgentStore/platform"');
 		expect(s).toContain("not permitted");
 		expect(s).toContain("outcome not observed");
+	});
+
+	it("says nothing extra about who else could land it when no owner is given — #1402 adds this sentence, never requires it", () => {
+		const s = describeRepoScopeViolation("ProAgentStore/platform", ["proappstore-online/platform"], { kind: "pr.open", ok: true });
+		expect(s).not.toContain("can land this work instead");
+	});
+
+	it("names the other coder registered for the refused repo, when one is given (#1402)", () => {
+		const s = describeRepoScopeViolation("ProAgentStore/platform", ["proappstore-online/platform"], { kind: "pr.open", ok: true }, "i-platform-coder");
+		expect(s).toContain("Coder i-platform-coder is registered for ProAgentStore/platform and can land this work instead.");
+	});
+});
+
+describe("recordRepoScopeViolations names the owning coder, end to end (#1402)", () => {
+	it("resolves the owner through otherCodersOnRepo and includes it in the stop reason and the work card", async () => {
+		const { env, writes } = mockEnv([{ instance_id: "i-platform-coder", id: "repo-row-1" }]);
+		const reason = await recordRepoScopeViolations(
+			env,
+			{ userId: "u1", instanceId: "i1", sessionId: "csess_f686f1ff", repoLabel: "platform", traceId: null },
+			["proappstore-online/platform"],
+			[act({ kind: "pr.open", command: INCIDENT_COMMAND })],
+		);
+		expect(reason).toContain("Coder i-platform-coder is registered for ProAgentStore/platform and can land this work instead.");
+		const cardWrite = writes.find((w) => /INSERT|UPDATE/i.test(w.sql) && JSON.stringify(w.args).includes("i-platform-coder"));
+		expect(cardWrite, "the work card or event write should carry the owner's instance id somewhere in its bound text").toBeTruthy();
+	});
+
+	it("omits the owner sentence cleanly when no other coder is registered — never invents one", async () => {
+		const { env } = mockEnv([]); // the default — no rows
+		const reason = await recordRepoScopeViolations(
+			env,
+			{ userId: "u1", instanceId: "i1", sessionId: "csess_f686f1ff", repoLabel: "platform", traceId: null },
+			["proappstore-online/platform"],
+			[act({ kind: "pr.open", command: INCIDENT_COMMAND })],
+		);
+		expect(reason).not.toContain("can land this work instead");
 	});
 });

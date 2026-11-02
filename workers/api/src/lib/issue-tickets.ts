@@ -112,10 +112,18 @@ export async function upsertIssueTicket(
 	return { ticketId: ticket.id, created };
 }
 
+const OTHER_REPO_REF = /\b([\w.-]+\/[\w.-]+)#\d+\b/;
+
+/** The `owner/repo` an objective's `owner/repo#N` names, when it differs from this run's own — null when the objective names no repo, or names this one. */
+export function namedOtherRepo(objective: string, githubRepo: string | null): string | null {
+	const m = OTHER_REPO_REF.exec(objective);
+	if (!m || !githubRepo || m[1].toLowerCase() === githubRepo.toLowerCase()) return null;
+	return m[1];
+}
+
 /** `owner/repo#N` in an objective names a repo; a reference to ANOTHER repo is not this run's issue. */
 export function namesOtherRepo(objective: string, githubRepo: string | null): boolean {
-	const m = /\b([\w.-]+\/[\w.-]+)#\d+\b/.exec(objective);
-	return !!m && !!githubRepo && m[1].toLowerCase() !== githubRepo.toLowerCase();
+	return namedOtherRepo(objective, githubRepo) !== null;
 }
 
 /**
