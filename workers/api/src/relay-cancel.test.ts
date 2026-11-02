@@ -59,6 +59,19 @@ const command = (r: InstanceType<typeof RelayDO>, body: unknown) => r.fetch(new 
 const frames = (sent: string[]) => sent.filter((s) => s !== "ping").map((s) => JSON.parse(s) as { id: string; type?: string; path?: string });
 
 describe("the relay cancels a command it gave up on (#1358)", () => {
+	it.each(["headed", "headless", "invalid", null])("forwards only validated browser mode metadata: %s (#1429)", async (browserMode) => {
+		let relay!: InstanceType<typeof RelayDO>;
+		const runner = runnerSocket((self) => void relay.webSocketMessage(self, "pong"));
+		relay = relayWith([runner]);
+		const pending = command(relay, { path: "/browser/act", browserMode, timeoutMs: 5_000 });
+		await vi.waitFor(() => expect(frames(runner.sent)).toHaveLength(1));
+		const [cmd] = frames(runner.sent) as Array<{ id: string; browserMode?: string }>;
+		if (browserMode === "headed" || browserMode === "headless") expect(cmd.browserMode).toBe(browserMode);
+		else expect(cmd).not.toHaveProperty("browserMode");
+		await relay.webSocketMessage(runner.socket as unknown as WebSocket, JSON.stringify({ id: cmd.id, status: 200, result: { ok: true } }));
+		expect((await pending).status).toBe(200);
+	});
+
 	it("sends { type: 'cancel', id } for the command that timed out, after the command itself", async () => {
 		let relay!: InstanceType<typeof RelayDO>;
 		const runner = runnerSocket((self) => void relay.webSocketMessage(self, "pong"));

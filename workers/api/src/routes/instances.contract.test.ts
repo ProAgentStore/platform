@@ -1,3 +1,4 @@
+import { registerBrowserModeRoutes } from "./instances-browser-mode.js";
 /**
  * The instance REST surface, held to a table — every value in it DERIVED by driving the
  * registered handler, never read out of the source (#305).
@@ -333,6 +334,8 @@ const ROUTES = [
 	"POST /:instanceId/runner-attach",
 	"GET /:instanceId/runner-setup",
 	"GET /:instanceId/native/preflight",
+	"GET /:instanceId/browser-mode",
+	"PUT /:instanceId/browser-mode",
 	"GET /:instanceId/browser-screenshots",
 	"PUT /:instanceId/browser-screenshots",
 	"POST /:instanceId/browse",
@@ -480,6 +483,7 @@ function routesOf(register: (app: Hono<{ Bindings: Env }>) => void): string[] {
 }
 
 const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
+	"instances-browser-mode.ts": registerBrowserModeRoutes,
 	"instances-apply.ts": registerApplyRoutes,
 	"instances-operator-manual.ts": registerOperatorManualRoutes,
 	"instances-behaviour.ts": registerBehaviourRoutes,
@@ -571,6 +575,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-native.ts": ["GET /:instanceId/native/preflight"],
+	"instances-browser-mode.ts": ["GET /:instanceId/browser-mode", "PUT /:instanceId/browser-mode"],
 	"instances-browser-screenshots.ts": ["GET /:instanceId/browser-screenshots", "PUT /:instanceId/browser-screenshots"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume", "POST /:instanceId/enable", "POST /:instanceId/disable"],
 	"instances-job-leads.ts": ["GET /:instanceId/job-leads/browser-verifications", "POST /:instanceId/job-leads/:recordId/browser-verification", "POST /:instanceId/job-leads/manual-url", "POST /:instanceId/job-leads/:recordId/triage"],
@@ -889,6 +894,8 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/runner-setup": [401, 404],
 	// Owner-scoped before it reads a runner or the machine's opt-in (#1057).
 	"GET /:instanceId/native/preflight": [401, 404],
+	"GET /:instanceId/browser-mode": [401, 404],
+	"PUT /:instanceId/browser-mode": [401, 404],
 	"GET /:instanceId/browser-screenshots": [401, 404],
 	"PUT /:instanceId/browser-screenshots": [401, 404],
 	"POST /:instanceId/browse": [401, 404],

@@ -1226,6 +1226,10 @@ describe("the published schemas let a client configure local browser research (#
 
 	it.each([
 		["set_agent_capabilities", { agent_id: "a1", runtime: "local_browser", local_browser: block, dry_run: true }],
+		["set_agent_capabilities", { agent_id: "a1", browser_mode: "headed", dry_run: true }],
+		["update_agent", { agent_id: "a1", capabilities: { browserMode: "headed" }, dry_run: true }],
+		["update_agent", { agent_id: "a1", capabilities: { browserMode: null }, dry_run: true }],
+		["create_agent", { slug: "visible", name: "Visible browser", capabilities: { browserMode: "headless" }, dry_run: true }],
 		["update_agent", { agent_id: "a1", capabilities: { surfaces: [], runtime: "local_browser", localBrowser: block }, dry_run: true }],
 		["create_agent", { slug: "scout", name: "Scout", capabilities: { surfaces: [], runtime: "local_browser", localBrowser: block }, dry_run: true }],
 	])("%s accepts runtime local_browser with its block", (name, input) => {

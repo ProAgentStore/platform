@@ -52,7 +52,7 @@ const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { vers
 
 export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
-	.option("--headless", "Run browser in headless mode")
+	.option("--headless", "Default to headless when an agent has no browser mode configured")
 	.option("--instance <id>", "Connect to a specific instance only")
 	.option("--force", "Take over from another connected machine")
 	// #896. Deliberately NOT `--force`, which already means something else here: `--force` takes an

@@ -290,6 +290,8 @@ export class LocalApplyRuntime {
 	private readonly handoffs: LocalApplyHandoffRuntime<Run>;
 
 	/** Application fills that a restart would lose (#896) — their state is in this process. */
+	browserBusy(instanceId: string): boolean { return [...this.runs.values()].some((r) => r.envelope.instanceId === instanceId && r.state !== "ended"); }
+
 	liveWork(): string[] {
 		return [...this.runs.values()].filter((r) => r.state !== "ended").map((r) => `an application fill (${r.envelope.applicationId.slice(0, 8)})`);
 	}

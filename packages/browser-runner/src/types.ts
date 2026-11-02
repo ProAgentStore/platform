@@ -28,6 +28,7 @@ export interface RunnerConfig {
 	dataDir: string;
 	token?: string;
 	instanceId?: string;
+	/** Fallback only; an agent/instance browser mode overrides this at launch. */
 	headless: boolean;
 	/**
 	 * This runner PROCESS's id (#896), from the single-instance lock its parent took.

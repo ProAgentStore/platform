@@ -53,7 +53,7 @@ export class McpRuntime {
 	 */
 	private readonly secrets: Record<string, string> = {};
 	/** One recorder at this chokepoint (#1409) — every `callTool`, every path, redacted before it is kept. */
-	private readonly calls = new BrowserCallRecorder();
+	constructor(private readonly calls = new BrowserCallRecorder()) {}
 	/** The run that currently holds this browser, set by whoever claimed it. Null until one does. */
 	private subject: BrowserCallSubject | null = null;
 

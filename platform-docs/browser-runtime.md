@@ -36,11 +36,36 @@ Membership is re-evaluated while the runner is up, not fixed at startup. `pags u
 
 | Flag | Effect |
 | --- | --- |
-| `--headless` | Run Playwright headless. |
+| `--headless` | Fallback browser mode when neither the instance nor its agent specifies one. |
 | `--instance <id>` | Serve exactly one agent, by id or slug. Debug scope: this run does **not** watch for new instances. |
 | `--force` | Take over when this same machine (same hostname/node) already has a runner connected. Also suspends coding sessions still owned by other nodes; the machine's own suspended sessions reactivate on reconnect. |
 
 The only 409 is same-hostname: a second runner on the same node is rejected unless `--force`. Several *different* machines can each run `pags up` for the same instance concurrently, and routing follows whichever relay socket is actually live.
+
+## Visible and headless browsers per agent
+
+With CLI 0.4.197 or later, the browser mode belongs to the agent configuration (#1429).
+In the agent builder, set **Browser mode** to **Visible browser**, **Headless browser**,
+or inherit the runner default. An instance owner can override this in the instance's
+**Settings → Browser mode**, or inherit the agent default.
+
+The order is instance override → agent default → runner fallback. `--headless` and
+`PAGS_RUNNER_HEADLESS=1` supply only that last fallback; an explicit visible setting
+wins even when the runner was installed as a background service. Browser visibility
+and whether the runner has a terminal window are separate settings.
+
+Through MCP, use `get_instance_browser_mode` and `set_instance_browser_mode` with
+`mode: "headed"`, `mode: "headless"`, or `mode: null` to clear an instance override.
+Creators set `capabilities.browserMode` through `create_agent` / `update_agent`.
+The read response names the effective configured mode and its source; when both
+settings inherit, the runner fallback remains unknown until the machine applies it.
+
+Changes apply at the next safe browser launch; they do not interrupt an active run.
+Different instances keep separate browser sessions, so one can be visible while
+another is headless. A visible browser requires an interactive desktop on the machine
+that runs the agent. A remote machine's browser window appears on that machine.
+The task's **Screenshot replay** provides a timeline slider in the console in either mode,
+when screenshot capture is enabled.
 
 ## Foreground and background (`pags up --background`)
 

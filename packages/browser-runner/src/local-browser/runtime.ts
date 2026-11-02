@@ -224,6 +224,8 @@ export class LocalBrowserRuntime {
 	 * Their state is in this process's memory: a restart does not resume them, and the cloud only
 	 * gives up on them minutes later. So `--replace` asks before taking the machine.
 	 */
+	browserBusy(instanceId: string): boolean { return [...this.runs.values()].some((r) => r.envelope.instanceId === instanceId && r.state !== "ended"); }
+
 	liveWork(): string[] {
 		return [...this.runs.values()].filter((r) => r.state !== "ended").map((r) => `a browser research run (${r.envelope.instanceId.slice(0, 8)})`);
 	}

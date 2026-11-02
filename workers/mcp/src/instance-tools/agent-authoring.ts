@@ -199,6 +199,7 @@ export function registerAgentAuthoringTools(server: McpServer, ctx: InstanceTool
 			agent_id: templateIdArg,
 			surfaces: z.array(z.string()).optional().describe("Console surfaces to declare. Omit to preserve them."),
 			runtime: z.enum(["browser", "coding", "local_browser", "local_artifact", "local_apply", "local_native"]).nullable().optional().describe("Template runtime, or null to clear it. Omit to preserve it."),
+			browser_mode: z.enum(["headed", "headless"]).nullable().optional().describe("Default browser visibility inherited by instances: headed, headless, or null for runner fallback. Omit to preserve it."),
 			workflow: z.string().nullable().optional().describe("Workflow name, or null to clear it. Omit to preserve it."),
 			tools: z.array(z.string()).optional().describe("Allowed runtime tool names. Omit to preserve them."),
 			custom_surfaces: z.array(z.record(z.string(), z.unknown())).optional().describe("Custom console-surface entries, mapped to the API's customSurfaces field. Omit to preserve them."),
@@ -206,10 +207,10 @@ export function registerAgentAuthoringTools(server: McpServer, ctx: InstanceTool
 			confirm: confirmArg("set_agent_capabilities", "save these template capabilities"),
 			dry_run: dryRunArg,
 		},
-		async ({ token, agent_id, surfaces, runtime, workflow, tools, custom_surfaces, local_browser, confirm, dry_run: preview }) => {
+		async ({ token, agent_id, surfaces, runtime, browser_mode, workflow, tools, custom_surfaces, local_browser, confirm, dry_run: preview }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const body = { ...(surfaces !== undefined ? { surfaces } : {}), ...(runtime !== undefined ? { runtime } : {}), ...(workflow !== undefined ? { workflow } : {}), ...(tools !== undefined ? { tools } : {}), ...(custom_surfaces !== undefined ? { customSurfaces: custom_surfaces } : {}), ...(local_browser !== undefined ? { localBrowser: local_browser } : {}) };
+			const body = { ...(surfaces !== undefined ? { surfaces } : {}), ...(browser_mode !== undefined ? { browserMode: browser_mode } : {}), ...(runtime !== undefined ? { runtime } : {}), ...(workflow !== undefined ? { workflow } : {}), ...(tools !== undefined ? { tools } : {}), ...(custom_surfaces !== undefined ? { customSurfaces: custom_surfaces } : {}), ...(local_browser !== undefined ? { localBrowser: local_browser } : {}) };
 			const input = { agent_id, ...body };
 			const denied = await requirePermission(safetyFor(token), "destructive", "set_agent_capabilities", input);
 			if (denied) return denied;

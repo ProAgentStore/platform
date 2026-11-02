@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**408 tool registrations.** 379 are always registered; 29 are gated to the console
+**410 tool registrations.** 381 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -371,6 +371,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_instance_local_browser_settings` | Patch engine, sign-in mode, workspace, browser profile, sites, limits, retention and result collection; refuses anything outside the agent's ceiling | write | yes | |
 | `get_instance_browser_verification` | Browser verification settings for one instance (#1031): enabled, runtime (pinned / any_eligible), fallback, wait limit, takeover preference, mobile; plus whether the agent declares a local browser, its pin, and the events it raises (push decided by the notification policy) | read | | |
 | `set_instance_browser_verification` | Change those settings; turning it on needs a declared local browser, out-of-range values are refused, never clamped. Not the pin, consent or notifications | write | yes | |
+| `get_instance_browser_mode` | Read browser visibility override, agent default and inheritance source | read | | |
+| `set_instance_browser_mode` | Choose headed/headless for one instance, or clear its override; next browser session only | write | yes | |
 | `get_browser_screenshots` | Is browser replay screenshot capture on for this instance (#1064)? One switch for every browser run it makes; on by default | read | | |
 | `set_browser_screenshots` | Turn replay screenshots on or off for runs that start after it; off = nothing taken, pulled or stored. Deletes nothing already stored | write | yes | |
 | `list_eligible_browser_runtimes` | Each of your machines with heartbeat, attachment (transport only), health, version and eligibility apart, and the machine the runtime setting would use | read | | |

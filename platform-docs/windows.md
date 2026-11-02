@@ -38,8 +38,11 @@ the machine under its hostname and connects every agent that needs a local runti
 WebSocket relay, the same as on macOS and Linux. It is ready when it prints "ready for jobs", and the
 machine then shows as connected on the console's **Terminals** page.
 
-The tested setup uses `--headless`, which runs the browser without a window. A runner started at
-boot by Task Scheduler (below) has no desktop to show a window on, so it must use `--headless`.
+The tested setup uses `--headless` as the fallback browser mode. A runner started at
+boot by Task Scheduler (below) has no desktop to show a window on. Keep those agents
+headless; a visible browser setting needs a runner in an interactive desktop session.
+With CLI 0.4.197 or later, explicit agent and instance browser-mode settings override
+the CLI fallback; see [Browser Runtime](browser-runtime.md#visible-and-headless-browsers-per-agent).
 
 ## Run at boot, without logging in
 

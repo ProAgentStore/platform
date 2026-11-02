@@ -1,3 +1,4 @@
+import { withBrowserRequest } from "./browser-request.js";
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { readRecordAck } from "./coding/record-cursor.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
@@ -45,7 +46,7 @@ export function createRunnerServer(runner: LocalRunner) {
 			if (!authorize(req, runner.config)) {
 				return json(res, 401, { error: "Unauthorized" });
 			}
-			await route(runner, req, res);
+			await withBrowserRequest(runner, req, () => route(runner, req, res));
 		} catch (error) {
 			const status = error instanceof RunnerInputError ? error.status : 500;
 			// A request that failed on the runner's side is a crash report (#1087), not just a 500 to

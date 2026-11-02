@@ -1,3 +1,4 @@
+import { browserModeDenial, browserModeValue } from "../lib/browser-mode.js";
 import { Hono } from "hono";
 import { agentDeleteStatements, countAgentSubscribers, foreignSubscriberRefusal, hasForeignSubscriberRows, hasSubscriberRows } from "../lib/agent-cascade.js";
 import { customSurfacesEnabled, localBrowserDenial, localBrowserView, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
@@ -356,7 +357,7 @@ agentRoutes.post("/", async (c) => {
 	// See the comment on the config write for what this block is and why settingsSchema rides
 	// along with it.
 	const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
-	const capsDenial = workflowRuntimeDenial(declaredCaps.workflow, declaredCaps.runtime ?? null) ?? localBrowserDenial(declaredCaps);
+	const capsDenial = workflowRuntimeDenial(declaredCaps.workflow, declaredCaps.runtime ?? null) ?? localBrowserDenial(declaredCaps) ?? browserModeDenial(declaredCaps);
 	if (capsDenial) throw new HttpError(400, capsDenial);
 
 	// Check slug uniqueness
@@ -515,7 +516,7 @@ agentRoutes.put("/:id", async (c) => {
 		// from either side — declaring a workflow onto an agent with no runtime, or clearing the
 		// runtime out from under a workflow that is already stored — and a patch-shaped check
 		// would only see one of them.
-		const denial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null) ?? localBrowserDenial(caps);
+		const denial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null) ?? localBrowserDenial(caps) ?? browserModeDenial(caps);
 		if (denial) throw new HttpError(400, denial);
 		config.capabilities = caps;
 		resolvedConfig = JSON.stringify(config);
@@ -566,10 +567,12 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 	let workflow: unknown = null;
 	let tools: unknown = [];
 	let localBrowser: unknown = null;
+	let browserMode: unknown = null;
 	try {
 		const config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {};
 		const caps = config.capabilities as Record<string, unknown> | undefined;
 		localBrowser = localBrowserView(caps);
+		browserMode = browserModeValue(caps?.browserMode);
 		customSurfaces = Array.isArray(caps?.customSurfaces) ? caps.customSurfaces : [];
 		surfaces = Array.isArray(caps?.surfaces) ? caps.surfaces : [];
 		runtime = caps?.runtime ?? null;
@@ -585,7 +588,7 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 	// BROWSER_TASK, the only value the platform enforces. Annotated for THIS agent, so a stored
 	// value the platform no longer runs comes back visible instead of silently reading as "none".
 	// `localBrowser` is the RESOLVED block (#946) — the limits and engines a run will actually get.
-	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, localBrowser, workflowOptions: workflowChoices(workflow), customSurfacesEnabled: customSurfacesEnabled(c.env) });
+	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, localBrowser, browserMode, workflowOptions: workflowChoices(workflow), customSurfacesEnabled: customSurfacesEnabled(c.env) });
 });
 
 /** Declare the agent's custom (published) console surfaces — owner only. Stored in
@@ -633,9 +636,10 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 	if ("workflow" in declared) caps.workflow = declared.workflow;
 	if (declared.tools !== undefined) caps.tools = declared.tools;
 	if ("localBrowser" in declared) caps.localBrowser = declared.localBrowser;
+	if ("browserMode" in declared) caps.browserMode = declared.browserMode;
 
 	// Same merged-block check as `PUT /:id` (#705) — this is the third door onto the same write.
-	const runtimeDenial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null) ?? localBrowserDenial(caps);
+	const runtimeDenial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null) ?? localBrowserDenial(caps) ?? browserModeDenial(caps);
 	if (runtimeDenial) throw new HttpError(400, runtimeDenial);
 
 	config.capabilities = caps;
@@ -654,6 +658,7 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 		workflow: caps.workflow ?? null,
 		tools: caps.tools ?? [],
 		localBrowser: localBrowserView(caps),
+		browserMode: browserModeValue(caps.browserMode),
 		// Re-served on the write path too, so a save that clears a no-longer-runnable value also
 		// clears the row the editor was showing for it (#375).
 		workflowOptions: workflowChoices(caps.workflow),

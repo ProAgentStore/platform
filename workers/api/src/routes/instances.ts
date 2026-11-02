@@ -1,3 +1,4 @@
+import { registerBrowserModeRoutes } from "./instances-browser-mode.js";
 import { retirementView } from "../lib/agent-retirement.js";
 import { registerOperatorManualRoutes } from "./instances-operator-manual.js";
 import { Hono } from "hono";
@@ -1216,6 +1217,7 @@ registerInstanceDescriptionRoutes(instanceRoutes); // one secret-safe runtime pr
 registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for one agent (#856)
 registerRunnerSetupRoutes(instanceRoutes); // the local coding runner setup checklist (#868)
 registerNativeRoutes(instanceRoutes); // the local_native machine preflight (#1057)
+registerBrowserModeRoutes(instanceRoutes);
 registerBrowserScreenshotsRoutes(instanceRoutes); // the owner's browser-screenshot switch (#1064)
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);

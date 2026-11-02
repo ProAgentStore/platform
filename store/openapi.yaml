@@ -434,6 +434,16 @@ components:
         waitLimitMinutes: { type: integer, minimum: 1, maximum: 1440 }
         takeover: { type: string, enum: [prompt, never] }
         allowMobile: { type: boolean }
+    BrowserModeView:
+      type: object
+      required: [mode, agentDefault, effective, source, explained, requiredCli]
+      properties:
+        mode: { type: string, nullable: true, enum: [headed, headless, null], description: Instance override; null inherits the agent default. }
+        agentDefault: { type: string, nullable: true, enum: [headed, headless, null] }
+        effective: { type: string, nullable: true, enum: [headed, headless, null], description: Resolved configuration; null uses the runner launch default. }
+        source: { type: string, enum: [instance, agent, runner] }
+        requiredCli: { type: string, example: 0.4.197 }
+        explained: { type: string }
     BrowserScreenshotsView:
       type: object
       required: [enabled, explained]
@@ -1243,6 +1253,11 @@ components:
         decides whether the agent needs `pags up` from `runtime`, and the runtime gates tool
         dispatch on `tools`.
       properties:
+        browserMode:
+          type: string
+          nullable: true
+          enum: [headed, headless, null]
+          description: Default browser visibility for this agent. Each instance may override it. Null inherits the runner launch default; explicit configuration takes precedence over CLI flags. Changes apply to the next browser session.
         surfaces:
           type: array
           description: Console surfaces this agent shows. Unknown values are dropped on write.
@@ -8295,6 +8310,45 @@ paths:
                 device: { type: string, enum: [mobile, desktop] }
       responses:
         "200": { description: The takeover after the move, content: { application/json: { schema: { type: object, properties: { takeover: { $ref: "#/components/schemas/BrowserTakeover" }, changed: { type: boolean } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-mode:
+    get:
+      summary: Read browser visibility and its inheritance source
+      operationId: getInstanceBrowserMode
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Owner override, agent default and resolved configuration; null effective uses the runner default.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserModeView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Set this instance's headed or headless browser mode
+      description: Instance override takes precedence over the agent default and CLI fallback. Null clears the override. Applies to the next browser session; active runs retain their mode. Audited as browser_mode.changed.
+      operationId: setInstanceBrowserMode
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              additionalProperties: false
+              properties:
+                mode: { type: string, nullable: true, enum: [headed, headless, null] }
+      responses:
+        "200":
+          description: Saved override and resolved configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserModeView" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }

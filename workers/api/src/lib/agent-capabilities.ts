@@ -14,6 +14,7 @@
  * category, so nothing needs a migration to keep working.
  */
 
+import { browserModeValue, type BrowserMode } from "./browser-mode.js";
 import { type RetirementNotice, retirementFor } from "./agent-retirement.js";
 import {
 	type ConstraintSpec,
@@ -105,6 +106,8 @@ export interface BoardColumn {
 }
 
 export interface AgentCapabilities {
+	/** Default visibility for browser sessions; an instance can override it. */
+	browserMode?: BrowserMode;
 	/** Console surfaces this agent shows (e.g. the Coding tab, the apply UI). */
 	surfaces: AgentSurface[];
 	/** Local runner runtime the brain drives. */
@@ -403,6 +406,8 @@ export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser
  *  the closed-enum power fields + the tool allowlist. customSurfaces/settingsSchema/
  *  boardColumns are owned by their own routes/validators and are NOT part of this. */
 export interface DeclaredCapabilities {
+	/** Preserved for validation: null clears the creator default. */
+	browserMode?: unknown;
 	surfaces?: AgentSurface[];
 	/** Per-surface options, keyed by surface id. Inert for a surface not in `surfaces`. */
 	surfaceOptions?: Record<string, unknown>;
@@ -423,6 +428,7 @@ export interface DeclaredCapabilities {
 export function sanitizeDeclaredCapabilities(input: unknown): DeclaredCapabilities {
 	const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
 	const out: DeclaredCapabilities = {};
+	if ("browserMode" in o) out.browserMode = o.browserMode;
 	if (Array.isArray(o.surfaces)) {
 		out.surfaces = [...new Set(o.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface)))];
 	}
@@ -518,6 +524,8 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 	const surfaceOptionsRaw = (declared as Record<string, unknown> | undefined)?.surfaceOptions;
 	const surfaceOptions = serializeSurfaceOptions(parseSurfaceOptions(surfaceOptionsRaw));
 	const withOptions = Object.keys(surfaceOptions).length ? { surfaceOptions } : {};
+	const mode = browserModeValue(declared?.browserMode);
+	const withBrowserMode = mode ? { browserMode: mode } : {};
 
 	if (declared && Array.isArray(declared.surfaces)) {
 		const surfaces = declared.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface));
@@ -531,7 +539,7 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 			workflow: isAgentWorkflow(declared.workflow) ? declared.workflow : null,
 			tools,
 			customSurfaces,
-			...withOptions,
+			...withOptions, ...withBrowserMode,
 			boardColumns: declaredColumns ?? defaultBoardColumns(surfaces),
 			settingsSchema,
 			...localBrowserFor(declared),
@@ -557,7 +565,7 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 	} else {
 		base = { surfaces: [], runtime: null, workflow: null };
 	}
-	return { ...base, tools, customSurfaces, ...withOptions, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema, ...retiredFor(base.workflow) };
+	return { ...base, tools, customSurfaces, ...withOptions, ...withBrowserMode, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema, ...retiredFor(base.workflow) };
 }
 
 /** The retirement block, present only when there is one — absent is the healthy case (#979). */

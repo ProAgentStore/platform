@@ -1,3 +1,4 @@
+import { browserModeForDispatch } from "../lib/browser-mode.js";
 import { overLimit } from "../lib/write-limits.js";
 import { withoutBrokerCredential } from "../lib/runtime-builder/task-credential.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -893,10 +894,11 @@ export async function callRuntime(
 		? typeof init.body === "string" ? JSON.parse(init.body) : init.body
 		: undefined;
 	const method = (typeof init.method === "string" ? init.method : "GET").toUpperCase();
+	const browserMode = await browserModeForDispatch(env, row.instance_id, row.user_id, path, row.runner_node, row.runner_version, relayBody);
 	return stub.fetch(new Request("https://relay/command", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ method, path, body: relayBody, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) }),
+		body: JSON.stringify({ method, path, body: relayBody, ...(browserMode ? { browserMode } : {}), ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) }),
 	}));
 }
 

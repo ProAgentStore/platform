@@ -25,6 +25,7 @@ import NotificationPolicySection from "./settings/NotificationPolicySection";
 import LocalBrowserSection from "./settings/LocalBrowserSection";
 import BrowserVerificationSection from "./settings/BrowserVerificationSection";
 import BrowserScreenshotsSection from "./settings/BrowserScreenshotsSection";
+import BrowserModeSection from "./settings/BrowserModeSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
 import CoderBrainSection from "./settings/CoderBrainSection";
 import AutoPickupSection from "./settings/AutoPickupSection";
@@ -286,6 +287,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
 			{isLocalBrowser && <BrowserVerificationSection instanceId={instanceId} />}
 			{takesScreenshots && <BrowserScreenshotsSection instanceId={instanceId} />}
+			{takesScreenshots && <BrowserModeSection instanceId={instanceId} />}
 			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}
 
 			<RunnerPanel instanceId={instanceId} />

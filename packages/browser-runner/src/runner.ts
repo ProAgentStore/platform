@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright";
 import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
-import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
+import { resolveRealChromeProfileDir, seedProfileCopy, seedAgentBrowserProfiles } from "./browser-profile.js";
 import { isTerminalTaskStatus, settleTaskOutcome } from "./apply-outcome.js";
 import { McpRuntime } from "./mcp-runtime.js";
 import type { BrowserCallsPage } from "./browser-call-recorder.js";
@@ -25,7 +25,7 @@ import { LocalApplyRuntime } from "./local-apply/runtime.js";
 import { LocalApplyReconciliationRuntime } from "./local-apply/reconciliation-runtime.js";
 import { LocalApplySignInRuntime } from "./local-apply/sign-in-runtime.js";
 import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
-import { createRunnerBrowserFactories } from "./local-apply/live-run-browser.js";
+import { BrowserSessions } from "./browser-sessions.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 import { SITE_BUILDER_TASK_TYPE, SiteBuilderRuntime } from "./site-builder/runtime.js";
@@ -75,30 +75,9 @@ const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
 
 const require = createRequire(import.meta.url);
 export class LocalRunner {
-	private browserContext: BrowserContext | null = null;
+	readonly browsers: BrowserSessions;
 	private chromiumInstallChecked = false;
-	/**
-	 * The single page the brain and the human takeover both act on. Tracked so
-	 * that when an ATS opens a new tab/popup, the active page follows it — the
-	 * remote brain and the human never diverge onto different pages.
-	 */
-	private activePage: Page | null = null;
 	private readonly fileAttachArmed = new WeakSet<Page>();
-	// When the explicit `upload` action is driving a chooser itself (browser_file_upload),
-	// suppress the global auto-attach handler so the résumé isn't attached TWICE (the click
-	// that opens the chooser would otherwise trigger both auto-attach AND browser_file_upload).
-	private suppressAutoAttach = false;
-	private applyResumePath: string | null = null;
-	/**
-	 * The INDUSTRY-STANDARD `@playwright/mcp` server, attached over CDP to the same
-	 * real-profile Chrome the takeover machinery drives. Every brain-issued browser
-	 * action runs through its standard tools — no hand-rolled action code. Lazily
-	 * started once the browser is up (see {@link getMcp}).
-	 */
-	private mcp: McpRuntime | null = null;
-	private cdpEndpoint: string | null = null;
-	/** The profile dir Chrome was actually launched into (holds DevToolsActivePort). */
-	private launchedProfileDir: string | null = null;
 	readonly store: RunnerStore;
 	/** This runtime's crash reports (#1087) — delivered to the platform by the CLI that runs it. */
 	readonly crashLog: CrashLog;
@@ -127,9 +106,11 @@ export class LocalRunner {
 	constructor(readonly config: RunnerConfig) {
 		mkdirSync(config.dataDir, { recursive: true });
 		this.store = new RunnerStore(config.dataDir);
+		this.browsers = new BrowserSessions(config.dataDir, config.headless, (id) => { const task = this.store.getTask(id); return !!task && !isTerminalTaskStatus(task.status); }, (id) => !!id && (this.localBrowser.browserBusy(id) || this.localApply.browserBusy(id)));
 		this.crashLog = new CrashLog(join(config.dataDir, "crash-reports.json"), runtimeCrashIdentity());
 		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
-		const { browserFor, applyBrowserFor } = createRunnerBrowserFactories({ headless: config.headless, dataDir: config.dataDir, defaultTools: () => this.getMcp(), defaultCookies: async () => (await (await this.getBrowserContext()).cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires })), sharedPage: () => this.activePage });
+		const browserFor = (profile: "default" | "isolated", dir: string) => this.browsers.browserFor(profile, dir, false, () => this.getMcp(), () => this.getBrowserContext());
+		const applyBrowserFor = (profile: "default" | "isolated", dir: string) => this.browsers.browserFor(profile, dir, true, () => this.getMcp(), () => this.getBrowserContext());
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor, onSweepFailure: (dir, error) => this.crashLog.record(crashReport({ ...runtimeCrashIdentity(), kind: "request_failure", ...describeError(error), route: `sweep ${dir}` })) });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
 		const localApplyTakeover = createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) });
@@ -208,6 +189,7 @@ export class LocalRunner {
 				updatedAt: now,
 			};
 			this.store.putTask(task);
+			if (["browser.task", "job.apply_agent", "browser.handoff"].includes(normalized.type)) this.browsers.current.taskIds.add(task.id);
 			const startedMsg = normalized.type === "browser.task" ? "Browser task started (agent-driven)" : normalized.type === SITE_BUILDER_TASK_TYPE ? "Website Builder draft registered (workflow-driven); starting the local author" : "Job application started (agent-driven)";
 			this.addTaskEvent(task, "task.created", startedMsg, { status: "running", url: normalized.input.url });
 			// The one workflow-driven type the runner DOES start work for (#841): its local author CLI.
@@ -241,6 +223,7 @@ export class LocalRunner {
 			updatedAt: now,
 		};
 		this.store.putTask(task);
+		if (normalized.type === "browser.open") this.browsers.current.taskIds.add(task.id);
 		this.addTaskEvent(task, "task.created", `Task created: ${task.type}`, {
 			status: task.status,
 		});
@@ -354,12 +337,7 @@ export class LocalRunner {
 			// the runner. Silence here is what let that read as a clean shutdown.
 			console.warn(`[runner] ${e instanceof Error ? e.message : String(e)} — a CLI process may still be running; check \`ps\` if a repo keeps changing`);
 		}
-		await this.mcp?.stop().catch(() => undefined);
-		this.mcp = null;
-		this.cdpEndpoint = null;
-		await this.browserContext?.close().catch(() => undefined);
-		this.browserContext = null;
-		this.launchedProfileDir = null;
+		await this.browsers.close();
 	}
 
 	private async runTask(id: string): Promise<void> {
@@ -631,9 +609,10 @@ export class LocalRunner {
 	private armFileAutoAttach(page: Page, filePath: string): void {
 		if (this.fileAttachArmed.has(page)) return;
 		this.fileAttachArmed.add(page);
+		const browserState = this.browsers.current;
 		page.on("filechooser", (chooser) => {
 			// Skip when an explicit upload action is already attaching (avoids double-attach).
-			if (this.suppressAutoAttach) return;
+			if (browserState.suppressAutoAttach) return;
 			chooser.setFiles(filePath).catch(() => undefined);
 		});
 	}
@@ -733,10 +712,16 @@ export class LocalRunner {
 	}
 
 	private async getBrowserContext(): Promise<BrowserContext> {
-		if (this.browserContext) return this.browserContext;
+		const state = this.browsers.current;
+		if (state.context) return state.context;
+		if (!state.launching) state.launching = this.launchBrowserContext().finally(() => { state.launching = undefined; });
+		return state.launching;
+	}
+	private async launchBrowserContext(): Promise<BrowserContext> {
+		seedAgentBrowserProfiles(this.config.dataDir, this.browsers.current.dataDir);
 		this.ensureChromiumInstalled();
-		const profileDir = join(this.config.dataDir, "browser-profile");
-		const downloadsPath = join(this.config.dataDir, "downloads");
+		const profileDir = join(this.browsers.current.dataDir, "browser-profile");
+		const downloadsPath = join(this.browsers.current.dataDir, "downloads");
 		mkdirSync(profileDir, { recursive: true });
 		mkdirSync(downloadsPath, { recursive: true });
 		const playwright = await import("playwright").catch((error) => {
@@ -745,7 +730,7 @@ export class LocalRunner {
 			);
 		});
 		const baseOpts = {
-			headless: this.config.headless,
+			headless: this.browsers.current.headless,
 			acceptDownloads: true,
 			downloadsPath,
 			// viewport:null + --start-maximized → the page uses the FULL window size
@@ -795,31 +780,31 @@ export class LocalRunner {
 			if (realProfileDir) {
 				// The seed is a snapshot; PAGS_RUNNER_REFRESH_PROFILE=1 re-copies it
 				// so logins/cookies pick up changes from your everyday Chrome.
-				const seedDir = join(this.config.dataDir, "real-profile-copy");
+				const seedDir = join(this.browsers.current.dataDir, "real-profile-copy");
 				if (process.env.PAGS_RUNNER_REFRESH_PROFILE === "1") rmSync(seedDir, { recursive: true, force: true });
 				const seededDir = seedProfileCopy(realProfileDir, seedDir);
 				if (!seededDir) throw new Error(`could not read your real Chrome profile at ${realProfileDir.userDataDir}`);
-				this.browserContext = await playwright.chromium.launchPersistentContext(seededDir, {
+				this.browsers.current.context = await playwright.chromium.launchPersistentContext(seededDir, {
 					...baseOpts,
 					channel: "chrome",
 					args: [...baseOpts.args, "--profile-directory=Default"],
 				});
-				this.launchedProfileDir = seededDir;
+				this.browsers.current.launchedProfileDir = seededDir;
 				console.log(`[runner] launched a private copy of your real Chrome profile (signed-in sessions seeded from "${realProfileDir.profile}")`);
 			} else {
-				const dedicated = join(this.config.dataDir, "chrome-profile");
-				this.browserContext = await playwright.chromium.launchPersistentContext(dedicated, { ...baseOpts, channel: "chrome" });
-				this.launchedProfileDir = dedicated;
+				const dedicated = join(this.browsers.current.dataDir, "chrome-profile");
+				this.browsers.current.context = await playwright.chromium.launchPersistentContext(dedicated, { ...baseOpts, channel: "chrome" });
+				this.browsers.current.launchedProfileDir = dedicated;
 			}
 		} catch (err) {
 			if (realProfileDir) {
 				const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
 				console.warn(`[runner] real-profile launch failed (${msg}); falling back to a dedicated profile. Fully quit Chrome (Cmd+Q) to use your real profile.`);
 			}
-			this.browserContext = await playwright.chromium.launchPersistentContext(profileDir, baseOpts);
-			this.launchedProfileDir = profileDir;
+			this.browsers.current.context = await playwright.chromium.launchPersistentContext(profileDir, baseOpts);
+			this.browsers.current.launchedProfileDir = profileDir;
 		}
-		await this.browserContext
+		await this.browsers.current.context
 			.addInitScript(() => {
 				Object.defineProperty(navigator, "webdriver", { get: () => undefined });
 			})
@@ -827,36 +812,36 @@ export class LocalRunner {
 		// Follow the active page: when the ATS opens a new tab/popup it becomes the
 		// page both the brain and the human takeover act on. Without this, the
 		// runner blindly used pages()[0] and the two could diverge.
-		this.browserContext.on("page", (p) => this.trackPage(p));
-		const initial = this.browserContext.pages()[0];
+		this.browsers.current.context.on("page", this.browsers.bind((p: Page) => this.trackPage(p)));
+		const initial = this.browsers.current.context.pages()[0];
 		if (initial) this.trackPage(initial);
 		// A seeded real profile can restore MANY tabs on launch; keep a single clean
 		// workspace tab so the agent's page is unambiguous and visible (not lost among
 		// restored blank tabs — the "why is the window blank?" symptom).
 		await this.closeStalePages().catch(() => undefined);
-		await this.activePage?.bringToFront().catch(() => undefined);
-		return this.browserContext;
+		await this.browsers.current.activePage?.bringToFront().catch(() => undefined);
+		return this.browsers.current.context;
 	}
 
 	/** Mark a page as the active one; fall back to the newest remaining page when it closes. */
 	private trackPage(page: Page): void {
-		this.activePage = page;
-		if (this.applyResumePath) this.armFileAutoAttach(page, this.applyResumePath);
-		page.once("close", () => {
-			if (this.activePage === page) {
-				this.activePage = this.browserContext?.pages().at(-1) ?? null;
+		this.browsers.current.activePage = page;
+		if (this.browsers.current.applyResumePath) this.armFileAutoAttach(page, this.browsers.current.applyResumePath);
+		page.once("close", this.browsers.bind(() => {
+			if (this.browsers.current.activePage === page) {
+				this.browsers.current.activePage = this.browsers.current.context?.pages().at(-1) ?? null;
 			}
-		});
+		}));
 	}
 
 	/** Close every page except the active one. ATS forms open popups/extra tabs that
 	 *  otherwise stay open in the persistent context until shutdown; over many
 	 *  applications they accumulate (memory/handles). Called when a task finishes. */
 	private async closeStalePages(): Promise<void> {
-		const ctx = this.browserContext;
+		const ctx = this.browsers.current.context;
 		if (!ctx) return;
 		for (const p of ctx.pages()) {
-			if (p !== this.activePage && !p.isClosed()) {
+			if (p !== this.browsers.current.activePage && !p.isClosed()) {
 				await p.close().catch(() => undefined);
 			}
 		}
@@ -865,29 +850,29 @@ export class LocalRunner {
 	/** The page the brain drives and the human takes over — created on demand. */
 	private async getActivePage(): Promise<Page> {
 		const context = await this.getBrowserContext();
-		if (!this.activePage || this.activePage.isClosed()) {
-			this.activePage = context.pages().at(-1) ?? (await context.newPage());
+		if (!this.browsers.current.activePage || this.browsers.current.activePage.isClosed()) {
+			this.browsers.current.activePage = context.pages().at(-1) ?? (await context.newPage());
 		}
 		// Keep the agent's working tab in the FOREGROUND so the user actually SEES what
 		// the agent is doing (and can act on it during a takeover). Without this, on a
 		// real Chrome profile that restores several tabs, the agent may drive a
 		// background tab while the user stares at a blank foreground tab.
-		await this.activePage.bringToFront().catch(() => undefined);
-		return this.activePage;
+		await this.browsers.current.activePage.bringToFront().catch(() => undefined);
+		return this.browsers.current.activePage;
 	}
 
 	/** The CDP endpoint of the launched Chrome (from DevToolsActivePort in its profile). */
 	private async readCdpEndpoint(): Promise<string> {
-		if (this.cdpEndpoint) return this.cdpEndpoint;
-		const dir = this.launchedProfileDir;
+		if (this.browsers.current.cdpEndpoint) return this.browsers.current.cdpEndpoint;
+		const dir = this.browsers.current.launchedProfileDir;
 		if (!dir) throw new Error("browser context not launched yet");
 		const portFile = join(dir, "DevToolsActivePort");
 		for (let i = 0; i < 50; i++) {
 			if (existsSync(portFile)) {
 				const line = readFileSync(portFile, "utf8").split("\n")[0]?.trim();
 				if (line) {
-					this.cdpEndpoint = `http://127.0.0.1:${line}`;
-					return this.cdpEndpoint;
+					this.browsers.current.cdpEndpoint = `http://127.0.0.1:${line}`;
+					return this.browsers.current.cdpEndpoint;
 				}
 			}
 			await new Promise((r) => setTimeout(r, 100));
@@ -902,12 +887,17 @@ export class LocalRunner {
 	 * performs land on the exact page the takeover/screencast machinery drives.
 	 */
 	private async getMcp(): Promise<McpRuntime> {
-		if (this.mcp) return this.mcp;
+		const state = this.browsers.current;
+		if (state.mcp) return state.mcp;
+		if (!state.startingMcp) state.startingMcp = this.startMcp().finally(() => { state.startingMcp = undefined; });
+		return state.startingMcp;
+	}
+	private async startMcp(): Promise<McpRuntime> {
 		await this.getBrowserContext();
 		const cdpEndpoint = await this.readCdpEndpoint();
-		const mcp = new McpRuntime();
+		const mcp = new McpRuntime(this.browsers.current.calls);
 		await mcp.start({ cdpEndpoint });
-		this.mcp = mcp;
+		this.browsers.current.mcp = mcp;
 		return mcp;
 	}
 
@@ -1056,16 +1046,16 @@ export class LocalRunner {
 				return mcp.callTool("browser_click", { element: label, target: ref });
 			}
 			case "upload": {
-				if (!this.applyResumePath) throw new RunnerInputError("no résumé file available to upload");
+				if (!this.browsers.current.applyResumePath) throw new RunnerInputError("no résumé file available to upload");
 				// Standard two-step FIRST (respects the brain's target): clicking the upload
 				// control opens the file chooser → browser_file_upload attaches the résumé.
 				// Suppress the global auto-attach handler for the duration so the résumé isn't
 				// attached twice (the click below can itself open a chooser the handler grabs).
-				this.suppressAutoAttach = true;
+				this.browsers.current.suppressAutoAttach = true;
 				try {
 					const ref = (a.ref || "").trim();
 					if (ref) await mcp.callTool("browser_click", { element: label, target: ref }).catch(() => undefined);
-					const res = await mcp.callTool("browser_file_upload", { paths: [this.applyResumePath] });
+					const res = await mcp.callTool("browser_file_upload", { paths: [this.browsers.current.applyResumePath] });
 					if (!res.isError || !/modal state|file chooser/i.test(mcp.textOf(res))) return res;
 					// The target was a LABEL / DROP-ZONE, not the chooser trigger, so no file
 					// chooser opened. Fall back to setting the résumé directly on the page's
@@ -1073,10 +1063,10 @@ export class LocalRunner {
 					// widgets (the semantically-correct upload field the brain clicks is often
 					// a container, not the button that fires the chooser).
 					const page = await this.getActivePage();
-					await page.locator('input[type="file"]').first().setInputFiles(this.applyResumePath, { timeout: 8_000 });
+					await page.locator('input[type="file"]').first().setInputFiles(this.browsers.current.applyResumePath, { timeout: 8_000 });
 					return { content: [{ type: "text", text: "résumé attached directly to the file input" }] };
 				} finally {
-					this.suppressAutoAttach = false;
+					this.browsers.current.suppressAutoAttach = false;
 				}
 			}
 			case "select":
@@ -1145,9 +1135,9 @@ export class LocalRunner {
 		// a real local file either way.
 		if (resumePath) {
 			const local = await this.resolveResumeFile(resumePath);
-			if (local) this.applyResumePath = local;
+			if (local) this.browsers.current.applyResumePath = local;
 		}
-		if (this.applyResumePath) this.armFileAutoAttach(page, this.applyResumePath);
+		if (this.browsers.current.applyResumePath) this.armFileAutoAttach(page, this.browsers.current.applyResumePath);
 		// Scroll is a VIEWPORT primitive, not an element action — no ref, no standard
 		// tool in @playwright/mcp 0.0.77. Use the mouse wheel on the live page (as the
 		// prior runtime did): it scrolls the actual hovered/inner scroll container,
@@ -1257,8 +1247,7 @@ export class LocalRunner {
 
 	/** This task's recorded browser calls after `afterSeq` (#1409), for the shared `/browser-calls` pull route. */
 	async browserCalls(taskId: string, afterSeq: number): Promise<BrowserCallsPage> {
-		if (!this.mcp) return { calls: [], lastSeq: afterSeq, dropped: 0 };
-		return this.mcp.pullCalls({ kind: "runtime_task", id: taskId }, afterSeq);
+		return this.browsers.current.calls.page({ kind: "runtime_task", id: taskId }, afterSeq);
 	}
 
 	/**
@@ -1267,6 +1256,7 @@ export class LocalRunner {
 	 * the take-over view. The brain pauses; the human solves it on this page.
 	 */
 	async browserHandoff(taskId: string, label: string, reason = "challenge"): Promise<{ ok: boolean; screenshotBase64?: string }> {
+		this.browsers.current.taskIds.add(taskId);
 		const page = await this.getActivePage();
 		this.takeovers.set(taskId, { page, reason, humanDone: false });
 		const screenshotBase64 = await captureScreenshotDataUrl(page);

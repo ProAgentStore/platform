@@ -6,6 +6,7 @@
  * token, and listens for command messages.  The cloud side POSTs to `/command`
  * which sends a message on the WebSocket and awaits the runner's response.
  */
+import { browserModeValue, type BrowserMode } from "./lib/browser-mode.js";
 import { DurableObject } from "cloudflare:workers";
 import { clipMarked } from "./lib/clip-marked.js";
 import { logError } from "./lib/error-log.js";
@@ -23,6 +24,7 @@ interface PendingRequest {
 }
 
 interface CommandRequest {
+	browserMode?: BrowserMode;
 	id: string;
 	method: string;
 	path: string;
@@ -234,7 +236,7 @@ export class RelayDO extends DurableObject<Env> {
 			return Response.json({ error: "No runner connected", code: "RUNNER_RELAY_NO_SOCKET" }, { status: 503 });
 		}
 
-		const body = (await request.json()) as { method?: string; path: string; body?: unknown; timeoutMs?: number };
+		const body = (await request.json()) as { method?: string; path: string; body?: unknown; timeoutMs?: number; browserMode?: unknown };
 		const dispatchStartedAt = Date.now();
 		const id = crypto.randomUUID();
 		const timeoutMs = typeof body.timeoutMs === "number" && body.timeoutMs > 0
@@ -255,7 +257,8 @@ export class RelayDO extends DurableObject<Env> {
 			);
 		}
 
-		const cmd: CommandRequest = { id, method: body.method || "POST", path: body.path, body: body.body };
+		const browserMode = browserModeValue(body.browserMode);
+		const cmd: CommandRequest = { id, method: body.method || "POST", path: body.path, body: body.body, ...(browserMode ? { browserMode } : {}) };
 
 		let result: CommandResponse;
 		try {

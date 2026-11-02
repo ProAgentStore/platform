@@ -70,3 +70,19 @@ export function resolveRealChromeProfileDir(): { userDataDir: string; profile: s
 	}
 	return existsSync(userDataDir) ? { userDataDir, profile } : null;
 }
+
+/** Seed each agent once from the legacy shared automation profile, excluding browser locks. */
+export function seedAgentBrowserProfiles(legacyDir: string, agentDir: string, profile: "default" | "isolated" = "default"): void {
+	if (legacyDir === agentDir) return;
+	for (const name of profile === "isolated" ? ["application-profiles/isolated/browser"] : ["browser-profile", "chrome-profile", "real-profile-copy"]) {
+		seedProfileCopy({ userDataDir: join(legacyDir, name), profile: "Default" }, join(agentDir, name));
+	}
+	{
+		const dest = join(agentDir, "application-profiles", profile, "site-sessions.json");
+		if (existsSync(dest)) return;
+		const source = join(legacyDir, "application-profiles", profile, "site-sessions.json");
+		if (!existsSync(source)) return;
+		mkdirSync(join(agentDir, "application-profiles", profile), { recursive: true });
+		copyFileSync(source, dest);
+	}
+}

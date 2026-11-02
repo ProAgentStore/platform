@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 408;
+export const MCP_TOOL_COUNT = 410;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 379;
+export const MCP_TOOL_ALWAYS_ON = 381;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -59,4 +59,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 404, issue: "#1335", date: "2026-10-26", reason: "coding_fleet_history reads the owner's coding history across every instance: picker decisions and the issues it passed over, attempts versus real runs, correlation and coverage. coding_loop_lifecycle reconstructs ONE objective on ONE instance by a handle you already hold, and coding_loop_queue / coding_loop_status page one instance; none can filter across instances by repo, issue, time or outcome, summarise a whole range, or state what is not recorded." },
 	{ count: 407, issue: "#1383", date: "2026-10-27", reason: "disable_instance, enable_instance and list_disabled_instances give the disabled state its own verbs and its own list. pause_instance and resume_instance stop and restart an instance but record no reason or actor and offer no way to see only the instances that are switched off; my_instances can include paused ones but cannot show ONLY them, with who disabled them, when and why, their repos, pinned machine and last run." },
 	{ count: 408, issue: "#1131", date: "2026-10-29", reason: "secure_input_sudo: run the owner-approved command of a `sudo` secure input as root on the instance's machine, the stored password delivered to sudo's stdin by the runner and success decided by the exit code. Not a sibling of secure_input_inject: that types into a terminal pane, where a masked prompt cannot be verified and a wrong guess spends one of sudo's three tries; this never types, takes no command of its own (only the one the owner approved with the value), and is a different API route (/secure-inputs/:id/sudo). It cannot be a mode of inject without making a tool whose arguments mean nothing for one of its two paths." },
+	{ count: 410, issue: "#1429", date: "2026-11-03", reason: "get/set_instance_browser_mode: instance browser visibility and inheritance. No existing tool reaches /browser-mode; screenshot capture controls evidence, verification settings control eligibility, and neither sets headed/headless browser launch mode." },
 ];

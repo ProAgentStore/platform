@@ -1,3 +1,4 @@
+import { BROWSER_MODE_MIN_CLI } from "./browser-mode.js";
 /**
  * Which server features a runner of a given version can serve (#859) — one table, read by every
  * surface that reports a machine's version.
@@ -39,6 +40,7 @@ export interface RunnerFeature {
 }
 
 export const RUNNER_FEATURES: readonly RunnerFeature[] = [
+	{ feature: "per-agent headed/headless browser mode", minCli: BROWSER_MODE_MIN_CLI },
 	{ feature: "disk, runner restarts, relay round trip and per-session usage in the resource history", minCli: RESOURCE_DETAIL_MIN_CLI },
 	{ feature: "Codex local browser research (the browser tools approved for codex exec, #952)", minCli: LOCAL_BROWSER_CODEX_MIN_CLI },
 	{ feature: "machine CPU load and memory in list_runner_nodes / coding_diagnostics", minCli: RESOURCES_MIN_CLI },

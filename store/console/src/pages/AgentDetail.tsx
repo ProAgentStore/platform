@@ -10,7 +10,7 @@ import { api } from "@proagentstore/sdk/client";
 import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 import type { Agent, Instance, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
 import { type WorkflowChoice, workflowPickerRows } from "../lib/workflow-picker";
-import LocalBrowserCapabilityCard from "../components/LocalBrowserCapabilityCard";
+import BrowserCapabilityCards from "../components/BrowserCapabilityCards";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
@@ -659,7 +659,7 @@ export default function AgentDetail() {
 							<Button variant="primary" onClick={saveCapabilities}>Save capabilities</Button>
 						</div>
 					</div>
-					{id && <LocalBrowserCapabilityCard key={capsSaved} agentId={id} runtime={capRuntime} />}
+					{id && <BrowserCapabilityCards key={capsSaved} agentId={id} runtime={capRuntime} surfaces={capSurfaces} />}
 
 					{/* Custom surfaces (Phase 3) */}
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
