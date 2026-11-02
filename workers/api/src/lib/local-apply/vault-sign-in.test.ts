@@ -178,6 +178,8 @@ describe("when the site does not let it in — the owner gets the ordinary hando
 describe("a refused password is never retried until the owner changes it", () => {
 	it("a later run on the same host is not tried again; once the credential is changed, it is", async () => {
 		const id = await store();
+		// SQLite uses the real clock on insert; pin the credential before the synthetic refusal even in a slow suite.
+		await d1.DB.prepare("UPDATE agent_credentials SET updated_at = datetime(?2 / 1000, 'unixepoch') WHERE id = ?1").bind(id, NOW).run();
 		await advanceVaultSignIn(env(), UID, await run(), settings, NOW + 60_000, fakes({ state: "failed", reason: "wrong_password" }).deps);
 		insertRun("run-2");
 		expect(await vaultSignInCanTry(env(), UID, await run("run-2"))).toBe(false);
