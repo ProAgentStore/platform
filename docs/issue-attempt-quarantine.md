@@ -12,12 +12,13 @@ makes a replayed event, a retried step or a second wake a no-op.
 | Counts as one attempt | Key |
 |---|---|
 | A queue entry the drain refused for a structural reason, so no run ever existed (no checkout, no coding CLI, no repo…) | `entry:<queue entry id>` |
-| A run that ended `failed`, `escalated`, `max_iterations`, `no_progress`, `engine_error`, `constraint_refused`, `turn_lost` or `budget` | `run:<run id>` |
+| A run that ended `failed`, `escalated`, `max_iterations`, `no_progress`, `constraint_refused` or `budget` | `run:<run id>` |
 
 | Never counts |
 |---|
 | A deferral or wait (`busy`, `paused`, `runner_offline`, `runner_overloaded`, `runner_unresponsive`, `recovery_required`), polling, a duplicate receipt |
 | A cancellation |
+| An infrastructure stop, including `engine_error` or `turn_lost` (#1417) |
 | A start-guard refusal: `duplicate`, `issue_closed`, `already_done`, `quarantined` — the guard doing its job |
 | Provider credit, credentials, a usage window, a machine that stayed away, an unanswered owner question, a platform interruption — those have their own holds (#1314) and are not the issue's fault |
 
@@ -45,12 +46,16 @@ flood the queue or the counter.
 
 ## How it ends
 
-It never expires into a retry loop. Only:
+The original #1336 design required an explicit release or success. #1417 subsequently added a seven-day expiry so an old
+incident does not hold an issue indefinitely. The implemented release paths are:
 
 1. **A verified success** — a run on the issue that ended `done` — restarts the count and lifts the stop. (`done` is the platform's
    existing notion of success, the same one the seven-day guard uses; no further verification is claimed.)
 2. **The owner's release** — `POST /v1/instances/{id}/issue-quarantines/release { repo, issue, reason }`. A reason is required, it is
    audited (`issue_quarantine.released`, who and why are also kept on the row), the count restarts, and a second release is a 404.
+3. **Expiry after seven days** — a quarantine check more than seven days after `openedAt` releases the stop and restarts the
+   count, recording `system:expired` and `issue_quarantine.expired`. Expiry is checked lazily; listing quarantines alone does
+   not expire them. Other admission and auto-pickup guards still apply before the issue can run again.
 
 The count restarts by moving a floor past every earlier attempt; no attempt row is deleted. `GET .../issue-quarantines` lists the
 open stops (`?released=1` adds lifted ones).

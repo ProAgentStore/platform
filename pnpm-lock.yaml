@@ -145,8 +145,8 @@ importers:
         specifier: 1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       '@playwright/mcp':
-        specifier: 0.0.77
-        version: 0.0.77
+        specifier: 0.0.84
+        version: 0.0.84
       chalk:
         specifier: ^5.6.2
         version: 5.6.2
@@ -154,8 +154,8 @@ importers:
         specifier: ^13.0.0
         version: 13.1.0
       playwright:
-        specifier: ^1.60.0
-        version: 1.60.0
+        specifier: 1.65.0-alpha-2026-10-30
+        version: 1.65.0-alpha-2026-10-30
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1252,11 +1252,6 @@ packages:
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
-
-  '@playwright/mcp@0.0.77':
-    resolution: {integrity: sha512-vf3PmCdOWVvEc3Vmh8DVWvsbz6/rIGi+OG0cyC/2YTn10U8tZMHEiRG62LHdPTTf0qCjoS7/1mbyS5F0RHoTzQ==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   '@playwright/mcp@0.0.84':
     resolution: {integrity: sha512-weqLrA7/D8MJzNV9/t3Hnjp100tS2sxFXKeb2gH6Nhktqmdfvx5qRA9AZ5Mhjnre1jY0wltsrRK5VZS5NBgcvw==}
@@ -2486,11 +2481,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  playwright-core@1.62.0-alpha-2026-06-29:
-    resolution: {integrity: sha512-/13EvW8l9Bmvt9nKHey+OcvZ8nob2FM8BCKBsUNwbXgmT4Hc0XX2b6mOErU0RBYNedOCa9q15USI7SY9K17v4w==}
-    engines: {node: '>=18'}
-    hasBin: true
-
   playwright-core@1.65.0-alpha-2026-10-30:
     resolution: {integrity: sha512-LPMw8B/HRQKMcJeXTqWSrkB/AfCKKmbDQMbu0p7zg8MgibOWaKMjZWR/StAtrQkOxvOmZEju1o1TnPgdoOCwrg==}
     engines: {node: '>=20'}
@@ -2498,11 +2488,6 @@ packages:
 
   playwright@1.60.0:
     resolution: {integrity: sha512-hheHdokM8cdqCb0lcE3s+zT4t4W+vvjpGxsZlDnikarzx8tSzMebh3UiFtgqwFwnTnjYQcsyMF8ei2mCO/tpeA==}
-    engines: {node: '>=18'}
-    hasBin: true
-
-  playwright@1.62.0-alpha-2026-06-29:
-    resolution: {integrity: sha512-ugaMuh6rAOqmbaxrM7+XQSs7M6yPXykq5gVugJPClHcJ4Cqxmky5rDHhrCt4wmaILUeMdI7kPBCx3zMx2Qu+bg==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -3612,11 +3597,6 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
-  '@playwright/mcp@0.0.77':
-    dependencies:
-      playwright: 1.62.0-alpha-2026-06-29
-      playwright-core: 1.62.0-alpha-2026-06-29
-
   '@playwright/mcp@0.0.84':
     dependencies:
       playwright: 1.65.0-alpha-2026-10-30
@@ -4706,19 +4686,11 @@ snapshots:
 
   playwright-core@1.60.0: {}
 
-  playwright-core@1.62.0-alpha-2026-06-29: {}
-
   playwright-core@1.65.0-alpha-2026-10-30: {}
 
   playwright@1.60.0:
     dependencies:
       playwright-core: 1.60.0
-    optionalDependencies:
-      fsevents: 2.3.2
-
-  playwright@1.62.0-alpha-2026-06-29:
-    dependencies:
-      playwright-core: 1.62.0-alpha-2026-06-29
     optionalDependencies:
       fsevents: 2.3.2
 

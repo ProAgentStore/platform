@@ -1970,9 +1970,13 @@ describe("deleting an agent", () => {
 	])("cascades cleanly for %s", async (_label, agentId, left) => {
 		d1.exec("PRAGMA foreign_keys = ON");
 		await call("POST", "/ap/application-runs", readyApp("lead-14"));
+		// Sign-in receipts belong to the Runner: delete them before its runs, but retain them when only the Tailor goes.
+		d1.exec(`INSERT INTO local_apply_agent_sign_ins (run_id, instance_id, user_id, host, state, created_at, updated_at)
+		 SELECT id, instance_id, user_id, 'example.com', 'signed_in', created_at, updated_at FROM local_apply_runs`);
 		await d1.DB.batch(agentDeleteStatements(d1.DB as never, agentId, { cascadeSubscribers: true }) as never);
 		const n = async (t: string) => (await d1.DB.prepare(`SELECT COUNT(*) AS n FROM ${t}`).first<{ n: number }>())?.n;
 		expect({ apps: await n("job_applications"), audit: await n("job_application_events"), runs: await n("local_apply_runs") }).toEqual(left);
+		expect(await n("local_apply_agent_sign_ins")).toBe(left.runs);
 	});
 });
 
