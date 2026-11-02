@@ -867,17 +867,33 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// slow spawn: at 700ms a loaded machine (the full suite) killed the fake engine before its
 		// first write, and the output this test waits for never came. 3s then failed the same way at
 		// full-suite load averages over 100 (#1360), so 8s: still a ceiling this test watches fire —
-		// the behaviour #391 pins — with headroom over a node startup on a loaded machine.
+		// the behaviour #391 pins — with headroom over a node startup on a loaded machine. `maxTurnMs`
+		// itself stays 8s: that is production's real kill-timer and #391's own behaviour, not what flaked.
+		//
+		// #1428: under concurrent-machine load, the FIRST `until()` below (waiting for the wedged engine's
+		// own first write) hit the file's shared 45s `UNTIL_FLOOR_MS` and still timed out — spawn-to-
+		// first-write latency itself exceeded 45s in that one run. Confirmed this isn't a removable
+		// overhead in the spawn path: `resolveEngineSpawn` (engine-spawn.ts) direct-spawns on non-Windows
+		// with no shell wrapper, and `spawnTarget` (launcher-wrapper.ts) adds nothing when there's no
+		// `pas mcp-auth exec --` prefix, which this fake engine never has. Five escalating controlled-load
+		// reproductions (CPU busy-loops, fork/exec churn, and real concurrent `vitest run` sweeps up to a
+		// load average of 480 on 12 cores) could not reproduce the original failure, so there's no new
+		// measurement to size a floor from the way #1360's 9x-slowdown measurement sized today's 45s. The
+		// 45s floor backs every `until()` in this file, including lighter ones that have never flaked, so
+		// raising it file-wide would trade a known-good margin elsewhere for an unverified one here. Instead
+		// only THIS wait — the one actually named in #1428 — gets its own larger explicit budget, and the
+		// test gets its own per-test timeout so that budget has room; the shared floor, every other test's
+		// budget, and the ceiling/ceiling-assertion behaviour below are all unchanged.
 		const s = new HeadlessSession({ id: "raw-wedged", workDir: dir, clientType: "codex", command: "codex", bin: wedgedBin, maxTurnMs: 8000 });
 		s.start();
 		s.input("hang");
-		await until(() => s.snapshot().includes("wedged: hang"), 8000, "the wedged engine's output");
+		await until(() => s.snapshot().includes("wedged: hang"), 60_000, "the wedged engine's output");
 		expect(s.runState()).toBe("thinking");
 		await until(() => s.runState() === "idle", 20_000, "the turn ceiling to end the turn");
 		expect(s.snapshot()).toMatch(/turn ended after .* the engine never exited/);
 		expect(s.alive).toBe(true); // the SESSION survives; only the turn was ended
 		s.stop();
-	});
+	}, 100_000);
 
 	it("is ALIVE between turns — a resting one-shot engine is not a dead session", async () => {
 		// The Pilot opens every iteration with

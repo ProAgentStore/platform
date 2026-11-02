@@ -204,11 +204,18 @@ describe("a stalled real transport is bounded, not silent (#1403)", () => {
 		// directly or through this bound, which is WHY the bound exists to be proven here, not a
 		// clean `git push` exit. What this guards: the bound must not fire just because a FAST,
 		// genuinely-finished delegate happened to be running — the absence of the marker is the claim.
-		writeFileSync(join(helperDir, "git-remote-https"), `#!/bin/sh\necho fine\nexit 0\n`, { mode: 0o755 });
-		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-fast"), helperDir, 5);
+		//
+		// #1428: the bound (was 5s) and the wall-clock assertion (was <5_000ms) used to be the SAME
+		// number, leaving zero margin for ordinary process-spawn jitter (git -> sh wrapper -> this
+		// fake helper) under concurrent machine load — a reported run measured 5,737ms against the
+		// 5,000ms ceiling, failing on overshoot alone with the timeout marker still absent (the real
+		// invariant). The bound is now large enough that it is never the thing racing the assertion;
+		// the assertion keeps a real margin instead of matching the bound 1:1, the way the sibling
+		// "killed at the configured bound" case below already does (bound=1s, asserts <10_000ms).
+		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-fast"), helperDir, 30);
 		const started = Date.now();
 		const r = run(["push", "https://github.com/proappstore-online/template-app.git", "main"]);
-		expect(Date.now() - started).toBeLessThan(5_000); // well under the 5s bound — it never had to wait
+		expect(Date.now() - started).toBeLessThan(10_000); // well under the 30s bound — it never had to wait
 		expect(r.stderr).not.toContain(PUSH_TIMEOUT_MARKER);
 	});
 
