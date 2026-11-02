@@ -4,7 +4,7 @@
  * The CLI process and the browser are faked; the registry, lifecycle and policy wiring are real.
  */
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -46,7 +46,7 @@ const browser: BrowserTools = {
 		name === "browser_evaluate" ? { content: [{ text: `### Result\n${JSON.stringify({ url: pageUrl, title: "Jobs" })}` }] } : { content: [{ text: `${name} ${JSON.stringify(args)}` }] },
 };
 
-function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error } = {}) {
+function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error; onSweepFailure?: (dir: string, error: unknown) => void } = {}) {
 	return new LocalBrowserRuntime({
 		dataDir: dir,
 		homeDir: home,
@@ -54,6 +54,7 @@ function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoExceptio
 		bridgeScript: "/runner/bridge-stdio.js",
 		now: () => now,
 		retentionMs: over.retentionMs,
+		onSweepFailure: over.onSweepFailure,
 		browserFor: async () => {
 			if (over.browserError) throw over.browserError;
 			return { tools: browser, stop: async () => void browsersStopped++ };
@@ -474,6 +475,35 @@ describe("retention", () => {
 		expect(existsSync(join(dir, "local-browser", "inst-1", "run-1"))).toBe(false);
 		expect(() => rt.status({ runId: "run-1" })).toThrow(/No local browser run/);
 		expect(rt.status({ runId: "run-live" }).state).toBe("running");
+	});
+
+	// #1426: on the Dell laptop one stale folder holding a locked file made `rmSync` throw EPERM out of
+	// `start()`, and every run on the machine was refused until the folder was deleted by hand.
+	it.skipIf(process.platform === "win32")("a stale folder it cannot delete is reported once and skipped; the run still starts and the others are swept", async () => {
+		const instDir = join(dir, "local-browser", "inst-stale"); // another instance's leftovers; inst-1 stays writable for the new run
+		const locked = join(instDir, "run-locked");
+		const expired = join(dir, "local-browser", "inst-old", "run-expired");
+		mkdirSync(locked, { recursive: true });
+		mkdirSync(expired, { recursive: true });
+		writeFileSync(join(locked, "profile.lock"), "");
+		utimesSync(locked, 1, 1);
+		utimesSync(expired, 1, 1);
+		chmodSync(instDir, 0o555); // the parent refuses unlink, the closest POSIX stand-in for a Windows file lock
+		const failures: string[] = [];
+		const rt = runtime({ retentionMs: 1000, onSweepFailure: (d) => failures.push(d) });
+		try {
+			expect(rt.start(envelope()).status).toBe("running");
+			rt.sweep();
+			expect(failures).toEqual([locked]);
+			expect(existsSync(locked)).toBe(true);
+			expect(existsSync(expired)).toBe(false);
+		} finally {
+			chmodSync(instDir, 0o755);
+		}
+		// The folder freed: the next sweep removes it, with nothing new reported.
+		rt.sweep();
+		expect(existsSync(locked)).toBe(false);
+		expect(failures).toEqual([locked]);
 	});
 });
 

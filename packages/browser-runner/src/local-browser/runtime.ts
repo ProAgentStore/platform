@@ -71,6 +71,8 @@ export interface LocalBrowserRuntimeDeps {
 	retentionMs?: number;
 	/** Path to the compiled bridge forwarder. Defaults to bridge-stdio.js beside this file. */
 	bridgeScript?: string;
+	/** A stale run folder the sweep could not delete (#1426). Called once per folder per process; the run still starts. */
+	onSweepFailure?: (dir: string, error: unknown) => void;
 }
 
 /**
@@ -538,12 +540,19 @@ export class LocalBrowserRuntime {
 		void run.browser?.stop().catch(() => undefined);
 	}
 
-	/** Drop ended runs past retention, with their folders. Custom workspaces are the owner's and are never deleted. */
+	/**
+	 * Drop ended runs past retention, with their folders. Custom workspaces are the owner's and are never deleted.
+	 *
+	 * Housekeeping never refuses a run (#1426): a folder that will not go — on Windows a stale run dir
+	 * can still hold a locked profile file, and `rmSync` answers EPERM — is reported once and skipped,
+	 * and `start()` carries on. Before this the throw escaped `start()` and one undeletable folder
+	 * rejected every run on the machine until someone deleted it by hand.
+	 */
 	sweep(): void {
 		const cutoff = this.now() - this.retentionMs;
 		for (const [id, run] of this.runs) {
 			if (run.state === "ended" && (run.endedAt ?? 0) < cutoff) {
-				rmSync(run.dir, { recursive: true, force: true });
+				this.removeDir(run.dir);
 				this.runs.delete(id);
 			}
 		}
@@ -554,8 +563,27 @@ export class LocalBrowserRuntime {
 			for (const runId of readdirSync(instDir)) {
 				if (this.runs.has(runId)) continue;
 				const dir = join(instDir, runId);
-				if (statSync(dir).mtimeMs < cutoff) rmSync(dir, { recursive: true, force: true });
+				try {
+					if (statSync(dir).mtimeMs >= cutoff) continue;
+				} catch {
+					continue; // gone between readdir and stat
+				}
+				this.removeDir(dir);
 			}
+		}
+	}
+
+	/** Folders the sweep could not delete, so each is reported once per process rather than on every start. */
+	private readonly sweepFailed = new Set<string>();
+
+	private removeDir(dir: string): void {
+		try {
+			rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+			this.sweepFailed.delete(dir);
+		} catch (error) {
+			if (this.sweepFailed.has(dir)) return;
+			this.sweepFailed.add(dir);
+			this.deps.onSweepFailure?.(dir, error);
 		}
 	}
 
