@@ -9,25 +9,32 @@
  * in `bridge.ts` can clear the wall. No live site; purely the local synthetic fixture (#1412's own
  * "no live site run is authorised by this ticket").
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
-import { McpRuntime } from "../mcp-runtime.js";
+import type { McpRuntime } from "../mcp-runtime.js";
 import { startTestJobServerAuth, type TestJobServerAuth } from "../test-job-server-auth.js";
 import { ApplyBridge, type ApplyBridgeHost } from "./bridge.js";
 import type { LocalApplyEvent, LocalApplyPause } from "./contract.js";
+import { launchCdpBrowser } from "./live-run-browser.js";
 
 const PROFILE = "Name: Jane Citizen\nEmail: jane.citizen@example.com";
 const EMAIL = "jane.citizen@example.com";
 const PASSWORD = "Tr0ub4dor&3-never-seen";
 
 let server: TestJobServerAuth;
+let profileDir: string;
+let launched: Awaited<ReturnType<typeof launchCdpBrowser>>;
 let mcp: McpRuntime;
 
 beforeEach(async () => {
 	process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS = "1";
 	server = await startTestJobServerAuth();
-	mcp = new McpRuntime();
-	await mcp.start({ headless: true });
+	profileDir = mkdtempSync(join(tmpdir(), "pags-agent-sign-in-leak-test-"));
+	launched = await launchCdpBrowser(profileDir, true);
+	mcp = launched.mcp;
 	await fetch(`${server.url}/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -38,7 +45,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	delete process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS;
-	await mcp.stop();
+	await launched.stop();
+	rmSync(profileDir, { recursive: true, force: true });
 	await server.close();
 });
 

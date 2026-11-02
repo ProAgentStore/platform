@@ -1,69 +1,54 @@
 /**
  * #1067 — the legacy workflow browser path (`runtime_task`: JOB_APPLY / BROWSER_TASK) blurs form controls
- * before every stored frame, as the Scout/Runner replay does (#1063), and keeps NO frame when the blur
- * cannot be confirmed. `runner.ts` `shot()` (each `/browser/act` frame) and `challenge.ts`
- * `captureScreenshotDataUrl` (the handoff still) both capture through `maskedPageScreenshot`.
+ * before every stored frame, as the Scout/Runner replay does (#1063), and keeps NO frame when the capture
+ * fails. `runner.ts` `shot()` (each `/browser/act` frame) and `challenge.ts` `captureScreenshotDataUrl`
+ * (the handoff still) both capture through `maskedPageScreenshot`.
  *
- * Two layers: a fake page for the order and the fail-closed rule, and a real Chromium page proving the
- * blur is IN the page at the moment of capture and gone straight after.
+ * Playwright-native since #1419: one `page.screenshot({style, mask, maskColor})` call, nothing to
+ * mutate or confirm. Two layers: a fake page for the fail-closed rule, and real Chromium pages proving
+ * the mask actually changes the rendered pixels — across the top document, a same-origin iframe, and an
+ * open shadow root, since `style` is documented to pierce both and nothing here had ever proven it.
  */
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { captureScreenshotDataUrl } from "../challenge.js";
 import { launchTestChromium } from "../test-chromium.js";
-import { maskedPageScreenshot, MASK_FORM_CONTROLS, UNMASK_FORM_CONTROLS } from "./replay.js";
+import { maskedPageScreenshot, MASK_CSS, MASK_SELECTOR, type MaskablePage } from "./replay.js";
 
 /** A page that records what it was asked, in order. */
-function fakePage(opts: { mask?: unknown; maskThrows?: boolean; shotThrows?: boolean } = {}) {
+function fakePage(opts: { shotThrows?: boolean } = {}) {
 	const calls: string[] = [];
-	return {
-		calls,
-		page: {
-			evaluate: async (expression: string) => {
-				if (expression === `(${MASK_FORM_CONTROLS})()`) {
-					calls.push("mask");
-					if (opts.maskThrows) throw new Error("page closed");
-					return "mask" in opts ? opts.mask : "masked";
-				}
-				if (expression === `(${UNMASK_FORM_CONTROLS})()`) {
-					calls.push("unmask");
-					return "unmasked";
-				}
-				calls.push(`other:${expression}`);
-				return null;
-			},
-			screenshot: async () => {
-				calls.push("shot");
-				if (opts.shotThrows) throw new Error("timeout");
-				return Buffer.from("jpeg-bytes");
-			},
+	const page: MaskablePage = {
+		locator: (selector: string) => {
+			calls.push(`locator:${selector}`);
+			return {} as ReturnType<MaskablePage["locator"]>;
+		},
+		screenshot: async (o) => {
+			calls.push("shot");
+			expect(o.style).toBe(MASK_CSS);
+			if (opts.shotThrows) throw new Error("timeout");
+			return Buffer.from("jpeg-bytes");
 		},
 	};
+	return { calls, page };
 }
 
-describe("maskedPageScreenshot — the order and the fail-closed rule (#1067)", () => {
-	it("blurs, captures, unblurs — and returns the frame", async () => {
+describe("maskedPageScreenshot — one native call, fail-closed (#1067, #1419)", () => {
+	it("masks and captures in a single call, and returns the frame", async () => {
 		const f = fakePage();
 		expect(await maskedPageScreenshot(f.page, { quality: 45, timeout: 8_000 })).toBe(Buffer.from("jpeg-bytes").toString("base64"));
-		expect(f.calls).toEqual(["mask", "shot", "unmask"]);
+		expect(f.calls).toEqual([`locator:${MASK_SELECTOR}`, "shot"]);
 	});
 
-	it("no frame when the blur is not confirmed, or cannot run — the page is never captured unblurred", async () => {
-		for (const opts of [{ mask: "unmasked" }, { mask: null }, { maskThrows: true }]) {
-			const f = fakePage(opts);
-			expect(await maskedPageScreenshot(f.page, { quality: 45, timeout: 8_000 })).toBeUndefined();
-			expect(f.calls).not.toContain("shot");
-		}
-	});
-
-	it("a capture that fails still unblurs the page", async () => {
+	it("no frame when the screenshot throws — nothing to unblur, nothing half-done", async () => {
 		const f = fakePage({ shotThrows: true });
 		expect(await maskedPageScreenshot(f.page, { quality: 45, timeout: 8_000 })).toBeUndefined();
-		expect(f.calls).toEqual(["mask", "shot", "unmask"]);
 	});
 });
 
-describe("in a real page (#1067)", () => {
+describe("in a real page — the mask changes the rendered pixels (#1067, #1419)", () => {
 	let browser: Browser;
 	beforeAll(async () => {
 		browser = await launchTestChromium();
@@ -72,38 +57,68 @@ describe("in a real page (#1067)", () => {
 		await browser?.close();
 	});
 
-	it("the typed field is blurred AT the moment of capture, and the blur is gone straight after — for the per-action frame and the handoff still", async () => {
+	it("a top-level input: masked and unmasked captures differ, byte for byte", async () => {
 		const page = await browser.newPage();
 		await page.setContent(`<form><input id="phone" value="+61 400 123 456"><textarea id="note">secret answer</textarea><p id="text">plain text</p></form>`);
-		const filters: Array<{ input: string; textarea: string; text: string }> = [];
-		const realShot = page.screenshot.bind(page);
-		// Read the page's computed style at the instant the frame is taken.
-		page.screenshot = (async (o: Parameters<typeof realShot>[0]) => {
-			filters.push(
-				await page.evaluate(() => ({
-					input: getComputedStyle(document.getElementById("phone") as Element).filter,
-					textarea: getComputedStyle(document.getElementById("note") as Element).filter,
-					text: getComputedStyle(document.getElementById("text") as Element).filter,
-				})),
-			);
-			return realShot(o);
-		}) as typeof page.screenshot;
-
-		const frame = await maskedPageScreenshot(page, { quality: 45, timeout: 8_000 });
-		const still = await captureScreenshotDataUrl(page);
-		expect(frame && frame.length > 100).toBe(true);
-		expect(still).toMatch(/^data:image\/jpeg;base64,/);
-		expect(filters).toEqual([
-			{ input: "blur(8px)", textarea: "blur(8px)", text: "none" },
-			{ input: "blur(8px)", textarea: "blur(8px)", text: "none" },
-		]);
-		// Unblurred straight after: the next human or automated step sees the real page.
+		const unmasked = await page.screenshot({ type: "jpeg", quality: 90 });
+		const maskedBase64 = await maskedPageScreenshot(page, { quality: 90, timeout: 8_000 });
+		expect(maskedBase64 && maskedBase64.length > 100).toBe(true);
+		const masked = Buffer.from(maskedBase64 as string, "base64");
+		expect(masked.equals(unmasked)).toBe(false);
+		// The page itself is never mutated: `style`/`mask` apply only for the instant of the capture.
 		expect(await page.evaluate(() => getComputedStyle(document.getElementById("phone") as Element).filter)).toBe("none");
+		const still = await captureScreenshotDataUrl(page);
+		expect(still).toMatch(/^data:image\/jpeg;base64,/);
 		await page.close();
+	}, 20_000);
+
+	it("an input inside an open shadow root: masked and unmasked captures differ", async () => {
+		const page = await browser.newPage();
+		await page.setContent(`<div id="shadow-host"></div>`);
+		await page.evaluate(() => {
+			const host = document.getElementById("shadow-host") as HTMLElement;
+			const root = host.attachShadow({ mode: "open" });
+			root.innerHTML = `<input id="shadowInput" value="shadow-secret-value" style="width:200px;height:40px">`;
+		});
+		const unmasked = await page.screenshot({ type: "jpeg", quality: 90 });
+		const maskedBase64 = await maskedPageScreenshot(page, { quality: 90, timeout: 8_000 });
+		expect(maskedBase64 && maskedBase64.length > 100).toBe(true);
+		const masked = Buffer.from(maskedBase64 as string, "base64");
+		expect(masked.equals(unmasked)).toBe(false);
+		await page.close();
+	}, 20_000);
+
+	describe("an input inside a same-origin iframe", () => {
+		let server: Server;
+		let base: string;
+		beforeAll(async () => {
+			server = createServer((req, res) => {
+				res.setHeader("Content-Type", "text/html");
+				if (req.url === "/child") res.end(`<input id="childInput" value="iframe-secret-value" style="width:200px;height:40px">`);
+				else res.end(`<iframe id="frame" src="/child" style="width:300px;height:100px;border:0"></iframe>`);
+			});
+			await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+			base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+		});
+		afterAll(async () => {
+			await new Promise((resolve) => server.close(resolve));
+		});
+
+		it("masked and unmasked captures differ, byte for byte — the mask reaches into the iframe's own document", async () => {
+			const page = await browser.newPage();
+			await page.goto(base);
+			await page.waitForTimeout(200); // the iframe's own navigation
+			const unmasked = await page.screenshot({ type: "jpeg", quality: 90 });
+			const maskedBase64 = await maskedPageScreenshot(page, { quality: 90, timeout: 8_000 });
+			expect(maskedBase64 && maskedBase64.length > 100).toBe(true);
+			const masked = Buffer.from(maskedBase64 as string, "base64");
+			expect(masked.equals(unmasked)).toBe(false);
+			await page.close();
+		}, 20_000);
 	});
 });
 
-describe("no stored frame bypasses the blur (#1067)", () => {
+describe("no stored frame bypasses the mask (#1067, #1419)", () => {
 	it("the only direct page.screenshot outside maskedPageScreenshot is the LIVE takeover fallback — and runner shot() masks", async () => {
 		const { readdirSync, readFileSync, statSync } = await import("node:fs");
 		const { join, relative } = await import("node:path");

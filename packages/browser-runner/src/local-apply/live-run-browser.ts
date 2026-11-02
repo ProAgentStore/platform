@@ -26,6 +26,85 @@ export function applicationProfileDir(dataDir: string, profile: LocalApplyProfil
  */
 const inUse = new Set<string>();
 
+/**
+ * Launch a browser the runner itself owns and attach `McpRuntime` to it over CDP (#1419: every
+ * browser the runner drives is launched BY the runner — `@playwright/mcp` only ever attaches, it
+ * never launches or owns a profile directory). Shared by the persistent `isolated` apply profile
+ * and any throwaway caller; the caller decides whether `profileDir` survives `stop()`.
+ *
+ * A persistent-context launch (not `.launch()`) either way: `launchPersistentContext` is what
+ * exposes `--remote-debugging-port=0` + a `DevToolsActivePort` file to read back, which is how a
+ * SEPARATE process (`@playwright/mcp`'s own Node process boundary inside `McpRuntime`) attaches to
+ * THIS browser rather than launching its own. A throwaway caller just uses a fresh temp dir and
+ * deletes it in its own `stop()`; nothing here assumes the dir is reused.
+ */
+export async function launchCdpBrowser(profileDir: string, headless: boolean): Promise<{
+	context: BrowserContext;
+	mcp: McpRuntime;
+	/** The currently live page in this context, or null — tracks the newest page, never falls back to another tab once it closes (a lost page is terminal for a handoff). */
+	activePage(): Page | null;
+	stop(): Promise<void>;
+}> {
+	const playwright = await import("playwright");
+	let context: BrowserContext | undefined;
+	let mcp: McpRuntime | undefined;
+	try {
+		mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+		// A persistent profile keeps the LAST launch's port file; read before Chrome rewrites it, the
+		// tools would attach to a dead port. Chrome writes a fresh one on every start.
+		rmSync(join(profileDir, "DevToolsActivePort"), { force: true });
+		context = await playwright.chromium.launchPersistentContext(profileDir, {
+			headless,
+			acceptDownloads: true,
+			viewport: null,
+			args: [
+				"--disable-blink-features=AutomationControlled",
+				"--start-maximized",
+				"--window-size=1512,982",
+				"--remote-debugging-port=0",
+				"--use-fake-ui-for-media-stream",
+				"--use-fake-device-for-media-stream",
+			],
+		});
+		await context.addInitScript(() => {
+			Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+		}).catch(() => undefined);
+		let activePage: Page | null = null;
+		const track = (page: Page) => {
+			activePage = page;
+			// Never fall back to another tab after the exact page closes: that would hand a
+			// person a different site/page. A lost page is terminal for this handoff.
+			page.once("close", () => {
+				if (activePage === page) activePage = null;
+			});
+		};
+		context.on("page", track);
+		const initial = context.pages().at(-1) ?? await context.newPage();
+		track(initial);
+		mcp = new McpRuntime();
+		await mcp.start({ cdpEndpoint: await cdpEndpoint(profileDir) });
+		const ctx = context;
+		const startedMcp = mcp;
+		let stopped = false;
+		return {
+			context: ctx,
+			mcp: startedMcp,
+			activePage: () => (activePage && !activePage.isClosed() ? activePage : null),
+			stop: async () => {
+				if (stopped) return;
+				stopped = true;
+				activePage = null;
+				await startedMcp.stop().catch(() => undefined);
+				await ctx.close().catch(() => undefined);
+			},
+		};
+	} catch (error) {
+		await mcp?.stop().catch(() => undefined);
+		await context?.close().catch(() => undefined);
+		throw error;
+	}
+}
+
 /** Bind application handoff to the run browser, not to the runner-wide active page. */
 export function createLocalApplyBrowserFactory(options: {
 	headless: boolean;
@@ -57,10 +136,22 @@ export function createRunnerBrowserFactories(options: {
 	applyBrowserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
 } {
 	const browserFor = async (profile: LocalApplyProfile, runDir: string): Promise<RunBrowser> => {
-		if (profile === "default") return { tools: await options.defaultTools(), stop: async () => undefined };
-		const mcp = new McpRuntime();
-		await mcp.start({ userDataDir: join(runDir, "profile"), headless: options.headless });
-		return { tools: mcp, secrets: mcp, stop: () => mcp.stop() };
+		if (profile === "default") return { tools: await options.defaultTools(), handoffPage: options.sharedPage, stop: async () => undefined };
+		// A throwaway browser for this run alone (#1419): a fresh temp dir, launched and attached
+		// over CDP exactly like the persistent `isolated` profile above, deleted on stop — never
+		// launched BY `@playwright/mcp` itself (the `McpRuntime.start` branch that did that, and its
+		// own #274 orphan-cleanup, are gone; `reaper.ts` stays for other people's leftovers).
+		const profileDir = join(runDir, "profile");
+		const launched = await launchCdpBrowser(profileDir, options.headless);
+		return {
+			tools: launched.mcp,
+			secrets: launched.mcp,
+			handoffPage: launched.activePage,
+			stop: async () => {
+				await launched.stop();
+				rmSync(profileDir, { recursive: true, force: true });
+			},
+		};
 	};
 	return {
 		browserFor,
@@ -86,63 +177,20 @@ export function createRunnerBrowserFactories(options: {
 export async function createPersistentApplyBrowser(profileDir: string, ledgerPath: string, headless: boolean): Promise<RunBrowser> {
 	if (inUse.has(profileDir)) throw new Error("This machine's application browser profile is in use by another run; try again when it ends.");
 	inUse.add(profileDir);
-	const playwright = await import("playwright");
-	let context: BrowserContext | undefined;
-	let mcp: McpRuntime | undefined;
-	let activePage: Page | null = null;
-	let stopped = false;
 	try {
-		mkdirSync(profileDir, { recursive: true, mode: 0o700 });
-		// A persistent profile keeps the LAST launch's port file; read before Chrome rewrites it, the
-		// tools would attach to a dead port. Chrome writes a fresh one on every start.
-		rmSync(join(profileDir, "DevToolsActivePort"), { force: true });
-		context = await playwright.chromium.launchPersistentContext(profileDir, {
-			headless,
-			acceptDownloads: true,
-			viewport: null,
-			args: [
-				"--disable-blink-features=AutomationControlled",
-				"--start-maximized",
-				"--window-size=1512,982",
-				"--remote-debugging-port=0",
-				"--use-fake-ui-for-media-stream",
-				"--use-fake-device-for-media-stream",
-			],
-		});
-		await context.addInitScript(() => {
-			Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-		}).catch(() => undefined);
-		const track = (page: Page) => {
-			activePage = page;
-			// Never fall back to another tab after the exact page closes: that would hand a
-			// person a different site/page. A lost page is terminal for this handoff.
-			page.once("close", () => {
-				if (activePage === page) activePage = null;
-			});
-		};
-		context.on("page", track);
-		const initial = context.pages().at(-1) ?? await context.newPage();
-		track(initial);
-		mcp = new McpRuntime();
-		await mcp.start({ cdpEndpoint: await cdpEndpoint(profileDir) });
-		const ctx = context;
+		const launched = await launchCdpBrowser(profileDir, headless);
+		const context = launched.context;
 		return {
-			tools: mcp,
-			secrets: mcp,
-			handoffPage: () => activePage && !activePage.isClosed() ? activePage : null,
-			sessions: new SiteSessionLedger(ledgerPath, async () => (await ctx.cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires }))),
+			tools: launched.mcp,
+			secrets: launched.mcp,
+			handoffPage: launched.activePage,
+			sessions: new SiteSessionLedger(ledgerPath, async () => (await context.cookies()).map((c) => ({ name: c.name, domain: c.domain, expires: c.expires }))),
 			stop: async () => {
-				if (stopped) return;
-				stopped = true;
-				activePage = null;
-				await mcp!.stop().catch(() => undefined);
-				await context!.close().catch(() => undefined);
+				await launched.stop();
 				inUse.delete(profileDir);
 			},
 		};
 	} catch (error) {
-		await mcp?.stop().catch(() => undefined);
-		await context?.close().catch(() => undefined);
 		inUse.delete(profileDir);
 		throw error;
 	}

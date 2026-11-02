@@ -26,7 +26,7 @@
  */
 import { classifyApplyClick } from "./contract.js";
 import { LISTING_EXPIRED_RE, LISTING_UNAVAILABLE_RE } from "./unavailable.js";
-import type { ReplayPoint, ShotRecorder } from "../local-browser/replay.js";
+import type { MaskablePage, ReplayPoint, ShotRecorder } from "../local-browser/replay.js";
 import {
 	CONFIRMATION_INTERVAL_SECONDS,
 	CONFIRMATION_LOOKS,
@@ -66,6 +66,8 @@ export interface ApplyBridgeHost {
 	gateId?: string;
 	/** This browser profile's site sign-in ledger (#1094). Absent: no session gate. */
 	sessions?: SiteSessionLedger;
+	/** This run's own real Playwright page, for a Playwright-native masked screenshot (#1419) — null on a browser the runner did not itself launch. */
+	page?(): MaskablePage | null;
 }
 
 export interface ToolResult {
@@ -249,7 +251,7 @@ export class ApplyBridge {
 		const res = await this.dispatch(name, args);
 		const point = res.isError ? null : ApplyBridge.shotPoint(name, this.submitAttempted && !submittedBefore);
 		if (point && this.shots) {
-			const seq = await this.shots.capture(this.browser, point);
+			const seq = await this.shots.capture(this.host.page?.() ?? null, point);
 			// Metadata only: which frame, and why. The pixels — every form control blurred — stay in the runner.
 			if (seq) this.host.emit({ type: "screenshot.captured", detail: { shot: seq, point } });
 		}

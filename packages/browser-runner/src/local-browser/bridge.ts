@@ -22,7 +22,7 @@
  */
 import type { LocalBrowserEvent, LocalBrowserFinding, LocalBrowserLimits, LocalBrowserPauseReason, LocalBrowserSourceFailure, LocalBrowserSourceFailureReason } from "./contract.js";
 import { LOCAL_BROWSER_SOURCE_FAILURE_REASONS, redactDetail } from "./contract.js";
-import type { ReplayPoint, ShotRecorder } from "./replay.js";
+import type { MaskablePage, ReplayPoint, ShotRecorder } from "./replay.js";
 
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
@@ -44,6 +44,8 @@ export interface BridgeHost {
 	allowListOnly(): boolean;
 	overTime(): boolean;
 	limits: LocalBrowserLimits;
+	/** This run's own real Playwright page, for a Playwright-native masked screenshot (#1419) — null on a browser the runner did not itself launch. */
+	page?(): MaskablePage | null;
 }
 
 export interface ToolResult {
@@ -221,7 +223,7 @@ export class BrowserBridge {
 
 	/** Take a replay frame, best-effort; the trace only records that it exists (seq + capture point). */
 	private async shot(point: ReplayPoint, url?: string): Promise<void> {
-		const seq = await this.shots?.capture(this.browser, point, url ? { url } : {});
+		const seq = await this.shots?.capture(this.host.page?.() ?? null, point, url ? { url } : {});
 		if (seq) this.host.emit({ type: "screenshot.captured", ...this.currentHost(), detail: { shot: seq, point } });
 	}
 

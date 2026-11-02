@@ -19,8 +19,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { McpRuntime } from "../mcp-runtime.js";
 import { startTestJobServer } from "../test-job-server.js";
+import { launchCdpBrowser } from "./live-run-browser.js";
 import { LocalApplyRuntime } from "./runtime.js";
 
 const PROFILE = `Full name: Jane Citizen
@@ -45,7 +45,7 @@ describe.skipIf(process.env.PAGS_ENGINE_SMOKE !== "1")("live machine-login appli
 			writeFileSync(join(home, "jobs/profile.md"), PROFILE);
 			writeFileSync(join(home, "jobs/applications/lead-smoke/t/resume.md"), RESUME);
 			writeFileSync(join(home, "jobs/applications/lead-smoke/t/cover-letter.md"), COVER);
-			const browsers: McpRuntime[] = [];
+			const browsers: Array<Awaited<ReturnType<typeof launchCdpBrowser>>> = [];
 			let selfUrl: string | null = null;
 			const rt = new LocalApplyRuntime({
 				dataDir: data,
@@ -53,10 +53,9 @@ describe.skipIf(process.env.PAGS_ENGINE_SMOKE !== "1")("live machine-login appli
 				selfUrl: () => selfUrl,
 				bridgeScript: BRIDGE,
 				browserFor: async (_p, runDir) => {
-					const mcp = new McpRuntime();
-					await mcp.start({ userDataDir: join(runDir, "profile"), headless: true });
-					browsers.push(mcp);
-					return { tools: mcp, stop: () => mcp.stop() };
+					const launched = await launchCdpBrowser(join(runDir, "profile"), true);
+					browsers.push(launched);
+					return { tools: launched.mcp, handoffPage: launched.activePage, stop: () => launched.stop() };
 				},
 			});
 			// The runner's bridge endpoint, as server.ts serves it.

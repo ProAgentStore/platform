@@ -13,7 +13,7 @@ import type { BrowserTools } from "./bridge.js";
 import { LOCAL_BROWSER_ERROR_CODES } from "./contract.js";
 import type { LocalBrowserTaskEnvelope } from "./contract.js";
 import { LocalBrowserRuntime, parseEnvelope, resolveWorkspacePath } from "./runtime.js";
-import { MASK_FORM_CONTROLS } from "./replay.js";
+import type { MaskablePage } from "./replay.js";
 
 class FakeChild extends EventEmitter {
 	stdout = new PassThrough();
@@ -165,42 +165,48 @@ describe("the bridge", () => {
 });
 
 describe("the owner's screenshot switch (#1064)", () => {
-	/** A browser that CAN take a frame (mask confirmed, image returned), recording every tool it is asked for. */
+	/** A browser that CAN take a frame (#1419: a real page, faked here), recording every tool it is asked for. */
 	function shotBrowser() {
 		const called: string[] = [];
+		const shots: string[] = [];
 		const tools: BrowserTools = {
 			listTools: browser.listTools,
 			callTool: async (name, args = {}) => {
 				called.push(name);
-				if (name === "browser_evaluate" && args.function === MASK_FORM_CONTROLS) return { content: [{ type: "text", text: '### Result\n"masked"' }] };
-				if (name === "browser_take_screenshot") return { content: [{ type: "image", data: "/9j/4AAQSkZJRgABAQ==", mimeType: "image/jpeg" }] };
 				return browser.callTool(name, args);
 			},
 		};
-		return { tools, called };
+		const page: MaskablePage = {
+			locator: () => ({}) as ReturnType<MaskablePage["locator"]>,
+			screenshot: async () => {
+				shots.push("shot");
+				return Buffer.from("/9j/4AAQSkZJRgABAQ==", "base64");
+			},
+		};
+		return { tools, called, shots, page };
 	}
 	async function browse(screenshots?: false) {
 		const b = shotBrowser();
-		const rt = new LocalBrowserRuntime({ dataDir: dir, homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", now: () => now, browserFor: async () => ({ tools: b.tools, stop: async () => undefined }), spawn: (() => new FakeChild()) as never });
+		const rt = new LocalBrowserRuntime({ dataDir: dir, homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", now: () => now, browserFor: async () => ({ tools: b.tools, handoffPage: () => b.page, stop: async () => undefined }), spawn: (() => new FakeChild()) as never });
 		rt.start(envelope({ policy: { ...envelope().policy, ...(screenshots === false ? { screenshots } : {}) } }));
 		await settle();
 		await rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://seek.com.au/jobs" } });
 		await rt.bridge({ runId: "run-1", op: "call", name: "browser_snapshot", args: {} });
-		return { rt, called: b.called };
+		return { rt, called: b.called, shots: b.shots };
 	}
 
 	it("ON (no flag): frames are taken, as #1063 shipped", async () => {
-		const { rt, called } = await browse();
-		expect(called).toContain("browser_take_screenshot");
+		const { rt, shots } = await browse();
+		expect(shots.length).toBeGreaterThan(0);
 		expect(rt.shots({ runId: "run-1" }).shots.length).toBeGreaterThan(0);
 		expect(rt.status({ runId: "run-1" }).events.some((e) => e.type === "screenshot.captured")).toBe(true);
 	});
 
 	it("OFF: the envelope keeps the flag, no frame is ever taken, `/shots` is empty, and the trace names none", async () => {
 		expect(parseEnvelope({ ...envelope(), policy: { ...envelope().policy, screenshots: false } }).policy.screenshots).toBe(false);
-		const { rt, called } = await browse(false);
+		const { rt, called, shots } = await browse(false);
 		expect(called).toContain("browser_navigate");
-		expect(called).not.toContain("browser_take_screenshot");
+		expect(shots).toEqual([]);
 		expect(rt.shots({ runId: "run-1" }).shots).toEqual([]);
 		expect(rt.status({ runId: "run-1" }).events.some((e) => e.type === "screenshot.captured")).toBe(false);
 	});

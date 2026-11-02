@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import { ApplyBridge, type ApplyBridgeHost, CREDENTIAL_NAME, groundingRefusal } from "./bridge.js";
 import { type LocalApplyEvent, type LocalApplyPause, parseLocalApplyEvent } from "./contract.js";
-import { APPLY_SHOT_CAP, MASK_FORM_CONTROLS, ShotRecorder, UNMASK_FORM_CONTROLS } from "../local-browser/replay.js";
+import { APPLY_SHOT_CAP, type MaskablePage, ShotRecorder } from "../local-browser/replay.js";
 
 interface PageFlags {
 	title?: string;
@@ -103,11 +103,23 @@ function fakeBrowser(
 
 const PROFILE = "Name: Jane Citizen\nEmail: jane@example.com\nWork authorization: Authorized to work in Australia\nRequires sponsorship: No\nNotice period: four weeks";
 
-function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[]; resume?: (p: LocalApplyPause) => "resumed" | "stopped" | "sign_in"; artifactError?: string; directive?: "continue" | "request_review" | "stop" } = {}) {
+/** A real page is what makes a frame possible at all (#1419) — a working fake by default. */
+function fakePage(opts: { shotThrows?: boolean } = {}): MaskablePage {
+	return {
+		locator: () => ({}) as ReturnType<MaskablePage["locator"]>,
+		screenshot: async () => {
+			if (opts.shotThrows) throw new Error("page closed");
+			return Buffer.from("/9j/4AAQSkZJRgABAQ==", "base64");
+		},
+	};
+}
+
+function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[]; resume?: (p: LocalApplyPause) => "resumed" | "stopped" | "sign_in"; artifactError?: string; directive?: "continue" | "request_review" | "stop"; page?: MaskablePage | null } = {}) {
 	const events: Array<Omit<LocalApplyEvent, "at">> = [];
 	const pauses: LocalApplyPause[] = [];
 	const allow = new Set(o.allow ?? ["jobs.example.com"]);
 	const grounding = [PROFILE];
+	const page = "page" in o ? o.page : fakePage();
 	const host: ApplyBridgeHost & { allow: Set<string>; grounding_: string[] } = {
 		allow,
 		grounding_: grounding,
@@ -124,6 +136,7 @@ function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[
 		now: () => Date.parse("2026-10-07T01:00:00Z"),
 		limits: { maxMinutes: 20, maxPages: 30, maxActions: 300 },
 		mode: o.mode ?? "fill_and_review",
+		page: () => page ?? null,
 		...(o.mode === "auto_submit" ? { gateId: "gate-1" } : {}),
 	};
 	return { host, events, pauses };
@@ -653,50 +666,24 @@ describe("upload_artifact — an approved file, once", () => {
 	});
 });
 
-describe("replay frames on an application page (#1063)", () => {
+describe("replay frames on an application page (#1063, #1419)", () => {
 	const IMAGE = "/9j/4AAQSkZJRgABAQ==";
-	/** The fake browser, plus a camera that records whether the page was masked when each frame was taken. */
-	function camera(tools: BrowserTools, mask: "masked" | "unmasked" = "masked") {
-		const state = { on: false, maskedAtShot: [] as boolean[] };
-		const wrapped: BrowserTools = {
-			listTools: tools.listTools,
-			callTool: async (name, args = {}) => {
-				if (name === "browser_evaluate" && args.function === MASK_FORM_CONTROLS) {
-					if (mask === "masked") state.on = true;
-					return { content: [{ text: `### Result\n"${mask}"` }] };
-				}
-				if (name === "browser_evaluate" && args.function === UNMASK_FORM_CONTROLS) {
-					state.on = false;
-					return { content: [{ text: '### Result\n"unmasked"' }] };
-				}
-				if (name === "browser_take_screenshot") {
-					state.maskedAtShot.push(state.on);
-					return { content: [{ type: "image", data: IMAGE, mimeType: "image/jpeg" }] };
-				}
-				return tools.callTool(name, args);
-			},
-		};
-		return { state, tools: wrapped };
-	}
-	async function recordedForm(mask: "masked" | "unmasked" = "masked") {
+	async function recordedForm(page: MaskablePage | null = fakePage()) {
 		const b = fakeBrowser({ [FORM]: {} });
-		const cam = camera(b.tools, mask);
-		const h = fakeHost();
+		const h = fakeHost({ page });
 		const shots = new ShotRecorder(APPLY_SHOT_CAP);
-		const bridge = new ApplyBridge(cam.tools, h.host, shots);
+		const bridge = new ApplyBridge(b.tools, h.host, shots);
 		await bridge.callTool("browser_navigate", { url: FORM });
 		await bridge.callTool("browser_snapshot", {});
 		await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
-		return { bridge, shots, cam, ...h };
+		return { bridge, shots, ...h };
 	}
 
-	it("frames navigation, reading, the checkpoint, a fill and review — every one taken with the form controls blurred", async () => {
-		const { bridge, shots, cam } = await recordedForm();
+	it("frames navigation, reading, the checkpoint, a fill and review — every one a masked screenshot", async () => {
+		const { bridge, shots } = await recordedForm();
 		await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
 		await bridge.callTool("ready_for_review", { summary: "Filled the name." });
 		expect(shots.shots.map((s) => s.point)).toEqual(["navigated", "snapshot", "checkpoint", "filled", "review"]);
-		expect(cam.state.maskedAtShot).toEqual([true, true, true, true, true]);
-		expect(cam.state.on).toBe(false);
 	});
 
 	it("privacy: the trace names each frame by seq and point; it never carries the image or a typed value, and survives the cloud's whitelist", async () => {
@@ -720,11 +707,16 @@ describe("replay frames on an application page (#1063)", () => {
 		expect(shots.shots.length).toBe(before);
 	});
 
-	it("fails closed: when the blur cannot be confirmed no frame is taken — and the fill itself still works", async () => {
-		const { bridge, shots, cam } = await recordedForm("unmasked");
+	it("fails closed: when the screenshot throws no frame is taken — and the fill itself still works", async () => {
+		const { bridge, shots } = await recordedForm(fakePage({ shotThrows: true }));
 		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
 		expect(shots.shots).toEqual([]);
-		expect(cam.state.maskedAtShot).toEqual([]);
+	});
+
+	it("fails closed: no real page at all (#1419) — no frame is attempted", async () => {
+		const { bridge, shots } = await recordedForm(null);
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
+		expect(shots.shots).toEqual([]);
 	});
 
 	it("the screenshot tool is never offered to the CLI", async () => {

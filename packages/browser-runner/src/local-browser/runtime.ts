@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, wri
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
 import { type BrowserTools, BrowserBridge, domainWithin } from "./bridge.js";
 import { SCOUT_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "./replay.js";
@@ -56,6 +57,8 @@ export interface RunBrowser {
 	tools: BrowserTools;
 	/** Close it — a no-op for the shared browser, which outlives every run. */
 	stop(): Promise<void>;
+	/** The currently live page in this run's own browser (#1419) — Playwright-native masked screenshots need a real `Page`, not just the MCP tool interface. Absent on the shared browser's own tools object; the runner's own active page is reached another way there. */
+	handoffPage?(): Page | null;
 }
 
 export interface LocalBrowserRuntimeDeps {
@@ -309,6 +312,7 @@ export class LocalBrowserRuntime {
 			allowListOnly: () => e.policy.allowDomains.length > 0,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			limits: e.limits,
+			page: () => run.browser?.handoffPage?.() ?? null,
 			},
 			e.policy.screenshots === false ? undefined : run.shots,
 		);

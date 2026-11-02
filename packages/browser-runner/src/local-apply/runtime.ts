@@ -513,6 +513,7 @@ export class LocalApplyRuntime {
 			signInSecrets: () => [...(run.signIn?.names ?? [])],
 			requestSignInCode: () => this.requestSignInCode(run),
 			signInDone: () => this.signInDone(run),
+			page: () => run.browser?.handoffPage?.() ?? null,
 		}, e.policy.screenshots === false ? undefined : run.shots);
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
 
