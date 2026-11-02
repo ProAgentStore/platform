@@ -13,7 +13,7 @@ import { installVersion } from "../commands/runner/self-update.js";
 import { sampleMemAvailable } from "../commands/runner/resources.js";
 import { configDir, lockDir, pidAlive, readLock } from "../runner-lock.js";
 import { serviceContext } from "../service-context.js";
-import { runnerServiceRestart, serviceLogPath, servicePlan, type ServiceContext } from "../service-install.js";
+import { refreshSupervisorScript, runnerServiceRestart, serviceLogPath, servicePlan, type ServiceContext } from "../service-install.js";
 import type { PayloadFacts, WatchdogDeps } from "./core.js";
 import { scrubText } from "./scrub.js";
 
@@ -129,6 +129,14 @@ export function realWatchdogDeps(log: (line: string) => void, ctx: ServiceContex
 			const r = runnerFromLocks();
 			if (!serviceInstalled(ctx)) {
 				throw new Error(r.alive ? "the runner is running but was not started by a service (launch: " + (r.launch ?? "unknown") + "), so stopping it would not bring it back; restart it by hand or run `pags up --install-service`" : "no service manager is installed for the runner, so there is nothing to start it with; run `pags up --install-service` on the machine");
+			}
+			// #1425: refresh the supervisor script BEFORE restarting it, so a machine whose install
+			// predates a later PATH-resolution fix (#1416) does not self-heal into the same broken
+			// config forever — best-effort; a restart with a stale script is still better than none.
+			try {
+				refreshSupervisorScript(ctx);
+			} catch {
+				// best effort
 			}
 			const c = runnerServiceRestart(ctx);
 			try {

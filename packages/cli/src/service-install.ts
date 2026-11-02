@@ -580,6 +580,20 @@ export function uninstallWatchdogService(ctx: ServiceContext, deps: ServiceDeps 
 	return removeByPlan(watchdogRemovalPlan(ctx), deps);
 }
 
+/**
+ * Rewrite just the supervisor script with the environment's CURRENT values (#1425) — a self-heal
+ * restart (`runnerServiceRestart` below) re-execs whatever is already on disk, so a machine whose
+ * script predates a later fix to {@link supervisedPath} (#1416's nvm-drift PATH resolution) would
+ * self-heal into the exact same broken config forever, never actually recovering. Only this one
+ * file, never the OS unit/plist: the supervisor script is plain data the LaunchAgent/systemd
+ * unit/Scheduled Task re-reads from disk on every spawn, so overwriting it needs no service
+ * reload, no new privileges, and nothing the owner has to be asked for.
+ */
+export function refreshSupervisorScript(ctx: ServiceContext, deps: Pick<ServiceDeps, "write"> = {}): void {
+	const file = servicePlan(ctx).files[0];
+	(deps.write ?? defaultWrite)(file.path, file.content);
+}
+
 /** The command that restarts the RUNNER's service unit, per OS — what the watchdog uses to bring a dead `pags up` back. */
 export function runnerServiceRestart(ctx: ServiceContext): ServiceCommand {
 	if (ctx.platform === "darwin") return { file: "launchctl", args: ["kickstart", "-k", `gui/${ctx.uid ?? 501}/${SERVICE_LABEL}`], why: "restart the runner's LaunchAgent" };

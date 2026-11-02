@@ -1,13 +1,14 @@
 /** #1320 — the watchdog's real hands, against temp folders and fake locks: the payload cache, the runner lock, the log, and the rollback end to end. */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cachedPayloads } from "../bootstrap/payload.js";
 import { beginTrial, badVersions, markBad } from "../bootstrap/trial.js";
 import { writeInstalled } from "../bootstrap/test-payload.js";
+import { servicePlan, supervisorPath, type ServiceContext } from "../service-install.js";
 import { executeCommand, type WatchdogDeps } from "./core.js";
-import { logHistory, payloadFacts, runnerFromLocks, tailOf } from "./local.js";
+import { logHistory, payloadFacts, realWatchdogDeps, runnerFromLocks, tailOf } from "./local.js";
 
 let dir: string;
 beforeEach(() => {
@@ -119,5 +120,40 @@ describe("rolling back, against the real payload cache (#1320)", () => {
 		markBad(root, "0.4.178", "never registered", "0.4.177");
 		const r = await executeCommand({ id: "c3", kind: "update", args: {} }, real(root, []));
 		expect(r).toMatchObject({ state: "failed", detail: expect.stringContaining("0.4.178 was installed here and rolled back (never registered)") });
+	});
+});
+
+describe("restartRunner refreshes the supervisor script first (#1425)", () => {
+	/**
+	 * `launchctl kickstart -k` / `systemctl --user restart` re-exec whatever is ALREADY on disk — a
+	 * machine whose supervisor script predates the #1416 PATH-resolution fix would self-heal into
+	 * the same broken config forever. `realWatchdogDeps().restartRunner()` must rewrite that file
+	 * BEFORE issuing the restart command, so the service manager's own command failing here (no
+	 * such unit is actually registered with systemd/launchd in this test) proves nothing about
+	 * whether the refresh itself happened first.
+	 */
+	it("overwrites the stale supervisor script with current values, even though the restart command itself then fails", async () => {
+		const ctx: ServiceContext = { platform: "linux", home: dir, nodePath: "/usr/bin/node", script: "/usr/lib/pags.js", configDir: dir, pathEnv: "/usr/bin", uid: 501, user: "me" };
+		const plan = servicePlan(ctx);
+		const supervisor = plan.files[0];
+		mkdirSync(dirname(supervisor.path), { recursive: true });
+		writeFileSync(supervisor.path, "STALE — written before a later PATH fix");
+		for (const f of plan.files.slice(1)) {
+			mkdirSync(dirname(f.path), { recursive: true });
+			writeFileSync(f.path, f.content); // `serviceInstalled` only checks these exist
+		}
+		const deps = realWatchdogDeps(() => undefined, ctx, "0.4.200");
+		await expect(deps.restartRunner()).rejects.toThrow(); // no real systemd unit registered — expected
+		expect(readFileSync(supervisor.path, "utf8")).toBe(supervisor.content);
+	});
+
+	it("refuses with no file write at all when no service is installed on this machine", async () => {
+		// `runnerFromLocks` reads the machine's REAL lock dir, so whichever of the two "cannot bring
+		// it back" messages fires depends on whether something real happens to be running right
+		// now — either way, nothing here was installed BY a service, so nothing should be written.
+		const ctx: ServiceContext = { platform: "linux", home: dir, nodePath: "/usr/bin/node", script: "/usr/lib/pags.js", configDir: join(dir, "nothing-here"), pathEnv: "/usr/bin", uid: 501, user: "me" };
+		const deps = realWatchdogDeps(() => undefined, ctx, "0.4.200");
+		await expect(deps.restartRunner()).rejects.toThrow(/no service manager is installed|was not started by a service/);
+		expect(existsSync(supervisorPath(ctx))).toBe(false);
 	});
 });

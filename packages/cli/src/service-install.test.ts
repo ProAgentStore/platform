@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { daemonPlistPath, installService, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisedPath, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
+import { daemonPlistPath, installService, refreshSupervisorScript, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisedPath, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
 
 const mac: ServiceContext = { platform: "darwin", home: "/Users/serge", nodePath: "/opt/homebrew/bin/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/serge/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin:/bin", uid: 501, user: "serge" };
 const linux: ServiceContext = { platform: "linux", home: "/home/serge", nodePath: "/usr/bin/node", script: "/usr/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/home/serge/.config/proagentstore", pathEnv: "/usr/local/bin:/usr/bin", user: "serge" };
@@ -298,5 +298,36 @@ describe("macOS LaunchDaemon (#1149): restart after an unattended reboot", () =>
 	it("without --daemon nothing changes: still the LaunchAgent", () => {
 		expect(servicePlan(mac).files.some((f) => f.path.includes("LaunchDaemons") || f.path.endsWith(".daemon.plist"))).toBe(false);
 		expect(servicePlan({ ...linux, daemon: true }).kind).toBe("systemd");
+	});
+});
+
+describe("refreshSupervisorScript (#1425): a self-heal restart must not re-exec a stale install", () => {
+	it("writes only the supervisor script, with CURRENT values — never the OS unit/plist", () => {
+		const written: Array<{ path: string; content: string }> = [];
+		refreshSupervisorScript(mac, { write: (path, content) => written.push({ path, content }) });
+		expect(written).toHaveLength(1);
+		expect(written[0].path).toBe(supervisorPath(mac));
+		expect(written[0].content).toBe(servicePlan(mac).files[0].content);
+		expect(written[0].content).toContain(supervisedPath(mac));
+	});
+
+	it("picks up a node path that moved since the script was last written — the exact #1416 drift this exists for", () => {
+		const stale = servicePlan(mac).files[0].content;
+		const moved: ServiceContext = { ...mac, nodePath: "/opt/homebrew/Cellar/node/24.0.0/bin/node" };
+		let fresh = "";
+		refreshSupervisorScript(moved, { write: (_path, content) => { fresh = content; } });
+		expect(fresh).not.toBe(stale);
+		expect(fresh).toContain("/opt/homebrew/Cellar/node/24.0.0/bin");
+	});
+
+	it("writes for real against a temp file when no write dep is given", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pags-refresh-"));
+		try {
+			const ctx: ServiceContext = { ...mac, configDir: dir };
+			refreshSupervisorScript(ctx);
+			expect(readFileSync(supervisorPath(ctx), "utf8")).toBe(servicePlan(ctx).files[0].content);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
