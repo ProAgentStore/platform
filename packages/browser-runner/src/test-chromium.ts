@@ -19,12 +19,17 @@ import { type Browser, chromium } from "playwright";
 
 let installed = false;
 
-export async function launchTestChromium(): Promise<Browser> {
+/** Also used by tests that launch their own persistent context/CDP browser. */
+export function ensureTestChromiumInstalled(): void {
 	if (!installed && process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL !== "1") {
 		const cli = join(dirname(createRequire(import.meta.url).resolve("playwright")), "cli.js");
 		const r = spawnSync(process.execPath, [cli, "install", "chromium"], { stdio: "inherit", env: process.env });
 		if (r.status !== 0) throw new Error("`playwright install chromium` failed — real-DOM tests cannot run without it.");
 		installed = true;
 	}
+}
+
+export async function launchTestChromium(): Promise<Browser> {
+	ensureTestChromiumInstalled();
 	return chromium.launch();
 }

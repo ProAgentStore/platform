@@ -12,9 +12,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { McpRuntime } from "../mcp-runtime.js";
+import { ensureTestChromiumInstalled } from "../test-chromium.js";
 import { startTestJobServerAuth, type TestJobServerAuth } from "../test-job-server-auth.js";
 import { ApplyBridge, type ApplyBridgeHost } from "./bridge.js";
 import type { LocalApplyEvent, LocalApplyPause } from "./contract.js";
@@ -26,10 +27,16 @@ const PASSWORD = "Tr0ub4dor&3-never-seen";
 
 let server: TestJobServerAuth;
 let profileDir: string;
-let launched: Awaited<ReturnType<typeof launchCdpBrowser>>;
+let launched: Awaited<ReturnType<typeof launchCdpBrowser>> | undefined;
 let mcp: McpRuntime;
 
+// Resolve/install this package's Chromium before the persistent-context launch. CI's root
+// Playwright has a different browser revision and its later E2E install cannot supply this one.
+beforeAll(() => ensureTestChromiumInstalled());
+
 beforeEach(async () => {
+	launched = undefined;
+	profileDir = "";
 	process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS = "1";
 	server = await startTestJobServerAuth();
 	profileDir = mkdtempSync(join(tmpdir(), "pags-agent-sign-in-leak-test-"));
@@ -45,9 +52,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	delete process.env.PAGS_TEST_DISABLE_SIGN_IN_MACROS;
-	await launched.stop();
-	rmSync(profileDir, { recursive: true, force: true });
-	await server.close();
+	try {
+		await launched?.stop();
+	} finally {
+		if (profileDir) rmSync(profileDir, { recursive: true, force: true });
+		await server?.close();
+	}
 });
 
 /** Wraps the real McpRuntime so every call+result is recorded for the leak check, while still driving the real browser. */
