@@ -174,7 +174,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 		});
 
-		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url, ...(shotsOff ? { screenshot: false } : {}) }));
+		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}) }));
 
 		// Durable-step wrappers for the tested pure loop. The call order is
 		// deterministic, so the monotonic counter yields stable, replayable step
@@ -294,7 +294,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					// runner is the only party that can read the ELEMENT (#627). A runner too old
 					// to know the field ignores it, which is exactly the state this leaves the
 					// field in until the CLI is upgraded.
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
 					// Persist a screenshot of the resulting page so the run can be REPLAYED
 					// visually. The blob goes to R2 keyed by step; the event carries only the
 					// key + the action (the events feed stays small). Best-effort — a shot

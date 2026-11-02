@@ -69,7 +69,9 @@ function fakeBrowser(
 	pages: Record<string, PageFlags> = {},
 	opts: { clicks?: Record<string, string>; uploadError?: string; postSubmit?: (looks: number) => PageFlags } = {},
 ) {
-	const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+	const calls: Array<{ name: string; args: Record<string, unknown>; internal?: boolean }> = [];
+	const internalCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+	const refusals: Array<{ tool: string; args: Record<string, unknown>; reason: string }> = [];
 	const history: string[] = [];
 	let submitPressed = false;
 	let postSubmitLooks = 0;
@@ -79,13 +81,18 @@ function fakeBrowser(
 				name,
 				inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
 			})),
-		callTool: async (name, args = {}) => {
+		refused: (tool, args, reason) => refusals.push({ tool, args, reason }),
+		callTool: async (name, args = {}, callOpts) => {
 			if (name === "browser_evaluate") {
+				// Kept OUT of `calls`/`sent()`: every pre-existing test here reads those as "what the agent itself
+				// drove", and the bridge's own navigation-inspection evaluate is never agent-reachable — it is
+				// refused by name before `callTool` either way. Tracked separately for the #1409 `internal` tests.
+				if (callOpts?.internal) internalCalls.push({ name, args });
 				if (typeof args.target === "string") return { content: [{ text: `### Result\n${JSON.stringify({ tag: "button", type: "", ...(FACTS[args.target] ?? { submits: false, method: "", name: "" }) })}` }] };
 				const url = history[history.length - 1] ?? "about:blank";
 				return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...pages[url], ...(submitPressed ? opts.postSubmit?.(postSubmitLooks) : {}) })}\n### Ran Playwright code` }] };
 			}
-			calls.push({ name, args });
+			calls.push({ name, args, ...(callOpts?.internal ? { internal: true } : {}) });
 			if (name === "browser_navigate") history.push(String(args.url));
 			if (name === "browser_click") {
 				if (args.target === "e8") submitPressed = true;
@@ -98,7 +105,7 @@ function fakeBrowser(
 			return { content: [{ text: `${name} ok` }] };
 		},
 	};
-	return { tools, calls, history, sent: (n: string) => calls.filter((c) => c.name === n) };
+	return { tools, calls, internalCalls, refusals, history, sent: (n: string) => calls.filter((c) => c.name === n) };
 }
 
 const PROFILE = "Name: Jane Citizen\nEmail: jane@example.com\nWork authorization: Authorized to work in Australia\nRequires sponsorship: No\nNotice period: four weeks";
@@ -879,5 +886,27 @@ describe("the agent-driven sign-in (#1412)", () => {
 		expect(snap.content[0].text).toMatch(/Signed in to seek\.com/);
 		expect(bridge.signIn).toBeNull();
 		expect(h.done).toEqual([1]);
+	});
+});
+
+describe("#1409: refusals and internal probes reach the call recorder", () => {
+	it("a refused tool is recorded via `refused`, never via `callTool`", async () => {
+		const { bridge, refusals, calls } = await onForm();
+		expect((await bridge.callTool("browser_run_code", { code: "1" })).isError).toBe(true);
+		expect(refusals).toEqual([{ tool: "browser_run_code", args: {}, reason: expect.stringContaining("not available") }]);
+		expect(calls.some((c) => c.name === "browser_run_code")).toBe(false);
+	});
+
+	it("navigating off this application's sites is refused", async () => {
+		const { bridge, refusals } = await onForm({}, { allow: ["jobs.example.com"] });
+		await bridge.callTool("browser_navigate", { url: "https://other.example.com" });
+		expect(refusals).toEqual([{ tool: "browser_navigate", args: {}, reason: expect.stringContaining("not one of this application's sites") }]);
+	});
+
+	it("the bridge's own page inspection is marked internal, unlike the agent's own navigate", async () => {
+		const { calls, internalCalls } = await onForm();
+		const nav = calls.find((c) => c.name === "browser_navigate");
+		expect(nav?.internal).toBeUndefined();
+		expect(internalCalls.some((c) => c.name === "browser_evaluate" && !c.args.target)).toBe(true);
 	});
 });

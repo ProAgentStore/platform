@@ -27,6 +27,7 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
+import type { BrowserCallsPage } from "../browser-call-recorder.js";
 import { isHomeRelative, isWorkspaceRelative } from "../local-artifact/contract.js";
 import { resolveSource } from "../local-artifact/runtime.js";
 import { type BrowserTools, domainWithin } from "../local-browser/bridge.js";
@@ -475,6 +476,7 @@ export class LocalApplyRuntime {
 		if (run.engineAuth === "api-key") throw new Blocked("api_key_refused", ["A provider API key would reach the CLI. Applications run on this machine's sign-in only — remove the key from the runner's environment."]);
 
 		run.browser = await this.deps.browserFor(e.browserProfile, run.dir);
+		run.browser.tools.setSubject?.({ kind: "local_apply_run", id: e.runId });
 		const artifactsByKind = new Map(e.artifacts.map((a) => [a.kind, a] as const));
 		run.bridge = new ApplyBridge(run.browser.tools, {
 			emit: (ev) => this.emit(run, ev),
@@ -810,6 +812,12 @@ export class LocalApplyRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; afterSeq?: unknown };
 		const run = this.get(String(o.runId ?? ""));
 		return run.shots.page(run.envelope.runId, typeof o.afterSeq === "number" && o.afterSeq > 0 ? o.afterSeq : 0);
+	}
+
+	/** This run's recorded browser calls after `afterSeq` (#1409), for the shared `/browser-calls` pull route. */
+	browserCalls(runId: string, afterSeq: number): BrowserCallsPage {
+		const run = this.get(runId);
+		return run.browser?.tools.pullCalls?.({ kind: "local_apply_run", id: run.envelope.runId }, afterSeq) ?? { calls: [], lastSeq: afterSeq, dropped: 0 };
 	}
 
 	status(raw: unknown): LocalApplyStatusResponse {

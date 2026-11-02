@@ -88,7 +88,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// answer, never inferred from a version — the published CLI upgrades on the field's
 		// schedule, and 0.4.45 and 0.4.51 were both live when this landed.
 		const opened = (await step.do("open", () =>
-			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, ...(shotsOff ? { screenshot: false } : {}) }),
+			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}) }),
 		)) as { commitGuard?: { supported?: boolean } } | undefined;
 		const runnerEnforces = opened?.commitGuard?.supported === true;
 
@@ -135,7 +135,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
 					// One artifact contract for every browser run (#1063): the frame is stored by subject (this task) and
 					// the event carries its id and a query-free URL — never the bytes.
 					if (r.screenshot && !shotsOff) {

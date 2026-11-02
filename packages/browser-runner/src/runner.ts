@@ -9,6 +9,7 @@ import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from 
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
 import { isTerminalTaskStatus, settleTaskOutcome } from "./apply-outcome.js";
 import { McpRuntime } from "./mcp-runtime.js";
+import type { BrowserCallsPage } from "./browser-call-recorder.js";
 import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { takeoverNavigation } from "./takeover-nav.js";
@@ -950,7 +951,7 @@ export class LocalRunner {
 			"el => ({ v: el.value !== undefined ? String(el.value) : (el.getAttribute('aria-checked') ?? el.textContent ?? '').trim(), " +
 			"bad: el.getAttribute('aria-invalid') === 'true' || !!(el.validity && !el.validity.valid), " +
 			"msg: el.validationMessage || '' })";
-		const res = await mcp.callTool("browser_evaluate", { element: action.name || "field", target: action.ref, function: fn }).catch(() => null);
+		const res = await mcp.callTool("browser_evaluate", { element: action.name || "field", target: action.ref, function: fn }, { internal: true }).catch(() => null);
 		if (!res || res.isError) return "";
 		const txt = mcp.textOf(res);
 		const i = txt.indexOf("### Result");
@@ -974,7 +975,7 @@ export class LocalRunner {
 		const fn =
 			"el => { if (el.checked !== undefined && el.checked !== null) return !!el.checked; " +
 			"const a = el.getAttribute('aria-checked'); return a === 'true' ? true : a === 'false' ? false : null; }";
-		const res = await mcp.callTool("browser_evaluate", { element: label, target: ref, function: fn }).catch(() => null);
+		const res = await mcp.callTool("browser_evaluate", { element: label, target: ref, function: fn }, { internal: true }).catch(() => null);
 		if (!res || res.isError) return null;
 		const txt = mcp.textOf(res);
 		const i = txt.indexOf("### Result");
@@ -990,7 +991,7 @@ export class LocalRunner {
 	/** Evaluate a function ON an element (by snapshot ref) and parse its JSON result. Never throws
 	 *  — a null return means "the page could not be asked", which callers must not read as a yes. */
 	private async evalJson<T>(mcp: McpRuntime, ref: string, label: string, fn: string): Promise<T | null> {
-		const res = await mcp.callTool("browser_evaluate", { element: label, target: ref, function: fn }).catch(() => null);
+		const res = await mcp.callTool("browser_evaluate", { element: label, target: ref, function: fn }, { internal: true }).catch(() => null);
 		if (!res || res.isError) return null;
 		const txt = mcp.textOf(res);
 		const i = txt.indexOf("### Result");
@@ -1104,6 +1105,9 @@ export class LocalRunner {
 		const page = await this.getActivePage();
 		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
 		const mcp = await this.getMcp();
+		// #1409: the legacy workflows (and the chat connector, which has no taskId of its own yet —
+		// #1424) share this one mcp across tasks; the subject follows whichever task is live now.
+		mcp.setSubject(taskId ? { kind: "runtime_task", id: taskId } : null);
 		const res = await mcp.callTool("browser_snapshot");
 		const full = this.extractSnapshot(mcp.textOf(res));
 		// The brain must see the WHOLE form or it can't finish. Real ATS forms are big
@@ -1130,8 +1134,12 @@ export class LocalRunner {
 	 * element by its snapshot ref. A tool-level failure is thrown so the workflow
 	 * surfaces it to the brain as an `error` (which drives its self-correction).
 	 */
-	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; mode?: string } }> {
+	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec, taskId?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; mode?: string } }> {
 		const page = await this.getActivePage();
+		// #1409: the legacy workflows (and the chat connector, which has no taskId of its own yet —
+		// #1424) share this one mcp across tasks; the subject follows whichever task is live now.
+		const mcp = await this.getMcp();
+		mcp.setSubject(taskId ? { kind: "runtime_task", id: taskId } : null);
 		// Arm résumé auto-attach so a file chooser never blocks the flow (see method).
 		// resumePath may be a signed URL (remote runner) or a local path — resolve to
 		// a real local file either way.
@@ -1146,7 +1154,12 @@ export class LocalRunner {
 		// whereas window.scrollBy is a no-op on sites that scroll an inner panel (e.g.
 		// PageUp/Coles), which made the brain scroll-loop forever.
 		if (action.action === "scroll") {
-			await page.mouse.wheel(0, Math.round(action.dy ?? 600)).catch(() => undefined);
+			// A raw Playwright call, not a standard tool — recorded directly (#1409), as tool `page.scroll`,
+			// since it never reaches `McpRuntime.callTool` to be recorded there.
+			const startedAt = Date.now();
+			const scrollArgs = { dy: Math.round(action.dy ?? 600) };
+			const wheeled = await page.mouse.wheel(0, scrollArgs.dy).then(() => true).catch(() => false);
+			mcp.recordExternal("page.scroll", scrollArgs, wheeled ? "ok" : "thrown", { startedAt });
 			await page.waitForTimeout(300).catch(() => undefined);
 			const active = await this.getActivePage();
 			return {
@@ -1158,14 +1171,16 @@ export class LocalRunner {
 				commitGuard: { supported: true, mode: guard?.mode },
 			};
 		}
-		const mcp = await this.getMcp();
 		// BEFORE the tool call, never after: this is the last point at which the action is still
 		// only a proposal. `commitGuard.supported` on every reply is how the cloud learns that this
 		// enforcement exists here at all — measured from the runner's own answer, not guessed from
 		// a version number, because the published CLI upgrades on the field's schedule.
 		if (guard) {
 			const refusal = await this.commitRefusal(mcp, page, action, guard);
-			if (refusal) throw new RunnerInputError(refusal);
+			if (refusal) {
+				mcp.refused(action.action, { ...(action.ref ? { ref: action.ref } : {}), ...(action.name ? { element: action.name } : {}) }, refusal);
+				throw new RunnerInputError(refusal);
+			}
 		}
 		const res = await this.callBrowserTool(mcp, action);
 		const text = mcp.textOf(res).trim();
@@ -1184,7 +1199,7 @@ export class LocalRunner {
 		// and the dialog blocks the NEXT tool call regardless of which case this was.
 		if (/modal state/i.test(text) && /dialog/i.test(text)) {
 			const dialogMsg = (text.match(/dialog with message "([^"]*)"/)?.[1] || "").slice(0, 160);
-			await mcp.callTool("browser_handle_dialog", { accept: true }).catch(() => undefined);
+			await mcp.callTool("browser_handle_dialog", { accept: true }, { internal: true }).catch(() => undefined);
 			await page.waitForTimeout(400).catch(() => undefined);
 			const settled = await this.getActivePage();
 			await settled.waitForLoadState("domcontentloaded", { timeout: 6_000 }).catch(() => undefined);
@@ -1238,6 +1253,12 @@ export class LocalRunner {
 		const task = this.store.getTask(taskId);
 		if (task) this.addTaskEvent(task, type, message, data);
 		return { ok: true };
+	}
+
+	/** This task's recorded browser calls after `afterSeq` (#1409), for the shared `/browser-calls` pull route. */
+	async browserCalls(taskId: string, afterSeq: number): Promise<BrowserCallsPage> {
+		if (!this.mcp) return { calls: [], lastSeq: afterSeq, dropped: 0 };
+		return this.mcp.pullCalls({ kind: "runtime_task", id: taskId }, afterSeq);
 	}
 
 	/**

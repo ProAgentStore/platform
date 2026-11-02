@@ -25,6 +25,7 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
+import type { BrowserCallsPage } from "../browser-call-recorder.js";
 import { type BrowserTools, BrowserBridge, domainWithin } from "./bridge.js";
 import { SCOUT_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "./replay.js";
 import { BRIDGE_ENV } from "./bridge-stdio.js";
@@ -301,6 +302,7 @@ export class LocalBrowserRuntime {
 		}
 		if (e.browserProfile === "default") this.emit(run, { type: "policy.decision", ...this.consentRef(run, "*"), detail: { scope: "signed_in_profile", decision: "consented" } });
 		run.browser = await this.deps.browserFor(e.browserProfile, run.dir);
+		run.browser.tools.setSubject?.({ kind: "local_browser_run", id: run.envelope.runId });
 		run.bridge = new BrowserBridge(
 			run.browser.tools,
 			{
@@ -448,6 +450,12 @@ export class LocalBrowserRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; afterSeq?: unknown };
 		const run = this.get(String(o.runId ?? ""));
 		return run.shots.page(run.envelope.runId, typeof o.afterSeq === "number" && o.afterSeq > 0 ? o.afterSeq : 0);
+	}
+
+	/** This run's recorded browser calls after `afterSeq` (#1409), for the shared `/browser-calls` pull route. */
+	browserCalls(runId: string, afterSeq: number): BrowserCallsPage {
+		const run = this.get(runId);
+		return run.browser?.tools.pullCalls?.({ kind: "local_browser_run", id: run.envelope.runId }, afterSeq) ?? { calls: [], lastSeq: afterSeq, dropped: 0 };
 	}
 
 	/** Does this token belong to this run? The bridge forwarder's only credential. */

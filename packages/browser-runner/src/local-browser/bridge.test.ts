@@ -18,13 +18,14 @@ interface PageFlags {
 
 /** A browser whose pages are a map of URL → flags, with redirects and click targets. */
 function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { redirect?: Record<string, string>; clicks?: Record<string, string> } = {}) {
-	const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+	const calls: Array<{ name: string; args: Record<string, unknown>; internal?: boolean }> = [];
+	const refusals: Array<{ tool: string; args: Record<string, unknown>; reason: string }> = [];
 	const history: string[] = [];
 	const tools: BrowserTools = {
 		listTools: async () =>
 			["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_click", "browser_type", "browser_evaluate", "browser_fill_form", "browser_take_screenshot"].map((name) => ({ name, inputSchema: {} })),
-		callTool: async (name, args = {}) => {
-			calls.push({ name, args });
+		callTool: async (name, args = {}, callOpts) => {
+			calls.push({ name, args, ...(callOpts?.internal ? { internal: true } : {}) });
 			if (name === "browser_navigate") history.push(opts.redirect?.[String(args.url)] ?? String(args.url));
 			if (name === "browser_click") history.push(opts.clicks?.[String(args.target)] ?? history[history.length - 1]);
 			if (name === "browser_navigate_back") history.pop();
@@ -36,8 +37,9 @@ function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { redirect?: R
 			if (name === "browser_snapshot") return { content: [{ type: "text", text: '- link "Job 1" [ref=e1]\n- button "Next" [ref=e2]\n- button "Apply now" [ref=e3]\n- textbox "Search" [ref=e4]' }] };
 			return { content: [{ type: "text", text: `${name} ok` }] };
 		},
+		refused: (tool, args, reason) => refusals.push({ tool, args, reason }),
 	};
-	return { tools, calls, history };
+	return { tools, calls, refusals, history };
 }
 
 const LIMITS: LocalBrowserLimits = { maxMinutes: 15, maxPages: 30, maxActions: 200, maxConcurrent: 1 };
@@ -278,6 +280,33 @@ describe("findings", () => {
 		await b.callTool("finish_research", { summary: "Done" });
 		expect(b.sourceFailures).toEqual([{ url: "https://x.com", reason: "login_required" }]);
 		expect(b.summary).toBe("Done");
+	});
+});
+
+describe("#1409: refusals and internal probes reach the call recorder", () => {
+	it("a write-tool refusal is recorded via `refused`, never via `callTool`", async () => {
+		const f = fakeBrowser();
+		const b = new BrowserBridge(f.tools, fakeHost({ allow: ["a.com"] }).host);
+		expect(textOf(await b.callTool("browser_type", { text: "x" }))).toMatch(/not available/);
+		expect(f.refusals).toEqual([{ tool: "browser_type", args: { text: "x" }, reason: expect.stringContaining("not available") }]);
+		expect(f.calls.some((c) => c.name === "browser_type")).toBe(false);
+	});
+
+	it("a disallowed-host refusal during navigate is recorded with the url", async () => {
+		const f = fakeBrowser();
+		const b = new BrowserBridge(f.tools, fakeHost({ allow: ["a.com"] }).host);
+		await b.callTool("browser_navigate", { url: "https://b.com/x" });
+		expect(f.refusals).toEqual([{ tool: "browser_navigate", args: { url: "https://b.com/x" }, reason: expect.stringContaining("not on this run's list of allowed sites") }]);
+	});
+
+	it("the bridge's own page inspection is marked internal, unlike the agent's own navigate", async () => {
+		const f = fakeBrowser({ "https://a.com/x": {} });
+		const b = new BrowserBridge(f.tools, fakeHost({ allow: ["a.com"] }).host);
+		await b.callTool("browser_navigate", { url: "https://a.com/x" });
+		const nav = f.calls.find((c) => c.name === "browser_navigate");
+		const inspect = f.calls.find((c) => c.name === "browser_evaluate");
+		expect(nav?.internal).toBeUndefined();
+		expect(inspect?.internal).toBe(true);
 	});
 });
 

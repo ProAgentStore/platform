@@ -23,11 +23,18 @@
 import type { LocalBrowserEvent, LocalBrowserFinding, LocalBrowserLimits, LocalBrowserPauseReason, LocalBrowserSourceFailure, LocalBrowserSourceFailureReason } from "./contract.js";
 import { LOCAL_BROWSER_SOURCE_FAILURE_REASONS, redactDetail } from "./contract.js";
 import type { MaskablePage, ReplayPoint, ShotRecorder } from "./replay.js";
+import type { BrowserCallsPage, BrowserCallSubject } from "../browser-call-recorder.js";
 
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
-	callTool(name: string, args?: Record<string, unknown>): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean }>;
+	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean }>;
+	/** A refusal that never reached Playwright (#1409) — recorded in the same ordered call stream as a `callTool`. */
+	refused?(tool: string, args: Record<string, unknown>, reason: string): void;
+	/** The run claiming this browser sets its own subject (#1409) — every call it makes is then recorded under it. */
+	setSubject?(subject: BrowserCallSubject | null): void;
+	/** The recorded calls for one subject, after `afterSeq` — the runner's `/browser-calls` pull route reaches this. */
+	pullCalls?(subject: BrowserCallSubject | null, afterSeq: number): BrowserCallsPage;
 }
 
 /** What the run gives the bridge: the trace, the pause machinery, and the live consent state. */
@@ -245,10 +252,10 @@ export class BrowserBridge {
 			await this.shot("completed");
 			return text("Recorded. The research is finished; stop now.");
 		}
-		if (WRITE_TOOLS.has(name)) return this.refuse(name, `${name} is not available: this run is research only — no typing, forms, uploads, key presses or scripts.`);
-		if (!READ_TOOLS.has(name)) return this.refuse(name, `${name} is not available in research mode.`);
-		if (this.host.overTime()) return this.refuse(name, "The run's time limit is reached. Call finish_research now.");
-		if (++this.actions > this.host.limits.maxActions) return this.refuse(name, `The run's limit of ${this.host.limits.maxActions} browser actions is reached. Call finish_research now.`);
+		if (WRITE_TOOLS.has(name)) return this.refuse(name, `${name} is not available: this run is research only — no typing, forms, uploads, key presses or scripts.`, undefined, args);
+		if (!READ_TOOLS.has(name)) return this.refuse(name, `${name} is not available in research mode.`, undefined, args);
+		if (this.host.overTime()) return this.refuse(name, "The run's time limit is reached. Call finish_research now.", undefined, args);
+		if (++this.actions > this.host.limits.maxActions) return this.refuse(name, `The run's limit of ${this.host.limits.maxActions} browser actions is reached. Call finish_research now.`, undefined, args);
 
 		if (name === "browser_navigate") return this.navigate(String(args.url ?? ""));
 		if (name === "browser_click") return this.click(args);
@@ -274,9 +281,10 @@ export class BrowserBridge {
 	}
 
 	/** Refuse, on the trace — naming the site and the owner's decision behind it when there is one. */
-	private refuse(tool: string, reason: string, host?: string): ToolResult {
+	private refuse(tool: string, reason: string, host?: string, args: Record<string, unknown> = {}): ToolResult {
 		const consentId = host ? this.host.consentIdFor(host) : undefined;
 		this.host.emit({ type: "policy.decision", ...(host ? { domain: host } : {}), ...(consentId ? { consentId } : {}), detail: { tool, decision: "refused", reason } });
+		this.browser.refused?.(tool, args, reason);
 		return text(reason, true);
 	}
 
@@ -309,10 +317,10 @@ export class BrowserBridge {
 
 	private async navigate(url: string): Promise<ToolResult> {
 		const host = hostOf(url);
-		if (!host) return this.refuse("browser_navigate", "Only http(s) URLs can be opened.");
-		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_navigate", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`);
+		if (!host) return this.refuse("browser_navigate", "Only http(s) URLs can be opened.", undefined, { url });
+		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_navigate", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`, undefined, { url });
 		const refusal = await this.admit(host, url);
-		if (refusal) return this.refuse("browser_navigate", refusal, host);
+		if (refusal) return this.refuse("browser_navigate", refusal, host, { url });
 		const res = await this.browser.callTool("browser_navigate", { url });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		// A redirect is a second navigation the CLI did not choose. Following one within the same
@@ -321,8 +329,8 @@ export class BrowserBridge {
 		const landedOn = state ? hostOf(state.url) : null;
 		const related = (a: string, b: string) => domainWithin(a, b) || domainWithin(b, a);
 		if (landedOn && !related(landedOn, host) && (this.host.isDenied(landedOn) || !this.host.isPermitted(landedOn))) {
-			await this.browser.callTool("browser_navigate_back", {}).catch(() => undefined);
-			return this.refuse("browser_navigate", `${host} redirected to ${landedOn}, a site this run has not been allowed on. Open ${landedOn} with browser_navigate to ask the owner, or skip it.`);
+			await this.browser.callTool("browser_navigate_back", {}, { internal: true }).catch(() => undefined);
+			return this.refuse("browser_navigate", `${host} redirected to ${landedOn}, a site this run has not been allowed on. Open ${landedOn} with browser_navigate to ask the owner, or skip it.`, undefined, { url });
 		}
 		return this.landed(textOf(res), state, "navigated");
 	}
@@ -331,8 +339,8 @@ export class BrowserBridge {
 		const ref = typeof args.target === "string" ? args.target : typeof args.ref === "string" ? args.ref : "";
 		const target = ref ? refRole(this.lastSnapshot, ref) : null;
 		const allowed = target && (CLICKABLE_ROLES.has(target.role) || (target.role === "button" && PAGINATION_NAME.test(target.name.trim())));
-		if (!allowed) return this.refuse("browser_click", "In research mode only links, tabs and pagination buttons (Next, More, a page number) from the latest browser_snapshot can be clicked.");
-		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`);
+		if (!allowed) return this.refuse("browser_click", "In research mode only links, tabs and pagination buttons (Next, More, a page number) from the latest browser_snapshot can be clicked.", undefined, args);
+		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`, undefined, args);
 		const res = await this.browser.callTool("browser_click", { element: typeof args.element === "string" ? args.element : target.name, target: ref });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		const state = await this.inspect();
@@ -340,8 +348,8 @@ export class BrowserBridge {
 		// A click that lands on a site this run may not be on is undone, and the CLI is told to
 		// navigate there instead — which is the path that asks the owner.
 		if (host && !this.visited.has(host) && (this.host.isDenied(host) || !this.host.isPermitted(host))) {
-			await this.browser.callTool("browser_navigate_back", {}).catch(() => undefined);
-			return this.refuse("browser_click", `That link leads to ${host}, a site this run has not been allowed on. Open it with browser_navigate to ask the owner.`);
+			await this.browser.callTool("browser_navigate_back", {}, { internal: true }).catch(() => undefined);
+			return this.refuse("browser_click", `That link leads to ${host}, a site this run has not been allowed on. Open it with browser_navigate to ask the owner.`, undefined, args);
 		}
 		return this.landed(textOf(res), state, "clicked");
 	}
@@ -390,7 +398,7 @@ export class BrowserBridge {
 	}
 
 	private async inspect(): Promise<PageState | null> {
-		const res = await this.browser.callTool("browser_evaluate", { function: INSPECT_PAGE }).catch(() => null);
+		const res = await this.browser.callTool("browser_evaluate", { function: INSPECT_PAGE }, { internal: true }).catch(() => null);
 		const v = res && !res.isError ? (evaluateResult(textOf(res)) as Partial<PageState> | null) : null;
 		if (!v || typeof v.url !== "string") return null;
 		return { url: v.url, title: typeof v.title === "string" ? v.title : "", captcha: !!v.captcha, login: !!v.login, paywall: !!v.paywall, accessBlocked: !!v.accessBlocked, writeForm: !!v.writeForm };

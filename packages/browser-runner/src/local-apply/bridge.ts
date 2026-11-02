@@ -339,8 +339,9 @@ export class ApplyBridge {
 		return { content: [{ type: "text", text: textOf(res) }], ...(res.isError ? { isError: true } : {}) };
 	}
 
-	private refuse(tool: string, cls: string, reason: string, domain?: string): ToolResult {
+	private refuse(tool: string, cls: string, reason: string, domain?: string, args: Record<string, unknown> = {}): ToolResult {
 		this.host.emit({ type: "policy.decision", ...(domain ? { domain } : {}), detail: { tool, class: cls, decision: "refused", reason: reason.slice(0, 200) } });
+		this.browser.refused?.(tool, args, reason);
 		return text(reason, true);
 	}
 
@@ -349,7 +350,7 @@ export class ApplyBridge {
 	}
 
 	private async inspect(): Promise<PageState | null> {
-		const res = await this.browser.callTool("browser_evaluate", { function: INSPECT_PAGE }).catch(() => null);
+		const res = await this.browser.callTool("browser_evaluate", { function: INSPECT_PAGE }, { internal: true }).catch(() => null);
 		const v = res && !res.isError ? (evaluateResult(textOf(res)) as Partial<PageState> | null) : null;
 		if (!v || typeof v.url !== "string") return null;
 		const unavailable = v.unavailable === "expired" || v.unavailable === "unavailable" ? v.unavailable : null;
@@ -490,7 +491,7 @@ export class ApplyBridge {
 		const state = await this.inspect();
 		const landedOn = state ? hostOf(state.url) : null;
 		if (state && landedOn && !this.host.isAllowed(landedOn)) {
-			await this.browser.callTool("browser_navigate_back", {}).catch(() => undefined);
+			await this.browser.callTool("browser_navigate_back", {}, { internal: true }).catch(() => undefined);
 			if (!(await this.pauseFor({ reason: "external_redirect", url: state.url, domain: landedOn }, async () => this.host.isAllowed(landedOn)))) {
 				return this.refuse(tool, "read", `That led to ${landedOn}, which is not one of this application's sites. It was undone. Stop now.`, landedOn);
 			}
@@ -506,7 +507,7 @@ export class ApplyBridge {
 	}
 
 	private async probe(ref: string, label: string): Promise<ElementFacts | null> {
-		const res = await this.browser.callTool("browser_evaluate", { element: label || "control", target: ref, function: ELEMENT_PROBE_FN }).catch(() => null);
+		const res = await this.browser.callTool("browser_evaluate", { element: label || "control", target: ref, function: ELEMENT_PROBE_FN }, { internal: true }).catch(() => null);
 		const v = res && !res.isError ? (evaluateResult(textOf(res)) as ElementFacts | null) : null;
 		return v && typeof v.submits === "boolean" ? v : null;
 	}
@@ -878,7 +879,7 @@ export class ApplyBridge {
 	private async awaitConfirmation(before: PageState): Promise<{ after: PageState | null; looks: number }> {
 		let after: PageState | null = null;
 		for (let i = 0; i < CONFIRMATION_LOOKS; i++) {
-			await this.browser.callTool("browser_wait_for", { time: CONFIRMATION_INTERVAL_SECONDS }).catch(() => undefined);
+			await this.browser.callTool("browser_wait_for", { time: CONFIRMATION_INTERVAL_SECONDS }, { internal: true }).catch(() => undefined);
 			const page = await this.inspect();
 			if (page) after = page;
 			if (confirmationMarker(before, page)) return { after: page, looks: i + 1 };

@@ -2,6 +2,7 @@ import { createConnection } from "@playwright/mcp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
 
 export interface McpRuntimeOptions {
 	/** Attach to an already-running Chrome over CDP. Every browser is launched by the
@@ -51,6 +52,10 @@ export class McpRuntime {
 	 * library, which is why the apply bridge refuses a name that is not in {@link secretNames}.
 	 */
 	private readonly secrets: Record<string, string> = {};
+	/** One recorder at this chokepoint (#1409) — every `callTool`, every path, redacted before it is kept. */
+	private readonly calls = new BrowserCallRecorder();
+	/** The run that currently holds this browser, set by whoever claimed it. Null until one does. */
+	private subject: BrowserCallSubject | null = null;
 
 	provideSecrets(map: Record<string, string>): void {
 		for (const [name, value] of Object.entries(map)) if (value) this.secrets[name] = value;
@@ -62,6 +67,11 @@ export class McpRuntime {
 
 	secretNames(): string[] {
 		return Object.keys(this.secrets);
+	}
+
+	/** The run claiming this browser sets its own subject (#1409); null leaves calls recorded as `subject: null`. */
+	setSubject(subject: BrowserCallSubject | null): void {
+		this.subject = subject;
 	}
 
 	async start(opts: McpRuntimeOptions): Promise<void> {
@@ -114,8 +124,57 @@ export class McpRuntime {
 		return res.tools as Array<{ name: string; description?: string; inputSchema: unknown }>;
 	}
 
-	async callTool(name: string, args: Record<string, unknown> = {}): Promise<McpToolResult> {
-		return (await this.connected().callTool({ name, arguments: args })) as McpToolResult;
+	/**
+	 * `opts.internal` marks a probe the RUNNER made of the page for its own purposes (a read-back, a
+	 * dialog auto-clear, the bridges' own page inspection) — never set by an agent-driven call. Every
+	 * call is recorded regardless; `internal` only tells a reader which ones were the agent's own.
+	 */
+	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean } = {}): Promise<McpToolResult> {
+		const startedAt = Date.now();
+		try {
+			const res = (await this.connected().callTool({ name, arguments: args })) as McpToolResult;
+			this.calls.record({
+				subject: this.subject,
+				tool: name,
+				args,
+				secrets: this.secrets,
+				startedAt,
+				outcome: res.isError ? "tool_error" : "ok",
+				...(res.isError ? { errorHead: this.textOf(res).slice(0, 200) } : {}),
+				internal: opts.internal ?? false,
+			});
+			return res;
+		} catch (err) {
+			this.calls.record({
+				subject: this.subject,
+				tool: name,
+				args,
+				secrets: this.secrets,
+				startedAt,
+				outcome: "thrown",
+				errorHead: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+				internal: opts.internal ?? false,
+			});
+			throw err;
+		}
+	}
+
+	/** A refusal that never reached Playwright at all (a policy/commit-guard refusal) — recorded in the same ordered stream. */
+	refused(tool: string, args: Record<string, unknown>, reason: string): void {
+		this.calls.record({ subject: this.subject, tool, args, secrets: this.secrets, startedAt: Date.now(), outcome: "refused", errorHead: reason, internal: false });
+	}
+
+	/**
+	 * A call that drove the page WITHOUT going through `callTool` at all (the raw-mouse scroll, which
+	 * has no standard tool). `startedAt` is the caller's own, so the duration reflects the real wait.
+	 */
+	recordExternal(tool: string, args: Record<string, unknown>, outcome: BrowserCallOutcome, opts: { startedAt?: number; errorHead?: string; internal?: boolean } = {}): void {
+		this.calls.record({ subject: this.subject, tool, args, secrets: this.secrets, startedAt: opts.startedAt ?? Date.now(), outcome, ...(opts.errorHead ? { errorHead: opts.errorHead } : {}), internal: opts.internal ?? false });
+	}
+
+	/** The recorded calls for one subject after `afterSeq`, paged — the runner's `/browser-calls` pull route. */
+	pullCalls(subject: BrowserCallSubject | null, afterSeq: number): BrowserCallsPage {
+		return this.calls.page(subject, afterSeq);
 	}
 
 	/** Text of the last tool result (the standard tools return their output as text content). */

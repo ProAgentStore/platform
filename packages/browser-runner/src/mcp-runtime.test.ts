@@ -52,4 +52,28 @@ describe("McpRuntime (standard @playwright/mcp)", () => {
 		const evalRes = launched.mcp.textOf(await launched.mcp.callTool("browser_evaluate", { function: "() => document.querySelector('input[name=fullName]').value" }));
 		expect(evalRes).toContain("Sergey Ivochkin");
 	}, 60_000);
+
+	// #1409: the recorder wraps `callTool` itself, so every one of these real calls — through the
+	// SAME `launched.mcp` the test above drove by hand — is recorded with no per-call wiring here.
+	it("records every call made through this one chokepoint, under the subject that claimed it, with no typed value kept", async () => {
+		launched.mcp.setSubject({ kind: "local_apply_run", id: "run-1409" });
+		await launched.mcp.callTool("browser_navigate", { url: server.jobUrl });
+		const snap = launched.mcp.textOf(await launched.mcp.callTool("browser_snapshot", {}));
+		const m = snap.match(/textbox "Full name"[^\n]*\[ref=([\w]+)\]/);
+		const ref = (m as RegExpMatchArray)[1];
+		await launched.mcp.callTool("browser_type", { element: "Full name textbox", target: ref, text: "a leaked value nobody should record" });
+		launched.mcp.refused("browser_run_code", { code: "1" }, "scripts are refused");
+
+		const page = launched.mcp.pullCalls({ kind: "local_apply_run", id: "run-1409" }, 0);
+		expect(page.calls.map((c) => c.tool)).toEqual(["browser_navigate", "browser_snapshot", "browser_type", "browser_run_code"]);
+		expect(page.calls.map((c) => c.outcome)).toEqual(["ok", "ok", "ok", "refused"]);
+		expect(page.calls.at(-1)?.errorHead).toBe("scripts are refused");
+		const dump = JSON.stringify(page.calls);
+		expect(dump).not.toContain("leaked value");
+		expect(page.calls[2].args.textLength).toBe("a leaked value nobody should record".length);
+
+		// A different subject sees none of this — the streams are genuinely separate (the no-subject
+		// stream is shared with the test above, which never sets one, so it is not asserted empty here).
+		expect(launched.mcp.pullCalls({ kind: "local_apply_run", id: "run-OTHER" }, 0).calls).toEqual([]);
+	}, 60_000);
 });
