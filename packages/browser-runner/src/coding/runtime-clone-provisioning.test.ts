@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { cloneIntoOwnFolder, liveCloneDeps } from "./repo-clone-job.js";
 import { CodingRuntime } from "./runtime.js";
 
-const base = realpathSync(mkdtempSync(join(tmpdir(), "pags-runtime-clone-")));
+const base = realpathSync.native(mkdtempSync(join(tmpdir(), "pags-runtime-clone-")));
 const upstream = join(base, "upstream.git");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
 let home: string;
@@ -28,7 +28,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-	home = realpathSync(mkdtempSync(join(base, "home-")));
+	home = realpathSync.native(mkdtempSync(join(base, "home-")));
 	vi.stubEnv("HOME", home);
 	vi.stubEnv("USERPROFILE", home);
 	runtime = new CodingRuntime(join(home, ".config", "proagentstore", "repos"));

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { confineCloneTarget } from "./clone-target.js";
 
-const home = realpathSync(mkdtempSync(join(tmpdir(), "pags-clone-target-")));
+const home = realpathSync.native(mkdtempSync(join(tmpdir(), "pags-clone-target-")));
 const git = (...args: string[]) => execFileSync("git", args, { cwd: home, stdio: "pipe" });
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 afterEach(() => vi.unstubAllEnvs());

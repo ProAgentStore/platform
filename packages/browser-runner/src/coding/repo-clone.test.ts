@@ -5,14 +5,14 @@
  * checkout with a clean `origin`, and nothing touched when something was already there.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RunnerInputError } from "../errors.js";
 import { cloneIntoWorkdir, ensureRepo } from "./repo.js";
 
-const tmp = mkdtempSync(join(tmpdir(), "pags-clone-"));
+const tmp = realpathSync.native(mkdtempSync(join(tmpdir(), "pags-clone-")));
 const upstream = join(tmp, "upstream.git");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" }).toString().trim();
 
@@ -22,6 +22,8 @@ beforeAll(() => {
 	git(seed, "init", "-q", "-b", "main");
 	git(seed, "config", "user.email", "t@t");
 	git(seed, "config", "user.name", "t");
+	// Pin fixture bytes independently of Windows Git core.autocrlf.
+	writeFileSync(join(seed, ".gitattributes"), "README.md text eol=lf\n");
 	writeFileSync(join(seed, "README.md"), "grass-karma\n");
 	git(seed, "add", ".");
 	git(seed, "commit", "-q", "-m", "init");
