@@ -162,7 +162,7 @@ export interface RealSchemaD1 {
 export const SCHEMA_CACHE_DIR = join(tmpdir(), "pags-real-schema-cache");
 
 /**
- * A short content hash of every migration file (name AND body), so a template built from
+ * A content hash of every migration file (name AND body), so a template built from
  * migration set A is never handed to a test expecting migration set B. This is the
  * "invalidate on migration content changes" key the cache is organized around — add,
  * remove, or edit one migration and the next build gets a new filename instead of a
@@ -171,7 +171,7 @@ export const SCHEMA_CACHE_DIR = join(tmpdir(), "pags-real-schema-cache");
 function migrationsContentHash(): string {
 	const h = createHash("sha256");
 	for (const [name, sql] of migrationSources()) h.update(name).update("\0").update(sql);
-	return h.digest("hex").slice(0, 24);
+	return h.digest("hex");
 }
 
 /**
