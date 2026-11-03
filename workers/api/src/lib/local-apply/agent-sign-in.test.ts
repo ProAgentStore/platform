@@ -202,6 +202,27 @@ describe("the agent-driven sign-in (#1412 acceptance)", () => {
 		expect(await row("run-2")).toMatchObject({ state: "failed", failure: "runner_unavailable" });
 	});
 
+	it.each([
+		[409, { code: "sign_in_secrets_unavailable", error: PASSWORD }, "sign_in_secrets_unavailable"],
+		[409, { error: "This run's browser cannot take secret placeholders" }, "sign_in_secrets_unavailable"],
+		[409, { code: "sign_in_not_at_wall", error: PASSWORD }, "not_at_wall"],
+		[409, { error: "The run is not paused for a sign-in" }, "not_at_wall"],
+		[409, { error: PASSWORD }, "sign_in_rejected"],
+		[500, { error: PASSWORD }, "sign_in_rejected"],
+		[200, { unexpected: PASSWORD }, "sign_in_rejected"],
+	])("classifies sign-in refusal %s %j without persisting runner text", async (status, answer, failure) => {
+		insertRun(RUN, SEEK_PAUSE);
+		const f = fakes({ status, answer });
+		const result = await advanceAgentSignIn(env(), UID, await run(), { signInEmail: JOB_MAILBOX }, none, T0, f.deps);
+		expect(result.outcome).toBe("failed");
+		expect(await row()).toMatchObject({ state: "failed", failure });
+		expect((await run()).trace.at(-1)?.detail).toMatchObject({ decision: "failed", rule: failure });
+		expect((await run()).status).toBe("paused");
+		expect(dumpD1()).not.toContain(PASSWORD);
+		await advanceAgentSignIn(env(), UID, await run(), { signInEmail: JOB_MAILBOX }, none, T0 + 1000, f.deps);
+		expect(f.sent).toHaveLength(1);
+	});
+
 	it("agentSignInWillTry answers from the vault's presence and the SEEK address without reading the vault", async () => {
 		insertRun(RUN, INDEED_PAUSE);
 		const f = fakes();

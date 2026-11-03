@@ -4,7 +4,7 @@ import { launchRunnerBrowser, type BrowserLaunchOptions, type BrowserLaunchRecei
 import type { BrowserContext, Page } from "playwright";
 import { McpRuntime } from "../mcp-runtime.js";
 import type { LocalApplyProfile } from "./contract.js";
-import type { RunBrowser } from "./runtime.js";
+import type { RunBrowser, SecretStore } from "./runtime.js";
 import { type CookieReader, SiteSessionLedger } from "./site-session.js";
 
 /**
@@ -109,7 +109,7 @@ export function createLocalApplyBrowserFactory(options: {
 export function createRunnerBrowserFactories(options: {
 	headless: boolean;
 	dataDir: string;
-	defaultTools(): Promise<RunBrowser["tools"]>;
+	defaultTools(): Promise<RunBrowser["tools"] & SecretStore>;
 	defaultCookies: CookieReader;
 	sharedPage(): Page | null;
 	onLaunch?: (receipt: BrowserLaunchReceipt) => void;
@@ -118,7 +118,10 @@ export function createRunnerBrowserFactories(options: {
 	applyBrowserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
 } {
 	const browserFor = async (profile: LocalApplyProfile, runDir: string): Promise<RunBrowser> => {
-		if (profile === "default") return { tools: await options.defaultTools(), handoffPage: options.sharedPage, stop: async () => undefined };
+		if (profile === "default") {
+			const tools = await options.defaultTools();
+			return { tools, secrets: tools, handoffPage: options.sharedPage, stop: async () => undefined };
+		}
 		// A throwaway browser for this run alone (#1419): a fresh temp dir, launched and attached
 		// directly to MCP like the persistent `isolated` profile above, deleted on stop — never
 		// launched BY `@playwright/mcp` itself (the `McpRuntime.start` branch that did that, and its

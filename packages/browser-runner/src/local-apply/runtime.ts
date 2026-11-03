@@ -724,8 +724,8 @@ export class LocalApplyRuntime {
 		}
 		if (!Object.keys(map).length) throw new RunnerInputError(`secrets must carry at least one of ${LOCAL_APPLY_SIGN_IN_SECRET_NAMES.join(", ")}`);
 		const paused = run.state === "paused" && run.pause?.reason === "login_required";
-		if (!paused && !(run.state === "running" && run.signIn)) throw new RunnerInputError("The run is not paused for a sign-in", 409);
-		if (!run.browser?.secrets) throw new RunnerInputError("This run's browser cannot take secret placeholders", 409);
+		if (!paused && !(run.state === "running" && run.signIn)) throw new RunnerInputError("The run is not paused for a sign-in", 409, "sign_in_not_at_wall");
+		if (!run.browser?.secrets) throw new RunnerInputError("This run's browser cannot take secret placeholders", 409, "sign_in_secrets_unavailable");
 		run.browser.secrets.provideSecrets(map);
 		// The values, so a result that somehow quotes one is scrubbed (`end()`); the names are what the trace sees.
 		run.secrets.push(...Object.values(map));

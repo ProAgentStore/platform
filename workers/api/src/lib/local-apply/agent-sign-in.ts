@@ -89,6 +89,8 @@ const WALL_GRACE_MS = 30_000;
 const FAILURE_TEXT: Record<string, (host: string) => string> = {
 	runner_outdated: () => "This machine's CLI is older than the agent-driven sign-in; update it (npm i -g @proagentstore/cli).",
 	runner_unavailable: () => "The runner did not take the sign-in secrets.",
+	sign_in_secrets_unavailable: () => "This run's browser cannot accept sign-in secret placeholders. Update the runner before starting a fresh application run.",
+	sign_in_rejected: () => "The runner rejected the sign-in secrets; the response did not establish that the sign-in page changed.",
 	not_at_wall: (h) => `The run was no longer paused at ${h}'s sign-in when the secrets were ready.`,
 	not_signed_in: (h) => `The agent did not get past ${h}'s sign-in with the login it was given.`,
 	email_not_permitted: () => "Email access is off for the Application Runner, so it cannot read the sign-in code. Turn it on under Settings → Permissions & Connections.",
@@ -97,6 +99,18 @@ const FAILURE_TEXT: Record<string, (host: string) => string> = {
 	code_not_received: (h) => `${h} did not email a sign-in code within five minutes of the agent asking for one.`,
 	interrupted: () => "The agent's sign-in was interrupted part-way.",
 };
+
+/** Only known protocol failures become diagnostics; arbitrary runner text may contain secrets. */
+function provisioningFailure(res: { status: number; body: unknown } | null): string {
+	if (res === null) return "runner_unavailable";
+	if (res.status === 404) return "runner_outdated";
+	const body = res.body && typeof res.body === "object" ? (res.body as { code?: unknown; error?: unknown }) : {};
+	if (res.status === 409) {
+		if (body.code === "sign_in_secrets_unavailable" || body.error === "This run's browser cannot take secret placeholders") return "sign_in_secrets_unavailable";
+		if (body.code === "sign_in_not_at_wall" || body.error === "The run is not paused for a sign-in") return "not_at_wall";
+	}
+	return "sign_in_rejected";
+}
 
 function defaultDeps(env: Env, run: ApplyRun, uid: string): AgentSignInDeps {
 	return {
@@ -221,7 +235,7 @@ export async function advanceAgentSignIn(
 			// Each use of a stored login is recorded: the host and what came of it, never the username or the password.
 			if (offer.credentialId) await logEvent(env, { source: "credentials", event: "credential.use", message: `Handed the login for ${host} to the agent's sign-in: ${taken ? "provisioned" : "not taken"}`, userId: uid, instanceId: run.instanceId, context: { host, credentialId: offer.credentialId, runId: run.id, via: "local_apply_agent", outcome: taken ? "provisioned" : "not_taken" } }).catch(() => undefined);
 			// #1422: no macro is left to fall back to — the owner hears of it, through this `failed` outcome, when the runner will not take the secrets.
-			if (!taken) return fail(res === null ? "runner_unavailable" : res.status === 404 ? "runner_outdated" : "not_at_wall");
+			if (!taken) return fail(provisioningFailure(res));
 			await trace("provisioned", { reason: names.join(","), ...(offer.credentialId ? { basis: "vault" } : { basis: "sign_in_email" }) });
 			return { outcome: "provisioned", run };
 		}

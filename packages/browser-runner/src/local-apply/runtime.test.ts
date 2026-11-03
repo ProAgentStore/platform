@@ -919,12 +919,12 @@ describe("sign-in secrets (#1412)", () => {
 	nativeCancelled = undefined;
 		plain.start(envelope({ runId: "run-2", requestId: "t1:lead-1:2:materials" }));
 		await settle();
-		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(/not paused for a sign-in/);
+		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(expect.objectContaining({ status: 409, code: "sign_in_not_at_wall" }));
 		pageLogin = true;
 		const held = callOn(plain, "run-2", "supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
 		await settle();
 		expect(plain.status({ runId: "run-2" })).toMatchObject({ state: "paused", pause: { reason: "login_required" } });
-		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(/cannot take secret placeholders/);
+		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(expect.objectContaining({ status: 409, code: "sign_in_secrets_unavailable" }));
 		plain.cancel({ runId: "run-2" });
 		await held;
 	});
