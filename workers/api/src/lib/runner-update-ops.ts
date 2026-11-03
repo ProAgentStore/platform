@@ -27,6 +27,7 @@
  */
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import { clipMarked } from "./clip-marked.js";
+import { cliAtLeast } from "./runner-upgrade.js";
 import type { Env } from "../types.js";
 
 /** `running` is in flight; everything else is terminal. */
@@ -420,6 +421,64 @@ export async function reconcileLateUpdateOp(env: Pick<Env, "DB">, userId: string
 		  WHERE id = ?3 AND user_id = ?4 AND state != 'running'`,
 	)
 		.bind(clipMarked(reconciliation, 800, { within: true, what: "diagnostic characters" }), now, id, userId)
+		.run()
+		.catch(() => null);
+	return (res?.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * An `unreachable` row is an acknowledgement GAP, not a confirmed failure (#1432): the install or
+ * restart command may have landed on the machine with its reply lost, and the machine re-registers
+ * on its own moments later. How long after the row went terminal a later registration may still
+ * retroactively verify it — generous next to the ~70s a real restart took in #1432's own evidence,
+ * but well inside {@link UPDATE_OP_STALE_MS} so it can never race the stale-operation sweep.
+ */
+export const RUNNER_UPDATE_RECONCILE_GRACE_MS = 10 * 60_000;
+
+/**
+ * A machine that re-registers with a newer CLI version shortly after its update operation ended
+ * `unreachable` gets that success reconciled passively (#1432) — no new install/restart command is
+ * sent, and the busy-run single-flight claim is untouched because this only ever writes a row that
+ * is already TERMINAL (`state = 'unreachable'`), never the live `running` row.
+ *
+ * Reconciliation requires the op's own pre-attempt version (`current_version`, recorded even when
+ * the machine was never reached) to show the observed version as genuine forward progress — a bare
+ * "some registration arrived" is not enough, and a `restart` (which keeps its version) will never
+ * satisfy `cliAtLeast` in both directions at once, so it is excluded without a separate check. When
+ * the pre-attempt version was never captured, or the newer version never arrives in time, the row
+ * is left exactly as `unreachable` — clearly unverified, never guessed into success or failure.
+ */
+export async function reconcileUnreachableUpdateOp(
+	env: Pick<Env, "DB">,
+	userId: string,
+	node: string,
+	machineId: string | null | undefined,
+	observedVersion: string,
+	now = Date.now(),
+): Promise<boolean> {
+	if (!observedVersion) return false;
+	const op = await latestUpdateOp(env, userId, node, machineId);
+	if (op?.state !== "unreachable" || !op.currentVersion) return false;
+	if (!cliAtLeast(observedVersion, op.currentVersion) || cliAtLeast(op.currentVersion, observedVersion)) return false;
+	const endedAtMs = op.endedAt ? Date.parse(op.endedAt) : NaN;
+	if (!Number.isFinite(endedAtMs) || now - endedAtMs > RUNNER_UPDATE_RECONCILE_GRACE_MS) return false;
+	const res = await env.DB.prepare(
+		`UPDATE runner_update_ops
+		    SET state = 'restarted', final_version = ?1,
+		        detail = ?2, reconciliation = ?2, reconciled_at = ?3, updated_at = ?3
+		  WHERE id = ?4 AND user_id = ?5 AND state = 'unreachable'`,
+	)
+		.bind(
+			observedVersion,
+			clipMarked(
+				`${node} re-registered on ${observedVersion} (was ${op.currentVersion}) within the restart grace window after the update could not be confirmed live; passively reconciled as a successful restart. Re-attachment of any held agent was not re-checked by this reconciliation.`,
+				800,
+				{ within: true, what: "diagnostic characters" },
+			),
+			now,
+			op.id,
+			userId,
+		)
 		.run()
 		.catch(() => null);
 	return (res?.meta?.changes ?? 0) > 0;

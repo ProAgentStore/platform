@@ -116,6 +116,7 @@ import { describeRejection, rejectionFor, updateGateState } from "../lib/runner-
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
 import { cleanupAnswer, fleetUpdatingFor, getMachinePolicy, reportMachineCleanup, reportMachinePolicyStatus } from "../lib/machine-policy.js";
+import { reconcileUnreachableUpdateOp } from "../lib/runner-update-ops.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -594,6 +595,12 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		// registration — the runner would then be unreachable for a bookkeeping write.
 		if (machineId && machineNames.length) {
 			await claimMachineNames(c.env, session.uid, machineId, machineNames).catch(() => 0);
+		}
+		// A registration is exactly the signal an `unreachable` update operation (#1432) waits for:
+		// the machine came back on its own and is now reporting a version. Passive and best-effort —
+		// it only ever upgrades a row already terminal, and a failure here must not fail registration.
+		if (runnerVersion) {
+			await reconcileUnreachableUpdateOp(c.env, session.uid, runnerNode, machineId || null, runnerVersion).catch(() => false);
 		}
 	}
 

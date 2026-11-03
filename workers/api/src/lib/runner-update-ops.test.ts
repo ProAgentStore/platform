@@ -11,6 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunnerUpdateWorkflowParams } from "./runner-update.js";
+import { RunnerUnreachableError } from "./runner-unreachable.js";
 
 /**
  * Live sockets, `instanceId@node`, and what the machine answers.
@@ -48,7 +49,7 @@ vi.mock("./runner-client.js", () => ({
 }));
 
 const { realSchemaD1 } = await import("./d1-sqlite.js");
-const { claimUpdateOp, advanceUpdateOp, failStaleUpdateOps, latestUpdateOp, latestUpdateOps, liveUpdateOp, reconcileLateUpdateOp, UPDATE_OP_STALE_MS } = await import("./runner-update-ops.js");
+const { claimUpdateOp, advanceUpdateOp, failStaleUpdateOps, latestUpdateOp, latestUpdateOps, liveUpdateOp, reconcileLateUpdateOp, reconcileUnreachableUpdateOp, RUNNER_UPDATE_RECONCILE_GRACE_MS, UPDATE_OP_STALE_MS } = await import("./runner-update-ops.js");
 const { dispatchQueuedRunnerUpdates, executeRunnerUpdateOperation, startRunnerUpdate } = await import("./runner-update.js");
 type D1 = ReturnType<typeof realSchemaD1>;
 
@@ -352,5 +353,81 @@ describe("the idle-node update path, end to end (#990)", () => {
 		const second = await startRunnerUpdate(env(), "u1", NODE, { ...fast, startWorkflow: async (_p, id) => { launches.push(id); } });
 		expect(second.started).toBe(false);
 		expect(launches, "one durable dispatch, however many times the owner asks").toHaveLength(1);
+	});
+
+	it("records the version it had BEFORE the attempt even when the machine never answers, so the gap can later be reconciled (#1432)", async () => {
+		reply = () => { throw new RunnerUnreachableError("connected but not responding", { code: "UNRESPONSIVE" }); };
+		const { op } = await start(fast);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "unreachable", currentVersion: "0.4.84", finalVersion: null });
+	});
+});
+
+describe("passive reconciliation of an `unreachable` update, after the fact (#1432)", () => {
+	it("upgrades the row to `restarted` when the machine re-registers on a newer version within the grace window", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "unreachable", currentVersion: "0.4.84", detail: "Every relay socket on Macmini.modem is connected but not answering." }, NOW + 1_000);
+		const endedAtMs = NOW + 1_000;
+		// The machine's own later registration — exactly the signal `POST /:instanceId/runtime` carries.
+		expect(await reconcileUnreachableUpdateOp(env(), "u1", NODE, null, "0.4.85", endedAtMs + 11_000)).toBe(true);
+		const after = await latestUpdateOp(env(), "u1", NODE);
+		expect(after).toMatchObject({ id: op.id, state: "restarted", finalVersion: "0.4.85" });
+		expect(after?.reconciliation).toMatch(/re-registered on 0\.4\.85 \(was 0\.4\.84\)/);
+		expect(after?.reconciledAt).toBeTruthy();
+		// It is NOT confused with a live re-attachment pass: nothing here claims the held agents came back.
+		expect(after?.reconciliation).toMatch(/not re-checked/);
+	});
+
+	it("leaves the row `unreachable` once the restart grace window has passed — it stays clearly unverified", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "unreachable", currentVersion: "0.4.84" }, NOW + 1_000);
+		const endedAtMs = NOW + 1_000;
+		expect(await reconcileUnreachableUpdateOp(env(), "u1", NODE, null, "0.4.85", endedAtMs + RUNNER_UPDATE_RECONCILE_GRACE_MS + 1)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "unreachable", finalVersion: null });
+	});
+
+	it("does not credit a re-registration on the SAME version — only forward progress is a verified update", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "unreachable", currentVersion: "0.4.84" }, NOW + 1_000);
+		expect(await reconcileUnreachableUpdateOp(env(), "u1", NODE, null, "0.4.84", NOW + 2_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "unreachable" });
+	});
+
+	it("does not reconcile when the op never recorded a pre-attempt version — it cannot establish forward progress", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "unreachable" }, NOW + 1_000);
+		expect((await latestUpdateOp(env(), "u1", NODE))?.currentVersion).toBeNull();
+		expect(await reconcileUnreachableUpdateOp(env(), "u1", NODE, null, "0.4.85", NOW + 2_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "unreachable" });
+	});
+
+	it("never touches a `running` row — reconciliation cannot become a second way to close an operation still in flight", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "running", phase: "installing", currentVersion: "0.4.84" }, NOW + 1_000);
+		expect(await reconcileUnreachableUpdateOp(env(), "u1", NODE, null, "0.4.85", NOW + 2_000)).toBe(false);
+		expect(await liveUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "running" });
+	});
+
+	it("never reconciles another owner's operation", async () => {
+		d1.exec(`INSERT INTO users (id, github_login) VALUES ('u2', 'u2')`);
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "unreachable", currentVersion: "0.4.84" }, NOW + 1_000);
+		expect(await reconcileUnreachableUpdateOp(env(), "u2", NODE, null, "0.4.85", NOW + 2_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "unreachable" });
+	});
+
+	it("leaves a `failed` (confirmed, not merely gapped) operation alone — it is not an acknowledgement gap", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "failed", currentVersion: "0.4.84", reason: "error" }, NOW + 1_000);
+		expect(await reconcileUnreachableUpdateOp(env(), "u1", NODE, null, "0.4.85", NOW + 2_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "failed" });
+	});
+
+	it("leaves the single-flight claim open to a fresh request — reconciliation never holds or extends it", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "unreachable", currentVersion: "0.4.84" }, NOW + 1_000);
+		expect(await reconcileUnreachableUpdateOp(env(), "u1", NODE, null, "0.4.85", NOW + 2_000)).toBe(true);
+		const next = await claimUpdateOp(env(), "u1", NODE, { now: NOW + 3_000 });
+		expect(next.claimed).toBe(true);
+		expect(next.op.id).not.toBe(op.id);
 	});
 });

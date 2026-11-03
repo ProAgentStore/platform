@@ -137,13 +137,16 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 		if (await socketOn(id)) held.push(id);
 	}
 
+	// The version before the command: what a lost reply is later reconciled against (#1034), and
+	// also what an `unreachable` row's passive reconciliation (#1432) checks a later registration
+	// moved past — recorded even when the machine is never reached at all.
+	const before = opts.dryRun ? null : await registeredVersion(env, userId, names);
+
 	// 2. Ask the machine, over a socket that answers.
 	const carriers = await liveCarriers(env, userId, rows, names);
 	if (carriers.length === 0) {
-		return { node, action: "unreachable", held, detail: `No \`pags up\` is connected on ${node}, so nothing there can be asked to update. It has to be started at the machine.` };
+		return { node, action: "unreachable", held, current: before ?? undefined, detail: `No \`pags up\` is connected on ${node}, so nothing there can be asked to update. It has to be started at the machine.` };
 	}
-	// The version before the command: what a lost reply is later reconciled against (#1034).
-	const before = opts.dryRun ? null : await registeredVersion(env, userId, names);
 	/** Set when the reply was lost but the machine's registered version shows the update landed. */
 	let landedSilently = false;
 	/** The version the machine registers once it moves past `from`, within the grace period; null if it does not. */
@@ -212,7 +215,7 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 		}
 	}
 	if (!reply) {
-		return { node, action: "unreachable", held, detail: `Every relay socket on ${node} is connected but not answering, so the update could not be confirmed. A stale agent socket may be recoverable: try force_runner_attach for an affected instance on this node, then check coding_diagnostics and list_runner_nodes before deciding whether to retry the update. If remote attachment cannot recover it, restart \`pags up\` at the machine.` };
+		return { node, action: "unreachable", held, current: before ?? undefined, detail: `Every relay socket on ${node} is connected but not answering, so the update could not be confirmed. A stale agent socket may be recoverable: try force_runner_attach for an affected instance on this node, then check coding_diagnostics and list_runner_nodes before deciding whether to retry the update. If remote attachment cannot recover it, restart \`pags up\` at the machine.` };
 	}
 
 	const base = { node, held, current: reply.current, latest: reply.latest, ...(typeof reply.retriedRolledBack === "string" ? { retriedRolledBack: clipMarked(reply.retriedRolledBack, 80, { what: "the version" }) } : {}) };
