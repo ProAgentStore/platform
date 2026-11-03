@@ -618,12 +618,13 @@ describe("decideAction fences the page (#749)", () => {
 		expect(user).toContain('- button "Apply now" [ref=e42]');
 	});
 
-	it("keeps OUR instruction and the URL line outside the block — the model must obey those", async () => {
+	it("keeps our instruction outside the block and page-derived history inside", async () => {
 		const { user } = await decide("- text hello");
 		const [ours, theirs] = user.split("<untrusted_reference_material");
-		expect(ours).toContain("Actions so far:");
-		expect(ours).toContain("clicked Apply");
-		expect(ours).toContain("CURRENT PAGE — <https://jobs.example.com/123>");
+		expect(ours).toContain("Actions so far");
+		expect(ours).not.toContain("clicked Apply");
+		expect(theirs).toContain("clicked Apply");
+		expect(theirs).toContain("CURRENT PAGE — <https://jobs.example.com/123>");
 		const after = theirs.split("</untrusted_reference_material>")[1];
 		expect(after).toContain("Do the single next action toward submitting the application.");
 	});

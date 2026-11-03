@@ -63,7 +63,7 @@ export async function notifyLiveBrowserBlocker(
 		await markLocalApplyHandoff(env, { continuityId: handoff.continuityId, instanceId: run.instanceId, userId: uid, state: "closed", terminalReason: "runner_restarted" }, now);
 		return;
 	}
-	const request = { handoffId: handoff.continuityId, runId: run.id, applicationId: run.applicationId, browserProfile: run.policy.browserProfile };
+	const request = { handoffId: handoff.continuityId, runId: run.id, applicationId: run.applicationId, browserProfile: run.policy.browserProfile, ...(handoff.handoffRequestId ? { handoffRequestId: handoff.handoffRequestId } : {}) };
 	const path = handoff.state === "requested" ? LOCAL_APPLY_HANDOFF_PATH : LOCAL_APPLY_HANDOFF_STATUS_PATH;
 	const res = await callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(request) }).catch(() => null);
 	if (!res) {

@@ -75,7 +75,7 @@ export const CONFIRMATION_URL_RE = /(^|\/)(apply|application|applications|job)?[
 /** Ordered by how strong the evidence is: the first match is the one recorded. */
 export function confirmationMarker(before: ConfirmationPage | null, after: ConfirmationPage | null): LocalApplyConfirmationMarker | null {
 	if (!after) return null;
-	if (after.confirmed) return "page_text";
+	if (after.confirmed && before && !before.confirmed) return "page_text";
 	const url = urlPathAndQuery(after.url).toLowerCase();
 	if (CONFIRMATION_URL_RE.test(url) && before && urlPathAndQuery(before.url).toLowerCase() !== url) return "url_receipt";
 	// The site's own duplicate notice, but ONLY if it appeared after this click: "you have already

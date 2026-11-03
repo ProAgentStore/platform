@@ -159,6 +159,7 @@ export async function applicationAudit(env: DB, applicationId: string, userId: s
 export type LocalApplyHandoffState = "requested" | "ready" | "closed";
 
 export interface LocalApplyHandoff {
+	handoffRequestId?: string;
 	id: string;
 	continuityId: string;
 	runId: string;
@@ -175,6 +176,7 @@ export interface LocalApplyHandoff {
 }
 
 interface HandoffRow {
+	request_id?: string;
 	id: string;
 	continuity_id: string;
 	run_id: string;
@@ -190,6 +192,7 @@ interface HandoffRow {
 }
 
 const presentHandoff = (r: HandoffRow): LocalApplyHandoff => ({
+	...(r.request_id && r.request_id !== "legacy" ? { handoffRequestId: r.request_id } : {}),
 	id: r.id,
 	continuityId: r.continuity_id,
 	runId: r.run_id,
@@ -223,23 +226,30 @@ export async function createLocalApplyHandoff(
 	if (isTerminalApplyRun(input.run.status)) return null;
 	const id = crypto.randomUUID();
 	const continuityId = crypto.randomUUID();
+	const requestId = input.run.pause?.handoffRequestId ?? "legacy";
+	// Only a new, durably recorded pause supersedes an earlier handoff. Preserve the old row.
+	await env.DB.prepare(`UPDATE local_apply_handoffs SET state = 'closed', terminal_reason = 'unavailable', ended_at = ?1, updated_at = ?1
+		WHERE run_id = ?2 AND instance_id = ?3 AND user_id = ?4 AND request_id <> ?5 AND state IN ('requested', 'ready')
+		AND EXISTS (SELECT 1 FROM local_apply_runs r WHERE r.id = ?2 AND r.status = 'paused' AND json_extract(r.pause, '$.handoffRequestId') = ?5)`)
+		.bind(now, input.run.id, input.run.instanceId, input.userId, requestId).run();
 	await env.DB.prepare(
 		`INSERT INTO local_apply_handoffs
-		   (id, continuity_id, run_id, application_id, instance_id, user_id, browser_profile, state, expires_at, created_at, updated_at)
-		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'requested', ?8, ?9, ?9
+		   (id, continuity_id, run_id, application_id, instance_id, user_id, browser_profile, state, expires_at, created_at, updated_at, request_id)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'requested', ?8, ?9, ?9, ?10
 		   FROM local_apply_runs r
 		  WHERE r.id = ?3 AND r.instance_id = ?5 AND r.user_id = ?6 AND r.application_id = ?4
 		    AND r.status IN ('queued', 'running', 'paused')
 		    AND json_extract(r.policy, '$.browserProfile') = ?7
+		    AND COALESCE(json_extract(r.pause, '$.handoffRequestId'), 'legacy') = ?10
 		    AND EXISTS (SELECT 1 FROM job_applications a WHERE a.id = ?4 AND a.user_id = ?6 AND a.fill_run_id = ?3)
-		 ON CONFLICT(run_id) DO NOTHING`,
+		 ON CONFLICT(run_id, request_id) DO NOTHING`,
 	)
-		.bind(id, continuityId, input.run.id, input.app.id, input.run.instanceId, input.userId, input.browserProfile, input.expiresAt, now)
+		.bind(id, continuityId, input.run.id, input.app.id, input.run.instanceId, input.userId, input.browserProfile, input.expiresAt, now, requestId)
 		.run();
 	const row = await env.DB.prepare(
-		"SELECT * FROM local_apply_handoffs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND application_id = ?4 AND browser_profile = ?5",
+		"SELECT * FROM local_apply_handoffs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND application_id = ?4 AND browser_profile = ?5 AND request_id = ?6",
 	)
-		.bind(input.run.id, input.run.instanceId, input.userId, input.app.id, input.browserProfile)
+		.bind(input.run.id, input.run.instanceId, input.userId, input.app.id, input.browserProfile, requestId)
 		.first<HandoffRow>();
 	return row ? presentHandoff(row) : null;
 }
@@ -253,7 +263,7 @@ export async function getHandoffById(env: DB, instanceId: string, userId: string
 }
 
 export async function getLocalApplyHandoffForRun(env: DB, runId: string, instanceId: string, userId: string): Promise<LocalApplyHandoff | null> {
-	const row = await env.DB.prepare("SELECT * FROM local_apply_handoffs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3")
+	const row = await env.DB.prepare("SELECT * FROM local_apply_handoffs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3 ORDER BY created_at DESC, rowid DESC LIMIT 1")
 		.bind(runId, instanceId, userId)
 		.first<HandoffRow>();
 	return row ? presentHandoff(row) : null;
@@ -577,6 +587,9 @@ export interface ApplyRun {
 	lastSyncedAt: number | null;
 	createdAt: number;
 	startedAt: number | null;
+	/** Durable active time; paused owner waits never consume the execution budget. */
+	activeElapsedMs?: number;
+	activeStartedAt?: number | null;
 	endedAt: number | null;
 }
 
@@ -599,6 +612,8 @@ interface RunRow {
 	last_synced_at: number | null;
 	created_at: number;
 	started_at: number | null;
+	active_elapsed_ms: number;
+	active_started_at: number | null;
 	ended_at: number | null;
 }
 
@@ -650,6 +665,8 @@ const present = (r: RunRow): ApplyRun => ({
 	lastSyncedAt: r.last_synced_at,
 	createdAt: r.created_at,
 	startedAt: r.started_at,
+	activeElapsedMs: r.active_elapsed_ms ?? 0,
+	activeStartedAt: r.active_started_at ?? null,
 	endedAt: r.ended_at,
 });
 
@@ -701,6 +718,8 @@ export async function updateApplyRun(
 		    SET status = ?1, pause = CASE WHEN ?2 THEN ?3 ELSE pause END, result = COALESCE(?4, result), engine_auth = COALESCE(?5, engine_auth),
 		        error_code = COALESCE(?6, error_code), error = COALESCE(?7, error), runner_node = COALESCE(?8, runner_node), trace = ?9,
 		        runner_seq = MAX(runner_seq, ?10), last_synced_at = CASE WHEN ?11 THEN ?12 ELSE last_synced_at END,
+		        active_elapsed_ms = active_elapsed_ms + CASE WHEN status = 'running' AND ?1 != 'running' THEN MAX(0, ?12 - COALESCE(active_started_at, ?12)) ELSE 0 END,
+		        active_started_at = CASE WHEN ?1 = 'running' THEN COALESCE(active_started_at, ?12) ELSE NULL END,
 		        started_at = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?12 ELSE started_at END,
 		        ended_at = CASE WHEN ?13 THEN ?12 ELSE ended_at END, policy = COALESCE(?17, policy), updated_at = ?12
 		  WHERE id = ?14 AND instance_id = ?15 AND status = ?16`,

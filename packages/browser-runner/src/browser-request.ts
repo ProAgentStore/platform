@@ -6,6 +6,10 @@ import { instanceOf, readJson } from "./request-instance.js";
 export async function withBrowserRequest<T>(runner: LocalRunner, req: IncomingMessage, fn: () => Promise<T>): Promise<T> {
 	const path = (req.url || "").split("?")[0].replace(/\/$/, "");
 	let newRun = req.method === "POST" && ["/local-browser/run", "/local-apply/run", "/local-apply/preflight", "/local-apply/sign-in", "/local-apply/reconciliation/run"].includes(path);
+	if (newRun && (path === "/local-browser/run" || path === "/local-apply/run")) {
+		const runtime = path === "/local-browser/run" ? runner.localBrowser : runner.localApply;
+		if (runtime.hasRequest(await readJson(req))) newRun = false;
+	}
 	if (req.method === "POST" && path === "/tasks") {
 		const body = await readJson<{ type?: unknown }>(req);
 		newRun = ["browser.open", "browser.task", "job.apply_agent", "local_browser.research", "local_browser.apply"].includes(String(body.type));

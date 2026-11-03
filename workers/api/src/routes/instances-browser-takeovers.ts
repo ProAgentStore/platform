@@ -24,7 +24,7 @@ import {
 	type TakeoverState,
 	type TakeoverSubject,
 } from "../lib/browser-takeover-types.js";
-import { getTakeover, latestTakeoverFor, LIVE_TAKEOVER_STATES, listTakeovers, requestTakeover, takeoverReasonOf, transitionTakeover } from "../lib/browser-takeovers.js";
+import { bindTakeoverRunnerRequest, getTakeover, latestTakeoverFor, LIVE_TAKEOVER_STATES, listTakeovers, requestTakeover, takeoverReasonOf, takeoverRunnerRequest, transitionTakeover } from "../lib/browser-takeovers.js";
 import { deepLinkFor } from "../lib/console-links.js";
 import { getLocalBrowserRun } from "../lib/local-browser/store.js";
 import { endCardTakeover, fillRunForCard, relayCardTakeover } from "../lib/local-apply/fill-handoff.js";
@@ -56,14 +56,25 @@ async function notifyRequested(env: Env, uid: string, instanceId: string, takeov
 
 /**
  * The gate in front of a runner task's remote view and input (#1031). A takeover the runner holds with
- * no durable row yet is recorded as `requested` (the runner asking IS the request); a closed one —
- * resumed, ended, expired — is refused with how to ask again rather than silently reopened. `open`
+ * no durable row yet is recorded as `requested` (the runner asking IS the request). A new runner
+ * request after a closed one gets its own row; the closed request is never reopened. `open`
  * moves a requested takeover to `active`: showing the frame is what opening means.
  */
-export async function takeoverGate(env: Env, uid: string, instanceId: string, runtime: RuntimeRow, taskId: string, opts: { open: boolean; device?: string; fill?: { waiting: boolean; reason?: TakeoverReason } }): Promise<BrowserTakeover> {
+export async function takeoverGate(env: Env, uid: string, instanceId: string, runtime: RuntimeRow, taskId: string, opts: { open: boolean; device?: string; fill?: { waiting: boolean; reason?: TakeoverReason; requestId?: string } }): Promise<BrowserTakeover> {
 	let takeover = await latestTakeoverFor(env, uid, instanceId, "runtime_task", taskId);
+	// The legacy task-id-only list cannot distinguish a fresh handoff from a stale request. New
+	// runners attach an opaque generation, fixed for this handoff and replaced on the next one.
+	const listed = !opts.fill ? (await runtimeJson(await callRuntime(env, runtime, "/takeover")).catch(() => ({}))) as { takeovers?: unknown; requests?: Array<{ taskId?: unknown; requestId?: unknown }> } : null;
+	const held = Array.isArray(listed?.takeovers) && listed.takeovers.includes(taskId);
+	const request = held && Array.isArray(listed?.requests) ? listed.requests.find((r) => r?.taskId === taskId) : null;
+	const candidateRequest = opts.fill?.waiting ? opts.fill.requestId : request?.requestId;
+	const requestId = typeof candidateRequest === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(candidateRequest) ? candidateRequest : undefined;
 	if (takeover && !LIVE_TAKEOVER_STATES.includes(takeover.state)) {
-		throw new HttpError(409, `This takeover is ${takeover.state}. Ask for it again (POST …/browser-takeovers with subjectKind "runtime_task") if the task still needs you.`);
+		const previousRequest = await takeoverRunnerRequest(env, uid, instanceId, takeover.id);
+		if (!requestId || !previousRequest || requestId === previousRequest) {
+			throw new HttpError(409, `This takeover is ${takeover.state}. Ask for it again (POST …/browser-takeovers with subjectKind "runtime_task") if the task still needs you.`);
+		}
+		takeover = null;
 	}
 	if (!takeover) {
 		// An application card (#1100) is never in the runner's task-takeover list — its page is its fill's
@@ -71,13 +82,13 @@ export async function takeoverGate(env: Env, uid: string, instanceId: string, ru
 		if (opts.fill) {
 			if (!opts.fill.waiting) throw new HttpError(404, "No takeover is waiting for this task.");
 		} else {
-			const listed = (await runtimeJson(await callRuntime(env, runtime, "/takeover")).catch(() => ({}))) as { takeovers?: unknown };
-			if (!Array.isArray(listed.takeovers) || !listed.takeovers.includes(taskId)) throw new HttpError(404, "No takeover is waiting for this task.");
+			if (!held) throw new HttpError(404, "No takeover is waiting for this task.");
 		}
 		const { settings } = await readBrowserVerification(env, instanceId, uid);
-		takeover = (await requestTakeover(env, { userId: uid, instanceId, subjectKind: "runtime_task", subjectId: taskId, reason: opts.fill?.reason ?? "manual", mobileAllowed: settings.allowMobile }))?.takeover ?? null;
+		takeover = (await requestTakeover(env, { userId: uid, instanceId, subjectKind: "runtime_task", subjectId: taskId, reason: opts.fill?.reason ?? "manual", mobileAllowed: settings.allowMobile, runnerRequestId: requestId }))?.takeover ?? null;
 		if (!takeover) throw new HttpError(409, "The takeover could not be recorded, so it was not opened.");
 	}
+	if (requestId) await bindTakeoverRunnerRequest(env, uid, instanceId, takeover.id, requestId);
 	// The owner's mobile preference (#1031), on the remote view itself — `device` is the caller's own statement.
 	if (opts.open && opts.device === "mobile" && !takeover.mobileAllowed) {
 		throw new HttpError(409, "Taking over from a phone is off for this agent (browser verification allowMobile). Take over at the machine, or allow it in Browser verification.");

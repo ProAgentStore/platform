@@ -50,6 +50,7 @@ export interface ElementFacts {
 	name: string;
 	tag: string;
 	type: string;
+	role?: string;
 }
 
 /** What the page says about whatever currently has focus (for a keypress). */
@@ -59,6 +60,7 @@ export interface FocusFacts {
 	tag: string;
 	type: string;
 	name: string;
+	role?: string;
 }
 
 /**
@@ -96,7 +98,7 @@ export const ELEMENT_PROBE_FN = `el => {
   var form = btn.form || (btn.closest && btn.closest('form')) || null;
   var submits = !!form && ((tag === 'button' && type !== 'button' && type !== 'reset') || (tag === 'input' && (type === 'submit' || type === 'image')));
   var name = (btn.getAttribute && btn.getAttribute('aria-label')) || btn.value || btn.innerText || btn.textContent || '';
-  return { submits: submits, method: form ? ((form.getAttribute('method') || 'get').toLowerCase()) : '', tag: tag, type: type, name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
+  return { submits: submits, method: form ? ((form.getAttribute('method') || 'get').toLowerCase()) : '', tag: tag, type: type, role: (btn.getAttribute && btn.getAttribute('role')) || '', name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
 }`;
 
 /** The probe for a keypress: there is no ref, so it reads whatever has focus. */
@@ -105,7 +107,7 @@ export const FOCUS_PROBE_FN = `(() => {
   if (!el) return { inForm: false, method: '', tag: '', type: '', name: '' };
   var form = el.form || (el.closest && el.closest('form')) || null;
   var name = (el.getAttribute && el.getAttribute('aria-label')) || el.value || el.innerText || el.textContent || '';
-  return { inForm: !!form, method: form ? ((form.getAttribute('method') || 'get').toLowerCase()) : '', tag: (el.tagName || '').toLowerCase(), type: ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase(), name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
+  return { inForm: !!form, method: form ? ((form.getAttribute('method') || 'get').toLowerCase()) : '', tag: (el.tagName || '').toLowerCase(), type: ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase(), role: (el.getAttribute && el.getAttribute('role')) || '', name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
 })()`;
 
 /**
@@ -122,6 +124,7 @@ export function refuseClick(spec: CommitGuardSpec, facts: ElementFacts | null, c
 		if (!facts) {
 			return "BLOCKED by the runner — this agent is READ-ONLY and that element could not be read from the page, so the click cannot be shown to be safe. Re-read the snapshot and target an element from it.";
 		}
+		if (facts.type === "checkbox" || facts.type === "radio" || facts.type === "file" || facts.tag === "select" || /^(checkbox|radio|switch|option)$/.test(facts.role ?? "")) return "BLOCKED by the runner — this agent is READ-ONLY and cannot change a checkbox, selection or uploaded file.";
 		if (facts.submits && facts.method === "post") {
 			return `BLOCKED by the runner — this agent is READ-ONLY and "${real || claimed || facts.tag}" submits a form (POST) on this page. That is a change, whatever the control is called. Report what you can already see with finish.`;
 		}
@@ -136,25 +139,25 @@ export function refuseClick(spec: CommitGuardSpec, facts: ElementFacts | null, c
 /**
  * May this keypress reach the page?
  *
- * Read-only only. A rehearsal's Enter is decided by the cloud loop, which holds the one piece of
- * state that makes the call — an Enter immediately after an arrow key is an autocomplete ACCEPT,
- * not a submit — and this process cannot tell a JS listbox that will swallow the key from a form
- * that will take it.
+ * Every mode is enforced here. A key can submit a POST form even when a cloud caller
+ * describes it as autocomplete: use an explicit permitted option/control in a rehearsal.
  */
 export function refuseKey(spec: CommitGuardSpec, key: string | undefined, focus: FocusFacts | null): string | null {
-	if (spec.mode !== "read_only") return null;
-	const k = (key ?? "").trim();
+	const k = key === " " ? "Space" : (key ?? "").trim().split("+").at(-1) ?? "";
 	const submitKey = SUBMIT_KEY_RE.test(k);
 	const activateKey = ACTIVATE_KEY_RE.test(k);
+	if (spec.mode === "read_only" && !focus && !/^(tab|escape)$/i.test(k)) return "BLOCKED by the runner — this agent is READ-ONLY and the focused element could not be read.";
+	if (spec.mode === "read_only" && !/^(tab|escape)$/i.test(k) && focus && (focus.method === "post" || /^(password|file|checkbox|radio)$/.test(focus.type) || focus.tag === "select" || /^(checkbox|radio|switch|combobox|listbox)$/.test(focus.role ?? ""))) return `BLOCKED by the runner — this agent is READ-ONLY and ${k} can change the focused form control.`;
 	if (!submitKey && !activateKey) return null;
+	const mode = spec.mode === "read_only" ? "READ-ONLY" : "a REHEARSAL";
 	if (!focus) {
-		return `BLOCKED by the runner — this agent is READ-ONLY and the focused element could not be read, so pressing ${k || "Enter"} cannot be shown to be safe.`;
+		return `BLOCKED by the runner — this run is ${mode} and the focused element could not be read, so pressing ${k || "Enter"} cannot be shown to be safe.`;
 	}
 	if (submitKey && focus.inForm && focus.method === "post") {
-		return `BLOCKED by the runner — this agent is READ-ONLY and pressing ${k} submits the form this field belongs to (POST). A search or filter that only reads (GET) is fine; this one writes. Report what you can already see with finish.`;
+		return `BLOCKED by the runner — this run is ${mode} and pressing ${k} can submit the form this field belongs to (POST). Use an explicit permitted control instead.`;
 	}
-	if (activateKey && (focus.tag === "button" || focus.type === "submit") && focus.method === "post") {
-		return `BLOCKED by the runner — this agent is READ-ONLY and Space activates "${focus.name || "the focused button"}", which submits a form (POST).`;
+	if ((focus.tag === "button" || focus.type === "submit") && ((spec.mode === "read_only" && focus.method === "post") || commitLabelRe(spec).test(focus.name))) {
+		return `BLOCKED by the runner — this run is ${mode} and ${k} activates "${focus.name || "the focused button"}", which commits.`;
 	}
 	return null;
 }

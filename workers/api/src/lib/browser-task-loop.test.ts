@@ -115,13 +115,13 @@ describe("read-only enforcement in the loop", () => {
 			[page('- button "Pay now"'), page('- text "Balance $184.20"')],
 			[
 				{ action: { action: "click", role: "button", name: "Pay now" } },
-				{ finish: { status: "submitted", detail: "Balance $184.20, due 3 September" } },
+				{ finish: { status: "completed", detail: "Balance $184.20, due 3 September" } },
 			],
 		);
 		const result = await runApplyLoop<BrowserTaskJob>(d, WATCH, { maxSteps: 8 });
 
 		expect(reached).toEqual([]); // the runner was never asked to click it
-		expect(result.outcome).toBe("submitted");
+		expect(result.outcome).toBe("completed");
 		expect(result.detail).toContain("$184.20");
 		// The refusal is fed back as the action's own outcome, so the next decision sees it.
 		expect(result.transcript?.some((l) => /READ-ONLY/.test(l))).toBe(true);
@@ -133,7 +133,7 @@ describe("read-only enforcement in the loop", () => {
 		const { deps: d, reached } = deps(
 			job,
 			[page('- button "Pay now"')],
-			[{ action: { action: "click", role: "button", name: "Pay now" } }, { finish: { status: "submitted", detail: "done" } }],
+			[{ action: { action: "click", role: "button", name: "Pay now" } }, { finish: { status: "completed", detail: "done" } }],
 		);
 		await runApplyLoop<BrowserTaskJob>(d, job, { maxSteps: 8 });
 		expect(reached.map((a) => a.name)).toEqual(["Pay now"]);
@@ -237,7 +237,7 @@ describe("browserTaskSystemPrompt", () => {
 describe("browserToolCallToDecision", () => {
 	it("maps finish(done) to a success and finish(blocked) to a block", () => {
 		expect(browserToolCallToDecision({ name: "finish", arguments: { status: "done", detail: "Balance $12" } }).finish).toEqual({
-			status: "submitted",
+			status: "completed",
 			detail: "Balance $12",
 		});
 		expect(browserToolCallToDecision({ name: "finish", arguments: { status: "blocked", detail: "login wall" } }).finish?.status).toBe("blocked");
@@ -280,7 +280,7 @@ describe("decideBrowserTask", () => {
 			snapshot: page('- text "Balance $184.20"'),
 		});
 
-		expect(decision.finish).toEqual({ status: "submitted", detail: "Balance $184.20, due 3 September" });
+		expect(decision.finish).toEqual({ status: "completed", detail: "Balance $184.20, due 3 September" });
 		expect(decision.usage).toEqual({ input: 10, output: 4 });
 		const [, , model, opts] = spy.mock.calls[0] as unknown as [unknown, unknown, string, { messages: Array<{ role: string; content: string }>; maxTokens: number }];
 		expect(model).toBe("claude-sonnet-4-6");

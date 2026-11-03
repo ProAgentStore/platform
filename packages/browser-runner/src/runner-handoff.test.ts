@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as challenge from "./challenge.js";
 import { LocalRunner } from "./runner.js";
 
 /**
@@ -22,9 +23,20 @@ describe("browserHandoffStatus when the page the human was handed is gone (#641)
 	});
 
 	afterEach(async () => {
-		await runner.close();
-		rmSync(dir, { recursive: true, force: true });
-	}, 30_000);
+		const ownedRunner = runner;
+		const ownedDir = dir;
+		vi.restoreAllMocks();
+		await ownedRunner.close();
+		rmSync(ownedDir, { recursive: true, force: true });
+	});
+
+	it("keeps a challenge pending when the live DOM probe fails, then retries", async () => {
+		const taskId = await handoffThenLoseTheBrowser("challenge", "recaptcha");
+		vi.spyOn(challenge, "detectHumanChallenge").mockRejectedValueOnce(new Error("frame detached"));
+		expect(await runner.browserHandoffStatus(taskId)).toEqual({ solved: false, challenge: null });
+		// The same still-open blank fixture can be inspected on the next poll.
+		expect(await runner.browserHandoffStatus(taskId)).toEqual({ solved: true, challenge: null });
+	}, 120_000);
 
 	/**
 	 * Register a real takeover on a real page, then take the browser away underneath it.

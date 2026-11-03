@@ -1,3 +1,4 @@
+import { activeApplyMilliseconds } from "./active-clock.js";
 /**
  * The Application Runner (#957): materials ready → a local CLI fills the application in a real
  * browser → the outcome written back to the application, by compare-and-set, with an audit row.
@@ -58,7 +59,7 @@ import {
 	moveApplication,
 	updateApplyRun,
 } from "./store.js";
-import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
+import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued, queueFieldsFor } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { clipMarked } from "../clip-marked.js";
 import { cliAtLeast } from "../runner-upgrade.js";
@@ -70,7 +71,7 @@ import { attentionDeps } from "../applications/attention-deps.js";
 import { applyRunSignals } from "../applications/run-signals.js";
 import { notifyUser } from "../../routes/push.js";
 import { claimVerifiedOneClickRecovery, consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
-import { releaseApprovalIfNothingWasSent, upgradeQueuedRunPolicy } from "./approval-at-dispatch.js";
+import { deferQueuedRunPolicy, releaseApprovalIfNothingWasSent, upgradeQueuedRunPolicy } from "./approval-at-dispatch.js";
 import { submitGateFor } from "./submission-gate.js";
 export { submitGateFor } from "./submission-gate.js";
 export { syncActiveApplyReconciliations } from "./reconciliation-sync.js";
@@ -170,14 +171,13 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
  * zero-bridge outcome in the PREVIOUS vocabulary, which is indistinguishable from a new-contract run
  * that had nothing to diagnose. Silent fallback to the older shape is the thing the issue forbids.
  *
- * So the cloud refuses before dispatch and says exactly what to do. An unreported version is not
- * judged — the convention `cliAtLeast` and every other MIN_CLI gate in this codebase follow, because
- * refusing on a fact we do not have is the worse failure.
+ * The cloud refuses before dispatch until the machine reports the safety contract version.
+ * An unreported version cannot prove the submission guards exist, so it also waits for an update.
  */
 export function runnerContractProblem(runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
 	const version = runnerVersion?.trim();
-	if (!version || cliAtLeast(version, LOCAL_APPLY_CONTRACT_MIN_CLI)) return null;
-	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it cannot perform the required read-only live-page preflight or the bounded same-page login/CAPTCHA handoff, and it predates the current post-submit confirmation evidence, which can leave an opaque submit_unconfirmed outcome. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
+	if (version && cliAtLeast(version, LOCAL_APPLY_CONTRACT_MIN_CLI)) return null;
+	return `The runner on ${node || "that machine"} is CLI ${version || "unknown"}, which has not verified this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): dispatch-time submission guards, credential origin binding and current post-submit confirmation are required to prevent unsafe actions and an opaque submit_unconfirmed outcome. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
 }
 
 export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };
@@ -354,21 +354,30 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		run = (await updateApplyRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
 		await move(env, uid, applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId, expectRun: runId, reason: errorCode, questions: [error] }, now);
 	};
+	// Persist the dispatch lease BEFORE the RPC. A worker crash or lost response must leave a
+	// status to reconcile, never a queued row that automatically starts the browser again.
+	const claimedDispatch = await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null }, now);
+	if (!claimedDispatch) throw new HttpError(409, "The run changed before dispatch; no browser request was sent.");
+	run = claimedDispatch;
 	let res: Response | null = null;
 	try {
 		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(envelope) });
-	} catch (err) {
-		await fail("runner_unreachable", `The runner did not answer: ${err instanceof Error ? err.message.slice(0, 300) : "unknown error"}`);
+	} catch {
+		// It may already be acting. Keep its authority bound and reconcile through /status only.
 	}
 	if (res) {
 		const payload = (await runtimeJson(res)) as Record<string, unknown>;
 		const refusal = res.ok ? { defer: false as const } : refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });
-		if (res.status === 404) await fail("runner_unsupported", "The connected runner cannot fill applications yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again.");
+		if (payload.code === "application_start_uncertain") run = await endLost(env, uid, run, "The runner has a prior dispatch claim without a verified terminal result; this application will not be restarted automatically.", now);
+		else if (res.status === 404) await fail("runner_unsupported", "The connected runner cannot fill applications yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again.");
 		// The machine is busy with the owner's OTHER application, which is a WAIT, not a failure
 		// (#974). The run stays `queued` — it already is the queue entry — and the per-minute sweep
 		// dispatches it when the slot frees. Before this, five leads approved at once left one run
 		// and four dead applications for the owner to retry by hand.
-		else if (refusal.defer) await noteQueued(env, "local_apply_runs", runId, refusal.message, now);
+		else if (refusal.defer) {
+			run = await deferQueuedRunPolicy(env, uid, run, now);
+			await noteQueued(env, "local_apply_runs", runId, refusal.message, now);
+		}
 		else if (!res.ok) await fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
 		else {
 			run = (await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode } }] }, now)) ?? run;
@@ -609,7 +618,13 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 /** Bring one run up to date from its runner, mirroring a pause onto the application. */
 async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now: number): Promise<ApplyRun> {
 	// A run recorded but never handed over (the Worker died between the two) is not left queued forever.
-	if (run.status === "queued") return now - run.createdAt > LOST_RUNNER_GRACE_MS ? endLost(env, uid, run, "The run was never handed to the runner.", now) : run;
+	if (run.status === "queued") {
+		// A definitive busy/offline refusal is a durable capacity wait, not an abandoned start.
+		// The queue owns its retry/expiry budget; creation age cannot turn it into runner_lost.
+		const queue = await queueFieldsFor(env, "local_apply_runs", run.id);
+		if (queue?.reason || (queue?.attempts ?? 0) > 0) return run;
+		return now - run.createdAt > LOST_RUNNER_GRACE_MS ? endLost(env, uid, run, "The run was never handed to the runner.", now) : run;
+	}
 	if (run.status !== "running" && run.status !== "paused") {
 		// Receipt is intentionally separate from projection. If a Worker stopped after saving the
 		// runner's typed result but before its application CAS, the scheduled sweep replays only this
@@ -622,8 +637,8 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		return run;
 	}
 	const startedAt = run.startedAt ?? run.createdAt;
-	const timeLimitReached = run.status === "running" && now - startedAt >= run.policy.limits.maxMinutes * 60_000;
-	const silentSince = run.lastSyncedAt ?? startedAt;
+	const timeLimitReached = run.status === "running" && activeApplyMilliseconds(run, now) >= run.policy.limits.maxMinutes * 60_000;
+	const silentSince = Math.max(run.lastSyncedAt ?? 0, run.activeStartedAt ?? startedAt);
 	const lostByTime = run.status === "running" ? now - silentSince > run.policy.limits.maxMinutes * 60_000 + LOST_RUNNER_GRACE_MS : now - silentSince > PAUSED_RUNNER_GRACE_MS;
 	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
 	if (!runtime) {
@@ -665,6 +680,7 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		body.state === "paused" && p && LOCAL_APPLY_PAUSE_REASONS.includes(p.reason as never)
 			? {
 				reason: p.reason as LocalApplyPause["reason"],
+				...(typeof p.handoffRequestId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(p.handoffRequestId) ? { handoffRequestId: p.handoffRequestId } : {}),
 				// Origin and path only (#1069) — a sign-in pause's page URL carries OAuth/session parameters.
 				...(typeof p.url === "string" && traceUrl(p.url) ? { url: traceUrl(p.url) } : {}),
 				...(typeof p.domain === "string" ? { domain: p.domain.slice(0, 253) } : {}),
@@ -696,7 +712,7 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	if (body.state === "ended" && body.result !== undefined && !isTerminalApplyRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now);
 	// A result is authoritative if it arrived at the deadline.  Otherwise a still-running CLI
 	// cannot turn status polling into an unbounded lease; PAGS stops and settles it itself.
-	if (timeLimitReached && current.status === "running") current = await stopTimedOutRun(env, runtime, uid, current, now);
+	if (current.status === "running" && activeApplyMilliseconds(current, now) >= current.policy.limits.maxMinutes * 60_000) current = await stopTimedOutRun(env, runtime, uid, current, now);
 	if (current.status === "paused" && current.pause?.reason === "login_required") {
 		// #1412/#1422: the agent signs in itself with provisioned secret names — the only sign-in path now.
 		const agent = await advanceAgentSignIn(env, uid, current, signInSettings, signInSync, now);
@@ -890,6 +906,11 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		await noteQueued(env, "local_apply_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
 		return "queued";
 	}
+	const contractProblem = runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	if (contractProblem) {
+		await noteQueued(env, "local_apply_runs", run.id, contractProblem, now);
+		return "queued";
+	}
 	const s = await runnerSettingsFor(env, instanceId, uid).catch(() => null);
 	if (!s) return "queued";
 	// #993: the mode is decided HERE, not when the run was queued. `dispatched` is the run whose
@@ -899,20 +920,23 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	// #993: the mode is decided HERE, not when the run was queued. The queue has already proven no
 	// run holds the machine (`nextDueQueuedRun`) and a run must not count itself — without both,
 	// `concurrency` refuses for ever. See `approval-at-dispatch.ts` for the rest.
-	const { run: dispatched, upgraded } = await upgradeQueuedRunPolicy(
+	let { run: dispatched } = await upgradeQueuedRunPolicy(
 		env,
 		uid,
 		run,
 		() => submitGateFor(env, instanceId, uid, app, s, now, { excludeRunId: run.id, machineOnly: true, oneClickRecoveryId: run.policy.approvalRecoveryId }),
 		now,
-	).catch(() => ({ run, upgraded: false }));
+	);
 	let res: Response | null = null;
 	const kept = await keptAnswers(env, uid, dispatched);
+	const claimedDispatch = await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null }, now);
+	if (!claimedDispatch) return "queued";
+	dispatched = claimedDispatch;
 	try {
 		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(applyTaskEnvelope(dispatched, app, s, kept.answers)) });
 	} catch {
-		await noteQueued(env, "local_apply_runs", run.id, "The runner did not answer; waiting to try again.", now);
-		return "queued";
+		// A response gap is not a refusal. Poll this run; never dispatch it a second time.
+		return "dispatched";
 	}
 	const payload = (await runtimeJson(res)) as Record<string, unknown>;
 	if (res.ok) {
@@ -920,12 +944,15 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		await markDecisionsApplied(env, kept.ids, dispatched.id, now).catch(() => undefined);
 		return "dispatched";
 	}
+	if (payload.code === "application_start_uncertain") {
+		await endLost(env, uid, dispatched, "The runner has a prior dispatch claim without a verified terminal result; this application will not be restarted automatically.", now);
+		return "exhausted";
+	}
 	const refusal = refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });
 	if (refusal.defer) {
-		// Still waiting. Hand back only an approval THIS attempt just claimed for an upgrade: the
-		// run goes back in line and the next attempt re-earns it. A run that has been `auto_submit`
-		// since an earlier attempt keeps both its mode and the approval behind it (#993).
-		if (upgraded) await releaseApprovalIfNothingWasSent(env, uid, dispatched).catch(() => undefined);
+		// A definitive refusal executed nothing. Clear the stored authority before releasing its
+		// one-time approval; the next dispatch must re-evaluate revocation and current settings.
+		await deferQueuedRunPolicy(env, uid, dispatched, now);
 		await noteQueued(env, "local_apply_runs", run.id, refusal.message, now);
 		return "queued";
 	}

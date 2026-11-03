@@ -63,7 +63,7 @@ export const RUNNER_FEATURES: readonly RunnerFeature[] = [
 	{ feature: "repo_search", minCli: REPO_SEARCH_MIN_CLI },
 	{ feature: "switch a checkout back to its branch", minCli: SWITCH_BRANCH_MIN_CLI },
 	{ feature: "machine identity across renames", minCli: MACHINE_ID_MIN_CLI },
-	{ feature: "application live-page preflight and bounded owner login/CAPTCHA handoff", minCli: LOCAL_APPLY_CONTRACT_MIN_CLI },
+	{ feature: "application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff", minCli: LOCAL_APPLY_CONTRACT_MIN_CLI },
 	{ feature: "Application Tailor uploaded résumé/profile sources", minCli: LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI },
 	{ feature: "post-run cleanup: process-group kill, leftover sweep, per-run temp folders, gentle/harsh mode (#1265)", minCli: CLEANUP_MIN_CLI },
 ];

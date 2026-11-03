@@ -14,6 +14,14 @@ describe("SEEK submit confirmation (#994)", () => {
 		expect(confirmationMarker(BEFORE, { ...BEFORE, confirmed: true })).toBe("page_text");
 	});
 
+	it("never accepts confirmation text that was already present or has no before observation (#1438)", () => {
+		const already = { ...BEFORE, confirmed: true };
+		expect(confirmationMarker(already, already)).toBeNull();
+		expect(confirmationMarker(already, { ...already, url: "https://au.seek.com/job/other", title: "Changed" })).toBeNull();
+		expect(confirmationMarker(null, already)).toBeNull();
+		expect(confirmationMarker(BEFORE, already)).toBe("page_text");
+	});
+
 	it("accepts a receipt URL only after the submit moved there", () => {
 		const receipt = { ...BEFORE, url: "https://au.seek.com/job/94991284/application/sent" };
 		expect(confirmationMarker(BEFORE, receipt)).toBe("url_receipt");

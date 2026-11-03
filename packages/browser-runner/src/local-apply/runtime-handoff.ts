@@ -16,8 +16,9 @@ export interface LocalApplyTakeoverAdapter {
 interface LocalApplyHandoffRun {
 	envelope: Pick<LocalApplyTaskEnvelope, "runId" | "applicationId" | "browserProfile">;
 	state: "running" | "paused" | "ended";
+	pause?: { handoffRequestId?: string };
 	browser?: { handoffPage?(): Page | null };
-	handoff?: { handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: LocalApplyHandoffTerminalReason };
+	handoff?: { handoffRequestId?: string; handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: LocalApplyHandoffTerminalReason };
 }
 
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,300}$/;
@@ -32,14 +33,33 @@ export interface LocalApplyHandoffHost {
 
 /** Exact-page lifecycle only. It deliberately has no access to a bridge, browser credentials, or run output. */
 export class LocalApplyHandoffRuntime<T extends LocalApplyHandoffRun> {
+	private readonly opening = new Map<string, { handoffId: string; promise: Promise<LocalApplyHandoffStatus> }>();
 	constructor(private readonly host: Omit<LocalApplyHandoffHost, "get"> & { get(runId: string): T }) {}
 
 	async handoff(raw: unknown): Promise<LocalApplyHandoffStatus> {
 		const request = this.parse(raw);
+		this.assertBinding(this.host.get(request.runId), request);
+		const pending = this.opening.get(request.runId);
+		if (pending) {
+			if (pending.handoffId !== request.handoffId) throw new RunnerInputError("A handoff is being opened for this application run", 409);
+			return pending.promise;
+		}
+		const promise = this.open(request);
+		this.opening.set(request.runId, { handoffId: request.handoffId, promise });
+		try { return await promise; } finally { this.opening.delete(request.runId); }
+	}
+
+	private async open(request: LocalApplyHandoffRequest): Promise<LocalApplyHandoffStatus> {
 		const run = this.host.get(request.runId);
 		this.assertBinding(run, request);
 		if (run.state === "ended") return this.closed(run, request.handoffId, "run_ended");
-		if (run.handoff) throw new RunnerInputError("A handoff already exists for this application run", 409);
+		if (run.handoff?.handoffId === request.handoffId) return this.status(request);
+		if (request.handoffRequestId && (run.state !== "paused" || request.handoffRequestId !== run.pause?.handoffRequestId)) throw new RunnerInputError("The handoff does not match the current pause", 409);
+		if (run.pause?.handoffRequestId && request.handoffRequestId !== run.pause.handoffRequestId) throw new RunnerInputError("The handoff does not match the current pause", 409);
+		if (run.handoff) {
+			if (!request.handoffRequestId || request.handoffRequestId === run.handoff.handoffRequestId) throw new RunnerInputError("A handoff already exists for this application run", 409);
+			await this.close(run, "unavailable");
+		}
 		if (!this.host.takeover) return this.closed(run, request.handoffId, "unavailable");
 		const page = run.browser?.handoffPage?.();
 		if (!page || page.isClosed()) return this.closed(run, request.handoffId, "page_lost");
@@ -48,7 +68,7 @@ export class LocalApplyHandoffRuntime<T extends LocalApplyHandoffRun> {
 		} catch {
 			return this.closed(run, request.handoffId, "profile_unavailable");
 		}
-		run.handoff = { handoffId: request.handoffId, expiresAt: this.host.now() + (this.host.handoffTtlMs ?? HANDOFF_TTL_MS), state: "ready" };
+		run.handoff = { handoffId: request.handoffId, ...(request.handoffRequestId ? { handoffRequestId: request.handoffRequestId } : {}), expiresAt: this.host.now() + (this.host.handoffTtlMs ?? HANDOFF_TTL_MS), state: "ready" };
 		return this.status(request);
 	}
 
@@ -59,6 +79,7 @@ export class LocalApplyHandoffRuntime<T extends LocalApplyHandoffRun> {
 		if (run.state === "ended") return this.closed(run, request.handoffId, "run_ended");
 		const handoff = run.handoff;
 		if (!handoff || handoff.handoffId !== request.handoffId) return this.closed(run, request.handoffId, "unavailable");
+		if (handoff.handoffRequestId && (run.state !== "paused" || handoff.handoffRequestId !== run.pause?.handoffRequestId)) await this.close(run, "unavailable");
 		if (handoff.state === "closed") return this.response(run, handoff);
 		if (handoff.expiresAt <= this.host.now()) await this.close(run, "expired");
 		else if (!this.host.takeover || (await this.host.takeover.state(handoff.handoffId)) !== "ready") await this.close(run, "page_lost");
@@ -103,7 +124,8 @@ export class LocalApplyHandoffRuntime<T extends LocalApplyHandoffRun> {
 		const applicationId = typeof o.applicationId === "string" ? o.applicationId : "";
 		const browserProfile = o.browserProfile === "default" || o.browserProfile === "isolated" ? o.browserProfile : null;
 		if (!SAFE_ID.test(handoffId) || !SAFE_ID.test(runId) || !SAFE_ID.test(applicationId) || !browserProfile) throw new RunnerInputError("handoff needs opaque handoffId, runId, applicationId, and browserProfile");
-		return { handoffId, runId, applicationId, browserProfile };
+		const handoffRequestId = typeof o.handoffRequestId === "string" && SAFE_ID.test(o.handoffRequestId) ? o.handoffRequestId : undefined;
+		return { handoffId, runId, applicationId, browserProfile, ...(handoffRequestId ? { handoffRequestId } : {}) };
 	}
 
 	private assertBinding(run: LocalApplyHandoffRun, request: LocalApplyHandoffRequest): void {

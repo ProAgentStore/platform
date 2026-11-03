@@ -34,8 +34,8 @@ export const HANDOFF_TTL_MS = 10 * 60_000;
 export type HandoffSuffix = "frame" | "input" | "resume" | "end";
 export const runnerHandoffPath = (suffix: HandoffSuffix) => `/local-apply/handoff/${suffix}`;
 
-export function handoffRequest(handoff: { continuityId: string; runId: string; applicationId: string; browserProfile: string }) {
-	return { handoffId: handoff.continuityId, runId: handoff.runId, applicationId: handoff.applicationId, browserProfile: handoff.browserProfile };
+export function handoffRequest(handoff: { continuityId: string; runId: string; applicationId: string; browserProfile: string; handoffRequestId?: string }) {
+	return { handoffId: handoff.continuityId, runId: handoff.runId, applicationId: handoff.applicationId, browserProfile: handoff.browserProfile, ...(handoff.handoffRequestId ? { handoffRequestId: handoff.handoffRequestId } : {}) };
 }
 
 /** The fill run behind an application's board card on THIS Runner instance, or null when the task is not one. */
@@ -60,11 +60,11 @@ export function blockedOnSignIn(run: ApplyRun): boolean {
 }
 
 /** What the takeover gate needs to know about a card's fill: does it wait on a person right now, and for what. */
-export function fillGate(run: ApplyRun | null): { waiting: boolean; reason?: "login_required" | "captcha" } | undefined {
+export function fillGate(run: ApplyRun | null): { waiting: boolean; reason?: "login_required" | "captcha"; requestId?: string } | undefined {
 	if (!run) return undefined;
-	if (blockedOnSignIn(run)) return { waiting: true, reason: "login_required" };
+	if (blockedOnSignIn(run)) return { waiting: true, reason: "login_required", requestId: `fill-${run.id}-signin` };
 	const reason = run.status === "paused" && (run.pause?.reason === "login_required" || run.pause?.reason === "captcha") ? run.pause.reason : undefined;
-	return reason ? { waiting: true, reason } : { waiting: false };
+	return reason ? { waiting: true, reason, ...(run.pause?.handoffRequestId ? { requestId: run.pause.handoffRequestId } : {}) } : { waiting: false };
 }
 
 /**
@@ -196,7 +196,7 @@ export async function relayCardTakeover(env: Env, userId: string, instanceId: st
 	if (blockedOnSignIn(run)) return relaySignIn(env, userId, instanceId, run, takeover, suffix, input);
 	const now = Date.now();
 	let handoff = await getLocalApplyHandoffForRun(env, run.id, instanceId, userId);
-	if (handoff?.state !== "ready" || !usableLocalApplyHandoff(handoff, now)) {
+	if (handoff?.state !== "ready" || !usableLocalApplyHandoff(handoff, now) || handoff.handoffRequestId !== run.pause?.handoffRequestId) {
 		if (suffix === "resume" && !handoff) throw new HttpError(409, "No live handoff is open for this application's fill; open the live view first.");
 		const ensured = await ensureFillHandoff(env, userId, instanceId, run);
 		if (!ensured.ready) throw new HttpError(409, `This application handoff is closed (${ensured.handoff.terminalReason ?? ensured.handoff.state}).`);

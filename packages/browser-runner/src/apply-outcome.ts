@@ -32,6 +32,7 @@ import type { RunnerTask, TaskStatus } from "./types.js";
  * when the two disagree, the same technique `browser-run.test.ts` uses one package over.
  */
 export type ApplyOutcome =
+	| "completed"
 	| "submitted"
 	| "ready"
 	| "expired"
@@ -69,6 +70,7 @@ export interface OutcomeDisposition {
  * method IS the finish. Left as-is deliberately rather than changed under an unrelated fix.
  */
 export const APPLY_OUTCOME_DISPOSITION: Record<ApplyOutcome, OutcomeDisposition> = {
+	completed: { status: "completed", event: "task.completed", error: false },
 	submitted: { status: "completed", event: "task.completed", error: false },
 	ready: { status: "completed", event: "task.completed", error: false },
 	expired: { status: "completed", event: "task.completed", error: false },

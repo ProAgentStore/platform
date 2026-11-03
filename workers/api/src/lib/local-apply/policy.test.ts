@@ -69,13 +69,13 @@ describe("evaluateSubmitGate", () => {
 describe("runnerContractProblem (#977)", () => {
 	const node = "pink-laptop";
 
-	it.each([["0.4.97"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
+	it.each([["0.4.200"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
 		expect(runnerContractProblem(version, node)).toBeNull();
 	});
 
 	// 0.4.88 is REFUSED from #994 on: it predates the bounded post-submit observation and SEEK's
 	// "application sent" receipt marker.
-	it.each([["0.4.95"], ["0.4.88"], ["0.4.85"], ["0.4.70"], ["0.3.99"]])("refuses %s, naming the version, the minimum and the fix", (version) => {
+	it.each([["0.4.199"], ["0.4.95"], ["0.4.88"], ["0.4.85"], ["0.4.70"], ["0.3.99"]])("refuses %s, naming the version, the minimum and the fix", (version) => {
 		const problem = runnerContractProblem(version, node);
 		expect(problem).toContain(version);
 		expect(problem).toContain(LOCAL_APPLY_CONTRACT_MIN_CLI);
@@ -87,8 +87,8 @@ describe("runnerContractProblem (#977)", () => {
 		expect(problem).toMatch(/submit_unconfirmed/);
 	});
 
-	it.each([[""], ["   "], [null], [undefined]])("does not judge an unreported version: %s", (version) => {
-		expect(runnerContractProblem(version, node)).toBeNull();
+	it.each([[""], ["   "], [null], [undefined]])("requires proof of the safety contract for an unreported version: %s", (version) => {
+		expect(runnerContractProblem(version, node)).toContain("0.4.200");
 	});
 
 	it("names the machine generically when the node is unknown", () => {
@@ -97,9 +97,8 @@ describe("runnerContractProblem (#977)", () => {
 
 	it("the minimum is the release that ships the current runner contract, not a future guess", () => {
 		// Pinned so bumping the contract minimum is a deliberate edit with a reason, not a drift.
-		// 0.4.97 is #1013's release: it ships exact isolated-page login/CAPTCHA takeover with the prior
-		// post-submit observation/receipt contract.
-		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.97");
+		// 0.4.200 adds dispatch-time safety, origin-bound credentials and fresh confirmation evidence.
+		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.200");
 	});
 
 	/**

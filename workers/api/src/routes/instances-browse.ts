@@ -161,7 +161,7 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 			const card = deriveFromUrl(startUrl);
 			({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
 				type: "browser.task",
-				input: { url: startUrl, objective: objective.slice(0, 500), blurFormFields, ...(screenshotsOn ? {} : { screenshots: false }) },
+				input: { url: startUrl, objective: objective.slice(0, 500), readOnly: job.readOnly === true, dryRun: job.dryRun === true, blurFormFields, ...(screenshotsOn ? {} : { screenshots: false }) },
 				title: card.title || undefined,
 				subtitle: card.subtitle || undefined,
 			}));

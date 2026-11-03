@@ -1,7 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { BrowserActionUncertainError, dispatchBrowserActionOnce, requireSafeBrowserDispatch } from "../lib/browser-action-dispatch.js";
+import { closeFailedBrowserTask, markBrowserTaskResumed } from "../lib/browser-task-close.js";
 import { SCREENSHOTS_OFF_REASON } from "../lib/browser-screenshots.js";
 import { describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
-import { blockedActionReason, decideBrowserTask, type BrowserTaskJob } from "../lib/browser-task-loop.js";
+import { blockedActionReason, browserTaskRunnerOutcome, decideBrowserTask, type BrowserTaskJob } from "../lib/browser-task-loop.js";
 import { commitGuardSpec, commitModeFor } from "../lib/commit-guard.js";
 import { callRunner, getBoundRunnerConn } from "../lib/runner-client.js";
 import { deepLinkFor } from "../lib/console-links.js";
@@ -10,7 +12,7 @@ import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
 import { browserRunAdvance, browserRunPark, browserRunTick, BROWSER_RUN_ROUNDS, finishBrowserRun, handoffGiveUpAt } from "../lib/browser-run.js";
 import { captionUrl, storeWorkflowShot } from "../lib/browser-artifacts.js";
-import { collectJobSecrets, makeSecretRedactor } from "../lib/redact-secrets.js";
+import { createBrowserRunRedactor } from "../lib/browser-loop-redaction.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
@@ -60,6 +62,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				const conn = await getBoundRunnerConn(this.env, instanceId, userId);
 				if (conn) await callRunner(conn, "/browser/complete", { taskId, outcome: "failed", detail: msg.slice(0, 300) });
 			} catch { /* best-effort */ }
+			await step.do("failed-close", () => closeFailedBrowserTask(this.env, { taskId, instanceId, userId }, msg.slice(0, 300)));
 			// AFTER the transient rethrow above, never before it: a run the platform is about to
 			// replay must not be filed as dead (#546). Only a genuine crash closes the record.
 			const crashed: ApplyResult = { outcome: "failed", detail: msg, steps: 0 };
@@ -80,6 +83,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
 		if (!conn) {
 			const noRunner: ApplyResult = { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
+			await step.do("no-runner-close", () => closeFailedBrowserTask(env, { taskId, instanceId, userId }, noRunner.detail!));
 			await finishBrowserRun(env, loopRunId, noRunner);
 			return noRunner;
 		}
@@ -90,17 +94,19 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// guard at the act boundary says so in every reply (#627/#629). MEASURED from its own
 		// answer, never inferred from a version — the published CLI upgrades on the field's
 		// schedule, and 0.4.45 and 0.4.51 were both live when this landed.
-		const opened = (await step.do("open", () =>
-			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields }),
-		)) as { commitGuard?: { supported?: boolean } } | undefined;
-		const runnerEnforces = opened?.commitGuard?.supported === true;
+		const opened = (await step.do("open", { retries: { limit: 0, delay: "2 seconds", backoff: "constant" }, timeout: "2 minutes" }, () =>
+			dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: "open" }, () => callRunner<{ url: string; completedOutcome?: boolean; commitGuard?: { supported?: boolean; dispatchSafe?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields })),
+		)) as { completedOutcome?: boolean; commitGuard?: { supported?: boolean; dispatchSafe?: boolean } } | undefined;
+		requireSafeBrowserDispatch(opened);
+		const runnerEnforces = opened?.commitGuard?.dispatchSafe === true;
 
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
 		// #631: `agent.shot` is written inside `act`, so it bypasses the loop's redacting
 		// `emit`. A browse job carries no password today, which is exactly why this is here —
 		// the redactor reads the job's own keys, so the day one is added it is already covered.
-		const redact = makeSecretRedactor(collectJobSecrets(job));
+		const redaction = createBrowserRunRedactor(job);
+		const { redact } = redaction;
 		if (shotsOff) {
 			// #1064 audit: the task's own trace says screenshots are off and why — never anything else.
 			await step.do("screenshots-off-notice", async () => {
@@ -126,7 +132,8 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				return snap as PageSnapshot;
 			}),
 			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideBrowserTask(env, userId, p, { kind: "chat", instanceId })) as Promise<ApplyDecision>,
-			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, retry, async () => {
+			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, { ...retry, retries: { limit: 0, delay: "2 seconds", backoff: "constant" } }, async () => {
+				if (await browserRunTick(env, loopRunId)) throw new Error("Browser task stopped before dispatch.");
 				// The commit guard, enforced HERE and not in the prompt: a rehearsal (`dryRun`) or a
 				// read-only agent (`readOnly`, declared on the agent row) never lets the committing
 				// click reach the page, and the brain cannot override a runtime it does not run in.
@@ -138,7 +145,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields });
+					const r = await dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: `s${sn}-act` }, () => callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
 					// One artifact contract for every browser run (#1063): the frame is stored by subject (this task) and
 					// the event carries its id and a query-free URL — never the bytes.
 					if (r.screenshot && !shotsOff) {
@@ -147,6 +154,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 					}
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
 				} catch (e) {
+					if (e instanceof BrowserActionUncertainError) throw e;
 					return { url: "", challenge: null as string | null, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
 				}
 			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
@@ -172,7 +180,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			// restarts at zero every handoff, so recording it would freeze progress rather than
 			// advance it (see `lib/browser-run.ts`).
 			await browserRunAdvance(env, loopRunId, round + 1);
-			result = await runApplyLoop<BrowserTaskJob>(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens });
+			result = await runApplyLoop<BrowserTaskJob>(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, redaction });
 			solvedChallengeUrl = undefined;
 			if (result.outcome !== "captcha" && result.outcome !== "stuck" && result.outcome !== "needs_input") break;
 
@@ -239,11 +247,16 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 				job.providedAnswers = { ...(job.providedAnswers ?? {}), [result.fieldNeeded]: providedValue };
 			}
 			if (result.outcome === "captcha") solvedChallengeUrl = result.url;
-			await step.do(`resume-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId }));
+			await step.do(`resume-${round}`, async () => {
+				const resumed = await callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId });
+				if (!resumed.ok) throw new Error("The browser task was not resumed; no further action was dispatched.");
+				await markBrowserTaskResumed(env, { taskId, instanceId, userId });
+				return resumed;
+			});
 		}
 
-		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
-		await step.do("trace-end", async () => { await logEvent(env, { source: "apply", event: "browse.end", level: result.outcome === "submitted" ? "info" : "warn", message: `Outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`, userId, instanceId, traceId: taskId, context: { outcome: result.outcome, steps: result.steps, url: job.url } }).catch(() => undefined); return null; });
+		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: browserTaskRunnerOutcome(result.outcome, opened?.completedOutcome === true), detail: result.detail }));
+		await step.do("trace-end", async () => { await logEvent(env, { source: "apply", event: "browse.end", level: result.outcome === "completed" || result.outcome === "ready" ? "info" : "warn", message: `Outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`, userId, instanceId, traceId: taskId, context: { outcome: result.outcome, steps: result.steps, url: job.url } }).catch(() => undefined); return null; });
 
 		if (["failed", "blocked", "expired", "max_steps"].includes(result.outcome)) {
 			await step.do("log-outcome", async () => { await logError(env, { source: "browser-task", userId, message: `browser task ${result.outcome}: ${result.detail ?? ""}`, context: { instanceId, taskId, url: job.url, outcome: result.outcome, steps: result.steps } }).catch(() => undefined); return null; });

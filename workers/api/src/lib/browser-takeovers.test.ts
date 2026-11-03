@@ -61,6 +61,18 @@ describe("the takeover state machine (#1031)", () => {
 		expect(await transitionTakeover(env(), "u2", "i1", id, "active")).toMatchObject({ ok: false, takeover: null });
 	});
 
+	it("cannot resurrect a previously closed runner generation, even after another generation", async () => {
+		const input = { userId: "u1", instanceId: "i1", subjectKind: "runtime_task" as const, subjectId: "task-repeat", reason: "captcha" as const, mobileAllowed: true };
+		const first = await requestTakeover(env(), { ...input, runnerRequestId: "first", now: 1_000 });
+		await transitionTakeover(env(), "u1", "i1", first!.takeover.id, "resumed");
+		const second = await requestTakeover(env(), { ...input, runnerRequestId: "second", now: 1_000 });
+		expect(second?.created).toBe(true);
+		// Millisecond ties must still close the live, newly inserted request.
+		expect(await closeLiveTakeoverFor(env(), "u1", "i1", "runtime_task", "task-repeat", "resumed")).toMatchObject({ id: second!.takeover.id });
+		expect(await requestTakeover(env(), { ...input, runnerRequestId: "first" })).toBeNull();
+		expect(await listTakeovers(env(), "u1", "i1")).toHaveLength(2);
+	});
+
 	it("the cron expires live takeovers past their time, and only those", async () => {
 		const live = (await ask("run-1", 1_000))!.takeover.id;
 		const done = (await ask("run-2", 1_000))!.takeover.id;

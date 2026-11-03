@@ -20,8 +20,8 @@ describe("collectJobSecrets", () => {
 		expect(collectJobSecrets({ providedAnswers: { "Account password": "hunter2hunter2", "Preferred name": "Sam" } })).toEqual(["hunter2hunter2"]);
 	});
 
-	it("ignores non-secret fields and values too short to substitute safely", () => {
-		expect(collectJobSecrets({ candidate: { email: "a@b.com", fullName: "Sam Smith" }, url: "https://x", password: "abc" })).toEqual([]);
+	it("ignores non-secret fields but retains even short secret values", () => {
+		expect(collectJobSecrets({ candidate: { email: "a@b.com", fullName: "Sam Smith" }, url: "https://x", password: "abc" })).toEqual(["abc"]);
 	});
 });
 

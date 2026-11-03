@@ -709,11 +709,18 @@ describe("a browser agent's action trail leaves the loop only through the redact
 		return f as Source;
 	};
 
-	it("the loop's two doors exist and are what the rest of the guard is about", () => {
-		// Guards over source die by finding nothing and passing vacuously. Assert the subject.
-		expect(matchLines(loop().code, /const emit = async \(/g).length).toBe(1);
-		expect(matchLines(loop().code, /const logAction = \(/g).length).toBe(1);
-		expect(findCalls(loop().code, "makeSecretRedactor").length).toBe(1);
+	it("redacts a secret at both event and returned-result boundaries", async () => {
+		const { runApplyLoop } = await import("./apply-loop.js");
+		const events: unknown[] = [];
+		const result = await runApplyLoop({
+			snapshot: async () => ({ url: "https://example.test", title: "Form", snapshot: "", challenge: null }),
+			act: async () => ({ url: "https://example.test", challenge: null }),
+			decide: async () => ({ finish: { status: "ready", detail: "Saved test-secret-value" } }),
+			onEvent: (...event) => { events.push(event); },
+		}, { password: "test-secret-value", dryRun: true });
+		expect(events.length).toBeGreaterThan(0);
+		expect(result.detail).toBe("Saved ••••");
+		expect(JSON.stringify(events)).not.toContain("test-secret-value");
 	});
 
 	it("no event is emitted around `emit`", () => {

@@ -245,6 +245,12 @@ export class LocalBrowserRuntime {
 	}
 
 	/** Start a run. A requestId already held for the instance returns that run instead. */
+	/** A known request may read its receipt while the same browser lease remains held. */
+	hasRequest(raw: unknown): boolean {
+		const o = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+		return [...this.runs.values()].some(({ envelope: e }) => e.instanceId === o.instanceId && e.requestId === o.requestId);
+	}
+
 	start(raw: unknown): { runId: string; taskId: string; status: "running" | "paused" | "ended"; existing: boolean } {
 		const envelope = parseEnvelope(raw);
 		this.sweep();
@@ -307,7 +313,12 @@ export class LocalBrowserRuntime {
 		}
 		if (e.browserProfile === "default" && !this.deps.managedBrowser?.()) this.emit(run, { type: "policy.decision", ...this.consentRef(run, "*"), detail: { scope: "signed_in_profile", decision: "consented" } });
 		run.browser = await this.deps.browserFor(e.browserProfile, run.dir);
+		if (run.cancelled || run.state === "ended") {
+			await run.browser.stop();
+			return;
+		}
 		run.browser.tools.setSubject?.({ kind: "local_browser_run", id: run.envelope.runId });
+		run.browser.tools.setCallPolicy?.({ guard: { mode: "read_only" }, isCancelled: () => run.cancelled || run.state === "ended" || run.timedOut });
 		run.bridge = new BrowserBridge(
 			run.browser.tools,
 			{
@@ -466,13 +477,13 @@ export class LocalBrowserRuntime {
 	/** Does this token belong to this run? The bridge forwarder's only credential. */
 	authorizeBridge(runId: string, token: string): boolean {
 		const run = this.runs.get(runId);
-		return !!run && run.state !== "ended" && token.length > 0 && token === run.token;
+		return !!run && !run.cancelled && run.state !== "ended" && token.length > 0 && token === run.token;
 	}
 
 	async bridge(raw: unknown): Promise<unknown> {
 		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; op?: unknown; name?: unknown; args?: unknown };
 		const run = this.get(String(o.runId ?? ""));
-		if (!run.bridge || run.state === "ended") throw new RunnerInputError("The run is not active", 409);
+		if (!run.bridge || run.cancelled || run.state === "ended") throw new RunnerInputError("The run is not active", 409);
 		if (o.op === "list") return { tools: await run.bridge.listTools() };
 		if (o.op === "call" && typeof o.name === "string") return run.bridge.callTool(o.name, (o.args && typeof o.args === "object" ? o.args : {}) as Record<string, unknown>);
 		throw new RunnerInputError("op must be list or call");

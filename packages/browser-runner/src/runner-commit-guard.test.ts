@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -29,10 +29,14 @@ describe("LocalRunner commit guard — enforced where the click happens", () => 
 	});
 
 	afterEach(async () => {
-		await runner.close();
-		await server.close();
-		rmSync(dir, { recursive: true, force: true });
-	}, 30_000);
+		// Keep ownership even if a failing hook outlives its test. Never close the
+		// next case's server after awaiting this case's bounded browser teardown.
+		const owned = { runner, server, dir };
+		try { await owned.runner.close(); } finally {
+			await owned.server.close();
+			rmSync(owned.dir, { recursive: true, force: true });
+		}
+	});
 
 	function ref(snapshot: string, role: string, name: string): string {
 		const m = snapshot.match(new RegExp(`${role} "${name}"[^\\n]*\\[ref=(e\\d+)\\]`));
@@ -67,6 +71,22 @@ describe("LocalRunner commit guard — enforced where the click happens", () => 
 		expect(server.submissions.length).toBe(0);
 	}, 120_000);
 
+	it.each(["check", "upload"] as const)("a rehearsal cannot disguise the submit as %s", async (action) => {
+		const target = await submitRef();
+		const resume = join(dir, "resume.txt");
+		writeFileSync(resume, "Synthetic fixture only");
+		await expect(runner.browserAct({ action, ref: target, name: "Continue" }, action === "upload" ? resume : undefined, { mode: "dry_run" })).rejects.toThrow(/REHEARSAL/);
+		expect(server.submissions).toHaveLength(0);
+	}, 120_000);
+
+	it("Stop between snapshot and act refuses before opening or touching the browser", async () => {
+		const task = runner.createTask({ type: "browser.task", input: { url: server.quickApplyUrl, objective: "Synthetic rehearsal" } });
+		task.status = "cancelled";
+		runner.store.putTask(task);
+		await expect(runner.browserAct({ action: "navigate", url: server.quickApplyUrl }, undefined, undefined, task.id)).rejects.toThrow(/stopped/);
+		expect(runner.browsers.current.context).toBeNull();
+	});
+
 	it("a read-only agent cannot submit by pressing Enter in the form", async () => {
 		// #629: the commit guard only ever looked at clicks, so Enter — which submits a focused
 		// form — went straight through for an agent whose declaration is that it can never change
@@ -74,7 +94,7 @@ describe("LocalRunner commit guard — enforced where the click happens", () => 
 		await runner.browserAct({ action: "navigate", url: server.quickApplyUrl });
 		const snap = await runner.browserSnapshot();
 		const box = ref(snap.snapshot, "textbox", "Recherche");
-		await runner.browserAct({ action: "type", ref: box, name: "Recherche", text: "hello" }, undefined, { mode: "read_only" });
+		await runner.browserAct({ action: "click", ref: box, name: "Recherche" }, undefined, { mode: "read_only" });
 		await expect(runner.browserAct({ action: "key", key: "Enter" }, undefined, { mode: "read_only" })).rejects.toThrow(/READ-ONLY/);
 		expect(server.submissions.length).toBe(0);
 	}, 120_000);

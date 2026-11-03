@@ -220,7 +220,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 			const card = deriveFromUrl(url);
 			({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
 				type: "job.apply_agent",
-				input: { url, resumePath, blurFormFields, ...(screenshotsOn ? {} : { screenshots: false }) },
+				input: { url, resumePath, dryRun: job.dryRun === true, blurFormFields, ...(screenshotsOn ? {} : { screenshots: false }) },
 				title: card.title || undefined,
 				subtitle: card.subtitle || undefined,
 			}));

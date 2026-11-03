@@ -44,8 +44,8 @@
 /** What a redacted value renders as. Deliberately not the field's length. */
 export const SECRET_MASK = "••••";
 
-/** Shorter than this and a "secret" is too generic to substitute out of prose safely. */
-const MIN_SECRET_LEN = 6;
+/** Even a short PIN is a secret. Prefer over-redacting prose to disclosing it. */
+const MIN_SECRET_LEN = 1;
 
 /** Object keys whose STRING value is a secret, wherever it appears on a job. */
 const SECRET_KEY_RE = /(password|passwd|passphrase|secret|token|credential|apikey|api_key|\bpin\b|passcode)/i;

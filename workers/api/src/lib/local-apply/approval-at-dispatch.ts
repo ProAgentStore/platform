@@ -60,6 +60,18 @@ export async function releaseApprovalIfNothingWasSent(env: Env, uid: string, run
 	return await releaseSubmitAuthorization(env, auth.id, uid, run.id).catch(() => false);
 }
 
+/** A definitive pre-dispatch refusal returns both authority and approval to the queue.
+ * Downgrade first: interruption must never leave auto_submit after its approval was released.
+ * Never call this after a lost/uncertain dispatch response. */
+export async function deferQueuedRunPolicy(env: Env, uid: string, run: ApplyRun, now: number): Promise<ApplyRun> {
+	if (run.status !== "queued" && run.status !== "running") throw new Error("Only a pending dispatch can be deferred");
+	const policy: ApplyRunPolicy = run.policy.mode === "auto_submit" ? { ...run.policy, mode: "fill_and_review", gate: { allowed: false, gateId: null, checks: [...run.policy.gate.checks, { check: "dispatch_deferred", ok: false, why: "submission authority must be earned again at dispatch" }] } } : run.policy;
+	const updated = await updateApplyRun(env, run, { to: "queued", policy, events: [{ type: "policy.submit_gate", at: iso(now), detail: { mode: "fill_and_review", decision: "refused", reason: "dispatch_deferred" } }] }, now);
+	if (!updated) throw new Error("The queued run changed before its submission authority could be released");
+	await releaseApprovalIfNothingWasSent(env, uid, run);
+	return updated;
+}
+
 /**
  * Re-evaluate the submit gate for a run the queue is about to dispatch (#993).
  *
@@ -73,9 +85,8 @@ export async function releaseApprovalIfNothingWasSent(env: Env, uid: string, run
  *
  * What this does NOT do is as load-bearing as what it does:
  *
- *   · it never DOWNGRADES. A run already in `auto_submit` holds its approval (it spent it), so
- *     re-reading the gate would find `submission_approved` false — the approval is consumed, by
- *     this very run — and "re-evaluating" would strip the mode off exactly the run that earned it.
+ *   · an older queued run may retain a consumed approval after an uncertain dispatch. Keep
+ *     that exact grant bound to the run; a released/revoked grant cannot retain auto_submit.
  *   · it never overrides a review the owner asked for. `review: true` pins `fill_and_review` and
  *     records `review_requested` on the gate; that is a decision, not a transient refusal.
  *   · it upgrades only when the FRESH verdict allows and the approval is still claimable, so a
@@ -90,10 +101,14 @@ export async function upgradeQueuedRunPolicy(
 	gate: () => Promise<GateVerdict>,
 	now: number,
 ): Promise<{ run: ApplyRun; upgraded: boolean }> {
-	// Already `auto_submit` means this run spent the approval on an earlier attempt and still holds
-	// it. `upgraded: false` is what tells the caller not to hand it back when the machine defers
-	// again: the run keeps its mode across attempts, so it must keep the approval that earned it.
-	if (run.policy.mode === "auto_submit") return { run, upgraded: false };
+	// Reconcile older queued rows: never trust auto_submit without its still-held grant.
+	// New definitive deferrals reset authority and release the grant together above.
+	if (run.policy.mode === "auto_submit") {
+		// Compatibility for queued rows written before authority was reset on deferral.
+		const auth = await getSubmitAuthorization(env, run.applicationId, uid);
+		if (auth?.consumedRunId === run.id && !auth.revokedAt) return { run, upgraded: false };
+		run = await deferQueuedRunPolicy(env, uid, run, now);
+	}
 	if (run.policy.gate.checks.some((c) => c.check === "review_requested")) return { run, upgraded: false };
 	const verdict = await gate();
 	if (!verdict.allowed) return { run, upgraded: false };

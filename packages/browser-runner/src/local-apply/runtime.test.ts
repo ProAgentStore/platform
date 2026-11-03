@@ -44,6 +44,7 @@ let clicks: string[];
 let pageUnavailable: "expired" | "unavailable" | null;
 /** The page is a sign-in wall (#1412), when a test sets it. */
 let pageLogin: boolean;
+let nativeCancelled: (() => boolean) | undefined;
 /**
  * The live SEEK shape (#989), when a test asks for it: a job AD whose only control is the one that
  * OPENS the application, and which reveals the form once that control is pressed. `null` keeps the
@@ -61,6 +62,7 @@ const SEEK_AD = "https://au.seek.com/job/94991284";
 const SEEK_FORM = "https://au.seek.com/job/94991284/apply";
 
 const browser: BrowserTools = {
+	setCallPolicy: (policy) => { nativeCancelled = policy.isCancelled; },
 	listTools: async () => ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_evaluate"].map((name) => ({ name, inputSchema: {} })),
 	callTool: async (name, args = {}) => {
 		if (name === "browser_evaluate") {
@@ -141,6 +143,7 @@ beforeEach(() => {
 	clicks = [];
 	pageUnavailable = null;
 	pageLogin = false;
+	nativeCancelled = undefined;
 	seek = null;
 	pageTitle = null;
 	takeoverOpen = [];
@@ -156,6 +159,42 @@ beforeEach(() => {
 	};
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+describe("interrupted local application starts (#1444)", () => {
+	it("a runner restart cannot re-launch an active request, even with a different run id", async () => {
+		const first = runtime();
+		first.start(envelope());
+		await settle();
+		expect(spawned).toHaveLength(1);
+		const restarted = runtime();
+		expect(() => restarted.start(envelope())).toThrow(expect.objectContaining({ code: "application_start_uncertain" }));
+		expect(() => restarted.start(envelope({ runId: "run-2" }))).toThrow(expect.objectContaining({ code: "application_start_uncertain" }));
+		await settle();
+		expect(spawned).toHaveLength(1);
+		first.closeAll();
+	});
+
+	it("an interrupted pre-upgrade directory remains non-replayable after retention removes it", () => {
+		mkdirSync(join(dir, "data/local-apply/runner-1/run-1/scratch"), { recursive: true });
+		const restarted = runtime({ now: () => Date.now() + 25 * 60 * 60_000 });
+		expect(() => restarted.start(envelope())).toThrow(expect.objectContaining({ code: "application_start_uncertain" }));
+		expect(spawned).toHaveLength(0);
+	});
+});
+
+it("owner Stop invalidates native calls and refuses late bridge calls before the engine exits (#1438)", async () => {
+	const rt = runtime();
+	rt.start(envelope());
+	await settle();
+	expect(nativeCancelled?.()).toBe(false);
+	// A real process may need time to acknowledge SIGTERM. The browser must stop immediately.
+	child.kill = () => true;
+	rt.cancel({ runId: "run-1" });
+	expect(nativeCancelled?.()).toBe(true);
+	await expect(call(rt, "browser_click", { target: "e2" })).rejects.toThrow(/not active/);
+	expect(clicks).toEqual([]);
+	child.exit(143);
+});
 
 describe("parseApplyEnvelope", () => {
 	it.each([
@@ -237,12 +276,12 @@ describe("scoped local-apply handoff (#1013)", () => {
 		expect(JSON.stringify(await rt.handoffStatus(request))).not.toMatch(/jobs\.example|cookie|token|Jane Citizen/i);
 	});
 
-	it("rejects duplicate, mismatched application/profile, and stale handoff requests", async () => {
+	it("joins duplicate requests and rejects mismatched application/profile and stale handoff requests", async () => {
 		const rt = runtime();
 		rt.start(envelope());
 		await settle();
 		await rt.handoff(request);
-		await expect(rt.handoff(request)).rejects.toThrow(/already exists/);
+		await expect(rt.handoff(request)).resolves.toMatchObject({ state: "ready", handoffId: request.handoffId });
 		await expect(rt.handoffStatus({ ...request, applicationId: "other-app" })).rejects.toThrow(/does not match/);
 		await expect(rt.handoffStatus({ ...request, browserProfile: "default" })).rejects.toThrow(/does not match/);
 		await expect(rt.handoffStatus({ ...request, handoffId: "other-handoff" })).resolves.toMatchObject({ state: "closed", terminalReason: "unavailable" });
@@ -376,6 +415,9 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		const rt = runtime();
 		rt.start(envelope());
 		expect(rt.start({ ...envelope(), runId: "run-2" })).toMatchObject({ runId: "run-1", existing: true });
+		expect(rt.hasRequest({ ...envelope(), runId: "run-2" })).toBe(true);
+		expect(rt.hasRequest({ ...envelope(), instanceId: "another" })).toBe(false);
+		expect(rt.hasRequest({ ...envelope(), requestId: "another" })).toBe(false);
 		await settle();
 		expect(spawned).toHaveLength(1);
 		// …and a different application for the same agent waits its turn.
@@ -874,6 +916,7 @@ describe("sign-in secrets (#1412)", () => {
 
 		const plain = runtime();
 		pageLogin = false;
+	nativeCancelled = undefined;
 		plain.start(envelope({ runId: "run-2", requestId: "t1:lead-1:2:materials" }));
 		await settle();
 		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(/not paused for a sign-in/);

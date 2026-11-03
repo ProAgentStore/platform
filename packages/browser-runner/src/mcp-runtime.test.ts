@@ -49,7 +49,7 @@ describe("McpRuntime (standard @playwright/mcp)", () => {
 		const typed = await launched.mcp.callTool("browser_type", { element: "Full name textbox", target: (m as RegExpMatchArray)[1], text: "Sergey Ivochkin" });
 		expect(typed.isError ?? false, launched.mcp.textOf(typed)).toBe(false); // keep the tool's actual failure diagnosis
 		// The field genuinely holds the value (read it back with the standard tool).
-		const evalRes = launched.mcp.textOf(await launched.mcp.callTool("browser_evaluate", { function: "() => document.querySelector('input[name=fullName]').value" }));
+		const evalRes = launched.mcp.textOf(await launched.mcp.callTool("browser_evaluate", { function: "() => document.querySelector('input[name=fullName]').value" }, { internal: true }));
 		expect(evalRes).toContain("Sergey Ivochkin");
 	}, 60_000);
 

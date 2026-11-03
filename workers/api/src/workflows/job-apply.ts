@@ -1,3 +1,5 @@
+import { closeFailedBrowserTask, markBrowserTaskResumed } from "../lib/browser-task-close.js";
+import { BrowserActionUncertainError, dispatchBrowserActionOnce, requireSafeBrowserDispatch } from "../lib/browser-action-dispatch.js";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { SCREENSHOTS_OFF_REASON } from "../lib/browser-screenshots.js";
 import { decideAction, describeAction, dryRunBlockReason, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
@@ -15,7 +17,7 @@ import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
 import { browserRunAdvance, browserRunPark, browserRunTick, BROWSER_RUN_ROUNDS, finishBrowserRun, handoffGiveUpAt } from "../lib/browser-run.js";
 import { captionUrl, storeWorkflowShot } from "../lib/browser-artifacts.js";
-import { collectJobSecrets, makeSecretRedactor } from "../lib/redact-secrets.js";
+import { createBrowserRunRedactor } from "../lib/browser-loop-redaction.js";
 import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
 import type { Env } from "../types.js";
@@ -92,6 +94,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			} catch {
 				/* best-effort */
 			}
+			await step.do("failed-close", () => closeFailedBrowserTask(this.env, { taskId, instanceId, userId }, msg.slice(0, 300)));
 			// AFTER the transient rethrow above, never before it: a run the platform is about to
 			// replay must not be filed as dead (#546). Only a genuine crash closes the record.
 			const crashed: ApplyResult = { outcome: "failed", detail: msg, steps: 0 };
@@ -119,37 +122,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// workflow starting left the row `running` forever, and the single-flight claim in
 			// `/apply` matched it — every future application 409'd "already in progress" for the
 			// full 4h STALE_APPLY_MS window, for an application that never took a step.
-			await step.do("no-runner-close", async () => {
-				// The PAYLOAD too, not just the status column. The board renders
-				// `parsePayload(row.payload)`, so updating the column alone freed the single-flight
-				// claim (which reads the column) while leaving a live-looking "running" apply card
-				// on the board forever, with a Cancel button acting on a task no workflow owns.
-				const row = await env.DB.prepare(
-					"SELECT payload FROM instance_runtime_tasks WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
-				)
-					.bind(taskId, instanceId, userId)
-					.first<{ payload: string }>()
-					.catch(() => null);
-				let payload: Record<string, unknown> = {};
-				try {
-					payload = row?.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
-				} catch {
-					/* a corrupt payload still gets a terminal status below */
-				}
-				const now = new Date().toISOString();
-				payload = { ...payload, id: taskId, status: "failed", error: "No browser runner connected. Start it with: pags up", updatedAt: now, completedAt: now };
-				// NOT best-effort: this write is the only thing that closes the task, and everything
-				// the paragraph above describes comes back the moment it is skipped — a permanently
-				// "running" card with a Cancel button owned by nothing, and a single-flight claim
-				// that 409s every application for the next four hours. Let it throw so the step
-				// RETRIES; a workflow step is the one place where that is free.
-				await env.DB.prepare(
-					"UPDATE instance_runtime_tasks SET status = 'failed', payload = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
-				)
-					.bind(taskId, instanceId, userId, JSON.stringify(payload))
-					.run();
-				return null;
-			});
+			await step.do("no-runner-close", () => closeFailedBrowserTask(env, { taskId, instanceId, userId }, "No browser runner connected. Start it with: pags up"));
 			const noRunner: ApplyResult = { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
 			await finishBrowserRun(env, loopRunId, noRunner);
 			return noRunner;
@@ -177,7 +150,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 		});
 
-		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
+		const opened = await step.do("open", { retries: { limit: 0, delay: "2 seconds" }, timeout: "2 minutes" }, () => dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: "open" }, () => callRunner<{ url: string; commitGuard?: { dispatchSafe?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields })));
+
+		requireSafeBrowserDispatch(opened);
 
 		// Durable-step wrappers for the tested pure loop. The call order is
 		// deterministic, so the monotonic counter yields stable, replayable step
@@ -190,7 +165,8 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// loop's redacting `emit` — and it was the sink where 9 of the 18 leaked production
 		// rows landed, all but one with an empty control name that no field-name rule could catch.
 		// Redact the shot message here with the same job-derived value redactor.
-		const redact = makeSecretRedactor(collectJobSecrets(job));
+		const redaction = createBrowserRunRedactor(job);
+		const { redact } = redaction;
 		if (shotsOff) {
 			// #1064 audit: the task's own trace says screenshots are off and why — never anything else.
 			await step.do("screenshots-off-notice", async () => {
@@ -236,7 +212,8 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// increments deterministically every execution). Using it as the screenshot
 			// seq keeps R2 keys unique + stable across handoff/resume — a plain counter
 			// would reset to 0 on resume and overwrite earlier shots.
-			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, retry, async () => {
+			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, { retries: { limit: 0, delay: "2 seconds" }, timeout: "2 minutes" }, async () => {
+				if (await browserRunTick(env, loopRunId)) return { url: "", challenge: null, error: "Stopped by the owner before this action." };
 				// Hard dry-run guard: in test mode, NEVER let a submit click reach the
 				// page — block it here (the brain can't override the runtime) and tell
 				// the brain to finish(ready). This is what makes dryRun actually safe.
@@ -297,7 +274,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					// runner is the only party that can read the ELEMENT (#627). A runner too old
 					// to know the field ignores it, which is exactly the state this leaves the
 					// field in until the CLI is upgraded.
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields });
+					const r = await dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: `s${sn}-act` }, () => callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
 					// Persist a screenshot of the resulting page so the run can be REPLAYED
 					// visually. The blob goes to R2 keyed by step; the event carries only the
 					// key + the action (the events feed stays small). Best-effort — a shot
@@ -310,7 +287,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					}
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
 				} catch (e) {
-					// Return the failure to the brain instead of throwing (which would retry the same dead click).
+					// Uncertain dispatch is terminal: the brain must not choose the same click under a new step.
+					if (e instanceof BrowserActionUncertainError) throw e;
+					// Return a known failure to the brain without replaying this durable step.
 					return { url: "", challenge: null as string | null, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
 				}
 			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
@@ -370,7 +349,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// restarts at zero every handoff, so recording it would freeze progress rather than
 			// advance it (see `lib/browser-run.ts`).
 			await browserRunAdvance(env, loopRunId, round + 1);
-			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, filled });
+			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, filled, redaction });
 			solvedChallengeUrl = undefined;
 			filled = result.filled ?? filled; // once true, stays true for the rest of the application
 			transcript.push(...(result.transcript ?? []));
@@ -479,7 +458,12 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// After a solved captcha, suppress re-detection on that SAME page (its
 			// widget/text lingers) so the agent fills the form instead of looping.
 			if (result.outcome === "captcha") solvedChallengeUrl = result.url;
-			await step.do(`resume-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId }));
+			await step.do(`resume-${round}`, async () => {
+				const resumed = await callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId });
+				if (!resumed.ok) throw new Error("The runner did not resume this task.");
+				await markBrowserTaskResumed(env, { taskId, instanceId, userId });
+				return resumed;
+			});
 			// Any message the user sent while paused is picked up by deps.pollHint on the
 			// next loop step (same channel as mid-flight steering) — no special-casing here.
 		}

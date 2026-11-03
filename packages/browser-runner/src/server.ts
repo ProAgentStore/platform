@@ -55,6 +55,7 @@ export function createRunnerServer(runner: LocalRunner) {
 			if (status >= 500) recordRequestFailure(runner.crashLog, req, error);
 			json(res, status, {
 				error: error instanceof Error ? error.message : String(error),
+				...(error instanceof RunnerInputError && error.code ? { code: error.code } : {}),
 			});
 		}
 	});
@@ -275,7 +276,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 
 	// ── Human takeover (remote view + control) ──────────────────────────────
 	if (req.method === "GET" && path === "/takeover") {
-		return json(res, 200, { takeovers: runner.listTakeovers() });
+		return json(res, 200, { takeovers: runner.listTakeovers(), requests: runner.listTakeoverRequests() });
 	}
 	const frameMatch = path.match(/^\/takeover\/([^/]+)\/frame$/);
 	if (req.method === "GET" && frameMatch) {

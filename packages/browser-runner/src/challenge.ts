@@ -15,7 +15,8 @@ export async function detectHumanChallenge(page: Page): Promise<string | null> {
 		["arkose-funcaptcha", 'iframe[src*="arkoselabs"], iframe[src*="funcaptcha"], #arkose, #FunCaptcha, [data-callback*="arkose"]'],
 		["geetest", '.geetest_holder, .geetest_panel, [class*="geetest_"]'],
 	] as Array<[string, string]>) {
-		if ((await page.locator(selector).count().catch(() => 0)) > 0) return type;
+		// Inspection failure is unknown, never proof that a challenge disappeared.
+		if ((await page.locator(selector).count()) > 0) return type;
 	}
 	// reCAPTCHA is the trap: the invisible v3 "protected by reCAPTCHA" badge is on
 	// countless pages and needs NO human. Only hand off for a VISIBLE, interactive
@@ -38,8 +39,7 @@ export async function detectHumanChallenge(page: Page): Promise<string | null> {
 			}
 			const div = document.querySelector('.g-recaptcha:not([data-size="invisible"])');
 			return !!(div && visible(div));
-		})
-		.catch(() => false);
+		});
 	if (recaptcha) return "recaptcha";
 	// Unknown-vendor captchas (e.g. PageUp/Bendigo): an explicit "confirm you are
 	// not a robot" prompt is a near-certain human challenge. Match the specific
@@ -48,8 +48,7 @@ export async function detectHumanChallenge(page: Page): Promise<string | null> {
 		.evaluate(() => {
 			const t = (document.body?.innerText || "").toLowerCase();
 			return /confirm (that )?you('?re| are) not a robot|i'?m not a robot|verify (that )?you('?re| are) (a )?human|prove you('?re| are) (not a robot|human)/.test(t);
-		})
-		.catch(() => false);
+		});
 	return robotPrompt ? "captcha" : null;
 }
 

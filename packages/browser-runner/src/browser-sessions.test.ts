@@ -11,6 +11,51 @@ const dir = () => { const d = mkdtempSync(join(tmpdir(), "pags-modes-")); dirs.p
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
 describe("per-agent browser mode (#1429)", () => {
+	it("closes the owned browser while MCP teardown is waiting for its page to close", async () => {
+		const sessions = new BrowserSessions(dir(), true, () => false);
+		let release!: () => void;
+		const pageClosed = new Promise<void>((resolve) => { release = resolve; });
+		const stop = vi.fn(() => pageClosed);
+		const close = vi.fn(async () => { release(); });
+		sessions.current.mcp = { stop } as never;
+		sessions.current.context = { close } as unknown as BrowserContext;
+		try {
+			await sessions.close();
+			expect(stop).toHaveBeenCalledOnce();
+			expect(close).toHaveBeenCalledOnce();
+			expect(sessions.current.context).toBeNull();
+		} finally { release(); }
+	});
+	it("requires the live task's identity for every request, including taskless chat and snapshots (#1441)", async () => {
+		let local = false;
+		const sessions = new BrowserSessions(dir(), true, (id) => id === "owner", () => local);
+		await sessions.run("a", undefined, true, async () => {
+			sessions.current.taskIds.add("owner");
+			expect(() => sessions.assertTaskAccess()).toThrow(/owned by another/);
+			expect(() => sessions.assertTaskAccess("foreign")).toThrow(/owned by another/);
+			expect(() => sessions.assertTaskAccess("owner")).not.toThrow();
+		});
+		await sessions.run("b", undefined, true, async () => {
+			expect(() => sessions.assertTaskAccess()).not.toThrow();
+			sessions.current.leases = 1;
+			expect(() => sessions.assertTaskAccess()).toThrow(/owned by another/);
+			sessions.current.leases = 0;
+			local = true;
+			expect(() => sessions.assertTaskAccess()).toThrow(/owned by another/);
+		});
+	});
+	it("refuses a second run even when it inherits identical legacy browser settings (#1441)", async () => {
+		let active = true;
+		const sessions = new BrowserSessions(dir(), true, () => active);
+		await sessions.run("a", undefined, true, async () => { sessions.current.taskIds.add("first"); });
+		const second = vi.fn(async () => undefined);
+		await expect(sessions.run("a", undefined, true, second)).rejects.toThrow(/still in use/);
+		expect(second).not.toHaveBeenCalled();
+		await sessions.run("b", undefined, true, second);
+		active = false;
+		await sessions.run("a", undefined, true, second);
+		expect(second).toHaveBeenCalledTimes(2);
+	});
 	it("explicit headed overrides a headless service, explicit headless overrides a headed process, and absence uses fallback", async () => {
 		for (const fallback of [true, false]) {
 			const sessions = new BrowserSessions(dir(), fallback, () => false);

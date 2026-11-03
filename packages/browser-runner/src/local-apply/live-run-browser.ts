@@ -59,7 +59,7 @@ export async function launchCdpBrowser(profileDir: string, headless: boolean, op
 		const initial = context.pages().at(-1) ?? await context.newPage();
 		track(initial);
 		mcp = new McpRuntime();
-		await mcp.start({ context });
+		await mcp.start({ context, activePage: () => activePage, onPageSelected: (page) => { activePage = page; } });
 		const ctx = context;
 		const owned = launched;
 		const startedMcp = mcp;
@@ -74,8 +74,8 @@ export async function launchCdpBrowser(profileDir: string, headless: boolean, op
 				if (stopped) return;
 				stopped = true;
 				activePage = null;
-				await startedMcp.stop().catch(() => undefined);
-				await owned.stop();
+				const closed = await Promise.allSettled([startedMcp.stop(), owned.stop()]);
+				if (closed[1].status === "rejected") throw closed[1].reason;
 			},
 		};
 	} catch (error) {

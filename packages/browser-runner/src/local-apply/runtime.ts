@@ -36,6 +36,7 @@ import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
+import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
 import type { SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
 import { confirmationSignals } from "./confirmation.js";
@@ -155,7 +156,7 @@ interface Run {
 	checkpoints: Map<string, { checkpoint?: LocalApplySupervisorCheckpoint; directive?: LocalApplySupervisorDirective }>;
 	endedAt?: number;
 	timer?: ReturnType<typeof setInterval>;
-	handoff?: { handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: import("./handoff-contract.js").LocalApplyHandoffTerminalReason };
+	handoff?: { handoffRequestId?: string; handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: import("./handoff-contract.js").LocalApplyHandoffTerminalReason };
 }
 
 /**
@@ -296,12 +297,15 @@ export class LocalApplyRuntime {
 		return [...this.runs.values()].filter((r) => r.state !== "ended").map((r) => `an application fill (${r.envelope.applicationId.slice(0, 8)})`);
 	}
 	private readonly root: string;
+	private readonly startClaimsRoot: string;
 	private readonly now: () => number;
 	private readonly spawn: typeof nodeSpawn;
 	private readonly retentionMs: number;
 
 	constructor(private readonly deps: LocalApplyRuntimeDeps) {
 		this.root = join(deps.dataDir, "local-apply");
+		// Id-only start claims outlive scratch/profile retention; deleting them would permit replay.
+		this.startClaimsRoot = join(deps.dataDir, "local-apply-start-claims");
 		this.now = deps.now ?? Date.now;
 		this.spawn = deps.spawn ?? nodeSpawn;
 		this.retentionMs = deps.retentionMs ?? 24 * 60 * 60 * 1000;
@@ -395,6 +399,12 @@ export class LocalApplyRuntime {
 		}
 	}
 
+	/** A known request may read its receipt while the same browser lease remains held. */
+	hasRequest(raw: unknown): boolean {
+		const o = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+		return [...this.runs.values()].some(({ envelope: e }) => e.instanceId === o.instanceId && e.requestId === o.requestId);
+	}
+
 	start(raw: unknown): { runId: string; taskId: string; status: Run["state"]; existing: boolean } {
 		const envelope = parseApplyEnvelope(raw);
 		this.sweep();
@@ -407,6 +417,7 @@ export class LocalApplyRuntime {
 		if (!selfUrl) throw new RunnerInputError("The runner is still starting; try again in a moment.", 409);
 
 		const dir = join(this.root, envelope.instanceId.replace(/[^A-Za-z0-9_-]/g, "_"), envelope.runId);
+		claimApplyStart(this.startClaimsRoot, dir, envelope);
 		mkdirSync(join(dir, "scratch"), { recursive: true });
 		const run: Run = {
 			envelope,
@@ -478,7 +489,12 @@ export class LocalApplyRuntime {
 		if (run.engineAuth === "api-key") throw new Blocked("api_key_refused", ["A provider API key would reach the CLI. Applications run on this machine's sign-in only — remove the key from the runner's environment."]);
 
 		run.browser = await this.deps.browserFor(e.browserProfile, run.dir);
+		if (run.cancelled || run.state === "ended") {
+			await run.browser.stop();
+			return;
+		}
 		run.browser.tools.setSubject?.({ kind: "local_apply_run", id: e.runId });
+		run.browser.tools.setCallPolicy?.({ isCancelled: () => run.cancelled || run.timedOut || run.state === "ended" });
 		const artifactsByKind = new Map(e.artifacts.map((a) => [a.kind, a] as const));
 		run.bridge = new ApplyBridge(run.browser.tools, {
 			emit: (ev) => this.emit(run, ev),
@@ -493,6 +509,7 @@ export class LocalApplyRuntime {
 				return "error" in v ? v : { path: v.path, sha256: a.sha256 };
 			},
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
+			isStopped: () => run.cancelled || run.timedOut || run.state === "ended",
 			now: this.now,
 			limits: e.limits,
 			mode: e.policy.mode,
@@ -649,7 +666,7 @@ export class LocalApplyRuntime {
 			run.state = "paused";
 			const url = p.url ? traceUrl(p.url) : "";
 			const { url: _raw, ...rest } = p;
-			run.pause = { ...rest, ...(url ? { url } : {}) };
+			run.pause = { ...rest, ...(url ? { url } : {}), handoffRequestId: crypto.randomUUID() };
 			this.emit(run, { type: "run.paused", pauseReason: p.reason, ...(url ? { url } : {}), ...(p.domain ? { domain: p.domain } : {}) });
 		}
 		return new Promise((done) => run.waiters.push(done));
@@ -856,7 +873,7 @@ export class LocalApplyRuntime {
 	async bridge(raw: unknown): Promise<unknown> {
 		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; op?: unknown; name?: unknown; args?: unknown };
 		const run = this.get(String(o.runId ?? ""));
-		if (!run.bridge || run.state === "ended") throw new RunnerInputError("The run is not active", 409);
+		if (!run.bridge || run.state === "ended" || run.cancelled || run.timedOut) throw new RunnerInputError("The run is not active", 409);
 		if (o.op === "list") return { tools: await run.bridge.listTools() };
 		// A call that arrives while the run waits on the owner (the CLI gave up waiting on its own
 		// call) does not go ahead of them: nothing reaches the page until the owner resumes.
@@ -920,6 +937,7 @@ export class LocalApplyRuntime {
 		const cutoff = this.now() - this.retentionMs;
 		for (const [id, run] of this.runs) {
 			if (run.state === "ended" && (run.endedAt ?? 0) < cutoff) {
+				rememberApplyStart(this.startClaimsRoot, run.dir, run.envelope);
 				rmSync(run.dir, { recursive: true, force: true });
 				this.runs.delete(id);
 			}
@@ -930,7 +948,10 @@ export class LocalApplyRuntime {
 			for (const runId of readdirSync(instDir)) {
 				if (this.runs.has(runId)) continue;
 				const dir = join(instDir, runId);
-				if (statSync(dir).mtimeMs < cutoff) rmSync(dir, { recursive: true, force: true });
+				if (statSync(dir).mtimeMs < cutoff) {
+					rememberApplyStart(this.startClaimsRoot, dir);
+					rmSync(dir, { recursive: true, force: true });
+				}
 			}
 		}
 	}

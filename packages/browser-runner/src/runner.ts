@@ -1,5 +1,5 @@
 import { CrashLog, crashReport, describeError, runtimeCrashIdentity } from "./crash-reports.js";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BrowserContext, Page } from "playwright";
@@ -8,7 +8,8 @@ import { launchRunnerBrowser } from "./browser-launch.js";
 import { isTerminalTaskStatus, settleTaskOutcome } from "./apply-outcome.js";
 import { McpRuntime } from "./mcp-runtime.js";
 import type { BrowserCallsPage } from "./browser-call-recorder.js";
-import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
+import type { CommitGuardSpec } from "./commit-guard.js";
+import { taskCommitGuard } from "./mcp-call-policy.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { type NativeTakeoverSession, nativeTakeoverFrame, nativeTakeoverInput, stopNativeTakeover } from "./takeover-native.js";
 import { resolveHandoffStatus } from "./handoff-status.js";
@@ -24,6 +25,7 @@ import { LocalApplyReconciliationRuntime } from "./local-apply/reconciliation-ru
 import { LocalApplySignInRuntime } from "./local-apply/sign-in-runtime.js";
 import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
 import { BrowserSessions } from "./browser-sessions.js";
+import { ResumeFiles } from "./resume-files.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 import { SITE_BUILDER_TASK_TYPE, SiteBuilderRuntime } from "./site-builder/runtime.js";
@@ -75,6 +77,7 @@ export class LocalRunner {
 	readonly browsers: BrowserSessions;
 	private readonly fileAttachArmed = new WeakSet<Page>();
 	readonly store: RunnerStore;
+	private readonly taskGuards = new Map<string, CommitGuardSpec>();
 	/** This runtime's crash reports (#1087) — delivered to the platform by the CLI that runs it. */
 	readonly crashLog: CrashLog;
 	/** Local tmux coding sessions (the second runtime — AgentCoder port). */
@@ -96,7 +99,7 @@ export class LocalRunner {
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
-		NativeTakeoverSession & { reason?: string; humanDone?: boolean; inputValue?: string }
+		NativeTakeoverSession & { requestId: string; reason?: string; humanDone?: boolean; inputValue?: string }
 	>();
 
 	constructor(readonly config: RunnerConfig) {
@@ -109,7 +112,7 @@ export class LocalRunner {
 		const applyBrowserFor = (profile: "default" | "isolated", dir: string) => this.browsers.browserFor(profile, dir, true, () => this.getMcp(), () => this.getBrowserContext());
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor, managedBrowser: () => this.browsers.managed(), onSweepFailure: (dir, error) => this.crashLog.record(crashReport({ ...runtimeCrashIdentity(), kind: "request_failure", ...describeError(error), route: `sweep ${dir}` })) });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
-		const localApplyTakeover = createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) });
+		const localApplyTakeover = createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, requestId: crypto.randomUUID(), reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) });
 		this.localApply = new LocalApplyRuntime({
 			dataDir: config.dataDir,
 			selfUrl: () => this.selfUrl,
@@ -350,6 +353,7 @@ export class LocalRunner {
 
 		try {
 			const output = await this.execute(task);
+			if (this.store.getTask(task.id)?.status === "cancelled") { await this.endTakeover(task.id); return; }
 			task.status = "completed";
 			task.output = output;
 			task.updatedAt = new Date().toISOString();
@@ -357,6 +361,7 @@ export class LocalRunner {
 			this.store.putTask(task);
 			this.addTaskEvent(task, "task.completed", `Task completed: ${task.type}`, output);
 		} catch (error) {
+			if (this.store.getTask(task.id)?.status === "cancelled") { await this.endTakeover(task.id); return; }
 			if (error instanceof HumanHandoffError) {
 				// Not a failure — the autonomous attempt is paused for a human to
 				// take over (solve a challenge, finish a step the model can't).
@@ -405,7 +410,7 @@ export class LocalRunner {
 		const screenshotBase64 = task.input.screenshots === false ? undefined : await captureScreenshotDataUrl(page, task.input.blurFormFields);
 		// Keep this page alive and register a remote-control session so a human
 		// can view the screen and solve the challenge from the PAGS console.
-		this.takeovers.set(task.id, { page });
+		this.takeovers.set(task.id, { page, requestId: crypto.randomUUID() });
 		throw new HumanHandoffError(
 			`Human verification required (${challenge}). A person must take over to solve it.`,
 			{ reason: "challenge", challengeType: challenge, url: page.url(), attempts: 1, screenshotBase64 },
@@ -415,6 +420,11 @@ export class LocalRunner {
 	/** Active human-takeover task ids (for status/discovery). */
 	listTakeovers(): string[] {
 		return [...this.takeovers.keys()].filter((id) => !isLocalApplyTakeover(id));
+	}
+
+	/** Opaque identities distinguish successive handoffs on the same task (#1442). */
+	listTakeoverRequests(): Array<{ taskId: string; requestId: string }> {
+		return this.listTakeovers().map((taskId) => ({ taskId, requestId: this.takeovers.get(taskId)!.requestId }));
 	}
 
 	private requireTakeover(taskId: string): NonNullable<ReturnType<typeof this.takeovers.get>> {
@@ -440,9 +450,10 @@ export class LocalRunner {
 	 * fix it in the live view and try again. Completes the task on success.
 	 */
 	async resumeTakeover(taskId: string): Promise<{ submitted: boolean; resumed?: boolean; reason?: string; output?: unknown }> {
-		const session = this.requireTakeover(taskId);
 		const task = this.store.getTask(taskId);
 		if (!task) throw new RunnerInputError("Task not found");
+		if (isTerminalTaskStatus(task.status)) return { submitted: false, resumed: false, reason: "This task has ended and cannot be resumed." };
+		const session = this.requireTakeover(taskId);
 		const page = session.page;
 
 		// Agent-driven runs are steered by the remote workflow. "Resume" here just signals the
@@ -480,6 +491,7 @@ export class LocalRunner {
 			title: await page.title().catch(() => ""),
 			visibleText: (await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")).slice(0, 1_500),
 		};
+		if (isTerminalTaskStatus(this.requireTask(taskId).status)) return { submitted: false, resumed: false, reason: "This task ended while its challenge was being checked." };
 		this.addTaskEvent(task, "task.resumed.completed", "Challenge cleared after human takeover", output);
 		task.status = "completed";
 		task.output = output;
@@ -506,44 +518,36 @@ export class LocalRunner {
 	// render the real <input type=file> hidden behind a button/drop-zone). Playwright's
 	// filechooser event fires BEFORE the native OS dialog, so the file attaches without
 	// a blocking dialog, regardless of the upload DOM. Idempotent per page.
-	private armFileAutoAttach(page: Page, filePath: string): void {
+	private armFileAutoAttach(page: Page): void {
 		if (this.fileAttachArmed.has(page)) return;
 		this.fileAttachArmed.add(page);
 		const browserState = this.browsers.current;
 		page.on("filechooser", (chooser) => {
-			// Skip when an explicit upload action is already attaching (avoids double-attach).
-			if (browserState.suppressAutoAttach) return;
-			chooser.setFiles(filePath).catch(() => undefined);
+			// Read the current run's attachment at event time. A reused tab must never
+			// retain a previous application's résumé in the listener's closure.
+			if (browserState.suppressAutoAttach || !browserState.applyResumePath) return;
+			if (browserState.resumeTaskId) {
+				const task = this.store.getTask(browserState.resumeTaskId);
+				if (!task || isTerminalTaskStatus(task.status)) return;
+			}
+			chooser.setFiles(browserState.applyResumePath).catch(() => undefined);
 		});
 	}
 
-	private resumeFileCache = new Map<string, string>();
-	/**
-	 * Resolve a résumé reference to a LOCAL file path. A remote runner gets a
-	 * signed URL (the file lives in the platform's R2) — download it once and
-	 * cache it. A same-machine run may still pass a local path.
-	 */
-	private async resolveResumeFile(ref: string): Promise<string | null> {
-		if (/^https?:\/\//i.test(ref)) {
-			const cached = this.resumeFileCache.get(ref);
-			if (cached && existsSync(cached)) return cached;
-			try {
-				const res = await fetch(ref);
-				if (!res.ok) return null;
-				const buf = Buffer.from(await res.arrayBuffer());
-				const disp = res.headers.get("content-disposition") || "";
-				const name = (disp.match(/filename="?([^"]+)"?/i)?.[1] || "resume.pdf").replace(/[^\w.-]/g, "_");
-				const dir = join(this.config.dataDir, "uploads");
-				mkdirSync(dir, { recursive: true });
-				const dest = join(dir, name);
-				writeFileSync(dest, buf);
-				this.resumeFileCache.set(ref, dest);
-				return dest;
-			} catch {
-				return null;
-			}
+	private readonly resumeFiles = new ResumeFiles();
+	private async prepareResumeFile(page: Page, ref?: string, taskId?: string, uploadAllowed = true): Promise<void> {
+		const state = this.browsers.current;
+		// Taskless calls carry no durable owner: only an explicit attachment on this
+		// call grants upload access. Within one task the chosen file survives its steps.
+		if (!taskId || state.resumeTaskId !== taskId) state.applyResumePath = null;
+		state.resumeTaskId = taskId;
+		if (!uploadAllowed) { state.applyResumePath = null; return; }
+		if (ref) {
+			state.applyResumePath = null;
+			state.applyResumePath = await this.resumeFiles.resolve(ref, state.dataDir, taskId);
+			if (!state.applyResumePath) throw new RunnerInputError("The requested résumé could not be loaded; no previous attachment was reused.");
 		}
-		return existsSync(resolve(ref)) ? resolve(ref) : null;
+		if (state.applyResumePath) this.armFileAutoAttach(page);
 	}
 
 	/** End a takeover session (human finished or gave up). */
@@ -568,7 +572,9 @@ export class LocalRunner {
 			// human triggers in the takeover — never a native picker.
 			const attachPath = stringValue(task.input.resumePath ?? task.input.attachPath);
 			if (attachPath && existsSync(resolve(attachPath))) {
-				this.armFileAutoAttach(page, resolve(attachPath));
+				this.browsers.current.applyResumePath = resolve(attachPath);
+				this.browsers.current.resumeTaskId = task.id;
+				this.armFileAutoAttach(page);
 				this.addTaskEvent(task, "browser.file.armed", "File will auto-attach via Playwright", {
 					file: basename(resolve(attachPath)),
 				});
@@ -583,7 +589,7 @@ export class LocalRunner {
 			// can't auto-fill, the human completes it in the live view.
 			if (task.input.holdForTakeover) {
 				const screenshotBase64 = task.input.screenshots === false ? undefined : await captureScreenshotDataUrl(page, task.input.blurFormFields);
-				this.takeovers.set(task.id, { page });
+				this.takeovers.set(task.id, { page, requestId: crypto.randomUUID() });
 				this.addTaskEvent(task, "browser.takeover.ready", "Page ready for human takeover", { url: page.url() });
 				throw new HumanHandoffError("Ready for you to take over and complete this page.", {
 					reason: "assist",
@@ -622,6 +628,12 @@ export class LocalRunner {
 		} });
 		state.context = launched.context;
 		state.stopBrowser = launched.stop;
+		launched.context.on("close", () => {
+			if (state.context !== launched.context) return;
+			const staleMcp = state.mcp;
+			Object.assign(state, { context: null, activePage: null, mcp: null, stopBrowser: undefined, applyResumePath: null, resumeTaskId: undefined });
+			void staleMcp?.stop().catch(() => undefined);
+		});
 		await launched.context
 			.addInitScript(() => {
 				Object.defineProperty(navigator, "webdriver", { get: () => undefined });
@@ -643,8 +655,10 @@ export class LocalRunner {
 
 	/** Mark a page as the active one; fall back to the newest remaining page when it closes. */
 	private trackPage(page: Page): void {
-		this.browsers.current.activePage = page;
-		if (this.browsers.current.applyResumePath) this.armFileAutoAttach(page, this.browsers.current.applyResumePath);
+		const state = this.browsers.current;
+		state.activePage = page;
+		page.once("crash", () => { if (state.context === page.context()) void state.stopBrowser?.().catch(() => undefined); });
+		if (this.browsers.current.applyResumePath) this.armFileAutoAttach(page);
 		page.once("close", this.browsers.bind(() => {
 			if (this.browsers.current.activePage === page) {
 				this.browsers.current.activePage = this.browsers.current.context?.pages().at(-1) ?? null;
@@ -656,7 +670,10 @@ export class LocalRunner {
 	 *  otherwise stay open in the persistent context until shutdown; over many
 	 *  applications they accumulate (memory/handles). Called when a task finishes. */
 	private async closeStalePages(): Promise<void> {
-		const ctx = this.browsers.current.context;
+		const state = this.browsers.current;
+		// Cleanup never steals a page from a task or local engine that still owns it.
+		if (state.leases > 0 || [...state.taskIds].some((id) => { const task = this.store.getTask(id); return task && !isTerminalTaskStatus(task.status); })) return;
+		const ctx = state.context;
 		if (!ctx) return;
 		for (const p of ctx.pages()) {
 			if (p !== this.browsers.current.activePage && !p.isClosed()) {
@@ -689,8 +706,13 @@ export class LocalRunner {
 	private async startMcp(): Promise<McpRuntime> {
 		const context = await this.getBrowserContext();
 		const mcp = new McpRuntime(this.browsers.current.calls);
-		await mcp.start({ context });
-		this.browsers.current.mcp = mcp;
+		const state = this.browsers.current;
+		await mcp.start({ context, activePage: () => state.activePage, onPageSelected: (page) => { state.activePage = page; } });
+		if (state.context !== context) {
+			await mcp.stop();
+			throw new RunnerInputError("The browser closed while its tools were starting; start a fresh browser session.");
+		}
+		state.mcp = mcp;
 		return mcp;
 	}
 
@@ -780,45 +802,6 @@ export class LocalRunner {
 		return null;
 	}
 
-	/** Evaluate a function ON an element (by snapshot ref) and parse its JSON result. Never throws
-	 *  — a null return means "the page could not be asked", which callers must not read as a yes. */
-	private async evalJson<T>(mcp: McpRuntime, ref: string, label: string, fn: string): Promise<T | null> {
-		const res = await mcp.callTool("browser_evaluate", { element: label, target: ref, function: fn }, { internal: true }).catch(() => null);
-		if (!res || res.isError) return null;
-		const txt = mcp.textOf(res);
-		const i = txt.indexOf("### Result");
-		if (i < 0) return null;
-		const after = txt.slice(i + "### Result".length).trim();
-		const end = after.indexOf("\n###");
-		const block = (end >= 0 ? after.slice(0, end) : after).trim();
-		try {
-			return JSON.parse(block) as T;
-		} catch {
-			return null;
-		}
-	}
-
-	/**
-	 * The commit guard, enforced HERE because this is the process that clicks (#627, #629).
-	 *
-	 * The cloud's pre-filter reads a label the model wrote; this one reads the element. For a
-	 * read-only agent that is a DOM fact — does this control submit a POST form — which no label,
-	 * in any language, can talk its way past. Returns the refusal to hand back to the brain.
-	 */
-	private async commitRefusal(mcp: McpRuntime, page: Page, action: BrowserAction, guard: CommitGuardSpec): Promise<string | null> {
-		const re = commitLabelRe(guard);
-		if (action.action === "click") {
-			const ref = (action.ref || "").trim();
-			const facts = ref ? await this.evalJson<ElementFacts>(mcp, ref, action.name || action.role || "control", ELEMENT_PROBE_FN) : null;
-			return refuseClick(guard, facts, action.name, re);
-		}
-		if (action.action === "key") {
-			const focus = (await page.evaluate(FOCUS_PROBE_FN).catch(() => null)) as FocusFacts | null;
-			return refuseKey(guard, action.key, focus);
-		}
-		return null;
-	}
-
 	/** The snapshot ref the brain must target the element by (standard-tool `target`). */
 	private refOf(action: BrowserAction): string {
 		const ref = (action.ref || "").trim();
@@ -856,7 +839,10 @@ export class LocalRunner {
 				this.browsers.current.suppressAutoAttach = true;
 				try {
 					const ref = (a.ref || "").trim();
-					if (ref) await mcp.callTool("browser_click", { element: label, target: ref }).catch(() => undefined);
+					if (ref) {
+						const clicked = await mcp.callTool("browser_click", { element: label, target: ref });
+						if (clicked.isError) return clicked;
+					}
 					const res = await mcp.callTool("browser_file_upload", { paths: [this.browsers.current.applyResumePath] });
 					if (!res.isError || !/modal state|file chooser/i.test(mcp.textOf(res))) return res;
 					// The target was a LABEL / DROP-ZONE, not the chooser trigger, so no file
@@ -889,17 +875,19 @@ export class LocalRunner {
 	 * [ref=eNN] on each interactive element. The brain targets elements by that ref;
 	 * because {@link browserAct} routes through the SAME mcp server, the refs resolve.
 	 */
-	async browserSnapshot(taskId?: string): Promise<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean; cancelled?: boolean }> {
+	async browserSnapshot(taskId?: string): Promise<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean; cancelled?: boolean; commitGuard?: { supported: true; dispatchSafe: true } }> {
 		// If the user pressed Stop, the task is cancelled — tell the brain to halt.
 		if (taskId && this.store.getTask(taskId)?.status === "cancelled") {
 			return { url: "", title: "", snapshot: "", challenge: null, truncated: false, cancelled: true };
 		}
+		this.browsers.assertTaskAccess(taskId);
 		const page = await this.getActivePage();
 		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
 		const mcp = await this.getMcp();
 		// #1409: the legacy workflows (and the chat connector, which has no taskId of its own yet —
 		// #1424) share this one mcp across tasks; the subject follows whichever task is live now.
 		mcp.setSubject(taskId ? { kind: "runtime_task", id: taskId } : null);
+		await mcp.selectPage(page);
 		const res = await mcp.callTool("browser_snapshot");
 		const full = this.extractSnapshot(mcp.textOf(res));
 		// The brain must see the WHOLE form or it can't finish. Real ATS forms are big
@@ -917,7 +905,13 @@ export class LocalRunner {
 			snapshot,
 			challenge: await detectHumanChallenge(page),
 			truncated: full.length > MAX,
+			commitGuard: { supported: true, dispatchSafe: true },
 		};
+	}
+
+	private assertTaskMayAct(taskId?: string): void {
+		if (taskId && this.store.getTask(taskId)?.status === "cancelled") throw new RunnerInputError("BLOCKED by the runner — this task was stopped; no further browser action is permitted.");
+		this.browsers.assertTaskAccess(taskId);
 	}
 
 	/**
@@ -926,21 +920,20 @@ export class LocalRunner {
 	 * element by its snapshot ref. A tool-level failure is thrown so the workflow
 	 * surfaces it to the brain as an `error` (which drives its self-correction).
 	 */
-	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec, taskId?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; mode?: string } }> {
+	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec, taskId?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; dispatchSafe: true; mode?: string }; completedOutcome: true }> {
+		this.assertTaskMayAct(taskId);
+		guard = taskCommitGuard(taskId ? this.store.getTask(taskId)?.input : undefined, guard, taskId ? this.taskGuards.get(taskId) : undefined);
+		if (taskId && guard) this.taskGuards.set(taskId, guard);
 		const policy = this.screenshotPolicy(taskId, action);
 		const page = await this.getActivePage();
 		// #1409: the legacy workflows (and the chat connector, which has no taskId of its own yet —
 		// #1424) share this one mcp across tasks; the subject follows whichever task is live now.
 		const mcp = await this.getMcp();
 		mcp.setSubject(taskId ? { kind: "runtime_task", id: taskId } : null);
-		// Arm résumé auto-attach so a file chooser never blocks the flow (see method).
-		// resumePath may be a signed URL (remote runner) or a local path — resolve to
-		// a real local file either way.
-		if (resumePath) {
-			const local = await this.resolveResumeFile(resumePath);
-			if (local) this.browsers.current.applyResumePath = local;
-		}
-		if (this.browsers.current.applyResumePath) this.armFileAutoAttach(page, this.browsers.current.applyResumePath);
+		mcp.setCallPolicy({ guard, isCancelled: () => !!taskId && this.store.getTask(taskId)?.status === "cancelled" });
+		await mcp.selectPage(page);
+		await this.prepareResumeFile(page, resumePath, taskId, guard?.mode !== "read_only");
+		this.assertTaskMayAct(taskId);
 		// Scroll is a VIEWPORT primitive, not an element action — no ref, no standard
 		// tool in @playwright/mcp 0.0.77. Use the mouse wheel on the live page (as the
 		// prior runtime did): it scrolls the actual hovered/inner scroll container,
@@ -961,19 +954,9 @@ export class LocalRunner {
 				title: await active.title().catch(() => ""),
 				challenge: await detectHumanChallenge(active),
 				screenshot: !policy.enabled ? undefined : await this.shot(active, policy.blurFormFields),
-				commitGuard: { supported: true, mode: guard?.mode },
+				commitGuard: { supported: true, dispatchSafe: true, mode: guard?.mode },
+			completedOutcome: true,
 			};
-		}
-		// BEFORE the tool call, never after: this is the last point at which the action is still
-		// only a proposal. `commitGuard.supported` on every reply is how the cloud learns that this
-		// enforcement exists here at all — measured from the runner's own answer, not guessed from
-		// a version number, because the published CLI upgrades on the field's schedule.
-		if (guard) {
-			const refusal = await this.commitRefusal(mcp, page, action, guard);
-			if (refusal) {
-				mcp.refused(action.action, { ...(action.ref ? { ref: action.ref } : {}), ...(action.name ? { element: action.name } : {}) }, refusal);
-				throw new RunnerInputError(refusal);
-			}
 		}
 		const res = await this.callBrowserTool(mcp, action);
 		const text = mcp.textOf(res).trim();
@@ -992,7 +975,7 @@ export class LocalRunner {
 		// and the dialog blocks the NEXT tool call regardless of which case this was.
 		if (/modal state/i.test(text) && /dialog/i.test(text)) {
 			const dialogMsg = (text.match(/dialog with message "([^"]*)"/)?.[1] || "").slice(0, 160);
-			await mcp.callTool("browser_handle_dialog", { accept: true }, { internal: true }).catch(() => undefined);
+			await mcp.callTool("browser_handle_dialog", { accept: !guard }, { internal: true }).catch(() => undefined);
 			await page.waitForTimeout(400).catch(() => undefined);
 			const settled = await this.getActivePage();
 			await settled.waitForLoadState("domcontentloaded", { timeout: 6_000 }).catch(() => undefined);
@@ -1001,9 +984,10 @@ export class LocalRunner {
 				url: settled.url(),
 				title: await settled.title().catch(() => ""),
 				challenge: await detectHumanChallenge(settled),
-				feedback: dialogMsg ? `a native dialog was accepted: "${dialogMsg}"` : "a native dialog was accepted",
+				feedback: dialogMsg ? `a native dialog was ${guard ? "dismissed" : "accepted"}: "${dialogMsg}"` : `a native dialog was ${guard ? "dismissed" : "accepted"}`,
 				screenshot: !policy.enabled ? undefined : await this.shot(settled, policy.blurFormFields),
-				commitGuard: { supported: true, mode: guard?.mode },
+				commitGuard: { supported: true, dispatchSafe: true, mode: guard?.mode },
+			completedOutcome: true,
 			};
 		}
 		if (res.isError) throw new RunnerInputError(this.conciseFeedback(text) || `${action.action} failed`);
@@ -1023,6 +1007,7 @@ export class LocalRunner {
 		// For a WRITE, read the field's real value back (masked/intl fields transform
 		// input, e.g. "0404453580" → "+61404453580") so the brain knows it took and
 		// stops oscillating between formats — the signal inspectField used to give.
+		await mcp.selectPage(active);
 		let feedback = this.conciseFeedback(text);
 		if (action.action === "type" || action.action === "select" || action.action === "check") {
 			const rb = await this.readBackField(mcp, action);
@@ -1035,7 +1020,8 @@ export class LocalRunner {
 			challenge: await detectHumanChallenge(active),
 			feedback: feedback || undefined,
 			screenshot: !policy.enabled ? undefined : await this.shot(active, policy.blurFormFields),
-			commitGuard: { supported: true, mode: guard?.mode },
+			commitGuard: { supported: true, dispatchSafe: true, mode: guard?.mode },
+			completedOutcome: true,
 		};
 	}
 
@@ -1059,11 +1045,13 @@ export class LocalRunner {
 	 * the take-over view. The brain pauses; the human solves it on this page.
 	 */
 	async browserHandoff(taskId: string, label: string, reason = "challenge", options: { blurFormFields?: unknown; screenshot?: unknown } = {}): Promise<{ ok: boolean; screenshotBase64?: string }> {
+		this.assertTaskMayAct(taskId);
 		this.browsers.current.taskIds.add(taskId);
 		const page = await this.getActivePage();
-		this.takeovers.set(taskId, { page, reason, humanDone: false });
+		this.takeovers.set(taskId, { page, requestId: crypto.randomUUID(), reason, humanDone: false });
 		const policy = this.screenshotPolicy(taskId, options);
 		const screenshotBase64 = policy.enabled ? await captureScreenshotDataUrl(page, policy.blurFormFields) : undefined;
+		if (this.store.getTask(taskId)?.status === "cancelled") { await this.endTakeover(taskId); throw new RunnerInputError("This task was stopped during the handoff."); }
 		// The takeover is registered ABOVE, unconditionally — that is what makes the live view work.
 		// Everything below is the task's own bookkeeping, and it used to be skipped whenever no
 		// LOCAL task existed. The engine sign-in relay mints its own id (`signin-<sessionId>`) for
@@ -1118,13 +1106,21 @@ export class LocalRunner {
 		// A challenge resumes when the token/widget clears OR the human clicks Done —
 		// custom captchas (e.g. PageUp's "not a robot") have no detectable token, so
 		// the human's explicit Done is the authority; never strand them.
-		const challenge = await detectHumanChallenge(page);
-		const solved = !challenge || (await challengeSolved(page)) || !!session.humanDone;
-		return { solved, challenge };
+		try {
+			const challenge = await detectHumanChallenge(page);
+			const solved = !challenge || (await challengeSolved(page)) || !!session.humanDone;
+			return { solved, challenge };
+		} catch {
+			// A navigation/detachment/crash during the probe proves nothing about the
+			// challenge. Keep the handoff pending so a later poll can inspect it again.
+			return { solved: false, challenge: null };
+		}
 	}
 
 	/** The user supplied the value the agent asked for (ask-and-hold). */
 	browserSubmitInput(taskId: string, value: string): { ok: boolean } {
+		const task = this.store.getTask(taskId);
+		if (!task || isTerminalTaskStatus(task.status)) return { ok: false };
 		const session = this.takeovers.get(taskId);
 		// No live takeover (session expired / runner restarted): the value can't be
 		// delivered. Don't discard it silently AND resurrect the already-terminal task as
@@ -1137,7 +1133,6 @@ export class LocalRunner {
 		// no-session branch. (The console already blocks empty; this closes the API path.)
 		if (!value?.trim()) return { ok: false };
 		session.inputValue = value;
-		const task = this.store.getTask(taskId);
 		if (task) {
 			task.status = "running";
 			task.updatedAt = new Date().toISOString();
@@ -1151,6 +1146,7 @@ export class LocalRunner {
 	async browserResume(taskId: string): Promise<{ ok: boolean }> {
 		await this.endTakeover(taskId).catch(() => undefined);
 		const task = this.store.getTask(taskId);
+		if (!task || isTerminalTaskStatus(task.status)) return { ok: false };
 		if (task) {
 			task.status = "running";
 			task.updatedAt = new Date().toISOString();
@@ -1164,7 +1160,7 @@ export class LocalRunner {
 	async browserComplete(taskId: string, outcome: string, detail?: string): Promise<{ ok: boolean }> {
 		await this.endTakeover(taskId).catch(() => undefined);
 		const task = this.store.getTask(taskId);
-		if (task) {
+		if (task && (!isTerminalTaskStatus(task.status) || task.status === "cancelled" && outcome === "cancelled")) {
 			// A TOTAL table, not a chain of string comparisons: `cancelled` matched none of
 			// them and fell through to `failed`, so a run the owner stopped was filed as an
 			// error with a Retry button on it (#636). See apply-outcome.ts.

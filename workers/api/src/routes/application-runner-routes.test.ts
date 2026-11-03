@@ -223,7 +223,7 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 		expect(refused.status).toBe(409);
 		expect(refused.body.error).toMatch(/0.4.199/);
 		expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.199' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.200' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", readyApp("blur-new"));
 		expect(started.status, JSON.stringify(started.body)).toBeLessThan(300);
 		expect(dispatches()[0].body.policy).toMatchObject({ blurFormFields: false });
@@ -1109,8 +1109,8 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const ev = readyApp("lead-v1");
 		const r = await call("POST", "/ap/application-runs", ev);
 		expect(r.status).toBe(409);
-		expect(r.body.error).toMatch(/predates this application contract/);
-		expect(r.body.error).toMatch(/0\.4\.97 or newer/);
+		expect(r.body.error).toMatch(/has not verified this application contract/);
+		expect(r.body.error).toMatch(/0\.4\.200 or newer/);
 		expect(r.body.error).toMatch(/post-submit confirmation/);
 		expect(r.body.error).toMatch(/npm i -g @proagentstore\/cli|runner_update/);
 		// Nothing was spent and nothing moved: no run row, no dispatch, and the application is still
@@ -1124,11 +1124,11 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		setRunnerVersion("0.4.84");
 		const ev = readyApp("lead-v2");
 		expect((await call("POST", "/ap/application-runs", ev)).status).toBe(409);
-		setRunnerVersion("0.4.97");
+		setRunnerVersion("0.4.200");
 		const ok = await call("POST", "/ap/application-runs", ev);
 		expect(ok.body.run.status).toBe("running");
 		// And the record says WHICH runner executed it — the fact that was missing.
-		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.97" });
+		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.200" });
 	});
 
 	it("stamps the executing runner's version on every run, and returns it over the API", async () => {
@@ -1140,18 +1140,16 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		expect((await call("GET", `/ap/application-runs/${runId}`)).body.run.runnerVersion).toBe("0.5.0");
 	});
 
-	it("a machine that reports no version is not judged — a missing fact is not evidence", async () => {
-		// `instance_runtime_nodes.runner_version` is NOT NULL, so the reachable shape of "unreported"
-		// is the empty string. Refusing on a fact we do not have is the worse failure, and is what
-		// `cliAtLeast` and every other MIN_CLI gate in this codebase avoid.
+	it("an unreported version cannot prove application safety and is refused before dispatch", async () => {
 		setRunnerVersion("");
 		const r = await call("POST", "/ap/application-runs", readyApp("lead-v4"));
-		expect(r.body.run.status).toBe("running");
-		expect(await runRow(r.body.run.id as string)).toMatchObject({ runner_version: "" });
+		expect(r.status).toBe(409);
+		expect(r.body.error).toContain("0.4.200");
+		expect(dispatches()).toHaveLength(0);
 	});
 
 	it("an up-to-date runner still reports the #975 zero-bridge diagnosis end to end", async () => {
-		setRunnerVersion("0.4.97");
+		setRunnerVersion("0.4.200");
 		const ev = readyApp("lead-v5");
 		const started = await call("POST", "/ap/application-runs", ev);
 		const runId = started.body.run.id as string;
@@ -1170,7 +1168,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
 		// The pairing #977 asks for: the diagnosis AND the contract that produced it, on one record.
 		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0 } });
-		expect(run.runnerVersion).toBe("0.4.97");
+		expect(run.runnerVersion).toBe("0.4.200");
 		expect(await appRow("lead-v5")).toMatchObject({ status: "blocked", block_reason: "bridge_unused" });
 		// Still no free text from the CLI, whichever release ran it.
 		expect(JSON.stringify(run.result.diagnostic)).not.toMatch(/[A-Za-z]{200}/);
@@ -1344,6 +1342,43 @@ describe("an approval survives the queue, and is never spent on a run that sent 
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs WHERE application_id = 'lead-993a'").first<{ n: number }>())?.n).toBe(2);
 	});
 
+	it("a deferred approval upgrade loses its submit authority before the owner revokes it", async () => {
+		await oneClickBlocked("lead-revoke-deferred");
+		const busyRunId = await occupyTheMachine("lead-revoke-busy");
+		const before = await card("lead-revoke-deferred");
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-revoke-deferred", expected_status: "blocked", expected_version: before.stateVersion });
+		answers["/local-apply/run"] = BUSY_RUNNER;
+		const queuedRunId = (await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-revoke-deferred", expected_status: "blocked" })).body.result.runId as string;
+		runner("ended", { result: RESULT(busyRunId) });
+		await syncActiveApplyRuns(env());
+		// The fresh gate upgraded this attempt, then the runner definitively refused it.
+		expect(dispatches().at(-1)?.body.policy).toMatchObject({ mode: "auto_submit" });
+		expect(await modeOf(queuedRunId)).toBe("fill_and_review");
+		expect(await auth("lead-revoke-deferred")).toMatchObject({ consumed_at: null });
+		const { revokeSubmitAuthorization } = await import("../lib/local-apply/approval-store.js");
+		expect(await revokeSubmitAuthorization(env(), "lead-revoke-deferred", "u1", "owner changed mind", Date.now())).toBe(true);
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		await syncActiveApplyRuns(env());
+		expect(await runRow(queuedRunId)).toMatchObject({ status: "running" });
+		expect(dispatches().at(-1)?.body.policy).toMatchObject({ mode: "fill_and_review" });
+		expect((dispatches().at(-1)?.body.policy as { submitGate?: unknown }).submitGate).toBeUndefined();
+	});
+
+	it("an approval revoked after the gate read cannot be atomically consumed", async () => {
+		await occupyTheMachine("lead-revoke-race-busy");
+		readyWithEvent("lead-revoke-race");
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		answers["/local-apply/run"] = BUSY_RUNNER;
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-revoke-race", expected_status: "materials_ready" });
+		const observed = await auth("lead-revoke-race");
+		expect(observed).toMatchObject({ consumed_at: null });
+		const { revokeSubmitAuthorization, consumeSubmitAuthorization } = await import("../lib/local-apply/approval-store.js");
+		expect(await revokeSubmitAuthorization(env(), "lead-revoke-race", "u1", "owner changed mind", Date.now())).toBe(true);
+		expect(await consumeSubmitAuthorization(env(), observed!.id as string, "u1", "another-run", Date.now())).toBeNull();
+		expect(await auth("lead-revoke-race")).toMatchObject({ consumed_at: null, consumed_run_id: null });
+	});
+
 	it("a REVIEW the owner asked for is not an intent the queue may override", async () => {
 		// The mirror of the test above, and the reason the upgrade is not simply "re-run the gate".
 		// Auto-submit is ON and this lead matches it, so the fresh verdict at dequeue DOES allow a
@@ -1506,6 +1541,50 @@ describe("a busy Runner queues the fill instead of blocking the application (#97
 		expect(await runRow(runId)).toMatchObject({ status: "running" });
 	});
 
+	it.each([false, true])("claims dispatch durably before a lost reply (queued=%s) and reconciles without replay", async (queued) => {
+		await enableAutoSubmit();
+		answers["/local-apply/run"] = queued ? BUSY : () => { throw new Error("response lost"); };
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-dispatch-gap"));
+		const runId = r.body.run.id as string;
+		if (queued) {
+			expect(await runRow(runId)).toMatchObject({ status: "queued" });
+			answers["/local-apply/run"] = () => {
+				expect(d1.sqlite.prepare("SELECT status FROM local_apply_runs WHERE id = ?").get(runId)).toMatchObject({ status: "running" });
+				throw new Error("response lost");
+			};
+			await syncActiveApplyRuns(env());
+		}
+		expect(await runRow(runId)).toMatchObject({ status: "running" });
+		const count = dispatches().length;
+		runner("running", { lastSeq: 1 });
+		await syncActiveApplyRuns(env());
+		expect(dispatches()).toHaveLength(count);
+		answers["/local-apply/status"] = { status: 404, body: {} };
+		await syncActiveApplyRuns(env());
+		expect(await appRow("lead-dispatch-gap")).toMatchObject({ status: "blocked", block_reason: "submit_state_unknown" });
+		expect((await appRow("lead-dispatch-gap"))?.submit_attempted_at).not.toBeNull();
+		expect(dispatches()).toHaveLength(count);
+	});
+
+	it("a durable runner claim with no result is uncertainty, never a safe refusal to retry", async () => {
+		await enableAutoSubmit();
+		answers["/local-apply/run"] = { status: 409, body: { code: "application_start_uncertain", error: "Prior dispatch has no result" } };
+		await call("POST", "/ap/application-runs", readyApp("lead-prior-claim"));
+		expect(await appRow("lead-prior-claim")).toMatchObject({ status: "blocked", block_reason: "submit_state_unknown" });
+		expect((await appRow("lead-prior-claim"))?.submit_attempted_at).not.toBeNull();
+	});
+
+	it("a durable capacity wait is not orphaned when its creation age exceeds the lost-runner grace", async () => {
+		await enableAutoSubmit();
+		answers["/local-apply/run"] = BUSY;
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-capacity-wait"));
+		const queued = started.body.run;
+		const later = await syncApplyRun(env(), "u1", queued, queued.createdAt + 2 * 60 * 60_000);
+		expect(later.status).toBe("queued");
+		expect(await appRow("lead-capacity-wait")).toMatchObject({ status: "filling", submit_attempted_at: null });
+		expect(dispatches()).toHaveLength(1);
+	});
+
 	it("a genuine 409 conflict still blocks, so a bound run is never retried forever", async () => {
 		answers["/local-apply/run"] = { status: 409, body: { error: "Run abc already exists with another requestId" } };
 		const r = await call("POST", "/ap/application-runs", readyApp("lead-q2"));
@@ -1523,7 +1602,7 @@ describe("a busy Runner queues the fill instead of blocking the application (#97
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs WHERE application_id = 'lead-q3'").first<{ n: number }>())?.n).toBe(1);
 	});
 
-	it("an approved submission survives the wait — the authorization stays spent on that run", async () => {
+	it("an approved submission survives the wait and reclaims its authority at dispatch", async () => {
 		// #973 + #974: the approval is consumed at the first dispatch attempt, so the run that
 		// eventually goes to the machine is still the one the owner authorized.
 		readyApp("lead-q4");
@@ -1535,8 +1614,8 @@ describe("a busy Runner queues the fill instead of blocking the application (#97
 		const approved = await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-q4", expected_status: "materials_ready" });
 		const runId = approved.body.result.runId as string;
 		expect(await runRow(runId)).toMatchObject({ status: "queued" });
-		expect(approved.body.result.mode).toBe("auto_submit");
-		expect(approved.body.result.authorizationConsumedBy).toBe(runId);
+		expect(approved.body.result.mode).toBe("fill_and_review");
+		expect(approved.body.result.authorizationConsumedBy).toBeNull();
 		// When it finally dispatches, it still carries the submit gate the approval granted.
 		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
 		runner("running", { lastSeq: 0 });
@@ -1600,6 +1679,29 @@ describe("cloud supervision", () => {
 		expect(sent.find((s) => s.path === "/local-apply/cancel")?.body).toEqual({ runId });
 		expect(ended).toMatchObject({ status: "failed", errorCode: "run_timed_out" });
 		expect(await appRow("lead-time-limit")).toMatchObject({ status: "blocked", block_reason: "run_timed_out", submit_attempted_at: null });
+	});
+
+	it("excludes a long owner pause from the execution budget after resume and trace truncation", async () => {
+		await enableAutoSubmit();
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-paused-clock"));
+		const runId = started.body.run.id as string;
+		const start = started.body.run.startedAt as number;
+		runner("paused", { pause: { reason: "missing_answer", question: "Owner answer" } });
+		const paused = await syncApplyRun(env(), "u1", started.body.run, start + 60_000);
+		expect(paused).toMatchObject({ status: "paused", activeElapsedMs: 60_000, activeStartedAt: null });
+		// Clock state is durable independently of the bounded display trace.
+		d1.DB.prepare("UPDATE local_apply_runs SET trace = '[]' WHERE id = ?1").bind(runId).run();
+		const { getApplyRun } = await import("../lib/local-apply/store.js");
+		const fresh = await getApplyRun(env(), "ap", "u1", runId);
+		runner("running", { lastSeq: 2 });
+		const resumed = await syncApplyRun(env(), "u1", fresh!, start + 2 * 60 * 60_000);
+		expect(resumed.status).toBe("running");
+		const continuing = await syncApplyRun(env(), "u1", resumed, start + 2 * 60 * 60_000 + 18 * 60_000);
+		expect(continuing.status).toBe("running");
+		expect(sent.filter((s) => s.path === "/local-apply/cancel")).toHaveLength(0);
+		expect((await appRow("lead-paused-clock"))?.submit_attempted_at).toBeNull();
+		const ended = await syncApplyRun(env(), "u1", continuing, start + 2 * 60 * 60_000 + 19 * 60_000);
+		expect(ended).toMatchObject({ status: "failed", errorCode: "run_timed_out" });
 	});
 
 	it("accepts a structured terminal result that arrives at the deadline before stopping the CLI", async () => {

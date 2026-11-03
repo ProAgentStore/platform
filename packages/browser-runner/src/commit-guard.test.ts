@@ -78,16 +78,23 @@ describe("refuseKey — the hole a click-only guard could never see (#629)", () 
 
 	it("refuses when focus could not be read", () => {
 		expect(refuseKey(READ_ONLY, "Enter", null)).toMatch(/could not be read/);
+		expect(refuseKey(READ_ONLY, "a", null)).toMatch(/could not be read/);
 	});
 
-	it("leaves a rehearsal's keys alone — that carve-out belongs to the loop, which holds the state", () => {
-		expect(refuseKey(DRY_RUN, "Enter", focus({ inForm: true, method: "post" }))).toBeNull();
+	it("refuses implicit POST submission during a rehearsal", () => {
+		expect(refuseKey(DRY_RUN, "Enter", focus({ inForm: true, method: "post" }))).toMatch(/REHEARSAL/);
 	});
 
 	it("leaves navigation keys alone", () => {
-		for (const k of ["Tab", "Escape", "ArrowDown"]) {
+		for (const k of ["Tab", "Escape"]) {
 			expect(refuseKey(READ_ONLY, k, focus({ inForm: true, method: "post" })), k).toBeNull();
 		}
+	});
+	it("refuses keyboard changes to checkbox, dropdown and POST fields in read-only mode", () => {
+		expect(refuseKey(READ_ONLY, "Space", focus({ type: "checkbox" }))).toMatch(/READ-ONLY/);
+		expect(refuseKey(READ_ONLY, "ArrowDown", focus({ tag: "select" }))).toMatch(/READ-ONLY/);
+		expect(refuseKey(READ_ONLY, "a", focus({ method: "post", inForm: true }))).toMatch(/READ-ONLY/);
+		expect(refuseKey(READ_ONLY, "a", focus({ method: "get", inForm: true }))).toBeNull();
 	});
 });
 

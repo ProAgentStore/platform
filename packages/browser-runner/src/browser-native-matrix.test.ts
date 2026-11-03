@@ -52,7 +52,7 @@ describe.skipIf(!requested)("native MCP, masked replay and owner takeover on rea
 				const secretSnapshot = mcp.textOf(await mcp.callTool("browser_snapshot"));
 				const secretRef = secretSnapshot.match(/textbox "Passcode"[^\n]*\[ref=(\w+)\]/)?.[1];
 				expect(secretRef).toBeTruthy();
-				const secretResult = await mcp.callTool("browser_type", { element: "Passcode", target: secretRef, text: "FIXTURE_PASSWORD" });
+				const secretResult = await mcp.callTool("browser_type", { element: "Passcode", target: secretRef, text: "FIXTURE_PASSWORD" }, { expectedOrigin: new URL(url).origin });
 				expect(secretResult.isError).not.toBe(true);
 				expect(await page.locator("#secret").inputValue()).toBe("native-password-123");
 				expect(mcp.textOf(secretResult)).not.toContain("native-password-123");

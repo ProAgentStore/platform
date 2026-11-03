@@ -9,11 +9,13 @@ import { HttpError } from "../lib/auth.js";
 import { realSchemaD1, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { resolveNotificationDelivery } from "../lib/notification-policy.js";
 import { OWNER_ATTENTION_EVENTS } from "../lib/owner-attention.js";
+import type { RuntimeRow } from "../lib/runtime-nodes.js";
 import type { Env } from "../types.js";
 
 let d1: RealSchemaD1;
 /** Task ids the runner holds a takeover session for. */
 let runnerTakeovers: string[] = [];
+let runnerRequests: Array<{ taskId: string; requestId: string }> = [];
 const sent: string[] = [];
 
 vi.mock("../lib/auth.js", async () => {
@@ -29,7 +31,7 @@ vi.mock("./instances-runtime.js", async () => {
 		getLiveRuntime: async () => runtime,
 		callRuntime: async (_env: unknown, _rt: unknown, path: string) => {
 			sent.push(path);
-			if (path === "/takeover") return Response.json({ takeovers: runnerTakeovers });
+			if (path === "/takeover") return Response.json({ takeovers: runnerTakeovers, requests: runnerRequests });
 			if (path.endsWith("/frame")) return Response.json({ frame: "", width: 1, height: 1 });
 			if (path === "/local-browser/status") return Response.json({ state: "running" });
 			return Response.json({ ok: true });
@@ -38,9 +40,11 @@ vi.mock("./instances-runtime.js", async () => {
 });
 
 const { instanceRoutes } = await import("./instances.js");
+const { takeoverGate } = await import("./instances-browser-takeovers.js");
 
 beforeEach(() => {
 	runnerTakeovers = [];
+	runnerRequests = [];
 	sent.length = 0;
 	d1 = realSchemaD1();
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1')`);
@@ -161,6 +165,47 @@ describe("the runner's remote view is gated on a durable takeover (#1031)", () =
 		await call("PATCH", `/i1/browser-takeovers/${id}`, { state: "ended" });
 		const res = await call("GET", "/i1/takeover/task-4/frame");
 		expect(res).toMatchObject({ status: 409, body: { error: expect.stringMatching(/This takeover is ended\. Ask for it again/) } });
+	});
+
+	// Invariant: each new runner handoff gets one fresh durable request; a stale poll can
+	// never resurrect a closed request or acquire the page under that request's old id.
+	it.each(["resumed", "ended", "expired"] as const)("a new handoff after %s gets a fresh row, while the old generation stays closed", async (closedState) => {
+		runnerTakeovers = ["task-repeat"];
+		runnerRequests = [{ taskId: "task-repeat", requestId: "handoff-first" }];
+		expect((await call("GET", "/i1/takeover/task-repeat/frame")).status).toBe(200);
+		const first = (await call("GET", "/i1/browser-takeovers?subject_id=task-repeat")).body.takeovers[0];
+		await d1.DB.prepare("UPDATE browser_takeovers SET state = ?1 WHERE id = ?2").bind(closedState, first.id).run();
+		expect((await call("GET", "/i1/takeover/task-repeat/frame")).status).toBe(409);
+		runnerRequests = [{ taskId: "task-repeat", requestId: "handoff-second" }];
+		const responses = await Promise.all([call("GET", "/i1/takeover/task-repeat/frame"), call("GET", "/i1/takeover/task-repeat/frame")]);
+		expect(responses.map((r) => r.status)).toEqual([200, 200]);
+		const rows = (await call("GET", "/i1/browser-takeovers?subject_id=task-repeat")).body.takeovers;
+		expect(rows).toHaveLength(2);
+		expect(rows.find((r: { id: string }) => r.id === first.id)?.state).toBe(closedState);
+		expect(rows.find((r: { id: string }) => r.id !== first.id)?.state).toBe("active");
+	});
+
+	it("does not open a new generation that is absent from the runner's active list", async () => {
+		runnerTakeovers = ["task-gone"];
+		runnerRequests = [{ taskId: "task-gone", requestId: "first" }];
+		await call("GET", "/i1/takeover/task-gone/frame");
+		await call("POST", "/i1/takeover/task-gone/resume");
+		runnerTakeovers = [];
+		runnerRequests = [{ taskId: "task-gone", requestId: "second" }];
+		expect((await call("GET", "/i1/takeover/task-gone/frame")).status).toBe(409);
+		expect((await call("GET", "/i1/browser-takeovers?subject_id=task-gone")).body.takeovers).toHaveLength(1);
+	});
+
+	it("gives a later Application Runner pause its own durable card takeover", async () => {
+		const runtime: RuntimeRow = { instance_id: "i1", user_id: "u1", runner_node: "mac", status: "online", last_seen_at: null, placement: "local", endpoint_url: "", token_ciphertext: null, token_dek_wrapped: null, token_iv: null, token_plaintext: null, capabilities: "{}", runner_version: "0.4.200", created_at: "", updated_at: "" };
+		const env = { DB: d1.DB } as Env;
+		const first = await takeoverGate(env, "u1", "i1", runtime, "app-repeat", { open: true, fill: { waiting: true, reason: "login_required", requestId: "fill-pause-first" } });
+		await d1.DB.prepare("UPDATE browser_takeovers SET state = 'resumed' WHERE id = ?1").bind(first.id).run();
+		await expect(takeoverGate(env, "u1", "i1", runtime, "app-repeat", { open: true, fill: { waiting: true, requestId: "fill-pause-first" } })).rejects.toThrow(/resumed/);
+		const next = await takeoverGate(env, "u1", "i1", runtime, "app-repeat", { open: true, fill: { waiting: true, reason: "captcha", requestId: "fill-pause-second" } });
+		expect(next.id).not.toBe(first.id);
+		expect(next).toMatchObject({ state: "active", reason: "captcha" });
+		expect(sent).not.toContain("/takeover");
 	});
 });
 

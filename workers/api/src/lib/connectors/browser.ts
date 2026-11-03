@@ -19,6 +19,8 @@
 import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 import type { Env } from "../../types.js";
+import { commitGuardSpec } from "../commit-guard.js";
+import { requireSafeBrowserDispatch } from "../browser-action-dispatch.js";
 
 /** Acting on a live page can take longer than a read (waits, navigation) — give it room. */
 const ACT_TIMEOUT_MS = 30_000;
@@ -38,6 +40,20 @@ async function resolveRunner(ctx: RegistryToolCtx): Promise<{ conn: RunnerConn }
 	const conn = await getBoundRunnerConn(ctx.env, ctx.instanceId, ctx.userId).catch(() => null);
 	if (!conn) return { error: "No runner is connected for this agent — run `pags up` on the machine whose browser you want to drive." };
 	return { conn };
+}
+
+/** Chat uses the same declared agent policy as workflows, never a model-supplied override. */
+async function actionPolicy(ctx: RegistryToolCtx, conn: RunnerConn): Promise<ReturnType<typeof commitGuardSpec> | undefined> {
+	const row = await ctx.env.DB.prepare("SELECT a.config FROM agents a JOIN agent_instances i ON i.agent_id = a.id WHERE i.id = ?1 AND i.user_id = ?2")
+		.bind(ctx.instanceId, ctx.userId).first<{ config: string }>();
+	if (!row) throw new Error("The browser agent's policy is unavailable; no action was sent.");
+	const config = JSON.parse(row.config || "{}") as { browserTask?: { readOnly?: boolean } };
+	// This read also refuses access to a browser held by a workflow. Old runners must update
+	// before chat can act; their old supported:true receipt did not cover alternate tools.
+	const receipt = await callRunner(conn, "/browser/snapshot", {}, { timeoutMs: READ_TIMEOUT_MS });
+	try { requireSafeBrowserDispatch(receipt as Parameters<typeof requireSafeBrowserDispatch>[0]); }
+	catch { throw new Error("Browser actions require CLI 0.4.200 or newer. Update this runner before continuing."); }
+	return config.browserTask?.readOnly === true ? commitGuardSpec("read_only") : undefined;
 }
 
 export const BROWSER_TOOLS: ToolDef[] = [
@@ -60,10 +76,11 @@ export const BROWSER_TOOLS: ToolDef[] = [
 			if ("error" in r) return { content: r.error, success: false };
 			const url = String(input.url ?? "").trim();
 			if (!url) return { content: "A `url` is required.", success: false };
+			const guard = await actionPolicy(ctx, r.conn);
 			const res = await callRunner<{ url?: string; title?: string }>(
 				r.conn,
 				"/browser/act",
-				{ action: "navigate", url },
+				{ action: "navigate", url, ...(guard ? { guard } : {}) },
 				{ timeoutMs: ACT_TIMEOUT_MS },
 			);
 			// `res.url` is where the page ACTUALLY landed (redirects follow the site's choice) and
@@ -144,10 +161,11 @@ export const BROWSER_TOOLS: ToolDef[] = [
 			if (!(ACTIONS as readonly string[]).includes(action)) {
 				return { content: `Unknown action "${action}". Use one of: ${ACTIONS.join(", ")}.`, success: false };
 			}
+			const guard = await actionPolicy(ctx, r.conn);
 			const res = await callRunner<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string }>(
 				r.conn,
 				"/browser/act",
-				{ action, ref: input.ref, role: input.role, name: input.name, text: input.text, url: input.url, key: input.key, nth: input.nth, dy: input.dy },
+				{ action, ref: input.ref, role: input.role, name: input.name, text: input.text, url: input.url, key: input.key, nth: input.nth, dy: input.dy, ...(guard ? { guard } : {}) },
 				{ timeoutMs: ACT_TIMEOUT_MS },
 			);
 			// `res.feedback` is composed on the machine from what the PAGE reported back (element

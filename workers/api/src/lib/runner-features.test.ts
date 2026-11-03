@@ -11,7 +11,7 @@ const BROWSER_SETTINGS_FEATURE = "per-agent browser engine, profile policy and l
 const BROWSER_MODE_FEATURE = "per-agent headed/headless browser mode";
 const UPLOADED_SOURCES_FEATURE = "Application Tailor uploaded résumé/profile sources";
 const CLEANUP_FEATURE = "post-run cleanup: process-group kill, leftover sweep, per-run temp folders, gentle/harsh mode (#1265)";
-const LOCAL_APPLY_HANDOFF_FEATURE = "application live-page preflight and bounded owner login/CAPTCHA handoff";
+const LOCAL_APPLY_HANDOFF_FEATURE = "application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff";
 
 describe("what a runner version is too old for (#859)", () => {
 	it("the machine in #859 (0.4.60) is behind on clone, force-attach and runner_update — and nothing older", () => {
@@ -21,8 +21,8 @@ describe("what a runner version is too old for (#859)", () => {
 	});
 
 	it("reports the newest handoff floor while leaving an unknown version unjudged", () => {
-		// Only the newest floor (post-run cleanup, #1265) is above the local-apply contract's.
-		expect(runnerFeatureGaps(LOCAL_APPLY_CONTRACT_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, CLEANUP_FEATURE]);
+		// The application safety contract is the newest floor.
+		expect(runnerFeatureGaps(LOCAL_APPLY_CONTRACT_MIN_CLI)?.map((g) => g.feature)).toEqual([]);
 		// 0.4.71 reports load and memory, and is behind only on the rest of the machine (#924).
 		expect(runnerFeatureGaps(RESOURCES_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, "disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE, CLEANUP_FEATURE]);
 		expect(runnerFeatureGaps("")).toBeNull();
@@ -37,10 +37,11 @@ describe("what a runner version is too old for (#859)", () => {
 	});
 
 	it("post-run cleanup needs the release that carries it, and only that one is behind on it (#1265)", () => {
-		expect(runnerVersionView("0.4.166").behind).toEqual([`${BROWSER_SETTINGS_FEATURE} (needs 0.4.198)`, `${BROWSER_MODE_FEATURE} (needs 0.4.197)`, `${CLEANUP_FEATURE} (needs 0.4.167)`]);
-		expect(runnerFeatureGaps("0.4.167")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE]);
-		expect(runnerFeatureGaps("0.4.197")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE]);
-		expect(runnerFeatureGaps("0.4.198")).toEqual([]);
+		expect(runnerVersionView("0.4.166").behind).toEqual([`${BROWSER_SETTINGS_FEATURE} (needs 0.4.198)`, `${BROWSER_MODE_FEATURE} (needs 0.4.197)`, `${LOCAL_APPLY_HANDOFF_FEATURE} (needs 0.4.200)`, `${CLEANUP_FEATURE} (needs 0.4.167)`]);
+		expect(runnerFeatureGaps("0.4.167")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE]);
+		expect(runnerFeatureGaps("0.4.197")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE]);
+		expect(runnerFeatureGaps("0.4.198")?.map((g) => g.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE]);
+		expect(runnerFeatureGaps("0.4.200")).toEqual([]);
 		expect(runnerFeatureGaps("0.5.0")).toEqual([]);
 	});
 
@@ -75,7 +76,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
 			"the engine's own output in a failed run's detail (needs 0.4.68)",
 			"engine check before launch (installed + signed in), required by apply-now (needs 0.4.67)",
-			"application live-page preflight and bounded owner login/CAPTCHA handoff (needs 0.4.97)",
+			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.200)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 			`${CLEANUP_FEATURE} (needs 0.4.167)`,
 		]);
@@ -101,7 +102,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"machine CPU load and memory in list_runner_nodes / coding_diagnostics (needs 0.4.71)",
 			"relay sockets that keep their machine name when the hostname changes (needs 0.4.70)",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
-			"application live-page preflight and bounded owner login/CAPTCHA handoff (needs 0.4.97)",
+			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.200)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 			`${CLEANUP_FEATURE} (needs 0.4.167)`,
 		]);

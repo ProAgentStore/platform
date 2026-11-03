@@ -29,7 +29,7 @@ describe("stored browser screenshot run policy", () => {
 	function install(page: Page) {
 		runner["getActivePage"] = async () => page;
 		runner["getBrowserContext"] = async () => ({ pages: () => [page] }) as unknown as BrowserContext;
-		runner["getMcp"] = async () => ({ setSubject: () => undefined, recordExternal: () => undefined }) as unknown as McpRuntime;
+		runner["getMcp"] = async () => ({ setSubject: () => undefined, setCallPolicy: () => undefined, selectPage: async () => undefined, recordExternal: () => undefined }) as unknown as McpRuntime;
 	}
 	afterEach(async () => { await runner.close(); rmSync(dir, { recursive: true, force: true }); });
 
@@ -47,6 +47,7 @@ describe("stored browser screenshot run policy", () => {
 		expect(f.screenshot.mock.calls[1]?.[0]).toHaveProperty("mask");
 		await runner.browserHandoff(raw.id, "Review", "assist", { blurFormFields: true });
 		expect(f.screenshot.mock.calls[2]?.[0]).not.toHaveProperty("mask");
+		await runner.browserComplete(raw.id, "completed");
 		await runner.browserHandoff(masked.id, "Review", "assist", { blurFormFields: false });
 		expect(f.screenshot.mock.calls[3]?.[0]).toHaveProperty("mask");
 	});

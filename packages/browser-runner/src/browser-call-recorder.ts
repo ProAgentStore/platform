@@ -110,7 +110,7 @@ function originPath(raw: unknown): string | undefined {
 function maskSecrets(value: string, secrets: Readonly<Record<string, string>>): string {
 	let out = value;
 	for (const [name, secret] of Object.entries(secrets)) {
-		if (secret.length < 4) continue;
+		if (!secret.length) continue;
 		out = out.split(secret).join(`<secret>${name}</secret>`);
 	}
 	return out;
@@ -128,7 +128,7 @@ function maskSecrets(value: string, secrets: Readonly<Record<string, string>>): 
  */
 export function summarizeCallArgs(args: Record<string, unknown>, secrets: Readonly<Record<string, string>> = {}): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
-	const str = (v: unknown, max: number): string | undefined => (typeof v === "string" && v.length ? maskSecrets(v.slice(0, max), secrets) : undefined);
+	const str = (v: unknown, max: number): string | undefined => (typeof v === "string" && v.length ? maskSecrets(v, secrets).slice(0, max) : undefined);
 	if (str(args.element, 200) !== undefined) out.element = str(args.element, 200);
 	if (str(args.role, 60) !== undefined) out.role = str(args.role, 60);
 	if (str(args.ref, 100) !== undefined) out.ref = str(args.ref, 100);
@@ -158,6 +158,17 @@ export interface RecordInput {
 	outcome: BrowserCallOutcome;
 	errorHead?: string;
 	internal: boolean;
+}
+
+/** Tool errors may echo supplied text; apply the same value policy before keeping an error. */
+function redactCallError(error: string, args: Record<string, unknown>, secrets: Readonly<Record<string, string>> = {}): string {
+	let safe = maskSecrets(error, secrets);
+	const values: unknown[] = [args.text, ...(Array.isArray(args.values) ? args.values : [])];
+	if (Array.isArray(args.fields)) for (const field of args.fields) {
+		if (field && typeof field === "object" && "value" in field) values.push(field.value);
+	}
+	for (const value of values) if (typeof value === "string" && value) safe = safe.split(value).join("[REDACTED]");
+	return safe;
 }
 
 export class BrowserCallRecorder {
@@ -198,7 +209,7 @@ export class BrowserCallRecorder {
 				startedAt: new Date(input.startedAt).toISOString(),
 				durationMs: Math.max(0, Date.now() - input.startedAt),
 				outcome: input.outcome,
-				...(input.errorHead ? { errorHead: input.errorHead.slice(0, 200) } : {}),
+				...(input.errorHead ? { errorHead: redactCallError(input.errorHead, input.args, input.secrets).slice(0, 200) } : {}),
 				...(typeof args.url === "string" ? { urlAfter: args.url } : {}),
 				internal: input.internal,
 			};

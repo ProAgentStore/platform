@@ -113,6 +113,8 @@ describe("POST /:instanceId/apply starts the supported JOB_APPLY workflow (#1062
 	it("dryRun still fills without submitting — the flag reaches the workflow", async () => {
 		await apply("apply-inst", { url: "https://jobs.example/role/1", resumePath: "/home/ada/cv.pdf", dryRun: true });
 		expect(created[0].params.job.dryRun).toBe(true);
+		const stored = await env.DB.prepare("SELECT payload FROM instance_runtime_tasks WHERE id = ?1").bind(created[0].params.taskId).first<{ payload: string }>();
+		expect(JSON.parse(stored!.payload).input.dryRun).toBe(true);
 	});
 });
 

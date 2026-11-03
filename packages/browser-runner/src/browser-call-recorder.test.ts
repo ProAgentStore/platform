@@ -4,6 +4,19 @@ import { BROWSER_CALL_CAP, BrowserCallRecorder, isBrowserCallSubjectKind, summar
 const SUBJECT = { kind: "local_apply_run", id: "run-1" };
 
 describe("BrowserCallRecorder", () => {
+	it("redacts echoed values and short secrets before storing or truncating an error", () => {
+		const r = new BrowserCallRecorder();
+		r.record({ subject: SUBJECT, tool: "browser_type", args: { text: "typed-password" }, secrets: { PIN: "42" }, startedAt: Date.now(), outcome: "tool_error", errorHead: "Rejected typed-password with PIN 42", internal: false });
+		const error = r.page(SUBJECT, 0).calls[0].errorHead;
+		expect(error).not.toContain("typed-password");
+		expect(error).not.toContain("42");
+		expect(error).toContain("[REDACTED]");
+	});
+	it("does not expose a secret prefix when a retained label reaches its size limit", () => {
+		const secret = "never-leak-this-value";
+		const out = summarizeCallArgs({ element: `${"x".repeat(195)}${secret}` }, { PASSWORD: secret });
+		expect(out.element).not.toContain("never");
+	});
 	it("records ok, tool_error, thrown and refused outcomes with a sequence that only ever advances", () => {
 		const r = new BrowserCallRecorder();
 		r.record({ subject: SUBJECT, tool: "browser_navigate", args: { url: "https://a.com" }, startedAt: Date.now(), outcome: "ok", internal: false });

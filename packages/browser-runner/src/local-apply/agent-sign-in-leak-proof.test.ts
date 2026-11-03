@@ -19,6 +19,7 @@ import { ensureTestChromiumInstalled } from "../test-chromium.js";
 import { startTestJobServerAuth, type TestJobServerAuth } from "../test-job-server-auth.js";
 import { ApplyBridge, type ApplyBridgeHost } from "./bridge.js";
 import type { LocalApplyEvent, LocalApplyPause } from "./contract.js";
+import { SiteSessionLedger } from "./site-session.js";
 import { launchCdpBrowser } from "./live-run-browser.js";
 
 const PROFILE = "Name: Jane Citizen\nEmail: jane.citizen@example.com";
@@ -65,8 +66,8 @@ function recordingTools(): { tools: BrowserTools; calls: Array<{ name: string; a
 		calls,
 		tools: {
 			listTools: () => mcp.listTools(),
-			callTool: async (name, args = {}) => {
-				const res = await mcp.callTool(name, args);
+			callTool: async (name, args = {}, opts) => {
+				const res = await mcp.callTool(name, args, opts);
 				calls.push({ name, args, resultText: mcp.textOf(res) });
 				return res;
 			},
@@ -107,6 +108,100 @@ function refFor(snapshot: string, pattern: RegExp): string {
 }
 
 describe("the agent-driven sign-in against a REAL browser and REAL @playwright/mcp secrets (#1412, leak proof)", () => {
+	it("passwordless username and OTP forms on an ordinary URL remain a sign-in until the code wall disappears (#1438)", async () => {
+		mcp.provideSecrets({ PAGS_LOGIN_USERNAME: EMAIL, PAGS_LOGIN_CODE: "123456" });
+		const { tools } = recordingTools();
+		const { host: h, pauses } = host(["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_CODE"]);
+		const bridge = new ApplyBridge(tools, h);
+		await bridge.callTool("browser_navigate", { url: server.jobUrl });
+		const page = launched!.activePage()!;
+		await page.setContent('<form><label>Email<input type="email"></label><button type="button">Email me a sign in code</button></form>');
+		const emailPage = await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "passwordless", phase: "post_navigation" });
+		expect(pauses.at(-1)?.reason).toBe("login_required");
+		const email = refFor(emailPage.content[0].text, /textbox "Email"/);
+		expect((await bridge.callTool("browser_type", { target: email, text: "PAGS_LOGIN_USERNAME" })).isError).toBeUndefined();
+		await page.locator('button').evaluate(button => button.addEventListener('click', () => { document.body.innerHTML = '<form><label>Verification code<input name="code" autocomplete="one-time-code"></label><button type="button">Verify</button></form>'; }));
+		const next = refFor((await bridge.callTool("browser_snapshot", {})).content[0].text, /button "Email me a sign in code"/);
+		const toCode = await bridge.callTool("browser_click", { target: next });
+		expect(toCode.content[0].text).toContain("Still on the sign-in page");
+		expect(bridge.signIn).not.toBeNull();
+		const codePage = await bridge.callTool("browser_snapshot", {});
+		const code = refFor(codePage.content[0].text, /textbox "Verification code"/);
+		expect((await bridge.callTool("browser_type", { target: code, text: "PAGS_LOGIN_CODE" })).isError).toBeUndefined();
+		expect((await bridge.callTool("browser_snapshot", {})).content[0].text).not.toContain("Signed in to");
+		await page.setContent('<h1>My account</h1>');
+		expect((await bridge.callTool("browser_snapshot", {})).content[0].text).toContain("Signed in to");
+		expect(bridge.signIn).toBeNull();
+	}, 60_000);
+
+	it("a job snapshot before the sign-in wall cannot complete the pre-submit session gate (#1438)", async () => {
+		const { tools, calls } = recordingTools();
+		const { host: h, events } = host(["PAGS_LOGIN_USERNAME"]);
+		const ledger = new SiteSessionLedger(join(profileDir, "sessions.json"), () => launched!.context.cookies());
+		ledger.learnSignInWall(server.jobUrl, server.loginUrl);
+		h.sessions = ledger;
+		h.mode = "auto_submit";
+		h.gateId = "synthetic-gate";
+		const bridge = new ApplyBridge(tools, h);
+		await bridge.callTool("browser_navigate", { url: server.jobUrl });
+		await launched!.activePage()!.setContent('<button>Quick apply</button>');
+		const snapshot = await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "before-quick-apply", phase: "before_submit" });
+		const target = refFor(snapshot.content[0].text, /button "Quick apply"/);
+		const held = await bridge.callTool("browser_click", { target });
+		expect(held.content[0].text).toContain("Not pressed.");
+		const after = await bridge.callTool("browser_snapshot", {});
+		expect(after.content[0].text).not.toContain("Signed in to");
+		expect(bridge.signIn).not.toBeNull();
+		expect((await ledger.check(server.jobUrl)).state).toBe("missing");
+		expect(calls.filter(c => c.name === "browser_click")).toHaveLength(0);
+		expect(events.some(e => e.type === "submit.attempted")).toBe(false);
+	});
+
+	it("an unrelated hidden password never authorizes an application Submit (#1438)", async () => {
+		const { tools, calls } = recordingTools();
+		const { host: h, pauses } = host(["PAGS_LOGIN_PASSWORD"]);
+		const bridge = new ApplyBridge(tools, h);
+		await bridge.callTool("browser_navigate", { url: server.jobUrl });
+		const page = launched!.activePage()!;
+		await page.setContent('<form><input type="password" hidden></form><form id="application"><label>Promo code<input name="promoCode"></label><label>Postcode<input name="postcode"></label><button type="submit">Submit</button></form>');
+		await page.evaluate(() => document.querySelector('#application')!.addEventListener('submit', e => { e.preventDefault(); document.title = 'SENT'; }));
+		const snap = await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "hidden-password", phase: "initial" });
+		expect(pauses).toHaveLength(0);
+		const submit = refFor(snap.content[0].text, /button "Submit"/);
+		await bridge.callTool("browser_click", { target: submit });
+		expect(calls.filter(c => c.name === "browser_click")).toHaveLength(0);
+		expect(await page.title()).not.toBe("SENT");
+	});
+
+	it("even on an active login page, an unrelated application form cannot use the session bypass (#1438)", async () => {
+		const { tools, calls } = recordingTools();
+		const { host: h } = host(["PAGS_LOGIN_PASSWORD"]);
+		const bridge = new ApplyBridge(tools, h);
+		await bridge.callTool("browser_navigate", { url: server.loginUrl });
+		const page = launched!.activePage()!;
+		await page.setContent('<form action="/login"><label>Password<input type="password"></label><button>Sign in</button></form><form id="application"><label>Full name<input name="fullName"></label><label>Email<input type="email"></label><input type="password" hidden><button type="submit">Submit</button></form>');
+		const snap = await bridge.callTool("browser_snapshot", {});
+		const submit = refFor(snap.content[0].text, /button "Submit"/);
+		expect((await bridge.callTool("browser_click", { target: submit })).isError).toBe(true);
+		expect(calls.filter(c => c.name === "browser_click")).toHaveLength(0);
+	});
+
+	it("a same-origin sign-in form cannot submit credentials to a different origin (#1438)", async () => {
+		const { tools, calls } = recordingTools();
+		const { host: h } = host(["PAGS_LOGIN_PASSWORD"]);
+		const bridge = new ApplyBridge(tools, h);
+		await bridge.callTool("browser_navigate", { url: server.loginUrl });
+		const page = launched!.activePage()!;
+		await page.locator('form').evaluate(form => form.setAttribute('action', 'https://untrusted.example/login'));
+		const snap = await bridge.callTool("browser_snapshot", {});
+		const signIn = refFor(snap.content[0].text, /button "Sign in"/);
+		expect((await bridge.callTool("browser_click", { target: signIn })).isError).toBe(true);
+		expect(calls.filter(c => c.name === "browser_click")).toHaveLength(0);
+	});
+
 	it("password login: the name is typed, the real value is substituted, and the value never appears in any call or event", async () => {
 		mcp.provideSecrets({ PAGS_LOGIN_USERNAME: EMAIL, PAGS_LOGIN_PASSWORD: PASSWORD });
 		const names = ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD"];

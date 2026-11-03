@@ -26,6 +26,7 @@ export interface BrowserSession {
 	/** Standard Playwright MCP attaches directly to this session's browser. */
 	mcp: McpRuntime | null;
 	applyResumePath: string | null;
+	resumeTaskId?: string;
 	suppressAutoAttach: boolean;
 	launching?: Promise<BrowserContext>;
 	startingMcp?: Promise<McpRuntime>;
@@ -64,7 +65,7 @@ export class BrowserSessions {
 			const desired = mode === undefined ? this.fallbackHeadless : mode === "headless";
 			const busy = this.localLive(instanceId) || state.leases > 0 || [...state.taskIds].some(this.taskLive);
 			const changed = desired !== state.headless || settings.engine !== state.engine || settings.profilePolicy !== state.profilePolicy;
-			if (busy && newRun && (changed || settings.engine !== undefined || settings.profilePolicy !== undefined)) throw new RunnerInputError("This agent's browser is still in use. Its new browser settings take effect after the current task finishes.", 409);
+			if (busy && newRun) throw new RunnerInputError("This agent's browser is still in use. A new run can start after the current task finishes.", 409, "busy");
 			if (newRun && !busy && !changed && state.profilePolicy === "ephemeral") await this.closeSession(state);
 			if (changed && !busy) { await this.closeSession(state); state.headless = desired; state.engine = settings.engine as BrowserEngine | undefined; state.profilePolicy = settings.profilePolicy as BrowserProfilePolicy | undefined; }
 
@@ -80,9 +81,18 @@ export class BrowserSessions {
 		return (...args) => this.scope.run(state, () => fn(...args));
 	}
 
+	/** Every legacy tool request must belong to the task holding this browser, including chat. */
+	assertTaskAccess(taskId?: string): void {
+		const state = this.current;
+		if (state.leases > 0 || this.localLive(state.instanceId) || [...state.taskIds].some((id) => this.taskLive(id) && id !== taskId)) {
+			throw new RunnerInputError("This agent's browser is owned by another active task. Unattributed or unrelated browser calls cannot use it.", 409);
+		}
+	}
+
 	/** Local engines retain their launch scope across bridge requests and later resumes. */
 	async browserFor(profile: LocalApplyProfile, runDir: string, apply: boolean, tools: () => Promise<McpRuntime>, context: () => Promise<BrowserContext>): Promise<RunBrowser> {
 		const state = this.current;
+		if (state.leases > 0 || [...state.taskIds].some(this.taskLive)) throw new RunnerInputError("This agent's browser is still in use by another task.", 409, "busy");
 		state.leases++;
 		try {
 			let browser: RunBrowser;
@@ -104,14 +114,18 @@ export class BrowserSessions {
 	private async closeSession(state: BrowserSession): Promise<void> {
 		await state.startingMcp?.catch(() => undefined);
 		await state.launching?.catch(() => undefined);
-		await state.mcp?.stop().catch(() => undefined);
-		if (state.stopBrowser) await state.stopBrowser().catch(() => undefined);
-		else await state.context?.close().catch(() => undefined);
-		Object.assign(state, { context: null, activePage: null, mcp: null, stopBrowser: undefined, applyResumePath: null, suppressAutoAttach: false });
+		const mcp = state.mcp;
+		const stopBrowser = state.stopBrowser;
+		const context = state.context;
+		// Detach once before close events fire. MCP teardown can wait on a live page;
+		// closing its caller-owned browser concurrently releases that wait.
+		Object.assign(state, { context: null, activePage: null, mcp: null, stopBrowser: undefined, applyResumePath: null, resumeTaskId: undefined, suppressAutoAttach: false });
+		await Promise.allSettled([mcp?.stop(), stopBrowser ? stopBrowser() : context?.close()]);
 	}
 	/** A terminal workflow releases its ephemeral profile; waiting/human handoffs retain it. */
 	async finish(): Promise<void> {
 		const state = this.current;
+		if (![...state.taskIds].some(this.taskLive)) { state.applyResumePath = null; state.resumeTaskId = undefined; }
 		if (state.profilePolicy === "ephemeral" && state.leases === 0 && ![...state.taskIds].some(this.taskLive)) await this.closeSession(state);
 	}
 	managed(): boolean { return !!(this.current.engine || this.current.profilePolicy); }

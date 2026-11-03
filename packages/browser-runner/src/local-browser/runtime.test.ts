@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTools } from "./bridge.js";
+import type { McpCallPolicy } from "../mcp-call-policy.js";
 import { LOCAL_BROWSER_ERROR_CODES } from "./contract.js";
 import type { LocalBrowserTaskEnvelope } from "./contract.js";
 import { LocalBrowserRuntime, parseEnvelope, resolveWorkspacePath } from "./runtime.js";
@@ -37,16 +38,18 @@ let home: string;
 let spawned: Array<{ command: string; args: string[]; opts: { cwd: string; env: NodeJS.ProcessEnv }; child: FakeChild }>;
 let browsersStopped: number;
 let now: number;
+let browserPolicy: McpCallPolicy | undefined;
 
 /** The page the stub browser reports it is on (#1069 sets a sign-in page with a query). */
 let pageUrl = "https://seek.com.au/jobs";
 const browser: BrowserTools = {
+	setCallPolicy: (policy) => { browserPolicy = policy; },
 	listTools: async () => [{ name: "browser_navigate", inputSchema: {} }, { name: "browser_snapshot", inputSchema: {} }],
 	callTool: async (name, args = {}) =>
 		name === "browser_evaluate" ? { content: [{ text: `### Result\n${JSON.stringify({ url: pageUrl, title: "Jobs" })}` }] } : { content: [{ text: `${name} ${JSON.stringify(args)}` }] },
 };
 
-function runtime(over: { managedBrowser?: boolean; retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error; onSweepFailure?: (dir: string, error: unknown) => void } = {}) {
+function runtime(over: { managedBrowser?: boolean; retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error; browserWait?: Promise<void>; onSweepFailure?: (dir: string, error: unknown) => void } = {}) {
 	return new LocalBrowserRuntime({
 		dataDir: dir,
 		managedBrowser: () => over.managedBrowser === true,
@@ -57,6 +60,7 @@ function runtime(over: { managedBrowser?: boolean; retentionMs?: number; spawnEr
 		retentionMs: over.retentionMs,
 		onSweepFailure: over.onSweepFailure,
 		browserFor: async () => {
+			if (over.browserWait) await over.browserWait;
 			if (over.browserError) throw over.browserError;
 			return { tools: browser, stop: async () => void browsersStopped++ };
 		},
@@ -92,6 +96,7 @@ beforeEach(() => {
 	spawned = [];
 	browsersStopped = 0;
 	now = 1_000_000;
+	browserPolicy = undefined;
 });
 afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
@@ -125,6 +130,9 @@ describe("starting a run", () => {
 		const rt = runtime();
 		rt.start(envelope());
 		expect(rt.start(envelope({ runId: "run-other" }))).toMatchObject({ runId: "run-1", existing: true });
+		expect(rt.hasRequest(envelope({ runId: "run-other" }))).toBe(true);
+		expect(rt.hasRequest(envelope({ instanceId: "another" }))).toBe(false);
+		expect(rt.hasRequest(envelope({ requestId: "another" }))).toBe(false);
 		expect(() => rt.start(envelope({ runId: "run-2", requestId: "req-2" }))).toThrow(/already running 1 research run/);
 		// Another instance has its own cap.
 		expect(rt.start(envelope({ runId: "run-3", requestId: "req-3", instanceId: "inst-2" })).status).toBe("running");
@@ -375,6 +383,38 @@ describe("ending a run", () => {
 		rt.cancel({ runId: "run-1" });
 		expect(spawned[0].child.killed).toEqual(["SIGTERM"]);
 		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: "Cancelled by the owner" });
+	});
+
+	it("revokes browser dispatch immediately on Stop, before a slow engine exits", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		expect(browserPolicy?.guard).toEqual({ mode: "read_only" });
+		expect(browserPolicy?.isCancelled?.()).toBe(false);
+		const child = spawned[0].child;
+		const kill = vi.spyOn(child, "kill").mockReturnValue(true);
+		try {
+			rt.cancel({ runId: "run-1" });
+			expect(child.exitCode).toBeNull();
+			expect(browserPolicy?.isCancelled?.()).toBe(true);
+			await expect(rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://seek.com.au/jobs" } })).rejects.toThrow("The run is not active");
+		} finally {
+			kill.mockRestore();
+			child.exit(143);
+		}
+	});
+
+	it("Stop during browser launch closes the arriving browser and never starts the engine", async () => {
+		let finishLaunch!: () => void;
+		const browserWait = new Promise<void>((resolve) => { finishLaunch = resolve; });
+		const rt = runtime({ browserWait });
+		rt.start(envelope());
+		rt.cancel({ runId: "run-1" });
+		finishLaunch();
+		await settle();
+		expect(spawned).toHaveLength(0);
+		expect(browsersStopped).toBe(1);
+		expect(rt.status({ runId: "run-1" }).state).toBe("ended");
 	});
 
 	it("answers 404 for a run it does not hold — a restarted runner", () => {

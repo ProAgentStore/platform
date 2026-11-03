@@ -76,6 +76,7 @@ export const HANDOFF_POLL_MS = 5_000;
  *   not a fault.
  */
 export const BROWSER_RUN_STOP_REASONS: Record<ApplyOutcome, LoopStopReason> = {
+	completed: "done",
 	submitted: "done",
 	ready: "done",
 	expired: "failed",

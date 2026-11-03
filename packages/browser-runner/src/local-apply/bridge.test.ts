@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
+import { SIGN_IN_CONTROL_PROBE_FN } from "./sign-in-policy.js";
 import { ApplyBridge, type ApplyBridgeHost, CREDENTIAL_NAME, groundingRefusal } from "./bridge.js";
 import { type LocalApplyEvent, type LocalApplyPause, parseLocalApplyEvent } from "./contract.js";
 import { APPLY_SHOT_CAP, type MaskablePage, ShotRecorder } from "../local-browser/replay.js";
@@ -88,6 +89,7 @@ function fakeBrowser(
 				// drove", and the bridge's own navigation-inspection evaluate is never agent-reachable — it is
 				// refused by name before `callTool` either way. Tracked separately for the #1409 `internal` tests.
 				if (callOpts?.internal) internalCalls.push({ name, args });
+				if (args.function === SIGN_IN_CONTROL_PROBE_FN) return { content: [{ text: `### Result\n${JSON.stringify({ origin: new URL(history.at(-1) ?? FORM).origin, visible: true, safeDestination: true, credential: args.target === "e11" ? "password" : args.target === "e40" ? "username" : args.target === "e30" || args.target === "e31" ? "code" : null, sessionControl: args.target === "e41" || args.target === "e42" })}` }] };
 				if (typeof args.target === "string") return { content: [{ text: `### Result\n${JSON.stringify({ tag: "button", type: "", ...(FACTS[args.target] ?? { submits: false, method: "", name: "" }) })}` }] };
 				const url = history[history.length - 1] ?? "about:blank";
 				return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...pages[url], ...(submitPressed ? opts.postSubmit?.(postSubmitLooks) : {}) })}\n### Ran Playwright code` }] };
@@ -398,6 +400,20 @@ describe("auto_submit — once, gated, traced, and only on a confirmation", () =
 		// A second press is impossible.
 		expect((await bridge.callTool("browser_click", { target: "e8" })).isError).toBe(true);
 		expect(sent("browser_click")).toHaveLength(1);
+	});
+
+	it("serializes concurrent submit calls across their asynchronous probes and sends exactly once (#1438)", async () => {
+		const { bridge, sent, events } = await onForm({ "https://jobs.example.com/thanks": { confirmed: true } }, { mode: "auto_submit" }, { clicks: { e8: "https://jobs.example.com/thanks" } });
+		const results = await Promise.all([
+			bridge.callTool("browser_click", { target: "e8" }),
+			bridge.callTool("browser_click", { target: "e8" }),
+		]);
+		expect(results[0].content[0].text).toContain("Submitted");
+		expect(results[1].isError).toBe(true);
+		expect(results[1].content[0].text).toContain("finished for this run");
+		expect(sent("browser_click")).toHaveLength(1);
+		expect(events.filter(e => e.type === "submit.attempted")).toHaveLength(1);
+		expect(events.filter(e => e.type === "submit.confirmed")).toHaveLength(1);
 	});
 
 	it("keeps looking for a delayed SEEK-style receipt, then confirms it exactly once", async () => {
@@ -853,17 +869,71 @@ describe("the agent-driven sign-in (#1412)", () => {
 		expect(b.calls.filter((c) => c.name === "browser_type")).toHaveLength(0);
 	});
 
-	it("off the wall the sign-in is over: a page without one ends it, and its buttons go through the ordinary rules and the commit guard", async () => {
+	it("navigating away from a wall without an authentication action does not claim a signed-in session", async () => {
 		const { bridge, calls, done } = await atSignIn(["PAGS_LOGIN_USERNAME"]);
 		const back = await bridge.callTool("browser_navigate", { url: FORM });
-		expect(back.content[0].text).toMatch(/Signed in to seek\.com/);
-		expect(bridge.signIn).toBeNull();
-		expect(done).toEqual([1]);
+		expect(back.content[0].text).not.toMatch(/Signed in to seek\.com/);
+		expect(bridge.signIn).not.toBeNull();
+		expect(done).toEqual([]);
 		// "Sign in" is a submitting button on this page: the guard, not a session click, decides it.
 		const r = await bridge.callTool("browser_click", { target: "e41" });
 		expect(r.isError).toBe(true);
 		expect(r.content[0].text).toMatch(/supervisor_checkpoint/);
 		expect(calls.filter((c) => c.name === "browser_click")).toHaveLength(0);
+	});
+
+	it("a provisioning pause on a job page cannot turn a snapshot into signed-in evidence (#1438)", async () => {
+		const b = fakeBrowser({ [FORM]: {} });
+		const h = signInHost(["PAGS_LOGIN_PASSWORD"]);
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("browser_type", { target: "e11", text: "not-a-secret" });
+		const snapshot = await bridge.callTool("browser_snapshot", {});
+		expect(snapshot.content[0].text).not.toContain("Signed in to");
+		expect(bridge.signIn).not.toBeNull();
+		expect(h.done).toEqual([]);
+		const typed = await bridge.callTool("browser_type", { target: "e11", text: "PAGS_LOGIN_PASSWORD" });
+		expect(typed.isError).toBe(true);
+		expect(b.sent("browser_type")).toHaveLength(0);
+	});
+
+	it.each(["https://evil.example/login", "https://other.seek.com/login", "http://login.seek.com/login"])("refuses a provisioned password after redirect to %s (#1438)", async (url) => {
+		const { bridge, history, sent } = await atSignIn(["PAGS_LOGIN_PASSWORD"]);
+		history.push(url);
+		const typed = await bridge.callTool("browser_type", { target: "e11", text: "PAGS_LOGIN_PASSWORD" });
+		expect(typed.isError).toBe(true);
+		expect(sent("browser_type")).toHaveLength(0);
+	});
+
+	it("a password cannot be typed into a username field on the correct origin (#1438)", async () => {
+		const { bridge, sent } = await atSignIn(["PAGS_LOGIN_PASSWORD"]);
+		expect((await bridge.callTool("browser_type", { target: "e40", text: "PAGS_LOGIN_PASSWORD" })).isError).toBe(true);
+		expect(sent("browser_type")).toHaveLength(0);
+	});
+
+	it("a generic application submit does not borrow authority from the page's login wall (#1438)", async () => {
+		const { bridge, sent } = await atSignIn(["PAGS_LOGIN_PASSWORD"]);
+		expect((await bridge.callTool("browser_click", { target: "e8" })).isError).toBe(true);
+		expect(sent("browser_click")).toHaveLength(0);
+		expect(bridge.submitAttempted).toBe(false);
+	});
+
+	it("checkpoints keep an active agent sign-in instead of pausing it again (#1438)", async () => {
+		const { bridge, pauses } = await atSignIn(["PAGS_LOGIN_PASSWORD"]);
+		const checkpoint = await bridge.callTool("supervisor_checkpoint", { checkpointId: "login:2", phase: "post_navigation" });
+		expect(checkpoint.content[0].text).toContain("Sign in to seek.com yourself");
+		expect(pauses).toHaveLength(1);
+	});
+
+	it("a captcha appearing after navigation offers a takeover at the next checkpoint (#1438)", async () => {
+		const pages: Record<string, PageFlags> = { [FORM]: {} };
+		const { bridge, pauses } = await onForm(pages);
+		pages[FORM] = { captcha: true };
+		const checkpoint = await bridge.callTool("supervisor_checkpoint", { checkpointId: "late:2", phase: "uncertain" });
+		expect(checkpoint.isError).toBe(true);
+		expect(pauses).toEqual([expect.objectContaining({ reason: "captcha" })]);
+		expect(bridge.blocked?.reason).toBe("captcha");
 	});
 
 	it("a code page that signs in as the code lands is noticed at the next snapshot", async () => {

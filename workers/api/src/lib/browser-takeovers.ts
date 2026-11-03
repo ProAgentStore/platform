@@ -84,10 +84,21 @@ export async function getTakeover(env: DB, userId: string, instanceId: string, i
 
 /** The most recent takeover for one subject, live or not. */
 export async function latestTakeoverFor(env: DB, userId: string, instanceId: string, kind: TakeoverSubject, subjectId: string): Promise<BrowserTakeover | null> {
-	const r = await env.DB.prepare("SELECT * FROM browser_takeovers WHERE user_id = ?1 AND instance_id = ?2 AND subject_kind = ?3 AND subject_id = ?4 ORDER BY created_at DESC LIMIT 1")
+	const r = await env.DB.prepare("SELECT * FROM browser_takeovers WHERE user_id = ?1 AND instance_id = ?2 AND subject_kind = ?3 AND subject_id = ?4 ORDER BY state IN ('requested', 'active') DESC, created_at DESC, rowid DESC LIMIT 1")
 		.bind(userId, instanceId, kind, subjectId)
 		.first<Row>();
 	return r ? present(r) : null;
+}
+
+/** Internal handoff identity; never page content or a credential. */
+export async function takeoverRunnerRequest(env: DB, userId: string, instanceId: string, id: string): Promise<string | null> {
+	const row = await env.DB.prepare("SELECT runner_request_id FROM browser_takeovers WHERE id = ?1 AND user_id = ?2 AND instance_id = ?3").bind(id, userId, instanceId).first<{ runner_request_id: string | null }>();
+	return row?.runner_request_id ?? null;
+}
+
+/** Bind an explicit owner request on its first live view without changing an existing binding. */
+export async function bindTakeoverRunnerRequest(env: DB, userId: string, instanceId: string, id: string, requestId: string): Promise<void> {
+	await env.DB.prepare("UPDATE OR IGNORE browser_takeovers SET runner_request_id = ?1 WHERE id = ?2 AND user_id = ?3 AND instance_id = ?4 AND runner_request_id IS NULL AND state IN ('requested', 'active')").bind(requestId, id, userId, instanceId).run();
 }
 
 export async function listTakeovers(env: DB, userId: string, instanceId: string, opts: { state?: TakeoverState; subjectKind?: TakeoverSubject; subjectId?: string; limit?: number } = {}): Promise<BrowserTakeover[]> {
@@ -114,18 +125,18 @@ export async function listTakeovers(env: DB, userId: string, instanceId: string,
  */
 export async function requestTakeover(
 	env: DB,
-	input: { userId: string; instanceId: string; subjectKind: TakeoverSubject; subjectId: string; reason: TakeoverReason; mobileAllowed: boolean; now?: number; ttlMs?: number; id?: string },
+	input: { userId: string; instanceId: string; subjectKind: TakeoverSubject; subjectId: string; reason: TakeoverReason; mobileAllowed: boolean; now?: number; ttlMs?: number; id?: string; runnerRequestId?: string },
 ): Promise<{ takeover: BrowserTakeover; created: boolean } | null> {
 	const now = input.now ?? Date.now();
 	const agent = await env.DB.prepare("SELECT agent_id FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(input.instanceId, input.userId).first<{ agent_id: string }>();
 	if (!agent) return null;
 	const id = input.id ?? crypto.randomUUID();
 	const inserted = await env.DB.prepare(
-		`INSERT INTO browser_takeovers (id, instance_id, agent_id, user_id, subject_kind, subject_id, state, reason, mobile_allowed, expires_at, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'requested', ?7, ?8, ?9, ?10, ?10)
+		`INSERT INTO browser_takeovers (id, instance_id, agent_id, user_id, subject_kind, subject_id, state, reason, mobile_allowed, expires_at, created_at, updated_at, runner_request_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'requested', ?7, ?8, ?9, ?10, ?10, ?11)
 		 ON CONFLICT DO NOTHING`,
 	)
-		.bind(id, input.instanceId, agent.agent_id, input.userId, input.subjectKind, input.subjectId, input.reason, input.mobileAllowed ? 1 : 0, now + (input.ttlMs ?? TAKEOVER_TTL_MS), now)
+		.bind(id, input.instanceId, agent.agent_id, input.userId, input.subjectKind, input.subjectId, input.reason, input.mobileAllowed ? 1 : 0, now + (input.ttlMs ?? TAKEOVER_TTL_MS), now, input.runnerRequestId ?? null)
 		.run()
 		.then((r) => (r.meta?.changes ?? 0) > 0)
 		.catch(() => false);

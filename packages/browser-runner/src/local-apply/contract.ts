@@ -238,10 +238,10 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  *
  * Bump this when the runner's half of the contract changes again, together with the CLI version
  * that ships it — `policy.test.ts` pins the pair, so the floor cannot name a release that has not
- * been published. `cliAtLeast` treats an unreported version as capable, which is the convention
- * every MIN_CLI gate here follows.
+ * been published. Application dispatch requires an actual reported version: an unknown runner
+ * cannot prove the dispatch-time submission guard and credential origin binding shipped in 0.4.200.
  */
-export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.97";
+export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.200";
 
 export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output" | "submit_unconfirmed";
 export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output", "submit_unconfirmed"];
@@ -426,6 +426,8 @@ export interface LocalApplyResultEnvelope {
 
 /** What the run is waiting on, as `status` reports it while paused. */
 export interface LocalApplyPause {
+	/** Opaque identity fixed for this pause, distinct from later pauses on the same run. */
+	handoffRequestId?: string;
 	reason: LocalApplyPauseReason;
 	url?: string;
 	domain?: string;

@@ -162,7 +162,7 @@ export async function claimVerifiedOneClickRecovery(
 export async function consumeSubmitAuthorization(env: DB, authorizationId: string, userId: string, runId: string, now: number, recovery?: { id: string; runnerInstanceId: string }): Promise<SubmitAuthorization | null> {
 	const res = await env.DB.prepare(
 		`UPDATE job_application_submit_authorizations SET consumed_at = ?1, consumed_run_id = ?2
-		   WHERE id = ?3 AND user_id = ?4 AND consumed_at IS NULL
+		   WHERE id = ?3 AND user_id = ?4 AND consumed_at IS NULL AND revoked_at IS NULL
 		     AND (approval_kind = 'standard' OR (recovery_id = ?5 AND recovery_runner_instance_id = ?6))`,
 	)
 		.bind(now, runId, authorizationId, userId, recovery?.id ?? null, recovery?.runnerInstanceId ?? null)

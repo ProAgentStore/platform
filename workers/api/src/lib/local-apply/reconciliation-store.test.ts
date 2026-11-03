@@ -69,6 +69,25 @@ describe("#1013 local-apply durable reconciliation", () => {
 		expect(await markLocalApplyHandoff({ DB: d1.DB }, { continuityId: handoff!.continuityId, instanceId: "runner", userId: "u1", state: "ready" }, now + 2)).toBeNull();
 	});
 
+	it("retains closed handoff history and creates exactly one fresh handoff for a later pause", async () => {
+		const liveRun = { ...run("run-1", "paused"), pause: { reason: "captcha" as const, handoffRequestId: "pause-first" } };
+		const savePause = () => d1.DB.prepare("UPDATE local_apply_runs SET status = 'paused', pause = ?1 WHERE id = 'run-1'").bind(JSON.stringify(liveRun.pause)).run();
+		await savePause();
+		const input = { run: liveRun, app: { id: "app-1", fillRunId: "run-1" }, userId: "u1", browserProfile: "isolated", expiresAt: now + 60_000 };
+		const first = (await createLocalApplyHandoff({ DB: d1.DB }, input, now))!;
+		await markLocalApplyHandoff({ DB: d1.DB }, { continuityId: first.continuityId, instanceId: "runner", userId: "u1", state: "closed", terminalReason: "unavailable" }, now + 1);
+		expect(await createLocalApplyHandoff({ DB: d1.DB }, input, now + 2)).toMatchObject({ continuityId: first.continuityId, state: "closed" });
+		liveRun.pause.handoffRequestId = "pause-second";
+		await savePause();
+		const [second, duplicate] = await Promise.all([createLocalApplyHandoff({ DB: d1.DB }, input, now + 3), createLocalApplyHandoff({ DB: d1.DB }, input, now + 3)]);
+		expect(second).toMatchObject({ state: "requested", handoffRequestId: "pause-second" });
+		expect(second?.continuityId).not.toBe(first.continuityId);
+		expect(duplicate?.continuityId).toBe(second?.continuityId);
+		expect(await getHandoffById({ DB: d1.DB }, "runner", "u1", first.continuityId)).toMatchObject({ state: "closed" });
+		expect(await getHandoffById({ DB: d1.DB }, "runner", "u2", second!.continuityId)).toBeNull();
+		expect(await d1.DB.prepare("SELECT count(*) AS n FROM local_apply_handoffs WHERE run_id = 'run-1'").first()).toEqual({ n: 2 });
+	});
+
 	it("accepts only structured proof for the same uncertain attempt and keeps the attempt marker immutable", async () => {
 		const uncertain = run("run-1", "blocked");
 		const original = app();

@@ -2,13 +2,15 @@ import { createConnection } from "@playwright/mcp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { BrowserContext } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
+import { guardedToolRefusal, navigationRefusal, type McpCallPolicy } from "./mcp-call-policy.js";
 
 /** The caller owns the browser in either case. Native contexts work across all engines (#1431). */
-export type McpRuntimeOptions =
+export type McpRuntimeOptions = (
 	| { context: BrowserContext; cdpEndpoint?: never }
-	| { cdpEndpoint: string; context?: never };
+	| { cdpEndpoint: string; context?: never }
+) & { activePage?: () => Page | null; onPageSelected?: (page: Page) => void };
 
 export interface McpToolResult {
 	/** `text` blocks, or an `image` block (base64 `data` + `mimeType`) from `browser_take_screenshot` (#1063). */
@@ -42,6 +44,27 @@ async function withTimeout(p: Promise<unknown> | undefined, ms: number): Promise
 export class McpRuntime {
 	private server?: Server;
 	private client?: Client;
+	private context?: BrowserContext;
+	private selectedPage?: Page;
+	private activePage?: () => Page | null;
+	private onPageSelected?: (page: Page) => void;
+	private policy: McpCallPolicy = {};
+	setCallPolicy(policy: McpCallPolicy): void { this.policy = policy; }
+
+	/** Keep the native page used for policy/takeover identical to the MCP selected tab. */
+	async selectPage(page: Page): Promise<void> {
+		if (this.selectedPage === page && !page.isClosed()) return;
+		// MCP attaches lazily on its first tool. Listing initializes its native tab registry.
+		if (!this.selectedPage) {
+			const listed = await this.callTool("browser_tabs", { action: "list" }, { internal: true });
+			if (listed.isError) throw new Error("Could not initialize the browser's tab registry.");
+		}
+		const index = this.context?.pages().indexOf(page) ?? -1;
+		if (index < 0) throw new Error("Browser page is no longer owned by this runtime.");
+		const result = await this.callTool("browser_tabs", { action: "select", index }, { internal: true });
+		if (result.isError) throw new Error("Could not select the browser's active page.");
+		this.selectedPage = page;
+	}
 	/**
 	 * Native secret placeholders (#1412). `@playwright/mcp` reads `config.secrets[name]` at call time
 	 * (`browser_type` / `browser_fill_form` substitute the value, responses redact it to
@@ -76,6 +99,9 @@ export class McpRuntime {
 	async start(opts: McpRuntimeOptions): Promise<void> {
 		if (this.client) return;
 		if ((!opts.context && !opts.cdpEndpoint) || (opts.context && opts.cdpEndpoint)) throw new Error("MCP needs exactly one caller-owned browser context or CDP endpoint.");
+		this.context = opts.context;
+		this.activePage = opts.activePage;
+		this.onPageSelected = opts.onPageSelected;
 		// The runner is a trusted local process uploading the user's OWN résumé, which
 		// lives under the runner's data dir (outside the CWD). Lift the file-root guard
 		// (meant to stop an LLM reading arbitrary host files) so browser_file_upload can
@@ -119,7 +145,14 @@ export class McpRuntime {
 	/** The standard Playwright MCP tool schemas — advertised to the cloud brain verbatim. */
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
 		const res = await this.connected().listTools();
-		return res.tools as Array<{ name: string; description?: string; inputSchema: unknown }>;
+		return res.tools.filter((tool) => tool.name !== "browser_evaluate" && tool.name !== "browser_run_code") as Array<{ name: string; description?: string; inputSchema: unknown }>;
+	}
+
+	private async probe<T>(args: Record<string, unknown>): Promise<T | null> {
+		const result = await this.callTool("browser_evaluate", args, { internal: true });
+		if (result.isError) return null;
+		const block = this.textOf(result).split("### Result")[1]?.split("\n###")[0]?.trim();
+		try { return block ? JSON.parse(block) as T : null; } catch { return null; }
 	}
 
 	/**
@@ -127,10 +160,53 @@ export class McpRuntime {
 	 * dialog auto-clear, the bridges' own page inspection) — never set by an agent-driven call. Every
 	 * call is recorded regardless; `internal` only tells a reader which ones were the agent's own.
 	 */
-	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean } = {}): Promise<McpToolResult> {
+	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean; expectedOrigin?: string } = {}): Promise<McpToolResult> {
 		const startedAt = Date.now();
+		const client = this.connected();
+		const cancelled = () => this.policy.isCancelled?.() ? "BLOCKED by the runner — this task was stopped; no further browser action is permitted." : null;
+		let refusal = cancelled();
+		const currentPage = () => this.activePage?.() ?? this.selectedPage ?? this.context?.pages().at(-1);
+		const pageBefore = currentPage();
+		if (!refusal && name !== "browser_navigate" && name !== "browser_tabs" && pageBefore) refusal = navigationRefusal(pageBefore.url());
+		if (!refusal && name !== "browser_tabs" && this.activePage) {
+			const page = this.activePage();
+			if (!page || page.isClosed()) refusal = "BLOCKED by the runner — the run's active page is no longer available.";
+			else await this.selectPage(page);
+		}
+		if (!refusal) refusal = await guardedToolRefusal(name, args, this.policy.guard, (probeArgs) => this.probe(probeArgs), opts.internal ?? false);
+		const fields = name === "browser_fill_form" && Array.isArray(args.fields) ? args.fields as Record<string, unknown>[] : [];
+		const secretEntry = (name === "browser_type" && typeof args.text === "string" && !!this.secrets[args.text]) || fields.some((field) => typeof field.value === "string" && !!this.secrets[field.value]);
+		if (!refusal && secretEntry && !opts.expectedOrigin) refusal = "BLOCKED by the runner — credential entry requires a runner-bound sign-in origin.";
+		if (!refusal && opts.expectedOrigin) {
+			// A secret target may be in a cross-origin iframe even when the top page stayed put.
+			const targets = name === "browser_fill_form" ? fields.map((field) => field.ref ?? field.target) : [args.target ?? args.ref];
+			for (const target of targets) {
+				if (typeof target !== "string") continue;
+				const targetOrigin = await this.probe<string>({ target, element: "sign-in control", function: "el => el.ownerDocument.location.origin" });
+				if (targetOrigin !== opts.expectedOrigin) refusal = "BLOCKED by the runner — the sign-in control changed origin before credential entry.";
+			}
+			const page = this.selectedPage ?? this.context?.pages().at(-1);
+			let origin: string | undefined;
+			try { origin = page && !page.isClosed() ? new URL(page.url()).origin : undefined; } catch { /* Unknown means refused. */ }
+			if (origin !== opts.expectedOrigin) refusal = "BLOCKED by the runner — the sign-in page changed origin before credential entry.";
+		}
+		// Stop can arrive while a DOM/origin probe was in flight. Check again at dispatch.
+		refusal ??= cancelled();
+		if (refusal) {
+			this.refused(name, args, refusal);
+			return { isError: true, content: [{ type: "text", text: refusal }] };
+		}
 		try {
-			const res = (await this.connected().callTool({ name, arguments: args })) as McpToolResult;
+			let res = (await client.callTool({ name, arguments: args })) as McpToolResult;
+			if (!res.isError && name === "browser_tabs") {
+				this.selectedPage = args.action === "select" && typeof args.index === "number" ? this.context?.pages()[args.index] : undefined;
+				if (this.selectedPage) this.onPageSelected?.(this.selectedPage);
+			}
+			// Back, a link or a popup can navigate without browser_navigate. Never return a
+			// snapshot from a local/internal page even if an already-open tab reached one.
+			const pageAfter = currentPage();
+			const forbiddenPage = pageAfter && navigationRefusal(pageAfter.url());
+			if (forbiddenPage) res = { isError: true, content: [{ type: "text", text: forbiddenPage }] };
 			this.calls.record({
 				subject: this.subject,
 				tool: name,
@@ -138,7 +214,7 @@ export class McpRuntime {
 				secrets: this.secrets,
 				startedAt,
 				outcome: res.isError ? "tool_error" : "ok",
-				...(res.isError ? { errorHead: this.textOf(res).slice(0, 200) } : {}),
+				...(res.isError ? { errorHead: this.textOf(res) } : {}),
 				internal: opts.internal ?? false,
 			});
 			return res;
@@ -150,7 +226,7 @@ export class McpRuntime {
 				secrets: this.secrets,
 				startedAt,
 				outcome: "thrown",
-				errorHead: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+				errorHead: err instanceof Error ? err.message : String(err),
 				internal: opts.internal ?? false,
 			});
 			throw err;
@@ -190,5 +266,10 @@ export class McpRuntime {
 		await withTimeout(this.server?.close(), 20_000);
 		this.client = undefined;
 		this.server = undefined;
+		this.context = undefined;
+		this.selectedPage = undefined;
+		this.activePage = undefined;
+		this.onPageSelected = undefined;
+		this.policy = {};
 	}
 }

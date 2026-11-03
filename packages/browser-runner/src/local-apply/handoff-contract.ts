@@ -83,6 +83,8 @@ export interface LocalApplySignInStatus {
 
 /** All four bindings are compared at the runner boundary before a live page is exposed. */
 export interface LocalApplyHandoffRequest {
+	/** Present on new runners: binds this handoff to the exact current pause. */
+	handoffRequestId?: string;
 	handoffId: string;
 	runId: string;
 	applicationId: string;

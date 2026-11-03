@@ -24,6 +24,7 @@
  *
  * The trace carries classes, domains, decisions and artifact handles — never a typed value.
  */
+import { SIGN_IN_CONTROL_PROBE_FN, SIGN_IN_PAGE_PROBE_FN, type SignInControlFacts, signInOrigin } from "./sign-in-policy.js";
 import { classifyApplyClick } from "./contract.js";
 import { LISTING_EXPIRED_RE, LISTING_UNAVAILABLE_RE } from "./unavailable.js";
 import type { MaskablePage, ReplayPoint, ShotRecorder } from "../local-browser/replay.js";
@@ -60,6 +61,8 @@ export interface ApplyBridgeHost {
 	/** The verified absolute path of an approved artifact, or why it cannot be uploaded. */
 	artifactPath(kind: LocalApplyArtifactKind): { path: string; sha256: string } | { error: string };
 	overTime(): boolean;
+	/** Owner Stop invalidates even a decision whose model turn has already started. */
+	isStopped?(): boolean;
 	now(): number;
 	limits: LocalApplyLimits;
 	mode: LocalApplyMode;
@@ -146,7 +149,7 @@ export const INSPECT_PAGE = `() => {
 		title: document.title.slice(0, 200),
 		captcha: has('iframe[src*="recaptcha"], .g-recaptcha, iframe[src*="hcaptcha.com"], .h-captcha, iframe[src*="challenges.cloudflare.com"], .cf-turnstile, iframe[src*="arkoselabs"], .geetest_holder')
 			|| /confirm (that )?you('?re| are) not a robot|i'?m not a robot|verify (that )?you('?re| are) (a )?human/.test(text),
-		login: has('input[type=password]'),
+		login: (${SIGN_IN_PAGE_PROBE_FN})(),
 		duplicate: /you('ve| have) already applied|already applied (for|to) this|application (already exists|has already been (submitted|received))|duplicate application/.test(text),
 		antiBot: /unusual traffic|access (is )?denied|request (has been )?blocked|bot detected|checking (if the site connection is secure|your browser)/.test(text),
 		confirmed: new RegExp(CONFIRMATION_TEXT_SOURCE).test(text),
@@ -198,6 +201,8 @@ export class ApplyBridge {
 	actions = 0;
 	pages = 0;
 	private lastSnapshot = "";
+	/** A run owns one page: concurrent calls must not share a pre-submit observation. */
+	private toolQueue: Promise<void> = Promise.resolve();
 	private readonly admitted = new Set<string>();
 	/** Fill and submit are disabled until the cloud supervisor releases the current page checkpoint. */
 	private supervisorApproved = false;
@@ -215,6 +220,9 @@ export class ApplyBridge {
 	blocked: { reason: LocalApplyBlockReason; questions: string[] } | null = null;
 	/** The agent-driven sign-in in progress (#1412): the site, and the secret NAMES the CLI may type. Null otherwise. */
 	signIn: { site: string; names: string[] } | null = null;
+	private signInOrigin: string | null = null;
+	private signInWallSeen = false;
+	private signInActionTaken = false;
 
 	constructor(
 		private readonly browser: BrowserTools,
@@ -246,7 +254,14 @@ export class ApplyBridge {
 		return points[name] ?? null;
 	}
 
-	async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
+	callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
+		const call = this.toolQueue.then(() => this.executeTool(name, args));
+		// A failed call must release the queue without allowing another call to overlap it.
+		this.toolQueue = call.then(() => undefined, () => undefined);
+		return call;
+	}
+
+	private async executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
 		const submittedBefore = this.submitAttempted;
 		const res = await this.dispatch(name, args);
 		const point = res.isError ? null : ApplyBridge.shotPoint(name, this.submitAttempted && !submittedBefore);
@@ -307,6 +322,7 @@ export class ApplyBridge {
 	}
 
 	private async dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+		if (this.host.isStopped?.()) return this.refuse(name, "read", "The application was stopped. No further browser action is allowed.");
 		if (this.done) return text("The application is finished for this run. Stop now.", true);
 		if (name === "ready_for_review") return this.review(typeof args.summary === "string" ? args.summary : "");
 		if (name === "request_answer") return this.requestAnswer(args);
@@ -330,9 +346,10 @@ export class ApplyBridge {
 		// shows no wall any more is the same evidence the owner's own sign-in is judged by (`holdFor`'s recheck).
 		if (name === "browser_snapshot" && this.signIn && !res.isError) {
 			const state = await this.inspect();
-			if (state && !this.blockerOf(state)) return this.signedIn(textOf(res), hostOf(state.url) ?? "");
+			if (state && this.observeSignIn(state)) return this.signedIn(textOf(res), hostOf(state.url) ?? "");
 		}
 		if (name === "browser_navigate_back") {
+			this.signInActionTaken = false;
 			const state = await this.inspect();
 			if (state) return this.landed(textOf(res), state);
 		}
@@ -375,6 +392,11 @@ export class ApplyBridge {
 			// A pause raised from a credential FIELD carries no domain: the page it is on is the sign-in site.
 			const host = p.domain ?? hostOf((await this.inspect())?.url ?? "") ?? "";
 			this.signIn = { site: host ? siteKeyOf(host) : "", names: this.host.signInSecrets?.() ?? [] };
+			this.signInOrigin = null;
+			this.signInWallSeen = false;
+			this.signInActionTaken = false;
+			const state = await this.inspect();
+			if (state) this.observeSignIn(state);
 			this.supervisorApproved = false;
 			this.blocked = null;
 			return true;
@@ -398,7 +420,7 @@ export class ApplyBridge {
 		this.host.emit({ type: "browser.navigated", url: state.url, domain: host });
 		const blocker = this.blockerOf(state);
 		// Signing in (#1412): a page past the sign-in wall means the CLI got in; the wall itself is where it is working.
-		if (this.signIn && !blocker) return this.signedIn(toolText, host);
+		if (this.signIn && this.observeSignIn(state)) return this.signedIn(toolText, host);
 		if (this.signIn && blocker === "login_required") return text(`${toolText}\n\nStill on the sign-in page. ${this.signInInstructions()}`);
 		if (!blocker) return text(toolText);
 		return this.holdFor(blocker, state);
@@ -411,14 +433,34 @@ export class ApplyBridge {
 			`Sign in to ${this.signIn?.site || "the site"} yourself now. PAGS has provisioned these secret names: ${names.join(", ") || "(none yet)"}.`,
 			"Take a browser_snapshot, then type the NAME exactly (for example PAGS_LOGIN_USERNAME) into the matching field with browser_type: the runner substitutes the real value, which you never see. Then click the sign-in / continue button.",
 			"If the site emails a code: click the button that sends it, call request_sign_in_code, and when it returns type PAGS_LOGIN_CODE into the code box.",
-			"Type nothing else into a password or code field, and do not fill the application until you are told you are signed in.",
+			"First reach the site's actual sign-in page using its Sign in link; a job page without a login wall is not proof of sign-in. Type nothing else into a password or code field, and do not fill the application until you are told you are signed in.",
 		].join(" ");
 	}
 
-	/** The sign-in wall is gone: remember the session, wipe the secrets, and hand the CLI back to the application. */
+	/** Require an observed credential wall and authentication action; an ordinary job page proves neither. */
+	private observeSignIn(state: PageState): boolean {
+		if (!this.signIn) return false;
+		const host = hostOf(state.url) ?? "";
+		const origin = signInOrigin(state.url);
+		if (state.login && siteKeyOf(host) === this.signIn.site && this.host.isAllowed(host) && origin && (!this.signInOrigin || origin === this.signInOrigin)) {
+			this.signInWallSeen = true;
+			this.signInOrigin ??= origin;
+		}
+		return this.signInWallSeen && this.signInActionTaken && !this.blockerOf(state) && this.host.isAllowed(host);
+	}
+
+	private async signInControl(ref: string, label: string): Promise<SignInControlFacts | null> {
+		const res = await this.browser.callTool("browser_evaluate", { element: label || "sign-in control", target: ref, function: SIGN_IN_CONTROL_PROBE_FN }, { internal: true }).catch(() => null);
+		const facts = res && !res.isError ? evaluateResult(textOf(res)) as SignInControlFacts | null : null;
+		return facts && typeof facts.origin === "string" && typeof facts.visible === "boolean" ? facts : null;
+	}
+
 	private async signedIn(toolText: string, host: string): Promise<ToolResult> {
 		const site = this.signIn?.site || (host ? siteKeyOf(host) : "");
 		this.signIn = null;
+		this.signInOrigin = null;
+		this.signInWallSeen = false;
+		this.signInActionTaken = false;
 		this.host.signInDone?.();
 		if (site) await this.recordSignIn(site);
 		this.host.emit({ type: "policy.decision", ...(host ? { domain: host } : {}), detail: { tool: "agent_sign_in", class: "session", decision: "signed_in", site } });
@@ -439,10 +481,13 @@ export class ApplyBridge {
 	/** A sign-in page's own button (#1412): on the sign-in site, pressed as a session action, then the page is re-read. */
 	private async sessionClick(forward: Record<string, unknown>, t: { ref: string; role: string; name: string }, before: PageState): Promise<ToolResult> {
 		const host = hostOf(before.url) ?? "";
-		if (!host || siteKeyOf(host) !== this.signIn?.site) return this.refuse("browser_click", "session", `"${t.name}" is not on the sign-in site (${this.signIn?.site}). Session buttons are pressed there only.`, host || undefined);
+		if (!host || !this.signInOrigin || siteKeyOf(host) !== this.signIn?.site || signInOrigin(before.url) !== this.signInOrigin) return this.refuse("browser_click", "session", `"${t.name}" is not on the sign-in site (${this.signIn?.site}). Session buttons are pressed there only.`, host || undefined);
+		const facts = await this.signInControl(t.ref, t.name);
+		if (!facts?.sessionControl || facts.origin !== this.signInOrigin) return this.refuse("browser_click", "session", "That control is not part of a visible sign-in form on the bound origin. Nothing was pressed.", host);
 		this.host.emit({ type: "policy.decision", domain: host, detail: { tool: "browser_click", class: "session", decision: "allowed", reason: "sign_in_step", role: t.role } });
-		const res = await this.browser.callTool("browser_click", forward);
+		const res = await this.browser.callTool("browser_click", forward, { expectedOrigin: this.signInOrigin });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
+		this.signInActionTaken = true;
 		const state = await this.inspect();
 		if (state) return this.landed(textOf(res), state);
 		return text(textOf(res));
@@ -481,6 +526,7 @@ export class ApplyBridge {
 		if (!host) return this.refuse("browser_navigate", "read", "Only http(s) URLs can be opened.");
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_navigate", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
 		if (!(await this.admit(host, url))) return this.refuse("browser_navigate", "read", `${host} is not one of this application's sites and the owner did not allow it. Stop now.`, host);
+		if (this.signIn) this.signInActionTaken = false;
 		const res = await this.browser.callTool("browser_navigate", { url });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		return this.afterMove("browser_navigate", textOf(res));
@@ -588,9 +634,16 @@ export class ApplyBridge {
 		// trace carries the name. Anything else into a credential field is refused, never paused for again. A name
 		// the cloud did not provision is refused too: the library would type it literally.
 		if (this.signIn?.names.includes(value)) {
+			const state = await this.inspect();
+			if (state) this.observeSignIn(state);
+			const origin = state && signInOrigin(state.url);
+			const facts = await this.signInControl(t.ref, t.name);
+			const kind = value === "PAGS_LOGIN_PASSWORD" ? "password" : value === "PAGS_LOGIN_CODE" ? "code" : value === "PAGS_LOGIN_USERNAME" ? "username" : null;
+			if (!origin || !this.signInOrigin || origin !== this.signInOrigin || facts?.origin !== this.signInOrigin || !facts.visible || !facts.safeDestination || facts.credential !== kind || !kind) return this.refuse("browser_type", "session", "The credential field is not on the bound sign-in origin or does not match this secret. Nothing was typed.");
 			this.host.emit({ type: "policy.decision", detail: { tool: "browser_type", class: "session", decision: "allowed", reason: `secret:${value}`, role: t.role } });
-			const res = await this.browser.callTool("browser_type", { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value });
+			const res = await this.browser.callTool("browser_type", { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value }, { expectedOrigin: this.signInOrigin });
 			if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
+			if (kind === "password" || kind === "code") this.signInActionTaken = true;
 			return text(textOf(res));
 		}
 		if (SECRET_NAME.test(value)) return this.refuse("browser_type", "session", `${value} is not a provisioned secret name${this.signIn ? ` (provisioned: ${this.signIn.names.join(", ") || "none"})` : ""}. Nothing was typed.`);
@@ -670,11 +723,16 @@ export class ApplyBridge {
 		const state = await this.inspect();
 		// A sign-in reached after the last landing — a late redirect (#1100, run 804bed49): hold for the owner as
 		// on landing. Reported to the cloud as a blocker it was stopped, and ended `incomplete`.
-		if (state?.login && !this.blocked) {
-			const held = await this.holdFor("login_required", state);
+		if (this.signIn) {
+			if (state && this.observeSignIn(state)) return this.signedIn("", hostOf(state.url) ?? "");
+			if (!state || !state.captcha && !state.antiBot) return text(this.signInInstructions());
+		}
+		const blocker = state && this.blockerOf(state);
+		if (state && blocker && !this.blocked) {
+			const held = await this.holdFor(blocker, state);
 			// The cloud answered with secrets (#1412): the hold's text is the CLI's sign-in instructions, not an owner's sign-in.
 			if (held.isError || this.signIn) return held;
-			return text("The owner signed in. Take a browser_snapshot to read the page, then call supervisor_checkpoint again.");
+			return text(`${blocker === "login_required" ? "The owner signed in" : "The owner handled the blocker"}. Take a browser_snapshot to read the page, then call supervisor_checkpoint again.`);
 		}
 		const blockers = new Set<LocalApplySupervisorBlocker>();
 		if (state?.captcha) blockers.add("captcha");
@@ -835,6 +893,8 @@ export class ApplyBridge {
 		if (!this.host.isAllowed(domain)) return this.refuse("browser_click", "submit", `${domain} is not one of this application's sites; nothing was submitted.`, domain);
 		const gate = await this.sessionGate(before.url, domain);
 		if (gate) return gate;
+		// Stop can arrive while the fresh page / session checks above are awaiting the browser.
+		if (this.host.isStopped?.()) return this.refuse("browser_click", "submit", "The application was stopped; nothing was submitted.");
 		this.submitAttempted = true;
 		this.host.emit({ type: "submit.attempted", url: before.url, domain, detail: { class: "submit", gateId: this.host.gateId } });
 		const res = await this.browser.callTool("browser_click", forward);

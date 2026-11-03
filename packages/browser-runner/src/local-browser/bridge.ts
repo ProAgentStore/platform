@@ -24,15 +24,18 @@ import type { LocalBrowserEvent, LocalBrowserFinding, LocalBrowserLimits, LocalB
 import { LOCAL_BROWSER_SOURCE_FAILURE_REASONS, redactDetail } from "./contract.js";
 import type { MaskablePage, ReplayPoint, ShotRecorder } from "./replay.js";
 import type { BrowserCallsPage, BrowserCallSubject } from "../browser-call-recorder.js";
+import type { McpCallPolicy } from "../mcp-call-policy.js";
 
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
-	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean }>;
+	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean; expectedOrigin?: string }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean }>;
 	/** A refusal that never reached Playwright (#1409) — recorded in the same ordered call stream as a `callTool`. */
 	refused?(tool: string, args: Record<string, unknown>, reason: string): void;
 	/** The run claiming this browser sets its own subject (#1409) — every call it makes is then recorded under it. */
 	setSubject?(subject: BrowserCallSubject | null): void;
+	/** Owner/run policy enforced at the actual MCP dispatch, including after a DOM probe awaits. */
+	setCallPolicy?(policy: McpCallPolicy): void;
 	/** The recorded calls for one subject, after `afterSeq` — the runner's `/browser-calls` pull route reaches this. */
 	pullCalls?(subject: BrowserCallSubject | null, afterSeq: number): BrowserCallsPage;
 }

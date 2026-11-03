@@ -51,6 +51,14 @@ function taskAt(status: TaskStatus): RunnerTask {
 describe("the runner's apply-outcome disposition", () => {
 	const outcomes = declaredOutcomes();
 
+	it("records a completed browser objective without claiming an application was submitted (#1440)", () => {
+		const task = taskAt("running");
+		const disposition = settleTaskOutcome(task, "completed", "Read the page");
+		expect(task.status).toBe("completed");
+		expect(task.output).toEqual({ outcome: "completed", detail: "Read the page" });
+		expect(disposition).toEqual({ status: "completed", event: "task.completed", error: false });
+	});
+
 	it("reads a plausible ApplyOutcome union — otherwise every assertion below is vacuous", () => {
 		expect(outcomes.length, `ApplyOutcome declares ${outcomes.length} outcomes`).toBeGreaterThanOrEqual(10);
 		expect(outcomes).toContain("cancelled");

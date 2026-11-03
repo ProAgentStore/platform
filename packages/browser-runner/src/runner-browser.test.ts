@@ -105,7 +105,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(task.status).toBe("running");
 
 		// Brain drives onto a CAPTCHA page, then hands off.
-		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?challenge=1` });
+		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?challenge=1` }, undefined, undefined, task.id);
 		const handoff = await runner.browserHandoff(task.id, "cloudflare-turnstile");
 		expect(handoff.screenshotBase64).toMatch(/^data:image\/jpeg;base64,/);
 		// Same-session takeover is registered on the live page; task waits for a human.
@@ -116,7 +116,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(await runner.browserHandoffStatus(task.id)).toEqual({ solved: false, challenge: "cloudflare-turnstile" });
 
 		// Human solves it (the same live page advances past the challenge).
-		await runner.browserAct({ action: "navigate", url: server.jobUrl });
+		await runner.browserAct({ action: "navigate", url: server.jobUrl }, undefined, undefined, task.id);
 		expect((await runner.browserHandoffStatus(task.id)).solved).toBe(true);
 
 		// Brain resumes on the same session, then finishes.
@@ -132,7 +132,8 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		// A page that pops a native alert — exactly what Coles does after résumé upload.
 		// @playwright/mcp traps the dialog as a modal state that blocks every tool; the
 		// runner must clear it transparently (the brain has no dialog vocabulary).
-		await runner.browserAct({ action: "navigate", url: "data:text/html,<button onclick=\"alert('Your resume has been uploaded and processed')\">Go</button>" });
+		await runner.browserAct({ action: "navigate", url: server.jobUrl });
+		await runner.browsers.current.activePage!.setContent("<button onclick=\"alert('Your resume has been uploaded and processed')\">Go</button>");
 		const snap = await runner.browserSnapshot();
 		// Clicking opens the alert (the click itself may succeed; the dialog blocks the NEXT tool).
 		await runner.browserAct({ action: "click", ref: ref(snap.snapshot, "button", "Go"), name: "Go" });
@@ -146,7 +147,8 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 	it("reads back a masked field's real value so the brain doesn't oscillate", async () => {
 		// A phone field that transforms input like a real intl mask: "0404…" → "+61404…".
 		// Without read-back the brain can't tell the value took and re-types forever.
-		await runner.browserAct({ action: "navigate", url: "data:text/html,<input aria-label=Phone oninput=\"this.value=this.value.replace(/^0/,'+61')\">" });
+		await runner.browserAct({ action: "navigate", url: server.jobUrl });
+		await runner.browsers.current.activePage!.setContent("<input aria-label=Phone oninput=\"this.value=this.value.replace(/^0/,'+61')\">");
 		const snap = await runner.browserSnapshot();
 		const res = await runner.browserAct({ action: "type", ref: ref(snap.snapshot, "textbox", "Phone"), name: "Phone", text: "0404453580" });
 		// The runner reports what the field ACTUALLY holds now (the transformed value).
@@ -158,7 +160,8 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		// Ashby: the labeled 'Resume' control is a drop-zone/button that does NOT open a
 		// native file chooser on click, so the standard two-step (click → browser_file_upload)
 		// gets 'no modal state'. The runner must fall back to setting the hidden file input.
-		await runner.browserAct({ action: "navigate", url: "data:text/html,<button aria-label='Resume'>Upload</button><input type=file style='position:absolute;left:-9999px' onchange=\"document.title='FILE:'+this.files[0].name\">" });
+		await runner.browserAct({ action: "navigate", url: server.jobUrl });
+		await runner.browsers.current.activePage!.setContent("<button aria-label='Resume'>Upload</button><input type=file style='position:absolute;left:-9999px' onchange=\"document.title='FILE:'+this.files[0].name\">");
 		const snap = await runner.browserSnapshot();
 		// Target the BUTTON (which never opens a chooser) — the fallback must still attach.
 		await runner.browserAct({ action: "upload", ref: ref(snap.snapshot, "button", "Resume"), name: "Resume" }, resume());
