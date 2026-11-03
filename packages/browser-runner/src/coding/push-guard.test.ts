@@ -209,13 +209,16 @@ describe("a stalled real transport is bounded, not silent (#1403)", () => {
 		// number, leaving zero margin for ordinary process-spawn jitter (git -> sh wrapper -> this
 		// fake helper) under concurrent machine load — a reported run measured 5,737ms against the
 		// 5,000ms ceiling, failing on overshoot alone with the timeout marker still absent (the real
-		// invariant). The bound is now large enough that it is never the thing racing the assertion;
-		// the assertion keeps a real margin instead of matching the bound 1:1, the way the sibling
-		// "killed at the configured bound" case below already does (bound=1s, asserts <10_000ms).
-		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-fast"), helperDir, 30);
+		// invariant). The bound was widened so it is never the thing racing the assertion, and the
+		// assertion kept a real margin instead of matching the bound 1:1.
+		// #1466: that margin was exceeded again — 12,426ms against the 10,000ms ceiling, during a
+		// run with pre-push typechecks running concurrently (heavier contention than #1428's own
+		// incident, not a different cause). Widened both numbers again, by roughly the same
+		// proportion as #1428's own fix, so the assertion still sits well clear of the bound.
+		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-fast"), helperDir, 60);
 		const started = Date.now();
 		const r = run(["push", "https://github.com/proappstore-online/template-app.git", "main"]);
-		expect(Date.now() - started).toBeLessThan(10_000); // well under the 30s bound — it never had to wait
+		expect(Date.now() - started).toBeLessThan(20_000); // well under the 60s bound — it never had to wait
 		expect(r.stderr).not.toContain(PUSH_TIMEOUT_MARKER);
 	});
 

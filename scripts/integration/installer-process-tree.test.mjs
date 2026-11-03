@@ -51,7 +51,12 @@ describe("installer-owned process termination (#1333)", () => {
 		let grandchild;
 		try {
 			grandchild = await new Promise((resolve, reject) => {
-				const timer = setTimeout(() => reject(new Error("No grandchild readiness receipt")), 5000);
+				// #1466: measured at 5,000ms this timed out under full-suite load with pre-push
+				// typechecks running concurrently — the same process-spawn-jitter-under-contention
+				// cause #1435 already named above for a single spawn, compounded here by TWO (this
+				// test spawns a parent, which spawns the grandchild, each paying its own Node
+				// startup cost before the readiness line can even be written).
+				const timer = setTimeout(() => reject(new Error("No grandchild readiness receipt")), 15000);
 				let output = "";
 				child.stdout.on("data", (chunk) => {
 					output += chunk;
@@ -76,8 +81,8 @@ describe("installer-owned process termination (#1333)", () => {
 	}
 	it("reaps a real new-session descendant retaining stdout while an unrelated process survives", async () => {
 		await escapedGrandchild(false);
-	}, 15000);
+	}, 30000); // #1466: widened alongside the inner 15,000ms readiness wait, plus slack for the close-wait and `ps` check that follow it.
 	it.skipIf(process.platform !== "linux" || !process.env.CI)("reaps an actual sudo-owned new-session descendant on the hosted CI runner", async () => {
 		await escapedGrandchild(true);
-	}, 15000);
+	}, 30000);
 });

@@ -449,7 +449,13 @@ describe("bounded bodies, paging and retries", () => {
 		expect(plain.text.length).toBe(40_000);
 		expect(plain.truncated).toBe(true);
 		expect(plain.nextOffset).toBe(40_000);
-	}, 30_000);
+		// #1466: measured at 4,084ms in isolation, this timed out at 30,000ms (observed ~31,899ms)
+		// during a full-suite run with pre-push typechecks running concurrently — this handler is
+		// pure/mocked (no real DB, no real network, no real timer: `env.DB` and the Gmail fetch are
+		// both synchronous fakes), so the ~8x slowdown is CPU contention sharing this process's
+		// time slice, not a wait on anything. Widened with the same proportional headroom #1428
+		// and this issue's other two fixes apply to their own process-spawn jitter.
+	}, 60_000);
 
 	it("clips summary fields on a scoped listing and marks the cut", async () => {
 		fakeGmail({ messages: [inbound("s1", ADMIN, { Subject: "S".repeat(900) })] });
