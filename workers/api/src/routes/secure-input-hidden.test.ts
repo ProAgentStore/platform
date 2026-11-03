@@ -166,9 +166,31 @@ describe("a hidden prompt is verified by its outcome, not by echo (#1140)", () =
 		const ssh = machine.get("ssh-pink");
 		if (ssh) ssh.slow = 3;
 		const id = await ready("not-the-password");
-		const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "ssh-pink" });
-		expect(r.body).toMatchObject({ delivered: false, submitted: true, consumedValue: true, reason: expect.stringMatching(/Permission denied/) });
-		expect(sent.at(-1)?.keys).toEqual(["C-c"]);
+		// The fake SSH server delays by captures, not wall time. Advance its clock with
+		// those captures so a loaded worker cannot exhaust the 60ms fixture window first.
+		let now = Date.now();
+		const startedAt = now;
+		let delayedCaptures = 0;
+		const originalRunner = callRunner.getMockImplementation()!;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		callRunner.mockImplementation(async (...args) => {
+			if (String(args[1]).endsWith("/capture")) {
+				now += hiddenOutcomeTiming.pollMs;
+				if (ssh?.pendingRejection != null) delayedCaptures++;
+			}
+			return originalRunner(...args);
+		});
+		try {
+			const r = await call("POST", `/i1/secure-inputs/${id}/inject`, { target: "ssh-pink" });
+			expect(r.body).toMatchObject({ delivered: false, submitted: true, consumedValue: true, reason: expect.stringMatching(/Permission denied/) });
+			expect(sent.at(-1)?.keys).toEqual(["C-c"]);
+			expect(delayedCaptures).toBe(3);
+			expect(now - startedAt).toBeGreaterThan(0);
+			expect(now - startedAt).toBeLessThan(hiddenOutcomeTiming.windowMs);
+		} finally {
+			clock.mockRestore();
+			callRunner.mockImplementation(originalRunner);
+		}
 	});
 
 	it("no prompt + hidden_prompt:true: refused before anything is consumed or typed", async () => {
