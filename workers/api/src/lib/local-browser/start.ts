@@ -140,6 +140,21 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 		await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: "failed", errorCode } }], now);
 		return failed ?? run;
 	};
+	/**
+	 * A lost reply is not a refusal (#1445): the relay may have handed the command to the runner
+	 * before the connection that would have carried its acceptance dropped. Recording that as
+	 * `failed` freed this run's concurrency slot while the runner could still be acting on it, so the
+	 * next scheduled tick dispatched a second, duplicate-owning run with a fresh request id. Recorded
+	 * as `running` instead, exactly as a confirmed dispatch would be: it keeps the slot, and the next
+	 * sync tick (`syncLocalBrowserRun`) pulls the runner's own `/status` to learn whether it actually
+	 * holds the run (reconciled normally) or never heard of it (`runner_lost`, the same path a runner
+	 * that restarted mid-run already takes).
+	 */
+	const ambiguous = async (runnerNode: string | null, note: string) => {
+		const running = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running", runnerNode }, now)) ?? run;
+		await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "note", at: new Date(now).toISOString(), detail: { code: "dispatch_unknown", message: note } }], now);
+		return running;
+	};
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) return fail("runner_offline", "No runner is connected. Run `pags up` on the machine that should do the research, then start the run again.");
 	const tooOld = engineRunnerProblem(run.policy.engine, runtime.runner_version, runtime.runner_node);
@@ -182,11 +197,14 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 	try {
 		res = await callRuntime(env, runtime, LOCAL_BROWSER_RUN_PATH, { method: "POST", body: JSON.stringify(envelope) });
 	} catch (err) {
-		return fail("runner_unreachable", `The runner did not answer: ${err instanceof Error ? err.message.slice(0, 300) : "unknown error"}`);
+		return ambiguous(runtime.runner_node || null, `The runner did not answer: ${err instanceof Error ? err.message.slice(0, 300) : "unknown error"}`);
 	}
+	// The relay's own answers: 503 means no socket ever took the command — it never left the cloud,
+	// so this is a definite refusal. 504 means the socket went away mid-command, after the command was
+	// handed off — the runner may already have it, so this is ambiguous, never a refusal (#1445).
+	if (res.status === 503) return fail("runner_unreachable", "No runner is connected right now. Check `pags up` on that machine, then start the run again.");
+	if (res.status === 504) return ambiguous(runtime.runner_node || null, "The runner did not confirm it received the run before the connection dropped.");
 	const payload = (await runtimeJson(res)) as Record<string, unknown>;
-	// The relay's own answers: 503 no socket at dispatch, 504 the socket went away mid-command.
-	if (res.status === 503 || res.status === 504) return fail("runner_unreachable", "The runner disconnected before it took the run. Check `pags up` on that machine, then start the run again.");
 	if (res.status === 404) return fail("runner_unsupported", "The connected runner does not support local browser research yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again.");
 	if (!res.ok) return fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
 	const taskId = typeof payload.taskId === "string" ? payload.taskId : typeof payload.id === "string" ? payload.id : null;

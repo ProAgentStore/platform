@@ -20,7 +20,7 @@ const { instanceRoutes } = await import("./instances.js");
 
 let d1: RealSchemaD1;
 /** What the fake runner answers, and every command it was sent. */
-let runner: { status: number; body: unknown; taskTypes: string[] | null; capabilitiesThrow?: boolean; paths?: Record<string, { status: number; body: unknown; onCall?: () => void }> };
+let runner: { status: number; body: unknown; taskTypes: string[] | null; capabilitiesThrow?: boolean; throwOnPath?: string; paths?: Record<string, { status: number; body: unknown; onCall?: () => void }> };
 let sent: Array<{ method: string; path: string; body: unknown }>;
 const relay = {
 	idFromName: (n: string) => n,
@@ -29,6 +29,9 @@ const relay = {
 			const cmd = (await req.json()) as { method: string; path: string; body: unknown };
 			sent.push(cmd);
 			if (cmd.path === "/capabilities" && runner.capabilitiesThrow) throw new Error("Runner relay is connected but not responding");
+			// A dropped connection before any reply reaches the relay — the command may or may not have
+			// gone through, exactly what a real `fetch` throw means (#1445).
+			if (cmd.path === runner.throwOnPath) throw new Error("Relay command failed: network error");
 			if (cmd.path === "/capabilities") return Response.json(runner.taskTypes ? { taskTypes: runner.taskTypes } : {});
 			const byPath = runner.paths?.[cmd.path];
 			if (byPath) {
@@ -253,6 +256,69 @@ describe("runs", () => {
 		runner = { status: 202, body: { taskId: "t" }, taskTypes: null };
 		getBoundRunnerConn.mockResolvedValue({ runnerNode: "mac", instanceId: "i1", userId: "u1", relayName: "i1:node:mac", endpointUrl: "relay://", token: "", env: {} });
 		expect((await call("POST", "/i1/local-browser/runs", { objective: "again" })).body.status).toBe("running");
+	});
+
+	/**
+	 * #1445: a lost dispatch reply is NOT a refusal. Before this fix, a 504 (the socket going away
+	 * mid-command, after the relay already handed it to the runner) or a dropped `fetch` ended the run
+	 * `failed`/`runner_unreachable` — freeing its concurrency slot while the runner could still be
+	 * running it. A later scheduled tick then started a second, duplicate-owning browser session for
+	 * the same instance. Recording it `running` instead keeps the slot until the next sync tick learns
+	 * the truth from the runner's own `/status` (here, a reconciliation that proves it the long way:
+	 * the slot blocks a second dispatch, and only resolves once the runner says it does not know the run).
+	 */
+	it.each([
+		["a 504 (socket dropped mid-command)", () => (runner = { ...runner, status: 504, body: { error: "Relay command timed out after 120000 ms", code: "RUNNER_RELAY_TIMEOUT" } })],
+		["a dropped fetch before any reply", () => (runner = { ...runner, throwOnPath: "/local-browser/run" })],
+	])("an ambiguous dispatch (%s) stays running, not failed, and holds the slot until reconciled", async (_why, arrange) => {
+		arrange();
+		const r = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "req-1" });
+		expect(r.body).toMatchObject({ status: "running", errorCode: null });
+		const events = (await call("GET", `/i1/local-browser/runs/${r.body.id}/events`)).body.events as Array<{ type: string; detail?: { code?: string } }>;
+		expect(events.find((e) => e.type === "note")?.detail?.code).toBe("dispatch_unknown");
+
+		// The slot is held: a second scheduled tick with a fresh request id must not start a second,
+		// duplicate-owning browser session while the first is unresolved.
+		const second = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "req-2" });
+		expect(second.status).toBe(409);
+		expect(second.body.error).toMatch(/already active/);
+		expect(sent.filter((x) => x.path === "/local-browser/run")).toHaveLength(1);
+
+		// The runner restarted and has no memory of this run: the next sync reconciles it as lost — not
+		// before then, and not by guessing — which is what finally frees the slot.
+		runner = { ...runner, throwOnPath: undefined, paths: { "/local-browser/status": { status: 404, body: { error: "No local browser run" } } } };
+		const { syncActiveLocalBrowserRuns } = await import("../lib/local-browser/sync.js");
+		await syncActiveLocalBrowserRuns({ DB: d1.DB, RELAY: relay } as unknown as Env);
+		expect((await call("GET", `/i1/local-browser/runs/${r.body.id}`)).body).toMatchObject({ status: "failed", errorCode: "runner_lost" });
+
+		// Only now can a fresh run take the slot — exactly one live browser session for this instance, ever.
+		runner = { status: 202, body: { taskId: "t2" }, taskTypes: null };
+		getBoundRunnerConn.mockResolvedValue({ runnerNode: "mac", instanceId: "i1", userId: "u1", relayName: "i1:node:mac", endpointUrl: "relay://", token: "", env: {} });
+		const third = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "req-3" });
+		expect(third.body).toMatchObject({ status: "running", runnerTaskId: "t2" });
+		expect(sent.filter((x) => x.path === "/local-browser/run")).toHaveLength(2);
+	});
+
+	it("a definite refusal (503, no socket at all) still fails and frees the slot at once — no ambiguity to wait out", async () => {
+		runner = { ...runner, status: 503, body: { error: "No runner connected", code: "RUNNER_RELAY_NO_SOCKET" } };
+		const r = await call("POST", "/i1/local-browser/runs", { objective: "x" });
+		expect(r.body).toMatchObject({ status: "failed", errorCode: "runner_unreachable" });
+		runner = { status: 202, body: { taskId: "t" }, taskTypes: null };
+		expect((await call("POST", "/i1/local-browser/runs", { objective: "again" })).body.status).toBe("running");
+	});
+
+	it("a scheduled trigger tick cannot duplicate ownership across an ambiguous dispatch (#1445)", async () => {
+		const { runLocalBrowserTrigger } = await import("../lib/local-browser/trigger.js");
+		const env = { DB: d1.DB, RELAY: relay } as unknown as Env;
+		const target = { name: "Daily SEEK sweep", instance_id: "i1", user_id: "u1" };
+		runner = { ...runner, status: 504, body: { error: "timeout" } };
+		const first = await runLocalBrowserTrigger(env, target, "Senior roles on SEEK");
+		expect(first).toMatchObject({ status: "running" });
+		// A second tick, a new request id each time (it is a fresh cron fire, not a replay) — but the
+		// first run's slot is still unresolved, so this one is a SKIP, never a second browser session.
+		const second = await runLocalBrowserTrigger(env, target, "Senior roles on SEEK");
+		expect(second).toMatchObject({ skipped: true, reason: "a run is already in progress" });
+		expect(sent.filter((x) => x.path === "/local-browser/run")).toHaveLength(1);
 	});
 
 	it("pauses and resumes on the runner's events, ignores invalid ones, then ends on a valid result", async () => {
