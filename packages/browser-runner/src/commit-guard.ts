@@ -97,8 +97,10 @@ export const ELEMENT_PROBE_FN = `el => {
   var type = ((btn.getAttribute && btn.getAttribute('type')) || '').toLowerCase();
   var form = btn.form || (btn.closest && btn.closest('form')) || null;
   var submits = !!form && ((tag === 'button' && type !== 'button' && type !== 'reset') || (tag === 'input' && (type === 'submit' || type === 'image')));
+  var method = form ? form.method : '';
+  if (submits && btn.hasAttribute('formmethod')) method = btn.formMethod || 'get';
   var name = (btn.getAttribute && btn.getAttribute('aria-label')) || btn.value || btn.innerText || btn.textContent || '';
-  return { submits: submits, method: form ? ((form.getAttribute('method') || 'get').toLowerCase()) : '', tag: tag, type: type, role: (btn.getAttribute && btn.getAttribute('role')) || '', name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
+  return { submits: submits, method: String(method).toLowerCase(), tag: tag, type: type, role: (btn.getAttribute && btn.getAttribute('role')) || '', name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
 }`;
 
 /** The probe for a keypress: there is no ref, so it reads whatever has focus. */
@@ -106,24 +108,27 @@ export const FOCUS_PROBE_FN = `(() => {
   var el = document.activeElement;
   if (!el) return { inForm: false, method: '', tag: '', type: '', name: '' };
   var form = el.form || (el.closest && el.closest('form')) || null;
+  var method = form ? form.method : '';
+  if (form) {
+    var isSubmit = node => node.form === form && ((node.tagName === 'BUTTON' && node.type === 'submit') || (node.tagName === 'INPUT' && (node.type === 'submit' || node.type === 'image')));
+    var submitter = isSubmit(el) ? el : Array.from(form.getRootNode().querySelectorAll('button,input')).find(isSubmit);
+    if (submitter && submitter.hasAttribute('formmethod')) method = submitter.formMethod || 'get';
+  }
   var name = (el.getAttribute && el.getAttribute('aria-label')) || el.value || el.innerText || el.textContent || '';
-  return { inForm: !!form, method: form ? ((form.getAttribute('method') || 'get').toLowerCase()) : '', tag: (el.tagName || '').toLowerCase(), type: ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase(), role: (el.getAttribute && el.getAttribute('role')) || '', name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
+  return { inForm: !!form, method: String(method).toLowerCase(), tag: (el.tagName || '').toLowerCase(), type: ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase(), role: (el.getAttribute && el.getAttribute('role')) || '', name: String(name).replace(/\\s+/g, ' ').trim().slice(0, 160) };
 })()`;
 
 /**
  * May this click reach the page? Returns the refusal to hand back to the brain, or null.
  *
  * `facts` is null when the element could not be probed (an evaluate that failed, a ref the page no
- * longer has). That is not treated as permission: in read-only it is refused outright, and in a
- * rehearsal it falls back to the claimed name, which is the behaviour that shipped.
+ * longer has). Both guarded modes refuse; a model-supplied name is not evidence about the target.
  */
 export function refuseClick(spec: CommitGuardSpec, facts: ElementFacts | null, claimedName: string | undefined, re: RegExp): string | null {
 	const claimed = (claimedName ?? "").trim();
 	const real = (facts?.name ?? "").trim();
+	if (!facts) return `BLOCKED by the runner — this run is ${spec.mode === "read_only" ? "READ-ONLY" : "a REHEARSAL"} and that element could not be read from the page, so the click cannot be shown to be safe. Re-read the snapshot and target an element from it.`;
 	if (spec.mode === "read_only") {
-		if (!facts) {
-			return "BLOCKED by the runner — this agent is READ-ONLY and that element could not be read from the page, so the click cannot be shown to be safe. Re-read the snapshot and target an element from it.";
-		}
 		if (facts.type === "checkbox" || facts.type === "radio" || facts.type === "file" || facts.tag === "select" || /^(checkbox|radio|switch|option)$/.test(facts.role ?? "")) return "BLOCKED by the runner — this agent is READ-ONLY and cannot change a checkbox, selection or uploaded file.";
 		if (facts.submits && facts.method === "post") {
 			return `BLOCKED by the runner — this agent is READ-ONLY and "${real || claimed || facts.tag}" submits a form (POST) on this page. That is a change, whatever the control is called. Report what you can already see with finish.`;

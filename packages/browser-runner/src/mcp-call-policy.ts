@@ -57,7 +57,7 @@ export async function guardedToolRefusal(name: string, args: Record<string, unkn
 		const key = String(args.key ?? "");
 		return refuseKey(guard, key, await probe<FocusFacts>({ function: `() => ${FOCUS_PROBE_FN}` }));
 	}
-	if (name === "browser_handle_dialog" && args.accept !== false) return "BLOCKED by the runner — a guarded run cannot accept a page dialog. Dismiss it or ask the owner.";
+	if (name === "browser_handle_dialog") return "BLOCKED by the runner — a guarded run cannot resolve a page dialog: accepting or dismissing it can continue a submission. Ask the owner.";
 	if (name === "browser_file_upload" && guard.mode === "read_only") return "BLOCKED by the runner — this agent is READ-ONLY and cannot upload files.";
 	if (!internal && name === "browser_drag") return "BLOCKED by the runner — drag actions cannot be shown to preserve this run's commit policy.";
 	return null;

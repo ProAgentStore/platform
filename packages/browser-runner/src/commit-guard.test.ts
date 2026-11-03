@@ -55,9 +55,9 @@ describe("refuseClick — a rehearsal decides on the label, but on the PAGE's la
 		expect(refuseClick(DRY_RUN, facts({ submits: true, method: "post", name: "Save and Continue" }), "Save and Continue", TERMINAL)).toBeNull();
 	});
 
-	it("falls back to the claimed name when the element cannot be probed", () => {
+	it("fails closed when the element cannot be probed, whatever the claimed name", () => {
 		expect(refuseClick(DRY_RUN, null, "Submit application", TERMINAL)).toMatch(/BLOCKED/);
-		expect(refuseClick(DRY_RUN, null, "Next", TERMINAL)).toBeNull();
+		expect(refuseClick(DRY_RUN, null, "Next", TERMINAL)).toMatch(/could not be read/);
 	});
 });
 

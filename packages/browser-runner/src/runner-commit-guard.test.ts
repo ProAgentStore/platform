@@ -87,6 +87,21 @@ describe("LocalRunner commit guard — enforced where the click happens", () => 
 		expect(runner.browsers.current.context).toBeNull();
 	});
 
+	it("a rehearsal leaves alert() open because dismissing it would continue the POST", async () => {
+		await runner.browserAct({ action: "navigate", url: server.quickApplyUrl });
+		await runner.browsers.current.activePage!.setContent('<form method="post" action="/apply" enctype="multipart/form-data"><button type="button" onclick="alert(\'Continue?\');this.form.submit()">Go</button></form>');
+		const snapshot = await runner.browserSnapshot();
+		await expect(runner.browserAct({ action: "click", ref: ref(snapshot.snapshot, "button", "Go"), name: "Go" }, undefined, { mode: "dry_run" })).rejects.toThrow(/left it open/);
+		expect(server.submissions).toHaveLength(0);
+		const mcp = runner.browsers.current.mcp!;
+		expect((await mcp.callTool("browser_handle_dialog", { accept: false }, { internal: true })).isError).toBe(true);
+		expect(server.submissions).toHaveLength(0);
+		// The exact same dismiss WOULD submit; only the synthetic test lifts the policy.
+		mcp.setCallPolicy({});
+		expect((await mcp.callTool("browser_handle_dialog", { accept: false }, { internal: true })).isError).not.toBe(true);
+		await expect.poll(() => server.submissions.length, { timeout: 5_000 }).toBe(1);
+	}, 120_000);
+
 	it("a read-only agent cannot submit by pressing Enter in the form", async () => {
 		// #629: the commit guard only ever looked at clicks, so Enter — which submits a focused
 		// form — went straight through for an agent whose declaration is that it can never change

@@ -39,7 +39,7 @@ afterEach(() => d1.close());
 			snapshot: async () => ({ url: "https://test.invalid/apply", title: "Apply", snapshot: '- button "Submit" [ref=e1]', challenge: null }),
 			decide,
 			act: () => dispatchBrowserActionOnce(env, key, click),
-		}, { url: "https://test.invalid/apply", resumePath: "resume.pdf", candidate: { fullName: "Test User", email: "test@example.invalid" } })).rejects.toBeInstanceOf(BrowserActionUncertainError);
+		}, {})).rejects.toBeInstanceOf(BrowserActionUncertainError);
 		expect(decide).toHaveBeenCalledTimes(1);
 		expect(click).toHaveBeenCalledTimes(1);
 	});

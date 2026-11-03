@@ -36,7 +36,32 @@ describe("MCP action policy — no guarded action reaches the page through an al
 		expect(server.submissions).toHaveLength(before);
 		mcp.setCallPolicy({});
 		expect((await mcp.callTool("browser_click", { target, element: "checkbox" })).isError).not.toBe(true);
-		expect(server.submissions).toHaveLength(before + 1);
+		await expect.poll(() => server.submissions.length, { timeout: 5_000 }).toBe(before + 1);
+	});
+	it.each(["click", "Space", "Enter"])("read-only sees a POST formmethod override through %s, including an external default submitter", async (action) => {
+		await page.setContent('<button form="application" formmethod="post" type="submit">Go</button><form id="application" method="get" action="/apply" enctype="multipart/form-data"><label>Search<input name="coverNote"></label></form>');
+		const target = mcp.textOf(await mcp.callTool("browser_snapshot")).match(/button "Go"[^\n]*\[ref=(\w+)\]/)?.[1];
+		expect(target).toBeTruthy();
+		if (action === "Space") await page.getByRole("button", { name: "Go" }).focus();
+		if (action === "Enter") await page.getByRole("textbox", { name: "Search" }).focus();
+		const invoke = () => action === "click" ? mcp.callTool("browser_click", { target, element: "Go" }) : mcp.callTool("browser_press_key", { key: action });
+		mcp.setCallPolicy({ guard: { mode: "read_only" } });
+		const before = server.submissions.length;
+		const refused = await invoke();
+		expect(refused.isError).toBe(true);
+		expect(mcp.textOf(refused)).toContain("READ-ONLY");
+		expect(server.submissions).toHaveLength(before);
+		mcp.setCallPolicy({});
+		expect((await invoke()).isError).not.toBe(true);
+		await expect.poll(() => server.submissions.length, { timeout: 5_000 }).toBe(before + 1);
+	});
+	it("a failed DOM probe cannot turn a rehearsal's invented Continue label into permission", async () => {
+		mcp.setCallPolicy({ guard: { mode: "dry_run" } });
+		const before = server.submissions.length;
+		const result = await mcp.callTool("browser_click", { target: "missing-ref", element: "Continue" });
+		expect(result.isError).toBe(true);
+		expect(mcp.textOf(result)).toContain("could not be read");
+		expect(server.submissions).toHaveLength(before);
 	});
 	it.each(["Space", " ", "Control+Enter"])("refuses activation %s during a rehearsal", async (key) => {
 		await page.locator('button[type="submit"]').focus();
@@ -50,6 +75,8 @@ describe("MCP action policy — no guarded action reaches the page through an al
 		await page.waitForTimeout(50);
 		mcp.setCallPolicy({ guard: { mode: "dry_run" } });
 		expect((await mcp.callTool("browser_handle_dialog", { accept: true }, { internal: true })).isError).toBe(true);
+		expect((await mcp.callTool("browser_handle_dialog", { accept: false }, { internal: true })).isError).toBe(true);
+		mcp.setCallPolicy({});
 		expect((await mcp.callTool("browser_handle_dialog", { accept: false }, { internal: true })).isError).not.toBe(true);
 		expect(await page.locator("body").getAttribute("data-sent")).toBeNull();
 	});

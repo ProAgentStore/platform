@@ -974,8 +974,9 @@ export class LocalRunner {
 		// a dialog is now open"; the text pattern is the only reliable signal either way,
 		// and the dialog blocks the NEXT tool call regardless of which case this was.
 		if (/modal state/i.test(text) && /dialog/i.test(text)) {
+			if (guard) throw new RunnerInputError("BLOCKED by the runner — a page dialog needs the owner. Resolving it could continue a submission, so the guarded run left it open.");
 			const dialogMsg = (text.match(/dialog with message "([^"]*)"/)?.[1] || "").slice(0, 160);
-			await mcp.callTool("browser_handle_dialog", { accept: !guard }, { internal: true }).catch(() => undefined);
+			await mcp.callTool("browser_handle_dialog", { accept: true }, { internal: true }).catch(() => undefined);
 			await page.waitForTimeout(400).catch(() => undefined);
 			const settled = await this.getActivePage();
 			await settled.waitForLoadState("domcontentloaded", { timeout: 6_000 }).catch(() => undefined);
@@ -984,10 +985,10 @@ export class LocalRunner {
 				url: settled.url(),
 				title: await settled.title().catch(() => ""),
 				challenge: await detectHumanChallenge(settled),
-				feedback: dialogMsg ? `a native dialog was ${guard ? "dismissed" : "accepted"}: "${dialogMsg}"` : `a native dialog was ${guard ? "dismissed" : "accepted"}`,
+				feedback: dialogMsg ? `a native dialog was accepted: "${dialogMsg}"` : "a native dialog was accepted",
 				screenshot: !policy.enabled ? undefined : await this.shot(settled, policy.blurFormFields),
-				commitGuard: { supported: true, dispatchSafe: true, mode: guard?.mode },
-			completedOutcome: true,
+				commitGuard: { supported: true, dispatchSafe: true },
+				completedOutcome: true,
 			};
 		}
 		if (res.isError) throw new RunnerInputError(this.conciseFeedback(text) || `${action.action} failed`);

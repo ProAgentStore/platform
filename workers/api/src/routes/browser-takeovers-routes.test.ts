@@ -198,7 +198,7 @@ describe("the runner's remote view is gated on a durable takeover (#1031)", () =
 
 	it("gives a later Application Runner pause its own durable card takeover", async () => {
 		const runtime: RuntimeRow = { instance_id: "i1", user_id: "u1", runner_node: "mac", status: "online", last_seen_at: null, placement: "local", endpoint_url: "", token_ciphertext: null, token_dek_wrapped: null, token_iv: null, token_plaintext: null, capabilities: "{}", runner_version: "0.4.200", created_at: "", updated_at: "" };
-		const env = { DB: d1.DB } as Env;
+		const env = { DB: d1.DB } as unknown as Env;
 		const first = await takeoverGate(env, "u1", "i1", runtime, "app-repeat", { open: true, fill: { waiting: true, reason: "login_required", requestId: "fill-pause-first" } });
 		await d1.DB.prepare("UPDATE browser_takeovers SET state = 'resumed' WHERE id = ?1").bind(first.id).run();
 		await expect(takeoverGate(env, "u1", "i1", runtime, "app-repeat", { open: true, fill: { waiting: true, requestId: "fill-pause-first" } })).rejects.toThrow(/resumed/);
