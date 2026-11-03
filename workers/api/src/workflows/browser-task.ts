@@ -1,3 +1,4 @@
+import { clipMarked } from "../lib/clip-marked.js";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { BrowserActionUncertainError, dispatchBrowserActionOnce, requireSafeBrowserDispatch } from "../lib/browser-action-dispatch.js";
 import { closeFailedBrowserTask, markBrowserTaskResumed } from "../lib/browser-task-close.js";
@@ -60,9 +61,9 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			await logError(this.env, { source: "browser-task", userId, status: 500, message: `browser task workflow crashed: ${msg}`, context: { instanceId, taskId, url: job?.url } });
 			try {
 				const conn = await getBoundRunnerConn(this.env, instanceId, userId);
-				if (conn) await callRunner(conn, "/browser/complete", { taskId, outcome: "failed", detail: msg.slice(0, 300) });
+				if (conn) await callRunner(conn, "/browser/complete", { taskId, outcome: "failed", detail: clipMarked(msg, 300, { within: true }) });
 			} catch { /* best-effort */ }
-			await step.do("failed-close", () => closeFailedBrowserTask(this.env, { taskId, instanceId, userId }, msg.slice(0, 300)));
+			await step.do("failed-close", () => closeFailedBrowserTask(this.env, { taskId, instanceId, userId }, clipMarked(msg, 300, { within: true })));
 			// AFTER the transient rethrow above, never before it: a run the platform is about to
 			// replay must not be filed as dead (#546). Only a genuine crash closes the record.
 			const crashed: ApplyResult = { outcome: "failed", detail: msg, steps: 0 };
