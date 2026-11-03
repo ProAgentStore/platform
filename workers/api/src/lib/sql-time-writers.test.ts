@@ -19,6 +19,7 @@ import { openMcpInputRequest, listMcpInputRequests, purgeExpiredMcpInputRequests
 import { purgeExpiredFlows, saveFlow } from "./mcp-oauth-store.js";
 import { sqlTime } from "./sql-time.js";
 import { finishLoopRun } from "./agent-loop-store.js";
+import { closeFailedBrowserTask, markBrowserTaskResumed } from "./browser-task-close.js";
 import { closeWorkCards, setWorkCardProgress, upsertWorkCard } from "./work-card.js";
 import { mirrorRuntimeTask, mirroredRuntimeTasks, mirrorRuntimeEvent } from "../routes/instances-runtime.js";
 import type { Env } from "../types.js";
@@ -124,6 +125,35 @@ describe("#634 — instance_runtime_tasks.updated_at is one ordering, not two", 
 		await closeWorkCards(env, "i1", "u1", ["c1"], "completed");
 		expect(offenders(d1, "instance_runtime_tasks", "updated_at")).toEqual([]);
 		d1.close();
+	});
+
+	it.each([
+		{ writer: "closeFailedBrowserTask", before: "running", after: "failed" },
+		{ writer: "markBrowserTaskResumed", before: "needs_human", after: "running" },
+	])("$writer writes SQL time to the column and ISO time to the board payload", async ({ writer, before, after }) => {
+		const { d1, env } = fixture();
+		try {
+			const taskId = "browser-transition";
+			const oldIso = "2001-01-01T01:02:03.456Z";
+			await mirrorRuntimeTask(env, "i1", "u1", { id: taskId, type: "job.apply_agent", status: before, updatedAt: oldIso });
+			// Deliberately start with an old ISO column: a writer that skips its timestamp update
+			// cannot pass just because the fixture writer already normalized the value.
+			d1.sqlite.prepare("UPDATE instance_runtime_tasks SET updated_at = ?1 WHERE id = ?2").run(oldIso, taskId);
+			const key = { taskId, instanceId: "i1", userId: "u1" };
+			if (writer === "closeFailedBrowserTask") await closeFailedBrowserTask(env, key, "The runner disconnected.");
+			else await markBrowserTaskResumed(env, key);
+			const row = d1.sqlite.prepare("SELECT status, updated_at, payload FROM instance_runtime_tasks WHERE id = ?1").get(taskId) as { status: string; updated_at: string; payload: string };
+			expect(row.status).toBe(after);
+			expect(row.updated_at).not.toBe(oldIso);
+			expect(offenders(d1, "instance_runtime_tasks", "updated_at")).toEqual([]);
+			const payload = JSON.parse(row.payload) as { status: string; updatedAt: string; completedAt?: string };
+			expect(payload.status).toBe(after);
+			expect(payload.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+			expect(payload.updatedAt).not.toBe(oldIso);
+			if (after === "failed") expect(payload.completedAt).toBe(payload.updatedAt);
+		} finally {
+			d1.close();
+		}
 	});
 
 	it("the single-flight claim's cutoff moved with the column, so a live card still blocks", async () => {
@@ -286,7 +316,7 @@ describe("migration 0128 converts the rows already in the table", () => {
 describe("the writer census", () => {
 	// A source scan, in the shape `runtime-response.test.ts` already uses for `last_seen_at`. The
 	// point is the DENOMINATOR: not "the helper exists" but "every write site goes through it".
-	// A thirteenth statement fails this test and has to be driven through the cases above.
+	// A new statement fails this test and has to be driven through the cases above.
 	const STATEMENT_RE = /(?:INSERT INTO|UPDATE)\s+instance_runtime_tasks[\s\S]*?`/g;
 
 	function writerFiles(): { file: string; statement: string }[] {
@@ -309,12 +339,14 @@ describe("the writer census", () => {
 		return out;
 	}
 
-	it("is thirteen statements across nine files, and every one of them is accounted for", () => {
+	it("is fourteen statements across nine files, and every one of them is accounted for", () => {
 		const found = writerFiles();
 		expect(
 			[...new Set(found.map((f) => f.file))].sort(),
 			"a new writer of instance_runtime_tasks.updated_at — add it to the executable cases above, then update this list",
 		).toEqual([
+			// #1439: failed workflow closure and confirmed handoff resume, both executed above.
+			"lib/browser-task-close.ts",
 			// #1362: the chat loop's escalation card, moved out of workflows/agent-loop.ts unchanged (`datetime('now')`).
 			"lib/chat-loop-settle.ts",
 			"lib/loop-drivers.ts",
@@ -325,9 +357,8 @@ describe("the writer census", () => {
 			"routes/instances-browse.ts",
 			"routes/instances-runtime.ts",
 			"routes/instances-tasks.ts",
-			"workflows/job-apply.ts",
 		]);
-		expect(found).toHaveLength(13);
+		expect(found).toHaveLength(14);
 	});
 
 	it("every writer that BINDS a timestamp names a producer from sql-time.ts", () => {
