@@ -6,10 +6,13 @@ import { installerDescendants, runBoundedCommand, terminateInstallerTree } from 
 describe("installer-owned process termination (#1333)", () => {
 	it("bounds a real diagnostic command and preserves completed output", async () => {
 		expect(await runBoundedCommand(process.execPath, ["-e", 'console.log("healthy diagnostic")'])).toContain("healthy diagnostic");
-		const output = await runBoundedCommand(process.execPath, ["-e", 'console.log("stalled diagnostic");setInterval(()=>{},1000)'], { timeoutMs: 200 });
+		// Output preservation requires Node to start and write first. Under full-suite load,
+		// a 200ms deadline can kill it before that happens (#1435). Use the real command's
+		// bounded 15s startup/execution budget; the interval still forces owned-tree cleanup.
+		const output = await runBoundedCommand(process.execPath, ["-e", 'console.log("stalled diagnostic");setInterval(()=>{},1000)']);
 		expect(output).toContain("stalled diagnostic");
-		expect(output).toContain("owned descendants terminated");
-	});
+		expect(output).toContain("timed out after 15000ms; owned descendants terminated");
+	}, 60_000); // Both command budgets plus process-table reads/termination; no suite-wide increase.
 	it("delivers configuration input without a shell and refuses failed or timed-out repairs", async () => {
 		expect(await runBoundedCommand(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], { input: "public mirror configuration", rejectNonzero: true })).toBe("public mirror configuration");
 		await expect(runBoundedCommand(process.execPath, ["-e", "process.exit(2)"], { rejectNonzero: true })).rejects.toThrow("exit 2");
