@@ -288,12 +288,18 @@ describe("the Co-pilot door recovers a stalled controller reply (#907)", () => {
 	afterEach(() => setControllerAiSleepForTest(null));
 
 	it("re-asks after a stall and delegates once, from the complete answer, with the policy's deadlines", async () => {
-		h.ai.mockRejectedValueOnce(stall()).mockResolvedValueOnce(DRIVE);
-		const res = await call("POST", "/coding/sessions/A/agent", { message: "can you check the test?" });
-		expect(res.body).toMatchObject({ delegated: true });
-		expect(h.ai).toHaveBeenCalledTimes(2);
-		expect((h.ai.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 });
-		expect(acts).toEqual([["A", expect.stringContaining("run pnpm vitest run src/x.test.ts")]]);
+		// This assertion checks policy wiring; elapsed-budget behavior is covered in controller-ai-recovery.test.ts.
+		const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+		try {
+			h.ai.mockRejectedValueOnce(stall()).mockResolvedValueOnce(DRIVE);
+			const res = await call("POST", "/coding/sessions/A/agent", { message: "can you check the test?" });
+			expect(res.body).toMatchObject({ delegated: true });
+			expect(h.ai).toHaveBeenCalledTimes(2);
+			expect((h.ai.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 });
+			expect(acts).toEqual([["A", expect.stringContaining("run pnpm vitest run src/x.test.ts")]]);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("on exhaustion says the provider stalled and sends nothing — never a silent '(no response)'", async () => {
