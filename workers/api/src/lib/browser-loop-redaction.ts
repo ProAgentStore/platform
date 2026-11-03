@@ -1,4 +1,4 @@
-import type { BrowserAction } from "./apply-loop.js";
+import type { BrowserAction } from "./browser-action.js";
 import { resolveSnapshotElement } from "./commit-guard.js";
 import { collectJobSecrets, isSecretFieldName, makeSecretRedactor } from "./redact-secrets.js";
 
