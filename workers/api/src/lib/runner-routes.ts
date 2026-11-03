@@ -52,6 +52,7 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	"/coding/git": readSlow(),
 	"/coding/git-remote": readSlow(),
 	"/coding/git-identity": readSlow(),
+	"/coding/push-capability": readSlow(),
 	"/coding/sync": readSlow(), // fetches, never pulls
 	"/coding/repo-check": readSlow(),
 	"/coding/read-file": readSlow(),

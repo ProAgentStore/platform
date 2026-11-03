@@ -34,6 +34,7 @@ import { getLiveRuntime, getRuntimeNode, updateRuntimeStatus } from "./instances
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import { logDirectResponse } from "../lib/on-error.js";
 import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
+import { type HttpsPushCapabilityProbe, pushCapabilityIssues, pushCapabilityRepos } from "../lib/push-identity.js";
 import type { Env } from "../types.js";
 
 /**
@@ -480,6 +481,8 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// report that shows one of them cannot say that. `gh` is machine-wide, so it is one call
 		// regardless of how many hosts the repos use.
 		let githubCredentials: GithubCredentialScopeResult | null = null;
+		let pushCapability: HttpsPushCapabilityProbe | null = null;
+		const pushScopeRepos = pushCapabilityRepos(dbRepos);
 		if (conn && runnerReachable && dbRepos.length) {
 			await Promise.all([
 				...sshHosts.slice(0, MAX_SSH_HOSTS).map(async ({ host }) => {
@@ -500,6 +503,21 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 						// Runner older than #688, or `gh` unavailable. Unverified, not "no login".
 					}
 				})(),
+				// #1465: whether the credential plain `git push` over HTTPS will actually use can
+				// push to the repos this session is bound to — a question checkout readiness and
+				// write-scope membership never answer. Skipped when no repo has a GitHub slug.
+				...(pushScopeRepos.length
+					? [
+							(async () => {
+								try {
+									pushCapability = await callRunner<HttpsPushCapabilityProbe>(conn, "/coding/push-capability", { host: "github.com", repos: pushScopeRepos }, { timeoutMs: 15_000 });
+								} catch {
+									// Older runner without the endpoint, a network hiccup, or no credential
+									// configured. Unverified, not "can push".
+								}
+							})(),
+						]
+					: []),
 			]);
 		}
 		const httpsLogin = httpsLoginFrom(githubCredentials);
@@ -749,6 +767,11 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// Grouping is `sshHostGroups`, the outcomes are `sshIdentityIssues`, and both are pure — the
 		// bug this replaces was unreachable by a test precisely because it was not.
 		issues.push(...sshIdentityIssues(sshHosts, gitIdentityByHost, httpsLogin));
+
+		// 6c. Push-capability issues (#1465): the credential plain `git push` over HTTPS will use
+		// may not be the one `gh`/the GitHub App authenticates as, and may not have push access to
+		// a repo this session is otherwise correctly bound to and in scope for.
+		issues.push(...pushCapabilityIssues(pushCapability, httpsLogin));
 
 		const activeSessions = sessions.filter((s) => s.status === "active");
 		// "Healthy" has to mean able to work, not merely running (#593). A session whose run is

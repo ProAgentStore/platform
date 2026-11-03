@@ -17,6 +17,7 @@ import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
+import { probeHttpsPushCapability } from "./coding/https-push-identity.js";
 import { checkEngine, listEngineModelsLive } from "./coding/engine-check.js";
 import { routeActionsRunner } from "./coding/actions-runner.js";
 import { routeWindowsRunner } from "./coding/windows-runner-routes.js";
@@ -410,6 +411,17 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const b = req.method === "POST" ? await readJson<{ host?: string }>(req).catch(() => ({})) : {};
 		const host = String((b as { host?: string }).host || "github.com");
 		return json(res, 200, probeGitSshIdentity(host));
+	}
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/push-capability") {
+		// Report whether the identity plain `git push` over HTTPS resolves can actually push to
+		// the named repos (#1465) — distinct from the SSH identity (#684) and the `gh` login
+		// (#688). Called by `coding_diagnostics` to surface a credential/permission gap BEFORE
+		// delivery discovers it as a 403. Read-only: no push is attempted. Never throws — a
+		// network hiccup or absent credential returns pushable:null, never a guess.
+		const b2 = req.method === "POST" ? await readJson<{ host?: string; repos?: unknown }>(req).catch(() => ({})) : {};
+		const host2 = String((b2 as { host?: string }).host || "github.com");
+		const repos = Array.isArray((b2 as { repos?: unknown }).repos) ? ((b2 as { repos: unknown[] }).repos.filter((r): r is string => typeof r === "string")) : [];
+		return json(res, 200, await probeHttpsPushCapability(host2, repos));
 	}
 	// ── GitHub credential scope (#688) ────────────────────────────────────────
 	// Read-only: reports the authenticated gh login + org memberships. Surfaces
