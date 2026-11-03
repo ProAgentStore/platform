@@ -87,6 +87,7 @@ import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { sweepExpiredBrowserArtifacts } from "./lib/browser-artifacts.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
+import { failExpiredCodeWaits } from "./lib/local-apply/agent-sign-in.js";
 import { expireScheduledUpdateOps, failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { failSilentUpdates } from "./lib/machine-policy.js";
 import { notifySilentMachines, notifySilentWatchdogs } from "./lib/machine-silence.js";
@@ -443,6 +444,10 @@ export default {
 		ctx.waitUntil(syncActiveTailorRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-tailor", method: "CRON" })));
 		// The same pull for Application Runner fills (#957).
 		ctx.waitUntil(syncActiveApplyRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-runner", method: "CRON" })));
+		// #1467: the agent-driven sign-in's 5-minute code wait only got evaluated when the runner
+		// kept syncing with codeRequested still set — a runner that went quiet left it elapsing
+		// with no explicit outcome ever recorded. Independent of the pull above.
+		ctx.waitUntil(failExpiredCodeWaits(env).catch((err) => logUnhandled(env, err, { path: "scheduled:agent-sign-in-code-wait", method: "CRON" })));
 		// Replay screenshots past their retention (#1063): the R2 object and its row, together.
 		ctx.waitUntil(sweepExpiredBrowserArtifacts(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-artifacts", method: "CRON" })));
 		// The Runner owns the ten-minute reconciliation deadline.  Pull the terminal result here so

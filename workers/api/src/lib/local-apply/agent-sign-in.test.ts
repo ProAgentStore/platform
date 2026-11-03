@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../../types.js";
 import { createCredential, findCredentialForHost, passwordLoginForHost } from "../credentials.js";
 import { type RealSchemaD1, realSchemaD1, seedTenant } from "../d1-sqlite.js";
-import { type AgentSignInDeps, advanceAgentSignIn, agentSignInApplies, agentSignInWillTry, parseRunnerSignIn, senderQuery, signedInEventIn, signInCodeIn } from "./agent-sign-in.js";
+import { type AgentSignInDeps, advanceAgentSignIn, agentSignInApplies, agentSignInWillTry, failExpiredCodeWaits, parseRunnerSignIn, senderQuery, signedInEventIn, signInCodeIn } from "./agent-sign-in.js";
 import { type ApplyRun, type ApplyTraceEvent, getApplyRun } from "./store.js";
 
 const UID = "u1";
@@ -259,5 +259,56 @@ describe("signInCodeIn", () => {
 	});
 	it("never takes a job id or a salary for a code", () => {
 		expect(signInCodeIn("20 new jobs for Software Developer", "Job 95289924 pays $120000")).toBeNull();
+	});
+});
+
+describe("failExpiredCodeWaits — the 5-minute wait evaluated independently of any runner sync (#1467)", () => {
+	/** Provision, then move the sign-in into "waiting on a code" exactly as the reactive test above does — up to and including the moment `code_requested_at` is set — but never call `advanceAgentSignIn` again: the live gap was a runner that stopped syncing, not one that synced and got a wrong answer. */
+	const requestCode = async (f: ReturnType<typeof fakes>) => {
+		insertRun(RUN, SEEK_PAUSE);
+		await advanceAgentSignIn(env(), UID, await run(), { signInEmail: JOB_MAILBOX }, none, T0, f.deps);
+		setRunning();
+		const want = { signIn: parseRunnerSignIn(running(["PAGS_LOGIN_USERNAME"], true).signIn), events: [] };
+		await advanceAgentSignIn(env(), UID, await run(), { signInEmail: null }, want, T0 + 30_000, f.deps);
+	};
+
+	it("marks a code wait that elapsed with the runner never syncing again, and writes the same trace event advanceAgentSignIn would have", async () => {
+		const f = fakes({ mail: [STALE_MAIL] });
+		await requestCode(f);
+		expect(await row()).toMatchObject({ state: "signing_in", failure: null });
+
+		expect(await failExpiredCodeWaits(env(), T0 + 30_000 + 5 * 60_000 + 1)).toBe(1);
+		expect(await row()).toMatchObject({ state: "failed", failure: "code_not_received" });
+		expect((await run()).trace.at(-1)?.detail).toMatchObject({ decision: "failed", rule: "code_not_received" });
+		// Only the original provisioning call ever reached the runner — the sweep never resends or retries anything.
+		expect(f.sent).toHaveLength(1);
+	});
+
+	it("leaves a code wait alone while it is still within its five minutes", async () => {
+		const f = fakes({ mail: [STALE_MAIL] });
+		await requestCode(f);
+		expect(await failExpiredCodeWaits(env(), T0 + 30_000 + 5 * 60_000 - 1)).toBe(0);
+		expect(await row()).toMatchObject({ state: "signing_in" });
+	});
+
+	it("leaves a sign-in alone once its code already arrived — nothing to time out", async () => {
+		const f = fakes({ mail: [CODE_MAIL] });
+		await requestCode(f);
+		expect(await row()).toMatchObject({ state: "signing_in", code_message_id: "msg-new" });
+		expect(await failExpiredCodeWaits(env(), T0 + 30_000 + 5 * 60_000 + 1)).toBe(0);
+		expect(await row()).toMatchObject({ state: "signing_in" });
+	});
+
+	it("is idempotent — a second sweep over an already-settled row changes nothing further", async () => {
+		const f = fakes({ mail: [STALE_MAIL] });
+		await requestCode(f);
+		const deadline = T0 + 30_000 + 5 * 60_000 + 1;
+		expect(await failExpiredCodeWaits(env(), deadline)).toBe(1);
+		expect(await failExpiredCodeWaits(env(), deadline + 60_000)).toBe(0);
+		expect((await run()).trace.filter((e) => (e.detail as { rule?: string })?.rule === "code_not_received")).toHaveLength(1);
+	});
+
+	it("never touches a run with no sign-in row at all", async () => {
+		expect(await failExpiredCodeWaits(env(), T0 + 10 * 60_000)).toBe(0);
 	});
 });

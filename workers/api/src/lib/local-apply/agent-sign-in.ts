@@ -28,7 +28,7 @@ import { logEvent } from "../events.js";
 import { getMessage, listMessages } from "../gmail.js";
 import { EMAIL_CODE_SIGN_IN_SITES, LOCAL_APPLY_SIGN_IN_SECRETS_PATH, type LocalApplySignInSecretName } from "./contract.js";
 import type { ApplicationRunnerSettings } from "./policy.js";
-import { type ApplyRun, type ApplyTraceEvent, updateApplyRun } from "./store.js";
+import { type ApplyRun, type ApplyTraceEvent, getApplyRun, updateApplyRun } from "./store.js";
 
 /** `provisioned` is the first sync's answer (the secrets just went over, read the run back now); `waiting` every later one. */
 export type AgentSignInOutcome = "not_applicable" | "provisioned" | "waiting" | "signed_in" | "failed";
@@ -281,4 +281,57 @@ export async function advanceAgentSignIn(
 		if (current?.state !== "signing_in") return { outcome: current ? "not_applicable" : "failed", run };
 		return fail(current.code_requested_at ? "mailbox_unreadable" : "interrupted");
 	}
+}
+
+/**
+ * The 5-minute code wait (#1467), evaluated independently of any runner sync.
+ *
+ * The live gap: the check at `now - requestedAt > CODE_WAIT_MS` inside {@link advanceAgentSignIn}
+ * only ever RUNS when that function is called again with `sync.signIn?.codeRequested` still set —
+ * which requires the runner to keep syncing and keep reporting it is still waiting on a code. A
+ * runner that stops doing either (goes quiet, or reports a plain pause without repeating
+ * `codeRequested`) leaves the wait elapsing SILENTLY: the trace's last sign-in event stays
+ * `code_requested`, and a caller reading the run directly (never going through this function)
+ * sees nothing more specific than the original `login_required` pause — exactly the live incident
+ * this closes, where `ready_for_review` read a stale pause five minutes after the code request
+ * with no `code_not_received` ever having been recorded.
+ *
+ * Swept by the same per-minute cron as the runner-update sweeps, so the timeout becomes explicit
+ * regardless of what the runner does next. Never resends anything and never changes the run's
+ * pause/status — it only settles the sign-in's own bookkeeping row (the same one
+ * {@link advanceAgentSignIn}'s `fail` already would have) and writes the same trace event that
+ * function already writes for every other failure reason.
+ */
+export async function failExpiredCodeWaits(env: Env, now = Date.now()): Promise<number> {
+	const cutoff = now - CODE_WAIT_MS;
+	const { results } = await env.DB.prepare(
+		`SELECT run_id AS runId, instance_id AS instanceId, user_id AS userId, host
+		   FROM local_apply_agent_sign_ins
+		  WHERE state = 'signing_in' AND code_requested_at IS NOT NULL AND code_message_id IS NULL AND code_requested_at < ?1`,
+	)
+		.bind(cutoff)
+		.all<{ runId: string; instanceId: string; userId: string; host: string }>()
+		.catch(() => ({ results: [] }));
+	let expired = 0;
+	for (const row of results ?? []) {
+		const settled = await env.DB.prepare(
+			"UPDATE local_apply_agent_sign_ins SET state = 'failed', failure = 'code_not_received', updated_at = ?2 WHERE run_id = ?1 AND state = 'signing_in'",
+		)
+			.bind(row.runId, now)
+			.run()
+			.then((r) => (r.meta?.changes ?? 0) > 0)
+			.catch(() => false);
+		if (!settled) continue; // already settled by a sync in the same tick, or by a prior sweep
+		expired++;
+		const run = await getApplyRun(env, row.instanceId, row.userId, row.runId).catch(() => null);
+		if (!run) continue; // the run itself is gone; the sign-in row is still correctly settled
+		const event: ApplyTraceEvent = {
+			type: "policy.decision",
+			at: new Date(now).toISOString(),
+			...(row.host ? { domain: row.host } : {}),
+			detail: { tool: "agent_sign_in", class: "session", source: "platform", decision: "failed", reason: FAILURE_TEXT.code_not_received(row.host), rule: "code_not_received" },
+		};
+		await updateApplyRun(env, run, { events: [event] }, now).catch(() => null);
+	}
+	return expired;
 }
