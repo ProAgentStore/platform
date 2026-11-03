@@ -261,7 +261,7 @@ export interface LocalBrowserStatusResponse {
  */
 export interface ReplayShot {
 	seq: number;
-	point: "navigated" | "clicked" | "snapshot" | "waited" | "paused" | "blocked" | "filled" | "uploaded" | "checkpoint" | "review" | "submit" | "completed";
+	point: "action" | "navigated" | "clicked" | "snapshot" | "waited" | "paused" | "blocked" | "filled" | "uploaded" | "checkpoint" | "review" | "submit" | "completed";
 	url?: string;
 	action?: string;
 	/** Observed control label, bounded and scrubbed of run secrets; never the typed value. */
