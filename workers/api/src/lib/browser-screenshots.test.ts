@@ -7,7 +7,7 @@ import { browserSettingsForDispatch } from "./browser-settings-dispatch.js";
 let d1: RealSchemaD1;
 let env: Env;
 beforeEach(() => {
- d1 = realSchemaD1(); env = { DB: d1.DB } as Env;
+ d1 = realSchemaD1(); env = { DB: d1.DB } as unknown as Env;
  d1.exec(`INSERT INTO users(id,github_login) VALUES ('u','u'); INSERT INTO agents(id,owner_id,slug,name,config) VALUES ('a','u','a','A','{}'); INSERT INTO agent_instances(id,agent_id,user_id,status,config) VALUES ('i','a','u','active','{}')`);
 });
 afterEach(() => d1.close());
