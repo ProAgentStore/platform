@@ -87,7 +87,7 @@ import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { sweepExpiredBrowserArtifacts } from "./lib/browser-artifacts.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
-import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
+import { expireScheduledUpdateOps, failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { failSilentUpdates } from "./lib/machine-policy.js";
 import { notifySilentMachines, notifySilentWatchdogs } from "./lib/machine-silence.js";
 import { redactStoredPanes } from "./lib/pane-redaction-sweep.js";
@@ -452,6 +452,10 @@ export default {
 		// state, so a row left there by a Worker that died would be the new way for an update to be
 		// unknowable — which is the whole defect the operation record exists to end.
 		ctx.waitUntil(failStaleUpdateOps(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-ops", method: "CRON" })));
+		// #1456: a `scheduled` deferred update is already terminal the moment it's written, so neither
+		// sweep above ever revisits it — without this it reports "scheduled" forever past its own
+		// lease. Pure bookkeeping; never contacts the machine.
+		ctx.waitUntil(expireScheduledUpdateOps(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-ops-expiry", method: "CRON" })));
 		// #1141: a machine that reported an install and went silent becomes `failed` with a reason and an error-log row —
 		// never `installing` forever, which is how two machines sat dark on 2026-10-17 with nothing saying so.
 		ctx.waitUntil(failSilentUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:silent-auto-updates", method: "CRON" })));

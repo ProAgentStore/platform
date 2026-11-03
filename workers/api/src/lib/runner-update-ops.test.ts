@@ -49,7 +49,22 @@ vi.mock("./runner-client.js", () => ({
 }));
 
 const { realSchemaD1 } = await import("./d1-sqlite.js");
-const { claimUpdateOp, advanceUpdateOp, failStaleUpdateOps, latestUpdateOp, latestUpdateOps, liveUpdateOp, reconcileLateUpdateOp, reconcileUnreachableUpdateOp, RUNNER_UPDATE_RECONCILE_GRACE_MS, UPDATE_OP_STALE_MS } = await import("./runner-update-ops.js");
+const {
+	claimUpdateOp,
+	advanceUpdateOp,
+	DEFERRED_UPDATE_LEASE_MS,
+	expireScheduledUpdateOps,
+	failStaleUpdateOps,
+	latestUpdateOp,
+	latestUpdateOps,
+	liveUpdateOp,
+	reconcileLateUpdateOp,
+	reconcileScheduledUpdateOp,
+	reconcileUnreachableUpdateOp,
+	RUNNER_UPDATE_RECONCILE_GRACE_MS,
+	SCHEDULED_UPDATE_RECONCILE_GRACE_MS,
+	UPDATE_OP_STALE_MS,
+} = await import("./runner-update-ops.js");
 const { dispatchQueuedRunnerUpdates, executeRunnerUpdateOperation, startRunnerUpdate } = await import("./runner-update.js");
 type D1 = ReturnType<typeof realSchemaD1>;
 
@@ -429,5 +444,116 @@ describe("passive reconciliation of an `unreachable` update, after the fact (#14
 		const next = await claimUpdateOp(env(), "u1", NODE, { now: NOW + 3_000 });
 		expect(next.claimed).toBe(true);
 		expect(next.op.id).not.toBe(op.id);
+	});
+});
+
+/** A `scheduled` deferred update, with a lease ending `DEFERRED_UPDATE_LEASE_MS` after it was granted. */
+const schedule = async (opts: { grantedAt?: number; leaseMs?: number } = {}) => {
+	const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+	const grantedAt = opts.grantedAt ?? NOW + 1_000;
+	const deferredUntil = new Date(grantedAt + (opts.leaseMs ?? DEFERRED_UPDATE_LEASE_MS)).toISOString();
+	await advanceUpdateOp(env(), "u1", op.id, { state: "scheduled", phase: "deferred", currentVersion: "0.4.84", deferredUntil }, grantedAt);
+	return { op, deferredUntilMs: Date.parse(deferredUntil) };
+};
+
+describe("`scheduled` deferred updates past their lease (#1456)", () => {
+	it("expires a row whose lease has passed with no confirmation — a stale receipt, never authorization to force a restart", async () => {
+		const { op, deferredUntilMs } = await schedule();
+		// Still within the lease: nothing to do yet.
+		expect(await expireScheduledUpdateOps(env(), deferredUntilMs - 1)).toBe(0);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "scheduled" });
+		// "Expiry while busy": the sweep never reads socket/engine state at all — it is pure
+		// bookkeeping over the operation record, same whether the node is idle or mid-turn.
+		expect(await expireScheduledUpdateOps(env(), deferredUntilMs + 1)).toBe(1);
+		const after = await latestUpdateOp(env(), "u1", NODE);
+		expect(after).toMatchObject({ id: op.id, state: "expired", reason: "lease_expired" });
+		expect(after?.detail).toMatch(/lease expired/);
+		expect(after?.detail).not.toMatch(/superseded|later operation/);
+		// Preserves the original receipt — the deferral's own data is untouched, only the verdict changed.
+		expect(after?.deferredUntil).toBe(new Date(deferredUntilMs).toISOString());
+		expect(after?.currentVersion).toBe("0.4.84");
+	});
+
+	it("reconciles a late registration seen before the lease even expired", async () => {
+		const { op, deferredUntilMs } = await schedule();
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.85", deferredUntilMs - 30_000)).toBe(true);
+		const after = await latestUpdateOp(env(), "u1", NODE);
+		expect(after).toMatchObject({ id: op.id, state: "restarted", finalVersion: "0.4.85" });
+		expect(after?.reconciliation).toMatch(/re-registered on 0\.4\.85 \(was 0\.4\.84\)/);
+		// Once reconciled, the expiry sweep has nothing left to do.
+		expect(await expireScheduledUpdateOps(env(), deferredUntilMs + 1)).toBe(0);
+	});
+
+	it("reconciles a restart admitted before expiry whose registration lands just after the lease — within grace", async () => {
+		const { op, deferredUntilMs } = await schedule();
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.85", deferredUntilMs + SCHEDULED_UPDATE_RECONCILE_GRACE_MS - 1)).toBe(true);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "restarted", finalVersion: "0.4.85" });
+	});
+
+	it("leaves the row unreconciled once the grace window itself has passed — it expires instead, clearly unconfirmed", async () => {
+		const { op, deferredUntilMs } = await schedule();
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.85", deferredUntilMs + SCHEDULED_UPDATE_RECONCILE_GRACE_MS + 1)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "scheduled" });
+		expect(await expireScheduledUpdateOps(env(), deferredUntilMs + SCHEDULED_UPDATE_RECONCILE_GRACE_MS + 2)).toBe(1);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "expired" });
+	});
+
+	it("does not credit an old, out-of-order heartbeat still carrying the pre-update version", async () => {
+		const { op, deferredUntilMs } = await schedule();
+		// A stale/duplicate registration, reordered in transit, reporting the version from BEFORE the update.
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.84", deferredUntilMs - 30_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "scheduled" });
+	});
+
+	it("does not let a later, out-of-order stale heartbeat reopen an already-reconciled row", async () => {
+		const { op, deferredUntilMs } = await schedule();
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.85", deferredUntilMs - 30_000)).toBe(true);
+		// The same stale pre-update version, delivered late, arrives after the real one already landed.
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.84", deferredUntilMs - 10_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "restarted", finalVersion: "0.4.85" });
+	});
+
+	it("refuses to credit this op when a LATER operation already exists for the machine — that op is the honest explanation", async () => {
+		const { op, deferredUntilMs } = await schedule();
+		// The owner (or a retry) started a second operation on the same machine after this one was scheduled.
+		await claimUpdateOp(env(), "u1", NODE, { now: deferredUntilMs - 60_000, id: "op-later" });
+		// Refused because `latestUpdateOp` now returns `op-later` (`running`, not `scheduled`) — the
+		// ORIGINAL op is no longer even the row reconciliation looks at, so it can never be credited.
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.85", deferredUntilMs - 30_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: "op-later", state: "running" });
+		// The original row is still just `scheduled` underneath the later op's `running` row...
+		const row1 = await d1.DB.prepare("SELECT state FROM runner_update_ops WHERE id = ?1").bind(op.id).first<{ state: string }>();
+		expect(row1?.state).toBe("scheduled");
+		// ...and the expiry sweep, once its lease passes, says so explicitly rather than guessing at causality.
+		await advanceUpdateOp(env(), "u1", "op-later", { state: "restarted", finalVersion: "0.4.85" }, deferredUntilMs - 20_000);
+		expect(await expireScheduledUpdateOps(env(), deferredUntilMs + 1)).toBe(1);
+		const row2 = await d1.DB.prepare("SELECT state, detail FROM runner_update_ops WHERE id = ?1").bind(op.id).first<{ state: string; detail: string }>();
+		expect(row2?.state).toBe("expired");
+		expect(row2?.detail).toMatch(/later operation/);
+	});
+
+	it("expires a legacy row with no recorded lease, falling back to the default lease length past when it was scheduled", async () => {
+		const { op } = await schedule();
+		// Simulate a row written before #1456 added `deferred_until`.
+		await d1.DB.prepare("UPDATE runner_update_ops SET deferred_until = NULL WHERE id = ?1").bind(op.id).run();
+		const scheduledAtMs = NOW + 1_000;
+		expect(await expireScheduledUpdateOps(env(), scheduledAtMs + DEFERRED_UPDATE_LEASE_MS - 1)).toBe(0);
+		expect(await expireScheduledUpdateOps(env(), scheduledAtMs + DEFERRED_UPDATE_LEASE_MS + 1)).toBe(1);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "expired" });
+	});
+
+	it("never touches a `running` row — the lease sweep is not a second way to close an operation still in flight", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "running", phase: "installing", currentVersion: "0.4.84" }, NOW + 1_000);
+		expect(await reconcileScheduledUpdateOp(env(), "u1", NODE, null, "0.4.85", NOW + 2_000)).toBe(false);
+		expect(await expireScheduledUpdateOps(env(), NOW + DEFERRED_UPDATE_LEASE_MS + 10_000)).toBe(0);
+		expect(await liveUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "running" });
+	});
+
+	it("never reconciles another owner's scheduled operation", async () => {
+		d1.exec(`INSERT INTO users (id, github_login) VALUES ('u2', 'u2')`);
+		const { op, deferredUntilMs } = await schedule();
+		expect(await reconcileScheduledUpdateOp(env(), "u2", NODE, null, "0.4.85", deferredUntilMs - 30_000)).toBe(false);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "scheduled" });
 	});
 });

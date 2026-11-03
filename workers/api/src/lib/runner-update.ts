@@ -19,6 +19,7 @@ import {
 	advanceUpdateOp,
 	claimUpdateOp,
 	claimWorkflowDispatch,
+	DEFERRED_UPDATE_LEASE_MS,
 	latestUpdateOp,
 	queueUpdateWorkflow,
 	queuedUpdateWorkflows,
@@ -45,8 +46,6 @@ export const RUNNER_RESTART_PATH = "/pags/runner/restart";
 const UPDATE_TIMEOUT_MS = 115_000;
 /** How long the restarted runner gets to re-attach every agent on its own before we step in. */
 const REATTACH_WAIT_MS = 90_000;
-/** Must expire before the stale-operation sweep, so a terminal row cannot hide a local retry. */
-export const DEFERRED_UPDATE_LEASE_MS = 5 * 60_000;
 /**
  * After the update command's relay times out, how long the machine's registered version is re-read
  * before the attempt is called failed (#1034). Bounded well inside the stale-operation sweep.

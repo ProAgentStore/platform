@@ -116,7 +116,7 @@ import { describeRejection, rejectionFor, updateGateState } from "../lib/runner-
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
 import { cleanupAnswer, fleetUpdatingFor, getMachinePolicy, reportMachineCleanup, reportMachinePolicyStatus } from "../lib/machine-policy.js";
-import { reconcileUnreachableUpdateOp } from "../lib/runner-update-ops.js";
+import { reconcileScheduledUpdateOp, reconcileUnreachableUpdateOp } from "../lib/runner-update-ops.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -601,6 +601,9 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		// it only ever upgrades a row already terminal, and a failure here must not fail registration.
 		if (runnerVersion) {
 			await reconcileUnreachableUpdateOp(c.env, session.uid, runnerNode, machineId || null, runnerVersion).catch(() => false);
+			// Same idea for a `scheduled` deferred update (#1456): a registration within its lease
+			// window is the machine confirming it actually restarted, before the lease sweep ever runs.
+			await reconcileScheduledUpdateOp(c.env, session.uid, runnerNode, machineId || null, runnerVersion).catch(() => false);
 		}
 	}
 

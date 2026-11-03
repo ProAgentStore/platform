@@ -31,7 +31,7 @@ import { cliAtLeast } from "./runner-upgrade.js";
 import type { Env } from "../types.js";
 
 /** `running` is in flight; everything else is terminal. */
-export const RUNNER_UPDATE_STATES = ["running", "scheduled", "restarting", "restarted", "up_to_date", "would_update", "refused", "unsupported", "unreachable", "failed"] as const;
+export const RUNNER_UPDATE_STATES = ["running", "scheduled", "expired", "restarting", "restarted", "up_to_date", "would_update", "refused", "unsupported", "unreachable", "failed"] as const;
 export type RunnerUpdateState = (typeof RUNNER_UPDATE_STATES)[number];
 
 /** The last durable control-plane checkpoint; it never pretends to observe an unreported machine step. */
@@ -39,6 +39,14 @@ export const RUNNER_UPDATE_PHASES = ["claimed", "queued", "dispatching", "instal
 export type RunnerUpdatePhase = (typeof RUNNER_UPDATE_PHASES)[number];
 
 export const isTerminalUpdateState = (state: string): boolean => state !== "running";
+
+/**
+ * The bounded busy-deferral lease (#860): must expire before the stale-operation sweep, so a
+ * terminal `scheduled` row cannot hide a local retry. Owned here (not `runner-update.ts`, which
+ * imports it) because {@link expireScheduledUpdateOps} needs it too, for a legacy row written
+ * before `deferred_until` existed (#1456).
+ */
+export const DEFERRED_UPDATE_LEASE_MS = 5 * 60_000;
 
 /** `update` installs the latest release and restarts; `restart` restarts on the CLI it has (#1032). */
 export type RunnerOpKind = "update" | "restart";
@@ -505,4 +513,121 @@ export async function failStaleUpdateOps(env: Pick<Env, "DB">, now = Date.now())
 		.run()
 		.catch(() => null);
 	return res?.meta?.changes ?? 0;
+}
+
+/** Is there a LATER operation recorded for this op's machine? If so, IT is the honest explanation
+ *  for any version change since — never this op, whose own lease has already elapsed (#1456). */
+async function hasLaterUpdateOp(env: Pick<Env, "DB">, userId: string, op: Pick<RunnerUpdateOp, "node" | "machineId" | "createdAt">): Promise<boolean> {
+	const byMachine = !!op.machineId;
+	const row = await env.DB.prepare(
+		`SELECT 1 FROM runner_update_ops WHERE user_id = ?1 AND ${byMachine ? "machine_id" : "node"} = ?2 AND created_at > ?3 LIMIT 1`,
+	)
+		.bind(userId, byMachine ? op.machineId : op.node, Date.parse(op.createdAt))
+		.first()
+		.catch(() => null);
+	return !!row;
+}
+
+/**
+ * How long past a `scheduled` op's own lease (`deferred_until`) a registration may still
+ * retroactively confirm it restarted (#1456) — the same idea as
+ * {@link RUNNER_UPDATE_RECONCILE_GRACE_MS} gives an `unreachable` op, but anchored to the LEASE
+ * rather than when the row went terminal: a `scheduled` row is already terminal at the moment it is
+ * written (when the deferral is granted), long before the machine has actually acted on it.
+ */
+export const SCHEDULED_UPDATE_RECONCILE_GRACE_MS = RUNNER_UPDATE_RECONCILE_GRACE_MS;
+
+/**
+ * A machine that registers a newer version while its `scheduled` deferred update's lease is still
+ * open, or shortly after (#1456), gets that success reconciled passively — the same passive
+ * mechanism {@link reconcileUnreachableUpdateOp} gives an `unreachable` op. Only ever writes a row
+ * already terminal (`state = 'scheduled'`), never the live `running` row, so the busy-run
+ * single-flight claim is untouched.
+ *
+ * Reads through {@link latestUpdateOp} — the single newest row for the machine — so a LATER
+ * operation (superseding this one) is never at risk of having its version bump misattributed here:
+ * it is, by construction, what `latestUpdateOp` would return instead, and this refuses unless THAT
+ * row is itself still `scheduled`. "Never infer agent reattachment or restart causality from version
+ * alone" holds because there is never more than one candidate row in play.
+ */
+export async function reconcileScheduledUpdateOp(
+	env: Pick<Env, "DB">,
+	userId: string,
+	node: string,
+	machineId: string | null | undefined,
+	observedVersion: string,
+	now = Date.now(),
+): Promise<boolean> {
+	if (!observedVersion) return false;
+	const op = await latestUpdateOp(env, userId, node, machineId);
+	if (op?.state !== "scheduled" || !op.currentVersion || !op.deferredUntil) return false;
+	if (!cliAtLeast(observedVersion, op.currentVersion) || cliAtLeast(op.currentVersion, observedVersion)) return false;
+	const deferredUntilMs = Date.parse(op.deferredUntil);
+	if (!Number.isFinite(deferredUntilMs) || now > deferredUntilMs + SCHEDULED_UPDATE_RECONCILE_GRACE_MS) return false;
+	const res = await env.DB.prepare(
+		`UPDATE runner_update_ops
+		    SET state = 'restarted', final_version = ?1,
+		        detail = ?2, reconciliation = ?2, reconciled_at = ?3, updated_at = ?3
+		  WHERE id = ?4 AND user_id = ?5 AND state = 'scheduled'`,
+	)
+		.bind(
+			observedVersion,
+			clipMarked(
+				`${node} re-registered on ${observedVersion} (was ${op.currentVersion}) within the deferred update's lease window; passively reconciled as a successful restart. Re-attachment of any held agent was not re-checked by this reconciliation.`,
+				800,
+				{ within: true, what: "diagnostic characters" },
+			),
+			now,
+			op.id,
+			userId,
+		)
+		.run()
+		.catch(() => null);
+	return (res?.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * `scheduled` rows whose lease has elapsed with no later confirmation (#1456) — the blind spot
+ * {@link failStaleUpdateOps} (`running` only) and {@link reconcileUnreachableUpdateOp}
+ * (`unreachable` only) both leave. A `scheduled` row is already terminal the moment it is written,
+ * so neither sweep ever revisits it, and without this it reports "scheduled" forever even though the
+ * runner's own contract (`runner-update.ts`) is that it will never restart once its lease is gone.
+ *
+ * Pure bookkeeping: it never contacts the machine, and the resulting `expired` state must never be
+ * read as authorization to force a restart — exactly the live repro this closes (a stale receipt
+ * next to another active coding turn is not permission to interrupt it).
+ *
+ * Swept by the same per-minute cron as {@link failStaleUpdateOps}. A row already reconciled by
+ * {@link reconcileScheduledUpdateOp} is skipped (`reconciliation IS NULL`). A legacy row written
+ * before `deferred_until` existed falls back to {@link DEFERRED_UPDATE_LEASE_MS} past `updated_at` —
+ * the lease it would have been given under today's contract — so it is not stuck unexpired forever
+ * either. Capped per tick so a backlog cannot make one cron invocation unbounded; the next tick picks
+ * up whatever is left.
+ */
+export async function expireScheduledUpdateOps(env: Pick<Env, "DB">, now = Date.now(), limit = 100): Promise<number> {
+	const { results } = await env.DB.prepare(
+		`SELECT id, user_id AS userId, node, machine_id AS machineId, current_version AS currentVersion, created_at AS createdAtMs
+		   FROM runner_update_ops
+		  WHERE state = 'scheduled' AND reconciliation IS NULL
+		    AND COALESCE(deferred_until, updated_at + ?1) < ?2
+		  ORDER BY created_at ASC LIMIT ?3`,
+	)
+		.bind(DEFERRED_UPDATE_LEASE_MS, now, limit)
+		.all<{ id: string; userId: string; node: string; machineId: string | null; currentVersion: string | null; createdAtMs: number }>()
+		.catch(() => ({ results: [] }));
+	let expired = 0;
+	for (const r of results ?? []) {
+		const superseded = await hasLaterUpdateOp(env, r.userId, { node: r.node, machineId: r.machineId, createdAt: new Date(r.createdAtMs).toISOString() });
+		const detail = superseded
+			? `The deferred update's lease expired with no confirmed restart, and a later operation was requested for ${r.node} since — that later operation is the current record, not this one. This is a stale receipt, not authorization to retry or force a restart.`
+			: `The deferred update's lease expired with no confirmed restart. The runner's own contract is to never restart after its lease — this is a stale receipt, not authorization to retry or force a restart.`;
+		const res = await env.DB.prepare(
+			`UPDATE runner_update_ops SET state = 'expired', reason = 'lease_expired', detail = ?1, updated_at = ?2 WHERE id = ?3 AND state = 'scheduled'`,
+		)
+			.bind(detail, now, r.id)
+			.run()
+			.catch(() => null);
+		if ((res?.meta?.changes ?? 0) > 0) expired++;
+	}
+	return expired;
 }
