@@ -1,7 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { RunnerInputError } from "../errors.js";
+import { requireEmptyCloneTarget } from "./clone-target.js";
 
 /**
  * Repo/workdir helpers for the coding engine.
@@ -217,6 +218,7 @@ export function probeGitSshIdentity(host: string): GitSshIdentity {
 export function cloneIntoWorkdir(dir: string, cloneUrl: string): { cloned: boolean; path: string } {
 	const before = checkWorkdir(dir);
 	const empty = !before.exists || (before.isDirectory && before.entryCount === 0);
+	if (empty) requireEmptyCloneTarget(dir);
 	ensureRepo(dir, { cloneUrl, ownFolder: true });
 	return { cloned: empty, path: dir };
 }
@@ -258,7 +260,7 @@ export function ensureRepo(
 	// (safe to clear) OR a real user directory the caller passed as an explicit workDir
 	// (deleting it = data loss). NEVER recursively delete a non-empty non-git dir — refuse
 	// instead, so a mis-wired workDir+cloneUrl can't nuke a user's files. An empty dir is
-	// fine to remove (git clone needs an empty/absent target).
+	// kept: git accepts an empty/absent target and refuses if a concurrent writer populates it.
 	if (existsSync(dir)) {
 		const entries = readdirSync(dir);
 		if (entries.length > 0) {
@@ -273,7 +275,7 @@ export function ensureRepo(
 				409,
 			);
 		}
-		rmSync(dir, { recursive: true, force: true });
+		// Keep the directory. Never delete files that appeared since the emptiness check.
 	}
 	const url = authenticatedCloneUrl(opts.cloneUrl, opts.token, opts.tokenUsername);
 	const args = ["clone"];

@@ -529,6 +529,36 @@ sign-in above for what that costs).
 Also worth knowing, from #1165: `tmux_secure_put` / `tmux_secure_get` no longer take an arbitrary path. A flow that delivered a `.env`
 straight into a project folder now writes it to `~/.config/proagentstore/secure-files`, and the operator moves it.
 
+### Provisioning a fresh checkout is a separate operation (#1446)
+
+For a connected coder, `coding_repo_add` with `clone: true`, `github_repo` and a home-relative path such as
+`~/dev/chinese` creates the checkout remotely before binding it. The folder may be missing or empty; it does not need
+`pags runner roots add` first. The clone destination must be below that machine's home, within an existing owner-registered
+project root, or a child of the runner's managed repository directory. `~` is expanded on the selected machine, including Windows.
+
+This uses a separate provisioning check. It refuses home/root folders, credentials and their ancestors, Git administration,
+symlink redirects below the project boundary, nonempty destinations and a new checkout nested inside another checkout.
+It does not register a root or widen the inspection allow-list above. A missing or empty destination can be checked for
+cloning, but its file contents cannot be read through that permission. An existing checkout still goes through the normal
+repository and GitHub-origin verification before the platform records it as ready.
+
+The #1193 inspection guard accidentally blocked this cold-start path before it could report a missing or empty folder.
+If an older runner answers a fresh `clone: true` request with “not a git repository or a folder you have allowed,” update
+that runner to CLI 0.4.201 or newer through `runner_update`, then retry the same request after confirming the new runner version. Do not broaden
+the machine's read roots as a workaround for this regression. The fix must reach the CLI on the remote machine; updating
+the cloud API alone does not replace its runner code.
+
+Long clones remain background jobs: repeat the same `coding_repo_add` arguments to join the same in-flight clone, then
+verify the binding with `coding_repos_list`. Runner clone status remains readable for a failed job even when it left partial
+files. A new clone does not overwrite those files. Git authentication is separate: the selected machine must already have
+authorized access to the repository through its Git credential helper or SSH identity. GitHub connector consent alone does
+not establish that access.
+
+Regression verification lives in `packages/browser-runner/src/coding/runtime-clone-provisioning.test.ts`: it drives the real
+runtime's missing/empty preflight, clone and origin verification against a temporary Git repository, including job polling
+and refusals for protected or occupied paths. A remote provisioning check should also confirm `cloneStatus: ready`, the
+correct GitHub identity and a usable checkout on the selected machine before starting a coding run.
+
 ## Terminal secrets: what is masked, where, and what is not (#1195)
 
 #1166 made the runner mask a terminal pane before it leaves the machine and clear tmux scrollback after an echoed

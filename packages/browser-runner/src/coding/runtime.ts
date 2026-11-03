@@ -1,4 +1,5 @@
 import { confineWorkDir, realPathOf } from "./workdir-guard.js";
+import { confineCloneTarget, requireEmptyCloneTarget, resolveCloneLocation } from "./clone-target.js";
 import { codingEngineModelProblem } from "./engine-model-policy.js";
 import type { RecordAck, RecordCursor } from "./record-cursor.js";
 import { actDigest, type EngineInputs } from "./input-ledger.js";
@@ -473,7 +474,15 @@ export class CodingRuntime {
 	 * resolved path so a message can name the thing the owner actually typed, `~` and all.
 	 */
 	checkRepo(input: { sessionId?: string; workDir?: string }) {
-		const resolved = this.resolveWorkDir(input);
+		let resolved: string;
+		try {
+			resolved = this.resolveWorkDir(input);
+		} catch (error) {
+			// A fresh destination is not a repository yet (#1446). Permit only its empty/missing
+			// preflight; file/tree/git still use the unchanged inspection resolver.
+			if (!input.workDir || input.sessionId) throw error;
+			resolved = confineCloneTarget(input.workDir, { managed: this.reposBaseDir });
+		}
 		// `homeRelative` (#1379), against the home's REAL path because `resolved` is one (a symlinked home must not read as 'outside home'): the machine-independent spelling of where this is, which the cloud stores as the folder's source of truth.
 		return { ...checkWorkdir(resolved), ...(input.workDir ? { requested: input.workDir } : {}), homeRelative: homeRelative(resolved, { home: realPathOf(homedir()) }) };
 	}
@@ -485,19 +494,26 @@ export class CodingRuntime {
 	startClone(input: { workDir?: string; slug?: string; protocol?: CloneProtocol }) {
 		if (!input.workDir || !input.slug || !/^[\w.-]+\/[\w.-]+$/.test(input.slug)) throw new InspectError("workDir and an owner/repo slug are required");
 		const protocol: CloneProtocol = input.protocol === "https" || input.protocol === "ssh" ? input.protocol : "auto";
-		return this.cloneJobs.start(this.resolveWorkDir({ workDir: input.workDir }), input.slug, protocol);
+		const path = resolveCloneLocation(input.workDir, { managed: this.reposBaseDir });
+		const current = this.cloneJobs.status(path);
+		if (current.state === "cloning") {
+			if (current.slug.toLowerCase() !== input.slug.toLowerCase()) throw new InspectError("A different repository is already being cloned into this destination.");
+			return current;
+		}
+		requireEmptyCloneTarget(path);
+		return this.cloneJobs.start(path, input.slug, protocol);
 	}
 
 	/** The background clone for this folder, or `state: "none"` (#858). */
 	cloneStatus(input: { workDir?: string }) {
 		if (!input.workDir) throw new InspectError("workDir is required");
-		return this.cloneJobs.status(this.resolveWorkDir({ workDir: input.workDir }));
+		return this.cloneJobs.status(resolveCloneLocation(input.workDir, { managed: this.reposBaseDir }));
 	}
 
 	/** Clone a repository into an absent or empty owner folder (#857) — see `cloneIntoWorkdir`. */
 	cloneRepo(input: { workDir?: string; cloneUrl?: string }) {
 		if (!input.workDir || !input.cloneUrl) throw new InspectError("workDir and cloneUrl are required");
-		return cloneIntoWorkdir(this.resolveWorkDir({ workDir: input.workDir }), input.cloneUrl);
+		return cloneIntoWorkdir(confineCloneTarget(input.workDir, { managed: this.reposBaseDir }), input.cloneUrl);
 	}
 
 	static taskTypes(): string[] {

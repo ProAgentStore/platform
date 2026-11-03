@@ -40,6 +40,8 @@ jobs:
         run: |
           pnpm --filter @proagentstore/sdk build
           pnpm --filter @proagentstore/cli build
+      - name: Fresh checkout provisioning regression (real git, no network)
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/runtime-clone-provisioning.test.ts
       - name: Release smoke test (start, heartbeat, self-update)
         run: node scripts/release-smoke/run.mjs
 
@@ -60,6 +62,8 @@ jobs:
         run: |
           pnpm --filter @proagentstore/sdk build
           pnpm --filter @proagentstore/cli build
+      - name: Fresh checkout provisioning regression (real git, no network)
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/runtime-clone-provisioning.test.ts
       - name: Release smoke test (start, heartbeat, self-update)
         run: node scripts/release-smoke/run.mjs
 

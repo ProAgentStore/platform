@@ -232,6 +232,43 @@ The runner starts that CLI as a **child process** and speaks to it directly — 
 Workflow brain -> RelayDO -> local runner -> coding CLI child process (stream-json)
 ```
 
+### Provision a repository on the remote machine
+
+The platform can create a coder's checkout through the connected runner; a normal fresh clone needs no terminal step
+on that machine. Pin the instance with `set_instance_runner_node`, then call:
+
+```json
+{
+  "instance_id": "<your-coder-instance-id>",
+  "path": "~/dev/chinese",
+  "github_repo": "<owner>/<repository>",
+  "clone": true
+}
+```
+
+These are the arguments to `coding_repo_add`. The runner expands `~` against its own home on Windows, macOS or Linux.
+The destination may be missing or empty, below that home, within an owner-registered project root, or a child of the
+runner's managed repository directory. Existing files are never overwritten to make room for a clone. Protected paths,
+symlink redirects and nested checkouts are refused. The folder is bound only after the runner verifies its checkout and
+matching GitHub origin.
+
+Fresh-checkout provisioning and file inspection have different permissions (#1446). An empty folder does not need to be
+registered as a read root before cloning into it. Provisioning does not make unrelated plain folders readable or change
+the owner's roots file. If an older runner refuses a fresh clone with “not a git repository or a folder you have allowed,”
+update the selected machine to CLI 0.4.201 or newer using `runner_update` and retry the same request once the updated runner is confirmed.
+The fix belongs in the remote runner, so a cloud-only deployment is insufficient.
+
+When the response says cloning is still in progress, repeat the exact arguments to join that job; do not create a second
+instance or destination. After success, check `coding_repos_list` for the expected repository, ready checkout and selected
+machine, then start work with `coding_loop_start`. A failed clone's runner status remains available even if partial files
+remain; a fresh attempt cannot overwrite a nonempty destination.
+
+The machine still needs Git and authorized repository credentials. The clone uses its existing HTTPS credential helper
+or SSH identity; PAGS GitHub connector write consent does not sign Git in on that machine. A credential refusal is reported
+separately from destination validation. Likewise, a connected runner and a ready checkout do not establish that the chosen
+coding engine is signed in or that the machine has capacity: `runner_setup`, `coding_diagnostics` and the run's start receipt
+report those remaining checks.
+
 ### What a session remembers
 
 A session is closed automatically after **six hours** with nothing touching it — a `claude` child process resident on your laptop indefinitely, one per repo, is the cost that buys. Whatever needs the session next simply opens a new one, so you never have to think about that.

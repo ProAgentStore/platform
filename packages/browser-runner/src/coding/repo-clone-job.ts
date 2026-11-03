@@ -17,9 +17,9 @@
  * into, a folder with anything in it never is, an empty folder inside another checkout is refused.
  */
 import { execFile } from "node:child_process";
-import { rmSync } from "node:fs";
 import { promisify } from "node:util";
-import { checkWorkdir, probeGitSshIdentity } from "./repo.js";
+import { requireEmptyCloneTarget } from "./clone-target.js";
+import { probeGitSshIdentity } from "./repo.js";
 
 const run = promisify(execFile);
 
@@ -85,11 +85,9 @@ export async function runCloneJob(job: CloneJob, protocol: CloneProtocol, deps: 
  * Rejects with git's reason (scrubbed of nothing: these URLs carry no token).
  */
 export async function cloneIntoOwnFolder(dir: string, url: string): Promise<void> {
-	const at = checkWorkdir(dir);
-	if (at.exists && at.isDirectory && at.entryCount > 0) throw new Error(`"${dir}" is not empty — never cloned into`);
-	if (at.exists && !at.isDirectory) throw new Error(`"${dir}" is a file, not a folder`);
-	if (at.exists && at.insideWorkTree) throw new Error(`"${dir}" is an empty folder inside another git checkout — not cloning a second repository into it`);
-	if (at.exists) rmSync(dir, { recursive: true, force: true });
+	requireEmptyCloneTarget(dir);
+	// git accepts an empty directory. Never recursively delete it: a concurrent writer could
+	// have populated it since preflight, in which case git itself must refuse the clone.
 	try {
 		await run("git", ["clone", url, dir], {
 			timeout: 60 * 60_000,
