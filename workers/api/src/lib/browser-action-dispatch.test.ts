@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import { runApplyLoop } from "./apply-loop.js";
 import type { Env } from "../types.js";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
 import { BrowserActionUncertainError, dispatchBrowserActionOnce, requireSafeBrowserDispatch } from "./browser-action-dispatch.js";
+import { mirroredRuntimeEvents, mirroredTaskEvents } from "../routes/instances-runtime.js";
 
 let d1: RealSchemaD1;
 let env: Pick<Env, "DB">;
@@ -30,6 +33,48 @@ afterEach(() => d1.close());
 		await expect(dispatchBrowserActionOnce(env, key, click)).resolves.toMatchObject({ url: "https://test.invalid/thanks" });
 		await expect(dispatchBrowserActionOnce(env, key, click)).rejects.toBeInstanceOf(BrowserActionUncertainError);
 		expect(click).toHaveBeenCalledTimes(1);
+	});
+
+	it("publishes a complete event envelope before dispatch without claiming the action succeeded", async () => {
+		const expected = {
+			id: "browser-action:task:s3-act",
+			taskId: "task",
+			type: "browser.action.claimed",
+			message: "Browser action reserved; execution result is unverified.",
+			data: { step: "s3-act", result: "unverified" },
+			createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+		};
+		await dispatchBrowserActionOnce(env, key, async () => {
+			expect(await mirroredRuntimeEvents(env as Env, "instance", "owner")).toEqual([expected]);
+			expect(await mirroredTaskEvents(env as Env, "instance", "owner", "task")).toEqual([expected]);
+			return "clicked";
+		});
+		expect(await mirroredTaskEvents(env as Env, "instance", "owner", "task")).toEqual([expected]);
+	});
+
+	it.each(["dispatched", "unverified"])("repairs legacy %s claims without changing replay protection or unrelated events", async (result) => {
+		const id = "browser-action:task:s3-act";
+		const legacy = JSON.stringify({ step: key.step, result });
+		const insert = d1.sqlite.prepare("INSERT INTO instance_runtime_task_events (id, instance_id, user_id, task_id, type, payload, created_at) VALUES (?, 'instance', 'owner', 'task', ?, ?, '2026-11-03 10:11:12')");
+		insert.run(id, "browser.action.claimed", legacy);
+		insert.run("unrelated", "agent.decision", legacy);
+		insert.run("browser-action:malformed", "browser.action.claimed", "invalid JSON");
+		await dispatchBrowserActionOnce(env, { ...key, step: "s4-act" }, async () => "ok");
+		const stored = (eventId: string) => d1.sqlite.prepare("SELECT * FROM instance_runtime_task_events WHERE id = ?").get(eventId);
+		const validBefore = stored("browser-action:task:s4-act");
+		const migration = readFileSync(new URL("../../migrations/0316_browser_action_claim_envelopes.sql", import.meta.url), "utf8");
+		d1.exec(migration);
+		const repaired = (await mirroredTaskEvents(env as Env, "instance", "owner", "task")).find((event) => (event as { id?: string } | null)?.id === id);
+		expect(repaired).toEqual({ id, taskId: "task", type: "browser.action.claimed", message: "Browser action reserved; execution result is unverified.", data: { step: key.step, result: "unverified" }, createdAt: "2026-11-03T10:11:12.000Z" });
+		expect(stored("unrelated")).toMatchObject({ payload: legacy });
+		expect(stored("browser-action:malformed")).toMatchObject({ payload: "invalid JSON" });
+		expect(stored("browser-action:task:s4-act")).toEqual(validBefore);
+		const once = stored(id);
+		d1.exec(migration);
+		expect(stored(id)).toEqual(once);
+		const click = vi.fn();
+		await expect(dispatchBrowserActionOnce(env, key, click)).rejects.toBeInstanceOf(BrowserActionUncertainError);
+		expect(click).not.toHaveBeenCalled();
 	});
 
 	it("an uncertain Submit ends the real loop before the model can select it again under a new step", async () => {

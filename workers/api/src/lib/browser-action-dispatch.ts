@@ -15,12 +15,20 @@ export async function dispatchBrowserActionOnce<T>(
 ): Promise<T> {
 	// Use the task's existing durable audit store. No raw args, page text, credentials or images.
 	const id = `browser-action:${key.taskId}:${key.step}`;
+	const event = {
+		id,
+		taskId: key.taskId,
+		type: "browser.action.claimed",
+		message: "Browser action reserved; execution result is unverified.",
+		data: { step: key.step, result: "unverified" },
+		createdAt: new Date().toISOString(),
+	};
 	const claimed = await env.DB.prepare(`INSERT OR IGNORE INTO instance_runtime_task_events
 		(id, instance_id, user_id, task_id, type, payload, created_at)
 		SELECT ?1, ?2, ?3, ?4, 'browser.action.claimed', ?5, datetime('now')
 		FROM instance_runtime_tasks WHERE id = ?4 AND instance_id = ?2 AND user_id = ?3
 		AND status = 'running'`)
-		.bind(id, key.instanceId, key.userId, key.taskId, JSON.stringify({ step: key.step, result: "unverified" })).run();
+		.bind(id, key.instanceId, key.userId, key.taskId, JSON.stringify(event)).run();
 	if (claimed.meta.changes !== 1) {
 		const prior = await env.DB.prepare("SELECT 1 AS present FROM instance_runtime_task_events WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(id, key.instanceId, key.userId).first();
 		if (prior) throw new BrowserActionUncertainError();
