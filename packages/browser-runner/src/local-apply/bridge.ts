@@ -27,7 +27,7 @@
 import { SIGN_IN_CONTROL_PROBE_FN, SIGN_IN_PAGE_PROBE_FN, type SignInControlFacts, signInOrigin } from "./sign-in-policy.js";
 import { classifyApplyClick } from "./contract.js";
 import { LISTING_EXPIRED_RE, LISTING_UNAVAILABLE_RE } from "./unavailable.js";
-import type { MaskablePage, ReplayPoint, ShotRecorder } from "../local-browser/replay.js";
+import type { MaskablePage, ShotRecorder } from "../local-browser/replay.js";
 import {
 	CONFIRMATION_INTERVAL_SECONDS,
 	CONFIRMATION_LOOKS,
@@ -41,6 +41,7 @@ import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
 import { looksLikeSignIn, type SiteSessionLedger, siteKeyOf } from "./site-session.js";
 import { followOpenedTab, tabCount } from "./follow-tab.js";
+import { ApplyReplay } from "./apply-replay.js";
 import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
@@ -71,6 +72,8 @@ export interface ApplyBridgeHost {
 	sessions?: SiteSessionLedger;
 	/** This run's own real Playwright page, for a Playwright-native masked screenshot (#1419) — null on a browser the runner did not itself launch. */
 	page?(): MaskablePage | null;
+	/** Redact provisioned run secrets before replay labels or URLs leave the machine. */
+	redact?(text: string): string;
 }
 
 export interface ToolResult {
@@ -224,34 +227,16 @@ export class ApplyBridge {
 	private signInWallSeen = false;
 	private signInActionTaken = false;
 
+	private readonly replay: ApplyReplay;
+	private readonly browser: BrowserTools;
 	constructor(
-		private readonly browser: BrowserTools,
+		browser: BrowserTools,
 		private readonly host: ApplyBridgeHost,
 		/** Replay frames (#1063), taken by the runner with every form control blurred — never a tool the CLI can call. */
-		private readonly shots?: ShotRecorder,
-	) {}
-
-	/**
-	 * The frame a successful call earns (#1063). A refused call earns none, so a model retrying a refused
-	 * tool cannot fill the run's frame cap.
-	 */
-	private static shotPoint(name: string, submittedNow: boolean): ReplayPoint | null {
-		if (submittedNow) return "submit";
-		const points: Record<string, ReplayPoint> = {
-			browser_navigate: "navigated",
-			browser_navigate_back: "navigated",
-			browser_click: "clicked",
-			browser_snapshot: "snapshot",
-			browser_wait_for: "waited",
-			browser_type: "filled",
-			browser_select_option: "filled",
-			upload_artifact: "uploaded",
-			supervisor_checkpoint: "checkpoint",
-			ready_for_review: "review",
-			request_answer: "paused",
-			report_job_unavailable: "blocked",
-		};
-		return points[name] ?? null;
+		shots?: ShotRecorder,
+	) {
+		this.replay = new ApplyReplay(host, shots);
+		this.browser = { listTools: () => browser.listTools(), callTool: (name, args, opts) => this.replay.call(browser, name, args, opts), refused: (tool, args, reason) => browser.refused?.(tool, args, reason) };
 	}
 
 	callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
@@ -262,15 +247,7 @@ export class ApplyBridge {
 	}
 
 	private async executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-		const submittedBefore = this.submitAttempted;
-		const res = await this.dispatch(name, args);
-		const point = res.isError ? null : ApplyBridge.shotPoint(name, this.submitAttempted && !submittedBefore);
-		if (point && this.shots) {
-			const seq = await this.shots.capture(this.host.page?.() ?? null, point);
-			// Metadata only: which frame, and why. The pixels — every form control blurred — stay in the runner.
-			if (seq) this.host.emit({ type: "screenshot.captured", detail: { shot: seq, point } });
-		}
-		return res;
+		return this.replay.run(name, this.target(args)?.name, () => this.dispatch(name, args), () => this.submitAttempted);
 	}
 
 	private get done(): boolean {
@@ -370,6 +347,7 @@ export class ApplyBridge {
 		const res = await this.browser.callTool("browser_evaluate", { function: INSPECT_PAGE }, { internal: true }).catch(() => null);
 		const v = res && !res.isError ? (evaluateResult(textOf(res)) as Partial<PageState> | null) : null;
 		if (!v || typeof v.url !== "string") return null;
+		this.replay.observeUrl(v.url);
 		const unavailable = v.unavailable === "expired" || v.unavailable === "unavailable" ? v.unavailable : null;
 		// A sign-in page by its ADDRESS too (#1100): SEEK's `login.seek.com/login` has no password field, so an
 		// "Apply" that bounced there ran on to `awaiting_review` with nothing filled. Same rule as the submit path.
@@ -387,6 +365,7 @@ export class ApplyBridge {
 	 */
 	private async pauseFor(p: LocalApplyPause, recheck?: () => Promise<boolean>): Promise<boolean> {
 		this.blocked = { reason: p.reason, questions: p.question ? [p.question] : [] };
+		await this.replay.beforePause(p);
 		const outcome = await this.host.pause(p);
 		if (outcome === "sign_in") {
 			// A pause raised from a credential FIELD carries no domain: the page it is on is the sign-in site.

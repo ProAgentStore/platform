@@ -1,4 +1,5 @@
 import MarkdownText from "../components/MarkdownText";
+import { applicationTraceLabel } from "../lib/applicationTrace";
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
 import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
@@ -447,7 +448,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef }: { inst
 
 			{(item.blockReason || pause) && (
 				<div className="mb-2 text-sm">
-					<p className="text-warning font-semibold">Waiting: {(pause?.reason ?? item.blockReason ?? "").replace(/_/g, " ")}</p>
+					<p className="text-warning font-semibold">{pause ? "Waiting" : "Stopped"}: {(pause?.reason ?? item.blockReason ?? "").replace(/_/g, " ")}</p>
 					{pause?.url && <p className="text-xs text-muted">At {pause.url} — open the runner's browser window on your machine to handle it, then Resume.</p>}
 					{questions.map((q) => (
 						<div key={q} className="mt-1">
@@ -489,7 +490,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef }: { inst
 						<li key={`${e.at}|${e.source}|${e.type}|${e.runId ?? ""}|${JSON.stringify(e.detail)}`} className="flex gap-2">
 							<span className="text-muted-soft shrink-0 w-40">{e.at ? new Date(e.at).toLocaleString() : ""}</span>
 							<span className="shrink-0 w-16">{e.source}</span>
-							<span>{e.type}</span>
+							<span className="min-w-0 break-words">{applicationTraceLabel(e)}</span>
 						</li>
 					))}
 				</ol>

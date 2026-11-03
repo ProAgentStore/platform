@@ -502,9 +502,9 @@ const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 // cloud trace, which is where the live investigation needed it.
 // `marker`, `looks`, `urlChanged` and `titleChanged` are #994's post-click evidence: a marker ID
 // from `LOCAL_APPLY_CONFIRMATION_MARKERS`, how many times the page was read, and whether it moved.
-// Each is an id, a count or a boolean — the same whitelist rule as everything else here, so no page
-// text and no typed value can ride along on a `submit.confirmed` / `submit.unconfirmed` event.
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site"]);
+// Those fields carry ids/counts/booleans, never receipt prose. `target` is the intentional exception:
+// a bounded observed control label, scrubbed of run secrets by the runner; typed values stay excluded.
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site", "target"]);
 
 /**
  * A page URL as a trace may keep it (#1069): origin and path, no query or fragment — a sign-in page's
@@ -550,6 +550,15 @@ export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
 			if (k === "marker") {
 				const marker = oneOf(LOCAL_APPLY_CONFIRMATION_MARKERS, v);
 				if (marker) detail[k] = marker;
+				continue;
+			}
+			if (k === "target") {
+				// A bounded observed control label only; never accept arbitrary-length page text.
+				if (typeof v === "string" && v.length <= 160) {
+					// biome-ignore lint/suspicious/noControlCharactersInRegex: scrub control characters before storing a page label.
+					const target = v.replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim();
+					if (target) detail[k] = target;
+				}
 				continue;
 			}
 			if (typeof v === "string") detail[k] = v.slice(0, 300);

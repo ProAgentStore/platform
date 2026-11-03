@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { MaskablePage } from "../local-browser/replay.js";
 import type { LocalApplyTaskEnvelope } from "./contract.js";
+import { applyPrompt, buildApplyEngineSpec } from "./engine.js";
 import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
 import type { LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
@@ -373,6 +374,18 @@ describe("the owner's screenshot switch (#1064)", () => {
 });
 
 describe("a fill-and-review run, end to end on the runner", () => {
+	it.each(["claude", "codex"] as const)("gives %s the bounded platform sign-in flow without granting general sign-in permission (#1464)", (engine) => {
+		const e = envelope({ engine });
+		const prompt = applyPrompt(e, []);
+		const spec = buildApplyEngineSpec(e, prompt, { command: "node", args: ["bridge.js"], env: {} }, "/tmp/mcp.json");
+		expect(spec.args).toContain(prompt);
+		expect(prompt).toContain("Only sign in when the PAGS bridge explicitly instructs you to do so and provides secret names");
+		expect(prompt).toContain("only on the sign-in origin bound by the runner");
+		expect(prompt).toContain("Never supply your own credentials");
+		expect(prompt).toContain("request_sign_in_code");
+		expect(prompt).not.toContain("Never sign in,");
+	});
+
 	it("fills, refuses the submit, and ends awaiting_review — the click never reaches the page", async () => {
 		const prev = { a: process.env.ANTHROPIC_API_KEY, o: process.env.OPENAI_API_KEY, t: process.env.CLAUDE_CODE_OAUTH_TOKEN };
 		process.env.ANTHROPIC_API_KEY = "sk-ant-should-never-reach-the-cli-0000000000";
@@ -875,6 +888,20 @@ describe("sign-in secrets (#1412)", () => {
 		expect(rt.status({ runId })).toMatchObject({ state: "paused", pause: { reason: "login_required", domain: "jobs.example.com" } });
 		return { held }; // wrapped: returning the pending call itself would make `await` wait on it
 	}
+
+	it("persists an ended sign-in result without the CLI's false owner-policy refusal or live-pause claim (#1464)", async () => {
+		const rt = runtime();
+		const { held } = await pausedAtWall(rt);
+		expect(() => rt.signInSecrets({ runId: "run-1", secrets: { PAGS_LOGIN_USERNAME: "jane@example.com" } })).toThrow(expect.objectContaining({ code: "sign_in_secrets_unavailable" }));
+		child.stdout.write(`${JSON.stringify({ type: "result", result: "I do not sign in on your behalf. The run is now paused for you. Resume it." })}\n`);
+		child.exit(0);
+		await held;
+		const status = rt.status({ runId: "run-1" });
+		expect(status).toMatchObject({ state: "ended", result: { outcome: "blocked", blockReason: "login_required", submitAttempted: false, filled: 0 } });
+		expect(status.pause).toBeUndefined();
+		expect(status.result?.summary).toBe("This run ended at the sign-in page before sign-in was completed. Nothing was submitted. Check the action log for sign-in details, then start a new run when access is ready.");
+		expect(runtime().status({ runId: "run-1" }).result?.summary).toBe(status.result?.summary);
+	});
 
 	it("releases the pause into signing_in, names the secrets in the status, wakes the code wait, and wipes on the owner's resume", async () => {
 		const store = secretStore();

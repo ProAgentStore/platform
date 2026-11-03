@@ -589,6 +589,10 @@ export interface BrowserArtifactView {
 	url: string | null;
 	domain: string | null;
 	action: string | null;
+	/** Redacted control label, when it was observed and recorded (never a typed value). */
+	target?: string | null;
+	/** Runner capture time; null for older frames without recoverable capture evidence. */
+	capturedAt?: string | null;
 	createdAt: string;
 }
 

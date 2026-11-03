@@ -20,6 +20,8 @@ export interface BrowserArtifactView {
 	url: string | null;
 	domain: string | null;
 	action: string | null;
+	target?: string | null;
+	capturedAt?: string | null;
 	createdAt: string;
 }
 
@@ -40,6 +42,7 @@ export interface ReplayFrame {
 	seq: number;
 	caption: string;
 	at?: string;
+	timeKind?: "captured" | "stored";
 	src: string;
 }
 
@@ -62,15 +65,31 @@ const POINT_WORDS: Record<string, string> = {
 	uploaded: "Attached a document",
 	checkpoint: "Checkpoint",
 	review: "Ready for review",
-	submit: "Submitted",
+	submit: "Submit attempted",
+	failed: "Action failed",
 	completed: "Finished",
 	action: "Acted on the page",
 };
 
-/** A frame's caption from its stored metadata: what happened, and where. Never page text. */
-export function artifactCaption(a: Pick<BrowserArtifactView, "point" | "domain" | "action">): string {
-	const what = POINT_WORDS[a.point] ?? "Acted on the page";
-	return a.domain ? `${what} — ${a.domain}` : what;
+/** Display only web origin/path; auth query strings never belong in replay captions. */
+export function replayUrl(value?: string | null): string {
+	try {
+		const url = new URL(value ?? "");
+		return /^https?:$/.test(url.protocol) ? `${url.origin}${url.pathname}` : "";
+	} catch { return ""; }
+}
+
+/** Frame metadata records a capture point, not necessarily a completed browser action. */
+export function artifactCaption(a: Pick<BrowserArtifactView, "point" | "domain" | "action"> & Partial<Pick<BrowserArtifactView, "url" | "target">>): string {
+	let what = POINT_WORDS[a.point] ?? "Captured the page";
+	if (a.point === "navigated") what = "Opened";
+	if (a.point === "checkpoint") what = "Captured at checkpoint";
+	if (a.point === "action" && /^(browser_)?click$/.test(a.action ?? "")) what = "Clicked";
+	if (a.point === "action" && a.action === "browser_press_key") what = "Pressed a key";
+	if (a.target) what += ` “${a.target}”`;
+	else if (what === "Clicked") what += " (target not recorded)";
+	const where = replayUrl(a.url) || a.domain;
+	return where ? `${what} — ${where}` : what;
 }
 
 export const artifactSrc = (instanceId: string, artifactId: string) => `/v1/instances/${instanceId}/browser-artifacts/${encodeURIComponent(artifactId)}`;
@@ -84,7 +103,7 @@ export const legacyShotSrc = (instanceId: string, taskId: string, seq: number) =
 export function replayFrames(instanceId: string, artifacts: readonly BrowserArtifactView[], legacy: { taskId: string; shots: readonly LegacyShot[] } | null = null): ReplayFrame[] {
 	const messages = new Map((legacy?.shots ?? []).map((s) => [s.seq, s.msg]));
 	const stored = new Set(artifacts.map((a) => a.seq));
-	const frames: ReplayFrame[] = artifacts.map((a) => ({ key: `a:${a.id}`, seq: a.seq, caption: messages.get(a.seq) || artifactCaption(a), at: a.createdAt, src: artifactSrc(instanceId, a.id) }));
+	const frames: ReplayFrame[] = artifacts.map((a) => ({ key: `a:${a.id}`, seq: a.seq, caption: messages.get(a.seq) || artifactCaption(a), at: a.capturedAt ?? a.createdAt, timeKind: a.capturedAt ? "captured" : "stored", src: artifactSrc(instanceId, a.id) }));
 	if (legacy) {
 		for (const s of legacy.shots) {
 			if (s.artifactId || stored.has(s.seq)) continue;

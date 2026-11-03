@@ -1,0 +1,131 @@
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+// #1464: each replay position must show its own bytes, capture time and action evidence.
+// The real console is rendered; every account/API request is answered by synthetic fixtures.
+const API = "https://api.proagentstore.online";
+const JOB_URL = "https://au.seek.com/job/95534692";
+const LOGIN_URL = "https://login.seek.com/login";
+const INSTANCE = { id: "runner-1", name: "Job Application Runner", slug: "job-application-runner", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: [], runtime: "local_apply", workflow: null } };
+const application = {
+	key: "app:app-1", kind: "application", status: "blocked", title: "Release Train Engineer", company: "Example Employer", location: "Melbourne",
+	url: JOB_URL, source: "SEEK", postedDate: null, matchRationale: null, scoutInstanceId: "scout-1", leadId: "lead-1", leadVersion: 1,
+	applicationId: "app-1", tailorInstanceId: "tailor-1", stateVersion: 3, blockReason: "login_required", questions: [],
+	artifacts: null, profileVersion: null, tailoringRunId: null, fillRunId: "run-1", fillRun: null,
+	submittedAt: null, submittedUrl: null, submitAttempted: false, submitPolicy: null, fillProgress: null,
+	execution: null, diagnostic: null, queue: null, submitAuthorization: null, updatedAt: "2026-11-03T11:00:00Z", actions: [],
+};
+
+async function mockReplay(page: Page, options: { missing?: number; longUrl?: boolean; livePause?: boolean } = {}) {
+	await page.addInitScript(() => window.localStorage.setItem("pags:session", "test-pags-token"));
+	const item = options.livePause ? { ...application, fillRun: { id: "run-1", status: "paused", mode: "dry_run", pause: { reason: "login_required", url: LOGIN_URL } }, actions: ["resume"] } : application;
+	const jobUrl = options.longUrl ? `https://jobs.example.com/${"long-path-segment".repeat(18)}` : JOB_URL;
+	const frames = [
+		{ seq: 1, point: "navigated", action: "browser_navigate", target: null, url: jobUrl, capturedAt: "2026-11-03T10:45:45Z" },
+		{ seq: 2, point: "clicked", action: "browser_click", target: "Apply", url: jobUrl, capturedAt: "2026-11-03T10:46:05Z" },
+		{ seq: 3, point: "blocked", action: "browser_click", target: "Apply", url: LOGIN_URL, capturedAt: "2026-11-03T10:46:14Z" },
+	].map((frame) => ({ ...frame, id: `frame-${frame.seq}`, subjectKind: "local_apply_run", subjectId: "run-1", contentType: "image/svg+xml", bytes: 100, domain: new URL(frame.url).hostname, createdAt: "2026-11-03T11:00:00Z" }));
+	const entries = [
+		{ type: "browser.navigated", detail: { url: `${jobUrl}?token=never-show-this#private` } },
+		{ type: "policy.decision", detail: { tool: "browser_click", decision: "allowed", target: "Apply" } },
+		{ type: "policy.decision", detail: { tool: "browser_click", class: "action", decision: "completed", target: "Apply", url: jobUrl } },
+		{ type: "browser.blocked", detail: { reason: "login_required", url: LOGIN_URL } },
+	].map((entry, index) => ({ ...entry, at: `2026-11-03T10:46:0${index}Z`, source: "runner", instanceId: "runner-1", runId: "run-1" }));
+	await page.route(`${API}/**`, (route) => {
+		const path = new URL(route.request().url()).pathname;
+		const json = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
+		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", roles: ["user"], boardConfig: null });
+		if (path === "/v1/instances/my/instances") return json({ instances: [INSTANCE] });
+		if (path === "/v1/instances/runner-1/application-queue") return json({ pipeline: { scouts: [], tailors: [], runners: [] }, items: [item], counts: { blocked: 1 }, limits: [], connections: [], notes: [] });
+		if (path === "/v1/instances/runner-1/application-queue/app-1/trace") return json({ applicationId: "app-1", correlation: {}, entries });
+		if (path === "/v1/instances/runner-1/browser-artifacts") return json({ subjectKind: "local_apply_run", subjectId: "run-1", artifacts: frames, screenshotsOff: false });
+		const frame = path.match(/\/browser-artifacts\/frame-(\d)$/);
+		if (frame) {
+			const seq = Number(frame[1]);
+			if (seq === options.missing) return json({ error: "Frame unavailable" }, 404);
+			const color = ["#ff0000", "#00ff00", "#0000ff"][seq - 1];
+			return route.fulfill({ contentType: "image/svg+xml", body: `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="1280" height="720" fill="${color}"/><text x="100" y="120" fill="white" font-size="40">Synthetic frame ${seq}</text></svg>` });
+		}
+		if (path.includes("/connections/deliveries")) return json({ deliveries: [] });
+		return json({});
+	});
+	await page.goto("/console/instances/runner-1/applications?application=app-1");
+	return page.getByTestId("run-replay");
+}
+
+async function renderedPixel(image: Locator): Promise<number[]> {
+	await expect(image).toBeVisible();
+	await expect.poll(() => image.evaluate((element) => (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0)).toBe(true);
+	return image.evaluate((element) => {
+		const canvas = document.createElement("canvas");
+		canvas.width = 1;
+		canvas.height = 1;
+		const ctx = canvas.getContext("2d")!;
+		ctx.drawImage(element as HTMLImageElement, 0, 0);
+		return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+	});
+}
+
+test.use({ locale: "en-AU", timezoneId: "UTC" });
+
+test("replay switches actual frame pixels, labels and capture timestamps", async ({ page }) => {
+	const replay = await mockReplay(page);
+	await expect(page.getByText("Stopped: login required", { exact: true })).toBeVisible();
+	await expect(page.getByText("Waiting: login required", { exact: true })).toHaveCount(0);
+	const image = replay.getByRole("img");
+	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("aria-valuetext", "Frame 1 of 3");
+	await expect(replay.getByTestId("replay-caption")).toContainText(`Opened — ${JOB_URL}`);
+	await expect(replay).toContainText("Captured 10:45:45");
+	expect(await renderedPixel(image)).toEqual([255, 0, 0, 255]);
+	const firstSource = await image.getAttribute("src");
+	await replay.getByRole("button", { name: "Next", exact: true }).click();
+	await expect(replay.getByTestId("replay-caption")).toContainText(`Clicked “Apply” — ${JOB_URL}`);
+	await expect(replay).toContainText("Captured 10:46:05");
+	expect(await renderedPixel(image)).toEqual([0, 255, 0, 255]);
+	expect(await image.getAttribute("src")).not.toBe(firstSource);
+	await replay.getByRole("slider", { name: "Frame" }).fill("2");
+	await expect(replay.getByTestId("replay-caption")).toContainText(LOGIN_URL);
+	await expect(replay).toContainText("Captured 10:46:14");
+	expect(await renderedPixel(image)).toEqual([0, 0, 255, 255]);
+	await replay.getByRole("button", { name: "Previous", exact: true }).click();
+	expect(await renderedPixel(image)).toEqual([0, 255, 0, 255]);
+	await page.getByRole("button", { name: "Trace", exact: true }).click();
+	const trace = page.getByRole("list", { name: "Application trace" });
+	await expect(trace).toContainText(`Opened page — ${JOB_URL}`);
+	await expect(trace).toContainText("Allowed click “Apply”");
+	await expect(trace).toContainText(`Clicked “Apply” — ${JOB_URL}`);
+	await expect(trace).not.toContainText("never-show-this");
+	await replay.screenshot({ path: "/tmp/pags1464-replay-ui.png" });
+});
+
+test("a live browser pause remains waiting and offers Resume", async ({ page }) => {
+	await mockReplay(page, { livePause: true });
+	await expect(page.getByText("Waiting: login required", { exact: true })).toBeVisible();
+	await expect(page.getByText("Stopped: login required", { exact: true })).toHaveCount(0);
+	await expect(page.getByText(`At ${LOGIN_URL} — open the runner's browser window on your machine to handle it, then Resume.`)).toBeVisible();
+	await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+});
+
+test("an unavailable frame does not reuse the preceding image or remain loading", async ({ page }) => {
+	const replay = await mockReplay(page, { missing: 2 });
+	expect(await renderedPixel(replay.getByRole("img"))).toEqual([255, 0, 0, 255]);
+	await replay.getByRole("button", { name: "Next", exact: true }).click();
+	await expect(replay).toContainText("Screenshot unavailable for this frame.");
+	await expect(replay.getByRole("img")).toHaveCount(0);
+	await expect(replay).not.toContainText("Loading screenshot");
+	await replay.getByRole("button", { name: "Next", exact: true }).click();
+	expect(await renderedPixel(replay.getByRole("img"))).toEqual([0, 0, 255, 255]);
+});
+
+test("mobile — replay and descriptive trace wrap long URLs within 375px", async ({ page }) => {
+	await page.setViewportSize({ width: 375, height: 812 });
+	const replay = await mockReplay(page, { longUrl: true });
+	await expect(replay.getByRole("img")).toBeVisible();
+	await page.getByRole("button", { name: "Trace", exact: true }).click();
+	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Allowed click “Apply”");
+	await replay.scrollIntoViewIfNeeded();
+	const box = await replay.boundingBox();
+	expect(box && box.x >= 0 && box.x + box.width <= 375).toBe(true);
+	expect(await replay.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+	await page.screenshot({ path: "/tmp/pags1464-replay-mobile.png", fullPage: true });
+});

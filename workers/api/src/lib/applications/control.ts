@@ -33,6 +33,7 @@ import { type PipelineHealth, pipelineHealth } from "./pipeline-health.js";
 import { cancelApplyRun, ownerFillEvent, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
 import { approveAndContinue, approveContinueResult, isPostFillApproval } from "../local-apply/approve-continue.js";
+import { traceUrl } from "../local-apply/contract.js";
 import type { FillProgress } from "./fill-progress.js";
 import { projectApplicationExecution, type ApplicationExecutionProjection } from "./execution-projection.js";
 import { type FillViews, NO_FILL_VIEWS, type RunDiagnostic, readFillViews } from "./fill-views.js";
@@ -856,8 +857,9 @@ export async function applicationTrace(env: Env, uid: string, instanceId: string
 	const runTrace = async (table: "local_artifact_runs" | "local_apply_runs", source: "tailor" | "runner") => {
 		const { results } = await env.DB.prepare(`SELECT id, instance_id, trace FROM ${table} WHERE user_id = ?1 AND application_id = ?2 ORDER BY created_at`).bind(uid, applicationId).all<{ id: string; instance_id: string; trace: string }>();
 		for (const r of results ?? []) {
-			for (const e of JSON.parse(r.trace || "[]") as Array<{ type: string; at: string; detail?: Record<string, unknown>; pauseReason?: string; domain?: string }>) {
-				entries.push({ at: e.at, source, type: e.type, instanceId: r.instance_id, runId: r.id, detail: { ...(e.detail ?? {}), ...(e.pauseReason ? { pauseReason: e.pauseReason } : {}), ...(e.domain ? { domain: e.domain } : {}) } });
+			for (const e of JSON.parse(r.trace || "[]") as Array<{ type: string; at: string; detail?: Record<string, unknown>; pauseReason?: string; domain?: string; url?: string }>) {
+				const url = traceUrl(typeof e.url === "string" ? e.url : "");
+				entries.push({ at: e.at, source, type: e.type, instanceId: r.instance_id, runId: r.id, detail: { ...(e.detail ?? {}), ...(e.pauseReason ? { pauseReason: e.pauseReason } : {}), ...(e.domain ? { domain: e.domain } : {}), ...(url ? { url } : {}) } });
 			}
 		}
 		return (results ?? []).map((r) => r.id);

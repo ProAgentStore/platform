@@ -715,7 +715,7 @@ describe("replay frames on an application page (#1063, #1419)", () => {
 		const captured = events.filter((e) => e.type === "screenshot.captured");
 		expect(captured.length).toBeGreaterThan(0);
 		for (const e of captured) {
-			expect(Object.keys(e.detail ?? {}).sort()).toEqual(["point", "shot"]);
+			expect(Object.keys(e.detail ?? {}).sort()).toEqual(e.detail?.target ? ["point", "shot", "target", "tool"] : ["point", "shot", "tool"]);
 			expect(parseLocalApplyEvent({ ...e, seq: 1, at: "2026-10-14T00:00:00Z" })?.detail).toEqual(e.detail);
 		}
 		const trace = JSON.stringify(events);

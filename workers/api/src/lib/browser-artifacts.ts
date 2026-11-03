@@ -10,7 +10,7 @@
  * The trace contracts are untouched. A trace may name a screenshot (its seq and capture point) and
  * nothing else; the bytes and every pixel of page content stay here, behind authentication. The metadata
  * kept beside them is closed: a capture point from a fixed vocabulary, a URL with its query and fragment
- * removed, its domain, and an action class — never page text, form values or typed values.
+ * removed, its domain, an action class, and a bounded redacted control label — never form values or typed values.
  *
  * Live takeover (`browser-takeovers.ts`) shares the subject identifiers and nothing else: that is an
  * interactive session, this is stored evidence after the fact.
@@ -39,6 +39,7 @@ export interface BrowserArtifactMetadata {
 	url: string | null;
 	domain: string | null;
 	action: string | null;
+	target: string | null;
 }
 
 /** A screenshot as a reader sees it (the wire type in agent-types.ts). The R2 key never leaves the server. */
@@ -62,10 +63,18 @@ export function captionUrl(raw: unknown): { url: string | null; domain: string |
 }
 
 /** Normalise whatever a writer reports into the closed metadata. Unknown points become `action`. */
-export function artifactMetadata(input: { point?: unknown; url?: unknown; action?: unknown }): BrowserArtifactMetadata {
+export function artifactMetadata(input: { point?: unknown; url?: unknown; action?: unknown; target?: unknown }): BrowserArtifactMetadata {
 	const point = (CAPTURE_POINTS as readonly string[]).includes(String(input.point)) ? (input.point as CapturePoint) : "action";
 	const action = typeof input.action === "string" && /^[a-z][a-z0-9_.-]{0,39}$/i.test(input.action) ? input.action.toLowerCase() : null;
-	return { point, ...captionUrl(input.url), action };
+	const target = typeof input.target === "string" ? input.target.replace(/[\s\p{Cc}]+/gu, " ").trim() : "";
+	return { point, ...captionUrl(input.url), action, target: target && target.length <= 160 ? target : null };
+}
+
+/** A runner may report clock skew, but never turn an invalid or far-future timestamp into evidence. */
+function captureTime(raw: unknown, now: number): number | null {
+	if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(raw)) return null;
+	const at = Date.parse(raw);
+	return Number.isFinite(at) && at >= 0 && at <= now + 5 * 60_000 ? at : null;
 }
 
 /** Base64 (no data: prefix) → bytes, or null when it is not base64. */
@@ -92,6 +101,8 @@ interface ArtifactRow {
 	url: string | null;
 	domain: string | null;
 	action: string | null;
+	target: string | null;
+	captured_at: number | null;
 	created_at: number;
 }
 
@@ -106,6 +117,8 @@ const view = (r: ArtifactRow): BrowserArtifactView => ({
 	url: r.url,
 	domain: r.domain,
 	action: r.action,
+	target: r.target ?? null,
+	capturedAt: r.captured_at == null ? null : new Date(r.captured_at).toISOString(),
 	createdAt: new Date(r.created_at).toISOString(),
 });
 
@@ -117,7 +130,9 @@ export interface PutBrowserArtifact {
 	seq: number;
 	bytes: Uint8Array;
 	contentType?: string;
-	metadata: { point?: unknown; url?: unknown; action?: unknown };
+	metadata: { point?: unknown; url?: unknown; action?: unknown; target?: unknown };
+	/** When the runner captured this image; distinct from server write/retention time. */
+	capturedAt?: unknown;
 	retentionDays?: number;
 	now?: number;
 }
@@ -170,11 +185,11 @@ export async function putBrowserArtifact(env: Pick<Env, "DB" | "STORAGE">, input
 	}
 	try {
 		await env.DB.prepare(
-			`INSERT INTO browser_run_artifacts (id, user_id, instance_id, subject_kind, subject_id, seq, kind, content_type, r2_key, bytes, point, url, domain, action, created_at, expires_at)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'screenshot', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+			`INSERT INTO browser_run_artifacts (id, user_id, instance_id, subject_kind, subject_id, seq, kind, content_type, r2_key, bytes, point, url, domain, action, created_at, expires_at, captured_at, target)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'screenshot', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
 			 ON CONFLICT (subject_kind, subject_id, seq) DO NOTHING`,
 		)
-			.bind(id, input.userId, input.instanceId, input.subjectKind, input.subjectId, input.seq, contentType, key, input.bytes.byteLength, meta.point, meta.url, meta.domain, meta.action, now, now + retention * DAY_MS)
+			.bind(id, input.userId, input.instanceId, input.subjectKind, input.subjectId, input.seq, contentType, key, input.bytes.byteLength, meta.point, meta.url, meta.domain, meta.action, now, now + retention * DAY_MS, captureTime(input.capturedAt, now), meta.target)
 			.run();
 	} catch {
 		// No row means the retention sweep would never find this object: remove it rather than orphan it.
@@ -192,13 +207,39 @@ export async function listBrowserArtifacts(env: Pick<Env, "DB">, userId: string,
 	const { results } = await env.DB.prepare("SELECT * FROM browser_run_artifacts WHERE user_id = ?1 AND instance_id = ?2 AND subject_kind = ?3 AND subject_id = ?4 ORDER BY seq LIMIT 500")
 		.bind(userId, instanceId, subjectKind, subjectId)
 		.all<ArtifactRow>();
-	return (results ?? []).map(view);
+	return recoverApplyCaptureMetadata(env, userId, instanceId, subjectKind, subjectId, (results ?? []).map(view));
 }
 
 /** One screenshot's row (with its key), only for its owner and instance. */
 export async function readBrowserArtifact(env: Pick<Env, "DB">, userId: string, instanceId: string, artifactId: string): Promise<(BrowserArtifactView & { r2Key: string }) | null> {
 	const row = await env.DB.prepare("SELECT * FROM browser_run_artifacts WHERE id = ?1 AND user_id = ?2 AND instance_id = ?3").bind(artifactId, userId, instanceId).first<ArtifactRow>();
-	return row ? { ...view(row), r2Key: row.r2_key } : null;
+	if (!row) return null;
+	const [artifact] = await recoverApplyCaptureMetadata(env, userId, instanceId, row.subject_kind, row.subject_id, [view(row)]);
+	return { ...artifact, r2Key: row.r2_key };
+}
+
+/** Older application frames omitted URL/time; their own ordered trace can supply exactly that evidence. */
+async function recoverApplyCaptureMetadata(env: Pick<Env, "DB">, userId: string, instanceId: string, kind: BrowserArtifactSubject, subjectId: string, frames: BrowserArtifactView[]): Promise<BrowserArtifactView[]> {
+	if (kind !== "local_apply_run" || !frames.some((frame) => !frame.capturedAt || !frame.url)) return frames;
+	const row = await env.DB.prepare("SELECT trace FROM local_apply_runs WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(subjectId, instanceId, userId).first<{ trace: string }>().catch(() => null);
+	let events: unknown;
+	try { events = JSON.parse(row?.trace ?? "[]"); } catch { return frames; }
+	if (!Array.isArray(events)) return frames;
+	const captures = new Map<number, { capturedAt: string | null; url: string | null; domain: string | null }>();
+	let page = captionUrl(null);
+	for (const event of events) {
+		if (!event || typeof event !== "object") continue;
+		if (event.type === "browser.navigated") page = captionUrl(event.url);
+		const seq = event.detail?.shot;
+		if (event.type !== "screenshot.captured" || !Number.isInteger(seq) || captures.has(seq)) continue;
+		const at = captureTime(event.at, Date.now());
+		const explicit = captionUrl(event.url);
+		captures.set(seq, { capturedAt: at === null ? null : new Date(at).toISOString(), ...(explicit.url ? explicit : page) });
+	}
+	return frames.map((frame) => {
+		const evidence = captures.get(frame.seq);
+		return evidence ? { ...frame, capturedAt: frame.capturedAt ?? evidence.capturedAt, ...(frame.url ? {} : { url: evidence.url, domain: evidence.domain }) } : frame;
+	});
 }
 
 /** The highest seq stored for a subject — the cursor a pull-sync resumes from. -1 when none. */
@@ -288,7 +329,8 @@ export async function ingestRunnerShots(
 				seq,
 				bytes,
 				contentType: typeof shot.mimeType === "string" ? shot.mimeType : "image/jpeg",
-				metadata: { point: shot.point, url: shot.url, action: shot.action },
+				metadata: { point: shot.point, url: shot.url, action: shot.action, target: shot.target },
+				capturedAt: shot.at,
 				retentionDays: target.retentionDays,
 				now,
 			});

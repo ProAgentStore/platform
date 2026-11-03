@@ -52,7 +52,12 @@ describe("keys and metadata", () => {
 	});
 
 	it("closes the metadata: an unknown point is `action`, a free-text action is dropped", () => {
-		expect(artifactMetadata({ point: "typed:hunter2", action: "Typed my password hunter2" })).toEqual({ point: "action", url: null, domain: null, action: null });
+		expect(artifactMetadata({ point: "typed:hunter2", action: "Typed my password hunter2" })).toEqual({ point: "action", url: null, domain: null, action: null, target: null });
+	});
+
+	it("keeps a bounded control label independently of the action class", () => {
+		expect(artifactMetadata({ point: "clicked", action: "browser_click", target: "  Apply\n now  " })).toMatchObject({ action: "browser_click", target: "Apply now" });
+		expect(artifactMetadata({ target: "x".repeat(161) })).toMatchObject({ target: null });
 	});
 });
 
@@ -134,6 +139,43 @@ describe("the storage guard — a run started with screenshots OFF never gets a 
 
 describe("ingestRunnerShots — the cloud pulls a run's frames (the runner cannot push)", () => {
 	const shot = (seq: number, extra: Record<string, unknown> = {}) => ({ seq, point: "clicked", url: "https://au.seek.com/job/1?x=1", mimeType: "image/jpeg", data: b64(JPEG), at: "2026-10-14T00:00:00Z", ...extra });
+
+	it("preserves each capture time and target when a batch arrives later, without extending retention", async () => {
+		const now = Date.parse("2026-11-04T00:00:00Z");
+		const times = ["2026-11-03T10:45:45.312Z", "2026-11-03T10:45:48.563Z", "2026-11-03T10:46:01.196Z"];
+		await ingestRunnerShots(env, { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run", subjectId: "run-times", retentionDays: 7 }, async (after) => after === 0 ? { shots: times.map((at, i) => shot(i + 1, { at, action: "browser_click", target: "Apply" })) } : null, now);
+		const frames = await listBrowserArtifacts(env, "u1", "i1", "local_apply_run", "run-times");
+		expect(frames.map((frame) => frame.capturedAt)).toEqual(times);
+		expect(frames.map((frame) => frame.createdAt)).toEqual(times.map(() => new Date(now).toISOString()));
+		expect(frames.every((frame) => frame.target === "Apply")).toBe(true);
+		expect(rows().every((row) => row.expires_at === now + 7 * 86_400_000)).toBe(true);
+	});
+
+	it("leaves absent, invalid and far-future capture times unknown", async () => {
+		const now = Date.parse("2026-11-04T00:00:00Z");
+		const values = [undefined, "not a date", "2027-01-01T00:00:00Z", 123];
+		await ingestRunnerShots(env, { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run", subjectId: "run-bad-times" }, async (after) => after === 0 ? { shots: values.map((at, i) => shot(i + 1, { at })) } : null, now);
+		expect((await listBrowserArtifacts(env, "u1", "i1", "local_apply_run", "run-bad-times")).map((frame) => frame.capturedAt)).toEqual(values.map(() => null));
+	});
+
+	it("recovers historical capture time and preceding page URL from the same run's durable trace", async () => {
+		const trace = [
+			{ type: "browser.navigated", at: "2026-11-03T10:45:45.167Z", url: "https://au.seek.com/job/95534692?token=SECRET" },
+			{ type: "screenshot.captured", at: "2026-11-03T10:45:45.312Z", detail: { shot: 1, point: "navigated" } },
+			{ type: "screenshot.captured", at: "2026-11-03T10:45:48.563Z", detail: { shot: 2, point: "snapshot" } },
+			{ type: "browser.navigated", at: "2026-11-03T10:46:14.957Z", url: "https://login.seek.com/login" },
+		];
+		d1.exec("INSERT INTO agents (id, owner_id, slug, name) VALUES ('a1', 'u1', 'a1', 'A'); INSERT INTO agent_instances (id, agent_id, user_id) VALUES ('i1', 'a1', 'u1')");
+		await env.DB.prepare("INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, policy, trace, created_at, updated_at) VALUES ('old-run', 'i1', 'u1', 'app', 'old-req', '{}', ?1, 0, 0)").bind(JSON.stringify(trace)).run();
+		await put(1, { subjectKind: "local_apply_run", subjectId: "old-run", metadata: { point: "navigated" } });
+		await put(2, { subjectKind: "local_apply_run", subjectId: "old-run", metadata: { point: "snapshot" } });
+		const frames = await listBrowserArtifacts(env, "u1", "i1", "local_apply_run", "old-run");
+		expect(frames.map((frame) => frame.capturedAt)).toEqual([trace[1].at, trace[2].at]);
+		expect(frames.map((frame) => frame.url)).toEqual(["https://au.seek.com/job/95534692", "https://au.seek.com/job/95534692"]);
+		expect(frames.every((frame) => frame.target === null)).toBe(true);
+		expect(await listBrowserArtifacts(env, "u2", "i1", "local_apply_run", "old-run")).toEqual([]);
+		expect(rows().every((row) => row.captured_at === null && row.url === null)).toBe(true);
+	});
 
 	it("stores every page of frames, resumes after the last stored one, and keeps the run's own retention", async () => {
 		const asked: number[] = [];

@@ -18,6 +18,9 @@ import { type BrowserArtifactListResponse, type BrowserArtifactView, type Replay
  */
 export function useBrowserArtifacts(instanceId: string, subjectKind: ReplaySubjectKind, subjectId: string | null | undefined, refreshKey: unknown = 0): { artifacts: BrowserArtifactView[]; screenshotsOff: boolean } {
 	const [state, setState] = useState<{ artifacts: BrowserArtifactView[]; screenshotsOff: boolean }>({ artifacts: [], screenshotsOff: false });
+	// Changing applications must never briefly display the preceding run's frames.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: identity changes reset the previous subject's data.
+	useEffect(() => setState({ artifacts: [], screenshotsOff: false }), [instanceId, subjectKind, subjectId]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `refreshKey` is the re-read trigger (the run's event count), not a value the effect reads.
 	useEffect(() => {
 		if (!subjectId) return;
@@ -39,6 +42,7 @@ const fmtStamp = (at?: string) => (at ? new Date(at).toLocaleTimeString() : "");
 
 export default function RunReplay({ frames, emptyText }: { frames: readonly ReplayFrame[]; emptyText: string }) {
 	const [urls, setUrls] = useState<Record<string, string>>({});
+	const [failed, setFailed] = useState<Record<string, boolean>>({});
 	const [idx, setIdx] = useState(0);
 	const [playing, setPlaying] = useState(false);
 	const urlsRef = useRef<Record<string, string>>({});
@@ -52,13 +56,14 @@ export default function RunReplay({ frames, emptyText }: { frames: readonly Repl
 				if (urlsRef.current[f.key]) continue;
 				try {
 					const res = await fetch(`${API}${f.src}`, { headers: { Authorization: `Bearer ${tok}` } });
-					if (!res.ok) continue;
+					if (!res.ok) throw new Error("Screenshot unavailable");
 					const blob = await res.blob();
 					if (cancelled) return;
 					urlsRef.current[f.key] = URL.createObjectURL(blob);
+					setFailed((old) => ({ ...old, [f.key]: false }));
 					setUrls({ ...urlsRef.current });
 				} catch {
-					/* a missing frame stays "Loading…" — the rest still play */
+					if (!cancelled) setFailed((old) => ({ ...old, [f.key]: true }));
 				}
 			}
 		})();
@@ -95,18 +100,19 @@ export default function RunReplay({ frames, emptyText }: { frames: readonly Repl
 				</button>
 				<button type="button" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} disabled={idx <= 0} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Previous"><ChevronLeft size={16} /></button>
 				<button type="button" onClick={() => { setPlaying(false); setIdx((i) => Math.min(frames.length - 1, i + 1)); }} disabled={idx >= frames.length - 1} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Next"><ChevronRight size={16} /></button>
-				<input type="range" min={0} max={Math.max(0, frames.length - 1)} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" aria-label="Step" aria-valuetext={`Step ${idx + 1} of ${frames.length}`} />
+				<input type="range" min={0} max={Math.max(0, frames.length - 1)} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" aria-label="Frame" aria-valuetext={`Frame ${idx + 1} of ${frames.length}`} />
 				<span className="text-xs text-muted-soft font-mono shrink-0">{idx + 1}/{frames.length}</span>
 			</div>
 			<div className="rounded-lg overflow-hidden border border-line bg-paper flex items-center justify-center min-h-[240px]">
-				{urls[cur.key] ? <img src={urls[cur.key]} alt={`Step ${cur.seq}`} width={1280} height={720} className="w-full max-h-[520px] object-contain" /> : <span className="text-sm text-muted-soft py-16">Loading screenshot…</span>}
+				{failed[cur.key] ? <span className="text-sm text-muted-soft py-16">Screenshot unavailable for this frame.</span> : urls[cur.key] ? <img key={cur.key} src={urls[cur.key]} alt={`Frame ${cur.seq}: ${cur.caption}`} onError={() => setFailed((old) => ({ ...old, [cur.key]: true }))} width={1280} height={720} className="w-full max-h-[520px] object-contain" /> : <span className="text-sm text-muted-soft py-16">Loading screenshot…</span>}
 			</div>
-			<div className="flex items-baseline justify-between gap-3 mt-2.5">
-				<div className="text-sm text-ink" data-testid="replay-caption">
-					<span className="font-semibold">Step {cur.seq}:</span> {cur.caption}
+			<div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1 sm:gap-3 mt-2.5">
+				<div className="min-w-0 flex-1 break-words text-sm text-ink" data-testid="replay-caption">
+					<span className="font-semibold">Frame {cur.seq}:</span> {cur.caption}
 				</div>
-				<span className="text-xs text-muted-soft font-mono shrink-0">{fmtStamp(cur.at)}</span>
+				<span className="text-xs text-muted-soft font-mono shrink-0">{cur.timeKind === "stored" ? "Stored " : "Captured "}{fmtStamp(cur.at)}</span>
 			</div>
+			<p className="text-xs text-muted-soft mt-1">Screenshots can show the same page between actions.</p>
 		</Card>
 	);
 }

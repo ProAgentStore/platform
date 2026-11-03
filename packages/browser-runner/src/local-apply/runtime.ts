@@ -33,6 +33,7 @@ import { resolveSource } from "../local-artifact/runtime.js";
 import { type BrowserTools, domainWithin } from "../local-browser/bridge.js";
 import { BRIDGE_ENV } from "../local-browser/bridge-stdio.js";
 import { redactText, secretEnvValues } from "../local-browser/contract.js";
+import { redactReplayText } from "./apply-replay.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
@@ -519,6 +520,7 @@ export class LocalApplyRuntime {
 			requestSignInCode: () => this.requestSignInCode(run),
 			signInDone: () => this.signInDone(run),
 			page: () => run.browser?.handoffPage?.() ?? null,
+			redact: (value) => redactReplayText(value, run.secrets),
 		}, e.policy.screenshots === false ? undefined : run.shots);
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
 
@@ -609,7 +611,11 @@ export class LocalApplyRuntime {
 		}
 		if (b?.reviewReady) return { outcome: "awaiting_review", summary };
 		if (!b?.filled && missingLogin(e.engine, run.output.join("\n"))) return { outcome: "blocked", summary, blockReason: "engine_not_signed_in", questions: [signInHelp(e.engine)], engineAuth: "missing_login" };
-		if (b?.blocked) return { outcome: "blocked", summary, blockReason: b.blocked.reason, questions: b.blocked.questions };
+		if (b?.blocked) {
+			// #1464: the CLI can describe a live pause after its held tool times out. This result is terminal.
+			const blockedSummary = b.blocked.reason === "login_required" ? "This run ended at the sign-in page before sign-in was completed. Nothing was submitted. Check the action log for sign-in details, then start a new run when access is ready." : summary;
+			return { outcome: "blocked", summary: blockedSummary, blockReason: b.blocked.reason, questions: b.blocked.questions };
+		}
 		if (run.timedOut) {
 			return { outcome: "blocked", summary, blockReason: "incomplete", questions: [`Stopped at the ${e.limits.maxMinutes}-minute limit before the form was ready for review.`], diagnostic: this.diagnosticOf(run, code, "timed_out") };
 		}

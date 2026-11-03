@@ -701,6 +701,12 @@ describe("the trace: Scout lead → triage → Tailor run → Runner run → fin
 		const fillRun = dispatches("/local-apply/run")[0].body.runId as string;
 		answers["/local-apply/status"] = { status: 200, body: { state: "ended", lastSeq: 0, events: [], result: { runId: fillRun, outcome: "awaiting_review", mode: "fill_and_review", traceId: fillRun, engineAuth: "machine-login", filled: 5, uploaded: ["resume"], submitAttempted: false, summary: "Filled." } } };
 		await call("GET", `/ap/application-runs/${fillRun}`);
+		// Older stored traces can still carry URL secrets: the shared projection must strip them,
+		// while retaining the page destination and an observed action target for the console/MCP.
+		for (const event of [
+			{ type: "browser.navigated", at: "2026-10-07T00:05:01.000Z", url: "https://user:SECRET@au.seek.com/job/123?token=SECRET#SECRET" },
+			{ type: "policy.decision", at: "2026-10-07T00:05:02.000Z", detail: { tool: "browser_click", class: "action", decision: "completed", target: "Apply" } },
+		]) await d1.DB.prepare("UPDATE local_apply_runs SET trace = json_insert(trace, '$[#]', json(?1)) WHERE id = ?2").bind(JSON.stringify(event), fillRun).run();
 
 		const viaTool = await call("GET", `/ap/application-queue/${appId}/trace`);
 		const viaConsole = await call("GET", `/t1/application-queue/${appId}/trace`);
@@ -711,5 +717,8 @@ describe("the trace: Scout lead → triage → Tailor run → Runner run → fin
 		expect(viaConsole.body.entries.filter((e: { source: string }) => e.source === "lifecycle").map((e: { type: string }) => e.type)).toEqual(["apply_requested→tailoring", "tailoring→materials_ready", "materials_ready→filling", "filling→awaiting_review"]);
 		expect(viaConsole.body.entries.find((e: { source: string }) => e.source === "lead")).toMatchObject({ type: "triage.apply", detail: { from: "new", to: "apply_requested" } });
 		expect(JSON.stringify(viaConsole.body)).not.toMatch(/recruiter@globex|private note/);
+		expect(viaConsole.body.entries.find((e: { type: string }) => e.type === "browser.navigated")).toMatchObject({ detail: { url: "https://au.seek.com/job/123" } });
+		expect(viaConsole.body.entries.find((e: { detail: { target?: string } }) => e.detail.target === "Apply")).toMatchObject({ detail: { tool: "browser_click", decision: "completed", target: "Apply" } });
+		expect(JSON.stringify(viaConsole.body)).not.toContain("SECRET");
 	});
 });

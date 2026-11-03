@@ -45,6 +45,7 @@ export const MASK_COLOR = "#0b0b0b";
 
 /** The minimum of Playwright's real `Page` a masked screenshot needs — real in production, faked in tests. */
 export interface MaskablePage {
+	url?(): string;
 	locator(selector: string): Locator;
 	screenshot(opts: { type: "jpeg"; quality: number; scale: "css"; style?: string; mask?: Locator[]; maskColor?: string; timeout: number }): Promise<Buffer>;
 }
@@ -95,14 +96,20 @@ export class ShotRecorder {
 	 * run has no real page to capture (#1419 — a browser the runner did not itself launch), or the
 	 * masked screenshot failed.
 	 */
-	async capture(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string } = {}): Promise<number | null> {
-		if (this.nextSeq >= this.cap) return null;
-		if (!page) return null;
+	async capture(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string; target?: string } = {}): Promise<number | null> {
+		return (await this.captureResult(page, point, meta)).seq;
+	}
+
+	/** The reason is explicit so a replay can distinguish missing evidence from an unchanged page. */
+	async captureResult(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string; target?: string } = {}): Promise<{ seq: number } | { seq: null; reason: "capture_limit" | "page_unavailable" | "capture_failed" | "frame_too_large" }> {
+		if (this.nextSeq >= this.cap) return { seq: null, reason: "capture_limit" };
+		if (!page) return { seq: null, reason: "page_unavailable" };
 		const data = await capturePageScreenshot(page, { quality: 50, timeout: 8_000, blurFormFields: this.blurFormFields });
-		if (!data || data.length > MAX_SHOT_BASE64) return null;
+		if (!data) return { seq: null, reason: "capture_failed" };
+		if (data.length > MAX_SHOT_BASE64) return { seq: null, reason: "frame_too_large" };
 		const seq = ++this.nextSeq;
-		this.shots.push({ seq, point, ...(meta.url ? { url: meta.url } : {}), ...(meta.action ? { action: meta.action } : {}), mimeType: "image/jpeg", data, at: new Date(this.now()).toISOString() });
-		return seq;
+		this.shots.push({ seq, point, ...(meta.url ? { url: meta.url } : {}), ...(meta.action ? { action: meta.action } : {}), ...(meta.target ? { target: meta.target } : {}), mimeType: "image/jpeg", data, at: new Date(this.now()).toISOString() });
+		return { seq };
 	}
 
 	/** The frames after `afterSeq`, paged by size; `lastSeq` never runs past a frame not returned. */

@@ -264,6 +264,8 @@ export interface ReplayShot {
 	point: "navigated" | "clicked" | "snapshot" | "waited" | "paused" | "blocked" | "filled" | "uploaded" | "checkpoint" | "review" | "submit" | "completed";
 	url?: string;
 	action?: string;
+	/** Observed control label, bounded and scrubbed of run secrets; never the typed value. */
+	target?: string;
 	mimeType: string;
 	data: string;
 	at: string;

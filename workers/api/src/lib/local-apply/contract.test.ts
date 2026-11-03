@@ -24,6 +24,11 @@ describe("the vendored copy", () => {
 });
 
 describe("parseLocalApplyEvent", () => {
+	it("keeps only bounded normalized replay targets and rejects non-label values", () => {
+		const event = (target: unknown) => parseLocalApplyEvent({ type: "screenshot.captured", at: "2026-10-07T00:00:00Z", detail: { target } });
+		expect(event("  Apply\nnow\u0000 ")?.detail).toEqual({ target: "Apply now" });
+		for (const target of ["x".repeat(161), " \n ", 42, true]) expect(event(target)?.detail).toBeUndefined();
+	});
 	it("keeps classes, decisions and handles; drops a typed value, a page's text and a cookie", () => {
 		const e = parseLocalApplyEvent({ type: "field.filled", at: "2026-10-07T00:00:00Z", detail: { class: "fill", role: "textbox", value: "Jane Citizen", text: "page text", cookie: "sid=1" } });
 		expect(e).toEqual({ type: "field.filled", at: "2026-10-07T00:00:00Z", detail: { class: "fill", role: "textbox" } });

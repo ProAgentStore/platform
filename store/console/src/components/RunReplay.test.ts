@@ -25,11 +25,24 @@ const artifact = (subjectKind: ReplaySubjectKind, seq: number, over: Partial<Bro
 });
 
 describe("replayFrames", () => {
+	it("keeps separate image sources and capture times even when ingestion time is identical", () => {
+		const frames = replayFrames("i1", [artifact("local_apply_run", 1, { capturedAt: "2026-10-14T00:00:01Z" }), artifact("local_apply_run", 2, { capturedAt: "2026-10-14T00:00:08Z" })]);
+		expect(frames[0].src).not.toBe(frames[1].src);
+		expect(frames.map((f) => [f.at, f.timeKind])).toEqual([["2026-10-14T00:00:01Z", "captured"], ["2026-10-14T00:00:08Z", "captured"]]);
+		expect(replayFrames("i1", [artifact("local_apply_run", 3)])[0].timeKind).toBe("stored");
+	});
+
+	it("shows a clicked target and safe page path, without claiming submit confirmation", () => {
+		expect(artifactCaption(artifact("local_apply_run", 1, { point: "clicked", target: "Apply", url: "https://owner:secret@au.seek.com/job/95534692?token=secret#secret" }))).toBe("Clicked “Apply” — https://au.seek.com/job/95534692");
+		expect(artifactCaption(artifact("local_apply_run", 1, { point: "submit" }))).toContain("Submit attempted");
+		expect(artifactCaption(artifact("local_apply_run", 1, { point: "clicked" }))).toContain("target not recorded");
+		expect(artifactCaption(artifact("local_apply_run", 1, { point: "action", action: "browser_press_key" }))).toBe("Pressed a key — https://au.seek.com/job/1");
+	});
 	it("plays a subject's artifacts in seq order, fetched from the owner-checked route", () => {
 		const frames = replayFrames("i1", [artifact("local_browser_run", 2, { point: "snapshot" }), artifact("local_browser_run", 1)]);
 		expect(frames.map((f) => [f.seq, f.caption, f.src])).toEqual([
-			[1, "Opened a page — au.seek.com", "/v1/instances/i1/browser-artifacts/art-local_browser_run-1"],
-			[2, "Read the page — au.seek.com", "/v1/instances/i1/browser-artifacts/art-local_browser_run-2"],
+			[1, "Opened — https://au.seek.com/job/1", "/v1/instances/i1/browser-artifacts/art-local_browser_run-1"],
+			[2, "Read the page — https://au.seek.com/job/1", "/v1/instances/i1/browser-artifacts/art-local_browser_run-2"],
 		]);
 	});
 
@@ -49,7 +62,7 @@ describe("replayFrames", () => {
 
 	it("a caption is built from metadata only — what happened and where, never page text", () => {
 		expect(artifactCaption({ point: "filled", domain: "jobs.example.com", action: null })).toBe("Filled a field — jobs.example.com");
-		expect(artifactCaption({ point: "something_new", domain: null, action: null })).toBe("Acted on the page");
+		expect(artifactCaption({ point: "something_new", domain: null, action: null })).toBe("Captured the page");
 	});
 });
 
@@ -57,9 +70,9 @@ describe("<RunReplay> renders for every subject kind", () => {
 	it.each(["runtime_task", "local_browser_run", "local_apply_run"] as const)("%s: controls, counter and the first frame's caption", (kind) => {
 		const html = renderToStaticMarkup(createElement(RunReplay, { frames: replayFrames("i1", [artifact(kind, 1), artifact(kind, 2, { point: "completed" })]), emptyText: "none" }));
 		expect(html).toContain('data-testid="run-replay"');
-		for (const label of ["Play", "Previous", "Next", "Step"]) expect(html).toContain(`aria-label="${label}"`);
+		for (const label of ["Play", "Previous", "Next", "Frame"]) expect(html).toContain(`aria-label="${label}"`);
 		expect(html).toContain("1/2");
-		expect(html).toContain("Opened a page — au.seek.com");
+		expect(html).toContain("Opened — https://au.seek.com/job/1");
 		// Bytes are fetched with the owner's token after mount; nothing is inlined in the markup.
 		expect(html).toContain("Loading screenshot…");
 		expect(html).not.toMatch(/src="data:|browser-artifacts\//);
