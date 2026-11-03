@@ -40,8 +40,8 @@ jobs:
         run: |
           pnpm --filter @proagentstore/sdk build
           pnpm --filter @proagentstore/cli build
-      - name: Fresh checkout provisioning regression (real git, no network)
-        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/runtime-clone-provisioning.test.ts
+      - name: Checkout provisioning and destination guards (real git, no network)
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/runtime-clone-provisioning.test.ts packages/browser-runner/src/coding/clone-target.test.ts packages/browser-runner/src/coding/repo-clone.test.ts packages/browser-runner/src/coding/workdir-case.test.ts packages/browser-runner/src/clone-work.test.ts
       - name: Release smoke test (start, heartbeat, self-update)
         run: node scripts/release-smoke/run.mjs
 
@@ -62,8 +62,8 @@ jobs:
         run: |
           pnpm --filter @proagentstore/sdk build
           pnpm --filter @proagentstore/cli build
-      - name: Fresh checkout provisioning regression (real git, no network)
-        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/runtime-clone-provisioning.test.ts
+      - name: Checkout provisioning and destination guards (real git, no network)
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/runtime-clone-provisioning.test.ts packages/browser-runner/src/coding/clone-target.test.ts packages/browser-runner/src/coding/repo-clone.test.ts packages/browser-runner/src/coding/workdir-case.test.ts packages/browser-runner/src/clone-work.test.ts
       - name: Release smoke test (start, heartbeat, self-update)
         run: node scripts/release-smoke/run.mjs
 

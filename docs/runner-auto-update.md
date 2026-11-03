@@ -40,6 +40,24 @@ toggle off cancels an update that has not begun installing. A receipt is not suc
 page records checking, waiting, installing/restarting, verified reconnect, unsupported, offline, or
 failure with its last attempt.
 
+## Update holds and retries (#1453)
+
+An update can finish downloading while new work starts on the machine. The final work check then
+holds the restart and reports the active work; it is not another install in progress. A manual request
+with a valid operation lease can wait for that work to finish within the lease. Without a valid lease,
+the reply states that no delayed restart was scheduled. Inspect the current version before retrying.
+
+The install bridge reports separate outcomes for a concurrent install, active work, an expired lease,
+unavailable or disabled automatic-update policy, and fleet staggering. Exceptions release its
+single-flight lock and any mutation drain so a later request can retry. A successful restart keeps
+the drain closed until the process exits. These changes do not authorize interruption of active turns.
+Background repository clones also count as local work until they succeed or fail (#1458); a clone-start
+HTTP reply does not make the machine idle. Ordinary updates and safe restarts wait for those clones.
+
+A historical `scheduled` receipt can remain visible after its `deferredUntil` deadline (#1456).
+Check that deadline and the machine's actual version; an expired receipt is not a live update request
+or proof that the machine restarted. This reporting limitation remains tracked separately.
+
 ## Diagnostics: what the controller last did (#1020)
 
 `get_machine_policy` (and the Terminals machine detail) carries `auto_update_diagnostics` beside the
@@ -550,7 +568,18 @@ the cloud API alone does not replace its runner code.
 
 Long clones remain background jobs: repeat the same `coding_repo_add` arguments to join the same in-flight clone, then
 verify the binding with `coding_repos_list`. Runner clone status remains readable for a failed job even when it left partial
-files. A new clone does not overwrite those files. Git authentication is separate: the selected machine must already have
+files. A new clone does not overwrite those files. The API refuses to join a job for a different repository and treats
+a lost, malformed or disappeared job receipt as unconfirmed, not completed (#1454). A failed partial checkout is not
+bound as ready merely because it has a `.git` directory and an origin. A missing or empty failed destination can be retried.
+
+Clone destinations also exclude bare repositories and separate Git administration directories, even when no path
+component is named `.git`. Session-created checkouts use the same missing/empty destination guard, including the refusal
+to create a nested checkout inside an existing repository (#1455). Credential-directory names are reserved
+without regard to letter case, including names not yet present on disk. Filesystem-native canonical paths
+keep aliases on case-insensitive disks tied to one clone job; ordinary distinct paths on case-sensitive
+disks remain distinct (#1457).
+
+Git authentication is separate: the selected machine must already have
 authorized access to the repository through its Git credential helper or SSH identity. GitHub connector consent alone does
 not establish that access.
 

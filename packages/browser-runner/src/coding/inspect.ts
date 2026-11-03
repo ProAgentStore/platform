@@ -76,8 +76,8 @@ export function resolveInside(root: string, rel: string, opts: { checkSymlink?: 
 	if (opts.checkSymlink && existsSync(abs)) {
 		// A symlink inside the repo could still point outside it — resolve the real path and
 		// re-check the same invariant.
-		const real = realpathSync(abs);
-		const realRoot = realpathSync(rootAbs);
+		const real = realpathSync.native(abs);
+		const realRoot = realpathSync.native(rootAbs);
 		if (real !== realRoot && !real.startsWith(realRoot + sep)) {
 			throw new InspectError(`path resolves (via symlink) outside the repo: ${rel}`);
 		}

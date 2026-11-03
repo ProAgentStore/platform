@@ -9,7 +9,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cloneIntoWorkdir } from "./repo.js";
+import { RunnerInputError } from "../errors.js";
+import { cloneIntoWorkdir, ensureRepo } from "./repo.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "pags-clone-"));
 const upstream = join(tmp, "upstream.git");
@@ -41,6 +42,27 @@ describe("cloneIntoWorkdir (#857)", () => {
 		mkdirSync(dir);
 		expect(cloneIntoWorkdir(dir, upstream).cloned).toBe(true);
 		expect(existsSync(join(dir, ".git"))).toBe(true);
+	});
+
+	it("session setup refuses a missing owner folder inside another checkout", () => {
+		const checkout = join(tmp, "session-parent");
+		git(tmp, "clone", "-q", upstream, checkout);
+		const target = join(checkout, "missing", "nested");
+		let refusal: unknown;
+		try {
+			ensureRepo(target, { cloneUrl: upstream, ownFolder: true });
+		} catch (error) {
+			refusal = error;
+		}
+		expect(refusal).toBeInstanceOf(RunnerInputError);
+		expect(refusal).toMatchObject({ status: 409, message: expect.stringContaining("inside another git checkout") });
+		expect(existsSync(target)).toBe(false);
+	});
+
+	it("legacy clone refuses a missing folder inside Git administration", () => {
+		const target = join(upstream, "objects", "nested", "clone");
+		expect(() => cloneIntoWorkdir(target, upstream)).toThrow(/git administration/);
+		expect(existsSync(target)).toBe(false);
 	});
 
 	it("leaves an existing checkout untouched — nothing is cloned over it", () => {

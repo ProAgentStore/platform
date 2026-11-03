@@ -144,7 +144,7 @@ export class LocalRunner {
 	 */
 	liveWork(): { codingTurns: number; localRuns: number; detail: string[] } {
 		const coding = this.coding.liveWork();
-		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork(), ...this.localApplyReconciliation.liveWork(), ...this.localApplySignIn.liveWork(), ...this.siteBuilder.liveWork()];
+		const local = [...this.coding.cloneWork(), ...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork(), ...this.localApplyReconciliation.liveWork(), ...this.localApplySignIn.liveWork(), ...this.siteBuilder.liveWork()];
 		return { codingTurns: coding.length, localRuns: local.length, detail: [...coding, ...local].slice(0, 10) };
 	}
 

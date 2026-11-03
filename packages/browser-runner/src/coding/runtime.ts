@@ -7,6 +7,7 @@ import { cleanCheckout, type CheckoutCleanAction } from "./checkout-clean.js";
 import { parkRestore, parkSnapshot } from "./park-snapshot.js";
 import { runObjective } from "./run-objective.js";
 import { homedir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { RunnerInputError } from "../errors.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
@@ -311,6 +312,8 @@ export class CodingRuntime {
 	}
 	/** Background cold-start clones, one per folder (#858). */
 	private cloneJobs = new CloneJobs();
+	/** Clones are background local work, not coding turns (#1458). */
+	cloneWork(): string[] { return this.cloneJobs.liveWork(); }
 	/**
 	 * Active human handoffs keyed by session id. `resolved` flips when the human
 	 * finishes (console "Resume" / submits a value); the brain workflow polls
@@ -494,13 +497,17 @@ export class CodingRuntime {
 	startClone(input: { workDir?: string; slug?: string; protocol?: CloneProtocol }) {
 		if (!input.workDir || !input.slug || !/^[\w.-]+\/[\w.-]+$/.test(input.slug)) throw new InspectError("workDir and an owner/repo slug are required");
 		const protocol: CloneProtocol = input.protocol === "https" || input.protocol === "ssh" ? input.protocol : "auto";
-		const path = resolveCloneLocation(input.workDir, { managed: this.reposBaseDir });
+		let path = resolveCloneLocation(input.workDir, { managed: this.reposBaseDir });
 		const current = this.cloneJobs.status(path);
 		if (current.state === "cloning") {
 			if (current.slug.toLowerCase() !== input.slug.toLowerCase()) throw new InspectError("A different repository is already being cloned into this destination.");
 			return current;
 		}
 		requireEmptyCloneTarget(path);
+		// Reserve the validated empty destination before publishing the job. Native resolution
+		// can now identify differently cased names on this filesystem without folding all paths.
+		mkdirSync(path, { recursive: true });
+		path = resolveCloneLocation(path, { managed: this.reposBaseDir });
 		return this.cloneJobs.start(path, input.slug, protocol);
 	}
 

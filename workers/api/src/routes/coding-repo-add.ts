@@ -73,16 +73,25 @@ export async function addPairedRepo(
 	}
 	// A clone of this folder already in flight (#858) — a call REPEATED while a long clone runs joins it
 	// rather than reading a half-written checkout as finished. Checked before the folder is judged.
+	let previousFailure: CloneJobView | undefined;
 	if (clone) {
 		const inFlight = await readCloneJob(conn, localPath);
 		if (inFlight?.state === "cloning") {
+			if (githubRepoIn && inFlight.slug?.toLowerCase() !== githubRepoIn.toLowerCase()) {
+				if (!inFlight.slug) return unconfirmedClone(c, localPath, githubRepoIn);
+				return c.json({ error: `A clone of ${inFlight.slug} is already running in \`${localPath}\`, not ${githubRepoIn}. Retry the original request or choose a different destination.` }, 409);
+			}
 			const outcome = await awaitClone(conn, localPath, inFlight, deadline);
 			if (outcome.kind === "pending") return stillCloning(c, outcome.job);
-		if (outcome.kind === "unconfirmed") return unconfirmedClone(c, localPath, githubRepoIn);
+			if (outcome.kind === "unconfirmed") return unconfirmedClone(c, localPath, githubRepoIn);
 			if (outcome.kind === "failed") return refuse(outcome.error);
 		}
+		if (inFlight?.state === "failed") previousFailure = inFlight;
 	}
 	let verdict = await checkWorkdirVia(conn, localPath);
+	// Failed clones may already have a .git directory and origin. Do not mistake that partial
+	// checkout for a successful job. Only a missing/empty destination is safe to retry automatically.
+	if (previousFailure && verdict.state !== "missing" && verdict.state !== "empty") return refuse(cloneFailure(previousFailure, localPath));
 	// Cold start (#857): nothing there yet, and the caller opted in — clone it, then carry on through
 	// EVERY check below exactly as for a checkout that was already there. Only an absent or empty folder
 	// is ever cloned into; without `clone` the same folder is refused as it always was.
@@ -269,19 +278,25 @@ async function readCloneJob(conn: RunnerConn, localPath: string): Promise<CloneJ
 	return callRunner<CloneJobView>(conn, "/coding/clone-status", { workDir: localPath }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
 }
 
+const cloneFailure = (job: CloneJobView, localPath: string): string =>
+	`Could not clone ${job.slug ?? "the repository"} into \`${localPath}\`: ${job.error ?? "git failed"}`;
+
 /** Wait on a running clone for up to {@link CLONE_WAIT_MS}, reading it back every couple of seconds. */
 async function awaitClone(conn: RunnerConn, localPath: string, job: CloneJobView, deadline: number): Promise<CloneOutcome> {
 	const until = Math.min(deadline, Date.now() + CLONE_WAIT_MS);
 	let current = job;
-	while (current.state === "cloning" && Date.now() < until) {
+	while (current?.state === "cloning" && Date.now() < until) {
 		await clonePollDelay(Math.min(CLONE_POLL_MS, Math.max(0, until - Date.now())));
 		const left = until - Date.now();
 		if (left <= 0) break;
-		current = (await callRunner<CloneJobView>(conn, "/coding/clone-status", { workDir: localPath }, { timeoutMs: Math.min(READ_TIMEOUT_MS, left) }).catch(() => null)) ?? current;
+		current = await callRunner<CloneJobView>(conn, "/coding/clone-status", { workDir: localPath }, { timeoutMs: Math.min(READ_TIMEOUT_MS, left) }).catch(() => current);
+		if (current?.slug && job.slug && current.slug.toLowerCase() !== job.slug.toLowerCase()) return { kind: "unconfirmed" };
 	}
-	if (current.state === "cloning") return { kind: "pending", job: current };
-	if (current.state === "failed") return { kind: "failed", error: `Could not clone ${current.slug ?? "the repository"} into \`${localPath}\`: ${current.error ?? "git failed"}` };
-	return { kind: "done" };
+	if (current?.state === "cloning") return { kind: "pending", job: current };
+	if (current?.state === "failed") return { kind: "failed", error: cloneFailure(current, localPath) };
+	// A restarted runner can lose its job map and answer `none`; an invalid receipt is equally
+	// inconclusive. A readable .git directory after that is not evidence that the clone finished.
+	return { kind: current?.state === "done" ? "done" : "unconfirmed" };
 }
 
 /**
@@ -366,11 +381,11 @@ function stillCloning(c: Context, job: CloneJobView) {
 function unconfirmedClone(c: Context, localPath: string, slug: string | undefined) {
 	return c.json({
 		outcome: "unknown",
-		possibleOutcomes: ["not-started", "cloning", "completed"],
+		possibleOutcomes: ["not-started", "cloning", "completed", "failed"],
 		poll: { tool: "coding_repos_list", input: { instance_id: c.req.param("instanceId") } },
 		cloning: null,
 		unconfirmed: true,
 		job: { path: localPath, slug, state: "unknown" },
-		detail: `The clone request's outcome is not confirmed. It may have started or completed on the machine. Nothing is stored yet. Call coding_repo_add again with the same arguments to check the checkout or join the same background clone; do not choose a different path or repository while the outcome is unknown.`,
+		detail: `The clone request's outcome is not confirmed. It may not have started, or may still be running, completed or failed on the machine. Nothing is stored yet. Call coding_repo_add again with the same arguments to check the checkout or join the same background clone; do not choose a different path or repository while the outcome is unknown.`,
 	}, 202);
 }

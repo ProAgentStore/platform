@@ -128,4 +128,9 @@ export class CloneJobs {
 	status(path: string): CloneJob | { path: string; state: "none" } {
 		return this.jobs.get(path) ?? { path, state: "none" };
 	}
+
+	/** Background clones outlive their start request and must block safe restarts (#1458). No owner paths leave here. */
+	liveWork(): string[] {
+		return [...this.jobs.values()].filter((job) => job.state === "cloning").map((_job, i) => `repository-clone-${i + 1}`);
+	}
 }

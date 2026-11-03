@@ -58,7 +58,9 @@ export function realPathOf(raw: string, home = homedir()): string {
 	}
 	let real = p;
 	try {
-		real = realpathSync(p);
+		// Native resolution includes the filesystem's actual casing; the JS fallback preserves
+		// the caller's spelling even on case-insensitive volumes (#1457).
+		real = realpathSync.native(p);
 	} catch {
 		// Unreadable: judge the path as written.
 	}
@@ -69,6 +71,28 @@ export function realPathOf(raw: string, home = homedir()): string {
 export function isWithin(child: string, parent: string): boolean {
 	const rel = relative(parent, child);
 	return rel === "" || (!!rel && !rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Credential names are reserved regardless of spelling, including before they exist (#1457).
+ * Only these home-relative names are folded: ordinary project paths keep filesystem semantics.
+ * Canonical checks additionally protect credential directories redirected through a symlink.
+ */
+export function credentialDirectoryAt(raw: string, homeInput = homedir(), includeAncestors = false): string | undefined {
+	const homeWritten = resolveHomePath("~", { home: homeInput }).path;
+	const written = resolveHomePath(raw, { home: homeInput }).path;
+	const home = realPathOf(homeWritten, homeInput);
+	const path = realPathOf(written, homeInput);
+	const names = [[homeWritten, written], [home, path]].flatMap(([base, target]) => {
+		if (!isWithin(target, base)) return [];
+		return [relative(base, target).split(/[\\/]/).join("/").toLowerCase()];
+	});
+	return CREDENTIAL_DIRS.find((dir) => {
+		const reserved = dir.toLowerCase();
+		if (names.some((name) => name === reserved || name.startsWith(`${reserved}/`) || (includeAncestors && (name === "" || reserved.startsWith(`${name}/`))))) return true;
+		const credential = realPathOf(join(home, dir), homeInput);
+		return isWithin(path, credential) || (includeAncestors && isWithin(credential, path));
+	});
 }
 
 /**
@@ -93,7 +117,7 @@ export function confineWorkDir(raw: string, opts: { home?: string; allow?: reado
 		throw new InspectError(`"${raw}" is ${path === home ? "the home folder" : "a folder that contains the home folder"}, not a repository — register the repository's own folder.`);
 	}
 	if ((opts.allow ?? []).some((a) => isWithin(path, realPathOf(a, home)))) return path;
-	const credential = CREDENTIAL_DIRS.find((d) => isWithin(path, realPathOf(join(home, d), home)));
+	const credential = credentialDirectoryAt(raw, opts.home ?? homedir());
 	if (credential) throw new InspectError(`"${raw}" is inside ~/${credential}, which holds credentials — it cannot be read as a repository.`);
 	// The allow-list (#1193): a registered root, else a git working tree that is not the home folder's own.
 	const registered = (opts.roots ?? readRoots(opts.home ?? homedir())).map((r) => realPathOf(r, home));

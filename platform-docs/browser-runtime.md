@@ -261,7 +261,19 @@ The fix belongs in the remote runner, so a cloud-only deployment is insufficient
 When the response says cloning is still in progress, repeat the exact arguments to join that job; do not create a second
 instance or destination. After success, check `coding_repos_list` for the expected repository, ready checkout and selected
 machine, then start work with `coding_loop_start`. A failed clone's runner status remains available even if partial files
-remain; a fresh attempt cannot overwrite a nonempty destination.
+remain; a fresh attempt cannot overwrite a nonempty destination. A repeated request cannot join another repository's
+clone job. A disappeared or malformed job receipt is unconfirmed, and a failed partial checkout is not accepted as ready
+just because its Git origin is readable (#1454). Missing or empty destinations remain safely retryable.
+
+The destination guard also protects bare repositories and separate Git administration directories that have no literal
+`.git` path component. Session-created checkouts apply the same guard before creating missing nested paths (#1455).
+Credential-directory names are reserved case-insensitively even before they exist; ordinary directory names
+retain the filesystem's case behavior. A validated empty clone directory is reserved before the background
+job starts, so aliases resolve to the same filesystem-native canonical job key (#1457).
+
+Active clone jobs count as local work for safe update/restart admission until success or failure (#1458).
+A crash or forced restart can still lose in-memory clone receipts (#1459); an unknown outcome requires inspection,
+not an assumption of completion.
 
 The machine still needs Git and authorized repository credentials. The clone uses its existing HTTPS credential helper
 or SSH identity; PAGS GitHub connector write consent does not sign Git in on that machine. A credential refusal is reported

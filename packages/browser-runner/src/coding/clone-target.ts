@@ -1,11 +1,12 @@
 /** #1446: provisioning a new checkout is not permission to read an arbitrary folder. */
-import { lstatSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { lstatSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, relative } from "node:path";
 import { resolveHomePath } from "./home-path.js";
 import { InspectError } from "./inspect.js";
 import { readRoots } from "./runner-roots.js";
-import { CREDENTIAL_DIRS, gitRootOf, isWithin, realPathOf } from "./workdir-guard.js";
+import { credentialDirectoryAt, gitRootOf, isWithin, realPathOf } from "./workdir-guard.js";
 
 export interface CloneTargetOptions {
 	home?: string;
@@ -33,10 +34,8 @@ export function resolveCloneLocation(raw: string, opts: CloneTargetOptions = {})
 	const inManaged = managed !== undefined && !sameManaged && isWithin(path, managed);
 	if (sameManaged) throw new InspectError("Clone into a child of the managed repository folder, not the folder itself.");
 	if (!inManaged) {
-		for (const dir of CREDENTIAL_DIRS) {
-			const credential = realPathOf(join(home, dir), homeInput);
-			if (isWithin(path, credential) || isWithin(credential, path)) throw new InspectError(`A clone destination cannot contain or be inside ~/${dir}, which holds credentials.`);
-		}
+		const dir = credentialDirectoryAt(raw, homeInput, true);
+		if (dir) throw new InspectError(`A clone destination cannot contain or be inside ~/${dir}, which holds credentials.`);
 	}
 	const roots = (opts.roots ?? readRoots(homeInput)).map((root) => ({ written: resolveHomePath(root, { home: homeInput }).path, path: realPathOf(root, homeInput) })).filter((root) => !isWithin(home, root.path));
 	const boundary = inManaged ? { path: managed, written: managedWritten! } : isWithin(path, home) ? { path: home, written: homeWritten } : roots.find((root) => isWithin(path, root.path));
@@ -47,6 +46,9 @@ export function resolveCloneLocation(raw: string, opts: CloneTargetOptions = {})
 	while (relative(component, boundary.written) !== "" && relative(component, boundary.path) !== "") {
 		try {
 			if (lstatSync(component).isSymbolicLink()) throw new InspectError("A clone destination cannot traverse a symlink below its project root.");
+			// A differently cased spelling of the boundary is the same existing directory on
+			// some filesystems. Check symlinks first so a child alias back to home is still refused.
+			if (relative(realPathOf(component, homeInput), boundary.path) === "") break;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
@@ -57,9 +59,38 @@ export function resolveCloneLocation(raw: string, opts: CloneTargetOptions = {})
 	return path;
 }
 
+/** #1455: bare and separate Git administration directories need not be named `.git`. */
+function requireOutsideGit(path: string): void {
+	if (gitRootOf(dirname(path))) throw new InspectError("Not cloning a second repository inside another git checkout.");
+	let ancestor = dirname(path);
+	for (;;) {
+		try {
+			if (!statSync(ancestor).isDirectory()) throw new InspectError("The clone destination has a parent that is not a directory.");
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			const parent = dirname(ancestor);
+			if (parent === ancestor) throw new InspectError("Could not inspect the clone destination's parent.");
+			ancestor = parent;
+		}
+	}
+	// Inspect THIS location, not the repository inherited from the runner's launch environment.
+	const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: "C" };
+	for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
+	const result = spawnSync("git", ["rev-parse", "--is-inside-git-dir", "--is-inside-work-tree"], { cwd: ancestor, env, encoding: "utf8", timeout: 10_000 });
+	if (!result.error && result.status === 128 && /^fatal: not a git repository(?: \(|:|$)/.test(result.stderr)) return;
+	if (!result.error && result.status === 0) {
+		const [administration, worktree] = result.stdout.trim().split(/\r?\n/);
+		if (administration === "true") throw new InspectError("A clone destination cannot be inside git administration.");
+		if (worktree === "true") throw new InspectError("Not cloning a second repository inside another git checkout.");
+		if (administration === "false" && worktree === "false") return;
+	}
+	throw new InspectError("Could not verify that the clone destination is outside git administration; check git and the folder's permissions.");
+}
+
 /** Strict eligibility: unreadable is never empty; missing children of a repo are not new repos. */
 export function requireEmptyCloneTarget(path: string): void {
-	if (gitRootOf(dirname(path))) throw new InspectError("Not cloning a second repository inside another git checkout.");
+	requireOutsideGit(path);
 	try {
 		const at = lstatSync(path);
 		if (!at.isDirectory() || at.isSymbolicLink()) throw new InspectError("The clone destination is not a plain directory.");

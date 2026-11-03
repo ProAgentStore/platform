@@ -82,7 +82,7 @@ describe("the mutation drain is bounded (#1169)", () => {
 		const run = bridge.run(plan, false);
 		await vi.advanceTimersByTimeAsync(1_000);
 		release?.();
-		expect(await run).toBe(true);
+		expect(await run).toEqual({ kind: "restarting" });
 		expect(detachAll).toHaveBeenCalled();
 	});
 

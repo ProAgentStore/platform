@@ -330,7 +330,7 @@ describe("B1 — every install/restart bridge wait is bounded (#1020)", () => {
 		expect(h.install).toHaveBeenCalledTimes(npmBefore);
 		// The retry: everything answers. What npm already installed is not installed again; it restarts exactly once.
 		h.hang[stage] = false;
-		expect(await h.bridge.run(plan, true)).toBe(true);
+		expect(await h.bridge.run(plan, true)).toEqual({ kind: "restarting" });
 		expect(h.activate).toHaveBeenCalledTimes(1);
 		expect(h.activate).toHaveBeenCalledWith(plan.latest);
 		expect(h.install).toHaveBeenCalledTimes(1);
@@ -340,7 +340,7 @@ describe("B1 — every install/restart bridge wait is bounded (#1020)", () => {
 	it("CONTROL: an ordinary install restarts exactly once, and a concurrent second run is refused by the single flight", async () => {
 		const h = bridgeHarness();
 		const [first, second] = await Promise.all([h.bridge.run(plan, true), h.bridge.run(plan, true)]);
-		expect([first, second].sort()).toEqual([false, true]);
+		expect([first.kind, second.kind].sort()).toEqual(["in-flight", "restarting"]);
 		expect(h.install).toHaveBeenCalledTimes(1);
 		expect(h.detachAll).toHaveBeenCalledTimes(1);
 	});
@@ -356,7 +356,7 @@ describe("B1 — every install/restart bridge wait is bounded (#1020)", () => {
 			refreshPolicy: async () => true,
 			facts: async () => healthy("0.4.90"),
 			plan: planRunnerUpdate,
-			installAndRestart: (p, automatic) => h.bridge.run(p, automatic),
+			installAndRestart: async (p, automatic) => (await h.bridge.run(p, automatic)).kind === "restarting",
 			status: (s, e) => cell.record(s, e),
 			setTimer: (_fn, ms) => {
 				timers.push({ ms });
@@ -499,7 +499,7 @@ describe("an open cycle owns the update until it resolves; a verified one stays 
 				},
 			},
 		});
-		const rig = controllerOn(cell, { facts: async () => healthy(o.current(), o.latest()), attached: o.attached, install: (p, a) => bridge.run(p, a) });
+		const rig = controllerOn(cell, { facts: async () => healthy(o.current(), o.latest()), attached: o.attached, install: async (p, a) => (await bridge.run(p, a)).kind === "restarting" });
 		/** Run one check whose final restart look hangs until its bound expires. */
 		const checkWithHungRestart = async () => {
 			hangFinal = true;

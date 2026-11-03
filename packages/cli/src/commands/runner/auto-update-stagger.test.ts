@@ -91,7 +91,7 @@ describe("one machine at a time (#1141)", () => {
 			log: () => undefined,
 			settle: async () => undefined,
 		});
-		expect(await bridge.run(updatePlan, true)).toBe(false);
+		expect(await bridge.run(updatePlan, true)).toEqual({ kind: "fleet-updating", installedVersion: null });
 		expect(install).not.toHaveBeenCalled();
 		expect(bridge.inFlight()).toBe(false);
 	});

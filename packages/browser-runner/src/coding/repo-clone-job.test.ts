@@ -129,6 +129,12 @@ describe("cloneIntoOwnFolder — real git, the owner-folder guards (#858)", () =
 		expect(existsSync(join(dir, ".git"))).toBe(false);
 	});
 
+	it("never clones inside a bare repository's administration directory", async () => {
+		const dir = join(upstream, "objects", "nested", "clone");
+		await expect(cloneIntoOwnFolder(dir, upstream)).rejects.toThrow(/git administration/);
+		expect(existsSync(dir)).toBe(false);
+	});
+
 	it("fails with git's reason for a repository it cannot reach", async () => {
 		await expect(cloneIntoOwnFolder(join(tmp, "missing"), join(tmp, "no-such.git"))).rejects.toThrow(/repository|does not exist|not found/i);
 	});

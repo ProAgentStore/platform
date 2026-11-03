@@ -9,14 +9,15 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, restartBlockedByInstall, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
+import { deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, restartBlockedByInstall, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
 import { diffMembership, eligibleIds, relayStatusPath, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAutoUpdatePolicy } from "./auto-update.js";
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, RelayMutationAdmission } from "./auto-update-controller.js";
 import { readWorkLook } from "./runner-work-observation.js";
-import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
+import { createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
+import { answerPlannedUpdate } from "./update-receipt.js";
 import { agentsStillMissing, applyRetryRolledBack, releaseTrial, rollbackAvailable } from "./release-trial.js";
 import { updateLogUpload } from "../../bootstrap/update-log.js";
 import { BOOTSTRAP_ENV, payloadRoot } from "../../bootstrap/payload.js";
@@ -225,13 +226,17 @@ export async function connectViaRelay(
 					updateWaiting = false;
 					return;
 				}
-				const facts = await boundedWork((signal) => updateFacts(signal));
+				const facts = await boundedWork((signal) => updateFacts(signal)).catch((e) => {
+					writeError(`runner_update: work observation failed — ${e instanceof Error ? e.message : String(e)}`);
+					return null;
+				});
 				const plan = facts ? planRunnerUpdate(facts) : null;
 				if (plan?.action === "update") {
-					const installed = await bridge.run(plan, false, deferredManualLease).catch((e) => {
+					const outcome = await bridge.run(plan, false, deferredManualLease).catch((e) => {
 						writeError(`runner_update: install failed — ${e instanceof Error ? e.message : String(e)}`);
-						return false;
+						return null;
 					});
+					const installed = outcome?.kind === "restarting";
 					if (!installed && Date.now() < lease.expiresAt) tick();
 					else {
 						deferredManualLease = null;
@@ -259,7 +264,7 @@ export async function connectViaRelay(
 		// The same bridge an explicit runner_update uses: npm, a fresh authoritative policy, the mutation drain, the
 		// final local-work observation and restart — each wait bounded.
 		installAndRestart: async (plan, automatic) => {
-			const installed = await bridge.run(plan, automatic);
+			const installed = (await bridge.run(plan, automatic)).kind === "restarting";
 			// The controller records `restarting` in the microtask after this resolves; leaving on a timer keeps it.
 			if (installed) setTimeout(() => leaveForRestart(plan.restarter), 0).unref();
 			return installed;
@@ -285,23 +290,13 @@ export async function connectViaRelay(
 		const retriedNote = retried ? { retriedRolledBack: retried } : {};
 		const plan = planRunnerUpdate(facts);
 		if (dryRun || plan.action === "up-to-date" || plan.action === "refused") return { status: 200, result: { ...plan, dryRun, ...retriedNote } };
-		if (plan.action === "wait") {
-			const lease = deferredUpdateLease(body);
-			if (!lease) return { status: 400, result: { error: "A busy runner_update needs a current operation lease; no delayed restart was scheduled." } };
-			if (!updateWhenIdle(lease)) return { status: 409, result: { error: "A runner update is already waiting for active work to finish." } };
-			return { status: 200, result: { ...plan, ...retriedNote, operationId: lease.operationId, deferredUntil: lease.expiresAt, detail: "This operation may restart only before its recorded lease expires; no delayed restart survives an expired or terminal operation." } };
-		}
-		try {
-			if (!(await bridge.run(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
-		} catch (e) {
-			if (e instanceof BoundExpired) return { status: 504, result: { error: e.message } };
-			return { status: 500, result: { error: `npm could not install ${plan.latest}: ${e instanceof Error ? e.message : String(e)}` } };
-		}
-		const supervisor = supervisorNote(plan.restarter);
-		// `openRelaySocket` sends this value before timers run.  Calling `leaveForRestart` above
-		// would synchronously exit and make this decisive machine acknowledgement impossible.
-		setTimeout(() => leaveForRestart(plan.restarter), 25).unref();
-		return { status: 200, result: { action: "restarting", ...retriedNote, current: plan.current, latest: plan.latest, restartedBy: plan.restarter, ...(supervisor ? { supervisor } : {}) } };
+		const reply = await answerPlannedUpdate(plan, body, {
+			run: bridge.run,
+			defer: updateWhenIdle,
+			// openRelaySocket sends the machine receipt before this timer exits.
+			restart: (ready) => { setTimeout(() => leaveForRestart(ready.restarter), 25).unref(); },
+		});
+		return { ...reply, result: { ...reply.result, ...retriedNote } };
 	};
 
 	/**

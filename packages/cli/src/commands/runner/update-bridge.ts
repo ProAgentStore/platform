@@ -151,81 +151,77 @@ export const DEFAULT_DRAIN_MS = 120_000;
  * install it again), never restarts, and throws {@link BoundExpired} — which the controller records as a failed
  * check with a retry. Its late answer reaches nothing.
  */
+/** A hold is not an install already in progress: callers must preserve the reason (#1453). */
+export type InstallBridgeResult =
+	| { kind: "restarting" }
+	| { kind: "in-flight" }
+	| { kind: "lease-expired" | "policy-unavailable" | "policy-disabled" | "fleet-updating"; installedVersion: string | null }
+	| { kind: "work-active"; waitingFor: string[]; installedVersion: string | null };
+
 export function createInstallBridge(deps: InstallBridgeDeps) {
 	let inFlight = false;
 	let installedPendingRestart: string | null = null;
 	const within = <T>(work: (signal: AbortSignal) => Promise<T>) => boundedWork(work, deps.bound);
-	const release = (drained: boolean) => {
-		if (drained) deps.admission.resume();
-		inFlight = false;
-	};
-	const expired = (drained: boolean, what: string): never => {
-		release(drained);
+	const expired = (what: string): never => {
 		throw new BoundExpired(`${what} did not answer within ${(deps.bound?.ms ?? 30_000) / 1000}s; nothing restarted, and it will be retried.`);
 	};
-	const run = async (plan: UpdatePlanAction, automatic = false, lease?: DeferredUpdateLease): Promise<boolean> => {
-		// An automatic check and a remote manual request may both have observed the same old version. Only one may
-		// ever reach npm/restart; a second observer leaves the first to finish.
-		if (inFlight || (lease && !deps.leaseActive(lease))) return false;
+	const held = (kind: "lease-expired" | "policy-unavailable" | "policy-disabled" | "fleet-updating"): InstallBridgeResult => ({ kind, installedVersion: installedPendingRestart });
+	const run = async (plan: UpdatePlanAction, automatic = false, lease?: DeferredUpdateLease): Promise<InstallBridgeResult> => {
+		if (inFlight) return { kind: "in-flight" };
+		if (lease && !deps.leaseActive(lease)) return held("lease-expired");
 		inFlight = true;
-		// Cached policy is deliberately insufficient for unattended mutation: the owner's switch is read again
-		// immediately before npm, so an offline runner cannot install after a disable.
-		if (automatic) {
-			const fresh = await within((signal) => deps.refresh(signal));
-			if (fresh === null) expired(false, "The owner policy refresh before installing");
-			// Another machine started first (#1141): the answer to THIS refresh — which already reported us installing —
-			// is the race-safe look. The service counts only machines ahead of us, so exactly one proceeds.
-			if (!fresh || !deps.cell.policy.autoUpdate || deps.cell.policy.fleetUpdating) {
-				release(false);
-				return false;
+		let drained = false;
+		let restarting = false;
+		try {
+			// Cached policy cannot authorize an unattended install. The fresh answer also orders the fleet race.
+			if (automatic) {
+				const fresh = await within((signal) => deps.refresh(signal));
+				if (fresh === null) expired("The owner policy refresh before installing");
+				if (!fresh || !deps.cell.authoritative) return held("policy-unavailable");
+				if (!deps.cell.policy.autoUpdate) return held("policy-disabled");
+				if (deps.cell.policy.fleetUpdating) return held("fleet-updating");
 			}
-		}
-		if (installedPendingRestart !== plan.latest) {
-			deps.log(`Updating ${plan.current} → ${plan.latest} (runner_update)…`);
-			try {
+			if (installedPendingRestart !== plan.latest) {
+				deps.log(`Updating ${plan.current} → ${plan.latest} (runner_update)…`);
 				await deps.install(plan.latest);
 				installedPendingRestart = plan.latest;
-			} catch (error) {
-				release(false);
-				throw error;
+			}
+			// Work admitted while npm ran must survive. Hold new mutations until final restart admission.
+			const drainMs = deps.drainMs ?? DEFAULT_DRAIN_MS;
+			drained = true;
+			if ((await deps.admission.drain(drainMs)) === false) {
+				const stuck = deps.admission.pending();
+				throw new BoundExpired(`${stuck} local request${stuck === 1 ? " is" : "s are"} still running after ${Math.round(drainMs / 1000)}s, so the restart waited no longer; nothing restarted and it will be retried. A forced runner_restart restarts now.`);
+			}
+			await (deps.settle ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 500))))();
+			if (lease && !deps.leaseActive(lease)) return held("lease-expired");
+			if (automatic) {
+				const fresh = await within((signal) => deps.refresh(signal));
+				if (fresh === null) expired("The owner policy refresh after installing");
+				if (!fresh || !deps.cell.authoritative) return held("policy-unavailable");
+				if (!deps.cell.policy.autoUpdate) return held("policy-disabled");
+			}
+			const facts = await within((signal) => deps.facts(signal));
+			if (facts === null) return expired("The final local work look before restarting");
+			// The final look itself can consume the rest of a deferred operation's lease.
+			if (lease && !deps.leaseActive(lease)) return held("lease-expired");
+			if (facts.busy.length) return { kind: "work-active", waitingFor: [...facts.busy], installedVersion: installedPendingRestart };
+			if (automatic && !mayAutomaticallyRestart({ authoritative: deps.cell.authoritative, enabled: deps.cell.policy.autoUpdate, workObserved: true, busy: facts.busy })) {
+				return held(deps.cell.policy.autoUpdate ? "policy-unavailable" : "policy-disabled");
+			}
+			deps.activate?.(plan.latest);
+			deps.log(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
+			deps.detachAll();
+			restarting = true;
+			// The caller sends the receipt before exiting; retain the admission gate until then.
+			return { kind: "restarting" };
+		} finally {
+			// Rejections from any dependency must release both guards, not just expected timeout paths (#1453).
+			if (!restarting) {
+				inFlight = false;
+				if (drained) deps.admission.resume();
 			}
 		}
-		// Npm may run for minutes. Block new work, then re-admit restart after it finishes, rather than trusting the
-		// idle snapshot that admitted installation; a run that began during npm must survive.
-		const drainMs = deps.drainMs ?? DEFAULT_DRAIN_MS;
-		if ((await deps.admission.drain(drainMs)) === false) {
-			// The install is kept (a retry does not run npm again); the gate reopens so the machine accepts work again.
-			const stuck = deps.admission.pending();
-			release(true);
-			throw new BoundExpired(`${stuck} local request${stuck === 1 ? " is" : "s are"} still running after ${Math.round(drainMs / 1000)}s, so the restart waited no longer; nothing restarted and it will be retried. A forced runner_restart restarts now.`);
-		}
-		await (deps.settle ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 500))))();
-		if (lease && !deps.leaseActive(lease)) {
-			release(true);
-			return false;
-		}
-		if (automatic) {
-			const fresh = await within((signal) => deps.refresh(signal));
-			if (fresh === null) expired(true, "The owner policy refresh after installing");
-			if (!fresh || !deps.cell.policy.autoUpdate) {
-				release(true);
-				return false;
-			}
-		}
-		const final = await within((signal) => deps.facts(signal));
-		if (final === null) expired(true, "The final local work look before restarting");
-		const facts = final as UpdateFacts;
-		const workObserved = !facts.busy.includes("runner-work-observation-unavailable");
-		if (facts.busy.length || (automatic && !mayAutomaticallyRestart({ authoritative: deps.cell.authoritative, enabled: deps.cell.policy.autoUpdate, workObserved, busy: facts.busy }))) {
-			release(true);
-			return false;
-		}
-		try { deps.activate?.(plan.latest); }
-		catch (error) { release(true); throw error; }
-		deps.log(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
-		deps.detachAll();
-		// The control reply must leave the relay before the process exits; the caller owns the exit (#1008).
-		return true;
 	};
 	return { run, inFlight: () => inFlight, installedPendingRestart: () => installedPendingRestart };
 }

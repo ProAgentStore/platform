@@ -916,6 +916,71 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 			expect(asked.filter((a) => a.path === "/coding/clone-start")).toHaveLength(1);
 		});
 
+		it("a repeated call for a DIFFERENT repository refuses the occupied destination without joining its job", async () => {
+			fakeClock();
+			const asked = machine({ initial: MISSING, finishAfter: Number.POSITIVE_INFINITY });
+			expect((await add({ githubRepo: "acme/grass-karma", clone: true })).status).toBe(202);
+			const before = asked.length;
+			const { status, body, issued } = await add({ githubRepo: "acme/other", clone: true });
+			expect(status).toBe(409);
+			expect(body.error).toMatch(/acme\/grass-karma.*acme\/other/);
+			expect(asked.slice(before).map((call) => call.path)).toEqual(["/coding/clone-status"]);
+			expect(inserted(issued)).toBe(false);
+		});
+
+		it.each([{ state: "none" }, {}, null, { state: "finished" }, { state: "done", slug: "acme/other" }])("a lost or invalid job receipt %j never counts as a completed clone", async (receipt) => {
+			fakeClock();
+			getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+			let started = false;
+			callRunner.mockImplementation(async (_conn: unknown, path: string) => {
+				if (path === "/coding/clone-status") return started ? receipt : { state: "none" };
+				if (path === "/coding/clone-start") {
+					started = true;
+					return { path: "~/dev/grass-karma", slug: "acme/grass-karma", state: "cloning" };
+				}
+				// A partial clone can already contain .git and origin; those do not prove the job finished.
+				if (path === "/coding/repo-check") return started ? HEALTHY : MISSING;
+				if (path === "/coding/git-remote") return { remote: "https://github.com/acme/grass-karma.git" };
+				throw new Error(`Unexpected runner request ${path}`);
+			});
+			const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
+			expect(status).toBe(202);
+			expect(body).toMatchObject({ outcome: "unknown", unconfirmed: true, cloning: null, possibleOutcomes: ["not-started", "cloning", "completed", "failed"] });
+			expect(callRunner.mock.calls.some((call) => call[1] === "/coding/git-remote")).toBe(false);
+			expect(inserted(issued)).toBe(false);
+		});
+
+		it("a previously FAILED clone with partial .git content is refused with the job's failure, not bound as ready", async () => {
+			machine({ initial: HEALTHY, origin: "https://github.com/acme/grass-karma.git" });
+			const dispatch = callRunner.getMockImplementation()!;
+			callRunner.mockImplementation(async (...args: unknown[]) => args[1] === "/coding/clone-status"
+				? { path: "~/dev/grass-karma", slug: "acme/grass-karma", state: "failed", error: "checkout failed: disk full" }
+				: dispatch(...args));
+			const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
+			expect(status).toBe(400);
+			expect(body.error).toMatch(/Could not clone acme\/grass-karma.*checkout failed: disk full/);
+			expect(callRunner.mock.calls.some((call) => call[1] === "/coding/clone-start" || call[1] === "/coding/git-remote")).toBe(false);
+			expect(inserted(issued)).toBe(false);
+		});
+
+		it.each([MISSING, { ...HEALTHY, entryCount: 0, insideWorkTree: false }])("a previously failed clone is safely retried when its destination is missing or empty", async (initial) => {
+			fakeClock();
+			const asked = machine({ initial });
+			const dispatch = callRunner.getMockImplementation()!;
+			let readPrevious = false;
+			callRunner.mockImplementation(async (...args: unknown[]) => {
+				if (args[1] === "/coding/clone-status" && !readPrevious) {
+					readPrevious = true;
+					return { path: "~/dev/grass-karma", slug: "acme/grass-karma", state: "failed", error: "previous transport failed" };
+				}
+				return dispatch(...args);
+			});
+			const { status, row } = await add({ githubRepo: "acme/grass-karma", clone: true });
+			expect(status).toBe(201);
+			expect(row).toMatchObject({ github_repo: "acme/grass-karma" });
+			expect(asked.filter((call) => call.path === "/coding/clone-start")).toHaveLength(1);
+		});
+
 		it("an SSH-ONLY machine: the runner cloned over SSH, the git@ origin passes the same GitHub check, and it binds", async () => {
 			machine({ initial: MISSING, via: "ssh" });
 			const { status, row } = await add({ githubRepo: "acme/private", clone: true });

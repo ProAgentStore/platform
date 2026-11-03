@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { RunnerInputError } from "../errors.js";
 import { requireEmptyCloneTarget } from "./clone-target.js";
+import { InspectError } from "./inspect.js";
 
 /**
  * Repo/workdir helpers for the coding engine.
@@ -269,13 +270,16 @@ export function ensureRepo(
 			// A refusal about the owner's folder, answered as one (#1116) — never a runner crash.
 			throw new RunnerInputError(`Refusing to clone into non-empty directory "${dir}" (no .git found) — move it aside or point at an empty path.`, 409);
 		}
-		if (opts.ownFolder && checkWorkdir(dir).insideWorkTree) {
-			throw new RunnerInputError(
-				`"${dir}" is an empty folder inside another git checkout — not cloning a second repository into it. Point this repo at the checkout itself, or remove the folder.`,
-				409,
-			);
-		}
 		// Keep the directory. Never delete files that appeared since the emptiness check.
+	}
+	// #1455: session setup uses the same guard as explicit clone requests, including when the
+	// destination does not exist yet or its ancestors are bare/separate Git administration.
+	try {
+		requireEmptyCloneTarget(dir);
+	} catch (error) {
+		// Session setup surfaces rejected owner input as a conflict, never a runner crash.
+		if (error instanceof InspectError) throw new RunnerInputError(error.message, 409);
+		throw error;
 	}
 	const url = authenticatedCloneUrl(opts.cloneUrl, opts.token, opts.tokenUsername);
 	const args = ["clone"];
