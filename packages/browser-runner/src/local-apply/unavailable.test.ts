@@ -36,15 +36,21 @@ describe("listingUnavailableReason — the boards' own notices", () => {
 describe("the in-page probe, executed on SEEK's notice", () => {
 	afterEach(() => vi.unstubAllGlobals());
 
-	const probe = (bodyText: string) => {
-		vi.stubGlobal("document", { body: { innerText: bodyText }, title: "Head of IT Delivery Job in Cremorne - SEEK", querySelector: () => null });
+	const probe = (bodyText: string, inputs: unknown[] = []) => {
+		vi.stubGlobal("document", { body: { innerText: bodyText }, title: "Head of IT Delivery Job in Cremorne - SEEK", querySelector: () => null, querySelectorAll: () => inputs });
 		vi.stubGlobal("location", { href: "https://au.seek.com/job/95031707" });
-		const fn = new Function(`return (${INSPECT_PAGE});`)() as () => { unavailable: string | null };
+		const fn = new Function(`return (${INSPECT_PAGE});`)() as () => { unavailable: string | null; login: boolean };
 		return fn();
 	};
 
 	it("reads SEEK's 'This job is no longer advertised' as unavailable — the check report_job_unavailable runs", () => {
 		expect(probe(SEEK).unavailable).toBe("unavailable");
+	});
+
+	it("keeps the listing notice independent of visible versus hidden credential fields (#1438)", () => {
+		const password = (hidden: boolean) => ({ type: "password", disabled: false, closest: () => hidden ? {} : null, getClientRects: () => hidden ? [] : [{}], checkVisibility: () => !hidden });
+		expect(probe(SEEK, [password(true)])).toMatchObject({ unavailable: "unavailable", login: false });
+		expect(probe(SEEK, [password(false)])).toMatchObject({ unavailable: "unavailable", login: true });
 	});
 
 	it("reads Indeed's expiry as expired, and a live page as nothing", () => {
