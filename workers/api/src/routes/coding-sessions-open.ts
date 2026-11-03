@@ -419,8 +419,8 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		const carded = await mirrorRuntimeTask(c.env, instanceId, uid, {
 			id: taskId,
 			type: "engine.signin",
-			input: { ...previousInput, screenshots: capture.enabled, blurFormFields: capture.blurFormFields },
 			status: "needs_human",
+			input: { ...previousInput, screenshots: capture.enabled, blurFormFields: capture.blurFormFields },
 			title: "Sign in to the coding engine",
 			subtitle: (() => { try { return new URL(prompt.url as string).host; } catch { return null; } })(),
 			reasoning: authPromptGuidance(prompt),

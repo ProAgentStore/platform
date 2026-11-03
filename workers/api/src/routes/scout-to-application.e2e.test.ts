@@ -155,7 +155,7 @@ describe("#953: Scout → Connection → Application Runner → status writeback
 		expect(await d1.DB.prepare("SELECT enabled FROM agent_connections WHERE id = 'c-ready'").first<{ enabled: number }>()).toEqual({ enabled: 0 });
 		expect(await d1.DB.prepare("SELECT count(*) AS n FROM agent_connection_deliveries WHERE connection_id = 'c-ready'").first<{ n: number }>()).toEqual({ n: 1 });
 		expect(dispatches("/local-apply/run")).toHaveLength(1);
-		expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", allowDomains: ["jobs.example.com"] });
+		expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", allowDomains: ["jobs.example.com"], blurFormFields: true });
 		expect((await d1.DB.prepare("SELECT count(*) AS n FROM local_apply_runs WHERE application_id = 'reviewed'").first<{ n: number }>())?.n).toBe(1);
 		// The receipt, not the paused edge, is the narrow proof that this Runner owns this fill.
 		// Its terminal evidence is the exact pre-submit one-click refusal #1011 permits the owner to approve.
@@ -301,7 +301,7 @@ describe("#953: Scout → Connection → Application Runner → status writeback
 		expect(dispatches("/local-apply/run")).toHaveLength(1);
 		// Under the default configuration, the Runner is told to fill and STOP: no submit gate exists.
 		const task = dispatches("/local-apply/run")[0].body;
-		expect(task.policy).toEqual({ mode: "fill_and_review", allowDomains: ["jobs.example.com"] });
+		expect(task.policy).toEqual({ mode: "fill_and_review", allowDomains: ["jobs.example.com"], blurFormFields: true });
 		expect(leads.get("lead-1")?.data.application_status).toBe("filling");
 
 		// 6. The Runner's CLI (scripted) pauses on a question it cannot answer from the profile…
