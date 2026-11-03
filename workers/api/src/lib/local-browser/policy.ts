@@ -99,6 +99,8 @@ export interface EffectiveLocalBrowserPolicy {
 	collection: CollectionMapping | null;
 	/** Set only on a RUN's policy, when the owner's browser-screenshot switch was off as it started (#1064). */
 	screenshots?: false;
+	/** Owner screenshot blurring choice, frozen when the run starts; absent = true. */
+	blurFormFields?: boolean;
 	/** The owner's saved brief as the run started with it (#1065). Absent when none is saved. */
 	brief?: string;
 }

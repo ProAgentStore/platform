@@ -16,7 +16,7 @@
  * once; a submit attempt — confirmed, unconfirmed, or unknowable because the runner was lost
  * mid-run — sets `submit_attempted_at`, and nothing starts another fill after that.
  */
-import { SCREENSHOTS_OFF_REASON, browserScreenshotsEnabled } from "../browser-screenshots.js";
+import { SCREENSHOTS_OFF_REASON, browserScreenshotSettings, screenshotBlurRunnerProblem } from "../browser-screenshots.js";
 import { ingestRunnerShots } from "../browser-artifacts.js";
 import { HttpError } from "../auth.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
@@ -227,7 +227,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		workspace: s.workspace,
 		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}) },
+		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
 		limits: run.policy.limits,
 		// #1079: what the owner already answered for this application, kept since an earlier fill stopped waiting.
 		...(ownerAnswers.length ? { ownerAnswers: ownerAnswers.map((a) => ({ question: a.question, answer: a.answer })) } : {}),
@@ -277,6 +277,9 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	// exists, so an outdated machine costs the owner nothing and the application stays retryable.
 	// 409 rather than 503: the outbox must not retry this on a loop, because only a person updating
 	// the CLI can change the answer.
+	const { enabled: screenshotsOn, blurFormFields } = await browserScreenshotSettings(env, instanceId, uid);
+	const blurProblem = screenshotBlurRunnerProblem(screenshotsOn ? blurFormFields : true, runtime.runner_version, runtime.runner_node);
+	if (blurProblem) throw new HttpError(409, blurProblem);
 	const contractProblem = runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	// The admission gate (#1175): refused HERE, before the application leaves materials_ready, like an outdated machine — but 503,
@@ -317,7 +320,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const gateId = allowed ? crypto.randomUUID() : null;
 	const mode = allowed ? "auto_submit" : "fill_and_review";
 	// The owner's screenshot switch, fixed into this run as it starts (#1064).
-	const screenshotsOn = await browserScreenshotsEnabled(env, instanceId, uid);
+
 	const policy: ApplyRunPolicy = {
 		engine: s.engine,
 		authMode: s.authMode,
@@ -328,10 +331,11 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		gate: { allowed, gateId, checks },
 		...(opts.oneClickRecoveryId ? { approvalRecoveryId: opts.oneClickRecoveryId } : {}),
 		...(screenshotsOn ? {} : { screenshots: false as const }),
+		blurFormFields,
 	};
 	const failing = checks.filter((c) => !c.ok).map((c) => c.check);
 	const trace: ApplyTraceEvent[] = [
-		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
+		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", blurFormFields, ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
 		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
 	if (spentApproval) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: spentApproval.id } });

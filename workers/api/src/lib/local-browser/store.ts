@@ -138,6 +138,11 @@ export async function getLocalBrowserRun(env: DB, instanceId: string, userId: st
 	return row ? present(row) : null;
 }
 
+export async function localBrowserRunByRequest(env: DB, instanceId: string, userId: string, requestId: string): Promise<LocalBrowserRun | null> {
+	const row = await env.DB.prepare("SELECT * FROM local_browser_runs WHERE instance_id = ?1 AND user_id = ?2 AND request_id = ?3").bind(instanceId, userId, requestId).first<RunRow>();
+	return row ? present(row) : null;
+}
+
 export async function listLocalBrowserRuns(env: DB, instanceId: string, userId: string, limit: number): Promise<LocalBrowserRun[]> {
 	const { results } = await env.DB.prepare("SELECT * FROM local_browser_runs WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, id DESC LIMIT ?3")
 		.bind(instanceId, userId, limit)

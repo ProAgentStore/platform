@@ -1,3 +1,4 @@
+import { withBrowserCaptureSettings } from "../lib/browser-screenshots.js";
 import { browserSettingsForDispatch } from "../lib/browser-settings-dispatch.js";
 import { overLimit } from "../lib/write-limits.js";
 import { withoutBrokerCredential } from "../lib/runtime-builder/task-credential.js";
@@ -890,9 +891,10 @@ export async function callRuntime(
 ): Promise<Response> {
 	if (!env.RELAY) throw new Error("RELAY binding not configured");
 	const stub = env.RELAY.get(env.RELAY.idFromName(relayNameForInstance(row.instance_id, row.runner_node)));
-	const relayBody = init.body
+	let relayBody = init.body
 		? typeof init.body === "string" ? JSON.parse(init.body) : init.body
 		: undefined;
+	relayBody = await withBrowserCaptureSettings(env, row.instance_id, row.user_id, path, relayBody);
 	const method = (typeof init.method === "string" ? init.method : "GET").toUpperCase();
 	const browserSettings = await browserSettingsForDispatch(env, row.instance_id, row.user_id, path, row.runner_node, row.runner_version, relayBody);
 	return stub.fetch(new Request("https://relay/command", {

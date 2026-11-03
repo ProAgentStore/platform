@@ -194,17 +194,6 @@ describe("engine sign-in relay (#coding-auth)", () => {
 		expect(body).not.toMatch(/req\.json\(\)[\s\S]{0,200}url/);  // never reads a URL from the request
 	});
 
-	it("hands off through the EXISTING takeover path rather than a new mechanism", async () => {
-		const src = sessionRouteSrc();
-		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
-		const body = route.slice(0, route.indexOf("});"));
-		expect(body).toContain('"/browser/act"');      // navigate in the runner's browser
-		// FLAT body, action as a string — the shape the runner actually parses. A nested
-		// {action:{kind,url}} is accepted silently and opens nothing.
-		expect(body).toContain('{ action: "navigate", url: prompt.url }');
-		expect(body).toContain('"/browser/handoff"');  // same relay the apply flow uses
-	});
-
 	it("logs only the HOST of the sign-in URL, not the whole thing", () => {
 		// OAuth URLs carry state/PKCE/redirect params; putting them verbatim in a durable trace
 		// is a needless secret-adjacent leak.

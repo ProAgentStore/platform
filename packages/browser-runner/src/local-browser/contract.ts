@@ -98,6 +98,8 @@ export interface LocalBrowserTaskEnvelope {
 		/** `false` when the owner turned browser screenshots OFF for this agent (#1064): the runner takes no
 		 *  replay frame for this run. Absent = on. Fixed when the run starts. */
 		screenshots?: false;
+		/** Owner screenshot blurring choice, frozen when this run starts. Absent or malformed = true. */
+		blurFormFields?: boolean;
 		/**
 		 * The id of each owner decision the lists above came from (#947), keyed by domain — `*` for
 		 * the signed-in-profile decision — so the trace can name the decision that admitted or

@@ -17,6 +17,8 @@ import type { Env } from "../types.js";
 export interface BrowserTaskParams {
 	/** `false` when the owner's browser-screenshot switch was off as this task started (#1064). */
 	screenshots?: false;
+	/** Owner choice frozen at task creation; older tasks retain blurring. */
+	blurFormFields?: boolean;
 	instanceId: string;
 	userId: string;
 	/** The runner task id this run drives (created by the trigger route). */
@@ -73,6 +75,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// The owner's screenshot switch, fixed when this task started (#1064): the runner is asked for no
 		// frame, none is stored, and the task's trace says why — once, as a durable step.
 		const shotsOff = event.payload.screenshots === false;
+		const blurFormFields = event.payload.blurFormFields !== false;
 
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
 		if (!conn) {
@@ -88,7 +91,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// answer, never inferred from a version — the published CLI upgrades on the field's
 		// schedule, and 0.4.45 and 0.4.51 were both live when this landed.
 		const opened = (await step.do("open", () =>
-			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}) }),
+			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields }),
 		)) as { commitGuard?: { supported?: boolean } } | undefined;
 		const runnerEnforces = opened?.commitGuard?.supported === true;
 
@@ -115,7 +118,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			// at the one place `runApplyLoop` already halts on (#560). `browserRunTick` also
 			// heartbeats, which is what keeps `sweepStaleRuns` off a long-running task.
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, async () => {
-				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId });
+				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId, blurFormFields });
 				const stopped = await browserRunTick(env, loopRunId);
 				return stopped ? { ...snap, cancelled: true } : snap;
 			}).then((snap) => {
@@ -135,7 +138,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields });
 					// One artifact contract for every browser run (#1063): the frame is stored by subject (this task) and
 					// the event carries its id and a query-free URL — never the bytes.
 					if (r.screenshot && !shotsOff) {
@@ -175,7 +178,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 
 			const reason = result.outcome === "captcha" ? "challenge" : result.outcome === "needs_input" ? "needs_input" : "stuck";
 			const label = result.outcome === "captcha" ? result.challenge ?? "captcha" : result.outcome === "needs_input" ? result.fieldNeeded ?? "a value" : result.detail ?? "this step";
-			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined }));
+			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined, blurFormFields, ...(shotsOff ? { screenshot: false } : {}) }));
 
 			await step.do(`notify-${round}`, async () => {
 				// The run, not the Board (#349) — same reasoning as the apply workflow: the controls

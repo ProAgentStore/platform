@@ -493,9 +493,10 @@ components:
         explained: { type: string }
     BrowserScreenshotsView:
       type: object
-      required: [enabled, explained]
+      required: [enabled, blurFormFields, explained]
       properties:
         enabled: { type: boolean }
+        blurFormFields: { type: boolean, default: true }
         explained: { type: string }
     BrowserVerificationView:
       type: object
@@ -8275,7 +8276,7 @@ paths:
       description: |
         #1063. The image bytes, served `no-store` and only to the run's owner: the instance, the artifact
         row and the run it belongs to are all checked, so another owner's frame is a 404. Application
-        Runner frames were taken with every form control blurred (fail-closed: no blur, no frame).
+        Runner frames follow the owner's frozen form-field blurring choice (default on).
       operationId: getBrowserArtifact
       tags: [Instances]
       parameters:
@@ -8471,10 +8472,10 @@ paths:
       summary: The owner's browser-screenshot switch for one instance
       description: |
         #1064. ON by default: every browser step this instance takes (workflow tasks, local research,
-        Application Runner fills) is captured as a small replay frame — form fields blurred first,
+        Application Runner fills) is captured as a small replay frame — form fields blurred by default,
         owner-only, deleted after 30 days. OFF means no frame is taken, pulled or stored for runs
         started while it is off. The value is fixed when a run starts. `explained` is the text shown
-        beside the switch.
+        beside the switch. Disabling blur requires CLI 0.4.199 or newer when capturing frames; native password bullets and credential text redaction remain.
       operationId: getBrowserScreenshots
       tags: [Instances]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -8487,8 +8488,8 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
-      summary: Turn browser screenshots on or off
-      description: Exactly `{enabled}`; any other field is refused. Turning it off deletes nothing already stored — earlier frames expire on their own retention. Audited as `browser_screenshots.changed`.
+      summary: Set browser screenshot capture and form-field blurring
+      description: Send enabled and/or blurFormFields as booleans; omitted fields are preserved. Both choices freeze when a run starts. Turning capture off deletes nothing already stored. Audited as `browser_screenshots.changed`.
       operationId: setBrowserScreenshots
       tags: [Instances]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -8498,10 +8499,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [enabled]
+              minProperties: 1
               additionalProperties: false
               properties:
                 enabled: { type: boolean }
+                blurFormFields: { type: boolean }
       responses:
         "200":
           description: The saved switch

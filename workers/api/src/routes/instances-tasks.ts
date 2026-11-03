@@ -1,3 +1,4 @@
+import { withTaskScreenshotSettings } from "../lib/browser-screenshots.js";
 import { overLimit, ticketOverLimit } from "../lib/write-limits.js";
 import { clipMarked } from "../lib/clip-marked.js";
 import { hitOutputCap } from "../lib/reply-truncation.js";
@@ -316,7 +317,7 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		// Route to the machine that's actually live (not the stale default row), so creating a
 		// board task on a multi-machine account reaches the connected runner.
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
-		const body = normalizeRunnerTaskBody(await c.req.json());
+		const body = await withTaskScreenshotSettings(c.env, instanceId, session.uid, normalizeRunnerTaskBody(await c.req.json()));
 		const res = await callRuntime(c.env, runtime, "/tasks", {
 			method: "POST",
 			body: JSON.stringify(body),

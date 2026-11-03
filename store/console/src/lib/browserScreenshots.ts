@@ -1,10 +1,11 @@
 /**
  * Browser screenshots (#1064) — the console's half of `workers/api/src/routes/instances-browser-screenshots.ts`.
- * One switch per instance, covering every browser run it makes; the same value MCP's
+ * Capture and form-field blur preferences cover every browser run; the same values MCP's
  * get/set_browser_screenshots read and write.
  */
 export interface BrowserScreenshotsView {
 	enabled: boolean;
+	blurFormFields: boolean;
 	/** What the switch does, worded by the server so the console, API and MCP say the same thing. */
 	explained: string;
 }

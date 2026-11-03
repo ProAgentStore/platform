@@ -458,8 +458,8 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 		};
 	};
 
-	it("is ON by default, owner-only, takes exactly {enabled}, and every change is audited", async () => {
-		expect((await call("GET", "/i1/browser-screenshots")).body).toEqual({ enabled: true, explained: expect.stringMatching(/blurred.*only to you.*30 days/) });
+	it("is ON by default, owner-only, accepts independent controls, and every change is audited", async () => {
+		expect((await call("GET", "/i1/browser-screenshots")).body).toEqual({ enabled: true, blurFormFields: true, explained: expect.stringMatching(/blurred.*only to you.*30 days/) });
 		expect((await call("PUT", "/i1/browser-screenshots", { enabled: "no" })).status).toBe(400);
 		expect((await call("PUT", "/i1/browser-screenshots", { enabled: false, retentionDays: 1 })).body.error).toMatch(/Unknown field\(s\): retentionDays/);
 		expect((await call("GET", "/i1/browser-screenshots")).body.enabled).toBe(true);
@@ -473,6 +473,25 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 		expect(JSON.parse(row!.config)).toMatchObject({ runnerNode: "mac", browserScreenshots: { enabled: false } });
 		const audit = d1.sqlite.prepare("SELECT context FROM agent_events WHERE event = 'browser_screenshots.changed' AND instance_id = 'i1'").all() as Array<{ context: string }>;
 		expect(audit.map((a) => JSON.parse(a.context))).toEqual([expect.objectContaining({ enabled: false })]);
+	});
+
+	it("freezes unblurred policy, preserves partial settings, and refuses old runners only when captures are on", async () => {
+		expect((await call("PUT", "/i1/browser-screenshots", { blurFormFields: false })).body).toMatchObject({ enabled: true, blurFormFields: false });
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.198'");
+		const refused = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "old" });
+		expect(refused.body.error).toMatch(/0.4.199/);
+		expect(sent.some((x) => x.path === "/local-browser/run")).toBe(false);
+		await call("PUT", "/i1/browser-screenshots", { enabled: false });
+		const off = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "off" });
+		expect(off.status).toBeLessThan(300);
+		expect(sent.find((x) => x.path === "/local-browser/run")?.body).toMatchObject({ policy: { screenshots: false, blurFormFields: false } });
+		await call("POST", `/i1/local-browser/runs/${off.body.id}/cancel`);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.199'");
+		await call("PUT", "/i1/browser-screenshots", { enabled: true });
+		const on = (await call("POST", "/i1/local-browser/runs", { objective: "y", requestId: "on" })).body;
+		await call("PUT", "/i1/browser-screenshots", { blurFormFields: true });
+		const policy = await d1.DB.prepare("SELECT policy FROM local_browser_runs WHERE id = ?1").bind(on.id).first<{ policy: string }>();
+		expect(JSON.parse(policy!.policy).blurFormFields).toBe(false);
 	});
 
 	it("OFF: the run records it, the runner is told, no frame is pulled or stored, and the replay says why", async () => {

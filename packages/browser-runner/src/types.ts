@@ -120,6 +120,8 @@ export interface BrowserAction {
 	action: "click" | "type" | "select" | "check" | "upload" | "navigate" | "scroll" | "key" | "wait";
 	/** `false` when the owner turned browser screenshots OFF for this run (#1064): no frame is taken at all. */
 	screenshot?: boolean;
+	/** Frozen owner preference: only explicit false leaves rendered form values visible. */
+	blurFormFields?: boolean;
 	/** Stable element reference from the snapshot (e.g. "e42"). Resolved via the
 	 *  aria-ref selector — unambiguous, preferred over role+name when present. */
 	ref?: string;

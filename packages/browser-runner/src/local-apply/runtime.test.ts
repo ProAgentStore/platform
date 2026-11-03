@@ -281,9 +281,10 @@ describe("scoped local-apply handoff (#1013)", () => {
 
 describe("the owner's screenshot switch (#1064)", () => {
 	/** The test browser, made able to take a frame (#1419: a real page, faked here); every tool asked is recorded. */
-	async function fill(screenshots?: false) {
+	async function fill(screenshots?: false, blurFormFields?: unknown) {
 		const called: string[] = [];
 		const shots: string[] = [];
+		const masked: boolean[] = [];
 		const tools: BrowserTools = {
 			listTools: browser.listTools,
 			callTool: async (name, args = {}) => {
@@ -293,17 +294,20 @@ describe("the owner's screenshot switch (#1064)", () => {
 		};
 		const page: MaskablePage = {
 			locator: () => ({}) as ReturnType<MaskablePage["locator"]>,
-			screenshot: async () => {
+			screenshot: async (options) => {
+				masked.push(!!options.mask);
 				shots.push("shot");
 				return Buffer.from("/9j/4AAQSkZJRgABAQ==", "base64");
 			},
 		};
 		const rt = new LocalApplyRuntime({ dataDir: join(dir, "data"), homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", browserFor: async () => ({ tools, stop: async () => undefined, handoffPage: () => page }), takeover, spawn: (() => (child = new FakeChild())) as never });
-		rt.start(envelope({ policy: { mode: "fill_and_review", allowDomains: ["jobs.example.com"], ...(screenshots === false ? { screenshots } : {}) } }));
+		const input = envelope({ policy: { mode: "fill_and_review", allowDomains: ["jobs.example.com"], ...(screenshots === false ? { screenshots } : {}), blurFormFields: blurFormFields as boolean } });
+		rt.start(input);
+		input.policy.blurFormFields = blurFormFields === false; // freeze before any asynchronous browser work.
 		await settle();
 		await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
 		await call(rt, "browser_snapshot");
-		return { rt, called, shots };
+		return { rt, called, shots, masked };
 	}
 
 	it("ON (no flag): the fill takes blurred frames, as #1063 shipped", async () => {
@@ -319,6 +323,13 @@ describe("the owner's screenshot switch (#1064)", () => {
 		expect(shots).toEqual([]);
 		expect(rt.shots({ runId: "run-1" }).shots).toEqual([]);
 		expect(rt.status({ runId: "run-1" }).events.some((e) => e.type === "screenshot.captured")).toBe(false);
+	});
+
+	it.each([false, true, undefined, null, "false", 0])("freezes the application blur policy %j at run start", async (blurFormFields) => {
+		const { rt, masked } = await fill(undefined, blurFormFields);
+		expect(masked.length).toBeGreaterThan(0);
+		expect(masked.every((value) => value === (blurFormFields !== false))).toBe(true);
+		rt.closeAll();
 	});
 });
 

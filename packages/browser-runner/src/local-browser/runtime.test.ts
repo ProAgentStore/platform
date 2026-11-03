@@ -179,6 +179,7 @@ describe("the owner's screenshot switch (#1064)", () => {
 	function shotBrowser() {
 		const called: string[] = [];
 		const shots: string[] = [];
+		const masked: boolean[] = [];
 		const tools: BrowserTools = {
 			listTools: browser.listTools,
 			callTool: async (name, args = {}) => {
@@ -188,21 +189,24 @@ describe("the owner's screenshot switch (#1064)", () => {
 		};
 		const page: MaskablePage = {
 			locator: () => ({}) as ReturnType<MaskablePage["locator"]>,
-			screenshot: async () => {
+			screenshot: async (options) => {
+				masked.push(!!options.mask);
 				shots.push("shot");
 				return Buffer.from("/9j/4AAQSkZJRgABAQ==", "base64");
 			},
 		};
-		return { tools, called, shots, page };
+		return { tools, called, shots, page, masked };
 	}
-	async function browse(screenshots?: false) {
+	async function browse(screenshots?: false, blurFormFields?: unknown) {
 		const b = shotBrowser();
 		const rt = new LocalBrowserRuntime({ dataDir: dir, homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", now: () => now, browserFor: async () => ({ tools: b.tools, handoffPage: () => b.page, stop: async () => undefined }), spawn: (() => new FakeChild()) as never });
-		rt.start(envelope({ policy: { ...envelope().policy, ...(screenshots === false ? { screenshots } : {}) } }));
+		const input = envelope({ policy: { ...envelope().policy, ...(screenshots === false ? { screenshots } : {}), blurFormFields: blurFormFields as boolean } });
+		rt.start(input);
+		input.policy.blurFormFields = blurFormFields === false; // caller/settings changes cannot rewrite a live run.
 		await settle();
 		await rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://seek.com.au/jobs" } });
 		await rt.bridge({ runId: "run-1", op: "call", name: "browser_snapshot", args: {} });
-		return { rt, called: b.called, shots: b.shots };
+		return { rt, called: b.called, shots: b.shots, masked: b.masked };
 	}
 
 	it("ON (no flag): frames are taken, as #1063 shipped", async () => {
@@ -220,7 +224,15 @@ describe("the owner's screenshot switch (#1064)", () => {
 		expect(rt.shots({ runId: "run-1" }).shots).toEqual([]);
 		expect(rt.status({ runId: "run-1" }).events.some((e) => e.type === "screenshot.captured")).toBe(false);
 	});
+
+	it.each([false, true, undefined, null, "false", 0])("freezes the research blur policy %j at run start", async (blurFormFields) => {
+		const { rt, masked } = await browse(undefined, blurFormFields);
+		expect(masked.length).toBeGreaterThan(0);
+		expect(masked.every((value) => value === (blurFormFields !== false))).toBe(true);
+		rt.closeAll();
+	});
 });
+
 
 describe("trace URLs leave the machine as origin and path only (#1069)", () => {
 	it("a navigation to a page with OAuth/session parameters records origin and path; a finding keeps its own link whole", async () => {

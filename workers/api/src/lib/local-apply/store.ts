@@ -551,6 +551,8 @@ export interface ApplyRunPolicy {
 	approvalRecoveryId?: string;
 	/** Present only when the owner's browser-screenshot switch was OFF as this run started (#1064). */
 	screenshots?: false;
+	/** Owner screenshot blurring choice, frozen when the run starts; absent = true. */
+	blurFormFields?: boolean;
 }
 
 export type ApplyTraceEvent = Omit<LocalApplyEvent, "type"> & { type: LocalApplyEvent["type"] | LocalApplyPlatformEventType };

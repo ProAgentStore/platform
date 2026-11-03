@@ -23,6 +23,8 @@ import type { Env } from "../types.js";
 export interface JobApplyParams {
 	/** `false` when the owner's browser-screenshot switch was off as this task started (#1064). */
 	screenshots?: false;
+	/** Owner choice frozen at task creation; older tasks retain blurring. */
+	blurFormFields?: boolean;
 	instanceId: string;
 	userId: string;
 	/** The runner task id this application drives (created by the trigger route). */
@@ -105,6 +107,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// The owner's screenshot switch, fixed when this task started (#1064): the runner is asked for no
 		// frame, none is stored, and the task's trace says why — once, as a durable step.
 		const shotsOff = event.payload.screenshots === false;
+		const blurFormFields = event.payload.blurFormFields !== false;
 
 		// Resolved fresh (not journaled) so the runner token never lands in state.
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
@@ -174,7 +177,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 		});
 
-		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}) }));
+		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
 
 		// Durable-step wrappers for the tested pure loop. The call order is
 		// deterministic, so the monotonic counter yields stable, replayable step
@@ -206,7 +209,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// application to stop. `browserRunTick` also heartbeats, which keeps `sweepStaleRuns`
 			// off an application that is legitimately taking a while.
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, async () => {
-				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId });
+				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId, blurFormFields });
 				const stopped = await browserRunTick(env, loopRunId);
 				return stopped ? { ...snap, cancelled: true } : snap;
 			}).then((snap) => {
@@ -294,7 +297,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					// runner is the only party that can read the ELEMENT (#627). A runner too old
 					// to know the field ignores it, which is exactly the state this leaves the
 					// field in until the CLI is upgraded.
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields });
 					// Persist a screenshot of the resulting page so the run can be REPLAYED
 					// visually. The blob goes to R2 keyed by step; the event carries only the
 					// key + the action (the events feed stays small). Best-effort — a shot
@@ -378,7 +381,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			//  needs_input → resume when the user supplies the value (saved to Profile).
 			const reason = result.outcome === "captcha" ? "challenge" : result.outcome === "needs_input" ? "needs_input" : "stuck";
 			const label = result.outcome === "captcha" ? result.challenge ?? "captcha" : result.outcome === "needs_input" ? result.fieldNeeded ?? "a value" : result.detail ?? "this step";
-			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined }));
+			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined, blurFormFields, ...(shotsOff ? { screenshot: false } : {}) }));
 			// #1079: the question is a durable decision on this card — an answer given after the window
 			// below closes is stored on it, and the next application to this posting uses it.
 			if (reason === "needs_input") {

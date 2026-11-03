@@ -249,7 +249,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		workspace: o.workspace,
 		sources,
 		artifacts,
-		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}) },
+		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
 	};
@@ -415,7 +415,7 @@ export class LocalApplyRuntime {
 			state: "running",
 			events: [],
 			// Screenshots off (#1064): zero cap for `/shots`, and no recorder handed to the bridge below.
-			shots: new ShotRecorder(envelope.policy.screenshots === false ? 0 : APPLY_SHOT_CAP, () => this.now()),
+			shots: new ShotRecorder(envelope.policy.screenshots === false ? 0 : APPLY_SHOT_CAP, () => this.now(), envelope.policy.blurFormFields),
 			seq: 0,
 			allow: new Set(envelope.policy.allowDomains),
 			grounding: [],

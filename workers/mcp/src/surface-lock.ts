@@ -1265,4 +1265,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.196": "sha256:2e31cd60125ee2373cc5023e99eb5283c3810fb279e8495854e41245055e2bbc", // #1392: set_instance_loop_limits `provider_retry` gains `fallback_model` - an opt-in model to try once when the retries are spent.
 	"0.1.197": "sha256:0af101db5107b60fba894357382f5f12d31ea23e022eb625798921abfc3b2507", // #1429: per-instance browser visibility tools and template browserMode declaration.
 	"0.1.198": "sha256:ea5fe2cb8005ebddcf17b7ef232364369402a30e90b63fb97dc8685d9f559d35", // #1431: browser engine/profile settings, actual session evidence, creator capability fields.
+	"0.1.199": "sha256:43dcde8193b4554d38ada05159ee106ec729b5262e05a4c7a63d2b2273f038f6", // #1433: screenshot capture and form blur become independently patchable.
 };

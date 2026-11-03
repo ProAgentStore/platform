@@ -53,7 +53,7 @@ const { subjectScreenshotsOff } = await import("../lib/browser-artifacts.js");
 
 const SECRET = "t1062-secret";
 let d1: RealSchemaD1;
-let created: Array<{ params: { instanceId: string; taskId: string; screenshots?: false; job: { url: string; dryRun: boolean; candidate: Record<string, unknown> } } }>;
+let created: Array<{ params: { instanceId: string; taskId: string; screenshots?: false; blurFormFields?: boolean; job: { url: string; dryRun: boolean; candidate: Record<string, unknown> } } }>;
 let env: Env;
 
 beforeEach(() => {
@@ -121,6 +121,18 @@ describe("the owner's browser-screenshot switch reaches the workflow task (#1064
 		const token = await signSession("u1", SECRET, { roles: [] });
 		return (await app()).request("/v1/instances/apply-inst/browser-screenshots", { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }, env);
 	};
+
+	it("freezes the owner blur choice into both workflow params and task input", async () => {
+		const { writeBrowserScreenshots } = await import("../lib/browser-screenshots.js");
+		await writeBrowserScreenshots(env, "apply-inst", "u1", { blurFormFields: false });
+		const r = await apply("apply-inst", { url: "https://jobs.example/role/1", resumePath: "/home/ada/cv.pdf", blurFormFields: true });
+		expect(r.status).toBe(202);
+		expect(created[0].params.blurFormFields).toBe(false);
+		await writeBrowserScreenshots(env, "apply-inst", "u1", { blurFormFields: true });
+		const row = await d1.DB.prepare("SELECT payload FROM instance_runtime_tasks WHERE id = ?1").bind(r.body.taskId).first<{ payload: string }>();
+		expect(JSON.parse(row!.payload).input.blurFormFields).toBe(false);
+		expect(created[0].params.blurFormFields).toBe(false);
+	});
 
 	it("ON (the default): the workflow and the task carry no flag", async () => {
 		const r = await apply();

@@ -73,6 +73,13 @@ export async function patchInstanceConfigFields(env: Env, instanceId: string, us
 	return (res.meta?.changes ?? 0) > 0;
 }
 
+/** Merge object properties atomically inside one config key; concurrent sibling edits survive. */
+export async function mergeInstanceConfigObject(env: Env, instanceId: string, userId: string, key: string, fields: Record<string, unknown>): Promise<boolean> {
+	if (!isValidConfigKey(key)) throw new Error(`Invalid config key: ${key}`);
+	const res = await env.DB.prepare(`UPDATE agent_instances SET config = json_set(${CONFIG_OR_EMPTY}, ?1, json_patch(CASE WHEN json_type(${CONFIG_OR_EMPTY}, ?1) = 'object' THEN json_extract(${CONFIG_OR_EMPTY}, ?1) ELSE '{}' END, json(?2))), updated_at = datetime('now') WHERE id = ?3 AND user_id = ?4`).bind(jsonPath(key), JSON.stringify(fields), instanceId, userId).run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
 /**
  * Bump `last_activity_at` to now — call this after any real user-driven event
  * (chat, task create, apply start, coding session start). Fire-and-forget: a

@@ -16,7 +16,7 @@ import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
 import { LocalBrowserRuntime } from "./local-browser/runtime.js";
 import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
-import { maskedPageScreenshot } from "./local-browser/replay.js";
+import { capturePageScreenshot } from "./local-browser/replay.js";
 import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
@@ -161,6 +161,9 @@ export class LocalRunner {
 	createTask(request: CreateTaskRequest): RunnerTask {
 		const normalized = normalizeCreateTaskRequest(request);
 		validateTaskInput(normalized.type, normalized.input);
+		if (["browser.open", "browser.task", "job.apply_agent", "browser.handoff"].includes(normalized.type)) {
+			normalized.input = { ...normalized.input, blurFormFields: normalized.input.blurFormFields !== false };
+		}
 		const now = new Date().toISOString();
 		// Optional card presentation for the console kanban (only set when provided).
 		const card: Pick<RunnerTask, "title" | "subtitle" | "description"> = {};
@@ -399,7 +402,7 @@ export class LocalRunner {
 			challengeType: challenge,
 			url: page.url(),
 		});
-		const screenshotBase64 = await captureScreenshotDataUrl(page);
+		const screenshotBase64 = task.input.screenshots === false ? undefined : await captureScreenshotDataUrl(page, task.input.blurFormFields);
 		// Keep this page alive and register a remote-control session so a human
 		// can view the screen and solve the challenge from the PAGS console.
 		this.takeovers.set(task.id, { page });
@@ -579,7 +582,7 @@ export class LocalRunner {
 			// complex multi-step sites (e.g. a Dayforce/Workday ATS) the agent
 			// can't auto-fill, the human completes it in the live view.
 			if (task.input.holdForTakeover) {
-				const screenshotBase64 = await captureScreenshotDataUrl(page);
+				const screenshotBase64 = task.input.screenshots === false ? undefined : await captureScreenshotDataUrl(page, task.input.blurFormFields);
 				this.takeovers.set(task.id, { page });
 				this.addTaskEvent(task, "browser.takeover.ready", "Page ready for human takeover", { url: page.url() });
 				throw new HumanHandoffError("Ready for you to take over and complete this page.", {
@@ -709,12 +712,21 @@ export class LocalRunner {
 
 	/** A small JPEG screenshot (base64, no data: prefix) of the page — one per action,
 	 *  so the cloud can store it per step and the whole run can be replayed visually.
-	 *  Form controls are BLURRED first, and no frame is kept when that cannot be confirmed (#1067) —
-	 *  the Scout/Runner replay policy (#1063), which this legacy path used to skip.
+	 *  The frozen run policy masks form controls by default; only explicit false keeps rendered values.
+	 *  A capture failure stores no frame.
 	 *  scale:"css" avoids 2× retina bloat; a short timeout means a stuck page never delays the
 	 *  action (the screenshot is best-effort, not the point). */
-	private async shot(page: Page): Promise<string | undefined> {
-		return maskedPageScreenshot(page, { quality: 45, timeout: 8_000 });
+	private async shot(page: Page, blurFormFields: unknown = true): Promise<string | undefined> {
+		return capturePageScreenshot(page, { quality: 45, timeout: 8_000, blurFormFields });
+	}
+
+	/** A task's saved policy wins over later requests/settings; absent and invalid values mask. */
+	private screenshotPolicy(taskId?: string, request: { blurFormFields?: unknown; screenshot?: unknown } = {}) {
+		const task = taskId ? this.store.getTask(taskId) : undefined;
+		return {
+			blurFormFields: (task ? task.input.blurFormFields : request.blurFormFields) !== false,
+			enabled: task?.input.screenshots !== false && request.screenshot !== false,
+		};
 	}
 
 	/**
@@ -915,6 +927,7 @@ export class LocalRunner {
 	 * surfaces it to the brain as an `error` (which drives its self-correction).
 	 */
 	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec, taskId?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; mode?: string } }> {
+		const policy = this.screenshotPolicy(taskId, action);
 		const page = await this.getActivePage();
 		// #1409: the legacy workflows (and the chat connector, which has no taskId of its own yet —
 		// #1424) share this one mcp across tasks; the subject follows whichever task is live now.
@@ -947,7 +960,7 @@ export class LocalRunner {
 				url: active.url(),
 				title: await active.title().catch(() => ""),
 				challenge: await detectHumanChallenge(active),
-				screenshot: action.screenshot === false ? undefined : await this.shot(active),
+				screenshot: !policy.enabled ? undefined : await this.shot(active, policy.blurFormFields),
 				commitGuard: { supported: true, mode: guard?.mode },
 			};
 		}
@@ -989,7 +1002,7 @@ export class LocalRunner {
 				title: await settled.title().catch(() => ""),
 				challenge: await detectHumanChallenge(settled),
 				feedback: dialogMsg ? `a native dialog was accepted: "${dialogMsg}"` : "a native dialog was accepted",
-				screenshot: action.screenshot === false ? undefined : await this.shot(settled),
+				screenshot: !policy.enabled ? undefined : await this.shot(settled, policy.blurFormFields),
 				commitGuard: { supported: true, mode: guard?.mode },
 			};
 		}
@@ -1021,7 +1034,7 @@ export class LocalRunner {
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
 			feedback: feedback || undefined,
-			screenshot: action.screenshot === false ? undefined : await this.shot(active),
+			screenshot: !policy.enabled ? undefined : await this.shot(active, policy.blurFormFields),
 			commitGuard: { supported: true, mode: guard?.mode },
 		};
 	}
@@ -1045,11 +1058,12 @@ export class LocalRunner {
 	 * for remote takeover and flip the task to needs_human so the console shows
 	 * the take-over view. The brain pauses; the human solves it on this page.
 	 */
-	async browserHandoff(taskId: string, label: string, reason = "challenge"): Promise<{ ok: boolean; screenshotBase64?: string }> {
+	async browserHandoff(taskId: string, label: string, reason = "challenge", options: { blurFormFields?: unknown; screenshot?: unknown } = {}): Promise<{ ok: boolean; screenshotBase64?: string }> {
 		this.browsers.current.taskIds.add(taskId);
 		const page = await this.getActivePage();
 		this.takeovers.set(taskId, { page, reason, humanDone: false });
-		const screenshotBase64 = await captureScreenshotDataUrl(page);
+		const policy = this.screenshotPolicy(taskId, options);
+		const screenshotBase64 = policy.enabled ? await captureScreenshotDataUrl(page, policy.blurFormFields) : undefined;
 		// The takeover is registered ABOVE, unconditionally — that is what makes the live view work.
 		// Everything below is the task's own bookkeeping, and it used to be skipped whenever no
 		// LOCAL task existed. The engine sign-in relay mints its own id (`signin-<sessionId>`) for
@@ -1061,7 +1075,7 @@ export class LocalRunner {
 		let task = this.store.getTask(taskId);
 		if (!task) {
 			const now = new Date().toISOString();
-			task = { id: taskId, type: "browser.handoff", status: "needs_human", input: {}, requiresApproval: false, createdAt: now, updatedAt: now };
+			task = { id: taskId, type: "browser.handoff", status: "needs_human", input: { blurFormFields: policy.blurFormFields, ...(policy.enabled ? {} : { screenshots: false }) }, requiresApproval: false, createdAt: now, updatedAt: now };
 			this.store.putTask(task);
 		}
 		{

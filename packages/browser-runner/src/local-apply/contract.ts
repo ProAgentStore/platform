@@ -136,6 +136,8 @@ export interface LocalApplyTaskEnvelope {
 		/** `false` when the owner turned browser screenshots OFF for this agent (#1064): the runner takes no
 		 *  replay frame for this run. Absent = on. Fixed when the run starts. */
 		screenshots?: false;
+		/** Owner screenshot blurring choice, frozen when this run starts. Absent or malformed = true. */
+		blurFormFields?: boolean;
 	};
 	limits: LocalApplyLimits;
 	/**

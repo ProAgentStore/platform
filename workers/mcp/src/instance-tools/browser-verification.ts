@@ -72,7 +72,7 @@ export function registerBrowserVerificationTools(server: McpServer, ctx: Instanc
 	// ── The owner's browser-screenshot switch (#1064) ─────────────────────────────────────────
 	server.tool(
 		"get_browser_screenshots",
-		"Is browser screenshot capture on for this instance (#1064)? One switch covers every browser run the instance makes — workflow tasks, local browser research and Application Runner fills. On by default: every browser step is captured as a small screenshot for replay, form fields blurred first, visible only to the owner, deleted after 30 days. Off: no frames are taken, pulled or stored for runs started while it is off. Answers `{enabled, explained}`. Read-only.",
+		"Read screenshot capture and form-field blur for this instance: `{enabled, blurFormFields, explained}`. Both default true. Applies to workflow browser tasks, local browser research and Application Runner fills. Capture off means no replay frames. Blur off saves rendered form values in owner-visible screenshots; native password bullets and vault text redaction stay unchanged. Screenshots expire after 30 days. Read-only.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
@@ -89,22 +89,25 @@ export function registerBrowserVerificationTools(server: McpServer, ctx: Instanc
 
 	server.tool(
 		"set_browser_screenshots",
-		"Turn browser screenshot capture on or off for one instance (#1064). Takes effect for runs that START after it; a run already going keeps the setting it started with. Off means the runner takes no frame and PAGS neither pulls nor stores any for those runs; turning it off does not delete screenshots already stored (they expire on their own). The model never gets a screenshot tool either way. Call with dry_run first.",
+		"Change screenshot capture and/or form-field blur independently for one instance (#1433). Only supplied fields change. Applies to future runs; active runs retain their starting settings. Capture off means no frames taken, pulled or stored. Blur off saves rendered form values in owner-visible screenshots, while native password bullets and vault text redaction remain unchanged. Changes neither delete nor alter stored screenshots. Preview with dry_run.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
-			enabled: z.boolean().describe("true = capture replay screenshots (the default); false = capture none."),
+			enabled: z.boolean().optional().describe("true = capture replay screenshots (the default); false = capture none. Omit to preserve."),
+			blur_form_fields: z.boolean().optional().describe("true = mask form fields in replay screenshots (the default); false = save rendered form values. Omit to preserve. Independent of capture."),
 			dry_run: z.boolean().optional().describe("Preview the change without saving it."),
 		},
-		async ({ token, instance_id, enabled, dry_run }) => {
+		async ({ token, instance_id, enabled, blur_form_fields, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, enabled };
+			const patch = { ...(enabled !== undefined ? { enabled } : {}), ...(blur_form_fields !== undefined ? { blurFormFields: blur_form_fields } : {}) };
+			const input = { instance_id, ...patch };
 			const denied = await requirePermission(safetyFor(token), "write", "set_browser_screenshots", input);
 			if (denied) return denied;
+			if (!Object.keys(patch).length) return text("Error: pass enabled and/or blur_form_fields to change.");
 			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/browser-screenshots`;
-			if (dry_run) return dryRun(safetyFor(token), "set_browser_screenshots", `turn browser screenshots ${enabled ? "on" : "off"}`, input, { endpoint, method: "PUT" });
-			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ enabled }) }, env)) as { error?: string };
+			if (dry_run) return dryRun(safetyFor(token), "set_browser_screenshots", `update browser screenshots: ${Object.keys(patch).join(", ")}`, input, { endpoint, method: "PUT", body: patch });
+			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(patch) }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "set_browser_screenshots", action: "completed", input, result: data });
 			return jsonText(data);

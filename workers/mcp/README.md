@@ -376,8 +376,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_browser_session` | Read actual runner browser session evidence without launching a browser | read | | |
 | `get_instance_browser_mode` | Read browser visibility override, agent default and inheritance source | read | | |
 | `set_instance_browser_mode` | Choose headed/headless for one instance, or clear its override; next browser session only | write | yes | |
-| `get_browser_screenshots` | Is browser replay screenshot capture on for this instance (#1064)? One switch for every browser run it makes; on by default | read | | |
-| `set_browser_screenshots` | Turn replay screenshots on or off for runs that start after it; off = nothing taken, pulled or stored. Deletes nothing already stored | write | yes | |
+| `get_browser_screenshots` | Read screenshot capture and form-field blur for this instance; both default on, independent controls | read | | |
+| `set_browser_screenshots` | Independently patch capture and form-field blur for future runs. Blur off saves rendered form values; changes no stored frames | write | yes | |
 | `list_eligible_browser_runtimes` | Each of your machines with heartbeat, attachment (transport only), health, version and eligibility apart, and the machine the runtime setting would use | read | | |
 | `browser_takeover_list` | One instance's durable browser takeovers (#1031), recorded before any remote control is shown: requested → active → resumed, or ended / expired; subject, reason, mobile preference, times — ids only | read | | |
 | `browser_takeover_get` | One takeover by id | read | | |

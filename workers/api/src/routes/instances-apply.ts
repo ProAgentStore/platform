@@ -1,6 +1,6 @@
 import { endCardTakeover, fillGate, fillRunForCard, relayCardTakeover } from "../lib/local-apply/fill-handoff.js";
 import { closeLiveTakeoverFor, LIVE_TAKEOVER_STATES, latestTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
-import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
+import { browserScreenshotSettings } from "../lib/browser-screenshots.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
 import { recordAnswer } from "../lib/coder-question-store.js";
 import { answerDecision, markDecisionsApplied, pendingAnswersFor } from "../lib/owner-decisions.js";
@@ -211,7 +211,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 
 		// The owner's screenshot switch, fixed into this task as it starts (#1064): recorded on the task's
 		// input (the storage guard and the console read it there) and handed to the workflow.
-		const screenshotsOn = await browserScreenshotsEnabled(env, instanceId, userId);
+		const { enabled: screenshotsOn, blurFormFields } = await browserScreenshotSettings(env, instanceId, userId);
 		let taskId: string;
 		try {
 			// Give the board card a real title up front (best-effort from the job URL),
@@ -220,7 +220,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 			const card = deriveFromUrl(url);
 			({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
 				type: "job.apply_agent",
-				input: { url, resumePath, ...(screenshotsOn ? {} : { screenshots: false }) },
+				input: { url, resumePath, blurFormFields, ...(screenshotsOn ? {} : { screenshots: false }) },
 				title: card.title || undefined,
 				subtitle: card.subtitle || undefined,
 			}));
@@ -292,7 +292,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 			throw new ApplyError(`Could not start the application: ${e instanceof Error ? e.message : String(e)}`, 500);
 		}
 		if (decided.length) await markDecisionsApplied(env, decided.map((d) => d.id), taskId).catch(() => undefined);
-		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0, loopRunId, ...(screenshotsOn ? {} : { screenshots: false as const }) } });
+		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0, loopRunId, blurFormFields, ...(screenshotsOn ? {} : { screenshots: false as const }) } });
 		return { workflowId: instance.id, taskId };
 	} finally {
 		await dropClaim();

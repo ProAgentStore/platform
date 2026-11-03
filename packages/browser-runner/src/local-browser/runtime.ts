@@ -187,6 +187,7 @@ export function parseEnvelope(raw: unknown): LocalBrowserTaskEnvelope {
 			profileConsented: p.profileConsented === true,
 			consentIds: consentIdMap(p.consentIds),
 			...(p.screenshots === false ? { screenshots: false as const } : {}),
+			blurFormFields: p.blurFormFields !== false,
 		},
 		limits,
 		resultSchema: { id: typeof schema.id === "string" ? schema.id : "findings", version: typeof schema.version === "number" ? schema.version : 1 },
@@ -271,7 +272,7 @@ export class LocalBrowserRuntime {
 			events: [],
 			// Screenshots off (#1064): a zero-cap recorder, so `/shots` answers with nothing — and the bridge
 			// below is given NO recorder at all, so no frame is ever attempted.
-			shots: new ShotRecorder(envelope.policy.screenshots === false ? 0 : SCOUT_SHOT_CAP, () => this.now()),
+			shots: new ShotRecorder(envelope.policy.screenshots === false ? 0 : SCOUT_SHOT_CAP, () => this.now(), envelope.policy.blurFormFields),
 			seq: 0,
 			consented: new Set(envelope.policy.consentedDomains),
 			deny: new Set(envelope.policy.denyDomains),

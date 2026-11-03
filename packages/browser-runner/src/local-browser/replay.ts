@@ -7,7 +7,7 @@
  * trace. Frames stay in this process's memory until the cloud PULLS them (the runner holds no API token);
  * the trace only ever says that a frame exists — `screenshot.captured` with its seq and capture point.
  *
- * ── Form-control policy (decided on #1063, Playwright-native since #1419)
+ * ── Form-control policy (default masked; owner opt-out #1433)
  *
  * An application page holds the owner's typed answers, and a pixel of a filled field is a typed value.
  * Until #1419 this blurred the TOP document only, by injecting a `<style>` through `browser_evaluate` —
@@ -17,7 +17,8 @@
  * piercing shadow DOM and inner frames, since Playwright v1.41) plus `mask: Locator[]` with `maskColor`
  * (paints a box over each matched element) replace it: neither mutates the page, so there is nothing to
  * undo, and `style` alone already reaches every frame and shadow root with no need to enumerate them.
- * A throw means NO screenshot: fail closed.
+ * Only an explicit frozen `blurFormFields: false` omits both layers, capturing normal rendered pixels.
+ * Password controls keep the browser's own masking. A throw means NO screenshot: fail closed.
  *
  * Bounded: a per-run cap, viewport only, a per-frame byte cap, and nothing written to disk.
  */
@@ -45,31 +46,38 @@ export const MASK_COLOR = "#0b0b0b";
 /** The minimum of Playwright's real `Page` a masked screenshot needs — real in production, faked in tests. */
 export interface MaskablePage {
 	locator(selector: string): Locator;
-	screenshot(opts: { type: "jpeg"; quality: number; scale: "css"; style: string; mask: Locator[]; maskColor: string; timeout: number }): Promise<Buffer>;
+	screenshot(opts: { type: "jpeg"; quality: number; scale: "css"; style?: string; mask?: Locator[]; maskColor?: string; timeout: number }): Promise<Buffer>;
 }
 
 /**
  * The form-control policy for a Playwright `Page` (#1067, Playwright-native since #1419) — the legacy
- * workflow browser tasks (`runtime_task`: JOB_APPLY / BROWSER_TASK) and the live takeover still frame,
+ * workflow browser tasks (`runtime_task`: JOB_APPLY / BROWSER_TASK) and the stored takeover still frame,
  * and `ShotRecorder.capture` below for Scout/Application Runner replay. One call: no mask confirmation
  * step exists any more because nothing mutates the page for Playwright to confirm. NO frame (undefined)
- * on any failure — a timeout, a closed page — exactly as before.
+ * on any failure — a timeout, a closed page — exactly as before. Only literal false opts out of masking.
  */
-export async function maskedPageScreenshot(page: MaskablePage, opts: { quality: number; timeout: number }): Promise<string | undefined> {
+export async function capturePageScreenshot(page: MaskablePage, opts: { quality: number; timeout: number; blurFormFields?: unknown }): Promise<string | undefined> {
 	try {
 		const buf = await page.screenshot({
 			type: "jpeg",
 			quality: opts.quality,
 			scale: "css",
-			style: MASK_CSS,
-			mask: [page.locator(MASK_SELECTOR)],
-			maskColor: MASK_COLOR,
+			...(opts.blurFormFields === false ? {} : {
+				style: MASK_CSS,
+				mask: [page.locator(MASK_SELECTOR)],
+				maskColor: MASK_COLOR,
+			}),
 			timeout: opts.timeout,
 		});
 		return buf.toString("base64");
 	} catch {
 		return undefined;
 	}
+}
+
+/** Compatibility entry point: callers without an owner policy always mask. */
+export function maskedPageScreenshot(page: MaskablePage, opts: { quality: number; timeout: number }): Promise<string | undefined> {
+	return capturePageScreenshot(page, opts);
 }
 
 export class ShotRecorder {
@@ -79,6 +87,7 @@ export class ShotRecorder {
 	constructor(
 		private readonly cap: number,
 		private readonly now: () => number = Date.now,
+		private readonly blurFormFields: unknown = true,
 	) {}
 
 	/**
@@ -89,7 +98,7 @@ export class ShotRecorder {
 	async capture(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string } = {}): Promise<number | null> {
 		if (this.nextSeq >= this.cap) return null;
 		if (!page) return null;
-		const data = await maskedPageScreenshot(page, { quality: 50, timeout: 8_000 });
+		const data = await capturePageScreenshot(page, { quality: 50, timeout: 8_000, blurFormFields: this.blurFormFields });
 		if (!data || data.length > MAX_SHOT_BASE64) return null;
 		const seq = ++this.nextSeq;
 		this.shots.push({ seq, point, ...(meta.url ? { url: meta.url } : {}), ...(meta.action ? { action: meta.action } : {}), mimeType: "image/jpeg", data, at: new Date(this.now()).toISOString() });

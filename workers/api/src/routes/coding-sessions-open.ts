@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { browserScreenshotSettings } from "../lib/browser-screenshots.js";
 import { codingEngineModelProblem } from "../lib/coding-engine-policy.js";
 import { deriveClientType } from "../lib/coding-command.js";
 import { maskPaneText } from "../lib/pane-mask.js";
@@ -26,7 +27,7 @@ import { recordEngineUsage } from "../lib/usage.js";
 import { readReauthState } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
-import { getRuntime, getRuntimeForNode, mirrorRuntimeTask, normalizeRunnerNode } from "./instances-runtime.js";
+import { getRuntime, getRuntimeForNode, isRecord, mirroredRuntimeTask, mirrorRuntimeTask, normalizeRunnerNode } from "./instances-runtime.js";
 import { repoOwners, type RepoOwner } from "../lib/coding-ownership.js";
 import type { Env } from "../types.js";
 
@@ -394,10 +395,14 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		}
 
 		const taskId = `signin-${sessionId}`;
+		const existing = await mirroredRuntimeTask(c.env, instanceId, uid, taskId);
+		const previousInput = isRecord(existing) && isRecord(existing.input) ? existing.input : {};
+		const capture = existing ? { enabled: previousInput.screenshots !== false, blurFormFields: previousInput.blurFormFields !== false } : await browserScreenshotSettings(c.env, instanceId, uid);
+		const captureRequest = { blurFormFields: capture.blurFormFields, screenshot: capture.enabled };
 		// Flat body with `action` as a STRING — the shape lib/connectors/browser.ts uses. A nested
 		// {action:{kind,url}} silently does nothing, which is the worst possible failure here: the
 		// button reports success and no page ever opens.
-		const nav = await callRunner<{ ok?: boolean }>(conn, "/browser/act", { action: "navigate", url: prompt.url }).catch(() => null);
+		const nav = await callRunner<{ ok?: boolean }>(conn, "/browser/act", { action: "navigate", url: prompt.url, ...captureRequest, ...(existing ? { taskId } : {}) }, { frozenScreenshotPolicy: capture }).catch(() => null);
 		if (!nav) throw new HttpError(502, "Couldn't open the sign-in page in the runner's browser.");
 		// The board card MUST exist before the handoff. The runner's /browser/handoff registers the
 		// takeover in memory and then does `const task = this.store.getTask(taskId); if (task) {…}` —
@@ -414,6 +419,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		const carded = await mirrorRuntimeTask(c.env, instanceId, uid, {
 			id: taskId,
 			type: "engine.signin",
+			input: { ...previousInput, screenshots: capture.enabled, blurFormFields: capture.blurFormFields },
 			status: "needs_human",
 			title: "Sign in to the coding engine",
 			subtitle: (() => { try { return new URL(prompt.url as string).host; } catch { return null; } })(),
@@ -426,6 +432,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			taskId,
 			label: "Engine sign-in",
 			reason: "challenge",
+			...captureRequest,
 		});
 
 		await logEvent(c.env, {

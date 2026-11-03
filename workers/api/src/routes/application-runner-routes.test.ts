@@ -216,6 +216,21 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 	const frame = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1));
 	const storedRun = (id: string) => d1.DB.prepare("SELECT policy, trace FROM local_apply_runs WHERE id = ?1").bind(id).first<{ policy: string; trace: string }>();
 
+	it("freezes the owner's blur choice and refuses old runners before a fill starts", async () => {
+		await call("PUT", "/ap/browser-screenshots", { blurFormFields: false });
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.198' WHERE instance_id = 'ap'");
+		const refused = await call("POST", "/ap/application-runs", readyApp("blur-old"));
+		expect(refused.status).toBe(409);
+		expect(refused.body.error).toMatch(/0.4.199/);
+		expect(dispatches()).toHaveLength(0);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.199' WHERE instance_id = 'ap'");
+		const started = await call("POST", "/ap/application-runs", readyApp("blur-new"));
+		expect(started.status, JSON.stringify(started.body)).toBeLessThan(300);
+		expect(dispatches()[0].body.policy).toMatchObject({ blurFormFields: false });
+		await call("PUT", "/ap/browser-screenshots", { blurFormFields: true });
+		expect(JSON.parse((await storedRun(started.body.run.id))!.policy)).toMatchObject({ blurFormFields: false });
+	});
+
 	it("OFF: the fill run records it, the runner is told, and its frames are never pulled", async () => {
 		await call("PUT", "/ap/browser-screenshots", { enabled: false });
 		stored.clear();
@@ -434,7 +449,7 @@ describe("submission is gated", () => {
 		const r = await call("POST", "/ap/application-runs", readyApp("lead-6"));
 		const gateId = r.body.run.policy.gate.gateId;
 		expect(r.body.run.policy).toMatchObject({ mode: "auto_submit", gate: { allowed: true } });
-		expect(dispatches()[0].body.policy).toEqual({ mode: "auto_submit", allowDomains: ["jobs.example.com", "example.com"], submitGate: { gateId } });
+		expect(dispatches()[0].body.policy).toEqual({ mode: "auto_submit", allowDomains: ["jobs.example.com", "example.com"], submitGate: { gateId }, blurFormFields: true });
 
 		const runId = r.body.run.id;
 		runner("ended", {

@@ -1,3 +1,4 @@
+import { screenshotBlurRunnerProblem, taskScreenshotSettings } from "./browser-screenshots.js";
 import type { Env } from "../types.js";
 import { compareVersions } from "./machine-capability-compat.js";
 import { readBrowserSettings } from "./browser-settings.js";
@@ -27,16 +28,30 @@ function startsBrowserSession(path: string, body?: unknown): boolean {
 /** Old runners ignore this wire field. Refuse explicit configuration before it can silently lose. */
 export async function browserSettingsForDispatch(env: Env, instanceId: string, uid: string, path: string, node?: string | null, registeredVersion?: string | null, body?: unknown): Promise<BrowserDispatchSettings> {
 	if (!browserModePath(path, body)) return {};
+	const approval = /^\/tasks\/([^/]+)\/approve$/.exec(path.split("?")[0] ?? path);
+	const approvalTask = approval ? await env.DB.prepare("SELECT type, payload FROM instance_runtime_tasks WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(decodeURIComponent(approval[1]), instanceId, uid).first<{ type: string; payload?: string }>() : null;
+	let approvalInput: Record<string, unknown> = {};
+	if (approvalTask?.type === "browser.open" && approvalTask.payload) {
+		try { approvalInput = (JSON.parse(approvalTask.payload) as { input?: Record<string, unknown> }).input ?? {}; } catch { /* Legacy defaults remain blurred. */ }
+	}
+	// The run's frozen owner value, never re-read from a setting that may change mid-run.
+	const captureBody = body && typeof body === "object" ? body as Record<string, unknown> : {};
+	const captureInput = approval ? approvalInput : captureBody.input && typeof captureBody.input === "object" ? captureBody.input as Record<string, unknown> : {};
+	const capturePolicy = captureBody.policy && typeof captureBody.policy === "object" ? captureBody.policy as Record<string, unknown> : {};
+	const wantsUnblurred = captureBody.blurFormFields === false || captureInput.blurFormFields === false || capturePolicy.blurFormFields === false;
+	const captureEnabled = captureBody.screenshot !== false && captureInput.screenshots !== false && capturePolicy.screenshots !== false;
+	const existingHandoff = path === "/browser/handoff" && typeof captureBody.taskId === "string" ? await taskScreenshotSettings(env, instanceId, uid, captureBody.taskId) : null;
+	if ((startsBrowserSession(path, body) || (path === "/browser/handoff" && !existingHandoff)) && captureEnabled && wantsUnblurred) {
+		const version = registeredVersion === undefined ? await browserRunnerVersion(env, instanceId, uid, node) : registeredVersion;
+		const problem = screenshotBlurRunnerProblem(false, version, node);
+		if (problem) throw new Error(problem);
+	}
 	const settings = await readBrowserSettings(env, instanceId, uid);
 	const { mode, engine, profile } = settings.effective;
 	const wire: BrowserDispatchSettings = { ...(mode ? { browserMode: mode } : {}), ...(engine ? { browserEngine: engine } : {}), ...(profile ? { browserProfilePolicy: profile } : {}) };
 	if (!mode && !engine && !profile) return wire;
 	if (!startsBrowserSession(path, body)) return wire;
-	const approval = /^\/tasks\/([^/]+)\/approve$/.exec(path.split("?")[0] ?? path);
-	if (approval) {
-		const task = await env.DB.prepare("SELECT type FROM instance_runtime_tasks WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(decodeURIComponent(approval[1]), instanceId, uid).first<{ type: string }>();
-		if (task && task.type !== "browser.open") return wire;
-	}
+	if (approvalTask && approvalTask.type !== "browser.open") return wire;
 
 	const version = registeredVersion === undefined ? await browserRunnerVersion(env, instanceId, uid, node) : registeredVersion;
 	if (!version || !/^v?\d+\.\d+\.\d+(?:[-+].*)?$/.test(version.trim()) || compareVersions(version.trim(), settings.requiredCli) < 0) {

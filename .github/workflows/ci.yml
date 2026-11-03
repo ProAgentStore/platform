@@ -307,7 +307,7 @@ jobs:
       - name: Native browser tools, screenshots and takeover across engines (#1431)
         env:
           PAGS_TEST_BROWSER_ENGINES: chromium,firefox,webkit
-        run: pnpm exec vitest run --project integration packages/browser-runner/src/browser-native-matrix.test.ts
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/browser-native-matrix.test.ts packages/browser-runner/src/local-browser/screenshot-policy-pixels.test.ts
       - run: pnpm test:e2e
       - name: Typecheck API worker
         run: cd workers/api && npx tsc --noEmit

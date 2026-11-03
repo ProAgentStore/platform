@@ -47,7 +47,7 @@ The only 409 is same-hostname: a second runner on the same node is rejected unle
 With CLI 0.4.197 or later, the browser mode belongs to the agent configuration (#1429).
 In the agent builder, set **Browser mode** to **Visible browser**, **Headless browser**,
 or inherit the runner default. An instance owner can override this in the instance's
-**Settings → Browser mode**, or inherit the agent default.
+**Settings → Browser settings**, or inherit the agent default.
 
 The order is instance override → agent default → runner fallback. `--headless` and
 `PAGS_RUNNER_HEADLESS=1` supply only that last fallback; an explicit visible setting
@@ -275,9 +275,12 @@ to the caller. They are not exposed over MCP.
   navigation, an accepted click, a page read or wait, a pause or blocker, and at completion; on an
   application run also after a fill, an upload, a checkpoint, review and a submit. `browser_take_screenshot`
   stays refused to the CLI.
-- **Form controls are blurred.** Before every frame the runner blurs every input, textarea, select and
-  editable region, and removes the blur straight after. If the blur cannot be confirmed, no frame is
-  taken. This applies to research runs as well as application runs.
+- **Form controls are blurred by default.** In **Settings → Browser screenshots**, the owner can turn
+  **Blur form fields** off to record visible form values (#1433, CLI 0.4.199). This choice is separate
+  from enabling screenshots and is fixed when a run starts. With blurring on, Playwright masks inputs,
+  textareas, selects and editable regions for the capture, including frames and shadow roots. A failed
+  capture produces no frame. With blurring off, the screenshot shows the page as rendered, including
+  ordinary typed values; the website's own password bullets remain. Existing frames cannot be unblurred.
 - **The trace stays redacted.** It records only that a frame exists (`screenshot.captured`, with its
   sequence number and capture point) — never the image, page text, form values or typed values. Stored
   metadata is the capture point, the page URL without its query or fragment, its domain and an action
@@ -293,6 +296,12 @@ Screenshots are **on** by default. An owner can turn them off for one agent (#10
 screenshots** in the console, `PUT /v1/instances/:id/browser-screenshots {"enabled": false}`, or the MCP
 tool `set_browser_screenshots`. One switch covers every browser run the agent makes — workflow tasks,
 research runs and Application Runner fills.
+
+To keep screenshots but show form values, send
+`PUT /v1/instances/:id/browser-screenshots {"blurFormFields": false}` or set
+`blur_form_fields: false` with `set_browser_screenshots`. Omitted fields are preserved. Turning blurring
+off stores those visible values in the owner's replay screenshots; access controls and retention stay
+the same. Credential-vault substitution and text-log redaction are independent of this visual setting.
 
 - **Fixed when a run starts.** The run records the value it started with, so switching mid-run never
   changes a run already going. Turning screenshots off deletes nothing already stored; earlier frames

@@ -291,6 +291,7 @@ const READBACK: Record<string, string | null> = {
 	"set_agent_capabilities.browser_profile_policy": "get_agent_capabilities",
 	"set_instance_browser_mode.mode": "get_instance_browser_mode",
 	"set_agent_capabilities.browser_mode": "get_agent_capabilities",
+	"set_browser_screenshots.blur_form_fields": "get_browser_screenshots",
 	"set_browser_screenshots.enabled": "get_browser_screenshots",
 	"browser_takeover_request.subject_kind": "browser_takeover_list",
 	"browser_takeover_request.subject_id": "browser_takeover_list",
