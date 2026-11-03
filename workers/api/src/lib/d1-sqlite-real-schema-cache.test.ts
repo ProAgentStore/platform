@@ -11,15 +11,10 @@
  * `agent-cascade.invariant.test.ts` and `sql-time.test.ts`; this file does not duplicate
  * that coverage.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { SCHEMA_CACHE_DIR, realSchemaD1, seedTenant } from "./d1-sqlite.js";
-
-function cloneFileCount(): number {
-	if (!existsSync(SCHEMA_CACHE_DIR)) return 0;
-	return readdirSync(SCHEMA_CACHE_DIR).filter((f) => f.startsWith("clone-")).length;
-}
+import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 
 describe("realSchemaD1() real-schema cache (#1449)", () => {
 	it("still returns a database with every migration applied", () => {
@@ -64,11 +59,25 @@ describe("realSchemaD1() real-schema cache (#1449)", () => {
 		expect(elapsedMs).toBeLessThan(5000);
 	});
 
-	it("close() removes its own clone file and leaves no growth behind", () => {
-		const before = cloneFileCount();
+	it("close() removes its own clone file and preserves another open clone", () => {
 		const d1 = realSchemaD1();
-		expect(cloneFileCount()).toBe(before + 1);
-		d1.close();
-		expect(cloneFileCount()).toBe(before);
+		const sibling = realSchemaD1();
+		const file = (d1.sqlite.prepare("PRAGMA database_list").get() as { file: string }).file;
+		const siblingFile = (sibling.sqlite.prepare("PRAGMA database_list").get() as { file: string }).file;
+		let closed = false;
+		try {
+			expect(file).not.toBe(siblingFile);
+			expect(existsSync(file)).toBe(true);
+			expect(existsSync(siblingFile)).toBe(true);
+			d1.close();
+			closed = true;
+			expect(existsSync(file)).toBe(false);
+			expect(existsSync(siblingFile)).toBe(true);
+			expect(sibling.sqlite.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
+		} finally {
+			if (!closed) d1.close();
+			sibling.close();
+		}
+		expect(existsSync(siblingFile)).toBe(false);
 	});
 });
