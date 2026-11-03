@@ -54,7 +54,9 @@
  * production module that imports this fails `pnpm typecheck` rather than shipping a filesystem
  * read into a Worker.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -78,7 +80,12 @@ export function migrationFiles(): string[] {
  * question production is: does this statement work against what the migrations made?
  */
 export function migrationSchemaDb(): DatabaseSync {
-	const db = new DatabaseSync(":memory:");
+	return buildMigratedDb(":memory:");
+}
+
+/** Shared by `migrationSchemaDb` (`:memory:`) and the template builder (a real path). */
+function buildMigratedDb(location: string): DatabaseSync {
+	const db = new DatabaseSync(location);
 	for (const [name, sql] of migrationSources()) {
 		try {
 			db.exec(sql);
@@ -147,23 +154,109 @@ export interface RealSchemaD1 {
 }
 
 /**
- * A `D1Database` over a private in-memory SQLite carrying the real schema.
+ * Where a fully-migrated schema template (and its short-lived clones) lives. A plain
+ * directory under the OS temp dir, not `node_modules/.cache`: it must survive being
+ * shared across every `vitest` fork for this Worker, and must NOT be mistaken for build
+ * output a `pnpm clean` ought to remove.
+ */
+export const SCHEMA_CACHE_DIR = join(tmpdir(), "pags-real-schema-cache");
+
+/**
+ * A short content hash of every migration file (name AND body), so a template built from
+ * migration set A is never handed to a test expecting migration set B. This is the
+ * "invalidate on migration content changes" key the cache is organized around — add,
+ * remove, or edit one migration and the next build gets a new filename instead of a
+ * stale hit.
+ */
+function migrationsContentHash(): string {
+	const h = createHash("sha256");
+	for (const [name, sql] of migrationSources()) h.update(name).update("\0").update(sql);
+	return h.digest("hex").slice(0, 24);
+}
+
+/**
+ * A file-based database with every migration applied EXACTLY ONCE per (process, hash) —
+ * built fresh the first time a given migration set is asked for, then reused by every
+ * later call, including from other `vitest` fork processes that land on the same cache
+ * directory. Building it costs the same ~300-migration replay `migrationSchemaDb` always
+ * did; every clone of it (below) costs a file copy instead.
  *
- * Each call builds its OWN database rather than sharing one: these tests write rows, and a shared
- * connection would make them order-dependent — the failure mode `check-test-isolation.mjs` exists
- * to keep out of the parallel project.
+ * Built as a file rather than `:memory:` because that is the only form a second process
+ * — or a second call in this one — can cheaply copy without re-running a single `CREATE
+ * TABLE`. Written to a PID-scoped temp path and `renameSync`'d into place so a half-built
+ * file is never visible under the final name: two forks racing to build the same hash is
+ * wasted work, never a corrupt read, because the content hash in the filename guarantees
+ * whichever one lands is schema-equivalent to the other.
+ */
+let templatePath: string | undefined;
+let templateHash: string | undefined;
+function realSchemaTemplatePath(): string {
+	const hash = migrationsContentHash();
+	if (templatePath && templateHash === hash) return templatePath;
+	mkdirSync(SCHEMA_CACHE_DIR, { recursive: true });
+	const finalPath = join(SCHEMA_CACHE_DIR, `schema-${hash}.db`);
+	// `existsSync` is safe to race: the file only ever appears at `finalPath` via the
+	// `renameSync` below, so a filename collision always means a COMPLETE build —
+	// never a half-written one caught mid-write.
+	if (!existsSync(finalPath)) {
+		const buildPath = join(SCHEMA_CACHE_DIR, `schema-${hash}.building-${process.pid}-${randomBytes(4).toString("hex")}.db`);
+		const db = buildMigratedDb(buildPath);
+		db.close();
+		try {
+			renameSync(buildPath, finalPath);
+		} catch {
+			// Another fork finished first; its file is schema-equivalent (same hash), so
+			// ours is redundant, not wrong. Discard it rather than leaving it to rot.
+			rmSync(buildPath, { force: true });
+		}
+	}
+	templatePath = finalPath;
+	templateHash = hash;
+	return finalPath;
+}
+
+/**
+ * A `D1Database` over a private file-backed SQLite carrying the real schema.
+ *
+ * Each call gets its OWN file and its OWN connection — nothing here is shared or mutable
+ * across callers, so two tests stay exactly as order-independent as before. What changed
+ * is HOW that fresh database gets its schema: instead of replaying every migration (the
+ * cost `migrationSchemaDb` always pays, and still does for the explicit migration-chain
+ * tests that call it directly), this clones a cached template built by that same replay
+ * once per (process, migration-content hash) — a file copy instead of ~300 `CREATE
+ * TABLE`s. #1449.
  */
 export function realSchemaD1(): RealSchemaD1 {
-	const sqlite = migrationSchemaDb();
+	const template = realSchemaTemplatePath();
+	const clonePath = join(SCHEMA_CACHE_DIR, `clone-${process.pid}-${randomBytes(8).toString("hex")}.db`);
+	copyFileSync(template, clonePath);
+	const sqlite = new DatabaseSync(clonePath);
 	const issued: IssuedStatement[] = [];
+	pendingClones.add(clonePath);
 	return {
 		DB: new FakeD1(sqlite, issued),
 		sqlite,
 		issued,
 		exec: (sql: string) => sqlite.exec(sql),
-		close: () => sqlite.close(),
+		close: () => {
+			sqlite.close();
+			pendingClones.delete(clonePath);
+			rmSync(clonePath, { force: true });
+		},
 	};
 }
+
+/**
+ * Not every one of the ~300 `realSchemaD1()` call sites closes what it opens — harmless
+ * for the old `:memory:` database, which GC reclaims with no filesystem trace. A clone
+ * file left after the process exits is not: this backstop sweeps anything still
+ * outstanding when the process goes down, so a test that forgets to close leaks nothing
+ * on disk either.
+ */
+const pendingClones = new Set<string>();
+process.once("exit", () => {
+	for (const p of pendingClones) rmSync(p, { force: true });
+});
 
 /**
  * The owner, agent and instance rows every other table's foreign keys point at.
