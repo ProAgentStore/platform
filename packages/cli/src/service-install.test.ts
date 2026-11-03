@@ -153,19 +153,45 @@ describe("the supervisor, run for real (#1141)", () => {
 		writeFileSync(supervisorPath(ctx), supervisor?.content ?? "");
 
 		const child = spawn(process.execPath, [supervisorPath(ctx)], { env: { ...process.env, PAGS_SUPERVISOR_MIN_MS: "100", PAGS_SUPERVISOR_MAX_MS: "400", PAGS_SUPERVISOR_RESET_MS: "600000" }, stdio: "ignore" });
-		await new Promise((r) => setTimeout(r, 2_000));
-		child.kill();
-		await new Promise((r) => child.once("exit", r));
+		const logPath = join(dir, "pags-up.log");
+		const readRuns = () => existsSync(starts) ? readFileSync(starts, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { args: string[]; service: string }) : [];
+		try {
+			// #1434: observe three real restarts; process startup under a busy suite has no fixed budget.
+			const deadline = Date.now() + 10_000;
+			while (readRuns().length < 4 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+			const runs = readRuns();
+			expect(runs.length, "supervisor did not produce four child starts within 10s").toBeGreaterThanOrEqual(4);
+			for (const run of runs) expect(run).toMatchObject({ args: ["up", "--headless"], service: "1" });
 
-		const runs = readFileSync(starts, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { args: string[]; service: string; at: number });
-		expect(runs[0]).toMatchObject({ args: ["up", "--headless"], service: "1" });
-		// With no backoff, 100ms apart, there would be ~20 starts in 2s; doubling to a 400ms cap leaves far fewer.
-		expect(runs.length).toBeGreaterThanOrEqual(3);
-		expect(runs.length).toBeLessThanOrEqual(9);
-		const gaps = runs.slice(1).map((r, i) => r.at - runs[i].at);
-		expect(gaps.at(-1) ?? 0).toBeGreaterThan(gaps[0] ?? 0);
-		expect(readFileSync(join(dir, "pags-up.log"), "utf8")).toMatch(/supervisor: pags up exited \(1\); starting it again/);
-	}, 15_000);
+			// Measure only each retry's wait, excluding the next Node child's startup latency.
+			const gaps: number[] = [];
+			let failedAt: number | undefined;
+			for (const line of readFileSync(logPath, "utf8").split("\n")) {
+				const entry = /^\[([^\]]+)\] supervisor: (.*)$/.exec(line);
+				if (!entry) continue;
+				if (entry[2].startsWith("pags up exited (1); starting it again")) failedAt = Date.parse(entry[1]);
+				else if (entry[2] === "starting pags up" && failedAt !== undefined) {
+					gaps.push(Date.parse(entry[1]) - failedAt);
+					failedAt = undefined;
+				}
+			}
+			expect(gaps.length).toBeGreaterThanOrEqual(3);
+			// Timer/date resolution may round by a few ms; load may delay a timer, never invalidate it.
+			for (const [index, minimum] of [100, 200, 400].entries()) expect(gaps[index]).toBeGreaterThanOrEqual(minimum - 5);
+		} finally {
+			// Attach before signalling; every assertion/timeout path reaps the process this test owns.
+			if (child.exitCode === null && child.signalCode === null) {
+				let timeout: ReturnType<typeof setTimeout> | undefined;
+				const exited = new Promise<void>((resolve, reject) => {
+					child.once("exit", () => resolve());
+					timeout = setTimeout(() => reject(new Error("supervisor did not exit after SIGKILL")), 5_000);
+				});
+				child.kill("SIGTERM");
+				const force = setTimeout(() => child.kill("SIGKILL"), 2_000);
+				try { await exited; } finally { clearTimeout(force); clearTimeout(timeout); }
+			}
+		}
+	}, 20_000);
 
 	// #1298: a spawn that FAILS emits "error" and never "exit"; retrying only on "exit" ended the supervisor with code 0.
 	it.skipIf(process.platform === "win32")("a missing executable is retried with backoff, never a successful exit, and recovers once it appears", async () => {
