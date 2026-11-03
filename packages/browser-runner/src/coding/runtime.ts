@@ -22,6 +22,7 @@ import { fastForwardRepo, type GitWriteCmd, switchRepoBranch } from "./repo-writ
 import { resolveHomePath, homeRelative, type ResolvedWorkdir } from "./home-path.js";
 import { checkWorkdir, cloneIntoWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 import { type CloneProtocol, CloneJobs } from "./repo-clone-job.js";
+import { defaultReceiptStorePath } from "./clone-receipt-store.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 import type { GhGuardReport } from "./gh-guard.js";
 import { CleanupManager } from "./cleanup.js";
@@ -310,8 +311,10 @@ export class CodingRuntime {
 			}
 		});
 	}
-	/** Background cold-start clones, one per folder (#858). */
-	private cloneJobs = new CloneJobs();
+	/** Background cold-start clones, one per folder (#858). Durable across a crash or forced
+	 *  restart via a receipt under `reposBaseDir` (#1459) — set in the constructor, once
+	 *  `reposBaseDir` itself is assigned. */
+	private cloneJobs!: CloneJobs;
 	/** Clones are background local work, not coding turns (#1458). */
 	cloneWork(): string[] { return this.cloneJobs.liveWork(); }
 	/**
@@ -323,7 +326,9 @@ export class CodingRuntime {
 	private takeovers = new Map<string, { reason: string; label: string; resolved: boolean; value?: string }>();
 
 	/** Base directory under which repos are cloned (one subdir per repo). */
-	constructor(private readonly reposBaseDir: string = join(homedir(), ".config", "proagentstore", "repos")) {}
+	constructor(private readonly reposBaseDir: string = join(homedir(), ".config", "proagentstore", "repos")) {
+		this.cloneJobs = new CloneJobs(undefined, { receiptsPath: defaultReceiptStorePath(this.reposBaseDir) });
+	}
 
 	/**
 	 * Post-run cleanup (#1265): the mode the platform set for this machine, the per-run TMPDIR and the

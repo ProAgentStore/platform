@@ -58,7 +58,9 @@ describe("cold-start cloning through CodingRuntime (#1446)", () => {
 		expect(() => runtime.tree({ workDir })).toThrow();
 		runtime.startClone({ workDir, slug: "acme/chinese", protocol: "https" });
 		await vi.waitFor(() => expect(runtime.cloneStatus({ workDir })).toMatchObject({ state: "done", via: "https" }), { timeout: 30_000 });
-		expect(clone).toHaveBeenCalledExactlyOnceWith(target, "https://github.com/acme/chinese.git");
+		// A third `onPid` callback rides along now (#1459's durable receipt); real pid capture is
+		// covered in repo-clone-job.test.ts, so here it is just "some function, called once".
+		expect(clone).toHaveBeenCalledExactlyOnceWith(target, "https://github.com/acme/chinese.git", expect.any(Function));
 		expect(runtime.checkRepo({ workDir })).toMatchObject({ checked: true, exists: true, insideWorkTree: true, homeRelative: workDir });
 		expect(runtime.gitRemote({ workDir })).toEqual({ remote: "https://github.com/acme/chinese.git" });
 		expect(readFileSync(join(target, "README.md"), "utf8")).toBe("offline fixture\n");

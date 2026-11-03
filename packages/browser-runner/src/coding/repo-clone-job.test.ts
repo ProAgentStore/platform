@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CloneJobs, type CloneJob, cloneIntoOwnFolder, runCloneJob } from "./repo-clone-job.js";
+import { readReceipt, writeReceipt } from "./clone-receipt-store.js";
 
 const job = (): CloneJob => ({ path: "/w/grass-karma", slug: "acme/grass-karma", state: "cloning", attempts: [], startedAt: 1 });
 
@@ -137,5 +138,112 @@ describe("cloneIntoOwnFolder — real git, the owner-folder guards (#858)", () =
 
 	it("fails with git's reason for a repository it cannot reach", async () => {
 		await expect(cloneIntoOwnFolder(join(tmp, "missing"), join(tmp, "no-such.git"))).rejects.toThrow(/repository|does not exist|not found/i);
+	});
+});
+
+describe("CloneJobs durability across a runner crash or forced restart (#1459)", () => {
+	const store = () => join(mkdtempSync(join(tmpdir(), "pags-clone-receipts-")), "receipts.json");
+
+	it("persists a receipt before contacting the machine, so a crash mid-clone leaves something to reconcile", async () => {
+		const receiptsPath = store();
+		let finish: () => void = () => undefined;
+		const clone = vi.fn((_dir: string, _url: string, onPid?: (pid: number) => void) => {
+			onPid?.(4242);
+			return new Promise<void>((resolve) => (finish = resolve));
+		});
+		const jobs = new CloneJobs({ clone, sshIdentity: () => null, now: () => 5 }, { receiptsPath, runnerInstanceId: "r1" });
+		jobs.start("/w/gk", "acme/gk");
+		await vi.waitFor(() => expect(readReceipt(receiptsPath, "/w/gk")).toMatchObject({ slug: "acme/gk", runnerInstanceId: "r1", pid: 4242 }));
+		finish();
+		await vi.waitFor(() => expect(jobs.status("/w/gk")).toMatchObject({ state: "done" }));
+		// Finished and acknowledged within this same process: nothing left to reconcile later.
+		expect(readReceipt(receiptsPath, "/w/gk")).toBeNull();
+	});
+
+	it("never adopts its OWN receipt as an orphan — a job missing from memory under the SAME runner instance already finished", () => {
+		const receiptsPath = store();
+		writeReceipt(receiptsPath, { path: "/w/gk", slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "r1", pid: 999, startedAt: 1 });
+		const jobs = new CloneJobs(undefined, { receiptsPath, runnerInstanceId: "r1", isAlive: () => true });
+		expect(jobs.status("/w/gk")).toEqual({ path: "/w/gk", state: "none" });
+		expect(readReceipt(receiptsPath, "/w/gk")).toBeNull();
+	});
+
+	it("adopts an orphaned clone left by a DIFFERENT (crashed/restarted) runner instance, and reports it still cloning", () => {
+		const receiptsPath = store();
+		writeReceipt(receiptsPath, { path: "/w/gk", slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "old-process", pid: 999, startedAt: 1 });
+		const jobs = new CloneJobs(undefined, { receiptsPath, runnerInstanceId: "new-process", isAlive: () => true, pollIntervalMs: 100_000 });
+		expect(jobs.status("/w/gk")).toMatchObject({ path: "/w/gk", slug: "acme/gk", state: "cloning" });
+	});
+
+	it("resolves an adopted orphan to `done` once it exits over a genuinely completed checkout", async () => {
+		const receiptsPath = store();
+		writeReceipt(receiptsPath, { path: "/w/gk", slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "old-process", pid: 999, startedAt: 1 });
+		let alive = true;
+		const jobs = new CloneJobs(undefined, { receiptsPath, runnerInstanceId: "new-process", isAlive: () => alive, inspectEvidence: () => "completed", pollIntervalMs: 2 });
+		expect(jobs.status("/w/gk")).toMatchObject({ state: "cloning" });
+		alive = false;
+		await vi.waitFor(() => expect(jobs.status("/w/gk")).toMatchObject({ state: "done" }));
+		expect(readReceipt(receiptsPath, "/w/gk")).toBeNull();
+	});
+
+	it("resolves an adopted orphan to `failed` once it exits over a genuinely incomplete checkout — a partial checkout, never deleted", async () => {
+		const receiptsPath = store();
+		const dir = mkdtempSync(join(tmpdir(), "pags-clone-partial-"));
+		writeFileSync(join(dir, "partial-marker"), "whatever git had written");
+		writeReceipt(receiptsPath, { path: dir, slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "old-process", pid: 999, startedAt: 1 });
+		let alive = true;
+		const jobs = new CloneJobs(undefined, { receiptsPath, runnerInstanceId: "new-process", isAlive: () => alive, inspectEvidence: () => "incomplete", pollIntervalMs: 2 });
+		expect(jobs.status(dir)).toMatchObject({ state: "cloning" });
+		alive = false;
+		await vi.waitFor(() => expect(jobs.status(dir)).toMatchObject({ state: "failed" }));
+		expect(jobs.status(dir)).toMatchObject({ error: expect.stringMatching(/restarted|retry is refused/) });
+		// Never deleted: the owner's (or git's partial) file is exactly as it was.
+		expect(existsSync(join(dir, "partial-marker"))).toBe(true);
+	});
+
+	it("judges a dead orphan's outcome immediately, without ever polling, when the pid was already gone at reconciliation time", () => {
+		const receiptsPath = store();
+		writeReceipt(receiptsPath, { path: "/w/gk", slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "old-process", pid: 999, startedAt: 1 });
+		const jobs = new CloneJobs(undefined, { receiptsPath, runnerInstanceId: "new-process", isAlive: () => false, inspectEvidence: () => "completed" });
+		expect(jobs.status("/w/gk")).toMatchObject({ state: "done" });
+		expect(readReceipt(receiptsPath, "/w/gk")).toBeNull();
+	});
+
+	it("a legacy receipt with no recorded pid is judged from evidence right away — nothing to poll for liveness", () => {
+		const receiptsPath = store();
+		writeReceipt(receiptsPath, { path: "/w/gk", slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "old-process", pid: null, startedAt: 1 });
+		const isAlive = vi.fn(() => true);
+		const jobs = new CloneJobs(undefined, { receiptsPath, runnerInstanceId: "new-process", isAlive, inspectEvidence: () => "completed" });
+		expect(jobs.status("/w/gk")).toMatchObject({ state: "done" });
+		expect(isAlive).not.toHaveBeenCalled();
+	});
+
+	it("a duplicate start() while an adopted orphan is still being watched JOINS it — never a second clone into the same destination", () => {
+		const receiptsPath = store();
+		writeReceipt(receiptsPath, { path: "/w/gk", slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "old-process", pid: 999, startedAt: 1 });
+		const clone = vi.fn(async () => undefined);
+		const jobs = new CloneJobs({ clone, sshIdentity: () => null, now: () => 5 }, { receiptsPath, runnerInstanceId: "new-process", isAlive: () => true, pollIntervalMs: 100_000 });
+		const adopted = jobs.status("/w/gk");
+		const retried = jobs.start("/w/gk", "acme/gk");
+		expect(retried).toEqual(adopted);
+		expect(clone).not.toHaveBeenCalled();
+	});
+
+	it("bounds how long a reused pid can be trusted — past maxOrphanWaitMs it is judged from evidence regardless of `isAlive`", async () => {
+		const receiptsPath = store();
+		writeReceipt(receiptsPath, { path: "/w/gk", slug: "acme/gk", protocol: "auto", jobId: "j1", runnerInstanceId: "old-process", pid: 999, startedAt: 1_000 });
+		let now = 1_000;
+		const jobs = new CloneJobs(
+			{ clone: vi.fn(async () => undefined), sshIdentity: () => null, now: () => now },
+			{ receiptsPath, runnerInstanceId: "new-process", isAlive: () => true, inspectEvidence: () => "completed", pollIntervalMs: 2, maxOrphanWaitMs: 50 },
+		);
+		expect(jobs.status("/w/gk")).toMatchObject({ state: "cloning" });
+		now += 1_000; // well past maxOrphanWaitMs, with `isAlive` still (falsely) saying it's running
+		await vi.waitFor(() => expect(jobs.status("/w/gk")).toMatchObject({ state: "done" }));
+	});
+
+	it("without a receiptsPath, behaves exactly as before #1459 — a crash is simply unseen, same as always", () => {
+		const jobs = new CloneJobs(undefined, {});
+		expect(jobs.status("/w/gk")).toEqual({ path: "/w/gk", state: "none" });
 	});
 });
