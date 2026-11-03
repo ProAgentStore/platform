@@ -19,6 +19,8 @@ beforeAll(() => {
 	git(seed, "init", "-q", "-b", "main");
 	git(seed, "config", "user.name", "Runtime fixture");
 	git(seed, "config", "user.email", "fixture@example.invalid");
+	// Keep the byte-level fixture invariant even when Windows Git enables core.autocrlf.
+	writeFileSync(join(seed, ".gitattributes"), "README.md text eol=lf\n");
 	writeFileSync(join(seed, "README.md"), "offline fixture\n");
 	git(seed, "add", ".");
 	git(seed, "commit", "-q", "-m", "fixture");
