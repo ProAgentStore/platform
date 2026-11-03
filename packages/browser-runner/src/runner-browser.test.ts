@@ -25,9 +25,18 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 	});
 
 	afterEach(async () => {
-		await runner.close();
-		await server.close();
-		rmSync(dir, { recursive: true, force: true });
+		// A timed-out hook can finish after the next beforeEach replaces these
+		// variables. Keep cleanup bound to the resources this test actually owns.
+		const owned = { runner, server, dir };
+		try {
+			await owned.runner.close();
+		} finally {
+			try {
+				await owned.server.close();
+			} finally {
+				rmSync(owned.dir, { recursive: true, force: true });
+			}
+		}
 	}, 30_000);
 
 	function resume(): string {
