@@ -455,6 +455,77 @@ describe("runApplyLoop resilience", () => {
 		expect(result.outcome).toBe("stuck");
 		expect(result.detail).toContain("timed out");
 	});
+
+	/** A plain decide() failure (no `retryable` marker) must NOT be retried — only the provider
+	 *  layer gets to say an identical retry could plausibly succeed (#1430). */
+	it("does not retry a non-retryable decide failure — one attempt, immediate handoff", async () => {
+		let calls = 0;
+		const deps: ApplyDeps = {
+			snapshot: async () => page('- textbox "Name"'),
+			act: async () => ({ url: "u", challenge: null }),
+			decide: async () => { calls++; throw new Error("no balance on this key"); },
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 5 });
+		expect(calls).toBe(1);
+		expect(result.outcome).toBe("stuck");
+		expect(result.detail).not.toContain("attempts");
+	});
+
+	/** The #1430 bug: Anthropic truncates the final `finish` tool call at the output cap, which
+	 *  `AnthropicStreamAssembler` refuses to hand back and the adapter marks `retryable`. Bounded
+	 *  recovery retries the decide step — no page action was taken, so nothing is replayed — and a
+	 *  later attempt that returns cleanly must continue the run instead of handing off. */
+	it("recovers from a retryable truncated-tool-call failure within the retry budget", async () => {
+		let calls = 0;
+		const retryableTruncation = () => {
+			const err = new Error("Anthropic: the reply hit the output limit before the arguments for tool `finish` finished arriving, so the call is incomplete");
+			(err as Error & { retryable: boolean }).retryable = true;
+			return err;
+		};
+		const events: string[] = [];
+		const deps: ApplyDeps = {
+			snapshot: async () => page('- text "Hawthorn VIC 3122"'),
+			act: async () => ({ url: "u", challenge: null }),
+			decide: async () => {
+				calls++;
+				if (calls < 3) throw retryableTruncation();
+				return { finish: { status: "submitted", detail: "Hawthorn VIC 3122 — in stock" } };
+			},
+			onEvent: (type) => { events.push(type); },
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 5 });
+		expect(calls).toBe(3); // 2 truncations + the attempt that finally came back whole
+		expect(result.outcome).toBe("submitted");
+		expect(result.detail).toContain("Hawthorn VIC 3122");
+		expect(events.filter((t) => t === "agent.decide_retry")).toHaveLength(2);
+		expect(events).not.toContain("agent.decide_failed"); // recovered — never handed off
+	});
+
+	/** When every attempt within the budget truncates, the loop still hands off cleanly — but says
+	 *  how many attempts it made, and never replayed a page action in the meantime. */
+	it("hands off after exhausting the retry budget on a persistently truncated decide", async () => {
+		let calls = 0;
+		const acted: unknown[] = [];
+		const events: string[] = [];
+		const deps: ApplyDeps = {
+			snapshot: async () => page('- text "Hawthorn VIC 3122"'),
+			act: async (a) => { acted.push(a); return { url: "u", challenge: null }; },
+			decide: async () => {
+				calls++;
+				const err = new Error("Anthropic: the reply hit the output limit before the arguments for tool `finish` finished arriving, so the call is incomplete");
+				(err as Error & { retryable: boolean }).retryable = true;
+				throw err;
+			},
+			onEvent: (type) => { events.push(type); },
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 5 });
+		expect(calls).toBe(3); // the whole bounded budget, then give up
+		expect(result.outcome).toBe("stuck");
+		expect(result.detail).toContain("output limit");
+		expect(acted).toEqual([]); // no page action was ever taken while recovering
+		expect(events.filter((t) => t === "agent.decide_retry")).toHaveLength(2);
+		expect(events.filter((t) => t === "agent.decide_failed")).toHaveLength(1);
+	});
 });
 
 
@@ -501,6 +572,27 @@ describe("dryRunBlockReason — dry run must not be able to submit", () => {
  * crafted accessible name would actually redirect a live model is not asserted and was not
  * reproduced — that needs a poisoned page and a real headed browser.
  */
+describe("decideAction", () => {
+	// #1430: the default (1024, `anthropic.ts`) left no room for a `finish` call's free-text
+	// `detail` after any real action history, and a cut mid-argument-stream crashed the whole
+	// decide step instead of truncating a prose reply.
+	it("asks for enough output room that a finish call's detail doesn't get cut mid-argument", async () => {
+		const userAi = await import("./user-ai.js");
+		const spy = vi.spyOn(userAi, "runUserWorkersAi").mockResolvedValue({
+			tool_calls: [{ name: "finish", arguments: { status: "submitted", detail: "x" } }],
+		} as never);
+		const { decideAction } = await import("./apply-loop.js");
+		await decideAction({} as never, "user_1", {
+			job: JOB,
+			actionLog: [],
+			snapshot: { url: "https://jobs.example.com/123", title: "Job", snapshot: "- text x", challenge: null },
+		});
+		const [, , , opts] = spy.mock.calls[0] as unknown as [unknown, unknown, unknown, { maxTokens: number }];
+		expect(opts.maxTokens).toBe(2048);
+		spy.mockRestore();
+	});
+});
+
 describe("decideAction fences the page (#749)", () => {
 	const decide = async (snapshot: string, title = "Job") => {
 		const userAi = await import("./user-ai.js");

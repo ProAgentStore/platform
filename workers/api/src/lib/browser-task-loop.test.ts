@@ -282,10 +282,13 @@ describe("decideBrowserTask", () => {
 
 		expect(decision.finish).toEqual({ status: "submitted", detail: "Balance $184.20, due 3 September" });
 		expect(decision.usage).toEqual({ input: 10, output: 4 });
-		const [, , model, opts] = spy.mock.calls[0] as unknown as [unknown, unknown, string, { messages: Array<{ role: string; content: string }> }];
+		const [, , model, opts] = spy.mock.calls[0] as unknown as [unknown, unknown, string, { messages: Array<{ role: string; content: string }>; maxTokens: number }];
 		expect(model).toBe("claude-sonnet-4-6");
 		expect(opts.messages[0].content).toContain("READ-ONLY");
 		expect(opts.messages[1].content).toContain("clicked Billing");
+		// #1430: the default (1024) left no room for a `finish` call's free-text `detail` after any
+		// real action history, and a cut mid-argument-stream crashed the whole decide step.
+		expect(opts.maxTokens).toBe(2048);
 		spy.mockRestore();
 	});
 

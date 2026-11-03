@@ -159,6 +159,32 @@ describe("AnthropicStreamAssembler", () => {
 		expect(body.stop_reason).toBe("max_tokens");
 	});
 
+	it("refuses a tool block that never closed because the output cap cut it off (#1430)", () => {
+		// The exact production trace: a browser-task `finish` call's free-text `detail` ran past the
+		// output cap mid-argument-stream — never `content_block_stop`, `stop_reason: "max_tokens"`.
+		// Distinct from the capped+argumentless case (#504, tested above): the arguments STARTED
+		// arriving here, so this is "cut off mid-call", not "never began".
+		let err: unknown;
+		try {
+			assembleAnthropicStream([
+				{ type: "message_start", message: { usage: {} } },
+				{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "finish", input: {} } },
+				{ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"status":"done","detail":"Found Labubu in stock at Hawthorn VIC 3122' } },
+				{ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 4096 } },
+				{ type: "message_stop" },
+			]);
+		} catch (e) {
+			err = e;
+		}
+		expect(err).toBeInstanceOf(AnthropicStreamError);
+		expect((err as AnthropicStreamError).message).toMatch(/finish.*finished arriving/);
+		// Capped is a deterministic "same every attempt" fact (#504), unlike a dropped connection —
+		// so it carries NO stall marker, and `controller-ai-recovery.ts`'s stall detector correctly
+		// does not treat it as one. Recovery for this case lives at the caller (`apply-loop.ts`
+		// `decideWithRecovery`, #1430), gated on `retryable`, not on this marker.
+		expect((err as AnthropicStreamError).marker).toBeUndefined();
+	});
+
 	it("refuses a tool block that never closed, whatever the stop reason says", () => {
 		expect(() =>
 			assembleAnthropicStream([

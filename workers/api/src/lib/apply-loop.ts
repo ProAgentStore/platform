@@ -107,6 +107,20 @@ export interface BrowserJobBase {
 	userHint?: string;
 }
 
+/**
+ * The output ceiling every browser-task decision names explicitly (#1430). The default
+ * (1024, `anthropic.ts`) left no room for a `finish` call's free-text `detail` after a run with any
+ * real amount of action history — the model's own summary of what it found is exactly the content
+ * most likely to run long, and a cut mid-argument-stream is not a truncated reply (#397's business)
+ * but a call `AnthropicStreamAssembler` refuses to hand back at all. Matches the sibling coding-pilot
+ * decision surface's `PILOT_MAX_TOKENS`.
+ */
+export const DECIDE_MAX_TOKENS = 2048;
+
+/** Attempts a `decide()` call gets before the loop gives up and hands off to a human (#1430):
+ *  1 try + 2 bounded retries, and only for a provider-stream fault the adapter marked retryable. */
+export const DECIDE_MAX_ATTEMPTS = 3;
+
 /** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them.
  *  Generic over the job type `J` so the SAME loop engine drives apply and booking. */
 export interface ApplyDeps<J extends BrowserJobBase = ApplyJob> {
@@ -162,6 +176,36 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		await deps.onEvent?.(type, redact(message), redactEventData(data, redact));
 	};
 	const logAction = (line: string) => actionLog.push(redact(line));
+
+	/**
+	 * Bounded recovery for a `decide()` call that fails on a provider-stream fault (#1430) — most
+	 * commonly the reply's final tool call (often `finish`) cut off at the output cap before its
+	 * arguments finished arriving, which `AnthropicStreamAssembler` refuses to hand back as a call.
+	 * `decide()` has no side effects (no page action is taken until AFTER it returns a decision), so
+	 * retrying it replays nothing — not even the step that failed, let alone anything on the page.
+	 *
+	 * Only an error the provider layer marked `retryable` (a malformed/truncated stream, a 5xx — see
+	 * `UserAiProviderError`) is retried; a credentials/credit/rate-limit failure or a real bug fails on
+	 * the first attempt exactly as before, because an identical retry cannot plausibly fix those.
+	 */
+	const decideWithRecovery = async (
+		params: { job: typeof job; actionLog: string[]; snapshot: PageSnapshot },
+	): Promise<{ decision: ApplyDecision } | { error: unknown; attempts: number }> => {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return { decision: await deps.decide(params) };
+			} catch (e) {
+				const retryable = (e as { retryable?: boolean } | null)?.retryable === true;
+				if (!retryable || attempt >= DECIDE_MAX_ATTEMPTS) return { error: e, attempts: attempt };
+				const msg = e instanceof Error ? e.message : String(e);
+				await emit(
+					"agent.decide_retry",
+					`Deciding the next step failed (attempt ${attempt} of ${DECIDE_MAX_ATTEMPTS}): ${msg} — retrying; no page action was taken`,
+					{ error: msg, attempt },
+				);
+			}
+		}
+	};
 	let lastUrl = "";
 	let lastActionKey = "";
 	let repeatFails = 0;
@@ -218,16 +262,18 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		}
 
 		let decision: ApplyDecision;
-		try {
-			decision = await deps.decide({ job, actionLog, snapshot: snap });
-		} catch (e) {
-			// The brain step failed (e.g. the BYOK AI timed out or errored). Do NOT let it
-			// crash the whole durable run with no output — hand off for this step so the
-			// human can take over or it fails cleanly (and gets logged) on timeout.
-			const msg = e instanceof Error ? e.message : String(e);
-			await emit("agent.decide_failed", `Deciding the next step failed: ${msg} — handing off`, { error: msg });
+		const decided = await decideWithRecovery({ job, actionLog, snapshot: snap });
+		if ("error" in decided) {
+			// The brain step failed (e.g. the BYOK AI timed out, errored, or — after the bounded
+			// retries above were exhausted — kept truncating). Do NOT let it crash the whole durable
+			// run with no output — hand off for this step so the human can take over or it fails
+			// cleanly (and gets logged) on timeout.
+			const msg = decided.error instanceof Error ? decided.error.message : String(decided.error);
+			const attemptsNote = decided.attempts > 1 ? ` after ${decided.attempts} attempts` : "";
+			await emit("agent.decide_failed", `Deciding the next step failed${attemptsNote}: ${msg} — handing off`, { error: msg, attempts: decided.attempts });
 			return { outcome: "stuck", detail: `assistant error: ${msg}`, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 		}
+		decision = decided.decision;
 		if (liveHint) job.userHint = undefined; // applied to this step only
 		if (decision.usage) { tokens.input += decision.usage.input; tokens.output += decision.usage.output; }
 		await emit(
@@ -646,6 +692,7 @@ export async function decideAction(
 		// The apply runs in a durable Workflow (2-min step budget), not an interactive
 		// request — a 25s cap crashed the whole run on a big-context decision. Give it 60s.
 		timeoutMs: 60_000,
+		maxTokens: DECIDE_MAX_TOKENS,
 	}, usageCtx)) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];

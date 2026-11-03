@@ -7,7 +7,7 @@
 import { runUserWorkersAi } from "./user-ai.js";
 import { FENCE_TAG, fenceUntrusted } from "./untrusted-fence.js";
 import { COMMIT_VERB_RE as COMMIT_VERBS, commitBlockReason, commitModeFor } from "./commit-guard.js";
-import { type ApplyDecision, type BrowserAction, type BrowserJobBase, type PageSnapshot } from "./apply-loop.js";
+import { DECIDE_MAX_TOKENS, type ApplyDecision, type BrowserAction, type BrowserJobBase, type PageSnapshot } from "./apply-loop.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
@@ -197,6 +197,7 @@ export async function decideBrowserTask(
 		],
 		tools: BROWSER_TASK_TOOLS,
 		timeoutMs: 60_000,
+		maxTokens: DECIDE_MAX_TOKENS,
 	}, usageCtx)) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];
