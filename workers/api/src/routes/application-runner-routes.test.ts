@@ -21,7 +21,7 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({ ...(await import
 
 const { instanceRoutes } = await import("./instances.js");
 const { deliverEvent } = await import("../lib/connections.js");
-const { syncActiveApplyRuns, syncApplyRun } = await import("../lib/local-apply/apply.js");
+const { syncActiveApplyRuns, syncApplyRun, dispatchNextQueuedFill } = await import("../lib/local-apply/apply.js");
 const { agentDeleteStatements } = await import("../lib/agent-cascade.js");
 
 let d1: RealSchemaD1;
@@ -42,7 +42,9 @@ const relay = {
 		},
 	}),
 };
-const agentDO = { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ ok: true }, { status: 201 }) }) };
+let instanceMemory: Record<string, unknown[]>;
+let memoryReadStatus = 200;
+const agentDO = { idFromName: (n: string) => n, get: (id: string) => ({ fetch: async (req: Request) => new URL(req.url).pathname === "/memory" ? Response.json({ memory: instanceMemory[id] ?? [] }, { status: memoryReadStatus }) : Response.json({ ok: true }, { status: 201 }) }) };
 /** In-memory R2 for replay frames (#1063/#1064). */
 const stored = new Map<string, Uint8Array>();
 const STORAGE = { put: async (k: string, v: Uint8Array) => void stored.set(k, v), get: async (k: string) => (stored.has(k) ? { body: stored.get(k) } : null), delete: async (k: string) => void stored.delete(k) };
@@ -52,6 +54,7 @@ const SHA_R = "a".repeat(64);
 const SHA_C = "b".repeat(64);
 
 beforeEach(() => {
+	instanceMemory = {}; memoryReadStatus = 200;
 	d1 = realSchemaD1();
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1'), ('u2', 'u2')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES
@@ -110,6 +113,47 @@ function readyApp(id: string, over: { title?: string; url?: string } = {}) {
 }
 const enableAutoSubmit = (over: Record<string, unknown> = {}) =>
 	call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1, ...over }, acknowledgeRealSubmissions: true });
+
+describe("owner instance memory reaches application dispatch (#1508)", () => {
+	const preference = (answer: string) => ({ key: "job_application_preferences", source: "user", type: "preference", updatedAt: Date.now(), content: JSON.stringify({ version: 1, facts: [{ field: "salary_expectation", answer, confirmedAt: "2026-10-01" }], pendingFields: ["salary_super_basis", "disclosures"] }) });
+	it("binds the Runner's own current facts without changing documents or submission authority", async () => {
+		instanceMemory.ap = [preference("AUD 150,000")]; instanceMemory.t1 = [preference("AUD 180,000")];
+		const result = await call("POST", "/ap/application-runs", readyApp("prefs-own"));
+		expect(result.status).toBeLessThan(300);
+		const task = dispatches()[0].body;
+		expect(task.instancePreferences).toMatchObject({ instanceId: "ap", facts: [{ field: "salary_expectation", answer: "AUD 150,000" }] });
+		expect(task.policy).toMatchObject({ mode: "fill_and_review" });
+		expect((task.policy as Record<string, unknown>).submitGate).toBeUndefined();
+		expect(task.artifacts).toMatchObject([{ sha256: SHA_R }, { sha256: SHA_C }]);
+		const receipt = result.body.run.trace.find((event: { type: string; detail?: { role?: string } }) => event.type === "source.read" && event.detail?.role === "instance_preferences");
+		expect(receipt.detail).toMatchObject({ count: 1, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+		expect(JSON.stringify(receipt)).not.toMatch(/150,000|180,000/);
+	});
+	it("reads edited memory afresh when a queued run reaches the machine", async () => {
+		instanceMemory.ap = [preference("AUD 150,000")];
+		answers["/local-apply/run"] = { status: 409, body: { error: "This machine is already filling 1 application(s) for this agent (limit 1)." } };
+		const started = await call("POST", "/ap/application-runs", readyApp("prefs-queued"));
+		expect(started.body.run.status).toBe("queued");
+		memoryReadStatus = 503;
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
+		expect(dispatches()).toHaveLength(1);
+		memoryReadStatus = 200;
+		instanceMemory.ap = [preference("AUD 160,000")];
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("dispatched");
+		expect(dispatches().at(-1)?.body.instancePreferences).toMatchObject({ facts: [{ answer: "AUD 160,000" }] });
+		expect(dispatches().at(-1)?.body.policy).toMatchObject({ mode: "fill_and_review" });
+	});
+	it("does not claim an application when its preference memory cannot be read", async () => {
+		memoryReadStatus = 503;
+		const result = await call("POST", "/ap/application-runs", readyApp("prefs-unreadable"));
+		expect(result.status).toBe(503);
+		expect(dispatches()).toHaveLength(0);
+		expect((await appRow("prefs-unreadable"))?.status).toBe("materials_ready");
+	});
+});
 
 describe("end to end: approved lead → materials_ready → filled and awaiting review, exactly once", () => {
 	it("chains the Tailor into the Runner, writes the lifecycle back with an audit row per move, and never dispatches twice", async () => {

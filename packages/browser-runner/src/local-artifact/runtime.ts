@@ -29,6 +29,7 @@ import { exportArtifactDocuments, snapshotAnswerSources } from "./documents.js";
 import { draftRepairPrompt } from "./draft-repair.js";
 import type { PortableDocument, LocalArtifactDocumentsResponse } from "./document-contract.js";
 import { RunnerInputError } from "../errors.js";
+import { preferenceReceipt, projectPreferenceSources, validatePreferences } from "../instance-preferences.js";
 import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import {
@@ -101,12 +102,12 @@ interface Run {
 	timer?: ReturnType<typeof setTimeout>;
 }
 
-type DraftContext = { workspace: string; outDir: string; outRel: string; lead: LocalArtifactLead; hashes: LocalArtifactSourceHash[]; texts: SourceText[] };
+type DraftContext = { workspace: string; outDir: string; outRel: string; lead: LocalArtifactLead; hashes: LocalArtifactSourceHash[]; texts: SourceText[]; originalTexts: SourceText[] };
 
 const intIn = (v: unknown, min: number, max: number): number | null => (typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : null);
 
 /** The envelope, validated at the runner's boundary. A bad LEAD is not thrown: it pauses the run. */
-export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
+export function parseArtifactEnvelope(raw: unknown, now = Date.now()): ParsedEnvelope {
 	const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 	const bad = (what: string) => new RunnerInputError(`Invalid local artifact task: ${what}`);
 	if (o.type !== LOCAL_ARTIFACT_TASK_TYPE) throw bad(`type must be ${LOCAL_ARTIFACT_TASK_TYPE}`);
@@ -154,6 +155,7 @@ export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
 	const maxConcurrent = intIn(p.maxConcurrent, 1, 3);
 	if (retainDays === null || maxMinutes === null || maxConcurrent === null) throw bad("policy limits are out of range");
 	const lead = parseLocalArtifactLead(o.lead);
+	const instancePreferences = validatePreferences(o.instancePreferences, o.instanceId as string, now);
 	return {
 		type: LOCAL_ARTIFACT_TASK_TYPE,
 		runId: o.runId,
@@ -165,6 +167,7 @@ export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
 		sources,
 		...(uploadedSources.length ? { uploadedSources } : {}),
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
+		...(instancePreferences ? { instancePreferences } : {}),
 		policy: { retainDays, maxMinutes, maxConcurrent },
 		...("lead" in lead ? { lead: lead.lead } : { lead: null, leadError: lead.error }),
 	};
@@ -211,7 +214,7 @@ export class LocalArtifactRuntime {
 
 	/** Start a run. A requestId already held for the instance returns that run instead. */
 	start(raw: unknown): { runId: string; taskId: string; status: "running" | "ended"; existing: boolean } {
-		const envelope = parseArtifactEnvelope(raw);
+		const envelope = parseArtifactEnvelope(raw, this.now());
 		this.sweep();
 		const same = [...this.runs.values()].find((r) => r.envelope.instanceId === envelope.instanceId && r.envelope.requestId === envelope.requestId);
 		if (same) return { runId: same.envelope.runId, taskId: same.envelope.runId, status: same.state, existing: true };
@@ -293,6 +296,13 @@ export class LocalArtifactRuntime {
 			this.emit(run, { type: "source.read", detail: { role: OWNER_ANSWERS_ROLE, count: e.ownerAnswers.length } });
 		}
 
+		// Projection changes only the drafting view. Original bytes remain the export/hash evidence.
+		const projectedTexts = projectPreferenceSources(texts, e.instancePreferences, "role");
+		if (e.instancePreferences) {
+			const prefs = e.instancePreferences;
+			this.emit(run, { type: "source.read", detail: preferenceReceipt(prefs) });
+		}
+
 		const outRel = `applications/${lead.leadId}/${e.runId}`;
 		const outDir = join(workspace, "applications", lead.leadId, e.runId);
 		try {
@@ -310,7 +320,7 @@ export class LocalArtifactRuntime {
 			this.kill(run);
 		}, e.policy.maxMinutes * 60_000);
 		run.timer.unref?.();
-		this.launchDraft(run, { workspace, outDir, outRel, lead, hashes, texts }, tailorPrompt(lead, texts));
+		this.launchDraft(run, { workspace, outDir, outRel, lead, hashes, texts: projectedTexts, originalTexts: texts }, tailorPrompt(lead, projectedTexts));
 	}
 
 	private launchDraft(run: Run, ctx: DraftContext, prompt: string): void {
@@ -378,7 +388,7 @@ export class LocalArtifactRuntime {
 			return;
 		}
 		const parsed = parseDraft(text);
-		const check = checkDraft(parsed, ctx.texts);
+		const check = checkDraft(parsed, ctx.texts, e.instancePreferences, this.now());
 		const retry = /:retry:(\d+)$/.exec(e.requestId);
 		const attemptNumber = retry ? Number(retry[1]) : 1;
 		const diagnostic: LocalArtifactValidationDiagnostic | undefined = check.ok ? undefined : {
@@ -403,7 +413,7 @@ export class LocalArtifactRuntime {
 		}
 
 		const at = new Date(this.now()).toISOString();
-		run.documentSources = snapshotAnswerSources(ctx.texts);
+		run.documentSources = snapshotAnswerSources(ctx.originalTexts);
 		run.documentDir = ctx.outDir;
 		const artifacts: LocalArtifactFile[] = [];
 		for (const [kind, name, body] of [
@@ -482,6 +492,8 @@ export class LocalArtifactRuntime {
 			try { rmSync(join(run.scratch, "sources"), { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
 			for (const source of run.envelope.uploadedSources) source.text = "";
 		}
+		// The provenance receipt is retained; private preference answers are no longer needed.
+		run.envelope.instancePreferences = undefined;
 		run.state = "ended";
 		run.endedAt = this.now();
 		run.result = {

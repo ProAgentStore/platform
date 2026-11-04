@@ -444,6 +444,22 @@ The push names the job by title and links to Settings, never to the posting.
 
 ### Application Runner fills (`runtime: "local_apply"`)
 
+**Job preferences live on the instance (#1508, CLI 0.4.213).** Open the relevant Tailor or
+Application Runner → **Knowledge → Memory** and edit **Job application preferences**. Employment
+type, salary expectation, availability, planned holidays and recruitment adjustments belong to that
+instance, rather than the general account Profile. The Memory view shows their values and confirmation
+dates; holidays also have a validity date. Salary superannuation basis and disclosures remain unanswered
+until the owner supplies the necessary facts.
+
+The stored entry is `job_application_preferences`, type `preference`, explicitly user-set. The same
+entry is accessible with `get_instance_memory` / `write_instance_memory`; its versioned document is
+validated by `instance-preferences-contract.ts`. Each direct or queued dispatch reads its own instance
+again and records a hash/count receipt without answer text. Agent-written summaries are not owner
+answers. Unavailable, malformed or expired preferences prevent dispatch and report what needs fixing.
+New preferences supersede recognized old values in the working sources; the original prepared document
+bytes and hashes remain intact. An application-specific answer must match the actual screening question
+to take precedence. Memory edits do not approve a submission or resume a running application.
+
 **While an application runs, the owner hears it (#1107).** The Tailor and the Runner already record every
 step on their run's trace; each sync now also turns that trace into owner notifications, through the
 owner-attention policy (#991/#992) so each is controllable per instance, event and channel:

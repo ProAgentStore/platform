@@ -151,6 +151,8 @@ export interface LocalApplyTaskEnvelope {
 	 * resume answers; never instructions. Absent when there are none. An older runner ignores it.
 	 */
 	ownerAnswers?: Array<{ question: string; answer: string }>;
+	/** Fresh owner-set facts from this exact instance; requires CLI 0.4.213. */
+	instancePreferences?: import("../instance-preferences-contract.js").InstancePreferences;
 }
 
 /** Why a run stops for a person. Each is a pause — never an obstacle to work around. */

@@ -75,6 +75,7 @@ const agentDO = {
 		fetch: async (req: Request) => {
 			const url = new URL(req.url);
 			const p = url.pathname;
+			if (p === "/memory") return Response.json({ memory: [] });
 			if (id === "scout") {
 				if (p === "/collections/job_leads/records" && req.method === "GET") return queryRecords(engine as never, "job_leads", url);
 				if (p === "/collections/job_leads/records" && req.method === "POST") return insertRecord(engine as never, "job_leads", req);

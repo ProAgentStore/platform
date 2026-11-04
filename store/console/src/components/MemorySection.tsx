@@ -10,12 +10,20 @@ import type { MemoryEntry } from "../lib/types";
 import Button from "./Button";
 import Card from "./Card";
 import LoadFailed from "./LoadFailed";
+import { INSTANCE_PREFERENCES_KEY, readJobPreferenceMemory } from "../lib/jobPreferenceMemory";
+import { JobPreferenceMemoryEditor, JobPreferenceMemoryView } from "./JobPreferenceMemory";
 
 export default function MemorySection({ instanceId, active }: { instanceId: string; active: boolean }) {
+	// Each instance owns its loaded rows and drafts, including while an earlier read is pending.
+	return <InstanceMemory key={instanceId} instanceId={instanceId} active={active} />;
+}
+
+function InstanceMemory({ instanceId, active }: { instanceId: string; active: boolean }) {
 	const [memories, setMemories] = useState<MemoryEntry[]>([]);
 	// One row editable at a time; key is identity (rename = delete + add).
 	const [editMemKey, setEditMemKey] = useState<string | null>(null);
 	const [editMemContent, setEditMemContent] = useState("");
+	const [editError, setEditError] = useState("");
 	const [showAddMem, setShowAddMem] = useState(false);
 	const [newMemKey, setNewMemKey] = useState("");
 	const [newMemType, setNewMemType] = useState("knowledge");
@@ -40,6 +48,10 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 	}, [active, loadMemory]);
 
 	const saveMemory = async (entry: MemoryEntry) => {
+		if (entry.key === INSTANCE_PREFERENCES_KEY && entry.type === "preference") {
+			const document = readJobPreferenceMemory(editMemContent);
+			if ("error" in document) { setEditError(document.error); return; }
+		}
 		try {
 			await api(`/v1/instances/${instanceId}/memory`, {
 				method: "PUT",
@@ -109,11 +121,13 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 				<p className="text-center py-4 text-muted-soft text-sm">No memories stored yet.</p>
 			) : (
 				<div className="flex flex-col gap-2">
-					{memories.map((m) => (
+					{memories.map((m) => {
+						const preferences = m.key === INSTANCE_PREFERENCES_KEY && m.type === "preference" ? readJobPreferenceMemory(m.content, { allowExpired: true }) : null;
+						return (
 						<Card key={m.key}>
 							<div className="flex justify-between items-start gap-2">
 								<div className="min-w-0">
-									<span className="font-semibold text-sm break-all">{m.key}</span>
+									<span className="font-semibold text-sm break-all">{preferences ? "Job application preferences" : m.key}</span>
 									<span className="text-xs text-purple-400 ml-2">{m.type}</span>
 									{m.source && <span className="text-xs text-muted-soft ml-2">{m.source}</span>}
 									{m.injected === false && (
@@ -126,7 +140,7 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 									)}
 								</div>
 								<div className="flex gap-1.5 shrink-0">
-									<Button onClick={() => { setEditMemKey(m.key); setEditMemContent(m.content); }}>Edit</Button>
+									<Button disabled={editMemKey === m.key} onClick={() => { setEditMemKey(m.key); setEditMemContent(m.content); setEditError(""); }}>Edit</Button>
 									<Button variant="danger" onClick={() => deleteMemory(m.key)}>Delete</Button>
 								</div>
 							</div>
@@ -134,17 +148,24 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 								<div className="mt-2">
 									{/* Names the ROW being edited, not just "content" — several of these can be
 									    open at once, and "Content" three times over says nothing about which. */}
-									<textarea aria-label={`Content of memory ${m.key}`} value={editMemContent} onChange={(e) => setEditMemContent(e.target.value)} className="w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
+									{preferences && !("error" in preferences) ? <JobPreferenceMemoryEditor document={preferences} onChange={content => { setEditMemContent(content); setEditError(""); }} /> : <>
+										{preferences && <p role="alert" className="text-warning mb-2">{preferences.error}</p>}
+										<textarea aria-label={`Content of memory ${m.key}`} value={editMemContent} onChange={(e) => { setEditMemContent(e.target.value); setEditError(""); }} className="w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
+									</>}
+									{editError && <p role="alert" className="text-warning mt-2">{editError}</p>}
 									<div className="flex gap-2 mt-2">
 										<Button variant="primary" onClick={() => saveMemory(m)}>Save</Button>
 										<Button onClick={() => setEditMemKey(null)}>Cancel</Button>
 									</div>
 								</div>
 							) : (
-								<MarkdownText text={m.content} className="text-sm text-muted mt-1" />
+								preferences && !("error" in preferences) ? <JobPreferenceMemoryView document={preferences} /> : <>
+									{preferences && <p role="alert" className="text-warning mt-2">{preferences.error}</p>}
+									<MarkdownText text={m.content} className="text-sm text-muted mt-1" />
+								</>
 							)}
 						</Card>
-					))}
+					); })}
 				</div>
 			)}
 		</div>

@@ -37,6 +37,7 @@ import { redactReplayText } from "./apply-replay.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { Blocked, clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 import { ApplyBridge } from "./bridge.js";
+import { preferenceReceipt, projectPreferenceSources, validatePreferences } from "../instance-preferences.js";
 import { resumeDomainGrants } from "./resume-domains.js";
 import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy, websiteAccessBlock, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
@@ -245,6 +246,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
+		...(o.instancePreferences !== undefined ? { instancePreferences: validatePreferences(o.instancePreferences, o.instanceId as string) } : {}),
 	};
 }
 
@@ -430,9 +432,13 @@ export class LocalApplyRuntime {
 	private async launch(run: Run, selfUrl: string): Promise<void> {
 		const e = run.envelope;
 		const home = this.deps.homeDir ?? homedir();
-		const { blocks, artifactPath } = prepareApplyDocuments(e, run.dir, home, (event) => this.emit(run, event));
+		const prepared = prepareApplyDocuments(e, run.dir, home, (event) => this.emit(run, event));
+		const preferences = validatePreferences(e.instancePreferences, e.instanceId, this.now());
+		const blocks = projectPreferenceSources(prepared.blocks, preferences);
+		const artifactPath = prepared.artifactPath;
+		if (preferences) this.emit(run, { type: "source.read", detail: preferenceReceipt(preferences) });
 		// #1079: answers the owner already gave this application, as a source — the same shape a resume's answers take.
-		for (const a of e.ownerAnswers ?? []) blocks.push({ label: "owner answers", text: `Q: ${a.question}\nA: ${a.answer}`, answerText: a.answer });
+		for (const a of e.ownerAnswers ?? []) blocks.push({ label: "owner answers", text: `Q: ${a.question}\nA: ${a.answer}`, answerText: a.answer, answerQuestion: a.question });
 		run.grounding = blocks;
 
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("../local-browser/bridge-stdio.js", import.meta.url));
@@ -466,6 +472,7 @@ export class LocalApplyRuntime {
 			websiteAccess: () => e.policy.browserWebsiteAccess,
 			grounding: () => run.grounding.map((source) => source.text).join("\n"),
 			groundingSources: () => run.grounding,
+			instancePreferences: () => e.instancePreferences,
 			artifactPath,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			isStopped: () => run.cancelled || run.timedOut || run.state === "ended",
@@ -765,7 +772,8 @@ export class LocalApplyRuntime {
 			if (typeof r.question !== "string" || typeof r.answer !== "string") continue;
 			const answer = r.answer.trim();
 			if (answer.length > LOCAL_APPLY_CAPS.answerChars) throw new RunnerInputError(`Each answer must be at most ${LOCAL_APPLY_CAPS.answerChars} characters; no answers were applied.`, 400);
-			if (answer) answers.push({ label: "owner answers", text: `Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${answer}`, answerText: answer });
+			if (r.question.length > LOCAL_APPLY_CAPS.questionChars) throw new RunnerInputError(`Each question must be at most ${LOCAL_APPLY_CAPS.questionChars} characters; no answers were applied.`, 400);
+			if (answer) answers.push({ label: "owner answers", text: `Q: ${r.question}\nA: ${answer}`, answerText: answer, answerQuestion: r.question });
 		}
 		if (websitePolicy) run.envelope.policy.browserWebsiteAccess = websitePolicy;
 		run.grounding.push(...answers);
@@ -926,6 +934,7 @@ export class LocalApplyRuntime {
 		// narrow handoff window must not turn an observed result into `runner_lost` in the cloud.
 		clearCloudDocuments(run.envelope, run.dir);
 		run.grounding = [];
+		delete run.envelope.instancePreferences;
 		run.output = [];
 		this.persistTerminal(run);
 		if (run.child && run.child.exitCode === null) this.kill(run);

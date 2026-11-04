@@ -59,6 +59,7 @@ const agentDO = {
 		fetch: async (req: Request) => {
 			const url = new URL(req.url);
 			const p = url.pathname;
+			if (p === "/memory") return Response.json({ memory: [] });
 			if (id === "scout" && p === "/collections/job_leads/records" && req.method === "GET") return queryRecords(engine as never, "job_leads", url);
 			if (id === "scout" && /^\/collections\/job_leads\/records\/[^/]+$/.test(p)) return getRecord(engine as never, "job_leads", p.split("/")[4]);
 			if (id === "scout" && /^\/job-leads\/[^/]+\/triage$/.test(p)) return triageJobLead(engine as never, p.split("/")[2], req);

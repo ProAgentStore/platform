@@ -2,6 +2,7 @@ import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "../browser-
 import { websiteAccessForInstance, withWebsiteDecisions } from "../browser-settings-dispatch.js";
 import { websiteAccessRunnerProblem } from "../browser-website-policy.js";
 import { loadCloudDocuments } from "../local-artifact/cloud-documents.js";
+import { instancePreferenceReceipt, instancePreferencesFor } from "../instance-preferences.js";
 import { resumeDomainsFor } from "./resume-domains.js";
 import { syncApplyWebsiteQuestion } from "../website-access-local.js";
 import { activeApplyMilliseconds } from "./active-clock.js";
@@ -291,6 +292,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const contractProblem = websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
+	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version);
 	// The admission gate (#1175): refused HERE, before the application leaves materials_ready, like an outdated machine — but 503,
 	// because the machine recovers by itself and the outbox should retry.
 	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "application runs", true);
@@ -346,6 +348,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const failing = checks.filter((c) => !c.ok).map((c) => c.check);
 	const trace: ApplyTraceEvent[] = [
 		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", blurFormFields, ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
+		...(instancePreferences ? [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] : []),
 		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
 	if (spentApproval) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: spentApproval.id } });
@@ -357,7 +360,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
 
 	const kept = await keptAnswers(env, uid, run);
-	const envelope = { ...applyTaskEnvelope(run, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}) };
+	const envelope = { ...applyTaskEnvelope(run, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}), ...(instancePreferences ? { instancePreferences } : {}) };
 	const fail = async (errorCode: string, error: string) => {
 		// The machine never took it, so nothing was sent and the approval goes back (#993).
 		await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
@@ -940,6 +943,9 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	// #993: the mode is decided HERE, not when the run was queued. The queue has already proven no
 	// run holds the machine (`nextDueQueuedRun`) and a run must not count itself — without both,
 	// `concurrency` refuses for ever. See `approval-at-dispatch.ts` for the rest.
+	let instancePreferences: Awaited<ReturnType<typeof instancePreferencesFor>>;
+	try { instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now); }
+	catch (error) { await noteQueued(env, "local_apply_runs", run.id, error instanceof HttpError ? error.message : "Candidate preference memory could not be read; no work was dispatched.", now); return "queued"; }
 	let { run: dispatched } = await upgradeQueuedRunPolicy(
 		env,
 		uid,
@@ -949,12 +955,12 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	);
 	let res: Response | null = null;
 	const kept = await keptAnswers(env, uid, dispatched);
-	const claimedDispatch = await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null }, now);
+	const claimedDispatch = await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null, ...(instancePreferences ? { events: [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] } : {}) }, now);
 	if (!claimedDispatch) return "queued";
 	dispatched = claimedDispatch;
 	if (dispatched.policy.browserWebsiteAccess) dispatched.policy.browserWebsiteAccess = await withWebsiteDecisions(env, uid, instanceId, dispatched.policy.browserWebsiteAccess);
 	try {
-		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify({ ...applyTaskEnvelope(dispatched, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}) }) });
+		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify({ ...applyTaskEnvelope(dispatched, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}), ...(instancePreferences ? { instancePreferences } : {}) }) });
 	} catch {
 		// A response gap is not a refusal. Poll this run; never dispatch it a second time.
 		return "dispatched";

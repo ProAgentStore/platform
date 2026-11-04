@@ -37,7 +37,7 @@ const relay = {
 		},
 	}),
 };
-const agentDO = { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ ok: true, permissions: { email: true } }, { status: 201 }) }) };
+const agentDO = { idFromName: (n: string) => n, get: () => ({ fetch: async (req: Request) => new URL(req.url).pathname === "/memory" ? Response.json({ memory: [] }) : Response.json({ ok: true, permissions: { email: true } }, { status: 201 }) }) };
 const env = () => ({ DB: d1.DB, RELAY: relay, AGENT: agentDO, KEY_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }) as unknown as Env;
 
 beforeEach(() => {

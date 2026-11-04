@@ -4,6 +4,8 @@
  * under an enabled gate — once. The browser is faked; every rule under test is the bridge's code.
  */
 import { describe, expect, it } from "vitest";
+import { PREFERENCE_FIELD_PROBE_FN, projectPreferenceSources } from "../instance-preferences.js";
+import type { InstancePreferences } from "../instance-preferences-contract.js";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import { SIGN_IN_CONTROL_PROBE_FN } from "./sign-in-policy.js";
 import { ApplyBridge, type ApplyBridgeHost, CREDENTIAL_NAME, groundingRefusal } from "./bridge.js";
@@ -1205,4 +1207,49 @@ it("a chooser on a different page cannot inherit the previous page's checkpoint"
  expect(upload.isError).toBe(true);
  expect(upload.content[0].text).toContain("supervisor_checkpoint");
  expect(b.sent("browser_file_upload")).toHaveLength(0);
+});
+
+
+describe("fresh instance preferences in browser answers (#1508)", () => {
+ const preferences: InstancePreferences = { version: 1, source: "user", instanceId: "runner-1", memoryKey: "job_application_preferences", memoryUpdatedAt: "2026-10-07T00:00:00Z", sha256: "a".repeat(64), facts: [
+  { field: "salary_expectation", answer: "AUD 150,000", confirmedAt: "2026-10-07" },
+  { field: "recruitment_adjustments_needed", answer: "No", confirmedAt: "2026-10-07" },
+ ], pendingFields: ["salary_super_basis", "disclosures"] };
+ async function preferenceForm(labels: string[], extraSources: Array<{label:string;text:string;answerText?:string;answerQuestion?:string}> = []) {
+  const h = await onForm();
+  const sources = [...projectPreferenceSources([{ label: "profile", text: "Salary expectation: AUD 180,000" }, { label: "resume", text: "Salary expectation: AUD 180,000; knowledge" }], preferences), ...extraSources];
+  h.host.instancePreferences = () => preferences;
+  h.host.groundingSources = () => sources;
+  h.host.grounding = () => sources.map(x => x.text).join("\n");
+  const original = h.tools.callTool;
+  h.tools.callTool = async (name, args, opts) => {
+   if (name === "browser_evaluate" && args?.function === PREFERENCE_FIELD_PROBE_FN) return { content: [{ text: `### Result\n${JSON.stringify({ labels })}` }] };
+   if (name === "browser_snapshot") return { content: [{ text: SNAPSHOT + '\n- textbox "Salary expectation" [ref=e70]\n- combobox "Salary expectation including super" [ref=e71]' }] };
+   return original(name, args, opts);
+  };
+  await h.bridge.callTool("browser_snapshot", {});
+  return h;
+ }
+ it("rejects stale approved salary and permits the fresh exact preference", async () => {
+  const h = await preferenceForm([]);
+  expect((await h.bridge.callTool("browser_type", { target: "e70", text: "AUD 180,000", source_quote: "Salary expectation: AUD 180,000" })).isError).toBe(true);
+  expect((await h.bridge.callTool("browser_type", { target: "e70", text: "AUD 150,000", source_quote: "AUD 150,000" })).isError).not.toBe(true);
+  expect(h.calls.filter(x => x.name === "browser_type").map(x => x.args.text)).toEqual(["AUD 150,000"]);
+ });
+ it.each([{labels: []}, {labels: ["Disclosures"]}, {labels: ["Recruitment adjustments needed", "Planned holidays next 6 months"]}])("refuses ambiguous or different native group $labels", async ({labels}) => {
+  const h = await preferenceForm(labels);
+  expect((await h.bridge.callTool("browser_click", { target: "e4", source_quote: "No" })).isError).toBe(true);
+  expect(h.calls.filter(x => x.name === "browser_click")).toHaveLength(0);
+ });
+ it("permits No only with the actual matching native question", async () => {
+  const h = await preferenceForm(["Recruitment adjustments needed"]);
+  expect((await h.bridge.callTool("browser_click", { target: "e4", source_quote: "No" })).isError).not.toBe(true);
+  expect(h.calls.filter(x => x.name === "browser_click")).toHaveLength(1);
+ });
+ it("keeps inclusive-super unanswered and honors only an actual same-question answer", async () => {
+  const h = await preferenceForm([]);
+  expect((await h.bridge.callTool("browser_select_option", { target: "e71", values: ["AUD 150,000"], source_quote: "AUD 150,000" })).isError).toBe(true);
+  const answered = await preferenceForm([], [{ label: "owner answers", text: "Q: Salary expectation including super\nA: AUD 170,000", answerText: "AUD 170,000", answerQuestion: "Salary expectation including super" }]);
+  expect((await answered.bridge.callTool("browser_select_option", { target: "e71", values: ["AUD 170,000"], source_quote: "AUD 170,000" })).isError).not.toBe(true);
+ });
 });

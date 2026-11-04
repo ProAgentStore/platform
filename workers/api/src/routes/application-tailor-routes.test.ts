@@ -19,7 +19,7 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({ ...(await import
 
 const { instanceRoutes } = await import("./instances.js");
 const { deliverEvent } = await import("../lib/connections.js");
-const { syncActiveTailorRuns, emitReady } = await import("../lib/local-artifact/tailor.js");
+const { syncActiveTailorRuns, emitReady, dispatchNextQueuedTailoring } = await import("../lib/local-artifact/tailor.js");
 
 let d1: RealSchemaD1;
 let sent: Array<{ path: string; body: Record<string, unknown> }>;
@@ -40,11 +40,14 @@ const relay = {
 /** Tasks created on any instance's DO — the downstream consumer of materials_ready. */
 let tasks: Array<{ instance: string; body: Record<string, unknown> }>;
 let uploadedSourceResponses: Record<string, Record<string, unknown>>;
+let instanceMemory: Record<string, unknown[]>;
+let memoryReadStatus = 200;
 const agentDO = {
 	idFromName: (n: string) => n,
 	get: (id: string) => ({
 		fetch: async (req: Request) => {
 			const path = new URL(req.url).pathname;
+			if (path === "/memory") return Response.json({ memory: instanceMemory[id] ?? [] }, { status: memoryReadStatus });
 			if (path.match(/^\/files\/[^/]+\/tailor-source$/)) {
 				const source = uploadedSourceResponses[path.split("/")[2]];
 				return source ? Response.json(source) : Response.json({ error: "not found" }, { status: 404 });
@@ -101,6 +104,7 @@ function runnerEnds(result: unknown) {
 }
 
 beforeEach(() => {
+	instanceMemory = {}; memoryReadStatus = 200;
 	d1 = realSchemaD1();
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1'), ('u2', 'u2')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES
@@ -133,6 +137,40 @@ async function call(method: string, path: string, body?: unknown) {
 }
 const appCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_applications").first<{ n: number }>())?.n;
 const runCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_artifact_runs").first<{ n: number }>())?.n;
+
+describe("owner instance memory reaches tailoring (#1508)", () => {
+	const preference = (answer: string) => ({ key: "job_application_preferences", source: "user", type: "preference", updatedAt: Date.now(), content: JSON.stringify({ version: 1, facts: [{ field: "salary_expectation", answer, confirmedAt: "2026-10-01" }] }) });
+	it("uses only this Tailor's preferences and refreshes them on queued dispatch", async () => {
+		instanceMemory.t1 = [preference("AUD 150,000")]; instanceMemory.other = [preference("AUD 999,000")];
+		answers["/local-artifact/run"] = { status: 409, body: { error: "This machine is already tailoring 1 application(s) for this agent (limit 1)." } };
+		const result = await call("POST", "/t1/applications", { event: leadEvent() });
+		expect(result.status).toBeLessThan(300);
+		const first = sent.find(event => event.path === "/local-artifact/run")!.body;
+		expect(first.instancePreferences).toMatchObject({ instanceId: "t1", facts: [{ answer: "AUD 150,000" }] });
+		memoryReadStatus = 503;
+		d1.exec("UPDATE local_artifact_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		expect(await dispatchNextQueuedTailoring(env(), "t1", "u1")).toBe("queued");
+		expect(sent.filter(event => event.path === "/local-artifact/run")).toHaveLength(1);
+		memoryReadStatus = 200;
+		instanceMemory.t1 = [preference("AUD 160,000")];
+		d1.exec("UPDATE local_artifact_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		answers["/local-artifact/run"] = { status: 202, body: { status: "running" } };
+		expect(await dispatchNextQueuedTailoring(env(), "t1", "u1")).toBe("dispatched");
+		expect(sent.filter(event => event.path === "/local-artifact/run").at(-1)?.body.instancePreferences).toMatchObject({ facts: [{ answer: "AUD 160,000" }] });
+		const dispatchedPreferences = sent.filter(event => event.path === "/local-artifact/run").at(-1)!.body.instancePreferences as { sha256: string };
+		const stored = await d1.DB.prepare("SELECT trace FROM local_artifact_runs WHERE instance_id = 't1'").first<{ trace: string }>();
+		expect(JSON.parse(stored!.trace)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "source.read", detail: expect.objectContaining({ sha256: dispatchedPreferences.sha256, count: 1 }) })]));
+		expect(stored!.trace).not.toContain("AUD 160,000");
+	});
+	it("does not claim a lead when preference memory cannot be read", async () => {
+		memoryReadStatus = 503;
+		const result = await call("POST", "/t1/applications", { event: leadEvent() });
+		expect(result.status).toBe(503);
+		expect(await appCount()).toBe(0);
+		expect(await runCount()).toBe(0);
+		expect(sent.filter(event => event.path === "/local-artifact/run")).toHaveLength(0);
+	});
+});
 
 it("fails closed rather than dispatching local sources when an uploaded selection is incomplete (#1004)", async () => {
 	d1.exec(`INSERT INTO application_tailor_uploaded_sources (

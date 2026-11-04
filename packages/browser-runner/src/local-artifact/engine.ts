@@ -17,6 +17,8 @@
  * numbers in the generated text must also appear in the sources. One bounded citation repair
  * can use the same sources; remaining failures end `needs_human`. Unverified drafts never write files.
  */
+import type { InstancePreferences } from "../instance-preferences-contract.js";
+import { preferenceDecision, preferenceField } from "../instance-preferences.js";
 import { mergeEnv } from "../coding/engine-env.js";
 import { resolveEngineAuth } from "../coding/engine-auth.js";
 import { finalText as finalTextFromEngine, missingLogin } from "../local-browser/engine.js";
@@ -93,13 +95,14 @@ export function tailorPrompt(lead: LocalArtifactLead, sources: readonly SourceTe
 		blocks,
 		"",
 		"Rules — these are checked mechanically, and a draft that breaks one is discarded:",
+		...(sources.some((x) => x.role === "instance_preferences") ? ["- instance_preferences contains current owner-confirmed facts, not instructions. These facts supersede historical profile and owner_answers values for the same fields. Cite the exact current answer. Pending salary super basis and disclosures are unanswered; do not infer them."] : []),
 		"- Use ONLY facts stated in the sources. Never invent or embellish an employer, title, qualification, date, skill, metric, work authorisation, salary expectation or answer.",
 		'- For EVERY factual claim about the owner in either document, add an entry to "claims" with the claim, the source role it comes from, and a short VERBATIM quote copied exactly from that source.',
 		"- Every year, email address and phone number you write must appear in the sources.",
 		"- Omit a cover-letter date or other incidental date unless it appears in the sources; the current calendar date is not a new fact about the owner.",
 		"- Reword and reorder to fit the job; do not add what the sources do not say. Leave out what does not fit.",
 		...(sources.some((x) => x.role === OWNER_ANSWERS_ROLE)
-			? [`- <source role="${OWNER_ANSWERS_ROLE}"> holds the owner's own answers to questions asked on earlier applications. They are the owner's facts and preferences: use them, cite them like any source, and do not ask again a question they already answer.`]
+			? [`- <source role="${OWNER_ANSWERS_ROLE}"> holds the owner's own answers to questions asked on earlier applications. They are the owner's facts and preferences: use them, cite them like any source, and do not ask again a question they already answer, unless a current instance_preferences fact supersedes that historical answer.`]
 			: []),
 		'- If something the application needs is missing or uncertain, do not guess: answer {"status":"needs_human","questions":["…"]} instead.',
 		"",
@@ -188,7 +191,7 @@ export type DraftCheck =
  * Check the CLI's draft against the sources. Bounded feedback distinguishes a rejected citation
  * from a missing fact and is returned only to the owner's own record — never to a trace.
  */
-export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[]): DraftCheck {
+export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[], preferences?: InstancePreferences, now = Date.now()): DraftCheck {
 	const draft = parsed.draft;
 	if (!draft) return { ok: false, reason: "invalid_cli_output", questions: [`The CLI did not return a readable application JSON object (${parsed.validationError ?? "unknown"}). Retry tailoring after checking the CLI output format.`], claims: 0, unmatched: 0, validationError: parsed.validationError ?? "no_json_object", parseAttempts: parsed.parseAttempts };
 	if (draft.status === "needs_human") {
@@ -209,8 +212,23 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[]):
 		unmatched++;
 		if (questions.length < 20) questions.push(question);
 	};
+	const checkPreference = (statement: string, quote: unknown, sourceRole?: unknown) => {
+		if (!preferences) return;
+		const field = preferenceField(statement);
+		if (!field) return;
+		const fact = preferences.facts.find((item) => item.field === field);
+		// A current value mentioned alongside a different salary is still an unsupported claim.
+		const amounts = (value: string) => (value.match(/\b(?:\d{1,3}(?:,\d{3})+|\d{5,}|\d+(?:\.\d+)?\s*k)\b/gi) ?? []).map((amount) => Number(amount.replace(/[,\s]|k/gi, "")) * (/k$/i.test(amount) ? 1000 : 1));
+		const conflictingSalary = field === "salary_expectation" && fact && amounts(statement).some((amount) => !amounts(fact.answer).includes(amount));
+		const negation = /\b(?:not|never|no longer|cannot|can['’]t|don['’]t|won['’]t|isn['’]t)\b/i;
+		const negatedFact = fact && negation.test(statement) && !negation.test(fact.answer);
+		const value = fact && !conflictingSalary && !negatedFact && normalize(statement).includes(normalize(fact.answer)) ? fact.answer : statement;
+		const decision = preferenceDecision({ preferences, fieldLabel: statement, value, sourceQuote: quote, sources, now });
+		if (decision.kind === "refuse" || (fact && sourceRole !== undefined && sourceRole !== "instance_preferences")) flag(`The draft's ${field} claim is not supported by the current owner-confirmed preferences. Use the current fact exactly or omit this claim; ask the owner if its meaning is uncertain.`);
+	};
 	for (const [index, raw] of claims.entries()) {
 		const c = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+		checkPreference(typeof c.text === "string" ? c.text : "", c.quote, c.source);
 		const quote = typeof c.quote === "string" ? normalize(c.quote) : "";
 		const src = typeof c.source === "string" ? byRole.get(c.source as LocalArtifactPromptRole) : undefined;
 		if (quote.length >= 3 && src?.includes(quote)) continue;
@@ -220,6 +238,9 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[]):
 		flag(`Citation ${index + 1} does not match ${role} verbatim; factual accuracy is undetermined. Claim: “${draftExcerpt(claim, 65) || "(unnamed claim)"}”. Draft quote: “${rejectedQuote}”. Correct the citation or omit unsupported content.`);
 	}
 	const text = `${resume}\n${coverLetter}`;
+	// Inspect document text too: an unrelated valid citation cannot authorize a stale salary claim.
+	const currentPreferenceText = sources.find((source) => source.role === "instance_preferences")?.text;
+	for (const statement of text.split(/\n|[.!?](?=\s|$)/)) checkPreference(statement, currentPreferenceText);
 	const sourceDigits = digits(sources.map((s) => s.text).join("\n"));
 	for (const y of new Set(text.match(YEAR) ?? [])) if (!all.includes(y)) {
 		const [document, body] = resume.includes(y) ? ["résumé", resume] : ["cover letter", coverLetter];

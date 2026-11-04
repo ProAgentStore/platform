@@ -25,6 +25,7 @@ const env = () => ({ DB: d1.DB, AGENT: {
 	idFromName: (id: string) => id,
 	get: (instance: string) => ({ fetch: async (req: Request) => {
 		const url = new URL(req.url);
+		if (url.pathname === "/memory") return Response.json({ memory: [] });
 		if (url.pathname === "/files") {
 			uploads++;
 			if (uploads === failUpload) return Response.json({ error: "unavailable" }, { status: 503 });

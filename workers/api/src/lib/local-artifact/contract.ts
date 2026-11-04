@@ -49,8 +49,9 @@ export const REQUIRED_SOURCE_ROLES: readonly LocalArtifactSourceRole[] = ["resum
  * never appears in `sources`, `sourceHashes` or a path, and an older runner simply ignores it.
  */
 export const OWNER_ANSWERS_ROLE = "owner_answers";
+export const INSTANCE_PREFERENCES_ROLE = "instance_preferences";
 /** A role the CLI may cite a claim from: a source file, or the owner's saved answers. */
-export type LocalArtifactPromptRole = LocalArtifactSourceRole | typeof OWNER_ANSWERS_ROLE;
+export type LocalArtifactPromptRole = LocalArtifactSourceRole | typeof OWNER_ANSWERS_ROLE | typeof INSTANCE_PREFERENCES_ROLE;
 export interface LocalArtifactOwnerAnswer {
 	question: string;
 	answer: string;
@@ -112,6 +113,8 @@ export interface LocalArtifactTaskEnvelope {
 	uploadedSources?: LocalArtifactUploadedSource[];
 	/** The owner's reusable answers to earlier blocking questions (#1066). Omitted when there are none. */
 	ownerAnswers?: LocalArtifactOwnerAnswer[];
+	/** Fresh owner-set facts from this exact instance; requires CLI 0.4.213. */
+	instancePreferences?: import("../instance-preferences-contract.js").InstancePreferences;
 	lead: LocalArtifactLead;
 	policy: LocalArtifactPolicy;
 }

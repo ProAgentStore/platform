@@ -1,4 +1,6 @@
 import { auxiliaryWebsiteAccess } from "../website-access-auxiliary.js";
+import { instancePreferenceReceipt, instancePreferencesFor } from "../instance-preferences.js";
+import type { InstancePreferences } from "../instance-preferences-contract.js";
 import { cloudDocumentsRunnerProblem, InvalidCloudDocuments, persistCloudDocuments } from "./cloud-documents.js";
 /**
  * The Application Tailor (#956): approved lead → tailored résumé + cover letter on the owner's
@@ -245,9 +247,10 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
 	}
 
+	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now);
 	const claim = await claimApplication(env, { ...base, workKey, lead: leadForStorage, status: "tailoring" });
 	if (!claim.created) return { kind: "existing", application: claim.app, run: claim.app.tailoringRunId ? await getTailorRun(env, instanceId, uid, claim.app.tailoringRunId) : null };
-	const run = await dispatchTailoring(env, instanceId, uid, claim.app.id, lead, settings.settings, key, source, runtime, now, uploadedSources);
+	const run = await dispatchTailoring(env, instanceId, uid, claim.app.id, lead, settings.settings, key, source, runtime, now, uploadedSources, instancePreferences);
 	return { kind: "started", application: (await getApplication(env, instanceId, uid, claim.app.id)) as JobApplication, run };
 }
 
@@ -270,6 +273,7 @@ async function dispatchTailoring(
 	runtime: LiveRuntime,
 	now: number,
 	uploadedSources?: LocalArtifactUploadedSource[],
+	instancePreferences?: InstancePreferences,
 ): Promise<TailorRun> {
 	const policy: TailorRunPolicy = { cloudDocuments: true, engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), ...(uploadedSources ? { uploadedSources: uploadedSources.map(({ text: _text, ...source }) => source) } : {}), retainDays: s.retainDays, maxMinutes: s.maxMinutes, stallMinutes: s.stallMinutes };
 	const runId = crypto.randomUUID();
@@ -280,11 +284,11 @@ async function dispatchTailoring(
 		applicationId,
 		requestId,
 		policy,
-		trace: [{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source } }],
+		trace: [{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source } }, ...(instancePreferences ? [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] : [])],
 		now,
 	});
 	let run = (await getTailorRun(env, instanceId, uid, runId)) as TailorRun;
-	const envelope = tailorTaskEnvelope(run, lead, s, uploadedSources, await ownerAnswersFor(env, uid));
+	const envelope = { ...tailorTaskEnvelope(run, lead, s, uploadedSources, await ownerAnswersFor(env, uid)), ...(instancePreferences ? { instancePreferences } : {}) };
 	const fail = async (errorCode: string, error: string) => {
 		run = (await updateTailorRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
 		await settleApplication(env, instanceId, uid, applicationId, runId, { to: "blocked", blockReason: errorCode, blockQuestions: [error] }, now);
@@ -343,9 +347,10 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid); }
 		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
 	}
+	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now);
 	const moved = await moveApplication(env, app, uid, { to: "tailoring", actor: "owner", actorInstanceId: instanceId, reason: "retry_tailoring" }, now);
 	if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
-	const run = await dispatchTailoring(env, instanceId, uid, app.id, parsed.lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now, uploadedSources);
+	const run = await dispatchTailoring(env, instanceId, uid, app.id, parsed.lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now, uploadedSources, instancePreferences);
 	return { application: (await getApplication(env, instanceId, uid, app.id)) as JobApplication, run, savedAnswers: answers.length };
 }
 
@@ -581,7 +586,7 @@ export function parseTailorAnswers(raw: unknown): Array<{ question: string; answ
 export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, uid: string, now = Date.now()): Promise<"dispatched" | "queued" | "idle" | "exhausted"> {
 	const next = await nextDueQueuedRun(env, "local_artifact_runs", instanceId, uid, now);
 	if (!next) return "idle";
-	const run = await getTailorRun(env, instanceId, uid, next.id);
+	let run = await getTailorRun(env, instanceId, uid, next.id);
 	const app = await getApplication(env, instanceId, uid, next.applicationId);
 	if (!run || !app) return "idle";
 	if (next.attempts >= QUEUE_MAX_ATTEMPTS) {
@@ -620,9 +625,17 @@ export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, 
 			return "exhausted";
 		}
 	}
+	let instancePreferences: Awaited<ReturnType<typeof instancePreferencesFor>>;
+	try { instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now); }
+	catch (error) { await noteQueued(env, "local_artifact_runs", run.id, error instanceof HttpError ? error.message : "Candidate preference memory could not be read; no work was dispatched.", now); return "queued"; }
+	if (instancePreferences) {
+		const recorded = await updateTailorRun(env, run, { events: [{ type: "source.read", at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] }, now);
+		if (!recorded) return "queued";
+		run = recorded;
+	}
 	let res: Response | null = null;
 	try {
-		res = await callRuntime(env, runtime, LOCAL_ARTIFACT_RUN_PATH, { method: "POST", body: JSON.stringify(tailorTaskEnvelope(run, parsed.lead, settings.settings, uploadedSources, await ownerAnswersFor(env, uid))) });
+		res = await callRuntime(env, runtime, LOCAL_ARTIFACT_RUN_PATH, { method: "POST", body: JSON.stringify({ ...tailorTaskEnvelope(run, parsed.lead, settings.settings, uploadedSources, await ownerAnswersFor(env, uid)), ...(instancePreferences ? { instancePreferences } : {}) }) });
 	} catch {
 		await noteQueued(env, "local_artifact_runs", run.id, "The runner did not answer; waiting to try again.", now);
 		return "queued";

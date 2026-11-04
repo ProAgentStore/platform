@@ -474,6 +474,7 @@ describe("a fill-and-review run, end to end on the runner", () => {
 				await settle();
 				const oversized = "Australian citizen".padEnd(LOCAL_APPLY_CAPS.answerChars, " ") + "Actually, I am not an Australian citizen.";
 				expect(() => rt.resume({ runId: "run-1", answers: [{ question: "Citizenship?", answer: oversized }] })).toThrow(/no answers were applied/);
+				expect(() => rt.resume({ runId: "run-1", answers: [{ question: "x".repeat(LOCAL_APPLY_CAPS.questionChars + 1), answer: "No" }] })).toThrow(/no answers were applied/);
 				expect(rt.status({ runId: "run-1" }).state).toBe("paused");
 				rt.resume({ runId: "run-1", answers: [{ question: "Are you an Australian citizen?", answer: "No" }] });
 				await paused;
@@ -1179,4 +1180,38 @@ it("browser observability refuses a different agent instance without reading or 
   expect(() => rt.browserState("run-1", "another-instance")).toThrow(/another agent/);
   expect(rt.browserState("run-1", "runner-1")).toMatchObject({ availability: "unavailable", current: false });
  } finally { rt.closeAll(); }
+});
+
+
+describe("owner instance preferences in local application launch (#1508)", () => {
+ it("projects effective prompt and grounding while keeping approved bytes and receipts intact", async () => {
+  const profile = PROFILE + "Salary expectation: AUD 180,000\n";
+  writeFileSync(join(home, "jobs/profile.md"), profile);
+  const e = envelope({ instancePreferences: { version: 1, source: "user", instanceId: "runner-1", memoryKey: "job_application_preferences", memoryUpdatedAt: "2026-10-07T00:00:00Z", sha256: "a".repeat(64), facts: [{ field: "salary_expectation", answer: "AUD 150,000", confirmedAt: "2026-10-07" }], pendingFields: ["salary_super_basis", "disclosures"] } });
+  const original = browser.callTool;
+  const spy = vi.spyOn(browser, "callTool").mockImplementation(async (name, args, opts) => name === "browser_snapshot" ? { content: [{ text: '- textbox "Salary expectation" [ref=e1]' }] } : original(name, args, opts));
+  try {
+   const rt = runtime();
+   rt.start(e);
+   await settle();
+   const prompt = spawned[0].args.join(" ");
+   expect(prompt).toContain("AUD 150,000");
+   expect(prompt).not.toContain("AUD 180,000");
+   expect(prompt).toContain("owner_confirmed_facts");
+   expect(readFileSync(join(home, "jobs/profile.md"), "utf8")).toBe(profile);
+   expect(readFileSync(join(home, "jobs/applications/lead-1/t-run/resume.md"), "utf8")).toBe(RESUME);
+   expect(rt.status({ runId: "run-1" }).events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "source.read", detail: expect.objectContaining({ role: "instance_preferences", sha256: "a".repeat(64), count: 1 }) })]));
+   await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
+   await call(rt, "browser_snapshot");
+   await approve(rt);
+   expect((await call(rt, "browser_type", { target: "e1", text: "AUD 180,000", source_quote: "Salary expectation: AUD 180,000" })).isError).toBe(true);
+   expect((await call(rt, "browser_type", { target: "e1", text: "AUD 150,000", source_quote: "AUD 150,000" })).isError).not.toBe(true);
+   child.exit(0);
+  } finally { spy.mockRestore(); }
+ });
+ it("refuses a different instance's preferences before launching an engine", () => {
+  const e = envelope({ instancePreferences: { version: 1, source: "user", instanceId: "other-runner", memoryKey: "job_application_preferences", memoryUpdatedAt: "2026-10-07T00:00:00Z", sha256: "a".repeat(64), facts: [] } });
+  expect(() => runtime().start(e)).toThrow(/provenance/);
+  expect(spawned).toHaveLength(0);
+ });
 });

@@ -44,6 +44,8 @@ import { followOpenedTab, tabCount } from "./follow-tab.js";
 import { websiteDecision, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { ApplyReplay } from "./apply-replay.js";
 import { type AnswerSource, isCombinedCitizenshipOption, observedCitizenshipOption } from "./citizenship-option.js";
+import { PREFERENCE_FIELD_PROBE_FN, preferenceDecision, preferenceField, type PreferenceDecision, type PreferenceSource } from "../instance-preferences.js";
+import type { InstancePreferences } from "../instance-preferences-contract.js";
 import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
@@ -62,7 +64,8 @@ export interface ApplyBridgeHost {
 	websiteAccess?(): BrowserWebsiteAccess | undefined;
 	/** Everything a value may be grounded in: profile, answers, approved materials, the owner's answers so far. */
 	grounding(): string;
-	groundingSources?(): readonly AnswerSource[];
+	groundingSources?(): readonly (AnswerSource & PreferenceSource)[];
+	instancePreferences?(): InstancePreferences | undefined;
 	/** The verified absolute path of an approved artifact, or why it cannot be uploaded. */
 	artifactPath(kind: LocalApplyArtifactKind): { path: string; sha256: string } | { error: string };
 	overTime(): boolean;
@@ -603,7 +606,9 @@ export class ApplyBridge {
 				const ok = await this.pauseFor({ reason: "consent_required", question: `Agree to: ${t.name.slice(0, 200)}` });
 				return ok ? text("The owner handled that agreement in the browser. Do not click it yourself; take a browser_snapshot and continue.") : text("The owner did not handle that agreement. Stop now.", true);
 			}
-			const refusal = isCombinedCitizenshipOption(t.role, t.name)
+			const preference = await this.preference(t, t.name, args.source_quote);
+			if (preference.kind === "refuse") return this.refuse("browser_click", "fill", preference.reason);
+			const refusal = preference.kind === "allow" ? null : isCombinedCitizenshipOption(t.role, t.name)
 				? observedCitizenshipOption(t.role, t.name, args.source_quote, this.host.groundingSources?.()) ? null : "This citizenship option needs a verified affirmative profile fact, with no conflicting or uncertain source statement. Quote that profile fact, or call request_answer."
 				: groundingRefusal(t.name, args.source_quote, this.host.grounding());
 			if (refusal) return this.refuse("browser_click", "fill", refusal);
@@ -658,6 +663,21 @@ export class ApplyBridge {
 		return text(textOf(res));
 	}
 
+	private async preference(t: { role: string; name: string; ref: string }, value: string, sourceQuote: unknown): Promise<PreferenceDecision> {
+		const preferences = this.host.instancePreferences?.();
+		if (!preferences) return { kind: "legacy" };
+		let labels = FIELD_ROLES.has(t.role) ? [] : [t.name];
+		if (FIELD_ROLES.has(t.role)) {
+			const result = await this.browser.callTool("browser_evaluate", { target: t.ref, function: PREFERENCE_FIELD_PROBE_FN }, { internal: true }).catch(() => null);
+			const facts = result && !result.isError ? evaluateResult(textOf(result)) as { labels?: unknown } | null : null;
+			if (Array.isArray(facts?.labels)) labels = facts.labels.filter((label): label is string => typeof label === "string");
+		}
+		const fields = [...new Set(labels.map(preferenceField).filter((field) => field !== null))];
+		if (fields.length > 1) return { kind: "refuse", reason: "The website associates this answer with conflicting screening questions. Call request_answer." };
+		const fieldLabel = fields.length === 1 ? labels.find((label) => preferenceField(label) === fields[0]) ?? null : null;
+		return preferenceDecision({ preferences, fieldLabel, value, sourceQuote, sources: this.host.groundingSources?.() ?? [], now: this.host.now() });
+	}
+
 	private async type(args: Record<string, unknown>): Promise<ToolResult> {
 		const t = this.target(args);
 		if (!t || !TYPE_ROLES.has(t.role)) return this.refuse("browser_type", "fill", "Type only into a text field from the latest browser_snapshot, by its ref.");
@@ -691,7 +711,9 @@ export class ApplyBridge {
 			if (ok && this.signIn) return text(this.signInInstructions());
 			return ok ? text("The owner handled the sign-in. Take a browser_snapshot and continue.") : text("A sign-in needs the owner and was not handled. Stop now.", true);
 		}
-		const refusal = groundingRefusal(value, args.source_quote, this.host.grounding());
+		const preference = await this.preference(t, value, args.source_quote);
+		if (preference.kind === "refuse") return this.refuse("browser_type", "fill", preference.reason);
+		const refusal = preference.kind === "allow" ? null : groundingRefusal(value, args.source_quote, this.host.grounding());
 		if (refusal) return this.refuse("browser_type", "fill", refusal);
 		return this.fill("browser_type", t.role, { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value });
 	}
@@ -702,7 +724,9 @@ export class ApplyBridge {
 		const values = Array.isArray(args.values) ? args.values.filter((v): v is string => typeof v === "string") : [];
 		if (!values.length) return this.refuse("browser_select_option", "fill", "values is required.");
 		for (const v of values) {
-			const refusal = groundingRefusal(v, args.source_quote, this.host.grounding());
+			const preference = await this.preference(t, v, args.source_quote);
+			if (preference.kind === "refuse") return this.refuse("browser_select_option", "fill", preference.reason);
+			const refusal = preference.kind === "allow" ? null : groundingRefusal(v, args.source_quote, this.host.grounding());
 			if (refusal) return this.refuse("browser_select_option", "fill", refusal);
 		}
 		return this.fill("browser_select_option", t.role, { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, values });
