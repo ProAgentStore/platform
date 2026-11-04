@@ -17,6 +17,7 @@ const scope = (t: BrowserEvidenceTarget) => [t.userId, t.instanceId, t.subjectKi
 const WHERE = "user_id = ?1 AND instance_id = ?2 AND subject_kind = ?3 AND subject_id = ?4";
 const read = (env: DB, t: BrowserEvidenceTarget) => env.DB.prepare(`SELECT coverage,state,state_status,refreshed_at FROM browser_run_evidence WHERE ${WHERE}`).bind(...scope(t)).first<EvidenceRow>();
 const parsedCoverage = (row: EvidenceRow | null): Coverage => { try { return { ...initial(), ...JSON.parse(row?.coverage ?? "{}") }; } catch { return initial(); } };
+const parsedRecord = (value: string): unknown => { try { return JSON.parse(value); } catch { return null; } };
 const statusOf = (status: number): Availability => status === 404 || status === 405 || status === 501 ? "unsupported" : status === 401 || status === 403 ? "refused" : "unavailable";
 async function requireSubject(env: DB, t: BrowserEvidenceTarget) { if (!(await subjectBelongsTo(env, t.userId, t.instanceId, t.subjectKind, t.subjectId))) throw new HttpError(404, "Browser run not found"); }
 
@@ -80,10 +81,10 @@ export async function listBrowserCalls(env: DB, t: BrowserEvidenceTarget, cursor
  const result = await env.DB.prepare(`SELECT id,epoch,record,stored_at FROM browser_run_calls WHERE ${WHERE} AND id > ?5 ORDER BY id LIMIT ?6`).bind(...scope(t), cursor ?? "0", limit + 1).all<{ id: number; epoch: string | null; record: string; stored_at: number }>();
  const rows = result.results ?? []; const hasMore = rows.length > limit; if (hasMore) rows.pop();
  const row = await read(env, t);
- return { subject: { kind: t.subjectKind, id: t.subjectId }, calls: rows.map(r => ({ ...JSON.parse(r.record), epoch: r.epoch, retainedAt: new Date(r.stored_at).toISOString() })), nextCursor: hasMore ? String(rows.at(-1)!.id) : null, hasMore, coverage: { ...parsedCoverage(row), refreshedAt: row?.refreshed_at ? new Date(row.refreshed_at).toISOString() : null, retentionDays: 30, errorTextMaxChars: 200, arguments: "redacted summaries; typed text and file contents are not stored", sequenceMeaning: "native stream order; epoch changes may reset seq", urlAfterMeaning: "navigation argument when known, not proof of final loaded URL" } };
+ return { subject: { kind: t.subjectKind, id: t.subjectId }, calls: rows.flatMap(r => { const call = sanitizeBrowserCall(parsedRecord(r.record), t); return call ? [{ ...call, epoch: r.epoch, retainedAt: new Date(r.stored_at).toISOString() }] : []; }), nextCursor: hasMore ? String(rows.at(-1)!.id) : null, hasMore, coverage: { ...parsedCoverage(row), refreshedAt: row?.refreshed_at ? new Date(row.refreshed_at).toISOString() : null, retentionDays: 30, errorTextMaxChars: 200, arguments: "redacted summaries; typed text and file contents are not stored", sequenceMeaning: "native stream order; epoch changes may reset seq", urlAfterMeaning: "navigation argument when known, not proof of final loaded URL" } };
 }
 export async function readBrowserState(env: DB, t: BrowserEvidenceTarget, refreshed = false) {
- await requireSubject(env, t); const row = await read(env, t); const state = row?.state ? JSON.parse(row.state) as Record<string, unknown> : null;
+ await requireSubject(env, t); const row = await read(env, t); const state = row?.state ? sanitizeBrowserState(parsedRecord(row.state), t) : null;
  return { subject: { kind: t.subjectKind, id: t.subjectId }, availability: row?.state_status ?? "not_collected", freshness: refreshed && row?.state_status === "available" && state?.current === true ? "observed_this_read" : "retained", capturedAt: state?.capturedAt ?? null, snapshot: state ? { ...state, current: refreshed && row?.state_status === "available" && state.current === true } : null, refreshedAt: row?.refreshed_at ? new Date(row.refreshed_at).toISOString() : null, notice: "Reading diagnostics never selects a tab, navigates, resumes, approves, or replays an action. An unavailable live source does not erase retained evidence." };
 }
 export async function sweepBrowserEvidence(env: DB, now = Date.now()) {

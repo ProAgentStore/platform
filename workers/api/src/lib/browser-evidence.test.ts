@@ -93,3 +93,24 @@ it("failed overlapping refresh preserves the state another read just captured",a
  unblock();await unavailable;
  expect(await readBrowserState(env(),target,true)).toMatchObject({availability:"unavailable",freshness:"retained",capturedAt:"2026-11-04T00:02:00Z"});
 });
+
+it("sanitizes embedded credential URLs before persistence and when reading legacy retained evidence", async () => {
+ const sensitive = "Loading https://username:SYNTHETIC_PASSWORD@jobs.test/apply?seek-token=SYNTHETIC_TOKEN_PREFIX…#SECRET";
+ const observed = { ...state, state: { ...state.state, tabs: [{ ...state.state.tabs[0], title: sensitive }] } };
+ const record = { ...call(1), args: { element: sensitive, target: sensitive }, errorHead: sensitive, browserState: observed.state };
+ await refreshBrowserEvidence(env(), target, async path => Response.json(path === "/browser-state" ? observed : { calls: [record], epoch: "e1", lastSeq: 1, dropped: 0, hasMore: false }));
+ const storedCall = await db.DB.prepare("SELECT record FROM browser_run_calls WHERE call_id='c1'").first<{record:string}>();
+ const storedState = await db.DB.prepare("SELECT state FROM browser_run_evidence WHERE subject_id='run-1'").first<{state:string}>();
+ for (const retained of [storedCall?.record, storedState?.state]) {
+  expect(retained).toContain("Loading https://jobs.test/apply");
+  expect(retained).not.toMatch(/SYNTHETIC_|seek-token|username/);
+ }
+ // Simulate evidence retained by the previously deployed writer. Reads must be safe even offline.
+ await db.DB.prepare("UPDATE browser_run_calls SET record=?1 WHERE call_id='c1'").bind(JSON.stringify(record)).run();
+ await db.DB.prepare("UPDATE browser_run_evidence SET state=?1 WHERE subject_id='run-1'").bind(JSON.stringify(observed)).run();
+ const calls = await listBrowserCalls(env(), target);
+ const snapshot = await readBrowserState(env(), target);
+ for (const result of [calls, snapshot]) expect(JSON.stringify(result)).not.toMatch(/SYNTHETIC_|seek-token|username/);
+ expect(calls.calls[0]).toMatchObject({ args: { element: "Loading https://jobs.test/apply", target: "Loading https://jobs.test/apply" }, errorHead: "Loading https://jobs.test/apply", browserState: { tabs: [{ title: "Loading https://jobs.test/apply" }] } });
+ expect(snapshot.snapshot).toMatchObject({ state: { tabs: [{ title: "Loading https://jobs.test/apply" }] } });
+});
