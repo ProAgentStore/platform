@@ -10,6 +10,8 @@ const CONTROLS = [
 	{ label: "readonly input", html: '<input id="chooser" type="text" readonly role="combobox" aria-label="Destination" aria-expanded="false">' },
 	{ label: "custom div", html: '<div id="chooser" role="combobox" tabindex="0" aria-label="Destination" aria-expanded="false">Choose</div>' },
 	{ label: "editable input", html: '<input id="chooser" type="search" role="combobox" aria-label="Destination" aria-expanded="false">' },
+	{ label: "native BUTTON pushbutton", html: '<button id="chooser" type="button" role="combobox" aria-label="Destination" aria-expanded="false">Choose</button>' },
+	{ label: "native INPUT pushbutton", html: '<input id="chooser" type="button" role="combobox" aria-label="Destination" aria-expanded="false" value="Choose">' },
 ];
 function form(control: string, mode: string) {
 	return `<h1>Application</h1><form method="post">${control}<label>Notes<input id="notes"></label>
@@ -81,15 +83,35 @@ describe("observed combobox opening without answering", () => {
 		const target = await open();expect((await bridge.callTool("browser_click", { target, action_intent })).isError).toBe(true);await unchanged();
 	});
 	it("requires initial checkpoint", async () => { const target = await open(CONTROLS[1].html, "open", false);expect((await click(target)).isError).toBe(true);await unchanged(); });
-	it.each(["checkbox", "radio", "file", "submit", "button"])("does not click a native %s masquerading as a combobox", async (type) => {
+	it.each(["checkbox", "radio", "file", "submit", "reset", "image"])("does not click a native %s masquerading as a combobox", async (type) => {
 		const target = await open(`<input id="chooser" type="${type}" role="combobox" aria-label="Destination">`);
 		const result = await bridge.callTool("browser_click", { target, element: "Apply", action_intent: "edit_form" });expect(result.isError).toBe(true);await unchanged();
 	});
 	it.each([
-		'<button id="chooser" type="button" role="combobox" aria-label="Destination">Choose</button>',
 		'<select id="chooser" aria-label="Destination"><option>Cedar</option><option>Birch</option></select>',
 	])("does not reinterpret another native control as a combobox opener", async (html) => {
 		const target = await open(html);expect((await click(target)).isError).toBe(true);await unchanged();
+	});
+
+	it.each([undefined, "submit", "reset", "not-a-type"])("refuses a native BUTTON with committing/reset/default type %s", async (type) => {
+		const attribute = type === undefined ? "" : `type="${type}"`;
+		const target = await open(`<button id="chooser" ${attribute} role="combobox" aria-label="Destination">Choose</button>`);
+		expect((await click(target)).isError).toBe(true);await unchanged();
+		expect(await page.evaluate(() => (window as Window & { submits: number }).submits)).toBe(0);
+	});
+	it.each(["button", "input"].flatMap((tag) => (tag === "button" ? ["submit", "reset", "remove-type", "not-a-type"] : ["submit", "reset", "image", "checkbox", "radio", "file"]).map((type) => ({ tag, type }))))("refuses $tag type mutation to $type after probing", async ({ tag, type }) => {
+		const control = tag === "button" ? '<button id="chooser" type="button" role="combobox" aria-label="Destination">Choose</button>' : '<input id="chooser" type="button" role="combobox" aria-label="Destination" value="Choose">';
+		const target = await open(control);await page.locator("#notes").fill("Cedar");
+		const actual = runtime.callTool.bind(runtime);
+		vi.spyOn(runtime, "callTool").mockImplementation(async (name, args, opts) => {
+			const result = await actual(name, args, opts);
+			if (name === "browser_evaluate" && args?.function === ELEMENT_PROBE_FN) await page.locator("#chooser").evaluate((node, changedType) => {
+				if (changedType === "remove-type") node.removeAttribute("type");else node.setAttribute("type", changedType);
+			}, type);
+			return result;
+		});
+		expect((await click(target)).isError).toBe(true);await unchanged();expect(await page.locator("#notes").inputValue()).toBe("Cedar");
+		expect(await page.evaluate(() => (window as Window & { submits: number }).submits)).toBe(0);
 	});
 
 	it.each(["checkbox", "role", "role_removed", "hidden", "stop", "domain"])("refuses %s mutation after probing", async (mutation) => {

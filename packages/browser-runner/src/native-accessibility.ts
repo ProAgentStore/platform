@@ -22,7 +22,7 @@ export async function accessibleTargetRefusal(currentPage: () => Page | null | u
 			const control = node.closest("button,input") as HTMLButtonElement | HTMLInputElement | null;
 			const submits = !!control?.form && (control.tagName === "BUTTON" ? !["button", "reset"].includes(control.type) : ["submit", "image"].includes(control.type));
 			const label = node.closest("label");
-			return { tag: node.tagName.toLowerCase(), type: node instanceof HTMLInputElement ? node.type : "", role: node.getAttribute("role") ?? "", submits, delegatesActivation: !!label?.control && label.control !== node };
+			return { tag: node.tagName.toLowerCase(), type: node instanceof HTMLInputElement || node instanceof HTMLButtonElement ? node.type : "", role: node.getAttribute("role") ?? "", submits, delegatesActivation: !!label?.control && label.control !== node };
 		});
 		if (facts.submits || (expected.role === "combobox" && !canOpenCombobox(facts))) return refused;
 		if (!await matching.evaluate((node, original) => node === original, element, { timeout: 1_000 })) return refused;
