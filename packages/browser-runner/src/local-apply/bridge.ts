@@ -84,11 +84,11 @@ export interface ApplyBridgeHost {
 }
 
 export interface ToolResult {
-	content: Array<{ type: "text"; text: string }>;
+	content: [{ type: "text"; text: string }, ...Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>];
 	isError?: boolean;
 }
 
-const READ_TOOLS = new Set(["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_wait_for"]);
+const READ_TOOLS = new Set(["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_wait_for", "browser_take_screenshot"]);
 const FILL_TOOLS = new Set(["browser_type", "browser_select_option"]);
 const BRIDGE_TOOLS = ["upload_artifact", "request_answer", "ready_for_review", "supervisor_checkpoint", "request_sign_in_code"] as const;
 /** A sign-in page's own buttons (#1412): pressed only while signing in, on the sign-in site, and never classed as the application's submit. */
@@ -243,7 +243,7 @@ export class ApplyBridge {
 	constructor(
 		browser: BrowserTools,
 		private readonly host: ApplyBridgeHost,
-		/** Replay frames (#1063), taken by the runner with every form control blurred — never a tool the CLI can call. */
+		/** Replay and model-input frames share the run's frozen screenshot and masking policy. */
 		shots?: ShotRecorder,
 	) {
 		this.replay = new ApplyReplay(host, shots);
@@ -266,7 +266,7 @@ export class ApplyBridge {
 	}
 
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
-		const own = (await this.browser.listTools()).filter((t) => READ_TOOLS.has(t.name) || FILL_TOOLS.has(t.name) || t.name === "browser_click" || t.name === "browser_press_key");
+		const own = (await this.browser.listTools()).filter((t) => t.name !== "browser_take_screenshot" && (READ_TOOLS.has(t.name) || FILL_TOOLS.has(t.name) || t.name === "browser_click" || t.name === "browser_press_key"));
 		const tools = own.map((t) => {
 			if (t.name === "browser_click")
 				return { ...t, description: "Click a link, tab, pagination or form-step button, or answer a checkbox / radio / option (answers need source_quote). A control that submits the application is governed by the run's policy.", inputSchema: withQuote(t.inputSchema, false) };
@@ -276,6 +276,7 @@ export class ApplyBridge {
 		});
 		return [
 			...tools,
+			...(this.replay.visionEnabled ? [{ name: "browser_take_screenshot", description: "Read current viewport pixels when a snapshot does not explain layout, a control or feedback. Uses the run's screenshot privacy settings. Refresh the snapshot for actionable element refs.", inputSchema: { type: "object", properties: {}, additionalProperties: false } }] : []),
 			{
 				name: "upload_artifact",
 				description: "Attach an approved document. First click the field's upload control (it opens a file chooser), then call this. Each document can be attached once.",
@@ -321,6 +322,7 @@ export class ApplyBridge {
 		if (!READ_TOOLS.has(name) && !FILL_TOOLS.has(name) && name !== "browser_click" && name !== "browser_press_key" && name !== "upload_artifact") return this.refuse(name, "read", `${name} is not available.`);
 		if (this.host.overTime()) return this.refuse(name, "read", "The run's time limit is reached. Call ready_for_review now.");
 		if (++this.actions > this.host.limits.maxActions) return this.refuse(name, "read", `The run's limit of ${this.host.limits.maxActions} browser actions is reached. Call ready_for_review now.`);
+		if (name === "browser_take_screenshot") return this.replay.modelScreenshot((url) => this.admitDomain(url));
 
 		if (name === "browser_navigate") return this.navigate(String(args.url ?? ""));
 		if (name === "browser_click") return this.click(args);

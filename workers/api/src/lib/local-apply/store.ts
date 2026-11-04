@@ -553,6 +553,8 @@ export const isTerminalApplyRun = (s: ApplyRunStatus) => TERMINAL.includes(s);
 export interface ApplyRunPolicy {
 	browserWebsiteAccess?: BrowserWebsiteAccessWire;
 	engine: string;
+	model?: string | null;
+	reasoningEffort?: string | null;
 	authMode: string;
 	browserProfile: string;
 	mode: LocalApplyMode;

@@ -867,10 +867,9 @@ describe("replay frames on an application page (#1063, #1419)", () => {
 		expect(shots.shots).toEqual([]);
 	});
 
-	it("the screenshot tool is never offered to the CLI", async () => {
+	it("offers policy-controlled screenshot input to the CLI", async () => {
 		const { bridge } = await recordedForm();
-		expect((await bridge.listTools()).map((t) => t.name)).not.toContain("browser_take_screenshot");
-		expect((await bridge.callTool("browser_take_screenshot", {})).isError).toBe(true);
+		expect((await bridge.listTools()).map((t) => t.name)).toContain("browser_take_screenshot");
 	});
 });
 

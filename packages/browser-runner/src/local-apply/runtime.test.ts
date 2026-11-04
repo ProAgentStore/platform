@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -269,6 +269,36 @@ it("cannot add a domain while running or at a non-redirect owner pause (#1478)",
 });
 
 describe("parseApplyEnvelope", () => {
+	it("validates explicit model configuration before any browser or CLI action", () => {
+		expect(parseApplyEnvelope(envelope({ engine: "codex", model: "future-model", reasoningEffort: "high" }))).toMatchObject({ model: "future-model", reasoningEffort: "high" });
+		expect(() => parseApplyEnvelope(envelope({ engine: "claude", reasoningEffort: "high" }))).toThrow(/only.*codex/);
+		expect(() => parseApplyEnvelope(envelope({ model: "--flag" }))).toThrow(/model/);
+	});
+	it("publishes scoped CLI identity through the run event contract", async () => {
+		const previousHome = process.env.CODEX_HOME;
+		const e = envelope({ engine: "codex", model: "requested-model", reasoningEffort: "high" });
+		const rt = runtime({ now: () => Date.parse("2026-11-05T12:00:00Z") });
+		try {
+			process.env.CODEX_HOME = realpathSync(home);
+			const folder = join(home, "sessions/2026/11/05"); mkdirSync(folder, { recursive: true });
+			const id = "11111111-2222-3333-4444-555555555555";
+			const cwd = join(dir, "data/local-apply", e.instanceId, e.runId, "scratch");
+			writeFileSync(join(folder, `rollout-date-${id}.jsonl`), [{ type: "session_meta", payload: { id, cwd } }, { type: "turn_context", payload: { cwd, model: "actual-model", effort: "high", prompt: "PRIVATE" } }].map((event) => JSON.stringify(event)).join("\n"));
+			rt.start(e); await settle();
+			child.stdout.write(`${JSON.stringify({ type: "thread.started", thread_id: id })}\n`);
+			const detail = rt.status({ runId: e.runId }).events.find((event) => event.type === "engine.model_observed")?.detail;
+			expect(detail).toEqual({ observedModel: "actual-model", observedReasoningEffort: "high", modelVerification: "local_cli_metadata", source: "codex_rollout_turn_context" });
+		} finally { rt.closeAll(); if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome; }
+	});
+	it("launches the selected acting model and logs requested configuration without inventing resolved identity", async () => {
+		const rt = runtime();
+		rt.start(envelope({ engine: "codex", model: "future-model", reasoningEffort: "high" }));
+		await settle();
+		expect(spawned[0].args).toContain("future-model");
+		expect(spawned[0].args).toContain('model_reasoning_effort="high"');
+		expect(rt.status({ runId: "run-1" }).events.find((e) => e.type === "engine.started")?.detail).toMatchObject({ requestedModel: "future-model", requestedReasoningEffort: "high", modelVerification: "unverified" });
+		rt.closeAll();
+	});
 	it.each([
 		["a provider API key mode", { authMode: "api-key" }, /authMode/],
 		["auto_submit without the PAGS gate", { policy: { mode: "auto_submit", allowDomains: ["jobs.example.com"] } }, /submitGate/],

@@ -1,3 +1,4 @@
+import { modelArguments } from "./model-config.js";
 /**
  * How a research run launches its CLI (#944): arguments, environment and prompt, per engine.
  *
@@ -71,6 +72,8 @@ const toml = (v: string) => JSON.stringify(v); // a TOML basic string accepts JS
 
 export function buildEngineSpec(input: {
 	engine: LocalBrowserEngine;
+	model?: string | null;
+	reasoningEffort?: string | null;
 	authMode: LocalBrowserAuthMode;
 	prompt: string;
 	bridge: BridgeLaunch;
@@ -80,12 +83,14 @@ export function buildEngineSpec(input: {
 	/** The bridge tools Codex may call without asking — the application bridge's own set (#957). */
 	toolNames?: readonly string[];
 }): EngineSpec {
+	const modelArgs = modelArguments(input);
 	const env = engineEnv(input.authMode, input.engine, input.toolTimeoutMs, input.baseEnv);
 	if (input.engine === "claude") {
 		const json = JSON.stringify({ mcpServers: { [BRIDGE_SERVER_NAME]: { command: input.bridge.command, args: input.bridge.args, env: input.bridge.env } } });
 		return {
 			command: "claude",
 			args: [
+				...modelArgs,
 				"-p",
 				input.prompt,
 				"--output-format",
@@ -118,6 +123,7 @@ export function buildEngineSpec(input: {
 			"--sandbox",
 			"read-only",
 			"--ignore-user-config",
+			...modelArgs,
 			"-c",
 			`${key}.command=${toml(input.bridge.command)}`,
 			"-c",

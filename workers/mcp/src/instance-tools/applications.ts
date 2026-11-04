@@ -471,6 +471,8 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			settings: z
 				.object({
 					engine: z.enum(["claude", "codex"]).optional(),
+					model: z.string().nullable().optional().describe("Local browser-driving CLI model ID, independent of the cloud supervisor. null uses the CLI default."),
+					reasoningEffort: z.string().nullable().optional().describe("Codex reasoning effort token supported by the selected model/client. null uses the CLI default. Other engines refuse explicit effort."),
 					authMode: z.enum(["machine", "subscription"]).optional(),
 					browserProfile: z.enum(["isolated", "default"]).optional(),
 					workspace: z.string().optional(),

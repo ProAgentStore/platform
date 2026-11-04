@@ -118,6 +118,9 @@ export interface LocalApplyTaskEnvelope {
 	instanceId: string;
 	applicationId: string;
 	engine: LocalApplyEngine;
+	/** Requested local CLI configuration, never proof of provider-resolved identity. */
+	model?: string | null;
+	reasoningEffort?: string | null;
 	authMode: LocalApplyAuthMode;
 	browserProfile: LocalApplyProfile;
 	/** The application page to start on. */
@@ -339,6 +342,7 @@ export interface LocalApplyUnavailableEvidence {
 export type LocalApplyEventType =
 	| "engine.auth_checked"
 	| "engine.started"
+	| "engine.model_observed"
 	| "engine.ended"
 	| "source.read"
 	| "browser.navigated"
@@ -361,6 +365,7 @@ export type LocalApplyEventType =
 export const LOCAL_APPLY_EVENT_TYPES: readonly LocalApplyEventType[] = [
 	"engine.auth_checked",
 	"engine.started",
+	"engine.model_observed",
 	"engine.ended",
 	"source.read",
 	"browser.navigated",
@@ -516,7 +521,7 @@ const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 // from `LOCAL_APPLY_CONFIRMATION_MARKERS`, how many times the page was read, and whether it moved.
 // Those fields carry ids/counts/booleans, never receipt prose. `target` is the intentional exception:
 // a bounded observed control label, scrubbed of run secrets by the runner; typed values stay excluded.
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site", "target"]);
+const DETAIL_KEYS = new Set(["observedModel", "observedReasoningEffort", "requestedModel", "requestedReasoningEffort", "modelVerification", "engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site", "target"]);
 
 /**
  * A page URL as a trace may keep it (#1069): origin and path, no query or fragment — a sign-in page's

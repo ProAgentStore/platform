@@ -49,12 +49,12 @@ On 2026-11-04, Anthropic's [Opus model page](https://www.anthropic.com/claude/op
 
 ## Current implementation gaps
 
-The following was verified in the local code on 2026-11-04. These are findings, not completed fixes.
+The following distinguishes implemented plumbing from remaining design gaps. Live model and image ingestion still require execution evidence for each run.
 
 | Area | Current behavior and evidence |
 | --- | --- |
-| Browser engine model | [`local-browser/engine.ts`](../packages/browser-runner/src/local-browser/engine.ts), `buildEngineSpec`, accepts an engine but no explicit model input and supplies no model argument in either CLI launch. [`local-apply/engine.ts`](../packages/browser-runner/src/local-apply/engine.ts) delegates to that launcher. This path alone cannot establish which model actually ran. |
-| Acting model's vision | [`local-apply/bridge.ts`](../packages/browser-runner/src/local-apply/bridge.ts), `APPLY_BRIDGE_TOOL_NAMES` and `listTools`, expose a filtered tool set without `browser_take_screenshot`. [`local-browser/replay.ts`](../packages/browser-runner/src/local-browser/replay.ts) records screenshots as replay evidence. Those saved frames do not, by themselves, reach the application model. The owner-facing MCP screenshot reader is a separate capability. |
+| Browser engine model | CLI 0.4.215 adds per-instance Application Runner `model` and `reasoningEffort` via MCP settings, frozen run policy and explicit CLI arguments. `null` uses CLI defaults. Codex supports explicit effort; unsupported engine/effort combinations fail. Older runners reject explicitly configured dispatch. `engine.started` records requested values as unverified. `engine.model_observed` reads model/effort from the exact Codex thread metadata, bound to its working directory, and labels the source `local_cli_metadata`; this is not provider attestation. Missing metadata remains unverified. |
+| Acting model's vision | CLI 0.4.215 exposes `browser_take_screenshot` when the run enables screenshots and has a native page. It returns fresh viewport pixels as MCP image content and records the same frame for replay. Frozen masking settings, Stop and website admission apply. Transport tests establish image content reaches the MCP client; a live model run must still establish actual use. Screenshot-off removes the tool. |
 | Question-to-memory mapping | [`instance-preferences.ts`](../packages/browser-runner/src/instance-preferences.ts), `preferenceField`, interprets English question wording using regular expressions. Its source-precedence checks and its question interpretation are currently coupled. |
 | Particular answer mapping | [`local-apply/citizenship-option.ts`](../packages/browser-runner/src/local-apply/citizenship-option.ts) recognizes a specific combined citizenship option and particular source-text shapes. This is not a general semantic mapping mechanism. |
 | Form controls | [`local-apply/bridge.ts`](../packages/browser-runner/src/local-apply/bridge.ts) uses pagination and form-step name patterns. Its selection path can forward a custom combobox to the native select tool, while its click policy can refuse a custom control. |
@@ -76,3 +76,9 @@ The observed application also repeated questions whose answers existed in instan
 - Changes are validated through the actual PAGS browser-agent path. Direct manual browser actions are not presented as evidence that the agent can complete the workflow.
 
 Do not mark this design delivered until the relevant capabilities and replacements are implemented and verified. Keep remaining inherited heuristics visible in the work record rather than describing a partially revised system as heuristic-free.
+
+## Comparing direct and platform runs
+
+Use the same posting, approved document hashes, confirmed owner facts and fill-only scope. Record each interface and its available tools, prompt, model configuration and observed identity. Matching model names and reasoning effort does not make two different harnesses identical or guarantee identical output. Keep direct UI actions separate from PAGS run evidence. Do not submit during a fill-only comparison, and leave unknown disclosures or self-identification unanswered. A comparison with missing inputs or unverified model identity is incomplete.
+
+On 2026-11-05, a synthetic live smoke test used the production engine launcher, MCP stdio forwarder, application bridge and screenshot recorder. Codex read a random code and coloured shape present only in the JPEG pixels. Its exact thread metadata reported `gpt-6-astra` with `high` effort. This establishes image ingestion through that path; it does not establish success on an employer form or parity with another ChatGPT harness. Model availability and identity must still be checked on each real run.

@@ -1,3 +1,5 @@
+import { CodexModelObserver } from "../local-browser/model-observation.js";
+import { modelConfigurationProblem, requestedModelEvidence } from "../local-browser/model-config.js";
 import type { BrowserStateObservation } from "../browser-state-contract.js";
 /**
  * Local application execution on the runner (#957) — the Job Application Runner's hands.
@@ -186,6 +188,8 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 	for (const k of ["runId", "requestId", "instanceId", "applicationId"]) if (typeof o[k] !== "string" || !SAFE_ID.test(o[k] as string)) throw bad(`${k} is required`);
 	if (!/^[A-Za-z0-9_-]{1,100}$/.test(o.runId as string)) throw bad("runId must be a plain id");
 	if (!LOCAL_APPLY_ENGINES.includes(o.engine as never)) throw bad("engine must be claude or codex");
+	const modelProblem = modelConfigurationProblem(o as { engine: unknown });
+	if (modelProblem) throw bad(modelProblem);
 	if (!LOCAL_APPLY_AUTH_MODES.includes(o.authMode as never)) throw bad("authMode must be machine or subscription — a provider API key is never used");
 	if (o.browserProfile !== "isolated" && o.browserProfile !== "default") throw bad("browserProfile must be isolated or default");
 	if (typeof o.applicationUrl !== "string" || !/^https?:\/\/[^\s/]+/i.test(o.applicationUrl) || o.applicationUrl.length > 2000) throw bad("applicationUrl must be an http(s) URL");
@@ -235,6 +239,8 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		instanceId: o.instanceId as string,
 		applicationId: o.applicationId as string,
 		engine: o.engine as LocalApplyTaskEnvelope["engine"],
+		...(o.model !== undefined ? { model: o.model as string | null } : {}),
+		...(o.reasoningEffort !== undefined ? { reasoningEffort: o.reasoningEffort as string | null } : {}),
 		authMode: o.authMode as LocalApplyTaskEnvelope["authMode"],
 		browserProfile: o.browserProfile,
 		applicationUrl: o.applicationUrl,
@@ -491,26 +497,31 @@ export class LocalApplyRuntime {
 
 		const child = this.spawn(spec.command, spec.args, { cwd: join(run.dir, "scratch"), env: spec.env, stdio: ["ignore", "pipe", "pipe"] });
 		run.child = child;
-		this.emit(run, { type: "engine.started", detail: { engine: e.engine, mode: e.policy.mode } });
+		this.emit(run, { type: "engine.started", detail: { engine: e.engine, mode: e.policy.mode, ...requestedModelEvidence(e) } });
+		const modelObserver = e.engine === "codex" ? new CodexModelObserver(spec.env.CODEX_HOME || join(spec.env.HOME || home, ".codex"), join(run.dir, "scratch"), this.now()) : null;
+		const observeModel = () => { const detail = modelObserver?.read(); if (detail) this.emit(run, { type: "engine.model_observed", detail }); };
 		let buf = "";
 		const keep = (chunk: Buffer | string) => {
 			buf += chunk.toString();
 			const lines = buf.split("\n");
 			buf = lines.pop() ?? "";
-			for (const line of lines) if (line.trim()) run.output.push(line.slice(0, 20_000));
+			for (const line of lines) if (line.trim()) { run.output.push(line.slice(0, 20_000)); modelObserver?.acceptLine(line); }
+			observeModel();
 			if (run.output.length > OUTPUT_LINES) run.output.splice(0, run.output.length - OUTPUT_LINES);
 		};
 		child.stdout?.on("data", keep);
-		child.stderr?.on("data", keep);
+		child.stderr?.on("data", (chunk: Buffer | string) => { run.output.push(chunk.toString().slice(0, 20_000)); if (run.output.length > OUTPUT_LINES) run.output.shift(); });
 		child.on("error", (err: NodeJS.ErrnoException) => {
 			this.end(run, { outcome: "failed", error: err.code === "ENOENT" ? `The ${e.engine === "claude" ? "Claude Code" : "Codex"} CLI is not installed on this machine (\`${spec.command}\` was not found).` : err.message });
 		});
 		child.on("close", (code) => {
-			if (buf.trim()) run.output.push(buf);
+			if (buf.trim()) { run.output.push(buf); modelObserver?.acceptLine(buf); }
+			observeModel();
 			this.emit(run, { type: "engine.ended", detail: { exitCode: code ?? -1 } });
 			this.end(run, this.outcomeOf(run, code ?? -1));
 		});
 		run.timer = setInterval(() => {
+			observeModel();
 			if (run.state !== "ended" && this.activeMs(run) >= e.limits.maxMinutes * 60_000 + 60_000) {
 				run.timedOut = true;
 				this.kill(run);

@@ -44,6 +44,10 @@ export interface AutoSubmitPolicy {
 
 export interface ApplicationRunnerSettings {
 	engine: LocalApplyEngine;
+	/** Local browser-driving model; null keeps the CLI default. Independent of the cloud supervisor. */
+	model?: string | null;
+	/** Explicit Codex effort. Other engines refuse this until an adapter supports it. */
+	reasoningEffort?: string | null;
 	authMode: LocalApplyAuthMode;
 	browserProfile: LocalApplyProfile;
 	workspace: string;
@@ -71,6 +75,8 @@ export interface ApplicationRunnerSettings {
 
 export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
 	engine: "claude",
+	model: null,
+	reasoningEffort: null,
 	authMode: "machine",
 	browserProfile: "isolated",
 	workspace: "~/jobs",
@@ -101,6 +107,13 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 		if (!LOCAL_APPLY_ENGINES.includes(p.engine as LocalApplyEngine)) return { error: `engine must be one of ${LOCAL_APPLY_ENGINES.join(", ")}` };
 		next.engine = p.engine as LocalApplyEngine;
 	}
+	for (const key of ["model", "reasoningEffort"] as const) {
+		if (p[key] === undefined) continue;
+		const value = p[key];
+		if (value !== null && (typeof value !== "string" || !(key === "model" ? /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/ : /^[a-z][a-z0-9_-]{0,31}$/).test(value))) return { error: `${key} must be a nonempty model identifier/effort token, or null to use the CLI default` };
+		next[key] = value as string | null;
+	}
+	if (next.reasoningEffort && next.engine !== "codex") return { error: "reasoningEffort is supported only by the codex browser engine; clear it with null when switching engines" };
 	if (p.authMode !== undefined) {
 		if (!LOCAL_APPLY_AUTH_MODES.includes(p.authMode as LocalApplyAuthMode)) return { error: "authMode must be machine or subscription — applications run on the machine's own sign-in, never a provider API key" };
 		next.authMode = p.authMode as LocalApplyAuthMode;

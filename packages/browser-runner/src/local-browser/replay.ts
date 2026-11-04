@@ -2,9 +2,9 @@
  * Replay screenshots of a local browser run (#1063) — Scout research and Application Runner fills.
  *
  * Captured by the RUNNER at points the bridge chooses (after a navigation, an accepted click, a snapshot,
- * a fill, a pause, completion), never by the model: `browser_take_screenshot` stays refused to the CLI, so
- * a screenshot is evidence the platform keeps, not a tool that could read a page around the redacted
- * trace. Recent frames stay in a bounded rolling buffer for the cloud to PULL (the runner holds no API token);
+ * a fill, a pause, completion). The application bridge can also return a fresh captured frame to its
+ * acting model, through the same frozen screenshot/privacy policy. Recent frames stay in a bounded
+ * rolling buffer for the cloud to PULL (the runner holds no API token);
  * old uncollected frames can be evicted, which the pull reports as a cursor-relative gap.
  * the trace only ever says that a frame exists — `screenshot.captured` with its seq and capture point.
  *
@@ -92,6 +92,9 @@ export class ShotRecorder {
 		private readonly blurFormFields: unknown = true,
 	) {}
 
+	get enabled(): boolean { return this.cap > 0; }
+	get formFieldsBlurred(): boolean { return this.blurFormFields !== false; }
+
 	/**
 	 * Take one frame, best-effort. Returns its seq, or null when capture is disabled, this
 	 * run has no real page to capture (#1419 — a browser the runner did not itself launch), or the
@@ -102,12 +105,15 @@ export class ShotRecorder {
 	}
 
 	/** The reason is explicit so a replay can distinguish missing evidence from an unchanged page. */
-	async captureResult(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string; target?: string } = {}): Promise<{ seq: number } | { seq: null; reason: "capture_limit" | "page_unavailable" | "capture_failed" | "frame_too_large" }> {
+	async captureResult(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string; target?: string } = {}, accept?: () => boolean): Promise<{ seq: number } | { seq: null; reason: "capture_limit" | "page_unavailable" | "capture_failed" | "frame_too_large" | "capture_invalidated" }> {
 		if (this.cap <= 0 || this.nextSeq >= Number.MAX_SAFE_INTEGER) return { seq: null, reason: "capture_limit" };
 		if (!page) return { seq: null, reason: "page_unavailable" };
 		const data = await capturePageScreenshot(page, { quality: 50, timeout: 8_000, blurFormFields: this.blurFormFields });
 		if (!data) return { seq: null, reason: "capture_failed" };
 		if (data.length > MAX_SHOT_BASE64) return { seq: null, reason: "frame_too_large" };
+		// Revalidate ownership/Stop after the asynchronous capture, before retaining pixels or assigning a sequence.
+		try { if (accept && !accept()) return { seq: null, reason: "capture_invalidated" }; }
+		catch { return { seq: null, reason: "capture_invalidated" }; }
 		const seq = ++this.nextSeq;
 		this.shots.push({ seq, point, ...(meta.url ? { url: meta.url } : {}), ...(meta.action ? { action: meta.action } : {}), ...(meta.target ? { target: meta.target } : {}), mimeType: "image/jpeg", data, at: new Date(this.now()).toISOString() });
 		if (this.shots.length > this.cap) this.shots.splice(0, this.shots.length - this.cap);
