@@ -1,3 +1,4 @@
+import { accessibleTargetRefusal, type ExpectedAccessibility } from "./native-accessibility.js";
 import { BrowserStateSampler } from "./browser-state.js";
 import type { BrowserStateObservation, BrowserStateSnapshot } from "./browser-state-contract.js";
 import { createConnection } from "@playwright/mcp";
@@ -185,7 +186,7 @@ export class McpRuntime {
 	 * dialog auto-clear, the bridges' own page inspection) — never set by an agent-driven call. Every
 	 * call is recorded regardless; `internal` only tells a reader which ones were the agent's own.
 	 */
-	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean } = {}): Promise<McpToolResult> {
+	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean; expectedAccessibility?: ExpectedAccessibility } = {}): Promise<McpToolResult> {
 		const startedAt = Date.now(), subject = this.subject, version = this.subjectVersion;
 		// Snapshot before awaiting: teardown may clear the live store while this call is in flight.
 		const initialSecrets = { ...this.diagnosticSecrets };
@@ -214,7 +215,7 @@ export class McpRuntime {
 		const current = live && !!this.captureState(subject);
 		return this.calls.state(subject, current);
 	}
-	private async dispatchTool(name: string, args: Record<string, unknown>, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean }): Promise<McpToolResult> {
+	private async dispatchTool(name: string, args: Record<string, unknown>, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean; expectedAccessibility?: ExpectedAccessibility }): Promise<McpToolResult> {
 		const client = this.connected();
 		const cancelled = () => this.policy.isCancelled?.() ? "BLOCKED by the runner — this task was stopped; no further browser action is permitted." : null;
 		let refusal = cancelled();
@@ -244,6 +245,7 @@ export class McpRuntime {
 			try { origin = page && !page.isClosed() ? new URL(page.url()).origin : undefined; } catch { /* Unknown means refused. */ }
 			if (origin !== opts.expectedOrigin) refusal = "BLOCKED by the runner — the sign-in page changed origin before credential entry.";
 		}
+		if (!refusal && opts.expectedAccessibility) refusal = name === "browser_click" ? await accessibleTargetRefusal(currentPage, args.target ?? args.ref, opts.expectedAccessibility) : "An accessibility-bound answer must use browser_click.";
 		let upload: PreparedUpload | undefined;
 		try {
 			if (!refusal && name === "browser_file_upload") {

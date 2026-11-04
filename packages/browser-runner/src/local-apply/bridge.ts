@@ -1,3 +1,4 @@
+import { withQuote } from "./tool-schemas.js";
 /**
  * The apply bridge (#957): the only way an application CLI reaches the page, and where the write
  * policy is enforced. Like the research bridge (`local-browser/bridge.ts`), the CLI gets no web
@@ -24,6 +25,8 @@
  *
  * The trace carries classes, domains, decisions and artifact handles — never a typed value.
  */
+import { unnamedOptionAnswer } from "./unnamed-option.js";
+import type { ExpectedAccessibility } from "../native-accessibility.js";
 import { SIGN_IN_CONTROL_PROBE_FN, SIGN_IN_PAGE_PROBE_FN, type SignInControlFacts, isSignInReturn, signInOrigin } from "./sign-in-policy.js";
 import { classifyApplyClick, LOCAL_APPLY_CAPS } from "./contract.js";
 import { LISTING_EXPIRED_RE, LISTING_UNAVAILABLE_RE } from "./unavailable.js";
@@ -197,15 +200,6 @@ export function groundingRefusal(value: string, quote: unknown, grounding: strin
 	if (!new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(v)}(?![\\p{L}\\p{N}])`, "u").test(q)) return `"${value.slice(0, 80)}" does not appear in the source_quote. Use the owner's value as written, or call request_answer.`;
 	return null;
 }
-
-const QUOTE_PROP = { type: "string", description: "The exact text from the owner's profile, answers or materials that this answer comes from. Required; the value must appear in it." };
-
-/** A browser tool's schema with `source_quote` added — the CLI must say where an answer comes from. */
-function withQuote(schema: unknown, required: boolean, extra: Record<string, unknown> = {}): unknown {
-	const s = (schema && typeof schema === "object" ? schema : { type: "object" }) as { properties?: Record<string, unknown>; required?: string[] };
-	return { ...s, type: "object", properties: { ...(s.properties ?? {}), source_quote: QUOTE_PROP, ...extra }, ...(required ? { required: [...(s.required ?? []), "source_quote"] } : {}) };
-}
-
 export class ApplyBridge {
 	/** Read by the runtime for the #975 diagnostic: 0 calls is the finding, not an internal detail. */
 	actions = 0;
@@ -267,9 +261,9 @@ export class ApplyBridge {
 		const own = (await this.browser.listTools()).filter((t) => t.name !== "browser_take_screenshot" && (READ_TOOLS.has(t.name) || FILL_TOOLS.has(t.name) || t.name === "browser_click" || t.name === "browser_press_key"));
 		const tools = own.map((t) => {
 			if (t.name === "browser_click")
-				return { ...t, description: "Click an observed control. Answers need source_quote. For a non-submit editor button, declare action_intent=edit_form only when live context establishes local form editing, never consent, sharing or submission. Verify the resulting state. Submission policy cannot be overridden by intent.", inputSchema: withQuote(t.inputSchema, false, { action_intent: { type: "string", enum: ["edit_form"], description: "Required for generic editor buttons: local noncommitting form editing only. Never terms/consent, sharing, submission or unrelated actions. This declaration cannot override submission policy." } }) };
+				return { ...t, description: "Click an observed control. Answers need source_quote. For a non-submit editor button, declare action_intent=edit_form only when live context establishes local form editing, never consent, sharing or submission. Verify the resulting state. Submission policy cannot be overridden by intent.", inputSchema: withQuote(t.inputSchema, false, { action_intent: { type: "string", enum: ["edit_form"], description: "Required for generic editor buttons: local noncommitting form editing only. Never terms/consent, sharing, submission or unrelated actions. This declaration cannot override submission policy." }, answer_value: { type: "string", description: "For an option whose name is omitted from the snapshot: its complete observed accessible label. Requires source_quote. The runner verifies this exact ref and native name; never supply a guessed label or an internal value." } }) };
 			if (t.name === "browser_press_key") return { ...t, description: "Press Tab, Shift+Tab, an arrow key, Escape, Home/End or PageUp/PageDown. Nothing that types or submits." };
-			if (FILL_TOOLS.has(t.name)) return { ...t, inputSchema: withQuote(t.inputSchema, true) };
+			if (FILL_TOOLS.has(t.name)) return { ...t, ...(t.name === "browser_select_option" ? { description: "Select options in a native HTML select only. For custom comboboxes/autocomplete, use current observed option clicks or supported keyboard interactions, then verify fresh evidence. Requires source_quote." } : {}), inputSchema: withQuote(t.inputSchema, true) };
 			return t;
 		});
 		return [
@@ -606,13 +600,19 @@ export class ApplyBridge {
 				const ok = await this.pauseFor({ reason: "consent_required", question: `Agree to: ${t.name.slice(0, 200)}` });
 				return ok ? text("The owner handled that agreement in the browser. Do not click it yourself; take a browser_snapshot and continue.") : text("The owner did not handle that agreement. Stop now.", true);
 			}
+			let expectedAccessibility: ExpectedAccessibility | undefined;
+			if (t.role === "option" && !t.name) {
+				const answer = await unnamedOptionAnswer(this.browser, t.ref, args.answer_value);
+				if ("error" in answer) return this.refuse("browser_click", "fill", answer.error);
+				t.name = answer.value; expectedAccessibility = answer.expected;
+			}
 			const preference = await this.preference(t, t.name, args.source_quote);
 			if (preference.kind === "refuse") return this.refuse("browser_click", "fill", preference.reason);
 			const refusal = preference.kind === "allow" ? null : isCombinedCitizenshipOption(t.role, t.name)
 				? observedCitizenshipOption(t.role, t.name, args.source_quote, this.host.groundingSources?.()) ? null : "This citizenship option needs a verified affirmative profile fact, with no conflicting or uncertain source statement. Quote that profile fact, or call request_answer."
 				: groundingRefusal(t.name, args.source_quote, this.host.grounding());
 			if (refusal) return this.refuse("browser_click", "fill", refusal);
-			return this.fill("browser_click", t.role, forward);
+			return this.fill("browser_click", t.role, forward, expectedAccessibility);
 		}
 
 		const facts = await this.probe(t.ref, t.name);
@@ -655,10 +655,10 @@ export class ApplyBridge {
 		return this.refuse("browser_click", "read", `"${t.name || t.role}" is not a control an application run may press. Use an observed supported control; generic editor buttons require local noncommitting edit_form intent.`);
 	}
 
-	private async fill(tool: string, role: string, forward: Record<string, unknown>): Promise<ToolResult> {
+	private async fill(tool: string, role: string, forward: Record<string, unknown>, expectedAccessibility?: ExpectedAccessibility): Promise<ToolResult> {
 		const checkpoint = this.requireSupervisor(tool, "fill");
 		if (checkpoint) return checkpoint;
-		const res = await this.browser.callTool(tool, forward);
+		const res = await this.browser.callTool(tool, forward, expectedAccessibility ? { expectedAccessibility } : undefined);
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		this.filled++;
 		this.host.emit({ type: "field.filled", detail: { tool, class: "fill", role } });

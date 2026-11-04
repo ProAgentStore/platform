@@ -1,3 +1,4 @@
+import type { ExpectedAccessibility } from "../native-accessibility.js";
 import type { BrowserStateObservation } from "../browser-state-contract.js";
 /**
  * The policy-enforcing browser a local CLI researches through (#944, #947).
@@ -31,7 +32,7 @@ import { websiteDecision, type BrowserWebsiteAccess, type WebsiteAccessBlock } f
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
-	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean; expectedOrigin?: string }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean; websiteAccess?: WebsiteAccessBlock }>;
+	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean; expectedOrigin?: string; expectedAccessibility?: ExpectedAccessibility }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean; websiteAccess?: WebsiteAccessBlock }>;
 	/** Native chooser identity, scoped to the browser's current live page. */
 	uploadContext?(): { page: object; chooserId: string | null } | null;
 	/** A refusal that never reached Playwright (#1409) — recorded in the same ordered call stream as a `callTool`. */
