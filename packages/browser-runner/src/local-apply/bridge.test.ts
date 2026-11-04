@@ -68,7 +68,7 @@ const FACTS: Record<string, { submits: boolean; method: string; name: string }> 
 
 function fakeBrowser(
 	pages: Record<string, PageFlags> = {},
-	opts: { clicks?: Record<string, string>; uploadError?: string; postSubmit?: (looks: number) => PageFlags } = {},
+	opts: { clicks?: Record<string, string>; uploadError?: string; postSubmit?: (looks: number) => PageFlags; typeCloses?: Record<string, string> } = {},
 ) {
 	const calls: Array<{ name: string; args: Record<string, unknown>; internal?: boolean }> = [];
 	const internalCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -95,6 +95,14 @@ function fakeBrowser(
 				return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...pages[url], ...(submitPressed ? opts.postSubmit?.(postSubmitLooks) : {}) })}\n### Ran Playwright code` }] };
 			}
 			calls.push({ name, args, ...(callOpts?.internal ? { internal: true } : {}) });
+			// A sign-in popup closing itself mid-type (#1476): the call errors, and whatever page remains
+			// (the opener, by default here) becomes what the next `browser_evaluate` read sees.
+			if (name === "browser_type" && opts.typeCloses?.[String(args.target)]) {
+				const landOn = opts.typeCloses[String(args.target)];
+				delete opts.typeCloses[String(args.target)]; // fires once — a retry after this is an ordinary type
+				history.push(landOn);
+				return { content: [{ text: "Target page, context or browser has been closed" }], isError: true };
+			}
 			if (name === "browser_navigate") history.push(String(args.url));
 			if (name === "browser_click") {
 				if (args.target === "e8") submitPressed = true;
@@ -921,6 +929,165 @@ describe("the agent-driven sign-in (#1412)", () => {
 		await bridge.callTool("browser_navigate", { url: job });
 		expect(done).toEqual([]);
 		expect(bridge.signIn).not.toBeNull();
+	});
+
+	describe("reconciling a sign-in popup that closes mid-type (#1476)", () => {
+		it("a popup that closes onto a witnessed oauth callback still signs in, once the job page confirms it", async () => {
+			const callback = "https://au.seek.com/oauth/callback";
+			const job = "https://au.seek.com/job/95534692";
+			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true }, [callback]: {}, [job]: {} };
+			const b = fakeBrowser(pages, { clicks: { e41: BACK }, typeCloses: { e30: callback } });
+			const h = signInHost(["PAGS_LOGIN_CODE"]);
+			const bridge = new ApplyBridge(b.tools, h.host);
+			await bridge.callTool("browser_navigate", { url: FORM });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+			await bridge.callTool("browser_navigate", { url: SIGN_IN });
+			await bridge.callTool("browser_snapshot", {});
+
+			const typed = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(typed.isError).toBeUndefined();
+			expect(typed.content[0].text).toMatch(/witnessed return/);
+			expect(h.done).toEqual([]); // The callback itself is still not proof on its own (#1474's same rule).
+			expect(bridge.signIn).not.toBeNull();
+
+			const returned = await bridge.callTool("browser_navigate", { url: job });
+			expect(returned.content[0].text).toContain("Signed in to seek.com");
+			expect(bridge.signIn).toBeNull();
+			expect(h.done).toEqual([1]);
+		});
+
+		it("a popup that closes with no witnessed return stays unresolved, and a bare clean read right after is never mistaken for success", async () => {
+			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true } };
+			const b = fakeBrowser(pages, { clicks: { e41: BACK }, typeCloses: { e30: FORM } });
+			const h = signInHost(["PAGS_LOGIN_CODE"]);
+			const bridge = new ApplyBridge(b.tools, h.host);
+			await bridge.callTool("browser_navigate", { url: FORM });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+			await bridge.callTool("browser_navigate", { url: SIGN_IN });
+			await bridge.callTool("browser_snapshot", {});
+
+			const typed = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(typed.isError).toBe(true);
+			expect(typed.content[0].text).toMatch(/proves nothing either way/);
+			expect(typed.content[0].text).toMatch(/do not retype/i);
+			expect(bridge.signIn).not.toBeNull();
+			expect(h.done).toEqual([]);
+
+			// The regression this closes: the opener (FORM) never carried a wall, so a plain snapshot of it
+			// — exactly what the model is told to take next — must not be read as "the wall is gone, done".
+			const snap = await bridge.callTool("browser_snapshot", {});
+			expect(snap.content[0].text).not.toContain("Signed in to");
+			expect(bridge.signIn).not.toBeNull();
+			expect(h.done).toEqual([]);
+		});
+
+		it.each([
+			["the opener, already back on the job form", FORM],
+			["an unrelated allowed page", "https://jobs.example.com/other-job"],
+			["the sign-in page itself, the entry apparently never landed", SIGN_IN],
+		])("%s after the popup closes is not mistaken for a witnessed return", async (_label, landOn) => {
+			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true }, "https://jobs.example.com/other-job": {} };
+			const b = fakeBrowser(pages, { clicks: { e41: BACK }, typeCloses: { e30: landOn } });
+			const h = signInHost(["PAGS_LOGIN_CODE"]);
+			const bridge = new ApplyBridge(b.tools, h.host);
+			await bridge.callTool("browser_navigate", { url: FORM });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+			await bridge.callTool("browser_navigate", { url: SIGN_IN });
+			await bridge.callTool("browser_snapshot", {});
+
+			const typed = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(typed.isError).toBe(true);
+			expect(typed.content[0].text).toMatch(/proves nothing either way/);
+			expect(bridge.signIn).not.toBeNull();
+			expect(h.done).toEqual([]);
+		});
+
+		it("an unrelated browser_type error (not a closed target) is returned as-is, never reconciled", async () => {
+			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true } };
+			const b = fakeBrowser(pages, { clicks: { e41: BACK } });
+			const realCallTool = b.tools.callTool;
+			b.tools.callTool = async (name, args, callOpts) => {
+				if (name === "browser_type" && args?.target === "e30") return { content: [{ text: "Element is not visible" }], isError: true };
+				return realCallTool(name, args, callOpts);
+			};
+			const h = signInHost(["PAGS_LOGIN_CODE"]);
+			const bridge = new ApplyBridge(b.tools, h.host);
+			await bridge.callTool("browser_navigate", { url: FORM });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+			await bridge.callTool("browser_navigate", { url: SIGN_IN });
+			await bridge.callTool("browser_snapshot", {});
+
+			const typed = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(typed.isError).toBe(true);
+			expect(typed.content[0].text).toBe("Element is not visible");
+			expect(bridge.signIn).not.toBeNull();
+		});
+
+		it("a prior session click (Email me a code) does not survive an ambiguous popup close — the opener is not read as its proof", async () => {
+			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true } };
+			const b = fakeBrowser(pages, { clicks: { e42: SIGN_IN, e41: BACK }, typeCloses: { e30: FORM } });
+			const h = signInHost(["PAGS_LOGIN_USERNAME"], { code: true });
+			const bridge = new ApplyBridge(b.tools, h.host);
+			await bridge.callTool("browser_navigate", { url: FORM });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+			await bridge.callTool("browser_navigate", { url: SIGN_IN });
+			await bridge.callTool("browser_snapshot", {});
+
+			// The session button's own click sets signInActionTaken=true before any credential is typed.
+			const sent = await bridge.callTool("browser_click", { target: "e42" });
+			expect(sent.isError).toBeUndefined();
+			const code = await bridge.callTool("request_sign_in_code", {});
+			expect(code.isError).toBeUndefined();
+
+			const typed = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(typed.isError).toBe(true);
+			expect(bridge.signIn).not.toBeNull();
+			expect(h.done).toEqual([]);
+
+			// The regression this closes: the taken-action proof from the EARLIER session click must not
+			// let a bare opener snapshot be read as "the wall is gone, so it's done".
+			const snap = await bridge.callTool("browser_snapshot", {});
+			expect(snap.content[0].text).not.toContain("Signed in to");
+			expect(bridge.signIn).not.toBeNull();
+			expect(h.done).toEqual([]);
+		});
+
+		it("after an unresolved popup close, retyping the exact same code is refused before it ever reaches the browser again — until a fresh code lifts the latch", async () => {
+			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true } };
+			const b = fakeBrowser(pages, { clicks: { e42: SIGN_IN, e41: BACK }, typeCloses: { e30: SIGN_IN } });
+			const h = signInHost(["PAGS_LOGIN_USERNAME"], { code: true });
+			const bridge = new ApplyBridge(b.tools, h.host);
+			await bridge.callTool("browser_navigate", { url: FORM });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+			await bridge.callTool("browser_navigate", { url: SIGN_IN });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("browser_click", { target: "e42" });
+			await bridge.callTool("request_sign_in_code", {});
+
+			const first = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(first.isError).toBe(true);
+			expect(b.sent("browser_type")).toHaveLength(1);
+
+			await bridge.callTool("browser_snapshot", {}); // the wall is still visible — e30 resolves again
+			const repeat = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(repeat.isError).toBe(true);
+			expect(repeat.content[0].text).toMatch(/already typed once/);
+			expect(b.sent("browser_type")).toHaveLength(1); // never dispatched to the browser a second time
+
+			// A freshly provisioned code — the owner's "explicit fresh auth/code flow" — lifts the latch:
+			// this attempt is no longer refused as a blind repeat, and it genuinely reaches the browser.
+			const fresh = await bridge.callTool("request_sign_in_code", {});
+			expect(fresh.isError).toBeUndefined();
+			const retried = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(retried.content[0].text).not.toMatch(/already typed once/);
+			expect(b.sent("browser_type")).toHaveLength(2);
+		});
 	});
 
 	it("does not turn an unresolved sign-in into a profile question (#1474)", async () => {
