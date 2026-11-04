@@ -1270,4 +1270,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.201": "sha256:4e2daeb34459d66a8c4842e2ebc1722385b69985eed85fd95d68bfb97c385c8f", // #1487: owner-scoped browser calls, retained/current tab state, paged screenshots and image retrieval.
 	"0.1.202": "sha256:4e2daeb34459d66a8c4842e2ebc1722385b69985eed85fd95d68bfb97c385c8f", // #1487: edge-compatible screenshot fetch; published tool schemas unchanged.
 	"0.1.203": "sha256:5a13a80a41a0ef9f56007351d84342723a10a20bd90fee8980e22506465f8e4c", // #1504: bounded original private instance text reader with hash-bound paging.
+	"0.1.204": "sha256:c61e47862a48db07296a98ecabbe5efa2a249e79452b0eaf2f00fb4221eb526b", // #1511: per-instance local browser model and reasoning configuration.
 };
