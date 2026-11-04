@@ -10,7 +10,7 @@ import type { JobApplication, TailorRun } from "./store.js";
 const { exportCall } = vi.hoisted(() => ({ exportCall: vi.fn() }));
 vi.mock("../../routes/instances-runtime.js", () => ({ callRuntime: exportCall, runtimeJson: (res: Response) => res.json(), getLiveRuntime: async () => ({ runner_version: "0.4.205", runner_node: "mac", instance_id: "apply" }) }));
 const { syncTailorRun } = await import("./tailor.js");
-const { getTailorRun, getApplication } = await import("./store.js");
+const { getTailorRun, getApplication, updateTailorRun } = await import("./store.js");
 const { moveApplication } = await import("../local-apply/store.js");
 const { startApplicationFill, dispatchNextQueuedFill } = await import("../local-apply/apply.js");
 const { persistCloudDocuments, loadCloudDocuments, cloudDocumentsRunnerProblem } = await import("./cloud-documents.js");
@@ -190,6 +190,45 @@ describe("real tailoring settlement and application dispatch", () => {
 			? Response.json({ state: "ended", lastSeq: 0, events: [], result }) : Response.json({}, { status: 503 }));
 		expect(await sync(5000)).toMatchObject({ status: "running" });
 		expect(await sync(1_202_000)).toMatchObject({ status: "failed", errorCode: "cloud_documents_unavailable" });
+	});
+	it("persists the validated result durably BEFORE attempting Files storage, so it survives a crash mid-upload (#1469)", async () => {
+		serveCompletedRun(); failUpload = 2;
+		expect(await sync()).toMatchObject({ status: "running", errorCode: "cloud_documents_pending" });
+		// Still non-terminal (storage never finished), but the result that WOULD finish it is
+		// already durable — the whole point: a restart before this point still has it.
+		const row = await d1.DB.prepare("SELECT result FROM local_artifact_runs WHERE id = ?1").bind(run.id).first<{ result: string }>();
+		expect(JSON.parse(row!.result)).toMatchObject({ runId: run.id, outcome: "completed" });
+	});
+	it("recovers a completed run from its durably persisted result when the runner 404s having lost it — Files already complete, never re-fetched (#1469)", async () => {
+		await persist(); // Files fully persisted, as if an earlier attempt got this far...
+		await updateTailorRun(env(), (await getTailorRun(env(), "tailor", "owner", run.id))!, { result }, 1000); // ...and its result was durably recorded (settleFromResult's own first step) ...
+		// ...but the crash landed before THIS run ever reached `updateTailorRun({ to: "completed", ... })` — it is still "running".
+		expect((await getTailorRun(env(), "tailor", "owner", run.id))!.status).toBe("running");
+		const uploadsBeforeRecovery = uploads;
+		exportCall.mockImplementation(async (_env: unknown, _runtime: unknown, path: string) => path === "/local-artifact/status" ? Response.json({}, { status: 404 }) : Response.json({ error: "should not be called" }, { status: 500 }));
+		const recovered = await sync(5000);
+		expect(recovered).toMatchObject({ status: "completed", errorCode: null, error: null });
+		expect(uploads).toBe(uploadsBeforeRecovery); // the documents endpoint was never asked again
+		const app2 = (await getApplication(env(), "tailor", "owner", "application"))!;
+		expect(app2.status).toBe("materials_ready");
+		expect(app2.readyEvent?.artifacts).toBeTruthy();
+		expect(JSON.stringify(app2.readyEvent)).not.toContain("contentBase64");
+	});
+	it("still ends the run runner_lost on a 404 when no result was ever durably recorded — nothing to recover from (#1469)", async () => {
+		exportCall.mockImplementation(async () => Response.json({}, { status: 404 }));
+		expect(await sync()).toMatchObject({ status: "failed", errorCode: "runner_lost" });
+		expect(await d1.DB.prepare("SELECT status, block_reason FROM job_applications").first()).toEqual({ status: "blocked", block_reason: "runner_lost" });
+	});
+	it("refuses closed rather than silently succeeding when a durable result exists but its documents never finished storing (#1469)", async () => {
+		await updateTailorRun(env(), (await getTailorRun(env(), "tailor", "owner", run.id))!, { result }, 1000); // the result arrived and was recorded...
+		// ...but NOTHING was ever uploaded (the crash landed before persistCloudDocuments did any
+		// work at all) — application_documents is empty, so the recovery check cannot shortcut, and
+		// re-asking the (now 404ing) runner for the documents fails the same way a live mismatch would.
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM application_documents").first<{ n: number }>())!.n).toBe(0);
+		exportCall.mockImplementation(async () => Response.json({}, { status: 404 }));
+		const settled = await sync(5000);
+		expect(settled).toMatchObject({ status: "failed", errorCode: "cloud_documents_unavailable" });
+		expect(await d1.DB.prepare("SELECT status, block_reason FROM job_applications").first()).toEqual({ status: "blocked", block_reason: "cloud_documents_unavailable" });
 	});
 	it.each([false, true])("hydrates exact cloud bytes on dispatch (queued=%s)", async (queued) => {
 		serveCompletedRun(); await sync();

@@ -356,6 +356,16 @@ async function settleFromResult(env: Env, uid: string, run: TailorRun, rawResult
 		return failed ?? run;
 	}
 	const r = checked.result;
+	// #1469: durable, metadata-only completion evidence BEFORE the Files step, not after it. A
+	// producing runner that restarts right after persistCloudDocuments finishes (Files written,
+	// receipts in `application_documents`) but before this function reaches its own
+	// `updateTailorRun` below leaves the run `running` forever with its result known nowhere — the
+	// next sync's `/local-artifact/status` 404s (the restarted runner no longer holds the run) and
+	// used to declare it lost outright, despite the documents already being safely stored. Writing
+	// `result` here, unconditionally and first, means the run row itself is that evidence: a later
+	// 404 can re-enter this exact function from `run.result` and finish settling without needing
+	// the runner's now-gone in-memory state at all.
+	run = (await updateTailorRun(env, run, { result: r }, now)) ?? run;
 	if (r.outcome === "completed" && run.policy.cloudDocuments) {
 		try { await persistCloudDocuments(env, runtime, uid, run, r, now); }
 		catch (error) {
@@ -461,7 +471,23 @@ async function syncTailorRunFromRunner(env: Env, uid: string, run: TailorRun, no
 	} catch {
 		return run;
 	}
-	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated. Retry tailoring.", now);
+	if (res.status === 404) {
+		// #1469: the runner saying it no longer holds this run proves nothing about whether its
+		// result already arrived and was durably persisted (see the comment in settleFromResult) —
+		// only that THIS incarnation of the runner can't be asked again. Finish from that durable
+		// record instead of declaring the run lost. Whatever settleFromResult decides — settled
+		// complete, refused closed on a confirmed documents mismatch, or left pending to retry
+		// within its own time budget — is strictly better evidence than a runner-silence guess, so
+		// it is returned as-is rather than overridden by endLost.
+		if (run.result !== null && run.result !== undefined) {
+			const recovered = await settleFromResult(env, uid, run, run.result, now, runtime).catch(() => null);
+			if (recovered) {
+				await syncApplicationCard(env, uid, recovered, "tailor");
+				return recovered;
+			}
+		}
+		return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated. Retry tailoring.", now);
+	}
 	if (!res.ok) return lostByTime ? endLost(env, uid, run, "The runner stopped answering for this run.", now) : run;
 	const body = (await runtimeJson(res)) as { state?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
 	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalArtifactEvent).filter((e): e is NonNullable<typeof e> => e !== null) as TraceEvent[];
