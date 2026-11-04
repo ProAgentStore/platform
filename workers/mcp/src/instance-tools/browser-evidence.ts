@@ -45,14 +45,19 @@ export function registerBrowserEvidenceTools(server: McpServer, ctx: InstanceToo
   const metadata = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/browser-artifacts/${encodeURIComponent(artifact_id)}?metadata=true`, session, {}, env);
   if (!metadata || typeof metadata !== "object" || "error" in metadata) return jsonText(metadata);
   const requestId = apiRequestIdForCall();
-  const response = await fetch(`${apiBase(env)}${path}`, { redirect: "error", signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${session}`, "X-PAGS-Client": "mcp", ...(requestId ? { "X-Request-Id": requestId } : {}) } });
-  if (!response.ok) { noteUpstreamStatus(response.status); return text(`Error: screenshot unavailable (API ${response.status}).`); }
-  const mimeType = response.headers.get("Content-Type")?.split(";")[0] ?? "";
-  if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) return text("Error: screenshot response was not an image.");
-  if (Number(response.headers.get("Content-Length") ?? 0) > 768 * 1024) return text("Error: screenshot exceeds the image limit.");
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!bytes.length || bytes.length > 768 * 1024) return text("Error: screenshot is empty or exceeds the image limit.");
-  let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte);
-  return { content: [{ type: "text" as const, text: JSON.stringify(metadata) }, { type: "image" as const, data: btoa(binary), mimeType }] };
+  try {
+   // #1494: Workers supports manual/follow only. Reject 3xx below; never forward bearer auth to a Location.
+   const response = await fetch(`${apiBase(env)}${path}`, { redirect: "manual", signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${session}`, "X-PAGS-Client": "mcp", ...(requestId ? { "X-Request-Id": requestId } : {}) } });
+   if (!response.ok) { noteUpstreamStatus(response.status); return text(`Error: screenshot unavailable (API ${response.status}).`); }
+   const mimeType = response.headers.get("Content-Type")?.split(";")[0] ?? "";
+   if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) return text("Error: screenshot response was not an image.");
+   if (Number(response.headers.get("Content-Length") ?? 0) > 768 * 1024) return text("Error: screenshot exceeds the image limit.");
+   const bytes = new Uint8Array(await response.arrayBuffer());
+   if (!bytes.length || bytes.length > 768 * 1024) return text("Error: screenshot is empty or exceeds the image limit.");
+   let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte);
+   return { content: [{ type: "text" as const, text: JSON.stringify(metadata) }, { type: "image" as const, data: btoa(binary), mimeType }] };
+  } catch {
+   return text("Error: screenshot download failed or timed out.");
+  }
  });
 }

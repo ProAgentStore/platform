@@ -45,3 +45,34 @@ it("shrinks oversized call pages without a second native refresh or skipping the
  expect(urls.map(url=>new URL(url).searchParams.get("limit"))).toEqual(["25","12","6","3"]);
  expect(urls.slice(1).every(url=>new URL(url).searchParams.get("refresh")==="false")).toBe(true);
 });
+it.each([200, 302, 307])("uses Worker-supported manual redirects and never forwards image credentials (%i)", async (status) => {
+ const requests: Array<{ url: string; redirect?: RequestInit["redirect"]; auth: string | null }> = [];
+ const invoke = fixture(async (url, init) => {
+  requests.push({ url: String(url), redirect: init?.redirect, auth: new Headers(init?.headers).get("Authorization") });
+  if (String(url).includes("metadata=true")) return Response.json({ id: "frame" });
+  // Workers rejects this option before making the image request, unlike Node fetch.
+  if (init?.redirect === "error") throw new TypeError("Invalid redirect mode: error");
+  if (status !== 200 && init?.redirect !== "manual") {
+   requests.push({ url: "https://outside.test/collect", redirect: "follow", auth: new Headers(init?.headers).get("Authorization") });
+   return new Response(new Uint8Array([255, 216, 255]), { headers: { "Content-Type": "image/jpeg" } });
+  }
+  return status === 200
+   ? new Response(new Uint8Array([255, 216, 255]), { headers: { "Content-Type": "image/jpeg" } })
+   : new Response(null, { status, headers: { Location: "https://outside.test/collect" } });
+ });
+ const result = await invoke("browser_run_screenshot", { instance_id: "i1", artifact_id: "frame" });
+ expect(requests).toHaveLength(2);
+ expect(requests[1]).toMatchObject({ url: "https://api.test/v1/instances/i1/browser-artifacts/frame", redirect: "manual", auth: "Bearer session" });
+ if (status === 200) expect(result.content[1]).toEqual({ type: "image", data: "/9j/", mimeType: "image/jpeg" });
+ else expect(result.content).toEqual([{ type: "text", text: `Error: screenshot unavailable (API ${status}).` }]);
+});
+it.each(["network", "body"])("returns the standard safe failure shape for image %s errors", async (failure) => {
+ const invoke = fixture(async url => {
+  if (String(url).includes("metadata=true")) return Response.json({ id: "frame" });
+  if (failure === "network") throw new Error("connection failed Bearer PRIVATE");
+  return new Response(new ReadableStream({ start(controller) { controller.error(new Error("body failed PRIVATE")); } }), { headers: { "Content-Type": "image/jpeg" } });
+ });
+ const result = await invoke("browser_run_screenshot", { instance_id: "i1", artifact_id: "frame" });
+ expect(result.content).toEqual([{ type: "text", text: "Error: screenshot download failed or timed out." }]);
+ expect(JSON.stringify(result)).not.toContain("PRIVATE");
+});
