@@ -296,9 +296,9 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version);
-	// The admission gate (#1175): refused HERE, before the application leaves materials_ready, like an outdated machine — but 503,
-	// because the machine recovers by itself and the outbox should retry.
-	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "application runs", true);
+	// Admission refuses before a run row exists. Only a connection's outbox retries this 503;
+	// an owner start has no durable retry, so its refusal must say to start again (#1520).
+	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "application runs", source === "connection");
 	if (overloaded) throw new HttpError(503, overloaded);
 
 	const now = Date.now();
