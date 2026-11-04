@@ -17,7 +17,8 @@ export function applicationTraceLabel(entry: Pick<ApplicationTraceEntry, "type" 
 	else if (entry.type === "run.resumed") label = "Resumed application";
 	else if (entry.type === "screenshot.captured") label = `Captured frame ${typeof d.shot === "number" ? d.shot : ""} (${words(text("point")) || "page"})`;
 	else if (entry.type === "field.filled") label = `Filled field${target ? ` “${target}”` : " (target not recorded)"}`;
-	else if (entry.type === "artifact.uploaded") label = `Attached ${words(text("kind")) || "document"}`;
+	else if (entry.type === "artifact.staged") label = `Prepared ${text("path") || "document"} from ${text("source") || "approved source"}; identical bytes`;
+	else if (entry.type === "artifact.uploaded") label = d.status === "selected" ? `Selected ${words(text("kind")) || "document"}; site acceptance unconfirmed` : `Attached ${words(text("kind")) || "document"}`;
 	else if (entry.type === "submit.attempted") label = "Attempted submission — confirmation pending";
 	else if (entry.type === "submit.confirmed") label = "Submission confirmed";
 	else if (entry.type === "run.ended") label = `Run ended: ${words(text("status")) || "finished"}${reason ? ` — ${reason}` : ""}`;

@@ -24,8 +24,8 @@
  *
  * The trace carries classes, domains, decisions and artifact handles — never a typed value.
  */
-import { SIGN_IN_CONTROL_PROBE_FN, SIGN_IN_PAGE_PROBE_FN, type SignInControlFacts, signInOrigin } from "./sign-in-policy.js";
-import { classifyApplyClick } from "./contract.js";
+import { SIGN_IN_CONTROL_PROBE_FN, SIGN_IN_PAGE_PROBE_FN, type SignInControlFacts, isSignInReturn, signInOrigin } from "./sign-in-policy.js";
+import { classifyApplyClick, LOCAL_APPLY_CAPS } from "./contract.js";
 import { LISTING_EXPIRED_RE, LISTING_UNAVAILABLE_RE } from "./unavailable.js";
 import type { MaskablePage, ShotRecorder } from "../local-browser/replay.js";
 import {
@@ -161,6 +161,8 @@ export const INSPECT_PAGE = `() => {
 }`;
 
 interface PageState {
+	/** Native credential controls, separate from a login-looking URL such as an OAuth callback. */
+	credentialWall: boolean;
 	url: string;
 	title: string;
 	captcha: boolean;
@@ -226,6 +228,8 @@ export class ApplyBridge {
 	private signInOrigin: string | null = null;
 	private signInWallSeen = false;
 	private signInActionTaken = false;
+	private signInCredentialEntered = false;
+	private signInReturnOrigin: string | null = null;
 
 	private readonly replay: ApplyReplay;
 	private readonly browser: BrowserTools;
@@ -273,7 +277,7 @@ export class ApplyBridge {
 			{
 				name: "request_answer",
 				description: "Ask the owner for an answer the sources do not give (missing_answer), or when a question is ambiguous (screening_ambiguity). The run waits for them.",
-				inputSchema: { type: "object", properties: { question: { type: "string" }, kind: { type: "string", enum: ["missing_answer", "screening_ambiguity"] } }, required: ["question"] },
+				inputSchema: { type: "object", properties: { question: { type: "string", maxLength: LOCAL_APPLY_CAPS.questionChars }, kind: { type: "string", enum: ["missing_answer", "screening_ambiguity"] } }, required: ["question"] },
 			},
 			{
 				name: "ready_for_review",
@@ -327,6 +331,8 @@ export class ApplyBridge {
 		}
 		if (name === "browser_navigate_back") {
 			this.signInActionTaken = false;
+			this.signInCredentialEntered = false;
+			this.signInReturnOrigin = null;
 			const state = await this.inspect();
 			if (state) return this.landed(textOf(res), state);
 		}
@@ -351,7 +357,7 @@ export class ApplyBridge {
 		const unavailable = v.unavailable === "expired" || v.unavailable === "unavailable" ? v.unavailable : null;
 		// A sign-in page by its ADDRESS too (#1100): SEEK's `login.seek.com/login` has no password field, so an
 		// "Apply" that bounced there ran on to `awaiting_review` with nothing filled. Same rule as the submit path.
-		return { url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: looksLikeSignIn(v.url, !!v.login), duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed, unavailable };
+		return { credentialWall: !!v.login, url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: looksLikeSignIn(v.url, !!v.login), duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed, unavailable };
 	}
 
 	private blockerOf(s: PageState): LocalApplyPauseReason | null {
@@ -374,6 +380,8 @@ export class ApplyBridge {
 			this.signInOrigin = null;
 			this.signInWallSeen = false;
 			this.signInActionTaken = false;
+			this.signInCredentialEntered = false;
+			this.signInReturnOrigin = null;
 			const state = await this.inspect();
 			if (state) this.observeSignIn(state);
 			this.supervisorApproved = false;
@@ -425,6 +433,11 @@ export class ApplyBridge {
 			this.signInWallSeen = true;
 			this.signInOrigin ??= origin;
 		}
+		if (state.credentialWall || state.captcha || state.antiBot || state.duplicate || (state.login && !isSignInReturn(state.url))) this.signInReturnOrigin = null;
+		// An OTP may return to an application-origin OAuth callback before the model navigates back
+		// to the job. Remember only a runner-observed automatic return after credential entry; the
+		// callback alone never declares success, and an explicit navigation cannot create this proof.
+		if (this.signInWallSeen && this.signInCredentialEntered && origin && origin !== this.signInOrigin && siteKeyOf(host) === this.signIn.site && this.host.isAllowed(host) && isSignInReturn(state.url) && !state.credentialWall && !state.captcha && !state.antiBot && !state.duplicate) this.signInReturnOrigin = origin;
 		return this.signInWallSeen && this.signInActionTaken && !this.blockerOf(state) && this.host.isAllowed(host);
 	}
 
@@ -437,9 +450,12 @@ export class ApplyBridge {
 	private async signedIn(toolText: string, host: string): Promise<ToolResult> {
 		const site = this.signIn?.site || (host ? siteKeyOf(host) : "");
 		this.signIn = null;
+		if (this.blocked?.reason === "login_required") this.blocked = null;
 		this.signInOrigin = null;
 		this.signInWallSeen = false;
 		this.signInActionTaken = false;
+		this.signInCredentialEntered = false;
+		this.signInReturnOrigin = null;
 		this.host.signInDone?.();
 		if (site) await this.recordSignIn(site);
 		this.host.emit({ type: "policy.decision", ...(host ? { domain: host } : {}), detail: { tool: "agent_sign_in", class: "session", decision: "signed_in", site } });
@@ -505,7 +521,16 @@ export class ApplyBridge {
 		if (!host) return this.refuse("browser_navigate", "read", "Only http(s) URLs can be opened.");
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_navigate", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
 		if (!(await this.admit(host, url))) return this.refuse("browser_navigate", "read", `${host} is not one of this application's sites and the owner did not allow it. Stop now.`, host);
-		if (this.signIn) this.signInActionTaken = false;
+		if (this.signIn) {
+			const before = await this.inspect();
+			if (before && this.observeSignIn(before)) return this.signedIn("Sign-in completed before this navigation. Read the current page before continuing.", hostOf(before.url) ?? "");
+			const returning = this.signInReturnOrigin && signInOrigin(url) === this.signInReturnOrigin && !looksLikeSignIn(url, false);
+			if (!returning) {
+				this.signInActionTaken = false;
+				this.signInCredentialEntered = false;
+				this.signInReturnOrigin = null;
+			}
+		}
 		const res = await this.browser.callTool("browser_navigate", { url });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		return this.afterMove("browser_navigate", textOf(res));
@@ -538,6 +563,10 @@ export class ApplyBridge {
 	}
 
 	private async click(args: Record<string, unknown>): Promise<ToolResult> {
+		if (this.signIn) {
+			const state = await this.inspect();
+			if (state && this.observeSignIn(state)) return this.signedIn("Sign-in completed before this click. The old sign-in control was not pressed; take a fresh snapshot.", hostOf(state.url) ?? "");
+		}
 		const t = this.target(args);
 		if (!t) return this.refuse("browser_click", "read", "Click only elements from the latest browser_snapshot, by their ref.");
 		const forward = { element: typeof args.element === "string" ? args.element : t.name, target: t.ref };
@@ -622,7 +651,12 @@ export class ApplyBridge {
 			this.host.emit({ type: "policy.decision", detail: { tool: "browser_type", class: "session", decision: "allowed", reason: `secret:${value}`, role: t.role } });
 			const res = await this.browser.callTool("browser_type", { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value }, { expectedOrigin: this.signInOrigin });
 			if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
-			if (kind === "password" || kind === "code") this.signInActionTaken = true;
+			if (kind === "password" || kind === "code") {
+				this.signInActionTaken = true;
+				this.signInCredentialEntered = true;
+				const after = await this.inspect();
+				if (after && this.observeSignIn(after)) return this.signedIn(textOf(res), hostOf(after.url) ?? "");
+			}
 			return text(textOf(res));
 		}
 		if (SECRET_NAME.test(value)) return this.refuse("browser_type", "session", `${value} is not a provisioned secret name${this.signIn ? ` (provisioned: ${this.signIn.names.join(", ") || "none"})` : ""}. Nothing was typed.`);
@@ -673,13 +707,20 @@ export class ApplyBridge {
 			return text(/modal state|file chooser/i.test(msg) ? "No file chooser is open. Click the field's upload control first, then call upload_artifact." : msg, true);
 		}
 		this.uploaded.add(kind);
-		this.host.emit({ type: "artifact.uploaded", detail: { kind, sha256: file.sha256, class: "fill" } });
-		return text(`Attached the approved ${kind.replace("_", " ")}.`);
+		this.host.emit({ type: "artifact.uploaded", detail: { kind, sha256: file.sha256, class: "fill", status: "selected", reason: "site_acceptance_unconfirmed" } });
+		return text(`Selected the approved ${kind.replace("_", " ")} in the file input. Website acceptance is not confirmed; inspect the upload field and resolve any validation error before continuing.`);
 	}
 
 	private async requestAnswer(args: Record<string, unknown>): Promise<ToolResult> {
-		const question = typeof args.question === "string" ? args.question.trim().slice(0, 300) : "";
+		const question = typeof args.question === "string" ? args.question.trim() : "";
 		if (!question) return text("request_answer needs the question.", true);
+		if (question.length > LOCAL_APPLY_CAPS.questionChars) return text(`The question exceeds ${LOCAL_APPLY_CAPS.questionChars} characters. Rewrite a concise, complete question within that limit; nothing was sent to the owner.`, true);
+		if (this.signIn) {
+			const state = await this.inspect();
+			if (state && this.observeSignIn(state)) return this.signedIn("Sign-in completed. Continue the application from a fresh snapshot.", hostOf(state.url) ?? "");
+			this.blocked = { reason: "login_required", questions: ["The browser has not verified that sign-in completed. Continue sign-in or take over this browser."] };
+			return text("Sign-in is still unresolved; it is not a missing profile or screening answer. Continue the sign-in, or call ready_for_review to report login_required. No profile question was sent.", true);
+		}
 		const reason: LocalApplyPauseReason = args.kind === "screening_ambiguity" ? "screening_ambiguity" : "missing_answer";
 		const before = this.host.grounding().length;
 		const ok = await this.pauseFor({ reason, question });
@@ -818,6 +859,13 @@ export class ApplyBridge {
 
 	/** A page-changing click — followed into a tab it opened (#1133, `follow-tab.ts`). */
 	private async clickAndFollow(forward: Record<string, unknown>): Promise<ToolResult> {
+		// An ordinary link is chosen by the model, not an authentication redirect. It cannot
+		// manufacture callback evidence or turn a public job page into sign-in confirmation.
+		if (this.signIn) {
+			this.signInActionTaken = false;
+			this.signInCredentialEntered = false;
+			this.signInReturnOrigin = null;
+		}
 		const before = await tabCount(this.browser);
 		const res = await this.browser.callTool("browser_click", forward);
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };

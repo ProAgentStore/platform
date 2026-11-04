@@ -59,3 +59,13 @@ export function signInOrigin(url: string): string | null {
 		return null;
 	}
 }
+
+/** A return relay is not a credential form or proof of success on its own. */
+export function isSignInReturn(url: string): boolean {
+	try {
+		const u = new URL(url);
+		return /^\/oauth2?\/callback\/?$/i.test(u.pathname) && !u.searchParams.has("error") && !u.searchParams.has("error_description");
+	} catch {
+		return false;
+	}
+}

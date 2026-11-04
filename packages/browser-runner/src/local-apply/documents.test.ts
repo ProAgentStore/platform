@@ -37,6 +37,8 @@ describe("cloud application documents (#1468)", () => {
 		expect(prepared.blocks.map((block) => block.label)).toEqual(["resume", "cover_letter", "profile"]);
 		const upload = prepared.artifactPath("resume");
 		expect(upload).toHaveProperty("path");
+		expect(upload).toMatchObject({ path: expect.stringMatching(/resume\.txt$/), sha256: input.artifacts[0].sha256 });
+		expect(events).toContainEqual({ type: "artifact.staged", detail: { kind: "resume", source: "resume.md", path: "resume.txt", sha256: input.artifacts[0].sha256, bytes: input.cloudDocuments![0].bytes } });
 		if (!("path" in upload)) throw new Error("Expected staged file");
 		expect(readFileSync(upload.path, "utf8")).toBe("Private resume exact owner text");
 		expect(statSync(upload.path).mode & 0o777).toBe(0o600);
@@ -103,7 +105,7 @@ describe("cloud application documents (#1468)", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(spawned).toBe(1);
 		const runDir = join(dir, "local-apply/runner-1/run-1");
-		expect(existsSync(join(runDir, "documents/resume.md"))).toBe(true);
+		expect(existsSync(join(runDir, "documents/resume.txt"))).toBe(true);
 		const checkpoint = runtime.bridge({ runId: "run-1", op: "call", name: "supervisor_checkpoint", args: { checkpointId: "initial:1", phase: "initial" } });
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		runtime.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "initial:1", directive: "continue" });

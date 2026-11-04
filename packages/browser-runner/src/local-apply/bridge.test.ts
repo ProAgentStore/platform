@@ -539,6 +539,20 @@ describe("pauses — a person handles it, the run never works around it", () => 
 		for (const name of ["Verification code", "Security code", "Login code", "Enter the code we sent to your email", "6 digit code", "One-time passcode", "Password"]) expect(CREDENTIAL_NAME.test(name), name).toBe(true);
 	});
 
+	it("rejects an oversized question intact, then sends a complete rewritten question (#1475)", async () => {
+		const { bridge, pauses } = await onForm();
+		const oversized = `Can you confirm ${"the complete context ".repeat(20)}and the final question?`;
+		const rejected = await bridge.callTool("request_answer", { question: oversized });
+		expect(rejected.isError).toBe(true);
+		expect(rejected.content[0].text).toContain("Rewrite a concise, complete question");
+		expect(pauses).toHaveLength(0);
+		const question = "What is your notice period, in weeks?";
+		await bridge.callTool("request_answer", { question: `  ${question}  ` });
+		expect(pauses).toEqual([{ reason: "missing_answer", question }]);
+		const tool = (await bridge.listTools()).find(t => t.name === "request_answer")!;
+		expect(tool.inputSchema).toMatchObject({ properties: { question: { maxLength: 300 } } });
+	});
+
 	it("request_answer pauses with the question; an unanswered one leaves the run blocked", async () => {
 		const { bridge, pauses } = await onForm();
 		const res = await bridge.callTool("request_answer", { question: "Salary expectation?" });
@@ -674,7 +688,7 @@ describe("upload_artifact — an approved file, once", () => {
 		expect((await bridge.callTool("upload_artifact", { kind: "resume" })).isError).toBeFalsy();
 		expect((await bridge.callTool("upload_artifact", { kind: "resume" })).isError).toBe(true);
 		expect(sent("browser_file_upload")).toEqual([{ name: "browser_file_upload", args: { paths: ["/home/jane/jobs/applications/lead-1/run-1/resume.md"] } }]);
-		expect(events.find((e) => e.type === "artifact.uploaded")?.detail).toMatchObject({ kind: "resume", sha256: "a".repeat(64) });
+		expect(events.find((e) => e.type === "artifact.uploaded")?.detail).toMatchObject({ kind: "resume", sha256: "a".repeat(64), status: "selected", reason: "site_acceptance_unconfirmed" });
 	});
 	it("refuses an artifact that changed since it was generated, and says why", async () => {
 		const { bridge, sent } = await onForm({}, { artifactError: "The approved resume has changed since it was generated; it will not be uploaded." });
@@ -774,7 +788,8 @@ describe("the agent-driven sign-in (#1412)", () => {
 	}
 
 	async function atSignIn(names: string[], o: Parameters<typeof signInHost>[1] = {}, clicks: Record<string, string> = { e41: BACK }) {
-		const b = fakeBrowser({ [FORM]: {}, [SIGN_IN]: { login: true }, [BACK]: {} }, { clicks });
+		const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true }, [BACK]: {} };
+		const b = fakeBrowser(pages, { clicks });
 		const h = signInHost(names, o);
 		const bridge = new ApplyBridge(b.tools, h.host);
 		await bridge.callTool("browser_navigate", { url: FORM });
@@ -782,7 +797,7 @@ describe("the agent-driven sign-in (#1412)", () => {
 		await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
 		const wall = await bridge.callTool("browser_navigate", { url: SIGN_IN });
 		await bridge.callTool("browser_snapshot", {});
-		return { bridge, wall, ...b, ...h };
+		return { bridge, wall, pages, ...b, ...h };
 	}
 
 	it("a login wall the cloud answers with secrets is handed to the CLI by NAME; names are forwarded, values and strangers are refused, and the session click lands it signed in", async () => {
@@ -843,6 +858,78 @@ describe("the agent-driven sign-in (#1412)", () => {
 		expect((await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" })).isError).toBeUndefined();
 		expect(calls.filter((c) => c.name === "browser_type").map((c) => c.args.text)).toEqual(["PAGS_LOGIN_CODE"]);
 		expect(events.map((e) => (e.detail as Record<string, unknown> | undefined)?.decision)).toContain("code_requested");
+	});
+
+	it("preserves completed OTP evidence through an observed automatic callback and same-origin return to the job (#1474)", async () => {
+		const { bridge, history, pages, done, sent, events } = await atSignIn(["PAGS_LOGIN_CODE"]);
+		const callback = "https://au.seek.com/oauth/callback";
+		const job = "https://au.seek.com/job/95534692";
+		pages[callback] = {};
+		pages[job] = {};
+		await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+		history.push(callback); // A site-driven redirect, not a model navigation.
+		// The old login control is refused on the callback, but that fresh read records the transition.
+		expect((await bridge.callTool("browser_click", { target: "e41" })).isError).toBe(true);
+		await bridge.callTool("browser_snapshot", {});
+		expect(done).toEqual([]); // The callback itself is not authenticated-session proof.
+		const returned = await bridge.callTool("browser_navigate", { url: job });
+		expect(returned.content[0].text).toContain("Signed in to seek.com");
+		expect(bridge.signIn).toBeNull();
+		expect(done).toEqual([1]);
+		expect(sent("browser_click")).toHaveLength(0);
+		expect(events.filter(e => e.type === "policy.decision" && e.detail?.decision === "signed_in")).toHaveLength(1);
+		expect((await bridge.callTool("supervisor_checkpoint", { checkpointId: "post-auth", phase: "post_navigation" })).content[0].text).toContain("directive is continue");
+	});
+
+	it("a fresh clean page after OTP completes sign-in before a stale Sign in click can act (#1474)", async () => {
+		const { bridge, history, pages, sent, done } = await atSignIn(["PAGS_LOGIN_CODE"]);
+		const job = "https://au.seek.com/job/95534692";
+		pages[job] = {};
+		await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+		history.push(job);
+		const res = await bridge.callTool("browser_click", { target: "e41" });
+		expect(res.content[0].text).toContain("Sign-in completed before this click");
+		expect(sent("browser_click")).toHaveLength(0);
+		expect(done).toEqual([1]);
+	});
+
+	it.each(["manual_callback", "callback_login_wall", "callback_error", "incorrect_code", "prewall"])("does not create sign-in evidence from %s (#1474)", async scenario => {
+		const { bridge, history, pages, done } = await atSignIn(["PAGS_LOGIN_CODE"]);
+		const callback = `https://au.seek.com/oauth/callback${scenario === "callback_error" ? "?error=access_denied" : ""}`;
+		const job = "https://au.seek.com/job/95534692";
+		pages[callback] = scenario === "callback_login_wall" ? { login: true } : {};
+		pages[job] = {};
+		if (scenario !== "prewall") await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+		if (scenario === "manual_callback") await bridge.callTool("browser_navigate", { url: callback });
+		else if (scenario !== "incorrect_code") history.push(callback);
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("browser_navigate", { url: job });
+		await bridge.callTool("browser_snapshot", {});
+		expect(bridge.signIn).not.toBeNull();
+		expect(done).toEqual([]);
+	});
+
+	it.each(["callback", "job"])("an ordinary link to a %s cannot manufacture authentication-return evidence (#1474)", async target => {
+		const callback = "https://au.seek.com/oauth/callback";
+		const job = "https://au.seek.com/job/95534692";
+		const { bridge, pages, done } = await atSignIn(["PAGS_LOGIN_CODE"], {}, { e10: target === "callback" ? callback : job });
+		pages[callback] = {};
+		pages[job] = {};
+		await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+		await bridge.callTool("browser_click", { target: "e10" });
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("browser_navigate", { url: job });
+		expect(done).toEqual([]);
+		expect(bridge.signIn).not.toBeNull();
+	});
+
+	it("does not turn an unresolved sign-in into a profile question (#1474)", async () => {
+		const { bridge, pauses } = await atSignIn(["PAGS_LOGIN_CODE"]);
+		const res = await bridge.callTool("request_answer", { question: "Can you confirm the browser is signed in?", kind: "screening_ambiguity" });
+		expect(res.isError).toBe(true);
+		expect(res.content[0].text).toContain("not a missing profile or screening answer");
+		expect(pauses).toHaveLength(1); // Only the original authentication pause.
+		expect(bridge.blocked?.reason).toBe("login_required");
 	});
 
 	it("a code that never arrives, and a code asked for outside a sign-in, are both refused honestly", async () => {

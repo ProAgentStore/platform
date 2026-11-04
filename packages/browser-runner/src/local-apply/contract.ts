@@ -340,6 +340,7 @@ export type LocalApplyEventType =
 	| "browser.blocked"
 	| "policy.decision"
 	| "field.filled"
+	| "artifact.staged"
 	| "artifact.uploaded"
 	| "review.ready"
 	| "submit.attempted"
@@ -361,6 +362,7 @@ export const LOCAL_APPLY_EVENT_TYPES: readonly LocalApplyEventType[] = [
 	"browser.blocked",
 	"policy.decision",
 	"field.filled",
+	"artifact.staged",
 	"artifact.uploaded",
 	"review.ready",
 	"submit.attempted",

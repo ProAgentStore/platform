@@ -80,10 +80,20 @@ describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 	});
 
 	it("runs a command and captures its output in the pane", async () => {
-		runCommand(SESSION, "echo tmux_connector_marker_42");
-		// Until the shell has rendered it — not a fixed beat that a loaded machine outruns.
-		await until(() => capturePane(SESSION, 200).includes("tmux_connector_marker_42"), "the shell to render the command's output");
-		expect(capturePane(SESSION, 200)).toContain("tmux_connector_marker_42");
+		// #1471: NOT `capturePane().includes("tmux_connector_marker_42")` — the typed line itself
+		// (tmux's own input echo) contains that exact text too, as part of "echo
+		// tmux_connector_marker_42", so a plain substring check can pass the instant the terminal
+		// echoes the keystrokes back, before the shell has actually run anything. That left this
+		// test's "ready" moment unreliable as a handoff to the NEXT test, which assumed the shell
+		// was idle and sent its own command right after — exactly the race the marker tests saw
+		// (completed:false) under load. Wait for the command's own completion marker instead: real
+		// execution, observed, not a guess.
+		const markers = makeRunMarkers();
+		runCommand(SESSION, wrapWithMarkers("echo tmux_connector_marker_42", markers));
+		const rawPane = await waitForMarker(SESSION, markers, { timeoutMs: 10_000, pollMs: 50 });
+		const result = extractBetweenMarkers(rawPane, markers);
+		expect(result.completed, `pane:\n${rawPane}\nmarkers: ${JSON.stringify(markers)}`).toBe(true);
+		expect(result.output).toBe("tmux_connector_marker_42");
 	});
 
 	/**
@@ -96,10 +106,14 @@ describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 		runCommand(SESSION, wrapWithMarkers("echo tmux_connector_marker_NEW", markers));
 		const rawPane = await waitForMarker(SESSION, markers, { timeoutMs: 10_000, pollMs: 50 });
 		const result = extractBetweenMarkers(rawPane, markers);
-		expect(result.completed).toBe(true);
-		expect(result.exitCode).toBe(0);
-		expect(result.truncated).toBe(false);
-		expect(result.output).toBe("tmux_connector_marker_NEW");
+		// #1471: a bounded raw-pane + marker-identity diagnostic on failure — the previous version
+		// of this assertion gave a bare `false`, with no way to tell whether the command never ran,
+		// the output was transformed, or the parser itself missed it.
+		const diag = `pane:\n${rawPane.slice(-2000)}\nmarkers: ${JSON.stringify(markers)}`;
+		expect(result.completed, diag).toBe(true);
+		expect(result.exitCode, diag).toBe(0);
+		expect(result.truncated, diag).toBe(false);
+		expect(result.output, diag).toBe("tmux_connector_marker_NEW");
 		// The prior test's output is still in the pane's scrollback, but not in the extracted result.
 		expect(rawPane).toContain("tmux_connector_marker_42");
 		expect(result.output).not.toContain("tmux_connector_marker_42");
@@ -110,8 +124,9 @@ describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 		runCommand(SESSION, wrapWithMarkers("false", markers));
 		const rawPane = await waitForMarker(SESSION, markers, { timeoutMs: 10_000, pollMs: 50 });
 		const result = extractBetweenMarkers(rawPane, markers);
-		expect(result.completed).toBe(true);
-		expect(result.exitCode).toBe(1);
+		const diag = `pane:\n${rawPane.slice(-2000)}\nmarkers: ${JSON.stringify(markers)}`;
+		expect(result.completed, diag).toBe(true);
+		expect(result.exitCode, diag).toBe(1);
 	});
 
 	it("tmux_capture_pane's since cursor returns only what a plain command adds next (#1406)", async () => {

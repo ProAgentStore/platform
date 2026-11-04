@@ -5,6 +5,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { BrowserContext, Page } from "playwright";
 import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
 import { guardedToolRefusal, navigationRefusal, type McpCallPolicy } from "./mcp-call-policy.js";
+import { UploadVerifier, type PreparedUpload } from "./upload-verification.js";
 
 /** The caller owns the browser in either case. Native contexts work across all engines (#1431). */
 export type McpRuntimeOptions = (
@@ -49,6 +50,7 @@ export class McpRuntime {
 	private activePage?: () => Page | null;
 	private onPageSelected?: (page: Page) => void;
 	private policy: McpCallPolicy = {};
+	private readonly uploads = new UploadVerifier();
 	setCallPolicy(policy: McpCallPolicy): void { this.policy = policy; }
 
 	/** Keep the native page used for policy/takeover identical to the MCP selected tab. */
@@ -167,6 +169,7 @@ export class McpRuntime {
 		let refusal = cancelled();
 		const currentPage = () => this.activePage?.() ?? this.selectedPage ?? this.context?.pages().at(-1);
 		const pageBefore = currentPage();
+		if (pageBefore) this.uploads.track(pageBefore);
 		if (!refusal && name !== "browser_navigate" && name !== "browser_tabs" && pageBefore) refusal = navigationRefusal(pageBefore.url());
 		if (!refusal && name !== "browser_tabs" && this.activePage) {
 			const page = this.activePage();
@@ -190,7 +193,14 @@ export class McpRuntime {
 			try { origin = page && !page.isClosed() ? new URL(page.url()).origin : undefined; } catch { /* Unknown means refused. */ }
 			if (origin !== opts.expectedOrigin) refusal = "BLOCKED by the runner — the sign-in page changed origin before credential entry.";
 		}
-		// Stop can arrive while a DOM/origin probe was in flight. Check again at dispatch.
+		let upload: PreparedUpload | undefined;
+		if (!refusal && name === "browser_file_upload") {
+			if (Array.isArray(args.paths) && args.paths.length && args.paths.every((path) => typeof path === "string")) {
+				upload = await this.uploads.prepare(currentPage(), args.paths as string[]);
+				refusal = upload.error ?? null;
+			} else if (pageBefore) this.uploads.clear(pageBefore);
+		}
+		// Stop can arrive while a DOM/origin/upload probe was in flight. Check again at dispatch.
 		refusal ??= cancelled();
 		if (refusal) {
 			this.refused(name, args, refusal);
@@ -198,6 +208,10 @@ export class McpRuntime {
 		}
 		try {
 			let res = (await client.callTool({ name, arguments: args })) as McpToolResult;
+			if (!res.isError && upload?.verify) {
+				const checked = await upload.verify();
+				res = { ...res, ...(checked.error ? { isError: true } : {}), content: [...res.content, { type: "text", text: checked.error ?? "Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback." }] };
+			}
 			if (!res.isError && name === "browser_tabs") {
 				this.selectedPage = args.action === "select" && typeof args.index === "number" ? this.context?.pages()[args.index] : undefined;
 				if (this.selectedPage) this.onPageSelected?.(this.selectedPage);
@@ -257,6 +271,7 @@ export class McpRuntime {
 	}
 
 	async stop(): Promise<void> {
+		this.uploads.stop();
 		// Bounded. Closing a persistent context flushes the whole profile to disk and
 		// on a cold/slow machine that measurably exceeds 10s — and a browser wedged
 		// mid-close would otherwise block teardown with no upper limit at all. The

@@ -37,6 +37,7 @@ describe("MCP action policy — no guarded action reaches the page through an al
 		mcp.setCallPolicy({});
 		expect((await mcp.callTool("browser_click", { target, element: "checkbox" })).isError).not.toBe(true);
 		await expect.poll(() => server.submissions.length, { timeout: 5_000 }).toBe(before + 1);
+		await page.waitForURL(/\/success\//);
 	});
 	it.each(["click", "Space", "Enter"])("read-only sees a POST formmethod override through %s, including an external default submitter", async (action) => {
 		await page.setContent('<button form="application" formmethod="post" type="submit">Go</button><form id="application" method="get" action="/apply" enctype="multipart/form-data"><label>Search<input name="coverNote"></label></form>');
@@ -54,6 +55,7 @@ describe("MCP action policy — no guarded action reaches the page through an al
 		mcp.setCallPolicy({});
 		expect((await invoke()).isError).not.toBe(true);
 		await expect.poll(() => server.submissions.length, { timeout: 5_000 }).toBe(before + 1);
+		await page.waitForURL(/\/success\//);
 	});
 	it("a failed DOM probe cannot turn a rehearsal's invented Continue label into permission", async () => {
 		mcp.setCallPolicy({ guard: { mode: "dry_run" } });

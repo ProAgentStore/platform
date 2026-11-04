@@ -60,11 +60,15 @@ export function prepareApplyDocuments(envelope: LocalApplyTaskEnvelope, dir: str
 		const folder = realpathSync(requestedFolder);
 		const documents = new Map<PortableDocument["role"], { document: PortableDocument; path: string }>();
 		for (const document of envelope.cloudDocuments) {
-			const path = join(folder, `${document.role}.md`);
+			// Markdown is UTF-8 text. Keep every byte, including markup, while using the
+			// plain-text extension that text-compatible employer inputs can accept (#1473).
+			const stagedName = `${document.role.replace("_", "-")}.txt`;
+			const path = join(folder, stagedName);
 			const bytes = Buffer.from(document.contentBase64, "base64");
 			writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
 			documents.set(document.role, { document, path });
 			blocks.push({ label: document.role, text: bytes.toString("utf8") });
+			if (document.role === "resume" || document.role === "cover_letter") emit({ type: "artifact.staged", detail: { kind: document.role, source: document.name, path: stagedName, sha256: document.sha256, bytes: document.bytes } });
 			if (document.role === "profile" || document.role === "answers") emit({ type: "source.read", detail: { role: document.role, path: `cloud/${document.role}`, sha256: document.sha256, bytes: document.bytes } });
 		}
 		return { blocks, artifactPath: (kind) => {
