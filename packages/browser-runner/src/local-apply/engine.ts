@@ -30,6 +30,8 @@ export function buildApplyEngineSpec(e: LocalApplyTaskEnvelope, prompt: string, 
 export interface SourceBlock {
 	label: string;
 	text: string;
+	/** Trusted owner answer, separately from its question; never extracted from prompt prose. */
+	answerText?: string;
 }
 
 /** The brief. The bridge, not this text, is what enforces the rules. */

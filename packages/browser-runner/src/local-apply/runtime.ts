@@ -74,7 +74,7 @@ import {
 	traceUrl,
 } from "./contract.js";
 import type { LocalApplyHandoffStatus } from "./handoff-contract.js";
-import { applyPrompt, buildApplyEngineSpec, observedApplyAuth } from "./engine.js";
+import { type SourceBlock, applyPrompt, buildApplyEngineSpec, observedApplyAuth } from "./engine.js";
 import { LocalApplyHandoffRuntime, type LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
 /** The run browser's native secret placeholders (#1412) — what `McpRuntime` provides. */
@@ -141,7 +141,7 @@ interface Run {
 	shots: ShotRecorder;
 	allow: Set<string>;
 	/** Source text, approved materials and the owner's answers — what a value may be grounded in. */
-	grounding: string[];
+	grounding: SourceBlock[];
 	secrets: string[];
 	/** The agent-driven sign-in in progress (#1412): the NAMES provisioned, never a value. */
 	signIn?: { origin: string; names: LocalApplySignInSecretName[]; codeRequested: boolean; codeWaiters: Array<(ok: boolean) => void> };
@@ -432,8 +432,8 @@ export class LocalApplyRuntime {
 		const home = this.deps.homeDir ?? homedir();
 		const { blocks, artifactPath } = prepareApplyDocuments(e, run.dir, home, (event) => this.emit(run, event));
 		// #1079: answers the owner already gave this application, as a source — the same shape a resume's answers take.
-		if (e.ownerAnswers?.length) blocks.push({ label: "owner answers", text: e.ownerAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n") });
-		run.grounding = blocks.map((b) => b.text);
+		for (const a of e.ownerAnswers ?? []) blocks.push({ label: "owner answers", text: `Q: ${a.question}\nA: ${a.answer}`, answerText: a.answer });
+		run.grounding = blocks;
 
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("../local-browser/bridge-stdio.js", import.meta.url));
 		const spec = buildApplyEngineSpec(e, applyPrompt(e, blocks), { command: process.execPath, args: [bridgeScript], env: { [BRIDGE_ENV.url]: selfUrl, [BRIDGE_ENV.runId]: e.runId, [BRIDGE_ENV.token]: run.token } }, join(run.dir, "mcp.json"));
@@ -464,7 +464,8 @@ export class LocalApplyRuntime {
 			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
 			isAllowed: isAllowedDomain,
 			websiteAccess: () => e.policy.browserWebsiteAccess,
-			grounding: () => run.grounding.join("\n"),
+			grounding: () => run.grounding.map((source) => source.text).join("\n"),
+			groundingSources: () => run.grounding,
 			artifactPath,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			isStopped: () => run.cancelled || run.timedOut || run.state === "ended",
@@ -761,7 +762,7 @@ export class LocalApplyRuntime {
 		if (websitePolicy) run.envelope.policy.browserWebsiteAccess = websitePolicy;
 		for (const a of (Array.isArray(o.answers) ? o.answers : []).slice(0, LOCAL_APPLY_CAPS.answers)) {
 			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
-			if (typeof r.question === "string" && typeof r.answer === "string" && r.answer.trim()) run.grounding.push(`Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars)}`);
+			if (typeof r.question === "string" && typeof r.answer === "string" && r.answer.trim()) run.grounding.push({ label: "owner answers", text: `Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars)}`, answerText: r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars) });
 		}
 		for (const domain of domains) run.allow.add(domain);
 		// The owner took the sign-in over: whatever was provisioned for the CLI is wiped (#1412).

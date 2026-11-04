@@ -445,6 +445,42 @@ describe("the owner's screenshot switch (#1064)", () => {
 });
 
 describe("a fill-and-review run, end to end on the runner", () => {
+	it.each([
+		{ profile: "Citizenship: Australian citizen", answer: undefined, quote: "Citizenship: Australian citizen", allowed: true },
+		{ profile: PROFILE, answer: "New Zealand citizen", quote: "A: New Zealand citizen", allowed: true },
+		{ profile: PROFILE, answer: "Australian/New Zealand Citizen", quote: "A: Australian/New Zealand Citizen", allowed: true },
+		{ profile: PROFILE, answer: "visa holder", quote: "Q: Select Australian/New Zealand Citizen or visa holder", allowed: false },
+	])("retains profile versus actual-answer authority through runtime dispatch: $allowed/$answer", async ({ profile, answer, quote, allowed }) => {
+		writeFileSync(join(home, "jobs/profile.md"), profile);
+		const resumeText = "Synthetic engineering experience";
+		writeFileSync(join(home, "jobs/applications/lead-1/t-run/resume.md"), resumeText);
+		const base = envelope();
+		base.artifacts[0].sha256 = sha(resumeText);
+		if (answer) base.ownerAnswers = [{ question: "Select Australian/New Zealand Citizen or visa holder", answer }];
+		const original = browser.callTool.bind(browser);
+		const spy = vi.spyOn(browser, "callTool").mockImplementation((name, args, opts) => name === "browser_snapshot" ? Promise.resolve({ content: [{ text: '- option "Australian/New Zealand Citizen" [ref=e50]\n- checkbox "I agree to the privacy policy" [ref=e51]' }] }) : original(name, args, opts));
+		try {
+			const rt = runtime();
+			rt.start(base);
+			await settle();
+			await call(rt, "browser_navigate", { url: base.applicationUrl });
+			await call(rt, "browser_snapshot");
+			await approve(rt);
+			const result = await call(rt, "browser_click", { target: "e50", source_quote: quote });
+			expect(!result.isError).toBe(allowed);
+			expect(clicks).toEqual(allowed ? ["e50"] : []);
+			if (allowed && !answer) {
+				const paused = call(rt, "browser_click", { target: "e51" });
+				await settle();
+				rt.resume({ runId: "run-1", answers: [{ question: "Are you an Australian citizen?", answer: "No" }] });
+				await paused;
+				await call(rt, "browser_snapshot");
+				expect((await call(rt, "browser_click", { target: "e50", source_quote: quote })).isError).toBe(true);
+				expect(clicks).toEqual(["e50"]);
+			}
+			child.exit(0);
+		} finally { spy.mockRestore(); }
+	});
 	it.each(["claude", "codex"] as const)("gives %s the bounded platform sign-in flow without granting general sign-in permission (#1464)", (engine) => {
 		const e = envelope({ engine });
 		const prompt = applyPrompt(e, []);

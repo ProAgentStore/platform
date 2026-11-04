@@ -43,6 +43,7 @@ import { looksLikeSignIn, type SiteSessionLedger, siteKeyOf } from "./site-sessi
 import { followOpenedTab, tabCount } from "./follow-tab.js";
 import { websiteDecision, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { ApplyReplay } from "./apply-replay.js";
+import { type AnswerSource, isCombinedCitizenshipOption, observedCitizenshipOption } from "./citizenship-option.js";
 import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
@@ -61,6 +62,7 @@ export interface ApplyBridgeHost {
 	websiteAccess?(): BrowserWebsiteAccess | undefined;
 	/** Everything a value may be grounded in: profile, answers, approved materials, the owner's answers so far. */
 	grounding(): string;
+	groundingSources?(): readonly AnswerSource[];
 	/** The verified absolute path of an approved artifact, or why it cannot be uploaded. */
 	artifactPath(kind: LocalApplyArtifactKind): { path: string; sha256: string } | { error: string };
 	overTime(): boolean;
@@ -601,7 +603,9 @@ export class ApplyBridge {
 				const ok = await this.pauseFor({ reason: "consent_required", question: `Agree to: ${t.name.slice(0, 200)}` });
 				return ok ? text("The owner handled that agreement in the browser. Do not click it yourself; take a browser_snapshot and continue.") : text("The owner did not handle that agreement. Stop now.", true);
 			}
-			const refusal = groundingRefusal(t.name, args.source_quote, this.host.grounding());
+			const refusal = isCombinedCitizenshipOption(t.role, t.name)
+				? observedCitizenshipOption(t.role, t.name, args.source_quote, this.host.groundingSources?.()) ? null : "This citizenship option needs a verified affirmative profile fact, with no conflicting or uncertain source statement. Quote that profile fact, or call request_answer."
+				: groundingRefusal(t.name, args.source_quote, this.host.grounding());
 			if (refusal) return this.refuse("browser_click", "fill", refusal);
 			return this.fill("browser_click", t.role, forward);
 		}

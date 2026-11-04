@@ -44,6 +44,9 @@ const SNAPSHOT = [
 	// #1014: an emailed one-time-code sign-in screen has no password field — only the code box.
 	'- textbox "Enter the 6-digit code we emailed you" [ref=e30]',
 	'- textbox "Sign-in code" [ref=e31]',
+	'- option "Australian/New Zealand Citizen" [ref=e50]',
+	'- option "New Zealand Citizen" [ref=e51]',
+	'- option "$160,001 - $180,000" [ref=e52]',
 	'- textbox "Postcode" [ref=e32]',
 	// #1412: a sign-in page's own controls — the address box, the password submit, and the emailed-code request.
 	'- textbox "Email address" [ref=e40]',
@@ -140,6 +143,7 @@ function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[
 		supervisorCheckpoint: async () => o.directive ?? "continue",
 		isAllowed: (h) => [...allow].some((d) => h === d || h.endsWith(`.${d}`)),
 		grounding: () => grounding.join("\n"),
+		groundingSources: () => grounding.map((text) => ({ label: "profile", text })),
 		artifactPath: (kind) => (o.artifactError ? { error: o.artifactError } : { path: `/home/jane/jobs/applications/lead-1/run-1/${kind}.md`, sha256: "a".repeat(64) }),
 		overTime: () => false,
 		now: () => Date.parse("2026-10-07T01:00:00Z"),
@@ -177,6 +181,111 @@ describe("groundingRefusal — an answer must come from the owner's own sources"
 });
 
 describe("the action classes", () => {
+	it("maps a verified Australian citizenship fact to the observed combined citizenship option", async () => {
+		const h = await onForm();
+		const source = "Work authorization: Australian citizen with Australian work authorization";
+		h.host.grounding_.push(source);
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: source })).isError).toBeFalsy();
+		expect(h.sent("browser_click").map((c) => c.args.target)).toEqual(["e50"]);
+	});
+	it.each([
+		["Citizenship: not an Australian citizen", "Australian citizen"],
+		["Citizenship: Australian citizen (unconfirmed)", "Australian citizen"],
+		["Citizenship: Australian citizen?", "Australian citizen"],
+		["Citizenship: Canadian citizen", "Citizenship: Canadian citizen"],
+		["Australian working rights: permanent resident", "Australian working rights: permanent resident"],
+		["Country: Australia", "Country: Australia"],
+		["Australian citizen", "Citizenship: Australian citizen"],
+		["Citizenship: Australian citizen\nCitizenship: unknown", "Citizenship: Australian citizen"],
+		["Citizenship: Australian citizen\nI am not an Australian citizen", "Citizenship: Australian citizen"],
+		["Citizenship: Australian citizen\nI don’t have Australian citizenship", "Australian citizen"],
+		["Citizenship: Australian citizen\nAustralian citizenship: to be confirmed", "Australian citizen"],
+		["Not:\nAustralian citizen", "Australian citizen"],
+		["Not an\nAustralian citizen", "Australian citizen"],
+	])("refuses unsupported citizenship mapping from %s", async (source, quote) => {
+		const h = await onForm();
+		h.host.grounding_.push(source);
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: quote })).isError).toBe(true);
+		expect(h.sent("browser_click")).toHaveLength(0);
+	});
+	it("keeps salary, other citizenship categories, free text and unobserved refs strict", async () => {
+		const h = await onForm();
+		const source = "Australian working rights: Australian citizen";
+		h.host.grounding_.push(source, "Salary expectation: AUD 180,000");
+		for (const target of ["e51", "unobserved"]) expect((await h.bridge.callTool("browser_click", { target, source_quote: source })).isError).toBe(true);
+		expect((await h.bridge.callTool("browser_click", { target: "e52", source_quote: "Salary expectation: AUD 180,000" })).isError).toBe(true);
+		expect((await h.bridge.callTool("browser_type", { target: "e1", text: "Australian/New Zealand Citizen", source_quote: source })).isError).toBe(true);
+		expect(h.sent("browser_click")).toHaveLength(0);
+		expect(h.sent("browser_type")).toHaveLength(0);
+	});
+	it("does not promote a generated résumé statement into an authoritative profile fact", async () => {
+		const h = await onForm();
+		const source = "Citizenship: Australian citizen";
+		h.host.grounding_.push(source);
+		h.host.groundingSources = () => [{ label: "profile", text: PROFILE }, { label: "resume", text: source }];
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: source })).isError).toBe(true);
+		expect(h.sent("browser_click")).toHaveLength(0);
+	});
+	it("grounds the observed option from the profile despite positive résumé and cover-letter formatting", async () => {
+		const h = await onForm();
+		const quote = "Work authorization: Australian citizen with Australian work authorization";
+		const sources = [
+			{ label: "profile", text: `City: Adelaide\nState/Region: SA\nCountry: Australia\n${quote}\nAustralian working rights: Australian citizen\n\nProvenance: User-confirmed corrections are Australian citizenship and Adelaide/Perth targeting.` },
+			{ label: "resume", text: "📞 +61 400 000 000 | 📧 candidate@example.test | 🔗 example.test/profile\nAdelaide, SA, Australia | Australian Citizen | Open to hybrid" },
+			{ label: "cover_letter", text: "I am an Australian citizen based in Adelaide and happy to work hybrid. I would welcome the chance to discuss how I can help Example's teams deliver on a reliable cadence." },
+		];
+		h.host.grounding_.push(...sources.map((source) => source.text));
+		h.host.groundingSources = () => sources;
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: quote })).isError).toBeFalsy();
+		expect(h.sent("browser_click").map((call) => call.args.target)).toEqual(["e50"]);
+	});
+	it.each([
+		["owner answers", "I am not a citizen of Australia."],
+		["cover_letter", "I am an Australian citizen. Correction: this is false."],
+		["profile", "Not:\n\nCitizenship: Australian citizen"],
+		["profile", "Not: confirmed\nCitizenship: Australian citizen"],
+		["profile", "The following information is incorrect.\n\nCitizenship: Australian citizen"],
+		["cover_letter", "I am an Australian citizen.\n\nCorrection: the previous statement is false."],
+	])("refuses an ambiguous or conflicting %s paragraph", async (label, text) => {
+		const h = await onForm();
+		const quote = "Citizenship: Australian citizen";
+		h.host.grounding_.push(quote, text);
+		h.host.groundingSources = () => [{ label: "profile", text: quote }, { label, text }];
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: quote })).isError).toBe(true);
+		expect(h.sent("browser_click")).toHaveLength(0);
+	});
+	it("never treats a citizenship option quoted in an owner question as the owner's answer", async () => {
+		const h = await onForm();
+		const question = "Q: Select Australian/New Zealand Citizen or visa holder";
+		h.host.grounding_.push(question);
+		h.host.groundingSources = () => [{ label: "profile", text: PROFILE }, { label: "owner answers", text: `${question}\nA: visa holder` }];
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: question })).isError).toBe(true);
+		expect(h.sent("browser_click")).toHaveLength(0);
+	});
+	it.each(["Australian citizen", "New Zealand citizen", "Australian/New Zealand Citizen"])("accepts the owner's actual affirmative answer: %s", async (answerText) => {
+		const h = await onForm();
+		const text = `Q: Which citizenship option applies?\nA: ${answerText}`;
+		h.host.grounding_.push(text);
+		h.host.groundingSources = () => [{ label: "profile", text: PROFILE }, { label: "owner answers", text, answerText }];
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: `A: ${answerText}` })).isError).toBeFalsy();
+		expect(h.sent("browser_click").map((call) => call.args.target)).toEqual(["e50"]);
+	});
+	it.each(["New Zealand citizen", "Australian/New Zealand Citizen"])("accepts an explicit affirmative profile category: %s", async (value) => {
+		const h = await onForm();
+		const text = `Citizenship: ${value}`;
+		h.host.grounding_.push(text);
+		h.host.groundingSources = () => [{ label: "profile", text }];
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: text })).isError).toBeFalsy();
+	});
+	it("keeps an explicit contradictory owner answer ahead of an older positive profile fact", async () => {
+		const h = await onForm();
+		const source = "Citizenship: Australian citizen";
+		const answer = "Q: Are you an Australian citizen?\nA: No";
+		h.host.grounding_.push(source, answer);
+		h.host.groundingSources = () => [{ label: "profile", text: source }, { label: "owner answers", text: answer }];
+		expect((await h.bridge.callTool("browser_click", { target: "e50", source_quote: source })).isError).toBe(true);
+		expect(h.sent("browser_click")).toHaveLength(0);
+	});
 	it("lists only read, fill and the bridge's own tools — every fill tool demands source_quote", async () => {
 		const { bridge } = await onForm();
 		const tools = await bridge.listTools();
