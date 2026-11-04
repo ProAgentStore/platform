@@ -1,4 +1,6 @@
 import { readScanSchedule, scanScheduleSummary } from "../lib/local-browser/schedule.js";
+import { websiteAccessForInstance } from "../lib/browser-settings-dispatch.js";
+import { websiteAccessRunnerProblem } from "../lib/browser-website-policy.js";
 import { scanTelemetry } from "../lib/local-browser/telemetry.js";
 import { syncScanCard } from "../lib/local-browser/scan-board.js";
 import type { Context, Hono } from "hono";
@@ -94,7 +96,7 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const { uid, instanceId } = await owned(c);
 		const cap = await capabilityOf(c, instanceId, uid);
 		const { settings, runnerNode } = await readLocalBrowserSettings(c.env, instanceId, uid);
-		const effective = effectiveLocalBrowserPolicy(cap, settings);
+		const effective = effectiveLocalBrowserPolicy(cap, settings, await websiteAccessForInstance(c.env, uid, instanceId));
 		// The SCAN SCHEDULE (#980), on the response the console's settings card and MCP's
 		// `get_instance_local_browser_settings` both already read — so "is this Scout scheduled" is
 		// answered in the same breath as "how would it run", and the two surfaces cannot disagree.
@@ -126,7 +128,7 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const merged = mergeLocalBrowserSettings(stored, patch, cap);
 		if ("error" in merged) throw new HttpError(400, merged.error);
 		await writeLocalBrowserSettings(c.env, instanceId, uid, merged.settings);
-		return c.json({ settings: merged.settings, effective: effectiveLocalBrowserPolicy(cap, merged.settings) });
+		return c.json({ settings: merged.settings, effective: effectiveLocalBrowserPolicy(cap, merged.settings, await websiteAccessForInstance(c.env, uid, instanceId)) });
 	});
 
 	/**
@@ -137,10 +139,14 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const { uid, instanceId } = await owned(c);
 		const cap = await capabilityOf(c, instanceId, uid);
 		const { settings } = await readLocalBrowserSettings(c.env, instanceId, uid);
-		const effective = effectiveLocalBrowserPolicy(cap, settings);
+		const effective = effectiveLocalBrowserPolicy(cap, settings, await websiteAccessForInstance(c.env, uid, instanceId));
 		const checks: Array<{ id: string; ok: boolean | null; detail: string }> = [];
 		checks.push("error" in effective ? { id: "settings", ok: false, detail: effective.error } : { id: "settings", ok: true, detail: `${effective.engine} via ${effective.authMode}, ${effective.workspace.kind === "scratch" ? "managed scratch folder" : effective.workspace.path}, ${effective.browserProfile} browser profile` });
 		const runtime = await getLiveRuntime(c.env, instanceId, uid);
+		if (!("error" in effective) && effective.browserWebsiteAccess) {
+			const problem = websiteAccessRunnerProblem(effective.browserWebsiteAccess, runtime?.runner_version, runtime?.runner_node);
+			checks.push({ id: "website_access", ok: !problem, detail: problem ?? "The runner enforces this agent's website access policy" });
+		}
 		checks.push(runtime ? { id: "runner", ok: true, detail: `Connected on ${runtime.runner_node || "this machine"}` } : { id: "runner", ok: false, detail: "No runner is connected. Run `pags up` on the machine that should do the research." });
 		if (runtime) {
 			// Asked live: the registration row's `capabilities` is a free-form string list that

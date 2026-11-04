@@ -41,6 +41,7 @@ import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
 import { looksLikeSignIn, type SiteSessionLedger, siteKeyOf } from "./site-session.js";
 import { followOpenedTab, tabCount } from "./follow-tab.js";
+import { websiteDecision, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { ApplyReplay } from "./apply-replay.js";
 import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
@@ -57,6 +58,7 @@ export interface ApplyBridgeHost {
 	/** Wait for a durable cloud directive at this exact, runner-observed checkpoint. */
 	supervisorCheckpoint(checkpoint: LocalApplySupervisorCheckpoint): Promise<LocalApplySupervisorDirective>;
 	isAllowed(host: string): boolean;
+	websiteAccess?(): BrowserWebsiteAccess | undefined;
 	/** Everything a value may be grounded in: profile, answers, approved materials, the owner's answers so far. */
 	grounding(): string;
 	/** The verified absolute path of an approved artifact, or why it cannot be uploaded. */
@@ -511,6 +513,13 @@ export class ApplyBridge {
 	}
 
 	private async admit(host: string, url: string): Promise<boolean> {
+		const policy = this.host.websiteAccess?.();
+		if (policy) {
+			const decision = websiteDecision(policy, host);
+			if (decision === "allow") return true;
+			if (decision === "ask") await this.pauseFor({ reason: "external_redirect", url, domain: host }, async () => this.host.isAllowed(host));
+			return false; // An owner decision never replays the action that was parked.
+		}
 		if (this.host.isAllowed(host)) {
 			if (!this.admitted.has(host)) {
 				this.admitted.add(host);
@@ -525,7 +534,7 @@ export class ApplyBridge {
 		const host = hostOf(url);
 		if (!host) return this.refuse("browser_navigate", "read", "Only http(s) URLs can be opened.");
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_navigate", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
-		if (!(await this.admit(host, url))) return this.refuse("browser_navigate", "read", `${host} is not one of this application's sites and the owner did not allow it. Stop now.`, host);
+		if (!(await this.admit(host, url))) return this.refuse("browser_navigate", "read", this.host.websiteAccess?.() ? `Website access to ${host} was not performed. Check the owner's website decision, then inspect the page and decide again.` : `${host} is not one of this application's sites and the owner did not allow it. Stop now.`, host);
 		if (this.signIn) {
 			const before = await this.inspect();
 			if (before && this.observeSignIn(before)) return this.signedIn("Sign-in completed before this navigation. Read the current page before continuing.", hostOf(before.url) ?? "");
@@ -547,6 +556,10 @@ export class ApplyBridge {
 		const landedOn = state ? hostOf(state.url) : null;
 		if (state && landedOn && !this.host.isAllowed(landedOn)) {
 			await this.browser.callTool("browser_navigate_back", {}, { internal: true }).catch(() => undefined);
+			if (this.host.websiteAccess?.()) {
+				await this.admit(landedOn, state.url);
+				return this.refuse(tool, "read", `Website access to ${landedOn} was not completed. The prior action may have run; inspect the page and decide again after any owner decision.`, landedOn);
+			}
 			if (!(await this.pauseFor({ reason: "external_redirect", url: state.url, domain: landedOn }, async () => this.host.isAllowed(landedOn)))) {
 				return this.refuse(tool, "read", `That led to ${landedOn}, which is not one of this application's sites. It was undone. Stop now.`, landedOn);
 			}

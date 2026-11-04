@@ -1,5 +1,8 @@
+import { websiteAccessForInstance, withWebsiteDecisions } from "../browser-settings-dispatch.js";
+import { websiteAccessRunnerProblem } from "../browser-website-policy.js";
 import { loadCloudDocuments } from "../local-artifact/cloud-documents.js";
 import { resumeDomainsFor } from "./resume-domains.js";
+import { syncApplyWebsiteQuestion } from "../website-access-local.js";
 import { activeApplyMilliseconds } from "./active-clock.js";
 /**
  * The Application Runner (#957): materials ready → a local CLI fills the application in a real
@@ -229,7 +232,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		workspace: s.workspace,
 		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
+		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
 		limits: run.policy.limits,
 		// #1079: what the owner already answered for this application, kept since an earlier fill stopped waiting.
 		...(ownerAnswers.length ? { ownerAnswers: ownerAnswers.map((a) => ({ question: a.question, answer: a.answer })) } : {}),
@@ -282,7 +285,8 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const { enabled: screenshotsOn, blurFormFields } = await browserScreenshotSettings(env, instanceId, uid);
 	const blurProblem = screenshotBlurRunnerProblem(screenshotsOn ? blurFormFields : true, runtime.runner_version, runtime.runner_node);
 	if (blurProblem) throw new HttpError(409, blurProblem);
-	const contractProblem = runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const browserWebsiteAccess = await websiteAccessForInstance(env, uid, instanceId);
+	const contractProblem = websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	// The admission gate (#1175): refused HERE, before the application leaves materials_ready, like an outdated machine — but 503,
@@ -330,6 +334,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		browserProfile: s.browserProfile,
 		mode,
 		allowDomains: [...new Set([jobHost, ...s.allowDomains])],
+		...(browserWebsiteAccess ? { browserWebsiteAccess } : {}),
 		limits: { maxMinutes: s.maxMinutes, maxPages: s.maxPages, maxActions: s.maxActions, stallMinutes: s.stallMinutes },
 		gate: { allowed, gateId, checks },
 		...(opts.oneClickRecoveryId ? { approvalRecoveryId: opts.oneClickRecoveryId } : {}),
@@ -713,6 +718,7 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
 	if (body.state === "ended" && body.result !== undefined && !isTerminalApplyRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now);
+	current = await syncApplyWebsiteQuestion(env, uid, current, (run, pause, decision) => resumeApplyRun(env, uid, run, { expectedWebsitePauseKey: pause.pauseKey, websiteDecision: decision })).catch(() => current);
 	// A result is authoritative if it arrived at the deadline.  Otherwise a still-running CLI
 	// cannot turn status polling into an unbounded lease; PAGS stops and settles it itself.
 	if (current.status === "running" && activeApplyMilliseconds(current, now) >= current.policy.limits.maxMinutes * 60_000) current = await stopTimedOutRun(env, runtime, uid, current, now);
@@ -808,7 +814,9 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 	}
 	const runtime = grantedRuntime ?? await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
 	if (!runtime) throw new HttpError(409, "No runner is connected. Run `pags up` on that machine, then resume.");
-	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[] }) }).catch(() => null);
+	const websiteResume = typeof b.expectedWebsitePauseKey === "string" && (b.websiteDecision === "allow" || b.websiteDecision === "deny")
+		? { expectedWebsitePauseKey: b.expectedWebsitePauseKey, websiteDecision: b.websiteDecision } : {};
+	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[], ...websiteResume }) }).catch(() => null);
 	if (!res) throw new HttpError(409, "The runner did not answer. Check `pags up` on that machine and try again.");
 	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
 	if (!res.ok) throw new HttpError(409, `The runner refused to resume: HTTP ${res.status}`);
@@ -911,7 +919,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		await noteQueued(env, "local_apply_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
 		return "queued";
 	}
-	const contractProblem = runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const contractProblem = websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) {
 		await noteQueued(env, "local_apply_runs", run.id, contractProblem, now);
 		return "queued";
@@ -940,6 +948,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	const claimedDispatch = await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null }, now);
 	if (!claimedDispatch) return "queued";
 	dispatched = claimedDispatch;
+	if (dispatched.policy.browserWebsiteAccess) dispatched.policy.browserWebsiteAccess = await withWebsiteDecisions(env, uid, instanceId, dispatched.policy.browserWebsiteAccess);
 	try {
 		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify({ ...applyTaskEnvelope(dispatched, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}) }) });
 	} catch {

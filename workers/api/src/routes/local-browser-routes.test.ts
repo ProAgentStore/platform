@@ -738,3 +738,27 @@ describe("#947 acceptance — the trace, end to end through the API", () => {
 		expect(second.id).not.toBe(first.id);
 	});
 });
+
+describe("shared website access on research dispatch", () => {
+	it.each(["allow_all", "allowlist", "ask_once"])("%s overrides legacy navigation lists, while retaining read-only and profile permission", async (mode) => {
+		await call("PUT", "/i1/browser-settings", { websiteAccess: { mode, domains: [] } });
+		expect((await call("GET", "/i1/local-browser/settings")).body.effective).toMatchObject({ allowDomains: [], browserWebsiteAccess: { mode, domains: [] } });
+		const started = await call("POST", "/i1/local-browser/runs", { objective: "Research the owner-requested website", requestId: "website-policy" });
+		expect(started.status).toBeLessThan(300);
+		const envelope = sent.find((item) => item.path === "/local-browser/run")?.body as { policy: Record<string, unknown> };
+		expect(envelope.policy).toMatchObject({ mode: "research_only", allowDomains: [], profileConsented: false, browserWebsiteAccess: { mode, domains: [] } });
+		expect(started.body.policy.browserWebsiteAccess).toEqual({ mode, domains: [], ...(mode === "ask_once" ? { rememberedDomains: [], deniedDomains: [] } : {}) });
+	});
+	it("refuses an explicit policy on CLI208 before claiming research", async () => {
+		await call("PUT", "/i1/browser-settings", { websiteAccess: { mode: "allow_all", domains: [] } });
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.208' WHERE instance_id = 'i1'");
+		const preflight = await call("GET", "/i1/local-browser/preflight");
+		expect(preflight.body).toMatchObject({ ready: false });
+		expect(preflight.body.checks).toContainEqual(expect.objectContaining({ id: "website_access", ok: false }));
+		const refused = await call("POST", "/i1/local-browser/runs", { objective: "Research", requestId: "website-old" });
+		expect(refused.status).toBe(409);
+		expect(refused.body.error).toMatch(/0\.4\.209/);
+		expect(sent.filter((item) => item.path === "/local-browser/run")).toEqual([]);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_browser_runs").first<{ n: number }>())?.n).toBe(0);
+	});
+});

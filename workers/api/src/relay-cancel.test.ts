@@ -76,6 +76,21 @@ describe("the relay cancels a command it gave up on (#1358)", () => {
 		expect((await pending).status).toBe(200);
 	});
 
+	it("forwards trusted website policy and refuses malformed explicit policy instead of dropping it", async () => {
+		let relay!: InstanceType<typeof RelayDO>;
+		const runner = runnerSocket((self) => void relay.webSocketMessage(self, "pong"));
+		relay = relayWith([runner]);
+		const browserWebsiteAccess = { mode: "ask_once", domains: ["jobs.example.com"], rememberedDomains: ["employer.example.com"], deniedDomains: ["blocked.example.com"] };
+		const pending = command(relay, { path: "/browser/act", browserWebsiteAccess, timeoutMs: 5000 });
+		await vi.waitFor(() => expect(frames(runner.sent)).toHaveLength(1));
+		const [cmd] = frames(runner.sent);
+		expect(cmd).toMatchObject({ browserWebsiteAccess });
+		await relay.webSocketMessage(runner.socket as unknown as WebSocket, JSON.stringify({ id: cmd.id, status: 200, result: { ok: true } }));
+		expect((await pending).status).toBe(200);
+		for (const invalid of [null, { mode: "all", domains: [] }, { mode: "ask_once", domains: [], rememberedDomains: ["https://example.com"] }, { mode: "allow_all", domains: [], deniedDomains: Array(1001).fill("example.com") }]) expect((await command(relay, { path: "/browser/act", browserWebsiteAccess: invalid })).status).toBe(400);
+		expect(frames(runner.sent)).toHaveLength(1);
+	});
+
 	it.each(["headed", "headless", "invalid", null])("forwards only validated browser mode metadata: %s (#1429)", async (browserMode) => {
 		let relay!: InstanceType<typeof RelayDO>;
 		const runner = runnerSocket((self) => void relay.webSocketMessage(self, "pong"));

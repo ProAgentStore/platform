@@ -1,4 +1,5 @@
 import { registerBrowserSettingsRoutes } from "./instances-browser-settings.js";
+import { registerWebsiteAccessRoutes } from "./instances-website-access.js";
 import { registerBrowserModeRoutes } from "./instances-browser-mode.js";
 /**
  * The instance REST surface, held to a table — every value in it DERIVED by driving the
@@ -158,6 +159,7 @@ const PARAMS: Record<string, string> = {
 	checkpointId: "checkpoint-1",
 	handoffId: "handoff-1",
 	requestId: "permission-request-1",
+	hostname: "jobs.example.com",
 };
 
 function concrete(pattern: string): string {
@@ -338,6 +340,11 @@ const ROUTES = [
 	"GET /:instanceId/browser-settings",
 	"PUT /:instanceId/browser-settings",
 	"GET /:instanceId/browser-settings/session",
+	"GET /:instanceId/website-requests",
+	"GET /:instanceId/website-requests/:requestId",
+	"POST /:instanceId/website-requests/:requestId/answer",
+	"GET /:instanceId/website-grants",
+	"DELETE /:instanceId/website-grants/:hostname",
 	"GET /:instanceId/browser-mode",
 	"PUT /:instanceId/browser-mode",
 	"GET /:instanceId/browser-screenshots",
@@ -487,6 +494,7 @@ function routesOf(register: (app: Hono<{ Bindings: Env }>) => void): string[] {
 }
 
 const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
+	"instances-website-access.ts": registerWebsiteAccessRoutes,
 	"instances-browser-settings.ts": registerBrowserSettingsRoutes,
 	"instances-browser-mode.ts": registerBrowserModeRoutes,
 	"instances-apply.ts": registerApplyRoutes,
@@ -580,6 +588,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-native.ts": ["GET /:instanceId/native/preflight"],
+	"instances-website-access.ts": ["GET /:instanceId/website-requests", "GET /:instanceId/website-requests/:requestId", "POST /:instanceId/website-requests/:requestId/answer", "GET /:instanceId/website-grants", "DELETE /:instanceId/website-grants/:hostname"],
 	"instances-browser-settings.ts": ["GET /:instanceId/browser-settings", "PUT /:instanceId/browser-settings", "GET /:instanceId/browser-settings/session"],
 	"instances-browser-mode.ts": ["GET /:instanceId/browser-mode", "PUT /:instanceId/browser-mode"],
 	"instances-browser-screenshots.ts": ["GET /:instanceId/browser-screenshots", "PUT /:instanceId/browser-screenshots"],
@@ -900,6 +909,11 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/runner-setup": [401, 404],
 	// Owner-scoped before it reads a runner or the machine's opt-in (#1057).
 	"GET /:instanceId/native/preflight": [401, 404],
+	"GET /:instanceId/website-requests": [401, 404],
+	"GET /:instanceId/website-requests/:requestId": [401, 404],
+	"POST /:instanceId/website-requests/:requestId/answer": [401, 404],
+	"GET /:instanceId/website-grants": [401, 404],
+	"DELETE /:instanceId/website-grants/:hostname": [401, 404],
 	"GET /:instanceId/browser-settings": [401, 404],
 	"PUT /:instanceId/browser-settings": [401, 404],
 	"GET /:instanceId/browser-settings/session": [401, 404],

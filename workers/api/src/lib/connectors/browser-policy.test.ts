@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegistryToolCtx } from "./types.js";
 
-const calls = vi.hoisted(() => ({ callRunner: vi.fn() }));
+const calls = vi.hoisted(() => ({ callRunner: vi.fn(), ensureWebsite: vi.fn() }));
+vi.mock("../website-access.js", () => ({ ensureWebsiteAccessRequest: calls.ensureWebsite, getWebsiteAccessRequest: vi.fn(), listRememberedWebsiteDomains: vi.fn() }));
 vi.mock("../runner-client.js", () => ({
 	callRunner: calls.callRunner,
 	getBoundRunnerConn: async () => ({ kind: "relay", instanceId: "instance" }),
@@ -20,9 +21,38 @@ function context(readOnly: boolean): RegistryToolCtx {
 }
 beforeEach(() => {
 	calls.callRunner.mockReset();
+	calls.ensureWebsite.mockReset().mockResolvedValue({ questionUrl: "/console/instances/instance/website-requests/opaque-question" });
 	calls.callRunner.mockImplementation(async (_conn, path) => path === "/browser/snapshot"
 		? { commitGuard: { dispatchSafe: true } }
 		: { ok: true, url: "https://example.test/", title: "Test", challenge: null });
+});
+
+describe("chat browser website permission", () => {
+	const block = { decision: "ask", mode: "ask_once", hostname: "new.example.com", url: "https://new.example.com/", actionDispatched: false };
+	it.each(["browser_navigate", "browser_act", "browser_snapshot"])("%s returns a durable question and never claims success", async (name) => {
+		calls.callRunner.mockImplementation(async (_conn, path) => path === "/browser/snapshot" && name !== "browser_snapshot"
+			? { commitGuard: { dispatchSafe: true } }
+			: { ok: false, url: "about:blank", websiteAccess: block });
+		const result = await BROWSER_TOOLS.find((tool) => tool.name === name)!.handler(context(false), { action: "navigate", url: block.url, browserWebsiteAccess: { mode: "allow_all" } });
+		expect(result).toMatchObject({ success: false, content: expect.stringContaining("/website-requests/opaque-question") });
+		expect(calls.ensureWebsite).toHaveBeenCalledOnce();
+		expect(calls.ensureWebsite.mock.calls[0][1]).toMatchObject({ userId: "owner", instanceId: "instance", hostname: "new.example.com", subjectKind: "connector" });
+		expect(calls.callRunner.mock.calls.at(-1)?.[2]).not.toHaveProperty("browserWebsiteAccess");
+	});
+	it("strict allowlist denial never creates an approval request", async () => {
+		calls.callRunner.mockImplementation(async (_conn, path) => path === "/browser/snapshot"
+			? { commitGuard: { dispatchSafe: true } }
+			: { ok: false, websiteAccess: { ...block, decision: "deny", mode: "allowlist" } });
+		const result = await BROWSER_TOOLS.find((tool) => tool.name === "browser_navigate")!.handler(context(false), { url: block.url });
+		expect(result).toMatchObject({ success: false, content: expect.stringContaining("denied") });
+		expect(calls.ensureWebsite).not.toHaveBeenCalled();
+	});
+	it("an unsuccessful navigation without a permission receipt never says Navigated to", async () => {
+		calls.callRunner.mockImplementation(async (_conn, path) => path === "/browser/snapshot" ? { commitGuard: { dispatchSafe: true } } : { ok: false });
+		const result = await BROWSER_TOOLS.find((tool) => tool.name === "browser_navigate")!.handler(context(false), { url: block.url });
+		expect(result).toMatchObject({ success: false });
+		expect(result).not.toHaveProperty("head");
+	});
 });
 
 describe("chat browser dispatch keeps the agent's declared policy", () => {

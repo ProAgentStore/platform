@@ -285,6 +285,10 @@ export async function mirrorRuntimeTask(
 	)
 		.bind(id, instanceId, userId, type, status, safeJsonStringify(task), createdAt, updatedAt)
 		.run();
+	if (type === "browser.open" && status === "needs_human") {
+		const { mirrorNativeWebsitePause } = await import("../lib/browser-website-native-pause.js");
+		await mirrorNativeWebsitePause(env, instanceId, userId, task);
+	}
 }
 
 export async function mirrorRuntimeTasks(

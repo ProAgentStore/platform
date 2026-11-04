@@ -36,8 +36,8 @@ export default function BrowserModeCapabilityCard({ agentId }: { agentId: string
 	return (
 		<Card className="mb-4" data-testid="browser-mode-default">
 			<h3 className="text-base font-semibold mb-1">Browser defaults</h3>
-			<p className="text-sm text-muted mb-3">Choose this agent's browser, window mode and profile. Each subscriber can override individual settings. Changes apply on the next browser launch; current tasks continue unchanged.</p>
-			<BrowserSettingsFields value={{ mode: data.browserMode ?? null, engine: data.browserEngine ?? null, profile: data.browserProfilePolicy ?? null }} disabled={saving} onChange={(patch) => void save(patch)} />
+			<p className="text-sm text-muted mb-3">Choose this agent's browser, window mode, profile and website access. Each subscriber can override individual settings. Changes apply on the next browser launch; current tasks continue unchanged.</p>
+			<BrowserSettingsFields value={{ mode: data.browserMode ?? null, engine: data.browserEngine ?? null, profile: data.browserProfilePolicy ?? null, websiteAccess: data.browserWebsiteAccess ?? null }} disabled={saving} onChange={(patch) => void save(patch)} />
 			<BrowserSettingsHelp />
 			{message && <p role="status" className="text-xs mt-2">{message}</p>}
 		</Card>

@@ -137,3 +137,10 @@ describe("Codex can call the bridge under approval policy never — and nothing 
 		expect(args[args.indexOf("--permission-mode") + 1]).toBe("dontAsk");
 	});
 });
+
+it("explicit allow_all brief overrides inherited legacy navigation lists", () => {
+ const text = researchPrompt({ objective: "Find roles", policy: { mode: "research_only", allowDomains: ["old.test"], denyDomains: ["denied.test"], consentedDomains: [], profileConsented: false, browserWebsiteAccess: { mode: "allow_all", domains: [] } }, limits: { maxMinutes: 15, maxPages: 30, maxActions: 200, maxConcurrent: 1 } });
+ expect(text).toContain("any HTTP(S) website");
+ expect(text).not.toContain("old.test");
+ expect(text).not.toContain("denied.test");
+});

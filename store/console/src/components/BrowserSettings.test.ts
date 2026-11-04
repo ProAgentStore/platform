@@ -50,3 +50,17 @@ describe("browser settings distinguish inherited, configured and actual state", 
 		expect(html).toContain("instance-1/run-1");
 	});
 });
+
+describe("website access belongs to the agent browser settings", () => {
+	it("offers all three choices and shows an inherited exact-host list separately from browser mode", () => {
+		const html = view({ websiteAccess: null, agentDefaults: { mode: null, engine: null, profile: null, websiteAccess: { mode: "allowlist", domains: ["jobs.example.com"] } }, effective: { mode: null, engine: null, profile: null, websiteAccess: { mode: "allowlist", domains: ["jobs.example.com"] } }, sources: { mode: "runner", engine: "runner", profile: "runner", websiteAccess: "agent" } });
+		for (const label of ["Allow all websites", "Only listed websites", "Ask once for each new website", "Use agent default (Only listed websites)", "Effective access: Only listed websites (from agent)"]) expect(html).toContain(label);
+		expect(html).not.toContain("Save website list");
+	});
+	it("an explicit list is editable and has no implied subdomain wildcard", () => {
+		const html = view({ websiteAccess: { mode: "allowlist", domains: ["jobs.example.com", "login.example.com"] } });
+		expect(html).toContain("Save website list");
+		expect(html).toContain("jobs.example.com\nlogin.example.com");
+		expect(html).toContain("separate websites");
+	});
+});

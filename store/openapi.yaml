@@ -355,6 +355,23 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    WebsiteAccessRequest:
+      type: object
+      required: [id, instanceId, instanceName, subjectKind, subjectId, hostname, pauseKey, status, createdAt, decidedAt, link, questionUrl]
+      properties:
+        id: { type: string }
+        instanceId: { type: string }
+        instanceName: { type: string }
+        subjectKind: { type: string, enum: [local_apply_run, local_browser_run, runtime_task, connector] }
+        subjectId: { type: string }
+        hostname: { type: string, description: Exact hostname only; does not cover subdomains }
+        pauseKey: { type: string, description: Immutable originating pause identifier }
+        status: { type: string, enum: [pending, approved, denied] }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        link: { type: string, description: Authenticated unique question page; opening does not answer }
+        questionUrl: { type: string }
+        subjectLink: { type: string, nullable: true }
     HttpProfile:
       type: object
       description: A named HTTP credential profile (#1123). Metadata only — the secret is never returned.
@@ -434,12 +451,26 @@ components:
         waitLimitMinutes: { type: integer, minimum: 1, maximum: 1440 }
         takeover: { type: string, enum: [prompt, never] }
         allowMobile: { type: boolean }
+    BrowserWebsiteAccess:
+      type: object
+      nullable: true
+      additionalProperties: false
+      required: [mode, domains]
+      description: Per-agent website permission. Null inherits; absent legacy configurations keep their workflow behavior. Explicit policy requires CLI 0.4.209 and never grants submission or credential permission.
+      properties:
+        mode: { type: string, enum: [allow_all, allowlist, ask_once] }
+        domains:
+          type: array
+          maxItems: 100
+          description: Exact bare hostnames. Empty allowlist permits no sites. Ask-once also admits remembered owner approvals for this agent; allow-all admits HTTP(S) websites without a website question.
+          items: { type: string, maxLength: 253 }
     BrowserSettingsValues:
       type: object
       properties:
         mode: { type: string, nullable: true, enum: [headed, headless, null] }
         engine: { type: string, nullable: true, enum: [chrome, msedge, chromium, firefox, webkit, null] }
         profile: { type: string, nullable: true, enum: [persistent, ephemeral, null] }
+        websiteAccess: { $ref: "#/components/schemas/BrowserWebsiteAccess" }
     BrowserSettingsView:
       allOf:
         - $ref: "#/components/schemas/BrowserSettingsValues"
@@ -454,6 +485,7 @@ components:
                 mode: { type: string, enum: [instance, agent, runner] }
                 engine: { type: string, enum: [instance, agent, runner] }
                 profile: { type: string, enum: [instance, agent, runner] }
+                websiteAccess: { type: string, enum: [instance, agent, runner] }
             requiredCli: { type: string }
             explained: { type: string }
     BrowserLaunchReceipt:
@@ -1306,6 +1338,7 @@ components:
           nullable: true
           enum: [chrome, msedge, chromium, firefox, webkit, null]
           description: Browser choice; explicit values never fall back. Chrome and Edge select their installed channels, while Chromium, Firefox and WebKit use Playwright-managed builds. Null retains workflow defaults.
+        browserWebsiteAccess: { $ref: "#/components/schemas/BrowserWebsiteAccess" }
         browserProfilePolicy:
           type: string
           nullable: true
@@ -8371,6 +8404,117 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/website-requests:
+    get:
+      summary: List this agent's immutable website permission questions
+      description: Owner-authenticated, read-only. A request is bound to its exact hostname and original run. Up to 50 requests per page; follow nextCursor. Reading or opening a link grants nothing.
+      operationId: listInstanceWebsiteRequests
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Requests and the next cursor, or null when complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requests: { type: array, items: { $ref: "#/components/schemas/WebsiteAccessRequest" } }
+                  nextCursor: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/website-requests/{requestId}:
+    get:
+      summary: Read one exact website question and its historical answer
+      operationId: getInstanceWebsiteRequest
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Owner-scoped request; an answered question does not imply its remembered permission has not been revoked
+          content:
+            application/json:
+              schema: { type: object, properties: { request: { $ref: "#/components/schemas/WebsiteAccessRequest" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/website-requests/{requestId}/answer:
+    post:
+      summary: Remember an owner's exact-host decision and optionally resume its original waiting run
+      description: Requires current ask_once configuration. The hostname and run cannot be changed by this request. The decision is saved atomically before attempting resume; a finished run is never restarted. Repeated answers neither resume again nor restore a revoked permission. Navigation permission never approves submission.
+      operationId: answerInstanceWebsiteRequest
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, deny] }
+      responses:
+        "200":
+          description: Saved decision with separate resume outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request: { $ref: "#/components/schemas/WebsiteAccessRequest" }
+                  recorded: { type: boolean }
+                  resumed: { type: boolean }
+                  repeated: { type: boolean }
+                  resumeError: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Already answered differently, ask_once no longer enabled, or remembered decision limit reached }
+  /v1/instances/{instanceId}/website-grants:
+    get:
+      summary: Read this agent's remembered exact-host allow and deny decisions
+      operationId: listInstanceWebsiteDecisions
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Allowed hostnames plus all remembered decisions; at most 1000 per instance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domains: { type: array, items: { type: string } }
+                  decisions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        hostname: { type: string }
+                        decision: { type: string, enum: [allow, deny] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/website-grants/{hostname}:
+    delete:
+      summary: Forget one remembered exact-host decision
+      description: Does not cancel an active run. A future ask_once visit requires a new question; an old answered link cannot restore a revoked decision.
+      operationId: revokeInstanceWebsiteDecision
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: hostname, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Decision removed, including when it was already absent }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/browser-settings:
     get:
       summary: Read browser choices and independent inheritance sources
@@ -8387,7 +8531,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
-      summary: Set this instance's browser mode, engine or profile policy
+      summary: Set this instance's browser mode, engine, profile or website policy
       description: Independent partial update; omitted fields remain unchanged and null clears only that override. Changes apply to the next session. An explicit engine never silently falls back; active runs preserve their launch settings.
       operationId: setInstanceBrowserSettings
       tags: [Instances]
@@ -8404,6 +8548,7 @@ paths:
                 mode: { type: string, nullable: true, enum: [headed, headless, null] }
                 engine: { type: string, nullable: true, enum: [chrome, msedge, chromium, firefox, webkit, null] }
                 profile: { type: string, nullable: true, enum: [persistent, ephemeral, null] }
+                websiteAccess: { $ref: "#/components/schemas/BrowserWebsiteAccess" }
       responses:
         "200":
           description: Saved overrides and resolved settings

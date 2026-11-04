@@ -85,7 +85,7 @@ export type LocalApplyPreflightResult =
 	/** `title`: the page's own title (CLI 0.4.137+), which names a pasted posting that arrived with none (#1098). */
 	| { state: "live"; jobUrl: string; applyUrl: string; evidence: "apply_control_present"; title?: string }
 	| { state: "unavailable"; jobUrl: string; reason: "expired" | "unavailable" }
-	| { state: "unverifiable"; jobUrl: string; reason: "navigation_failed" | "no_active_apply_path" | "access_blocked" };
+	| { state: "unverifiable"; jobUrl: string; reason: "navigation_failed" | "no_active_apply_path" | "access_blocked"; websiteAccess?: { decision: "ask" | "deny"; hostname: string; url: string; mode: "allowlist" | "ask_once"; actionDispatched: boolean } };
 
 export type LocalApplyArtifactKind = "resume" | "cover_letter";
 
@@ -133,6 +133,9 @@ export interface LocalApplyTaskEnvelope {
 		mode: LocalApplyMode;
 		/** The sites the run may be on. Leaving them pauses (`external_redirect`). */
 		allowDomains: string[];
+		/** Explicit owner website policy (CLI 0.4.209); absent retains legacy behavior. */
+		browserWebsiteAccess?: { mode: "allow_all" | "allowlist" | "ask_once"; domains: string[]; rememberedDomains?: string[]; deniedDomains?: string[] };
+
 		/** Present only under `auto_submit`: the PAGS policy decision that permits ONE final submit. */
 		submitGate?: { gateId: string };
 		/** `false` when the owner turned browser screenshots OFF for this agent (#1064): the runner takes no
@@ -490,6 +493,9 @@ export interface LocalApplyStatusResponse {
 /** `POST /local-apply/resume` — the owner has handled the pause; optionally with an answer or a newly allowed site. */
 export interface LocalApplyResumeRequest {
 	runId: string;
+	expectedWebsitePauseKey?: string;
+	websiteDecision?: "allow" | "deny";
+	browserWebsiteAccess?: LocalApplyTaskEnvelope["policy"]["browserWebsiteAccess"];
 	answers?: Array<{ question: string; answer: string }>;
 	allowDomains?: string[];
 }

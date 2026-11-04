@@ -145,7 +145,8 @@ export function buildEngineSpec(input: {
 /** The brief the CLI is given. The rules are restated, but the bridge is what enforces them. */
 export function researchPrompt(e: Pick<LocalBrowserTaskEnvelope, "objective" | "brief" | "policy" | "limits">): string {
 	const t = (name: string) => `mcp__${BRIDGE_SERVER_NAME}__${name}`;
-	const sites = e.policy.allowDomains.length ? `Stay on these sites: ${e.policy.allowDomains.join(", ")}.` : "Any public site may be visited; a site the owner has not approved pauses the run until they decide.";
+	const website = e.policy.browserWebsiteAccess;
+	const sites = website ? website.mode === "allow_all" ? "You may visit any HTTP(S) website." : website.mode === "allowlist" ? `Only these exact website hostnames are allowed: ${website.domains.join(", ") || "none"}. Other websites are blocked.` : "Unknown websites require the owner’s saved approval. Follow the browser refusal and take a fresh snapshot after permission; never replay a paused action automatically." : e.policy.allowDomains.length ? `Stay on these sites: ${e.policy.allowDomains.join(", ")}.` : "Any public site may be visited; a site the owner has not approved pauses the run until they decide.";
 	return [
 		"You are doing read-only web research for the owner of this machine.",
 		"",
@@ -163,7 +164,7 @@ export function researchPrompt(e: Pick<LocalBrowserTaskEnvelope, "objective" | "
 		"How to work:",
 		`- Your only tools are the browser tools from the ${BRIDGE_SERVER_NAME} server. Use ${t("browser_navigate")} to open pages (build search URLs with query parameters — you cannot type into pages), ${t("browser_snapshot")} to read them, and ${t("browser_click")} only for links, tabs and pagination.`,
 		"- Never try to sign in, submit, apply, buy, post or message anything. Never work around a captcha, a login wall, a paywall or a block — report it.",
-		`- ${sites}${e.policy.denyDomains.length ? ` Never visit: ${e.policy.denyDomains.join(", ")}.` : ""}`,
+		`- ${sites}${!website && e.policy.denyDomains.length ? ` Never visit: ${e.policy.denyDomains.join(", ")}.` : ""}`,
 		`- Limits: ${e.limits.maxPages} pages, ${e.limits.maxActions} browser actions, ${e.limits.maxMinutes} minutes.`,
 		`- For every result, call ${t("record_finding")} with the page URL and the exact text that supports it. For every source you could not read, call ${t("report_source_failure")}.`,
 		`- When done, call ${t("finish_research")} with a short summary of what you found and what you could not reach, then stop.`,

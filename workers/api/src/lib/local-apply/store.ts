@@ -1,3 +1,4 @@
+import type { BrowserWebsiteAccessWire } from "../browser-website-policy.js";
 /**
  * Application Runner (#957) — D1 reads/writes: the application lifecycle (compare-and-set + audit)
  * and the durable fill run. Every statement is scoped by `user_id`; runs also by `instance_id`.
@@ -550,6 +551,7 @@ const TERMINAL: readonly ApplyRunStatus[] = ["awaiting_review", "submitted", "bl
 export const isTerminalApplyRun = (s: ApplyRunStatus) => TERMINAL.includes(s);
 
 export interface ApplyRunPolicy {
+	browserWebsiteAccess?: BrowserWebsiteAccessWire;
 	engine: string;
 	authMode: string;
 	browserProfile: string;

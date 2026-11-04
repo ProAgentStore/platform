@@ -1,3 +1,4 @@
+import type { WebsiteAccessSettings } from "./websiteAccess";
 export type BrowserMode = "headed" | "headless";
 export type BrowserEngine = "chrome" | "msedge" | "chromium" | "firefox" | "webkit";
 export type BrowserProfilePolicy = "persistent" | "ephemeral";
@@ -5,13 +6,14 @@ export interface BrowserSettings {
 	mode: BrowserMode | null;
 	engine: BrowserEngine | null;
 	profile: BrowserProfilePolicy | null;
+	websiteAccess?: WebsiteAccessSettings | null;
 }
-export type BrowserSettingKey = keyof BrowserSettings;
+export type BrowserSettingKey = "mode" | "engine" | "profile";
 export type BrowserSettingSource = "instance" | "agent" | "runner";
 export interface BrowserSettingsView extends BrowserSettings {
 	agentDefaults: BrowserSettings;
 	effective: BrowserSettings;
-	sources: Record<BrowserSettingKey, BrowserSettingSource>;
+	sources: Record<BrowserSettingKey, BrowserSettingSource> & { websiteAccess?: BrowserSettingSource };
 	requiredCli: string;
 	explained: string;
 }
@@ -19,6 +21,7 @@ export interface BrowserCapabilities {
 	browserMode?: BrowserMode | null;
 	browserEngine?: BrowserEngine | null;
 	browserProfilePolicy?: BrowserProfilePolicy | null;
+	browserWebsiteAccess?: WebsiteAccessSettings | null;
 }
 export const BROWSER_FIELDS = [
 	{ key: "mode", label: "Browser mode", options: [["headed", "Visible browser"], ["headless", "Headless browser"]] },
@@ -37,5 +40,6 @@ export function browserCapabilitiesPatch(patch: Partial<BrowserSettings>): Parti
 		...("mode" in patch ? { browserMode: patch.mode } : {}),
 		...("engine" in patch ? { browserEngine: patch.engine } : {}),
 		...("profile" in patch ? { browserProfilePolicy: patch.profile } : {}),
+		...("websiteAccess" in patch ? { browserWebsiteAccess: patch.websiteAccess } : {}),
 	};
 }

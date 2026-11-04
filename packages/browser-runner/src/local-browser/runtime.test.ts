@@ -623,3 +623,23 @@ describe("the time limit", () => {
 		expect(spawned[0].child.killed).toEqual(["SIGTERM"]);
 	});
 });
+
+it.each(["allow", "deny"] as const)("research website %s requires the current opaque pause and never replays navigation", async (decision) => {
+ const rt = runtime();
+ const website = { mode: "ask_once" as const, domains: [] };
+ try {
+  rt.start(envelope({ policy: { ...envelope().policy, browserWebsiteAccess: website } })); await settle();
+  const held = rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://seek.com.au/jobs" } });
+  await settle();
+  const pause = rt.status({ runId: "run-1" }).websitePause;
+  expect(pause).toMatchObject({ hostname: "seek.com.au", url: "https://seek.com.au/jobs", pauseKey: expect.any(String) });
+  expect(rt.status({ runId: "run-1" }).events.find((e) => e.type === "run.paused")?.detail).toMatchObject({ websitePause: pause });
+  const refreshed = { ...website, ...(decision === "allow" ? { rememberedDomains: ["seek.com.au"] } : { deniedDomains: ["seek.com.au"] }) };
+  expect(() => rt.resume({ runId: "run-1", browserWebsiteAccess: refreshed })).toThrow(/current pause/);
+  expect(() => rt.resume({ runId: "run-1", expectedWebsitePauseKey: "stale", websiteDecision: decision, browserWebsiteAccess: refreshed })).toThrow(/current pause/);
+  rt.resume({ runId: "run-1", expectedWebsitePauseKey: pause?.pauseKey, websiteDecision: decision, browserWebsiteAccess: refreshed });
+  expect(await held).toMatchObject({ isError: true });
+  expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "running" });
+  expect(rt.status({ runId: "run-1" }).websitePause).toBeUndefined();
+ } finally { rt.closeAll(); }
+});

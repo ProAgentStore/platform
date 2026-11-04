@@ -1,4 +1,5 @@
 import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey, type CommitGuardSpec, type ElementFacts, type FocusFacts } from "./commit-guard.js";
+import type { BrowserWebsiteAccess, WebsiteAccessBlock } from "./browser-website-access.js";
 
 /** Owner/run policy, supplied by the runner. Never read from model tool arguments. */
 export interface McpCallPolicy {
@@ -8,6 +9,8 @@ export interface McpCallPolicy {
 	isDomainAllowed?: (host: string) => boolean;
 	/** Pause for owner admission. A supervisor checkpoint cannot grant domain access. */
 	requestDomainApproval?: (url: string) => Promise<boolean>;
+	websiteAccess?: () => BrowserWebsiteAccess | undefined;
+	requestWebsiteApproval?: (block: WebsiteAccessBlock) => Promise<void>;
 }
 
 /** Read-only inspection must remain available while a redirected page awaits admission. */

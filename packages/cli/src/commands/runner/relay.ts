@@ -1,4 +1,4 @@
-import { browserSettingsHeaders } from "./browser-settings.js";
+import { browserSettingsBody, browserSettingsHeaders } from "./browser-settings.js";
 import { hostname } from "node:os";
 import { CapabilityReporter } from "../../capabilities/detect.js";
 import { probeRuntimeHealth, type ResourceSample, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
@@ -814,9 +814,9 @@ export function openRelaySocket(
 			// Server pings to verify liveness — respond with pong
 			if (text === "ping") { try { ws.send("pong"); } catch { /* closed */ } return; }
 			if (text.startsWith(RTT_ECHO_PREFIX)) { rttWaiters.get(text.slice(RTT_ECHO_PREFIX.length))?.(Date.now()); return; }
-			let cmd: { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown };
+			let cmd: { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown; browserWebsiteAccess?: unknown };
 			try {
-				cmd = JSON.parse(text) as { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown };
+				cmd = JSON.parse(text) as { type?: string; id: string; method?: string; path: string; body?: unknown; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown; browserWebsiteAccess?: unknown };
 			} catch {
 				return;
 			}
@@ -852,10 +852,11 @@ export function openRelaySocket(
 				try { ws.send(JSON.stringify({ id: cmd.id, status: 503, result: { error: "Runner is draining for a safe automatic update; retry shortly." } })); } catch { /* WS closed */ }
 				return;
 			}
-			const hasBody = method !== "GET" && method !== "HEAD" && cmd.body !== undefined;
 			const controller = new AbortController();
 			inflight.set(cmd.id, controller);
 			try {
+				const localBody = browserSettingsBody(cmd);
+				const hasBody = method !== "GET" && method !== "HEAD" && localBody !== undefined;
 				const headers: Record<string, string> = {};
 				if (hasBody) headers["Content-Type"] = "application/json";
 				if (runnerToken) headers.Authorization = `Bearer ${runnerToken}`;
@@ -867,7 +868,7 @@ export function openRelaySocket(
 				const res = await fetch(`${localUrl}${cmd.path}`, {
 					method,
 					headers,
-					body: hasBody ? JSON.stringify(cmd.body) : undefined,
+					body: hasBody ? JSON.stringify(localBody) : undefined,
 					signal: controller.signal,
 				});
 				const text = await res.text().catch(() => "");

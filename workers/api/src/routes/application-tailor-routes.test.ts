@@ -327,6 +327,20 @@ describe("end to end: apply_requested → materials_ready, exactly once", () => 
 		expect(task?.lead).toMatchObject({ leadUrl: "https://jobs.example.com/role/42/apply" });
 	});
 
+	it.each(["ask", "deny"])("website permission %s during preflight blocks tailoring and creates only an owner question when needed", async (decision) => {
+		await call("PUT", "/next/browser-settings", { websiteAccess: { mode: decision === "ask" ? "ask_once" : "allowlist", domains: [] } });
+		const jobUrl = "https://jobs.example.com/role/permission";
+		const plan = planJobLeadTriage({ id: "email-permission", data: { ...LEAD_RECORD.data, source: "Gmail", status: "unverified", url: jobUrl } } as never, { action: "apply", sourceInstanceId: "scout" }, { now: "2026-10-07T00:00:00.000Z" });
+		if (!plan.ok || !plan.event) throw new Error("email fixture did not plan");
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "unverifiable", jobUrl, reason: "access_blocked", websiteAccess: { decision, mode: decision === "ask" ? "ask_once" : "allowlist", hostname: "jobs.example.com", url: jobUrl, actionDispatched: false } } };
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [plan.event], { traceId: plan.event.eventId });
+		expect(sent.map((x) => x.path)).toEqual(["/local-apply/preflight"]);
+		const blocked = await d1.DB.prepare("SELECT status, block_questions FROM job_applications WHERE lead_id = 'email-permission'").first<{status: string; block_questions: string}>();
+		expect(blocked?.status).toBe("blocked");
+		expect(blocked?.block_questions).toMatch(decision === "ask" ? /website-requests/ : /denied/);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM website_access_requests WHERE instance_id='next' AND subject_kind='connector'").first<{n: number}>())?.n).toBe(decision === "ask" ? 1 : 0);
+	});
+
 	it("an expired email listing is blocked before materials or a runtime task", async () => {
 		const plan = planJobLeadTriage(
 			{ id: "email-expired", data: { ...LEAD_RECORD.data, source: "Gmail", status: "unverified", url: "https://jobs.example.com/role/expired" } } as never,

@@ -89,6 +89,9 @@ export interface LocalBrowserTaskEnvelope {
 		mode: LocalBrowserMode;
 		/** Empty = any public site, each new domain behind a consent pause. */
 		allowDomains: string[];
+		/** Explicit owner website policy (CLI 0.4.209); absent retains legacy behavior. */
+		browserWebsiteAccess?: { mode: "allow_all" | "allowlist" | "ask_once"; domains: string[]; rememberedDomains?: string[]; deniedDomains?: string[] };
+
 		/** Always wins over an allow entry. */
 		denyDomains: string[];
 		/** Domains the owner has already consented to navigate. */
@@ -246,6 +249,7 @@ export interface LocalBrowserStatusResponse {
 	runId: string;
 	state: "running" | "paused" | "ended";
 	pauseReason?: LocalBrowserPauseReason;
+	websitePause?: { hostname: string; url: string; pauseKey: string };
 	/** Events after `afterSeq`, in order. */
 	events: LocalBrowserRunnerEvent[];
 	/** The highest seq the runner holds — the next `afterSeq`. */
@@ -282,6 +286,9 @@ export interface ReplayShotsPage {
 /** `POST /local-browser/resume` — the owner's current decisions, sent when they unblock a pause. */
 export interface LocalBrowserResumeRequest {
 	runId: string;
+	expectedWebsitePauseKey?: string;
+	websiteDecision?: "allow" | "deny";
+	browserWebsiteAccess?: LocalBrowserTaskEnvelope["policy"]["browserWebsiteAccess"];
 	consentedDomains: string[];
 	denyDomains: string[];
 	profileConsented: boolean;

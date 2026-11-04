@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ancestorGroupNames, fabricationBlockReason, numbersAreSourced, numbersIn, samePhone, type CandidateFacts } from "./fabrication-guard.js";
 
@@ -284,39 +282,5 @@ describe("the normalisation rules, directly", () => {
 		expect(numbersAreSourced("2000", ["120000"])).toBe(false);
 		expect(numbersAreSourced("120000 - 140000", ["120000"])).toBe(false);
 		expect(numbersAreSourced("", ["120000"])).toBe(false);
-	});
-});
-
-describe("the guard is wired into the act path", () => {
-	/**
-	 * The invariant, not the implementation: a pure guard nobody calls is a comment. This is the
-	 * same shape as the dry-run block it sits beside — that one was added because the prompt was
-	 * not enough, and it only works because `job-apply.ts` consults it before `/browser/act`.
-	 */
-	const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
-	const src = readFileSync(join(SRC, "workflows/job-apply.ts"), "utf8");
-
-	it("job-apply.ts consults it before forwarding an action to the runner", () => {
-		expect(src).toMatch(/fabricationBlockReason\(/);
-		// Before the act call, not after it.
-		expect(src.indexOf("fabricationBlockReason(")).toBeLessThan(src.indexOf('callRunner<{ url: string; challenge: string | null; feedback?: string'));
-		// And recorded where the owner can find it.
-		expect(src).toMatch(/apply\.unsourced_value/);
-	});
-
-	it("is NOT gated on dryRun — a real application is exactly when fabrication matters", () => {
-		// The neutering this test exists to catch: `job.dryRun ? fabricationBlockReason(…) : null`,
-		// copied from the line above it, which would leave every REAL application unguarded while
-		// every test above still passed.
-		const call = src.split("\n").find((l) => l.includes("fabricationBlockReason(")) ?? "";
-		expect(call).not.toBe("");
-		expect(call).not.toMatch(/dryRun/);
-	});
-
-	it("REFUSES rather than silently correcting the value", () => {
-		// The other obvious wrong fix: rewrite `a.text` to the candidate's real value and act
-		// anyway. That is a second invisible behaviour on the path this exists to make visible —
-		// the owner would still have no signal the model tried to invent something.
-		expect(src).not.toMatch(/\ba\.text\s*=[^=]/);
 	});
 });

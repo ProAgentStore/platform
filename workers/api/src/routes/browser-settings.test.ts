@@ -97,6 +97,53 @@ describe("browser settings", () => {
 		expect(sent.at(-1)).not.toHaveProperty("browserEngine");
 	});
 
+	it("inherits website access independently and validates instance and creator policy", async () => {
+		const browserWebsiteAccess = { mode: "ask_once", domains: ["JOBS.Example.COM.", "jobs.example.com"] };
+		expect((await call("/agents/agent-1/capabilities", { browserWebsiteAccess })).status).toBe(200);
+		expect((await call("/instances/i1/browser-settings")).body).toMatchObject({ effective: { websiteAccess: { mode: "ask_once", domains: ["jobs.example.com"] } }, sources: { websiteAccess: "agent" }, requiredCli: "0.4.209" });
+		expect((await call("/instances/i1/browser-settings", { websiteAccess: { mode: "allow_all", domains: [] } })).body).toMatchObject({ effective: { websiteAccess: { mode: "allow_all", domains: [] } }, sources: { websiteAccess: "instance" } });
+		expect((await call("/instances/i1/browser-settings", { websiteAccess: null })).body).toMatchObject({ effective: { websiteAccess: { mode: "ask_once", domains: ["jobs.example.com"] } } });
+		for (const websiteAccess of [{ mode: "all", domains: [] }, { mode: "allowlist", domains: ["*.example.com"] }, { mode: "ask_once", domains: ["https://example.com"] }, { mode: "ask_once", domains: [], rememberedDomains: ["evil.example"] }, { mode: "allow_all" }, { mode: "allowlist", domains: Array(101).fill("example.com") }]) {
+			expect((await call("/instances/i1/browser-settings", { websiteAccess })).status).toBe(400);
+			expect((await call("/agents/agent-1/capabilities", { browserWebsiteAccess: websiteAccess })).status).toBe(400);
+		}
+		expect(sent).toEqual([]);
+	});
+
+	it("binds owner website policy on both dispatchers and refuses existing tasks on old runners", async () => {
+		const access = { mode: "allowlist", domains: [] };
+		await call("/instances/i1/browser-settings", { websiteAccess: access });
+		for (const path of ["/browser/act", "/browser/snapshot", "/local-apply/resume", "/local-browser/resume", "/tasks/existing/website-access-resume"]) await expect(callRunner(conn(), path, { taskId: "existing", browserWebsiteAccess: { mode: "allow_all", domains: [] } })).rejects.toThrow("requires CLI 0.4.209");
+		expect(sent).toEqual([]);
+		await callRunner(conn(), "/local-apply/cancel", { taskId: "existing" });
+		d1.exec("UPDATE instance_runtimes SET runner_version = '0.4.209'");
+		await callRunner(conn(), "/browser/act", { taskId: "existing", browserWebsiteAccess: { mode: "allow_all", domains: [] } });
+		expect(sent.at(-1)).toMatchObject({ browserWebsiteAccess: access });
+		await callRunner(conn(), "/tasks/existing/website-access-resume", { pauseKey: "pause", websiteDecision: "allow" });
+		expect(sent.at(-1)).toMatchObject({ browserWebsiteAccess: access });
+		await callRuntime(env, { instance_id: "i1", user_id: "u1", runner_version: "0.4.209" } as RuntimeRow, "/local-apply/run", { method: "POST", body: JSON.stringify({ policy: { browserWebsiteAccess: { mode: "allow_all", domains: [] } } }) });
+		expect(sent.at(-1)).toMatchObject({ browserWebsiteAccess: access });
+		await call("/instances/i1/browser-settings", { websiteAccess: null });
+		await callRunner(conn(), "/browser/act");
+		expect(sent.at(-1)).not.toHaveProperty("browserWebsiteAccess");
+	});
+
+	it("sends remembered allow and deny decisions only for ask_once and only for this owner and instance", async () => {
+		d1.exec("UPDATE instance_runtimes SET runner_version = '0.4.209'");
+		for (const [id, uid, instance, hostname, decision] of [["r1", "u1", "i1", "jobs.example.com", "allow"], ["r2", "u1", "i1", "blocked.example.com", "deny"], ["r3", "u1", "i2", "other.example.com", "allow"], ["r4", "u2", "other", "private.example.com", "allow"]]) {
+			await d1.DB.prepare("INSERT INTO website_access_requests (id,user_id,instance_id,subject_kind,subject_id,hostname,pause_key,created_at) VALUES (?1,?2,?3,'runtime_task','task',?4,'pause',1)").bind(id,uid,instance,hostname).run();
+			await d1.DB.prepare("INSERT INTO website_access_grants (user_id,instance_id,hostname,decision,request_id,decided_at) VALUES (?1,?2,?3,?4,?5,1)").bind(uid,instance,hostname,decision,id).run();
+		}
+		await call("/instances/i1/browser-settings", { websiteAccess: { mode: "ask_once", domains: [] } });
+		await callRunner(conn(), "/browser/act");
+		expect(sent.at(-1)?.browserWebsiteAccess).toEqual({ mode: "ask_once", domains: [], rememberedDomains: ["jobs.example.com"], deniedDomains: ["blocked.example.com"] });
+		for (const mode of ["allow_all", "allowlist"]) {
+			await call("/instances/i1/browser-settings", { websiteAccess: { mode, domains: [] } });
+			await callRunner(conn(), "/browser/act");
+			expect(sent.at(-1)?.browserWebsiteAccess).toEqual({ mode, domains: [] });
+		}
+	});
+
 	it("reports actual launch evidence separately from changed configuration, and never starts a browser", async () => {
 		const launch = { engine: "chromium", version: "146.0", mode: "headless", profilePolicy: "ephemeral", profileId: "opaque", transport: "playwright", active: true };
 		receipt = { launch, launches: [launch] };

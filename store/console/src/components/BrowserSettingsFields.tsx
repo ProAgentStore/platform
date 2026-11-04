@@ -1,3 +1,4 @@
+import WebsiteAccessFields from "./WebsiteAccessFields";
 import { BROWSER_FIELDS, BROWSER_SETTING_SOURCE_LABELS, browserSettingLabel, type BrowserSettings, type BrowserSettingsView } from "../lib/browserSettings";
 
 export default function BrowserSettingsFields({ value, inherited, effective, sources, disabled, onChange }: {
@@ -19,6 +20,7 @@ export default function BrowserSettingsFields({ value, inherited, effective, sou
 			</label>
 			{effective && sources && <p className="text-xs mt-1" data-testid={`browser-effective-${field.key}`}>Effective setting: {browserSettingLabel(field.key, effective[field.key])} ({field.key === "profile" && sources.profile === "runner" ? "chosen by workflow" : BROWSER_SETTING_SOURCE_LABELS[sources[field.key]]}).</p>}
 		</div>)}
+		<WebsiteAccessFields value={value.websiteAccess} inherited={inherited ? inherited.websiteAccess ?? null : undefined} effective={effective?.websiteAccess} source={sources?.websiteAccess} disabled={disabled} onChange={(websiteAccess) => onChange({ websiteAccess })} />
 	</div>;
 }
 

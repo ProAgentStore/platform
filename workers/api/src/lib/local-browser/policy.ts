@@ -1,3 +1,6 @@
+import type { BrowserWebsiteAccessWire } from "../browser-website-policy.js";
+import { normalizeDomain } from "../browser-hostname.js";
+export { normalizeDomain } from "../browser-hostname.js";
 /**
  * Local CLI browser research: what an agent declares, what an instance chooses, and what a run
  * may actually do (#945). Pure — the store and routes do the I/O.
@@ -86,6 +89,7 @@ export interface LocalBrowserSettings {
 
 /** What a run is started with: the capability narrowed by the settings, nothing optional. */
 export interface EffectiveLocalBrowserPolicy {
+	browserWebsiteAccess?: BrowserWebsiteAccessWire;
 	engine: LocalBrowserEngine;
 	authMode: LocalBrowserAuthMode;
 	workspace: LocalBrowserWorkspace;
@@ -103,15 +107,6 @@ export interface EffectiveLocalBrowserPolicy {
 	blurFormFields?: boolean;
 	/** The owner's saved brief as the run started with it (#1065). Absent when none is saved. */
 	brief?: string;
-}
-
-const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-
-/** A bare hostname, lowercased — or null. No scheme, port, path, wildcard or IP literal. */
-export function normalizeDomain(raw: unknown): string | null {
-	if (typeof raw !== "string") return null;
-	const d = raw.trim().toLowerCase().replace(/\.$/, "");
-	return DOMAIN_RE.test(d) ? d : null;
 }
 
 /** Is `host` this domain or one of its subdomains? */
@@ -293,8 +288,8 @@ export function mergeLocalBrowserSettings(stored: unknown, patch: Record<string,
 }
 
 /** The policy a run starts with. Stored settings that no longer fit the capability are refused. */
-export function effectiveLocalBrowserPolicy(cap: LocalBrowserCapability, stored: unknown): EffectiveLocalBrowserPolicy | { error: string } {
-	const v = validateLocalBrowserSettings(stored, cap);
+export function effectiveLocalBrowserPolicy(cap: LocalBrowserCapability, stored: unknown, browserWebsiteAccess?: BrowserWebsiteAccessWire): EffectiveLocalBrowserPolicy | { error: string } {
+	const v = validateLocalBrowserSettings(stored, browserWebsiteAccess ? { ...cap, allowDomains: [] } : cap);
 	if ("error" in v) return { error: `Saved local browser settings no longer fit this agent: ${v.error}` };
 	const s = v.settings;
 	const allow = s.access?.allowDomains?.length ? s.access.allowDomains : cap.allowDomains;
@@ -305,8 +300,9 @@ export function effectiveLocalBrowserPolicy(cap: LocalBrowserCapability, stored:
 		workspace: s.workspace ?? { kind: "scratch" },
 		browserProfile: s.browserProfile ?? "isolated",
 		mode: "research_only",
-		allowDomains: allow.filter((d) => !deny.some((x) => domainWithin(d, x))),
-		denyDomains: deny,
+		allowDomains: browserWebsiteAccess ? browserWebsiteAccess.domains : allow.filter((d) => !deny.some((x) => domainWithin(d, x))),
+		denyDomains: browserWebsiteAccess ? [] : deny,
+		...(browserWebsiteAccess ? { browserWebsiteAccess } : {}),
 		limits: { ...cap.limits, ...s.limits },
 		traceRetentionDays: s.traceRetentionDays ?? RETENTION_DAYS.default,
 		resultSchema: cap.resultSchema,

@@ -13,6 +13,8 @@
  * fill's session gate passes. It has no engine, no bridge, no source and no submit gate — the page is
  * for a person, and nothing here fills or presses anything.
  */
+import { AuxiliaryWebsiteAccess } from "./aux-website-access.js";
+import type { BrowserWebsiteAccess } from "../browser-website-access.js";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
@@ -31,6 +33,7 @@ type Session = {
 	request: LocalApplySignInRequest;
 	site: string;
 	browser: RunBrowser;
+	website: AuxiliaryWebsiteAccess;
 	state: "ready" | "closed";
 	expiresAt: number;
 	terminalReason?: LocalApplyHandoffTerminalReason;
@@ -66,11 +69,12 @@ export class LocalApplySignInRuntime {
 	 * so the cloud may call it whenever a frame finds no live page: a page the owner closed is reported
 	 * closed, and a runner restart (nothing in memory) simply opens it again.
 	 */
-	async open(raw: unknown): Promise<LocalApplySignInStatus> {
+	async open(raw: unknown, websiteAccess?: BrowserWebsiteAccess): Promise<LocalApplySignInStatus> {
 		const request = parseRequest(raw);
 		const existing = this.sessions.get(request.signInId);
 		if (existing) {
 			if (existing.request.browserProfile !== request.browserProfile || existing.request.url !== request.url) throw new RunnerInputError("The sign-in id is already bound to another profile or site", 409);
+			if (existing.state === "ready" && await this.blocked(existing)) return this.view(existing);
 			if (existing.state === "ready" && !(await this.pageLive(existing))) await this.close(existing, "page_lost");
 			// A finished sign-in is an answer and is read back; one that closed without one (the owner
 			// closed the tab, the deadline passed) opens again — the cloud asks only under a live takeover.
@@ -82,6 +86,9 @@ export class LocalApplySignInRuntime {
 		// The `default` profile's page is the runner's own browser page; never navigate it from under a run.
 		if (this.deps.busy()) throw new RunnerInputError("An application run is using this machine's application browser; sign in when it ends.", 409);
 		const site = siteKeyOf(new URL(request.url).hostname);
+		const website = new AuxiliaryWebsiteAccess(websiteAccess);
+		const blocked = website.check(request.url);
+		if (blocked) return { ...this.closedView(request, site, "unavailable"), websiteAccess: blocked };
 		const takeover = this.deps.takeover;
 		let browser: RunBrowser;
 		try {
@@ -90,7 +97,7 @@ export class LocalApplySignInRuntime {
 		} catch {
 			return this.closedView(request, site, "profile_unavailable");
 		}
-		const session: Session = { request, site, browser, state: "ready", expiresAt: this.now() + TTL_MS };
+		const session: Session = { request, site, browser, website, state: "ready", expiresAt: this.now() + TTL_MS };
 		this.sessions.set(request.signInId, session);
 		session.cancelDeadline = this.schedule(() => void this.close(session, "expired"), TTL_MS);
 		const page = this.page(session);
@@ -98,33 +105,41 @@ export class LocalApplySignInRuntime {
 			await this.close(session, "profile_unavailable");
 			return this.view(session);
 		}
+		try { await website.install(browser, page); }
+		catch { await this.close(session, "profile_unavailable"); return this.view(session); }
 		await browser.sessions?.beginSignIn(site).catch(() => undefined);
 		// A slow or redirecting site still leaves a page the owner can use; only a lost page is terminal.
 		await page.goto(request.url, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+		if (await this.blocked(session, true)) return this.view(session);
 		try {
 			await takeover!.open({ handoffId: request.signInId }, page);
+			if (await this.blocked(session)) return this.view(session);
 		} catch {
 			await this.close(session, "page_lost");
 		}
 		return this.view(session);
 	}
 
-	async frame(raw: unknown): Promise<{ frame: string; width: number; height: number }> {
+	async frame(raw: unknown): Promise<{ frame: string; width: number; height: number } | LocalApplySignInStatus> {
 		const session = await this.live(raw);
+		if (await this.blocked(session)) return this.view(session);
 		try {
-			return await this.deps.takeover!.frame(session.request.signInId);
+			const frame = await this.deps.takeover!.frame(session.request.signInId);
+			return await this.blocked(session) ? this.view(session) : frame;
 		} catch {
 			await this.close(session, "page_lost");
 			throw new RunnerInputError("The sign-in page is no longer available", 409);
 		}
 	}
 
-	async input(raw: unknown): Promise<void> {
+	async input(raw: unknown): Promise<undefined | LocalApplySignInStatus> {
 		const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 		const session = await this.live(o);
+		if (await this.blocked(session)) return this.view(session);
 		if (!o.input || typeof o.input !== "object") throw new RunnerInputError("sign-in input is required");
 		try {
 			await this.deps.takeover!.input(session.request.signInId, o.input as TakeoverInput);
+			if (await this.blocked(session, true)) return this.view(session);
 		} catch {
 			await this.close(session, "page_lost");
 			throw new RunnerInputError("The sign-in page is no longer available", 409);
@@ -135,6 +150,7 @@ export class LocalApplySignInRuntime {
 	async end(raw: unknown): Promise<LocalApplySignInStatus> {
 		const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 		const session = this.require(o);
+		if (session.state === "ready" && await this.blocked(session)) return this.view(session);
 		if (session.state === "ready" && o.complete === true) {
 			const recorded = await session.browser.sessions?.completeSignIn(session.site).catch(() => null);
 			if (recorded) session.signedIn = recorded;
@@ -160,6 +176,17 @@ export class LocalApplySignInRuntime {
 		session.cancelDeadline = undefined;
 		await this.deps.takeover?.end(session.request.signInId).catch(() => undefined);
 		await session.browser.stop().catch(() => undefined);
+		await session.website.close();
+	}
+
+	private async blocked(session: Session, dispatched = false): Promise<boolean> {
+		const page = this.page(session);
+		if (!session.website.policy) return false;
+		if (session.website.blocked || (page && session.website.check(page.url(), dispatched))) {
+			await this.close(session, "unavailable");
+			return true;
+		}
+		return false;
 	}
 
 	private async live(raw: unknown): Promise<Session> {
@@ -193,6 +220,7 @@ export class LocalApplySignInRuntime {
 			browserProfile: session.request.browserProfile,
 			site: session.site,
 			state: session.state,
+			...(session.website.blocked ? { websiteAccess: session.website.blocked } : {}),
 			expiresAt: new Date(session.expiresAt).toISOString(),
 			...(session.terminalReason ? { terminalReason: session.terminalReason } : {}),
 			...(session.signedIn ? { signedIn: session.signedIn } : {}),
@@ -205,13 +233,12 @@ export class LocalApplySignInRuntime {
 }
 
 /** Separate from the fill's handoff and from reconciliation: this surface has no fill or submit operation. */
-export async function routeLocalApplySignIn(runtime: LocalApplySignInRuntime, method: string | undefined, path: string, read: () => Promise<unknown>): Promise<unknown | undefined> {
+export async function routeLocalApplySignIn(runtime: LocalApplySignInRuntime, method: string | undefined, path: string, read: () => Promise<unknown>, policy?: (body: unknown) => BrowserWebsiteAccess | undefined): Promise<unknown | undefined> {
 	if (method !== "POST") return undefined;
-	if (path === "/local-apply/sign-in") return runtime.open(await read());
+	if (path === "/local-apply/sign-in") { const body = await read(); return runtime.open(body, policy?.(body)); }
 	if (path === "/local-apply/sign-in/frame") return runtime.frame(await read());
 	if (path === "/local-apply/sign-in/input") {
-		await runtime.input(await read());
-		return { ok: true };
+		return await runtime.input(await read()) ?? { ok: true };
 	}
 	if (path === "/local-apply/sign-in/end") return runtime.end(await read());
 	return undefined;

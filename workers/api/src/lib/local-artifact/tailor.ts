@@ -1,3 +1,4 @@
+import { auxiliaryWebsiteAccess } from "../website-access-auxiliary.js";
 import { cloudDocumentsRunnerProblem, InvalidCloudDocuments, persistCloudDocuments } from "./cloud-documents.js";
 /**
  * The Application Tailor (#956): approved lead → tailored résumé + cover letter on the owner's
@@ -129,13 +130,16 @@ async function preflightEmailLead(env: Env, tailorInstanceId: string, uid: strin
 	try {
 		const response = await callRuntime(env, runtime, LOCAL_APPLY_PREFLIGHT_PATH, { method: "POST", body: JSON.stringify({ jobUrl }) });
 		const value = (await runtimeJson(response)) as Partial<LocalApplyPreflightResult>;
+		const website = await auxiliaryWebsiteAccess(env, uid, target.target_instance_id, "preflight", jobUrl, value);
+		if (website) return { ok: false, reason: "unverifiable_lead", question: website.error, result: { ...website, state: "unverifiable", jobUrl, reason: "access_blocked" } };
 		if (response.ok && value.state === "live" && typeof value.applyUrl === "string" && typeof value.jobUrl === "string") {
 			return { ok: true, result: value as Extract<LocalApplyPreflightResult, { state: "live" }> };
 		}
 		if (value.state === "unavailable" && typeof value.jobUrl === "string" && (value.reason === "expired" || value.reason === "unavailable")) return { ok: false, reason: "job_unavailable", question: "The Application Runner found this posting expired or unavailable. It was not sent for tailoring or submission.", result: value as Extract<LocalApplyPreflightResult, { state: "unavailable" }> };
 		if (value.state === "unverifiable" && typeof value.jobUrl === "string" && (value.reason === "navigation_failed" || value.reason === "no_active_apply_path" || value.reason === "access_blocked")) return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not verify a live job page with an active apply path. Email freshness is not evidence that the vacancy is open.", result: value as Extract<LocalApplyPreflightResult, { state: "unverifiable" }> };
 		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not verify a live job page with an active apply path. Email freshness is not evidence that the vacancy is open.", result: { state: "unverifiable", jobUrl, reason: "navigation_failed" } };
-	} catch {
+	} catch (error) {
+		if (error instanceof Error && /^(Website access requires CLI|Saved website access settings are invalid)/.test(error.message)) return { ok: false, reason: "unverifiable_lead", question: error.message, result: { state: "unverifiable", jobUrl, reason: "runner_incompatible" } };
 		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not complete the read-only live-page verification. No materials were prepared.", result: { state: "unverifiable", jobUrl, reason: "navigation_failed" } };
 	}
 }

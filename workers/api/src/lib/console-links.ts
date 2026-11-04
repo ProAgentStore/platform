@@ -111,6 +111,11 @@ export function instanceRunLink(instanceId: string, taskId: string): string {
 	return `${instanceLink(instanceId)}/tasks/${encodeURIComponent(taskId)}`;
 }
 
+/** One immutable, owner-authenticated website question; opening it never grants permission (#1480). */
+export function websiteAccessRequestLink(instanceId: string, requestId: string): string {
+	return `${instanceLink(instanceId)}/website-requests/${encodeURIComponent(requestId)}`;
+}
+
 /** The instance's Knowledge surface: documents, memory, files, credentials, rules. */
 export function instanceKnowledgeLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/knowledge`;
@@ -279,6 +284,7 @@ export type NotificationSubject =
 	| { kind: "builds"; instanceId: string; repoId: string }
 	/** One runtime task (browser task, job application): `RunDetail`, with takeover and the answer box (#349). */
 	| { kind: "task"; instanceId: string; taskId: string }
+	| { kind: "website-request"; instanceId: string; requestId: string }
 	/** A chat-driven run that needs the owner: the Assistant, where it is answered (#894 Q2 default). */
 	| { kind: "assistant"; instanceId: string }
 	/** A trigger (a scheduled run skipped): Settings, where triggers are configured. */
@@ -354,6 +360,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return instanceSettingsLink(subject.instanceId);
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
+			case "website-request":
+				return websiteAccessRequestLink(subject.instanceId, subject.requestId);
 			case "permission-request":
 				return instancePermissionsLink(subject.instanceId, subject.requestId);
 			case "account-approval":

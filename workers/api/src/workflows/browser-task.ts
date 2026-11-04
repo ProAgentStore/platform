@@ -1,6 +1,7 @@
 import { clipMarked } from "../lib/clip-marked.js";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { BrowserActionUncertainError, dispatchBrowserActionOnce, requireSafeBrowserDispatch } from "../lib/browser-action-dispatch.js";
+import { BrowserWebsiteAccessRequired, type BrowserWebsiteReply, requireBrowserWebsiteAccess, resolveOpeningWebsiteAccess, waitForBrowserWebsiteAccess } from "../lib/browser-website-access.js";
 import { closeFailedBrowserTask, markBrowserTaskResumed } from "../lib/browser-task-close.js";
 import { SCREENSHOTS_OFF_REASON } from "../lib/browser-screenshots.js";
 import { describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
@@ -95,9 +96,19 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// guard at the act boundary says so in every reply (#627/#629). MEASURED from its own
 		// answer, never inferred from a version — the published CLI upgrades on the field's
 		// schedule, and 0.4.45 and 0.4.51 were both live when this landed.
-		const opened = (await step.do("open", { retries: { limit: 0, delay: "2 seconds", backoff: "constant" }, timeout: "2 minutes" }, () =>
-			dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: "open" }, () => callRunner<{ url: string; completedOutcome?: boolean; commitGuard?: { supported?: boolean; dispatchSafe?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields })),
-		)) as { completedOutcome?: boolean; commitGuard?: { supported?: boolean; dispatchSafe?: boolean } } | undefined;
+		const initialOpen = (await step.do("open", { retries: { limit: 0, delay: "2 seconds", backoff: "constant" }, timeout: "2 minutes" }, () =>
+			dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: "open" }, () => callRunner<BrowserWebsiteReply & { url: string; completedOutcome?: boolean; commitGuard?: { supported?: boolean; dispatchSafe?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields })),
+		)) as BrowserWebsiteReply & { completedOutcome?: boolean; commitGuard?: { supported?: boolean; dispatchSafe?: boolean } };
+		const opening = await resolveOpeningWebsiteAccess(initialOpen,
+			(access, round) => waitForBrowserWebsiteAccess(env, step, { instanceId, userId, taskId, loopRunId, pauseKey: `website-open-${round}` }, access),
+			(round) => step.do(`website-open-snapshot-${round}`, () => callRunner<typeof initialOpen>(conn, "/browser/snapshot", { taskId, blurFormFields })),
+		);
+		if (opening.stop) {
+			await step.do("website-open-complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: opening.stop!.outcome, detail: opening.stop!.detail }));
+			await finishBrowserRun(env, loopRunId, opening.stop);
+			return opening.stop;
+		}
+		const opened = opening.receipt;
 		requireSafeBrowserDispatch(opened);
 		const runnerEnforces = opened?.commitGuard?.dispatchSafe === true;
 
@@ -125,10 +136,11 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			// at the one place `runApplyLoop` already halts on (#560). `browserRunTick` also
 			// heartbeats, which is what keeps `sweepStaleRuns` off a long-running task.
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, async () => {
-				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId, blurFormFields });
+				const snap = await callRunner<PageSnapshot & BrowserWebsiteReply>(conn, "/browser/snapshot", { taskId, blurFormFields });
 				const stopped = await browserRunTick(env, loopRunId);
 				return stopped ? { ...snap, cancelled: true } : snap;
 			}).then((snap) => {
+				if (!(snap as PageSnapshot)?.cancelled) requireBrowserWebsiteAccess(snap);
 				lastSnapshot = (snap as PageSnapshot)?.snapshot ?? "";
 				return snap as PageSnapshot;
 			}),
@@ -146,18 +158,21 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
-					const r = await dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: `s${sn}-act` }, () => callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
+					const r = await dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: `s${sn}-act` }, () => callRunner<BrowserWebsiteReply & { url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
 					// One artifact contract for every browser run (#1063): the frame is stored by subject (this task) and
 					// the event carries its id and a query-free URL — never the bytes.
 					if (r.screenshot && !shotsOff) {
 						const artifactId = await storeWorkflowShot(env, { userId, instanceId, taskId, seq: sn, screenshotBase64: r.screenshot, action: a.action, url: r.url ?? "" });
 						if (artifactId) await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, artifactId, action: a.action, name: a.name ?? "", url: captionUrl(r.url).url ?? "" } }).catch(() => undefined);
 					}
-					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
+					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback, ...(r.websiteAccess ? { websiteAccess: r.websiteAccess } : {}) };
 				} catch (e) {
 					if (e instanceof BrowserActionUncertainError) throw e;
 					return { url: "", challenge: null as string | null, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
 				}
+			}).then((receipt) => {
+				requireBrowserWebsiteAccess(receipt);
+				return receipt;
 			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
 			onEvent: (type, message, data) => step.do(`s${n++}-event`, async () => {
 				await callRunner(conn, "/browser/event", { taskId, type, message: redact(message), data }).catch(() => undefined);
@@ -181,7 +196,15 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			// restarts at zero every handoff, so recording it would freeze progress rather than
 			// advance it (see `lib/browser-run.ts`).
 			await browserRunAdvance(env, loopRunId, round + 1);
-			result = await runApplyLoop<BrowserTaskJob>(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, redaction });
+			try {
+				result = await runApplyLoop<BrowserTaskJob>(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, redaction });
+			} catch (error) {
+				if (!(error instanceof BrowserWebsiteAccessRequired)) throw error;
+				const answer = await waitForBrowserWebsiteAccess(env, step, { instanceId, userId, taskId, loopRunId, pauseKey: `website-round-${round}` }, error.access);
+				if (answer.approved) { solvedChallengeUrl = undefined; continue; }
+				result = answer.result;
+				break;
+			}
 			solvedChallengeUrl = undefined;
 			if (result.outcome !== "captcha" && result.outcome !== "stuck" && result.outcome !== "needs_input") break;
 

@@ -1,3 +1,5 @@
+import { websiteAccessRunnerProblem } from "../browser-website-policy.js";
+import { websiteAccessForInstance, withWebsiteDecisions } from "../browser-settings-dispatch.js";
 import { localBrowserRunByRequest } from "./store.js";
 /**
  * Starting a local CLI browser research run (#945) — the ONE path, shared by the owner's
@@ -62,20 +64,21 @@ export async function startLocalBrowserRun(
 	const capability = await localBrowserCapability(env, instanceId, uid);
 	if ("error" in capability) return { kind: "refused", error: capability.error };
 	const { settings } = await readLocalBrowserSettings(env, instanceId, uid);
-	const policy = effectiveLocalBrowserPolicy(capability.cap, settings);
+	const browserWebsiteAccess = await websiteAccessForInstance(env, uid, instanceId);
+	const policy = effectiveLocalBrowserPolicy(capability.cap, settings, browserWebsiteAccess);
 	if ("error" in policy) return { kind: "refused", error: policy.error };
 
 	// The owner's screenshot switch, FIXED into this run's policy as it starts (#1064): the runner, the
 	// frame pull and the artifact store all read it from here, so a mid-run toggle changes nothing.
 	const { enabled: screenshotsOn, blurFormFields } = await browserScreenshotSettings(env, instanceId, uid);
-	if (screenshotsOn && !blurFormFields) {
+	if (browserWebsiteAccess || (screenshotsOn && !blurFormFields)) {
 		const existing = await localBrowserRunByRequest(env, instanceId, uid, input.requestId);
 		if (existing) return { kind: "existing", run: existing };
 		const runtime = await getLiveRuntime(env, instanceId, uid);
-		const problem = screenshotBlurRunnerProblem(false, runtime?.runner_version, runtime?.runner_node);
+		const problem = websiteAccessRunnerProblem(browserWebsiteAccess, runtime?.runner_version, runtime?.runner_node) ?? screenshotBlurRunnerProblem(!screenshotsOn || blurFormFields, runtime?.runner_version, runtime?.runner_node);
 		if (problem) return { kind: "refused", error: problem };
 	}
-	const runPolicy = { ...policy, blurFormFields, ...(screenshotsOn ? {} : { screenshots: false as const }) };
+	const runPolicy = { ...policy, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), blurFormFields, ...(screenshotsOn ? {} : { screenshots: false as const }) };
 	const now = Date.now();
 	const claim = await claimLocalBrowserRun(env, { id: crypto.randomUUID(), instanceId, userId: uid, requestId: input.requestId, objective: input.objective, policy: runPolicy, now });
 	if (claim.kind === "existing") return { kind: "existing", run: claim.run };
@@ -157,7 +160,7 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 	};
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) return fail("runner_offline", "No runner is connected. Run `pags up` on the machine that should do the research, then start the run again.");
-	const tooOld = engineRunnerProblem(run.policy.engine, runtime.runner_version, runtime.runner_node);
+	const tooOld = websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? engineRunnerProblem(run.policy.engine, runtime.runner_version, runtime.runner_node);
 	if (tooOld) return fail("runner_unsupported", tooOld);
 	// The admission gate (#1175): an overloaded machine takes no new browser research either — the same verdict coding gets.
 	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "browser runs", false);
@@ -179,6 +182,7 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 		browserProfile: p.browserProfile,
 		policy: {
 			mode: p.mode,
+			...(p.browserWebsiteAccess ? { browserWebsiteAccess: await withWebsiteDecisions(env, uid, instanceId, p.browserWebsiteAccess) } : {}),
 			allowDomains: p.allowDomains,
 			// An owner's "deny" on a domain is as binding as the configured deny list.
 			denyDomains: [...new Set([...p.denyDomains, ...navigate.filter((x) => x.decision === "deny").map((x) => x.domain)])],

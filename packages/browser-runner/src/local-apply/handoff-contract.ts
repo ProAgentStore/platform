@@ -70,6 +70,8 @@ export interface LocalApplySignInRequest {
 
 /** Secret-free status of a post-run sign-in: names a site, never a cookie, URL query or value. */
 export interface LocalApplySignInStatus {
+	/** Website permission was refused before further page access; this is never sign-in/submission proof. */
+	websiteAccess?: LocalApplyWebsiteAccessBlock;
 	signInId: string;
 	browserProfile: LocalApplyProfile;
 	/** The registrable domain being signed in to, e.g. `seek.com`. */
@@ -107,6 +109,8 @@ export interface LocalApplyReconciliationEnvelope {
 
 /** The runner never transports site text/URLs/cookies; it reports only this evidence category. */
 export interface LocalApplyReconciliationStatus {
+	/** Website permission was refused before further page access; this is never sign-in/submission proof. */
+	websiteAccess?: LocalApplyWebsiteAccessBlock;
 	reconciliationId: string;
 	runId: string;
 	applicationId: string;
@@ -121,4 +125,13 @@ export interface LocalApplyReconciliationStatus {
 /** Same opaque handoff bindings, with the reconciliation id preventing original-run substitution. */
 export interface LocalApplyReconciliationHandoffRequest extends LocalApplyHandoffRequest {
 	reconciliationId: string;
+}
+
+/** Secret-free website refusal shared by auxiliary browser operations. */
+export interface LocalApplyWebsiteAccessBlock {
+	decision: "ask" | "deny";
+	hostname: string;
+	url: string;
+	mode: "allowlist" | "ask_once";
+	actionDispatched: boolean;
 }

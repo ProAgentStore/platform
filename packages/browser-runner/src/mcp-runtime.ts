@@ -6,6 +6,7 @@ import type { BrowserContext, Page } from "playwright";
 import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
 import { domainAdmissionUrl, guardedToolRefusal, navigationRefusal, type McpCallPolicy } from "./mcp-call-policy.js";
 import { UploadVerifier, type PreparedUpload } from "./upload-verification.js";
+import { websiteAccessBlock, type WebsiteAccessBlock } from "./browser-website-access.js";
 
 /** The caller owns the browser in either case. Native contexts work across all engines (#1431). */
 export type McpRuntimeOptions = (
@@ -17,6 +18,7 @@ export interface McpToolResult {
 	/** `text` blocks, or an `image` block (base64 `data` + `mimeType`) from `browser_take_screenshot` (#1063). */
 	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 	isError?: boolean;
+	websiteAccess?: WebsiteAccessBlock;
 }
 
 /** Await a promise, giving up (never throwing) after `ms`. */
@@ -202,7 +204,18 @@ export class McpRuntime {
 		}
 		// Redirects can land after a click or supervisor checkpoint, or during an awaited probe.
 		// The current native URL and live per-run allowlist decide at the actual dispatch boundary.
-		if (!refusal && this.policy.isDomainAllowed) {
+		let websiteBlock: WebsiteAccessBlock | null = null;
+		const websitePolicy = this.policy.websiteAccess?.();
+		const websiteUrl = () => name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined) ? String(args.url ?? "") : name === "browser_tabs" && args.action === "select" && typeof args.index === "number" ? this.context?.pages()[args.index]?.url() ?? "" : currentPage()?.url() ?? "";
+		const inspectWebsite = !opts.internal && (name !== "browser_tabs" || args.action === "new" || args.action === "select");
+		if (!refusal && websitePolicy && inspectWebsite) {
+			websiteBlock = websiteAccessBlock(websitePolicy, websiteUrl());
+			if (websiteBlock) {
+				if (websiteBlock.decision === "ask") await this.policy.requestWebsiteApproval?.(websiteBlock);
+				refusal = websiteBlock.decision === "ask" ? "Website approval is required. No action was dispatched. After the owner decides, inspect the page and make a fresh decision." : "This website is denied by this agent's website access policy. No action was dispatched.";
+			}
+		}
+		if (!refusal && !websitePolicy && this.policy.isDomainAllowed) {
 			const candidate = () => domainAdmissionUrl(name, args, currentPage()?.url(), opts.internal ?? false);
 			const allowed = (url: string | null) => {
 				if (url === null) return true;
@@ -220,7 +233,7 @@ export class McpRuntime {
 		refusal ??= cancelled();
 		if (refusal) {
 			this.refused(name, args, refusal);
-			return { isError: true, content: [{ type: "text", text: refusal }] };
+			return { isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
 		}
 		try {
 			let res = (await client.callTool({ name, arguments: args })) as McpToolResult;
@@ -237,6 +250,13 @@ export class McpRuntime {
 			const pageAfter = currentPage();
 			const forbiddenPage = pageAfter && navigationRefusal(pageAfter.url());
 			if (forbiddenPage) res = { isError: true, content: [{ type: "text", text: forbiddenPage }] };
+			if (!forbiddenPage && websitePolicy && inspectWebsite && pageAfter) {
+				const blockedAfter = websiteAccessBlock(websitePolicy, pageAfter.url(), !["browser_snapshot", "browser_wait_for", "browser_take_screenshot", "browser_console_messages", "browser_network_requests"].includes(name));
+				if (blockedAfter) {
+					if (blockedAfter.decision === "ask") await this.policy.requestWebsiteApproval?.(blockedAfter);
+					res = { isError: true, websiteAccess: blockedAfter, content: [{ type: "text", text: "The browser reached a website that this agent has not been permitted to access. The previous action may already have run; do not replay it. After an owner decision, inspect the page and decide again." }] };
+				}
+			}
 			this.calls.record({
 				subject: this.subject,
 				tool: name,

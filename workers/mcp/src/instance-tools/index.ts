@@ -32,6 +32,7 @@ import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerBrowserVerificationTools } from "./browser-verification.js";
 import { registerBrowserModeTools } from "./browser-mode.js";
 import { registerBrowserSettingsTools } from "./browser-settings.js";
+import { registerWebsiteAccessTools } from "./website-access.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerCoderBrainTools } from "./coder-brain.js";
 import { registerKnowledgeTools } from "./knowledge.js";
@@ -73,6 +74,7 @@ export function registerInstanceTools(
 	registerBrowserVerificationTools(server, ctx);
 	registerBrowserModeTools(server, ctx);
 	registerBrowserSettingsTools(server, ctx);
+	registerWebsiteAccessTools(server, ctx);
 	registerGmailScoutTools(server, ctx);
 	registerCoderBrainTools(server, ctx);
 	registerApplicationTools(server, ctx);

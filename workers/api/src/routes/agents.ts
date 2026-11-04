@@ -1,3 +1,4 @@
+import { browserWebsiteAccessValue } from "../lib/browser-website-policy.js";
 import { browserSettingsDenial, browserEngineValue, browserProfilePolicyValue } from "../lib/browser-settings.js";
 import { browserModeValue } from "../lib/browser-mode.js";
 import { Hono } from "hono";
@@ -571,6 +572,7 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 	let browserMode: unknown = null;
 	let browserEngine: unknown = null;
 	let browserProfilePolicy: unknown = null;
+	let browserWebsiteAccess: unknown = null;
 	try {
 		const config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {};
 		const caps = config.capabilities as Record<string, unknown> | undefined;
@@ -578,6 +580,7 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 		browserMode = browserModeValue(caps?.browserMode);
 		browserEngine = browserEngineValue(caps?.browserEngine);
 		browserProfilePolicy = browserProfilePolicyValue(caps?.browserProfilePolicy);
+		browserWebsiteAccess = browserWebsiteAccessValue(caps?.browserWebsiteAccess);
 		customSurfaces = Array.isArray(caps?.customSurfaces) ? caps.customSurfaces : [];
 		surfaces = Array.isArray(caps?.surfaces) ? caps.surfaces : [];
 		runtime = caps?.runtime ?? null;
@@ -593,7 +596,7 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 	// BROWSER_TASK, the only value the platform enforces. Annotated for THIS agent, so a stored
 	// value the platform no longer runs comes back visible instead of silently reading as "none".
 	// `localBrowser` is the RESOLVED block (#946) — the limits and engines a run will actually get.
-	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, localBrowser, browserMode, browserEngine, browserProfilePolicy, workflowOptions: workflowChoices(workflow), customSurfacesEnabled: customSurfacesEnabled(c.env) });
+	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, localBrowser, browserMode, browserEngine, browserProfilePolicy, browserWebsiteAccess, workflowOptions: workflowChoices(workflow), customSurfacesEnabled: customSurfacesEnabled(c.env) });
 });
 
 /** Declare the agent's custom (published) console surfaces — owner only. Stored in
@@ -641,7 +644,7 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 	if ("workflow" in declared) caps.workflow = declared.workflow;
 	if (declared.tools !== undefined) caps.tools = declared.tools;
 	if ("localBrowser" in declared) caps.localBrowser = declared.localBrowser;
-	for (const key of ["browserMode", "browserEngine", "browserProfilePolicy"] as const) if (key in declared) caps[key] = declared[key];
+	for (const key of ["browserMode", "browserEngine", "browserProfilePolicy", "browserWebsiteAccess"] as const) if (key in declared) caps[key] = declared[key];
 
 	// Same merged-block check as `PUT /:id` (#705) — this is the third door onto the same write.
 	const runtimeDenial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null) ?? localBrowserDenial(caps) ?? browserSettingsDenial(caps);
@@ -666,6 +669,7 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 		browserMode: browserModeValue(caps.browserMode),
 		browserEngine: browserEngineValue(caps.browserEngine),
 		browserProfilePolicy: browserProfilePolicyValue(caps.browserProfilePolicy),
+		browserWebsiteAccess: browserWebsiteAccessValue(caps.browserWebsiteAccess),
 		// Re-served on the write path too, so a save that clears a no-longer-runnable value also
 		// clears the row the editor was showing for it (#375).
 		workflowOptions: workflowChoices(caps.workflow),

@@ -10,3 +10,12 @@ describe("browser launch settings relay (#1431)", () => {
 	it.each([{ browserEngine: "safari" }, { browserEngine: ["firefox"] }, { browserProfilePolicy: "personal" }, { browserMode: "hidden" }])("rejects malformed settings instead of launching the fallback", (settings) => expect(() => browserSettingsHeaders(settings)).toThrow(/Invalid/));
 	it("permits read-only session inspection for local browser research", () => expect(routeRefusal({ runtime: "local_browser" }, "/browser/session")).toBeNull());
 });
+
+import { browserSettingsBody } from "./browser-settings.js";
+it("strips untrusted body policy and carries only owner relay metadata", () => {
+ const forged = { mode: "allow_all", domains: [] };
+ expect(browserSettingsBody({ body: { action: "click", _pagsBrowserWebsiteAccess: forged } })).toEqual({ action: "click" });
+ const owner = { mode: "allowlist", domains: ["example.test"] };
+ expect(browserSettingsBody({ body: { _pagsBrowserWebsiteAccess: forged }, browserWebsiteAccess: owner })).toEqual({ _pagsBrowserWebsiteAccess: owner });
+ expect(browserSettingsHeaders({ browserWebsiteAccess: owner })).toEqual({ "X-PAGS-Website-Policy": "1" });
+});

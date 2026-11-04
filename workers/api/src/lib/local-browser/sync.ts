@@ -8,6 +8,7 @@
  * event or a result does to a run.
  */
 import { clipMarked } from "../clip-marked.js";
+import { parseWebsitePause, syncResearchWebsiteQuestion } from "../website-access-local.js";
 import { logError } from "../error-log.js";
 import { persistJobLeadFindings } from "./findings.js";
 import { syncScanCard } from "./scan-board.js";
@@ -112,7 +113,9 @@ async function notifyPaused(env: Env, uid: string, instanceId: string, run: Loca
  * asked not to be brought in: the attempt ends `failed` (`takeover_declined`) and the runner is told to
  * stop. Otherwise a durable takeover is requested BEFORE anything is shown, and the owner is notified.
  */
-async function onPaused(env: Env, uid: string, instanceId: string, run: LocalBrowserRun, reason: LocalBrowserPauseReason | null, now: number): Promise<LocalBrowserRun> {
+async function onPaused(env: Env, uid: string, instanceId: string, run: LocalBrowserRun, reason: LocalBrowserPauseReason | null, now: number, websitePause?: unknown): Promise<LocalBrowserRun> {
+	// Website questions have their own remembered owner decision; takeover settings do not cancel them.
+	if (reason === "consent_required" && run.policy.browserWebsiteAccess?.mode === "ask_once" && parseWebsitePause(websitePause)) return run;
 	const { settings } = await readBrowserVerification(env, instanceId, uid);
 	if (settings.enabled && settings.takeover === "never") {
 		const runtime = await getLiveRuntime(env, instanceId, uid).catch(() => null);
@@ -169,7 +172,8 @@ export async function ingestRunnerEvents(
 		if (e.type === "run.paused" && current.status === "running") {
 			const paused = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: e.pauseReason }, now);
 			if (paused) {
-				current = await onPaused(env, uid, instanceId, paused, e.pauseReason ?? null, now).catch(() => paused);
+				current = await onPaused(env, uid, instanceId, paused, e.pauseReason ?? null, now, e.detail?.websitePause).catch(() => paused);
+				current = await syncResearchWebsiteQuestion(env, uid, current, e.detail?.websitePause, (run, pause, decision) => resumeLocalBrowserRun(env, run.instanceId, uid, run, Date.now(), { expectedWebsitePauseKey: pause.pauseKey, websiteDecision: decision }), false).catch(() => current);
 				// A scan waiting on a login, a captcha or a consent decision belongs in "Needs you"
 				// on the board, not only in a notification that scrolls away (#980).
 				await syncScanCard(env, instanceId, uid, current);
@@ -265,7 +269,7 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	// A reply that is not a JSON object is a runner (or a proxy in front of it) not answering properly, the same as a non-2xx: it is
 	// NOT a malformed result, which only a runner that reported the run ended can send (#1153).
 	if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) return lostByTime ? endLost(env, instanceId, uid, run, "The runner stopped answering for this run with a readable status.", now) : run;
-	const body = parsedBody as { state?: unknown; pauseReason?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
+	const body = parsedBody as { state?: unknown; pauseReason?: unknown; websitePause?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
 	const events = Array.isArray(body.events) ? body.events : [];
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await ingestRunnerEvents(env, instanceId, uid, run, events, now, { runnerSeq: lastSeq })).run;
@@ -280,7 +284,7 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	if (body.state === "paused" && current.status === "running") {
 		const reason = LOCAL_BROWSER_PAUSE_REASONS.includes(body.pauseReason as LocalBrowserPauseReason) ? (body.pauseReason as LocalBrowserPauseReason) : null;
 		const paused = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: reason }, now);
-		if (paused) current = await onPaused(env, uid, instanceId, paused, reason, now).catch(() => paused);
+		if (paused) current = await onPaused(env, uid, instanceId, paused, reason, now, body.websitePause).catch(() => paused);
 	} else if (body.state === "running" && current.status === "paused") {
 		current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
 	}
@@ -308,11 +312,11 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 			}
 		}
 	}
-	return current;
+	return syncResearchWebsiteQuestion(env, uid, current, body.websitePause, (run, pause, decision) => resumeLocalBrowserRun(env, run.instanceId, uid, run, Date.now(), { expectedWebsitePauseKey: pause.pauseKey, websiteDecision: decision })).catch(() => current);
 }
 
 /** Release a paused run: send the owner's current decisions to the runner, then read it back. */
-export async function resumeLocalBrowserRun(env: Env, instanceId: string, uid: string, run: LocalBrowserRun, now = Date.now()): Promise<LocalBrowserRun> {
+export async function resumeLocalBrowserRun(env: Env, instanceId: string, uid: string, run: LocalBrowserRun, now = Date.now(), websiteResume: { expectedWebsitePauseKey: string; websiteDecision: "allow" | "deny" } | Record<string, never> = {}): Promise<LocalBrowserRun> {
 	if (run.status !== "paused") throw new HttpError(409, `Only a paused run can be resumed; this one is ${run.status}`);
 	const runtime = await getLiveRuntime(env, instanceId, uid).catch(() => null);
 	if (!runtime) throw new HttpError(409, "No runner is connected. Run `pags up` on the machine doing the research, then resume.");
@@ -322,6 +326,7 @@ export async function resumeLocalBrowserRun(env: Env, instanceId: string, uid: s
 		method: "POST",
 		body: JSON.stringify({
 			runId: run.id,
+			...websiteResume,
 			consentedDomains: navigate.filter((x) => x.decision === "allow").map((x) => x.domain),
 			denyDomains: navigate.filter((x) => x.decision === "deny").map((x) => x.domain),
 			profileConsented: consent.some((x) => x.scope === "signed_in_profile" && x.decision === "allow"),

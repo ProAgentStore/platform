@@ -1,6 +1,7 @@
 import { clipMarked } from "../lib/clip-marked.js";
 import { closeFailedBrowserTask, markBrowserTaskResumed } from "../lib/browser-task-close.js";
 import { BrowserActionUncertainError, dispatchBrowserActionOnce, requireSafeBrowserDispatch } from "../lib/browser-action-dispatch.js";
+import { BrowserWebsiteAccessRequired, type BrowserWebsiteReply, requireBrowserWebsiteAccess, resolveOpeningWebsiteAccess, waitForBrowserWebsiteAccess } from "../lib/browser-website-access.js";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { SCREENSHOTS_OFF_REASON } from "../lib/browser-screenshots.js";
 import { decideAction, describeAction, dryRunBlockReason, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
@@ -151,8 +152,18 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 		});
 
-		const opened = await step.do("open", { retries: { limit: 0, delay: "2 seconds" }, timeout: "2 minutes" }, () => dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: "open" }, () => callRunner<{ url: string; commitGuard?: { dispatchSafe?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields })));
+		const initialOpen = await step.do("open", { retries: { limit: 0, delay: "2 seconds" }, timeout: "2 minutes" }, () => dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: "open" }, () => callRunner<BrowserWebsiteReply & { url: string; commitGuard?: { dispatchSafe?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, taskId, ...(shotsOff ? { screenshot: false } : {}), blurFormFields })));
 
+		const opening = await resolveOpeningWebsiteAccess(initialOpen,
+			(access, round) => waitForBrowserWebsiteAccess(env, step, { instanceId, userId, taskId, loopRunId, pauseKey: `website-open-${round}` }, access),
+			(round) => step.do(`website-open-snapshot-${round}`, () => callRunner<typeof initialOpen>(conn, "/browser/snapshot", { taskId, blurFormFields })),
+		);
+		if (opening.stop) {
+			await step.do("website-open-complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: opening.stop!.outcome, detail: opening.stop!.detail }));
+			await finishBrowserRun(env, loopRunId, opening.stop);
+			return opening.stop;
+		}
+		const opened = opening.receipt;
 		requireSafeBrowserDispatch(opened);
 
 		// Durable-step wrappers for the tested pure loop. The call order is
@@ -186,10 +197,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// application to stop. `browserRunTick` also heartbeats, which keeps `sweepStaleRuns`
 			// off an application that is legitimately taking a while.
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, async () => {
-				const snap = await callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId, blurFormFields });
+				const snap = await callRunner<PageSnapshot & BrowserWebsiteReply>(conn, "/browser/snapshot", { taskId, blurFormFields });
 				const stopped = await browserRunTick(env, loopRunId);
 				return stopped ? { ...snap, cancelled: true } : snap;
 			}).then((snap) => {
+				if (!(snap as PageSnapshot)?.cancelled) requireBrowserWebsiteAccess(snap);
 				// Kept for the guard below: the snapshot is the page's OWN account of every element
 				// (role, accessible name, [ref=eNN]), so resolving the brain's `ref` against it is
 				// how the dry-run block stops depending on a label the brain wrote and the runner
@@ -275,7 +287,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					// runner is the only party that can read the ELEMENT (#627). A runner too old
 					// to know the field ignores it, which is exactly the state this leaves the
 					// field in until the CLI is upgraded.
-					const r = await dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: `s${sn}-act` }, () => callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
+					const r = await dispatchBrowserActionOnce(env, { taskId, instanceId, userId, step: `s${sn}-act` }, () => callRunner<BrowserWebsiteReply & { url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, taskId, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}), blurFormFields }));
 					// Persist a screenshot of the resulting page so the run can be REPLAYED
 					// visually. The blob goes to R2 keyed by step; the event carries only the
 					// key + the action (the events feed stays small). Best-effort — a shot
@@ -286,13 +298,17 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 						const artifactId = await storeWorkflowShot(env, { userId, instanceId, taskId, seq: sn, screenshotBase64: r.screenshot, action: a.action, url: r.url ?? "" });
 						if (artifactId) await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, artifactId, action: a.action, name: a.name ?? "", url: captionUrl(r.url).url ?? "" } }).catch(() => undefined);
 					}
-					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
+					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback, ...(r.websiteAccess ? { websiteAccess: r.websiteAccess } : {}) };
 				} catch (e) {
 					// Uncertain dispatch is terminal: the brain must not choose the same click under a new step.
 					if (e instanceof BrowserActionUncertainError) throw e;
 					// Return a known failure to the brain without replaying this durable step.
 					return { url: "", challenge: null as string | null, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
 				}
+			}).then((receipt) => {
+				if ("websiteAccess" in receipt && receipt.websiteAccess?.actionDispatched && ["type", "select", "check", "upload"].includes(a.action)) filled = true;
+				requireBrowserWebsiteAccess(receipt);
+				return receipt;
 			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
 			onEvent: (type, message, data) => step.do(`s${n++}-event`, async () => {
 				await callRunner(conn, "/browser/event", { taskId, type, message: redact(message), data }).catch(() => undefined);
@@ -350,7 +366,15 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// restarts at zero every handoff, so recording it would freeze progress rather than
 			// advance it (see `lib/browser-run.ts`).
 			await browserRunAdvance(env, loopRunId, round + 1);
-			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, filled, redaction });
+			try {
+				result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, filled, redaction });
+			} catch (error) {
+				if (!(error instanceof BrowserWebsiteAccessRequired)) throw error;
+				const answer = await waitForBrowserWebsiteAccess(env, step, { instanceId, userId, taskId, loopRunId, pauseKey: `website-round-${round}` }, error.access);
+				if (answer.approved) { solvedChallengeUrl = undefined; continue; }
+				result = answer.result;
+				break;
+			}
 			solvedChallengeUrl = undefined;
 			filled = result.filled ?? filled; // once true, stays true for the rest of the application
 			transcript.push(...(result.transcript ?? []));

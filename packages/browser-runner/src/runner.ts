@@ -1,3 +1,4 @@
+import { parseBrowserWebsiteAccess, refreshWebsiteAccess, websiteAccessBlock, websiteResumePolicy, type BrowserWebsiteAccess, type WebsiteAccessBlock } from "./browser-website-access.js";
 import { CrashLog, crashReport, describeError, runtimeCrashIdentity } from "./crash-reports.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -77,6 +78,9 @@ export class LocalRunner {
 	readonly browsers: BrowserSessions;
 	private readonly fileAttachArmed = new WeakSet<Page>();
 	readonly store: RunnerStore;
+	private readonly websitePolicies = new Map<string, BrowserWebsiteAccess>();
+	private readonly websiteOpenResumes = new Map<string, Page>();
+	private readonly websiteOpenPages = new Map<string, Page>();
 	private readonly taskGuards = new Map<string, CommitGuardSpec>();
 	/** This runtime's crash reports (#1087) — delivered to the platform by the CLI that runs it. */
 	readonly crashLog: CrashLog;
@@ -161,8 +165,10 @@ export class LocalRunner {
 		};
 	}
 
-	createTask(request: CreateTaskRequest): RunnerTask {
+	createTask(request: CreateTaskRequest, websitePolicy?: BrowserWebsiteAccess): RunnerTask {
 		const normalized = normalizeCreateTaskRequest(request);
+		normalized.input = { ...normalized.input };
+		delete normalized.input._pagsWebsitePolicy;
 		validateTaskInput(normalized.type, normalized.input);
 		if (["browser.open", "browser.task", "job.apply_agent", "browser.handoff"].includes(normalized.type)) {
 			normalized.input = { ...normalized.input, blurFormFields: normalized.input.blurFormFields !== false };
@@ -191,6 +197,7 @@ export class LocalRunner {
 				updatedAt: now,
 			};
 			this.store.putTask(task);
+			this.bindWebsitePolicy(task.id, websitePolicy);
 			if (["browser.task", "job.apply_agent", "browser.handoff"].includes(normalized.type)) this.browsers.current.taskIds.add(task.id);
 			const startedMsg = normalized.type === "browser.task" ? "Browser task started (agent-driven)" : normalized.type === SITE_BUILDER_TASK_TYPE ? "Website Builder draft registered (workflow-driven); starting the local author" : "Job application started (agent-driven)";
 			this.addTaskEvent(task, "task.created", startedMsg, { status: "running", url: normalized.input.url });
@@ -225,6 +232,7 @@ export class LocalRunner {
 			updatedAt: now,
 		};
 		this.store.putTask(task);
+		this.bindWebsitePolicy(task.id, websitePolicy);
 		if (normalized.type === "browser.open") this.browsers.current.taskIds.add(task.id);
 		this.addTaskEvent(task, "task.created", `Task created: ${task.type}`, {
 			status: task.status,
@@ -240,7 +248,8 @@ export class LocalRunner {
 		return this.siteBuilder.refine(task, typeof refinement === "string" ? refinement : "");
 	}
 
-	async approveTask(id: string): Promise<RunnerTask> {
+	async approveTask(id: string, websitePolicy?: BrowserWebsiteAccess): Promise<RunnerTask> {
+		this.bindWebsitePolicy(id, websitePolicy);
 		const task = this.requireTask(id);
 		if (task.status !== "needs_approval") {
 			throw new RunnerInputError(`Task is not waiting for approval: ${task.status}`, 409);
@@ -354,6 +363,16 @@ export class LocalRunner {
 		try {
 			const output = await this.execute(task);
 			if (this.store.getTask(task.id)?.status === "cancelled") { await this.endTakeover(task.id); return; }
+			if (isRecord(output) && isRecord(output.websiteAccess)) {
+				const block = output.websiteAccess;
+				task.status = block.decision === "ask" ? "needs_human" : "failed";
+				task.output = { websiteAccess: { ...block, pauseKey: crypto.randomUUID() } };
+				task.updatedAt = new Date().toISOString();
+				if (task.status === "failed") task.completedAt = task.updatedAt;
+				this.store.putTask(task);
+				this.addTaskEvent(task, "browser.website_access", "Website access requires an owner decision", task.output);
+				return;
+			}
 			task.status = "completed";
 			task.output = output;
 			task.updatedAt = new Date().toISOString();
@@ -530,6 +549,8 @@ export class LocalRunner {
 				const task = this.store.getTask(browserState.resumeTaskId);
 				if (!task || isTerminalTaskStatus(task.status)) return;
 			}
+			const websitePolicy = this.websitePolicies.get(browserState.resumeTaskId || browserState.dataDir);
+			if (websitePolicy && websiteAccessBlock(websitePolicy, page.url())) return;
 			chooser.setFiles(browserState.applyResumePath).catch(() => undefined);
 		});
 	}
@@ -566,8 +587,16 @@ export class LocalRunner {
 			if (!url || !/^https?:\/\//.test(url)) {
 				throw new RunnerInputError("browser.open requires an http(s) url");
 			}
+			const websitePolicy = this.websitePolicies.get(task.id);
+			const inspectionPage = this.websiteOpenResumes.get(task.id);
+			this.websiteOpenResumes.delete(task.id);
+			const inspecting = !!inspectionPage;
+			const before = websitePolicy && !inspecting ? websiteAccessBlock(websitePolicy, url) : null;
+			if (before) return { websiteAccess: before };
 			const context = await this.getBrowserContext();
-			const page = context.pages()[0] || (await context.newPage());
+			const page = inspectionPage || context.pages()[0] || (await context.newPage());
+			if (page.isClosed()) throw new RunnerInputError("The paused website page was closed; start a new browser task", 409);
+			this.websiteOpenPages.set(task.id, page);
 			// Auto-attach a file (e.g. résumé) via Playwright for any upload the
 			// human triggers in the takeover — never a native picker.
 			const attachPath = stringValue(task.input.resumePath ?? task.input.attachPath);
@@ -580,7 +609,9 @@ export class LocalRunner {
 				});
 			}
 			this.addTaskEvent(task, "browser.goto.started", "Opening browser page", { url });
-			await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+			if (!inspecting) await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+			const after = websitePolicy ? websiteAccessBlock(websitePolicy, page.url(), true) : null;
+			if (after) return { websiteAccess: after };
 			// If the page presents an anti-bot challenge, hand off to a human to
 			// solve it via takeover (the same path job applications use).
 			await this.guardHumanChallenge(task, page);
@@ -875,20 +906,23 @@ export class LocalRunner {
 	 * [ref=eNN] on each interactive element. The brain targets elements by that ref;
 	 * because {@link browserAct} routes through the SAME mcp server, the refs resolve.
 	 */
-	async browserSnapshot(taskId?: string): Promise<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean; cancelled?: boolean; commitGuard?: { supported: true; dispatchSafe: true } }> {
+	async browserSnapshot(taskId?: string, incomingWebsitePolicy?: BrowserWebsiteAccess): Promise<{ websiteAccess?: WebsiteAccessBlock; url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean; cancelled?: boolean; commitGuard?: { supported: true; dispatchSafe: true } }> {
 		// If the user pressed Stop, the task is cancelled — tell the brain to halt.
 		if (taskId && this.store.getTask(taskId)?.status === "cancelled") {
 			return { url: "", title: "", snapshot: "", challenge: null, truncated: false, cancelled: true };
 		}
 		this.browsers.assertTaskAccess(taskId);
+		const websitePolicy = this.bindWebsitePolicy(taskId, incomingWebsitePolicy);
 		const page = await this.getActivePage();
 		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
 		const mcp = await this.getMcp();
 		// #1409: the legacy workflows (and the chat connector, which has no taskId of its own yet —
 		// #1424) share this one mcp across tasks; the subject follows whichever task is live now.
 		mcp.setSubject(taskId ? { kind: "runtime_task", id: taskId } : null);
+		mcp.setCallPolicy({ guard: taskCommitGuard(taskId ? this.store.getTask(taskId)?.input : undefined, undefined, taskId ? this.taskGuards.get(taskId) : undefined), websiteAccess: () => websitePolicy, isCancelled: () => !!taskId && this.store.getTask(taskId)?.status === "cancelled" });
 		await mcp.selectPage(page);
 		const res = await mcp.callTool("browser_snapshot");
+		if (res.websiteAccess) return { url: res.websiteAccess.url, title: "", snapshot: "", challenge: null, truncated: false, websiteAccess: res.websiteAccess, commitGuard: { supported: true, dispatchSafe: true } };
 		const full = this.extractSnapshot(mcp.textOf(res));
 		// The brain must see the WHOLE form or it can't finish. Real ATS forms are big
 		// (a single Coles step is ~31k chars); the old 16k cap cut the page in half, so
@@ -909,6 +943,47 @@ export class LocalRunner {
 		};
 	}
 
+ private bindWebsitePolicy(taskId: string | undefined, incoming?: BrowserWebsiteAccess): BrowserWebsiteAccess | undefined {
+  const key = taskId || this.browsers.current.dataDir;
+  const task = taskId ? this.store.getTask(taskId) : undefined;
+  const bound = this.websitePolicies.get(key) ?? parseBrowserWebsiteAccess(task?.input._pagsWebsitePolicy);
+  const policy = !taskId && incoming ? incoming : refreshWebsiteAccess(bound, incoming);
+  if (policy) {
+   this.websitePolicies.set(key, policy);
+   if (task) { task.input._pagsWebsitePolicy = policy; this.store.putTask(task); }
+  }
+  return policy;
+ }
+ private websiteRefusal(websiteAccess: WebsiteAccessBlock) {
+  return { ok: false, url: websiteAccess.url, title: "", challenge: null, feedback: "Website access blocked. Take a fresh snapshot after the owner decision; do not replay the previous action.", websiteAccess, commitGuard: { supported: true as const, dispatchSafe: true as const }, completedOutcome: true as const };
+ }
+ async resumeWebsiteAccess(taskId: string, pauseKey: unknown, decision: unknown, incoming?: BrowserWebsiteAccess): Promise<RunnerTask> {
+  const task = this.requireTask(taskId);
+  const block = isRecord(task.output) && isRecord(task.output.websiteAccess) ? task.output.websiteAccess : undefined;
+  if (task.type !== "browser.open" || task.status !== "needs_human" || !task.approval?.approvedAt || !block || typeof block.hostname !== "string" || typeof block.pauseKey !== "string") throw new RunnerInputError("No approved browser.open website pause matches this task", 409);
+  const policy = websiteResumePolicy(this.bindWebsitePolicy(taskId), incoming, { hostname: block.hostname, pauseKey: block.pauseKey }, pauseKey, decision);
+  if (policy) { this.websitePolicies.set(taskId, policy); task.input._pagsWebsitePolicy = policy; }
+  if (decision === "deny") {
+   task.status = "failed";
+   task.error = "The owner denied website access";
+   task.updatedAt = new Date().toISOString();
+   task.completedAt = task.updatedAt;
+   this.store.putTask(task);
+   this.addTaskEvent(task, "task.failed", task.error);
+   return task;
+  }
+  if (block.actionDispatched === true) {
+			const heldPage = this.websiteOpenPages.get(taskId);
+			if (!heldPage || heldPage.isClosed()) throw new RunnerInputError("The paused website page is unavailable; start a new browser task", 409);
+			this.websiteOpenResumes.set(taskId, heldPage);
+		}
+  task.status = "queued";
+  task.output = undefined;
+  this.store.putTask(task);
+  await this.runTask(taskId);
+  return this.requireTask(taskId);
+ }
+
 	private assertTaskMayAct(taskId?: string): void {
 		if (taskId && this.store.getTask(taskId)?.status === "cancelled") throw new RunnerInputError("BLOCKED by the runner — this task was stopped; no further browser action is permitted.");
 		this.browsers.assertTaskAccess(taskId);
@@ -920,8 +995,9 @@ export class LocalRunner {
 	 * element by its snapshot ref. A tool-level failure is thrown so the workflow
 	 * surfaces it to the brain as an `error` (which drives its self-correction).
 	 */
-	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec, taskId?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; dispatchSafe: true; mode?: string }; completedOutcome: true }> {
+	async browserAct(action: BrowserAction, resumePath?: string, guard?: CommitGuardSpec, taskId?: string, incomingWebsitePolicy?: BrowserWebsiteAccess): Promise<{ websiteAccess?: WebsiteAccessBlock; ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string; commitGuard: { supported: true; dispatchSafe: true; mode?: string }; completedOutcome: true }> {
 		this.assertTaskMayAct(taskId);
+		const websitePolicy = this.bindWebsitePolicy(taskId, incomingWebsitePolicy);
 		guard = taskCommitGuard(taskId ? this.store.getTask(taskId)?.input : undefined, guard, taskId ? this.taskGuards.get(taskId) : undefined);
 		if (taskId && guard) this.taskGuards.set(taskId, guard);
 		const policy = this.screenshotPolicy(taskId, action);
@@ -930,7 +1006,7 @@ export class LocalRunner {
 		// #1424) share this one mcp across tasks; the subject follows whichever task is live now.
 		const mcp = await this.getMcp();
 		mcp.setSubject(taskId ? { kind: "runtime_task", id: taskId } : null);
-		mcp.setCallPolicy({ guard, isCancelled: () => !!taskId && this.store.getTask(taskId)?.status === "cancelled" });
+		mcp.setCallPolicy({ guard, websiteAccess: () => websitePolicy, isCancelled: () => !!taskId && this.store.getTask(taskId)?.status === "cancelled" });
 		await mcp.selectPage(page);
 		await this.prepareResumeFile(page, resumePath, taskId, guard?.mode !== "read_only");
 		this.assertTaskMayAct(taskId);
@@ -940,6 +1016,8 @@ export class LocalRunner {
 		// whereas window.scrollBy is a no-op on sites that scroll an inner panel (e.g.
 		// PageUp/Coles), which made the brain scroll-loop forever.
 		if (action.action === "scroll") {
+			const blocked = websitePolicy ? websiteAccessBlock(websitePolicy, page.url()) : null;
+			if (blocked) return this.websiteRefusal(blocked);
 			// A raw Playwright call, not a standard tool — recorded directly (#1409), as tool `page.scroll`,
 			// since it never reaches `McpRuntime.callTool` to be recorded there.
 			const startedAt = Date.now();
@@ -948,6 +1026,8 @@ export class LocalRunner {
 			mcp.recordExternal("page.scroll", scrollArgs, wheeled ? "ok" : "thrown", { startedAt });
 			await page.waitForTimeout(300).catch(() => undefined);
 			const active = await this.getActivePage();
+			const redirected = websitePolicy ? websiteAccessBlock(websitePolicy, active.url(), true) : null;
+			if (redirected) return this.websiteRefusal(redirected);
 			return {
 				ok: true,
 				url: active.url(),
@@ -959,6 +1039,7 @@ export class LocalRunner {
 			};
 		}
 		const res = await this.callBrowserTool(mcp, action);
+		if (res.websiteAccess) return this.websiteRefusal(res.websiteAccess);
 		const text = mcp.textOf(res).trim();
 		// A native page dialog (alert/confirm/beforeunload) puts the standard server
 		// into a modal state that blocks EVERY other tool until it's handled. The brain
@@ -980,6 +1061,8 @@ export class LocalRunner {
 			await page.waitForTimeout(400).catch(() => undefined);
 			const settled = await this.getActivePage();
 			await settled.waitForLoadState("domcontentloaded", { timeout: 6_000 }).catch(() => undefined);
+			const redirected = websitePolicy ? websiteAccessBlock(websitePolicy, settled.url(), true) : null;
+			if (redirected) return this.websiteRefusal(redirected);
 			return {
 				ok: true,
 				url: settled.url(),
@@ -1005,6 +1088,8 @@ export class LocalRunner {
 		if (action.action === "click" || action.action === "navigate" || action.action === "key") {
 			await active.waitForLoadState("networkidle", { timeout: 3_500 }).catch(() => undefined);
 		}
+		const redirected = websitePolicy ? websiteAccessBlock(websitePolicy, active.url(), true) : null;
+		if (redirected) return this.websiteRefusal(redirected);
 		// For a WRITE, read the field's real value back (masked/intl fields transform
 		// input, e.g. "0404453580" → "+61404453580") so the brain knows it took and
 		// stops oscillating between formats — the signal inspectField used to give.

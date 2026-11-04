@@ -37,6 +37,7 @@ import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js"
 import { Blocked, clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 import { ApplyBridge } from "./bridge.js";
 import { resumeDomainGrants } from "./resume-domains.js";
+import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy, websiteAccessBlock, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
 import type { SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
@@ -209,7 +210,8 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 	// auto_submit without the gate PAGS evaluated is not a mode this runner will run.
 	if (p.mode === "auto_submit" && !gateId) throw bad("auto_submit requires policy.submitGate");
 	const allowDomains = strList(p.allowDomains);
-	if (!allowDomains.length) throw bad("policy.allowDomains must name the application's site");
+	const browserWebsiteAccess = parseBrowserWebsiteAccess(p.browserWebsiteAccess);
+	if (!allowDomains.length && !browserWebsiteAccess) throw bad("policy.allowDomains must name the application's site");
 	const l = (o.limits && typeof o.limits === "object" ? o.limits : {}) as Record<string, unknown>;
 	const limits = { maxMinutes: posInt(l.maxMinutes, 60) ?? 0, maxPages: posInt(l.maxPages, 200) ?? 0, maxActions: posInt(l.maxActions, 1000) ?? 0 };
 	if (Object.values(limits).some((v) => !v)) throw bad("limits are out of range");
@@ -239,7 +241,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		sources,
 		artifacts,
 		...(o.cloudDocuments !== undefined ? { cloudDocuments: parseCloudDocuments(o.cloudDocuments, artifacts) } : {}),
-		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
+		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
 	};
@@ -290,7 +292,7 @@ export class LocalApplyRuntime {
 	 * This deliberately creates no application run, launches no CLI, and never clicks/fills: the
 	 * only evidence it returns is a closed, redacted vocabulary the API can durably record.
 	 */
-	async preflight(raw: unknown): Promise<LocalApplyPreflightResult> {
+	async preflight(raw: unknown, websitePolicy?: BrowserWebsiteAccess): Promise<LocalApplyPreflightResult> {
 		const input = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
 		const jobUrl = typeof input.jobUrl === "string" ? input.jobUrl.trim() : "";
 		let parsed: URL;
@@ -300,14 +302,18 @@ export class LocalApplyRuntime {
 		} catch {
 			return { state: "unverifiable", jobUrl, reason: "navigation_failed" };
 		}
+		const blockedWebsite = websitePolicy ? websiteAccessBlock(websitePolicy, parsed.toString()) : null;
+		if (blockedWebsite) return { state: "unverifiable", jobUrl: parsed.toString(), reason: "access_blocked", websiteAccess: blockedWebsite };
 		const profile = input.browserProfile === "default" ? "default" : "isolated";
 		const dir = join(this.root, "preflight", randomBytes(12).toString("hex"));
 		let browser: RunBrowser | null = null;
 		try {
 			browser = await this.deps.browserFor(profile, dir);
+			browser.tools.setCallPolicy?.({ websiteAccess: () => websitePolicy, guard: { mode: "read_only" } });
 			const navigated = await browser.tools.callTool("browser_navigate", { url: parsed.toString() });
-			if (navigated.isError) return { state: "unverifiable", jobUrl: parsed.toString(), reason: "navigation_failed" };
+			if (navigated.isError) return { state: "unverifiable", jobUrl: parsed.toString(), reason: navigated.websiteAccess ? "access_blocked" : "navigation_failed", ...(navigated.websiteAccess ? { websiteAccess: navigated.websiteAccess } : {}) };
 			const snapshot = await browser.tools.callTool("browser_snapshot");
+			if (snapshot.websiteAccess) return { state: "unverifiable", jobUrl: parsed.toString(), reason: "access_blocked", websiteAccess: snapshot.websiteAccess };
 			const page = (snapshot.content ?? []).map((part) => part.text ?? "").join("\n");
 			if (snapshot.isError || /captcha|verify (?:you(?:'| a)re|that you are) human|access denied|unusual traffic|checking (?:if )?your browser/i.test(page)) {
 				return { state: "unverifiable", jobUrl: parsed.toString(), reason: "access_blocked" };
@@ -443,17 +449,20 @@ export class LocalApplyRuntime {
 		run.browser.tools.setSubject?.({ kind: "local_apply_run", id: e.runId });
 		// Configured site families keep their subdomain scope. A temporary owner grant admits
 		// only the exact paused hostname, never its descendants or another run's allowlist.
-		const isAllowedDomain = (host: string) => e.policy.allowDomains.some((domain) => domainWithin(host, domain)) || run.allow.has(host);
+		const isAllowedDomain = (host: string) => e.policy.browserWebsiteAccess ? websiteDecision(e.policy.browserWebsiteAccess, host) === "allow" : e.policy.allowDomains.some((domain) => domainWithin(host, domain)) || run.allow.has(host);
 		run.browser.tools.setCallPolicy?.({
 			isCancelled: () => run.cancelled || run.timedOut || run.state === "ended",
 			isDomainAllowed: isAllowedDomain,
 			requestDomainApproval: (url) => run.bridge?.admitDomain(url) ?? Promise.resolve(false),
+			websiteAccess: () => e.policy.browserWebsiteAccess,
+			requestWebsiteApproval: async (block) => { await run.bridge?.admitDomain(block.url); },
 		});
 		run.bridge = new ApplyBridge(run.browser.tools, {
 			emit: (ev) => this.emit(run, ev),
 			pause: (p) => this.pause(run, p),
 			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
 			isAllowed: isAllowedDomain,
+			websiteAccess: () => e.policy.browserWebsiteAccess,
 			grounding: () => run.grounding.join("\n"),
 			artifactPath,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
@@ -722,8 +731,11 @@ export class LocalApplyRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 		const run = this.get(String(o.runId ?? ""));
 		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
+		const websitePause = run.envelope.policy.browserWebsiteAccess?.mode === "ask_once" && run.pause?.reason === "external_redirect" && run.pause.domain && run.pause.handoffRequestId ? { hostname: run.pause.domain, pauseKey: run.pause.handoffRequestId } : undefined;
+		const websitePolicy = websiteResumePolicy(run.envelope.policy.browserWebsiteAccess, o.browserWebsiteAccess, websitePause, o.expectedWebsitePauseKey, o.websiteDecision);
 		const domains = resumeDomainGrants(o.allowDomains, run.state, run.pause);
 		if (run.pause?.reason === "supervisor_checkpoint") throw new RunnerInputError("This run is waiting for a persisted supervisor directive, not an owner resume", 409);
+		if (websitePolicy) run.envelope.policy.browserWebsiteAccess = websitePolicy;
 		for (const a of (Array.isArray(o.answers) ? o.answers : []).slice(0, LOCAL_APPLY_CAPS.answers)) {
 			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
 			if (typeof r.question === "string" && typeof r.answer === "string" && r.answer.trim()) run.grounding.push(`Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars)}`);

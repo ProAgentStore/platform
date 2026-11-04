@@ -7,8 +7,8 @@ import type { LocalArtifactResultEnvelope } from "./contract.js";
 import type { PortableDocument } from "./document-contract.js";
 import type { JobApplication, TailorRun } from "./store.js";
 
-const { exportCall } = vi.hoisted(() => ({ exportCall: vi.fn() }));
-vi.mock("../../routes/instances-runtime.js", () => ({ callRuntime: exportCall, runtimeJson: (res: Response) => res.json(), getLiveRuntime: async () => ({ runner_version: "0.4.205", runner_node: "mac", instance_id: "apply" }) }));
+const { exportCall, runtimeVersion } = vi.hoisted(() => ({ exportCall: vi.fn(), runtimeVersion: { value: "0.4.205" } }));
+vi.mock("../../routes/instances-runtime.js", () => ({ callRuntime: exportCall, runtimeJson: (res: Response) => res.json(), getLiveRuntime: async () => ({ runner_version: runtimeVersion.value, runner_node: "mac", instance_id: "apply" }) }));
 const { syncTailorRun } = await import("./tailor.js");
 const { getTailorRun, getApplication, updateTailorRun } = await import("./store.js");
 const { moveApplication } = await import("../local-apply/store.js");
@@ -45,6 +45,7 @@ function app(): JobApplication {
 	return { id: run.applicationId, instanceId: run.instanceId, tailoringRunId: run.id, resumeArtifact: result.artifacts[0], coverLetterArtifact: result.artifacts[1] } as JobApplication;
 }
 beforeEach(async () => {
+	runtimeVersion.value = "0.4.205";
 	d1 = realSchemaD1();
 	d1.exec(`INSERT INTO users(id, github_login) VALUES ('owner', 'owner');
 	INSERT INTO agents(id, owner_id, slug, name, config) VALUES ('tailor-agent','owner','tailor','Tailor','{"capabilities":{"runtime":"local_artifact","surfaces":[]}}'), ('apply-agent','owner','apply','Apply','{"capabilities":{"runtime":"local_apply","surfaces":[]}}');
@@ -232,6 +233,7 @@ describe("real tailoring settlement and application dispatch", () => {
 	});
 	it.each([false, true])("hydrates exact cloud bytes on dispatch (queued=%s)", async (queued) => {
 		serveCompletedRun(); await sync();
+		runtimeVersion.value = "0.4.209";
 		exportCall.mockImplementation(async (_env: unknown, _runtime: unknown, path: string) => path === "/local-apply/run"
 			? Response.json(queued ? { error: "Runner is busy", code: "busy" } : { status: "running" }, { status: queued ? 409 : 202 }) : Response.json({}));
 		const started = await startApplicationFill(env(), "apply", "owner", { eventId: "ready", applicationId: "application", tailorInstanceId: "tailor" }, "owner", { review: true });

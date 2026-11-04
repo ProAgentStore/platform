@@ -214,6 +214,29 @@ describe("end to end: approved lead → materials_ready → filled and awaiting 
 	});
 });
 
+describe("shared website access on application dispatch", () => {
+	it.each(["allow_all", "allowlist", "ask_once"])("freezes %s without granting submission or implicitly listing the starting job host", async (mode) => {
+		const websiteAccess = { mode, domains: [] };
+		expect((await call("PUT", "/ap/browser-settings", { websiteAccess })).status).toBe(200);
+		const started = await call("POST", "/ap/application-runs", readyApp("website-policy"));
+		expect(started.status).toBeLessThan(300);
+		const expected = { ...websiteAccess, ...(mode === "ask_once" ? { rememberedDomains: [], deniedDomains: [] } : {}) };
+		expect(dispatches()[0].body.policy).toMatchObject({ mode: "fill_and_review", browserWebsiteAccess: expected });
+		expect(started.body.run.policy).toMatchObject({ browserWebsiteAccess: expected, gate: { allowed: false } });
+		await call("PUT", "/ap/browser-settings", { websiteAccess: null });
+		expect(JSON.parse((await d1.DB.prepare("SELECT policy FROM local_apply_runs WHERE id = ?1").bind(started.body.run.id).first<{ policy: string }>())!.policy).browserWebsiteAccess).toEqual(expected);
+	});
+	it("refuses explicit website policy on CLI208 before claiming an application", async () => {
+		await call("PUT", "/ap/browser-settings", { websiteAccess: { mode: "allow_all", domains: [] } });
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.208' WHERE instance_id = 'ap'");
+		const refused = await call("POST", "/ap/application-runs", readyApp("website-old"));
+		expect(refused.status).toBe(409);
+		expect(refused.body.error).toMatch(/0\.4\.209/);
+		expect(dispatches()).toEqual([]);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs").first<{n: number}>())?.n).toBe(0);
+	});
+});
+
 describe("the owner's browser-screenshot switch (#1064)", () => {
 	const frame = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1));
 	const storedRun = (id: string) => d1.DB.prepare("SELECT policy, trace FROM local_apply_runs WHERE id = ?1").bind(id).first<{ policy: string; trace: string }>();
@@ -408,6 +431,19 @@ describe("an unconfirmed submit tells the owner, and offers only the read-only c
 		await call("GET", `/ap/application-runs/${runId}`);
 		await syncActiveApplyRuns(env());
 		expect(await notes()).toHaveLength(1);
+	});
+
+	it.each(["ask", "deny"])("website permission %s during reconciliation creates no submission proof or retry", async (decision) => {
+		const runId = await pressedThenSignIn("lead-website-reconcile");
+		await call("PUT", "/ap/browser-settings", { websiteAccess: { mode: decision === "ask" ? "ask_once" : "allowlist", domains: [] } });
+		answers["/local-apply/reconciliation/run"] = (body) => ({ status: 200, body: { reconciliationId: body.reconciliationId, runId, applicationId: "lead-website-reconcile", state: "ended", result: { state: "no_submission_proven", proofKind: "explicit_site_no_submission" }, websiteAccess: { decision, mode: decision === "ask" ? "ask_once" : "allowlist", hostname: "jobs.example.com", url: "https://jobs.example.com/history", actionDispatched: false } } });
+		const before = dispatches().length;
+		const out = await call("POST", `/ap/application-runs/${runId}/reconciliation`);
+		expect(out.status).toBe(409);
+		expect(out.body).toMatchObject({ state: "blocked", reconciliation: { state: "requested" } });
+		expect(out.body.error).toMatch(decision === "ask" ? /website-requests/ : /denied/);
+		expect((await call("GET", `/ap/application-runs/${runId}/reconciliation`)).body.reconciliation.state).toBe("requested");
+		expect(dispatches()).toHaveLength(before);
 	});
 
 	it("is the attempt #1013 can reconcile: the owner's read-only check is accepted for exactly this run", async () => {
@@ -1955,6 +1991,20 @@ describe("a takeover requested AFTER the fill ended blocked on a sign-in streams
 		const out = await requestTakeover(env(), { id: TAKEOVER, userId: "u1", instanceId: RUNNER, subjectKind: "runtime_task", subjectId: CARD, reason: "login_required", mobileAllowed: true });
 		expect(out?.takeover.state).toBe("requested");
 	};
+
+	it.each(["ask", "deny"])("website permission %s on a sign-in frame never auto-opens or retries the application", async (decision) => {
+		await endedBlockedOnSignIn();
+		await requestedAfterTheRunEnded();
+		await call("PATCH", `/${RUNNER}/browser-takeovers/${TAKEOVER}`, { state: "active", device: "mobile" });
+		await call("PUT", `/${RUNNER}/browser-settings`, { websiteAccess: { mode: decision === "ask" ? "ask_once" : "allowlist", domains: [] } });
+		answers["/local-apply/sign-in/frame"] = { status: 200, body: { state: "closed", websiteAccess: { decision, mode: decision === "ask" ? "ask_once" : "allowlist", hostname: "login.seek.com", url: "https://login.seek.com/login", actionDispatched: false } } };
+		const before = sent.length;
+		const frame = await call("GET", `/${RUNNER}/takeover/${CARD}/frame?device=mobile`);
+		expect(frame.status).toBe(409);
+		expect(frame.body.error).toMatch(decision === "ask" ? /website-requests/ : /denied/);
+		expect(sent.slice(before).map((x) => x.path)).toEqual(["/local-apply/sign-in/frame"]);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM website_access_requests WHERE instance_id=?1").bind(RUNNER).first<{n:number}>())?.n).toBe(decision === "ask" ? 1 : 0);
+	});
 
 	it("requested → activated from the phone → every frame poll is a live page, opened on the run's own profile at the job", async () => {
 		const st = signInRunner();

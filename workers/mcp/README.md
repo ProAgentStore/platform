@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**413 tool registrations.** 384 are always registered; 29 are gated to the console
+**418 tool registrations.** 389 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -372,6 +372,11 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_browser_verification` | Browser verification settings for one instance (#1031): enabled, runtime (pinned / any_eligible), fallback, wait limit, takeover preference, mobile; plus whether the agent declares a local browser, its pin, and the events it raises (push decided by the notification policy) | read | | |
 | `set_instance_browser_verification` | Change those settings; turning it on needs a declared local browser, out-of-range values are refused, never clamped. Not the pin, consent or notifications | write | yes | |
 | `get_instance_browser_settings` | Read next-session browser engine, visibility and profile policy, with inheritance | read | | |
+| `list_instance_website_requests` | Page exact-host website questions and unique owner links for one agent | read | | |
+| `get_instance_website_request` | Read one immutable website question without granting access | read | | |
+| `list_instance_website_decisions` | Read remembered exact-host allow and deny choices | read | | |
+| `answer_instance_website_request` | Record the owner's website choice; approval may resume only its original waiting run, never submits | runtime + write | yes | |
+| `revoke_instance_website_decision` | Forget one remembered website decision; old answered links cannot restore it | write | yes | |
 | `set_instance_browser_settings` | Independently set or clear browser engine, visibility and profile policy overrides | write | yes | |
 | `get_instance_browser_session` | Read actual runner browser session evidence without launching a browser | read | | |
 | `get_instance_browser_mode` | Read browser visibility override, agent default and inheritance source | read | | |

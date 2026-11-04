@@ -1,4 +1,5 @@
 import { registerBrowserSettingsRoutes } from "./instances-browser-settings.js";
+import { registerWebsiteAccessRoutes } from "./instances-website-access.js";
 import { registerBrowserModeRoutes } from "./instances-browser-mode.js";
 import { retirementView } from "../lib/agent-retirement.js";
 import { registerOperatorManualRoutes } from "./instances-operator-manual.js";
@@ -1229,6 +1230,7 @@ registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for
 registerRunnerSetupRoutes(instanceRoutes); // the local coding runner setup checklist (#868)
 registerNativeRoutes(instanceRoutes); // the local_native machine preflight (#1057)
 registerBrowserSettingsRoutes(instanceRoutes);
+registerWebsiteAccessRoutes(instanceRoutes);
 registerBrowserModeRoutes(instanceRoutes);
 registerBrowserScreenshotsRoutes(instanceRoutes); // the owner's browser-screenshot switch (#1064)
 registerBrowseRoutes(instanceRoutes);

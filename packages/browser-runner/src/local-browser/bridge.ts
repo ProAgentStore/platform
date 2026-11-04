@@ -25,11 +25,12 @@ import { LOCAL_BROWSER_SOURCE_FAILURE_REASONS, redactDetail } from "./contract.j
 import type { MaskablePage, ReplayPoint, ShotRecorder } from "./replay.js";
 import type { BrowserCallsPage, BrowserCallSubject } from "../browser-call-recorder.js";
 import type { McpCallPolicy } from "../mcp-call-policy.js";
+import { websiteDecision, type BrowserWebsiteAccess, type WebsiteAccessBlock } from "../browser-website-access.js";
 
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
-	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean; expectedOrigin?: string }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean }>;
+	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean; expectedOrigin?: string }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean; websiteAccess?: WebsiteAccessBlock }>;
 	/** A refusal that never reached Playwright (#1409) — recorded in the same ordered call stream as a `callTool`. */
 	refused?(tool: string, args: Record<string, unknown>, reason: string): void;
 	/** The run claiming this browser sets its own subject (#1409) — every call it makes is then recorded under it. */
@@ -52,6 +53,7 @@ export interface BridgeHost {
 	consentIdFor(host: string): string | undefined;
 	/** Must every site be on the allow list (the creator or owner gave one)? */
 	allowListOnly(): boolean;
+	websiteAccess?(): BrowserWebsiteAccess | undefined;
 	overTime(): boolean;
 	limits: LocalBrowserLimits;
 	/** This run's own real Playwright page, for a Playwright-native masked screenshot (#1419) — null on a browser the runner did not itself launch. */
@@ -302,7 +304,21 @@ export class BrowserBridge {
 	}
 
 	/** May the run be on this host — asking the owner, and waiting, when it is a new one. */
+	async admitDomain(url: string): Promise<void> {
+		const host = hostOf(url);
+		if (host) await this.admit(host, url);
+	}
+
 	private async admit(host: string, url: string): Promise<string | null> {
+		const policy = this.host.websiteAccess?.();
+		if (policy) {
+			const decision = websiteDecision(policy, host);
+			if (decision === "allow") return null;
+			if (decision === "deny") return `${host} is denied by this agent's website access policy.`;
+			this.host.emit({ type: "consent.requested", url, domain: host, detail: { scope: "navigate", mode: "ask_once" } });
+			await this.host.pause("consent_required", { domain: host, url, scope: "navigate", mode: "ask_once" });
+			return "The website decision was requested. No navigation was replayed; inspect the page and make a fresh decision.";
+		}
 		if (this.host.isDenied(host)) return `${host} is on this run's deny list.`;
 		if (this.host.isPermitted(host)) {
 			this.allowed(host, this.host.consentIdFor(host) ? "consent" : "allow_list");

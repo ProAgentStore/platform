@@ -688,6 +688,7 @@ export interface LocalBrowserSettingsValues {
 
 /** The policy a run would start with. */
 export interface LocalBrowserEffectivePolicy {
+	browserWebsiteAccess?: import("./websiteAccess").WebsiteAccessSettings;
 	engine: LocalBrowserEngine;
 	authMode: LocalBrowserAuthMode;
 	workspace: LocalBrowserWorkspace;

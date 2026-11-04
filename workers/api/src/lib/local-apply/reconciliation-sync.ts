@@ -5,6 +5,7 @@
  * requested record remains unresolved until its exact Runner reports a bounded terminal result.
  */
 import type { Env } from "../../types.js";
+import { auxiliaryWebsiteAccess } from "../website-access-auxiliary.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import { LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyReconciliationStatus } from "./handoff-contract.js";
@@ -31,6 +32,7 @@ export async function syncActiveApplyReconciliations(env: Env, limit = 25, now =
 		if (!res?.ok) continue;
 		const status = await runtimeJson(res) as LocalApplyReconciliationStatus;
 		if (status.reconciliationId !== item.id || status.runId !== run.id || status.applicationId !== app.id || status.state !== "ended" || !status.result) continue;
+		if (await auxiliaryWebsiteAccess(env, item.userId, item.instanceId, "reconciliation", item.id, status)) continue;
 		const reconciliation = await getLocalApplyReconciliation(env, run.id, item.instanceId, item.userId);
 		if (!reconciliation) continue;
 		await recordLocalApplyReconciliationProof(env, {

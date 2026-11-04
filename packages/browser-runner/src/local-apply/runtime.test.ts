@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { Page } from "playwright";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { McpCallPolicy } from "../mcp-call-policy.js";
 import type { MaskablePage } from "../local-browser/replay.js";
@@ -1026,4 +1026,31 @@ describe("sign-in secrets (#1412)", () => {
 		plain.cancel({ runId: "run-2" });
 		await held;
 	});
+});
+
+it.each(["allow", "deny"] as const)("binds saved website %s to the exact application pause without replay", async (decision) => {
+ const rt = runtime();
+ const website = { mode: "ask_once" as const, domains: ["jobs.example.com"] };
+ try {
+  rt.start(envelope({ policy: { ...envelope().policy, browserWebsiteAccess: website } })); await settle();
+  const held = nativePolicy?.requestWebsiteApproval?.({ decision: "ask", hostname: "employer.test", url: "https://employer.test/apply", mode: "ask_once", actionDispatched: false });
+  await settle();
+  const pause = rt.status({ runId: "run-1" }).pause;
+  expect(pause).toMatchObject({ reason: "external_redirect", domain: "employer.test" });
+  const refreshed = { ...website, ...(decision === "allow" ? { rememberedDomains: ["employer.test"] } : { deniedDomains: ["employer.test"] }) };
+  expect(() => rt.resume({ runId: "run-1", browserWebsiteAccess: refreshed })).toThrow(/current pause/);
+  expect(() => rt.resume({ runId: "run-1", expectedWebsitePauseKey: "stale", websiteDecision: decision, browserWebsiteAccess: refreshed })).toThrow(/current pause/);
+  rt.resume({ runId: "run-1", expectedWebsitePauseKey: pause?.handoffRequestId, websiteDecision: decision, browserWebsiteAccess: refreshed });
+  await held;
+  expect(nativePolicy?.isDomainAllowed?.("employer.test")).toBe(decision === "allow");
+  expect(nativePolicy?.isDomainAllowed?.("child.employer.test")).toBe(false);
+  expect(clicks).toEqual([]);
+ } finally { rt.closeAll(); }
+});
+
+it.each(["allowlist", "ask_once"] as const)("preflight %s refuses before opening an unknown website", async (mode) => {
+ const browserFor = vi.fn(async () => ({ tools: browser, stop: async () => undefined, handoffPage: () => runPage }));
+ const rt = runtime({ browserFor });
+ expect(await rt.preflight({ jobUrl: "https://employer.test/posting" }, { mode, domains: [] })).toMatchObject({ state: "unverifiable", reason: "access_blocked", websiteAccess: { decision: mode === "ask_once" ? "ask" : "deny", hostname: "employer.test", actionDispatched: false } });
+ expect(browserFor).not.toHaveBeenCalled();
 });

@@ -22,6 +22,11 @@ describe("the table is the app's, not a copy of it", () => {
 });
 
 describe("checkConsoleLink", () => {
+	it("routes website questions to their dedicated page and rejects incomplete or extra segments", () => {
+		expect(checkConsoleLink("/console/instances/i1/website-requests/question_1")).toEqual({ ok: true, route: "instances/:id/website-requests/:requestId" });
+		expect(checkConsoleLink("/console/instances/i1/website-requests").ok).toBe(false);
+		expect(checkConsoleLink("/console/instances/i1/website-requests/question_1/extra").ok).toBe(false);
+	});
 	it("accepts the links the product actually sends", () => {
 		for (const url of [
 			"/console/",

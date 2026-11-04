@@ -1,3 +1,4 @@
+import { browserWebsiteAccessWireValue, type BrowserWebsiteAccessWire } from "./lib/browser-website-policy.js";
 import { browserEngineValue, browserProfilePolicyValue, type BrowserEngine, type BrowserProfilePolicy } from "./lib/browser-settings.js";
 /**
  * RelayDO -- WebSocket relay between cloud (Workflow / API routes) and the
@@ -28,6 +29,7 @@ interface CommandRequest {
 	browserMode?: BrowserMode;
 	browserEngine?: BrowserEngine;
 	browserProfilePolicy?: BrowserProfilePolicy;
+	browserWebsiteAccess?: BrowserWebsiteAccessWire;
 	id: string;
 	method: string;
 	path: string;
@@ -239,7 +241,9 @@ export class RelayDO extends DurableObject<Env> {
 			return Response.json({ error: "No runner connected", code: "RUNNER_RELAY_NO_SOCKET" }, { status: 503 });
 		}
 
-		const body = (await request.json()) as { method?: string; path: string; body?: unknown; timeoutMs?: number; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown };
+		const body = (await request.json()) as { method?: string; path: string; body?: unknown; timeoutMs?: number; browserMode?: unknown; browserEngine?: unknown; browserProfilePolicy?: unknown; browserWebsiteAccess?: unknown };
+		const browserWebsiteAccess = browserWebsiteAccessWireValue(body.browserWebsiteAccess);
+		if (body.browserWebsiteAccess !== undefined && !browserWebsiteAccess) return Response.json({ error: "Invalid browserWebsiteAccess relay policy" }, { status: 400 });
 		const dispatchStartedAt = Date.now();
 		const id = crypto.randomUUID();
 		const timeoutMs = typeof body.timeoutMs === "number" && body.timeoutMs > 0
@@ -263,7 +267,7 @@ export class RelayDO extends DurableObject<Env> {
 		const browserMode = browserModeValue(body.browserMode);
 		const browserEngine = browserEngineValue(body.browserEngine);
 		const browserProfilePolicy = browserProfilePolicyValue(body.browserProfilePolicy);
-		const cmd: CommandRequest = { id, method: body.method || "POST", path: body.path, body: body.body, ...(browserMode ? { browserMode } : {}), ...(browserEngine ? { browserEngine } : {}), ...(browserProfilePolicy ? { browserProfilePolicy } : {}) };
+		const cmd: CommandRequest = { id, method: body.method || "POST", path: body.path, body: body.body, ...(browserMode ? { browserMode } : {}), ...(browserEngine ? { browserEngine } : {}), ...(browserProfilePolicy ? { browserProfilePolicy } : {}), ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}) };
 
 		let result: CommandResponse;
 		try {

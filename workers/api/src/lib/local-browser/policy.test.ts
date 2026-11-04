@@ -156,3 +156,11 @@ describe("the run lifecycle", () => {
 		}
 	});
 });
+
+describe("explicit shared website policy", () => {
+	it.each(["allow_all", "allowlist", "ask_once"] as const)("%s replaces legacy navigation lists without changing read-only mode", (mode) => {
+		const access = { mode, domains: [], rememberedDomains: ["owner.example.com"] };
+		const policy = effectiveLocalBrowserPolicy(cap({ allowDomains: ["legacy.example.com"], denyDomains: ["owner.example.com"] }), { access: { allowDomains: ["outside.example.com"] } }, access);
+		expect(policy).toMatchObject({ mode: "research_only", allowDomains: [], denyDomains: [], browserWebsiteAccess: access });
+	});
+});

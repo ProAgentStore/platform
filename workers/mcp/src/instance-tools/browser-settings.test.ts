@@ -56,6 +56,18 @@ describe("browser settings MCP contract (#1431)", () => {
 		}
 		expect(seen).toEqual([]);
 	});
+	it("writes and previews website access without changing submission policy", async () => {
+		const { seen, call } = fixture();
+		const website_access = { mode: "allow_all", domains: [] };
+		const preview = JSON.parse(await call("set_instance_browser_settings", { instance_id: "i1", website_access, dry_run: true }));
+		expect(preview.wouldDo.body).toEqual({ websiteAccess: website_access });
+		expect(seen).toEqual([]);
+		await call("set_instance_browser_settings", { instance_id: "i1", website_access });
+		await call("set_instance_browser_settings", { instance_id: "i1", website_access: null });
+		expect(seen.map(({body}) => body)).toEqual([{ websiteAccess: website_access }, { websiteAccess: null }]);
+		for (const value of [{mode: "all", domains: []}, {mode: "allowlist", domains: ["*.example.com"]}, {mode: "ask_once", domains: [], rememberedDomains: ["example.com"]}]) await expect(call("set_instance_browser_settings", { instance_id: "i1", website_access: value })).rejects.toThrow();
+	});
+
 	it("refuses writes without write permission and preserves structural API errors", async () => {
 		const denied = fixture(["read"]);
 		expect(await denied.call("set_instance_browser_settings", { instance_id: "i1", engine: "firefox", dry_run: true })).toContain("requires MCP scope");
@@ -65,8 +77,8 @@ describe("browser settings MCP contract (#1431)", () => {
 	});
 	it("sends creator defaults under canonical capability keys, preserving omitted siblings", async () => {
 		const { seen, call } = fixture(["destructive"], { ok: true }, registerAgentAuthoringTools);
-		await call("set_agent_capabilities", { agent_id: "a1", browser_engine: "firefox", browser_profile_policy: "ephemeral", confirm: "set_agent_capabilities" });
+		await call("set_agent_capabilities", { agent_id: "a1", browser_engine: "firefox", browser_profile_policy: "ephemeral", browser_website_access: { mode: "ask_once", domains: [] }, confirm: "set_agent_capabilities" });
 		await call("set_agent_capabilities", { agent_id: "a1", browser_engine: null, confirm: "set_agent_capabilities" });
-		expect(seen.map(({ body }) => body)).toEqual([{ browserEngine: "firefox", browserProfilePolicy: "ephemeral" }, { browserEngine: null }]);
+		expect(seen.map(({ body }) => body)).toEqual([{ browserEngine: "firefox", browserProfilePolicy: "ephemeral", browserWebsiteAccess: { mode: "ask_once", domains: [] } }, { browserEngine: null }]);
 	});
 });

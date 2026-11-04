@@ -1,3 +1,4 @@
+import { auxiliaryWebsiteAccess, auxiliaryRuntimeFailure } from "../website-access-auxiliary.js";
 import type { Env } from "../../types.js";
 import { HttpError } from "../auth.js";
 import { applicationCardId, applicationCardLabel } from "../applications/application-board.js";
@@ -153,7 +154,14 @@ async function relaySignIn(env: Env, userId: string, instanceId: string, run: Ap
 	const runtime = await getLiveRuntime(env, instanceId, userId).catch(() => null);
 	if (!runtime) throw new HttpError(409, "The Runner is disconnected. Start it (pags up) and take over again to sign in.");
 	const signInId = signInIdFor(takeover.id);
-	const post = (path: string, body: unknown) => callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(body) }).catch(() => null);
+	const post = async (path: string, body: unknown) => {
+		const response = await callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(body) }).catch(auxiliaryRuntimeFailure);
+		if (response) {
+			const website = await auxiliaryWebsiteAccess(env, userId, instanceId, "sign_in", signInId, await runtimeJson(response.clone()));
+			if (website) throw new HttpError(409, website.error);
+		}
+		return response;
+	};
 
 	if (suffix === "end" || suffix === "resume") {
 		const res = await post(LOCAL_APPLY_SIGN_IN_END_PATH, { signInId, complete: suffix === "resume" });

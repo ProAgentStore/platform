@@ -1,3 +1,4 @@
+import { websiteAccessFromRequest } from "./website-access-request.js";
 import { withBrowserRequest } from "./browser-request.js";
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { readRecordAck } from "./coding/record-cursor.js";
@@ -186,7 +187,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 
 	if (req.method === "POST" && path === "/tasks") {
 		const body = await readJson<CreateTaskRequest>(req);
-		return json(res, 202, runner.createTask(body));
+		return json(res, 202, runner.createTask(body, websiteAccessFromRequest(req, body)));
 	}
 
 	const taskMatch = path.match(/^\/tasks\/([^/]+)$/);
@@ -200,8 +201,14 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && refineMatch) return json(res, 202, runner.refineSiteBuilder(refineMatch[1], (await readJson<Record<string, unknown>>(req)).refinement));
 	const approveMatch = path.match(/^\/tasks\/([^/]+)\/approve$/);
 	if (req.method === "POST" && approveMatch) {
-		return json(res, 200, await runner.approveTask(approveMatch[1]));
+		return json(res, 200, await runner.approveTask(approveMatch[1], websiteAccessFromRequest(req, await readJson(req))));
 	}
+
+	const websiteResumeMatch = path.match(/^\/tasks\/([^/]+)\/website-access-resume$/);
+ if (req.method === "POST" && websiteResumeMatch) {
+  const body = await readJson<Record<string, unknown>>(req);
+  return json(res, 200, await runner.resumeWebsiteAccess(websiteResumeMatch[1], body.pauseKey, body.websiteDecision, websiteAccessFromRequest(req, body)));
+ }
 
 	const cancelMatch = path.match(/^\/tasks\/([^/]+)\/cancel$/);
 	if (req.method === "POST" && cancelMatch) {
@@ -222,7 +229,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// ── Brain-driven browser control (remote LLM acts on the live page) ─────
 	if (req.method === "POST" && path === "/browser/snapshot") {
 		const b = await readJson<{ taskId?: string }>(req).catch(() => ({}) as { taskId?: string });
-		return json(res, 200, await runner.browserSnapshot(b.taskId));
+		return json(res, 200, await runner.browserSnapshot(b.taskId, websiteAccessFromRequest(req, b)));
 	}
 	if (req.method === "POST" && path === "/browser/act") {
 		// `guard` is the commit policy for THIS run (#627, #629) — a rehearsal or a read-only
@@ -231,7 +238,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		// of state to get wrong. `taskId` (#1409) is the browser-call recorder's subject — absent
 		// from an older caller or the chat connector (#1424), which still works, just unattributed.
 		const body = await readJson<BrowserAction & { resumePath?: string; guard?: CommitGuardSpec; taskId?: string }>(req);
-		return json(res, 200, await runner.browserAct(body, body.resumePath, body.guard, body.taskId));
+		return json(res, 200, await runner.browserAct(body, body.resumePath, body.guard, body.taskId, websiteAccessFromRequest(req, body)));
 	}
 	if (req.method === "POST" && path === "/browser/event") {
 		const b = await readJson<{ taskId: string; type: string; message: string; data?: unknown }>(req);
@@ -312,7 +319,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.localBrowser.shots(await readJson(req)));
 	}
 	if (req.method === "POST" && path === "/local-browser/resume") {
-		return json(res, 200, runner.localBrowser.resume(await readJson(req)));
+		const body = await readJson<Record<string, unknown>>(req);
+		return json(res, 200, runner.localBrowser.resume({ ...body, browserWebsiteAccess: websiteAccessFromRequest(req, body) }));
 	}
 	if (req.method === "POST" && path === "/local-browser/cancel") {
 		return json(res, 200, runner.localBrowser.cancel(await readJson(req)));
@@ -331,7 +339,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	// Local application execution (#957) — run, status, resume, cancel; PULL like research.
 	if (req.method === "POST" && path === "/local-apply/preflight") {
-		return json(res, 200, await runner.localApply.preflight(await readJson(req)));
+		const body = await readJson(req);
+		return json(res, 200, await runner.localApply.preflight(body, websiteAccessFromRequest(req, body)));
 	}
 	if (req.method === "POST" && path === "/local-apply/run") {
 		return json(res, 202, runner.localApply.start(await readJson(req)));
@@ -344,12 +353,13 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	const handoff = await routeLocalApplyHandoff(runner.localApply, req.method, path, () => readJson(req));
 	if (handoff) return json(res, 200, handoff);
-	const reconciliation = await routeLocalApplyReconciliation(runner.localApplyReconciliation, req.method, path, () => readJson(req));
+	const reconciliation = await routeLocalApplyReconciliation(runner.localApplyReconciliation, req.method, path, () => readJson(req), (body) => websiteAccessFromRequest(req, body));
 	if (reconciliation !== undefined) return json(res, 200, reconciliation);
-	const signIn = await routeLocalApplySignIn(runner.localApplySignIn, req.method, path, () => readJson(req));
+	const signIn = await routeLocalApplySignIn(runner.localApplySignIn, req.method, path, () => readJson(req), (body) => websiteAccessFromRequest(req, body));
 	if (signIn !== undefined) return json(res, 200, signIn);
 	if (req.method === "POST" && path === "/local-apply/resume") {
-		return json(res, 200, runner.localApply.resume(await readJson(req)));
+		const body = await readJson<Record<string, unknown>>(req);
+		return json(res, 200, runner.localApply.resume({ ...body, browserWebsiteAccess: websiteAccessFromRequest(req, body) }));
 	}
 	if (req.method === "POST" && path === "/local-apply/sign-in-secrets") return json(res, 200, runner.localApply.signInSecrets(await readJson(req))); // #1412
 	if (req.method === "POST" && path === "/local-apply/directive") {

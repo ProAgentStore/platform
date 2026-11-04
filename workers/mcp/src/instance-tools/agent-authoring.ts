@@ -1,3 +1,4 @@
+import { websiteAccessSchema } from "./browser-settings.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText } from "../http.js";
@@ -200,6 +201,7 @@ export function registerAgentAuthoringTools(server: McpServer, ctx: InstanceTool
 			surfaces: z.array(z.string()).optional().describe("Console surfaces to declare. Omit to preserve them."),
 			runtime: z.enum(["browser", "coding", "local_browser", "local_artifact", "local_apply", "local_native"]).nullable().optional().describe("Template runtime, or null to clear it. Omit to preserve it."),
 			browser_engine: z.enum(["chrome", "msedge", "chromium", "firefox", "webkit"]).nullable().optional().describe("Default browser inherited by instances. Firefox/WebKit are Playwright builds; null clears the default. Omit to preserve."),
+			browser_website_access: websiteAccessSchema.nullable().optional().describe("Default per-agent website policy inherited by instances; null clears. Exact domains, independent of submission approval."),
 			browser_profile_policy: z.enum(["persistent", "ephemeral"]).nullable().optional().describe("Default browser profile lifetime inherited by instances; null clears the default. Omit to preserve."),
 			browser_mode: z.enum(["headed", "headless"]).nullable().optional().describe("Default browser visibility inherited by instances: headed, headless, or null for runner fallback. Omit to preserve it."),
 			workflow: z.string().nullable().optional().describe("Workflow name, or null to clear it. Omit to preserve it."),
@@ -209,10 +211,10 @@ export function registerAgentAuthoringTools(server: McpServer, ctx: InstanceTool
 			confirm: confirmArg("set_agent_capabilities", "save these template capabilities"),
 			dry_run: dryRunArg,
 		},
-		async ({ token, agent_id, surfaces, runtime, browser_mode, browser_engine, browser_profile_policy, workflow, tools, custom_surfaces, local_browser, confirm, dry_run: preview }) => {
+		async ({ token, agent_id, surfaces, runtime, browser_mode, browser_engine, browser_profile_policy, browser_website_access, workflow, tools, custom_surfaces, local_browser, confirm, dry_run: preview }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const body = { ...(surfaces !== undefined ? { surfaces } : {}), ...(browser_mode !== undefined ? { browserMode: browser_mode } : {}), ...(browser_engine !== undefined ? { browserEngine: browser_engine } : {}), ...(browser_profile_policy !== undefined ? { browserProfilePolicy: browser_profile_policy } : {}), ...(runtime !== undefined ? { runtime } : {}), ...(workflow !== undefined ? { workflow } : {}), ...(tools !== undefined ? { tools } : {}), ...(custom_surfaces !== undefined ? { customSurfaces: custom_surfaces } : {}), ...(local_browser !== undefined ? { localBrowser: local_browser } : {}) };
+			const body = { ...(surfaces !== undefined ? { surfaces } : {}), ...(browser_mode !== undefined ? { browserMode: browser_mode } : {}), ...(browser_engine !== undefined ? { browserEngine: browser_engine } : {}), ...(browser_profile_policy !== undefined ? { browserProfilePolicy: browser_profile_policy } : {}), ...(browser_website_access !== undefined ? { browserWebsiteAccess: browser_website_access } : {}), ...(runtime !== undefined ? { runtime } : {}), ...(workflow !== undefined ? { workflow } : {}), ...(tools !== undefined ? { tools } : {}), ...(custom_surfaces !== undefined ? { customSurfaces: custom_surfaces } : {}), ...(local_browser !== undefined ? { localBrowser: local_browser } : {}) };
 			const input = { agent_id, ...body };
 			const denied = await requirePermission(safetyFor(token), "destructive", "set_agent_capabilities", input);
 			if (denied) return denied;

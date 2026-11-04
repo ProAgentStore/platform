@@ -589,7 +589,7 @@ function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string
 				{field("profile", "Profile file (in your workspace)", "profile.md")}
 				{field("answers", "Answers file (optional)", "answers.md")}
 				{field("signInEmail", "SEEK sign-in email (signs in with the emailed code)", "the address your SEEK account uses")}
-				{field("allowDomains", "Allowed sites", "boards.greenhouse.io, jobs.lever.co")}
+				{field("allowDomains", "Job sites eligible for auto-submit", "boards.greenhouse.io, jobs.lever.co")}
 				{field("roles", "Approved roles", "engineer, developer")}
 				{field("locations", "Approved locations (optional)", "Sydney, Remote")}
 				{field("exclude", "Exclude when the job mentions", "contract, unpaid")}

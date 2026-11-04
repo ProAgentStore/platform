@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
+import LocalBrowserWebsiteFields from "./LocalBrowserWebsiteFields";
 import { type SettingsForm, authModeChoices, engineAuthLabel, formFromSettings, patchFromForm, TONE_CLASS } from "../../lib/localBrowser";
 import type { LocalBrowserConsentEntry, LocalBrowserConsentList, LocalBrowserRunList, LocalBrowserSettingsResponse, LocalBrowserSettingsSaved } from "../../lib/types";
 
@@ -171,31 +172,7 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 				</div>
 			</fieldset>
 
-			<div className="grid sm:grid-cols-2 gap-3 mb-3">
-				<label className="flex flex-col gap-1 text-xs font-semibold">
-					Allowed sites <span className="font-normal text-muted">One per line. Empty = any public site, each asked about first{cap.allowDomains.length ? `. This agent allows: ${cap.allowDomains.join(", ")}` : ""}.</span>
-					<textarea className={input} rows={3} value={form.allowDomains} onChange={(e) => set({ allowDomains: e.target.value })} />
-				</label>
-				<label className="flex flex-col gap-1 text-xs font-semibold">
-					Never visit <span className="font-normal text-muted">One per line; covers subdomains.</span>
-					<textarea className={input} rows={3} value={form.denyDomains} onChange={(e) => set({ denyDomains: e.target.value })} />
-				</label>
-			</div>
-			{sites.length > 0 && (
-				<div className="mb-3">
-					<div className="text-xs font-semibold mb-1">Your decisions</div>
-					<ul className="flex flex-wrap gap-1.5">
-						{sites.map((c) => (
-							<li key={c.domain} className="text-xs border border-line rounded px-1.5 py-0.5 flex gap-1 items-center">
-								<span className={c.decision === "allow" ? "text-success" : "text-danger"}>{c.decision === "allow" ? "✓" : "✕"}</span> {c.domain}
-								<button type="button" className="text-muted-soft hover:text-ink" aria-label={`Forget ${c.domain}`} onClick={() => decide({ scope: "navigate", domain: c.domain, decision: null })}>
-									×
-								</button>
-							</li>
-						))}
-					</ul>
-				</div>
-			)}
+			<LocalBrowserWebsiteFields websiteAccess={data.effective?.browserWebsiteAccess} allowDomains={cap.allowDomains} form={form} sites={sites} set={set} decide={(body) => void decide(body)} />
 
 			<fieldset className="mb-3">
 				<legend className="text-xs font-semibold mb-1">Limits <span className="font-normal text-muted">Empty = the agent's default; never above its ceiling.</span></legend>

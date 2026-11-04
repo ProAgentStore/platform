@@ -27,6 +27,7 @@ import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
 import type { BrowserCallsPage } from "../browser-call-recorder.js";
 import { type BrowserTools, BrowserBridge, domainWithin } from "./bridge.js";
+import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy } from "../browser-website-access.js";
 import { SCOUT_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "./replay.js";
 import { BRIDGE_ENV } from "./bridge-stdio.js";
 import {
@@ -112,6 +113,7 @@ interface Run {
 	token: string;
 	state: "running" | "paused" | "ended";
 	pauseReason?: LocalBrowserPauseReason;
+	websitePause?: { hostname: string; url: string; pauseKey: string };
 	events: LocalBrowserRunnerEvent[];
 	seq: number;
 	result?: LocalBrowserResultEnvelope;
@@ -181,6 +183,7 @@ export function parseEnvelope(raw: unknown): LocalBrowserTaskEnvelope {
 		browserProfile: o.browserProfile,
 		policy: {
 			mode: "research_only",
+			...(p.browserWebsiteAccess === undefined ? {} : { browserWebsiteAccess: parseBrowserWebsiteAccess(p.browserWebsiteAccess) }),
 			allowDomains: strList(p.allowDomains),
 			denyDomains: strList(p.denyDomains),
 			consentedDomains: strList(p.consentedDomains),
@@ -318,16 +321,17 @@ export class LocalBrowserRuntime {
 			return;
 		}
 		run.browser.tools.setSubject?.({ kind: "local_browser_run", id: run.envelope.runId });
-		run.browser.tools.setCallPolicy?.({ guard: { mode: "read_only" }, isCancelled: () => run.cancelled || run.state === "ended" || run.timedOut });
+		run.browser.tools.setCallPolicy?.({ guard: { mode: "read_only" }, isCancelled: () => run.cancelled || run.state === "ended" || run.timedOut, websiteAccess: () => e.policy.browserWebsiteAccess, requestWebsiteApproval: async (block) => { await run.bridge?.admitDomain(block.url); } });
 		run.bridge = new BrowserBridge(
 			run.browser.tools,
 			{
 			emit: (ev) => this.emit(run, ev),
 			pause: (reason, detail) => this.pause(run, reason, detail),
 			consentIdFor: (host) => this.consentRef(run, host).consentId,
-			isDenied: (host) => [...run.deny].some((d) => domainWithin(host, d)),
-			isPermitted: (host) => [...e.policy.allowDomains, ...run.consented].some((d) => domainWithin(host, d)),
-			allowListOnly: () => e.policy.allowDomains.length > 0,
+			isDenied: (host) => e.policy.browserWebsiteAccess ? websiteDecision(e.policy.browserWebsiteAccess, host) === "deny" : [...run.deny].some((d) => domainWithin(host, d)),
+			isPermitted: (host) => e.policy.browserWebsiteAccess ? websiteDecision(e.policy.browserWebsiteAccess, host) === "allow" : [...e.policy.allowDomains, ...run.consented].some((d) => domainWithin(host, d)),
+			allowListOnly: () => e.policy.browserWebsiteAccess ? e.policy.browserWebsiteAccess.mode === "allowlist" : e.policy.allowDomains.length > 0,
+			websiteAccess: () => e.policy.browserWebsiteAccess,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			limits: e.limits,
 			page: () => run.browser?.handoffPage?.() ?? null,
@@ -407,6 +411,10 @@ export class LocalBrowserRuntime {
 			run.activeMs += this.now() - run.activeSince;
 			run.state = "paused";
 			run.pauseReason = reason;
+			if (reason === "consent_required" && detail.scope === "navigate" && run.envelope.policy.browserWebsiteAccess?.mode === "ask_once" && typeof detail.domain === "string" && typeof detail.url === "string") {
+				run.websitePause = { hostname: detail.domain, url: traceUrl(detail.url), pauseKey: crypto.randomUUID() };
+				detail = { ...detail, websitePause: run.websitePause };
+			}
 			this.emit(run, { type: "run.paused", pauseReason: reason, detail });
 		}
 		return new Promise((resolveWait) => run.waiters.push(resolveWait));
@@ -416,6 +424,7 @@ export class LocalBrowserRuntime {
 		if (run.state === "paused") {
 			run.state = "running";
 			run.pauseReason = undefined;
+			run.websitePause = undefined;
 			run.activeSince = this.now();
 			if (outcome === "resumed") this.emit(run, { type: "run.resumed" });
 		}
@@ -427,6 +436,8 @@ export class LocalBrowserRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as Partial<LocalBrowserResumeRequest>;
 		const run = this.get(String(o.runId ?? ""));
 		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
+		const websitePolicy = websiteResumePolicy(run.envelope.policy.browserWebsiteAccess, o.browserWebsiteAccess, run.websitePause, o.expectedWebsitePauseKey, o.websiteDecision);
+		if (websitePolicy) run.envelope.policy.browserWebsiteAccess = websitePolicy;
 		for (const [d, id] of Object.entries(consentIdMap(o.consentIds))) run.consentIds.set(d, id);
 		for (const d of strList(o.consentedDomains)) run.consented.add(d);
 		for (const d of strList(o.denyDomains)) run.deny.add(d);
@@ -455,6 +466,7 @@ export class LocalBrowserRuntime {
 			runId: run.envelope.runId,
 			state: run.state,
 			...(run.pauseReason ? { pauseReason: run.pauseReason } : {}),
+			...(run.websitePause ? { websitePause: run.websitePause } : {}),
 			events: run.events.filter((e) => e.seq > after).slice(0, 500),
 			lastSeq: run.seq,
 			...(run.result ? { result: run.result } : {}),

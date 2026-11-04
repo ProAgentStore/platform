@@ -22,6 +22,7 @@ import Diagnostics from "./pages/Diagnostics";
 import Preferences from "./pages/Preferences";
 import RunDetail from "./pages/RunDetail";
 import SecureInputDetail from "./pages/SecureInputDetail";
+import WebsiteRequest from "./pages/WebsiteRequest";
 import RemoteAuthRequest from "./pages/RemoteAuthRequest";
 import DeviceApprove from "./pages/DeviceApprove";
 import { landingRoute, landingRouteFromMemory, type TopLevelRoute } from "./lib/lastRoute";
@@ -90,6 +91,7 @@ function AuthGate() {
 				<Route path="instances" element={<Dashboard />} />
 				<Route path="instances/:id/tasks/:taskId" element={<RunDetail />} />
 				<Route path="instances/:id/secure-inputs/:requestId" element={<SecureInputDetail />} />
+				<Route path="instances/:id/website-requests/:requestId" element={<WebsiteRequest />} />
 				<Route path="instances/:id/*" element={<InstanceDetail />} />
 				<Route path="dashboard" element={<Dashboard />} />
 				<Route path="tools" element={<Dashboard />} />

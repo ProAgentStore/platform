@@ -21,6 +21,8 @@ import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from
 import type { Env } from "../../types.js";
 import { commitGuardSpec } from "../commit-guard.js";
 import { requireSafeBrowserDispatch } from "../browser-action-dispatch.js";
+import { browserWebsiteBlock, type BrowserWebsiteReply } from "../browser-website-access.js";
+import { ensureWebsiteAccessRequest } from "../website-access.js";
 
 /** Acting on a live page can take longer than a read (waits, navigation) — give it room. */
 const ACT_TIMEOUT_MS = 30_000;
@@ -56,6 +58,15 @@ async function actionPolicy(ctx: RegistryToolCtx, conn: RunnerConn): Promise<Ret
 	return config.browserTask?.readOnly === true ? commitGuardSpec("read_only") : undefined;
 }
 
+/** An owner question is a blocked tool result, not a successful navigation or model permission. */
+async function websiteBlockResult(ctx: RegistryToolCtx, toolName: string, response: unknown) {
+	const access = browserWebsiteBlock(response);
+	if (!access) return null;
+	if (access.decision === "deny") return { content: `Website access denied by this agent's settings: ${access.hostname}. No website permission was granted.`, success: false };
+	const request = await ensureWebsiteAccessRequest(ctx.env, { userId: ctx.userId!, instanceId: ctx.instanceId!, subjectKind: "connector", subjectId: ctx.traceId ?? ctx.instanceId!, hostname: access.hostname, pauseKey: `${toolName}:${access.hostname}` });
+	return { content: `Website access needs the owner's decision for ${access.hostname}: ${request.questionUrl}. The action did not complete successfully. After permission is granted, take a fresh snapshot and decide the next action; do not replay a previous click.`, success: false };
+}
+
 export const BROWSER_TOOLS: ToolDef[] = [
 	{
 		name: "browser_navigate",
@@ -77,12 +88,15 @@ export const BROWSER_TOOLS: ToolDef[] = [
 			const url = String(input.url ?? "").trim();
 			if (!url) return { content: "A `url` is required.", success: false };
 			const guard = await actionPolicy(ctx, r.conn);
-			const res = await callRunner<{ url?: string; title?: string }>(
+			const res = await callRunner<BrowserWebsiteReply & { ok?: boolean; url?: string; title?: string }>(
 				r.conn,
 				"/browser/act",
 				{ action: "navigate", url, ...(guard ? { guard } : {}) },
 				{ timeoutMs: ACT_TIMEOUT_MS },
 			);
+			const websiteBlock = await websiteBlockResult(ctx, "browser_navigate", res);
+			if (websiteBlock) return websiteBlock;
+			if (res.ok === false) return { content: "The browser did not complete this navigation.", success: false };
 			// `res.url` is where the page ACTUALLY landed (redirects follow the site's choice) and
 			// `res.title` is written by the site. "Navigated to:" is ours and stays in the head.
 			return {
@@ -106,12 +120,14 @@ export const BROWSER_TOOLS: ToolDef[] = [
 		handler: async (ctx) => {
 			const r = await resolveRunner(ctx);
 			if ("error" in r) return { content: r.error, success: false };
-			const res = await callRunner<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean }>(
+			const res = await callRunner<BrowserWebsiteReply & { url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean }>(
 				r.conn,
 				"/browser/snapshot",
 				{},
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
+			const websiteBlock = await websiteBlockResult(ctx, "browser_snapshot", res);
+			if (websiteBlock) return websiteBlock;
 			// The challenge warning and the truncation note are OURS — head, outside the fence. The
 			// url/title/snapshot are the page's own bytes and go inside it.
 			if (res.challenge) {
@@ -162,12 +178,14 @@ export const BROWSER_TOOLS: ToolDef[] = [
 				return { content: `Unknown action "${action}". Use one of: ${ACTIONS.join(", ")}.`, success: false };
 			}
 			const guard = await actionPolicy(ctx, r.conn);
-			const res = await callRunner<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string }>(
+			const res = await callRunner<BrowserWebsiteReply & { ok: boolean; url: string; title: string; challenge: string | null; feedback?: string }>(
 				r.conn,
 				"/browser/act",
 				{ action, ref: input.ref, role: input.role, name: input.name, text: input.text, url: input.url, key: input.key, nth: input.nth, dy: input.dy, ...(guard ? { guard } : {}) },
 				{ timeoutMs: ACT_TIMEOUT_MS },
 			);
+			const websiteBlock = await websiteBlockResult(ctx, "browser_act", res);
+			if (websiteBlock) return websiteBlock;
 			// `res.feedback` is composed on the machine from what the PAGE reported back (element
 			// names, error text), so it is not ours even though it reads like a status line. The
 			// challenge warning IS ours.
