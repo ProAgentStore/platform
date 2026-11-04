@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 import type { Page } from "playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
+import type { McpCallPolicy } from "../mcp-call-policy.js";
 import type { MaskablePage } from "../local-browser/replay.js";
 import type { LocalApplyTaskEnvelope } from "./contract.js";
 import { applyPrompt, buildApplyEngineSpec } from "./engine.js";
@@ -46,6 +47,7 @@ let pageUnavailable: "expired" | "unavailable" | null;
 /** The page is a sign-in wall (#1412), when a test sets it. */
 let pageLogin: boolean;
 let nativeCancelled: (() => boolean) | undefined;
+let nativePolicy: McpCallPolicy | undefined;
 /**
  * The live SEEK shape (#989), when a test asks for it: a job AD whose only control is the one that
  * OPENS the application, and which reveals the form once that control is pressed. `null` keeps the
@@ -63,7 +65,7 @@ const SEEK_AD = "https://au.seek.com/job/94991284";
 const SEEK_FORM = "https://au.seek.com/job/94991284/apply";
 
 const browser: BrowserTools = {
-	setCallPolicy: (policy) => { nativeCancelled = policy.isCancelled; },
+	setCallPolicy: (policy) => { nativeCancelled = policy.isCancelled; nativePolicy = policy; },
 	listTools: async () => ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_evaluate"].map((name) => ({ name, inputSchema: {} })),
 	callTool: async (name, args = {}) => {
 		if (name === "browser_evaluate") {
@@ -145,6 +147,7 @@ beforeEach(() => {
 	pageUnavailable = null;
 	pageLogin = false;
 	nativeCancelled = undefined;
+	nativePolicy = undefined;
 	seek = null;
 	pageTitle = null;
 	takeoverOpen = [];
@@ -195,6 +198,74 @@ it("owner Stop invalidates native calls and refuses late bridge calls before the
 	await expect(call(rt, "browser_click", { target: "e2" })).rejects.toThrow(/not active/);
 	expect(clicks).toEqual([]);
 	child.exit(143);
+});
+
+it("installs live domain admission at native dispatch and keeps owner grants scoped to one run (#1479)", async () => {
+	const first = runtime();
+	const second = runtime();
+	try {
+		first.start(envelope());
+		await settle();
+		const policy = nativePolicy;
+		expect(policy?.isDomainAllowed?.("jobs.example.com")).toBe(true);
+		expect(policy?.isDomainAllowed?.("sub.jobs.example.com")).toBe(true);
+		expect(policy?.isDomainAllowed?.("jobs.example.com.evil.test")).toBe(false);
+		expect(policy?.isDomainAllowed?.("employer.test")).toBe(false);
+		await approve(first);
+		expect(policy?.isDomainAllowed?.("employer.test")).toBe(false);
+		const admission = policy?.requestDomainApproval?.("https://employer.test/apply");
+		await settle();
+		expect(first.status({ runId: "run-1" }).pause).toMatchObject({ reason: "external_redirect", domain: "employer.test" });
+		first.resume({ runId: "run-1", allowDomains: ["employer.test"] });
+		await expect(admission).resolves.toBe(true);
+		expect(policy?.isDomainAllowed?.("employer.test")).toBe(true);
+		expect(policy?.isDomainAllowed?.("child.employer.test")).toBe(false);
+		first.closeAll();
+		second.start(envelope({ runId: "run-2", requestId: "independent-request" }));
+		await settle();
+		expect(nativePolicy).not.toBe(policy);
+		expect(nativePolicy?.isDomainAllowed?.("employer.test")).toBe(false);
+	} finally {
+		first.closeAll();
+		second.closeAll();
+	}
+});
+
+it("refuses a stale domain grant before storing answers or releasing the current redirect pause (#1478)", async () => {
+	const rt = runtime();
+	try {
+		rt.start(envelope());
+		await settle();
+		const admission = nativePolicy?.requestDomainApproval?.("https://current-employer.test/apply");
+		await settle();
+		expect(() => rt.resume({ runId: "run-1", allowDomains: ["stale-employer.test"], answers: [{ question: "Name", answer: "Unapproved answer" }] })).toThrow(/exact hostname/);
+		expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "paused", pause: { reason: "external_redirect", domain: "current-employer.test" } });
+		expect(nativePolicy?.isDomainAllowed?.("stale-employer.test")).toBe(false);
+		rt.resume({ runId: "run-1", allowDomains: ["current-employer.test"] });
+		await expect(admission).resolves.toBe(true);
+		await call(rt, "browser_snapshot");
+		await approve(rt);
+		const typed = await call(rt, "browser_type", { target: "e1", text: "Unapproved answer", source_quote: "Unapproved answer" });
+		expect(typed.isError).toBe(true);
+		expect(typed.content[0].text).toMatch(/source_quote|sources|ground/i);
+	} finally { rt.closeAll(); }
+});
+
+it("cannot add a domain while running or at a non-redirect owner pause (#1478)", async () => {
+	const rt = runtime();
+	try {
+		rt.start(envelope());
+		await settle();
+		expect(() => rt.resume({ runId: "run-1", allowDomains: ["employer.test"] })).toThrow(/external_redirect/);
+		pageLogin = true;
+		const held = call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
+		await settle();
+		expect(() => rt.resume({ runId: "run-1", allowDomains: ["employer.test"] })).toThrow(/external_redirect/);
+		expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "paused", pause: { reason: "login_required" } });
+		expect(nativePolicy?.isDomainAllowed?.("employer.test")).toBe(false);
+		rt.cancel({ runId: "run-1" });
+		await held;
+	} finally { rt.closeAll(); }
 });
 
 describe("parseApplyEnvelope", () => {

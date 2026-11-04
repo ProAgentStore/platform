@@ -36,6 +36,7 @@ import { redactReplayText } from "./apply-replay.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { Blocked, clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 import { ApplyBridge } from "./bridge.js";
+import { resumeDomainGrants } from "./resume-domains.js";
 import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
 import type { SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
@@ -440,12 +441,19 @@ export class LocalApplyRuntime {
 			return;
 		}
 		run.browser.tools.setSubject?.({ kind: "local_apply_run", id: e.runId });
-		run.browser.tools.setCallPolicy?.({ isCancelled: () => run.cancelled || run.timedOut || run.state === "ended" });
+		// Configured site families keep their subdomain scope. A temporary owner grant admits
+		// only the exact paused hostname, never its descendants or another run's allowlist.
+		const isAllowedDomain = (host: string) => e.policy.allowDomains.some((domain) => domainWithin(host, domain)) || run.allow.has(host);
+		run.browser.tools.setCallPolicy?.({
+			isCancelled: () => run.cancelled || run.timedOut || run.state === "ended",
+			isDomainAllowed: isAllowedDomain,
+			requestDomainApproval: (url) => run.bridge?.admitDomain(url) ?? Promise.resolve(false),
+		});
 		run.bridge = new ApplyBridge(run.browser.tools, {
 			emit: (ev) => this.emit(run, ev),
 			pause: (p) => this.pause(run, p),
 			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
-			isAllowed: (host) => [...run.allow].some((d) => domainWithin(host, d)),
+			isAllowed: isAllowedDomain,
 			grounding: () => run.grounding.join("\n"),
 			artifactPath,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
@@ -714,12 +722,13 @@ export class LocalApplyRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 		const run = this.get(String(o.runId ?? ""));
 		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
+		const domains = resumeDomainGrants(o.allowDomains, run.state, run.pause);
 		if (run.pause?.reason === "supervisor_checkpoint") throw new RunnerInputError("This run is waiting for a persisted supervisor directive, not an owner resume", 409);
 		for (const a of (Array.isArray(o.answers) ? o.answers : []).slice(0, LOCAL_APPLY_CAPS.answers)) {
 			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
 			if (typeof r.question === "string" && typeof r.answer === "string" && r.answer.trim()) run.grounding.push(`Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars)}`);
 		}
-		for (const d of strList(o.allowDomains)) run.allow.add(d);
+		for (const domain of domains) run.allow.add(domain);
 		// The owner took the sign-in over: whatever was provisioned for the CLI is wiped (#1412).
 		if (run.signIn) this.signInDone(run);
 		this.release(run, "resumed");

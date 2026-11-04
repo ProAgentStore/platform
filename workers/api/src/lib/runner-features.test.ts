@@ -37,11 +37,12 @@ describe("what a runner version is too old for (#859)", () => {
 	});
 
 	it("post-run cleanup needs the release that carries it, and only that one is behind on it (#1265)", () => {
-		expect(runnerVersionView("0.4.166").behind).toEqual([`${BROWSER_SETTINGS_FEATURE} (needs 0.4.198)`, `${BROWSER_MODE_FEATURE} (needs 0.4.197)`, `${LOCAL_APPLY_HANDOFF_FEATURE} (needs 0.4.200)`, `${CLEANUP_FEATURE} (needs 0.4.167)`]);
+		expect(runnerVersionView("0.4.166").behind).toEqual([`${BROWSER_SETTINGS_FEATURE} (needs 0.4.198)`, `${BROWSER_MODE_FEATURE} (needs 0.4.197)`, `${LOCAL_APPLY_HANDOFF_FEATURE} (needs 0.4.208)`, `${CLEANUP_FEATURE} (needs 0.4.167)`]);
 		expect(runnerFeatureGaps("0.4.167")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE]);
 		expect(runnerFeatureGaps("0.4.197")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE]);
 		expect(runnerFeatureGaps("0.4.198")?.map((g) => g.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE]);
-		expect(runnerFeatureGaps("0.4.200")).toEqual([]);
+		expect(runnerFeatureGaps("0.4.207")?.map((g) => g.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE]);
+		expect(runnerFeatureGaps("0.4.208")).toEqual([]);
 		expect(runnerFeatureGaps("0.5.0")).toEqual([]);
 	});
 
@@ -76,7 +77,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
 			"the engine's own output in a failed run's detail (needs 0.4.68)",
 			"engine check before launch (installed + signed in), required by apply-now (needs 0.4.67)",
-			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.200)",
+			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.208)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 			`${CLEANUP_FEATURE} (needs 0.4.167)`,
 		]);
@@ -102,7 +103,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"machine CPU load and memory in list_runner_nodes / coding_diagnostics (needs 0.4.71)",
 			"relay sockets that keep their machine name when the hostname changes (needs 0.4.70)",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
-			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.200)",
+			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.208)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 			`${CLEANUP_FEATURE} (needs 0.4.167)`,
 		]);

@@ -22,6 +22,7 @@
  * HANDLES (owner-visible path + sha256), status and actionable pause reasons — never résumé text,
  * profile values, typed form values, cookies or the owner's answers.
  */
+import { parseResumeDomains } from "../local-apply/resume-domains.js";
 import { normaliseTraceEntries, type PagedTraceEntry } from "./trace-page.js";
 import { HttpError } from "../auth.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
@@ -595,6 +596,7 @@ export interface ActionInput {
 	note?: string;
 	deferUntil?: string;
 	answers?: Array<{ question: string; answer: string }>;
+	allowDomains?: string[];
 	/**
 	 * The caller's own key for an `approve_and_proceed` (#973), so a retry it cannot tell succeeded
 	 * reuses the same authorization. Omitted, the key is derived from the application and the state
@@ -617,6 +619,8 @@ export function parseActionInput(raw: unknown): ActionInput {
 	const s = (k: string) => (typeof o[k] === "string" && (o[k] as string).trim() ? (o[k] as string).trim() : undefined);
 	const v = o.expected_version ?? o.expectedVersion;
 	if (v !== undefined && (typeof v !== "number" || !Number.isInteger(v) || v < 0)) throw new HttpError(400, "expected_version must be a whole number");
+	const allowDomains = parseResumeDomains(o.allow_domains !== undefined ? o.allow_domains : o.allowDomains);
+	if (allowDomains.length && (action !== "resume" || !(s("application_id") ?? s("applicationId")) || v === undefined)) throw new HttpError(400, "allow_domains requires resume with application_id and expected_version from the paused application");
 	return {
 		action,
 		applicationId: s("application_id") ?? s("applicationId"),
@@ -627,6 +631,7 @@ export function parseActionInput(raw: unknown): ActionInput {
 		runnerInstanceId: s("runner_instance_id") ?? s("runnerInstanceId"),
 		note: s("note"),
 		deferUntil: s("defer_until") ?? s("deferUntil"),
+		allowDomains,
 		answers: Array.isArray(o.answers) ? (o.answers as ActionInput["answers"]) : undefined,
 		idempotencyKey: s("idempotency_key") ?? s("idempotencyKey"),
 		statement: s("statement"),
@@ -805,7 +810,7 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 		}
 		case "resume": {
 			const run = await fillRun(env, uid, pipeline, app);
-			const resumed = await resumeApplyRun(env, uid, run, { answers: input.answers ?? [] });
+			const resumed = await resumeApplyRun(env, uid, run, { answers: input.answers ?? [], allowDomains: input.allowDomains });
 			return after({ runStatus: resumed.status });
 		}
 		default:

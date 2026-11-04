@@ -4,6 +4,17 @@ import { commitLabelRe, ELEMENT_PROBE_FN, FOCUS_PROBE_FN, refuseClick, refuseKey
 export interface McpCallPolicy {
 	guard?: CommitGuardSpec;
 	isCancelled?: () => boolean;
+	/** Live per-run allowlist, including sites explicitly admitted by the owner on resume. */
+	isDomainAllowed?: (host: string) => boolean;
+	/** Pause for owner admission. A supervisor checkpoint cannot grant domain access. */
+	requestDomainApproval?: (url: string) => Promise<boolean>;
+}
+
+/** Read-only inspection must remain available while a redirected page awaits admission. */
+export function domainAdmissionUrl(name: string, args: Record<string, unknown>, currentUrl: string | undefined, internal: boolean): string | null {
+	if (name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined)) return String(args.url ?? "");
+	if ((name === "browser_evaluate" && internal) || ["browser_snapshot", "browser_wait_for", "browser_take_screenshot", "browser_console_messages", "browser_network_requests", "browser_tabs", "browser_navigate_back"].includes(name)) return null;
+	return currentUrl ?? "";
 }
 
 /** Saved owner policy and a policy already seen on this task cannot be weakened by an action. */

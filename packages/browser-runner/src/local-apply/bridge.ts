@@ -505,6 +505,11 @@ export class ApplyBridge {
 	}
 
 	/** May the run be on this host? Asks the owner (external_redirect) when it is not an allowed site. */
+	async admitDomain(url: string): Promise<boolean> {
+		const host = hostOf(url);
+		return !!host && !this.host.isStopped?.() && this.admit(host, url);
+	}
+
 	private async admit(host: string, url: string): Promise<boolean> {
 		if (this.host.isAllowed(host)) {
 			if (!this.admitted.has(host)) {

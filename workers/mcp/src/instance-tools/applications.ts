@@ -561,7 +561,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 				if (unconfirmed) return unconfirmed;
 			}
 			const body: Record<string, unknown> = { action };
-			for (const k of ["application_id", "scout_instance_id", "record_id", "expected_status", "expected_version", "runner_instance_id", "note", "defer_until", "answers", "idempotency_key"]) {
+			for (const k of ["application_id", "scout_instance_id", "record_id", "expected_status", "expected_version", "runner_instance_id", "note", "defer_until", "answers", "allow_domains", "idempotency_key"]) {
 				if (input[k] !== undefined) body[k] = input[k];
 			}
 			// An owner assertion (#1073) carries its attempt, the owner's words, the confirmation and the surface.
@@ -703,7 +703,8 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 		retry.handler,
 	);
 
-	const resume = decision("resume_application", ["resume"], "The paused fill would continue.", {
+	const resume = decision("resume_application", ["resume"], "The paused fill would continue; any allowed site applies only to this run.", {
+		allow_domains: z.array(z.string().trim().min(1).max(253).regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\.?$/i)).max(10).optional().describe("For external_redirect only: the owner-approved exact pause.domain hostname. Requires application_id and expected_version from the paused application. Applies only to its current run; never changes settings or submission approval. No URL, port, wildcard or parent-domain grant."),
 		answers: z.array(z.object({ question: z.string(), answer: z.string() })).optional().describe("Answers to the item's questions."),
 	});
 	server.tool(

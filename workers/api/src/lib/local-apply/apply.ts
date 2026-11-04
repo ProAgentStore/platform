@@ -1,4 +1,5 @@
 import { loadCloudDocuments } from "../local-artifact/cloud-documents.js";
+import { resumeDomainsFor } from "./resume-domains.js";
 import { activeApplyMilliseconds } from "./active-clock.js";
 /**
  * The Application Runner (#957): materials ready → a local CLI fills the application in a real
@@ -178,7 +179,7 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 export function runnerContractProblem(runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
 	const version = runnerVersion?.trim();
 	if (version && cliAtLeast(version, LOCAL_APPLY_CONTRACT_MIN_CLI)) return null;
-	return `The runner on ${node || "that machine"} is CLI ${version || "unknown"}, which has not verified this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): dispatch-time submission guards, credential origin binding and current post-submit confirmation are required to prevent unsafe actions and an opaque submit_unconfirmed outcome. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
+	return `The runner on ${node || "that machine"} is CLI ${version || "unknown"}, which has not verified this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): fresh mutation-domain checks, exact per-run domain grants, dispatch-time submission guards, credential origin binding and current post-submit confirmation are required to prevent unsafe actions and an opaque submit_unconfirmed outcome. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
 }
 
 export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };
@@ -773,6 +774,11 @@ function parkedOnAQuestion(run: ApplyRun): boolean {
 
 export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body: unknown, now = Date.now(), via: DecisionVia = "console"): Promise<ApplyRun> {
 	const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+	const allowDomains = resumeDomainsFor(b.allowDomains, run);
+	const grantedRuntime = allowDomains.length ? await getLiveRuntime(env, run.instanceId, uid).catch(() => null) : null;
+	if (allowDomains.length && !grantedRuntime) throw new HttpError(409, "No runner is connected. Update the CLI, restart `pags up`, then retry this application before granting a new site.");
+	const grantProblem = allowDomains.length ? runnerContractProblem(grantedRuntime?.runner_version, grantedRuntime?.runner_node) : null;
+	if (grantProblem) throw new HttpError(409, grantProblem);
 	// Refused, not cut: a truncated answer would be grounding the owner never wrote.
 	const rawAnswers = Array.isArray(b.answers) ? b.answers : [];
 	const answers = rawAnswers.filter((a): a is { question: string; answer: string } => !!a && typeof a === "object" && typeof (a as Record<string, unknown>).question === "string" && typeof (a as Record<string, unknown>).answer === "string");
@@ -800,10 +806,7 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 		}
 		return run;
 	}
-	const rawDomains = Array.isArray(b.allowDomains) ? b.allowDomains : [];
-	const allowDomains = rawDomains.map((d) => (typeof d === "string" ? hostOfUrl(`https://${d}`) : null));
-	if (rawDomains.length > 10 || allowDomains.some((d) => !d)) throw new HttpError(400, "allowDomains must be up to 10 hostnames");
-	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
+	const runtime = grantedRuntime ?? await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
 	if (!runtime) throw new HttpError(409, "No runner is connected. Run `pags up` on that machine, then resume.");
 	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[] }) }).catch(() => null);
 	if (!res) throw new HttpError(409, "The runner did not answer. Check `pags up` on that machine and try again.");

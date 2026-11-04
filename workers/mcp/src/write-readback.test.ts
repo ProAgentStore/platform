@@ -257,6 +257,8 @@ const READBACK: Record<string, string | null> = {
 	// #1079: the owner's answers are stored on the application's `owner_decisions` (and given to the next fill) —
 	// no MCP tool reads that table yet, so there is no readback to declare.
 	"resume_application.answers": null,
+	// Per-run browser permission is transient, not a stored instance setting.
+	"resume_application.allow_domains": null,
 	// #1066: retry_tailoring answers are saved to the owner's Profile as custom answers — get_profile returns them.
 	"retry_application.answers": "get_profile",
 	// #953: the policy written is the policy read.

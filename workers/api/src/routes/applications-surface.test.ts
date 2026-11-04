@@ -681,6 +681,38 @@ describe("retry, cancel and resume", () => {
 		expect(dispatches("/local-apply/run")).toHaveLength(1);
 	});
 
+	it("resumes only the observed external redirect on the exact application version, without changing settings", async () => {
+		readyApp("redirect");
+		const started = await act("t1", { action: "request_review", application_id: "redirect", expected_status: "materials_ready" });
+		const runId = started.body.result.runId;
+		answers["/local-apply/status"] = { status: 200, body: { state: "paused", pause: { reason: "external_redirect", domain: "jobs.smartrecruiters.com", url: "https://jobs.smartrecruiters.com/acme" }, lastSeq: 1, events: [{ seq: 1, type: "run.paused", at: "2026-10-07T00:06:00Z", pauseReason: "external_redirect" }] } };
+		await call("GET", `/ap/application-runs/${runId}`);
+		const paused = (await call("GET", "/t1/application-queue/item?application_id=redirect")).body.item;
+		const settingsBefore = (await call("GET", "/ap/application-runner/settings")).body;
+		const base = { action: "resume", application_id: "redirect", expected_status: "blocked", expected_version: paused.stateVersion };
+		for (const allow_domains of [null, "jobs.smartrecruiters.com", ["https://jobs.smartrecruiters.com"], ["jobs.smartrecruiters.com/path"], ["*.smartrecruiters.com"], ["jobs.smartrecruiters.com:443"], Array(11).fill("jobs.smartrecruiters.com")]) expect((await act("t1", { ...base, allow_domains })).status).toBe(400);
+		for (const allow_domains of [["smartrecruiters.com"], ["unrelated.example.com"], ["jobs.smartrecruiters.com", "unrelated.example.com"]]) expect((await act("t1", { ...base, allow_domains })).status).toBe(409);
+		const allow_domains = ["jobs.smartrecruiters.com"];
+		expect((await act("t1", { ...base, expected_version: undefined, allow_domains })).status).toBe(400);
+		expect((await act("t1", { ...base, expected_version: paused.stateVersion - 1, allow_domains })).status).toBe(409);
+		expect(dispatches("/local-apply/resume")).toEqual([]);
+		for (const version of ["0.4.207", ""]) {
+			await d1.DB.prepare("UPDATE instance_runtime_nodes SET runner_version = ?1 WHERE instance_id = 'ap'").bind(version).run();
+			const refused = await act("t1", { ...base, allow_domains, answers: [{ question: "Permission note?", answer: "Do not save on refusal" }] });
+			expect(refused.status).toBe(409);
+			expect(refused.body.error).toMatch(/0\.4\.208.*mutation-domain/);
+			expect(dispatches("/local-apply/resume")).toEqual([]);
+			expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM owner_decisions WHERE subject_id = 'redirect'").first<{ n: number }>())?.n).toBe(0);
+		}
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.208' WHERE instance_id = 'ap'");
+		answers["/local-apply/status"] = { status: 200, body: { state: "running", lastSeq: 2, events: [{ seq: 2, type: "run.resumed", at: "2026-10-07T00:07:00Z" }] } };
+		const resumed = await act("t1", { ...base, allow_domains: ["JOBS.SMARTRECRUITERS.COM"] });
+		expect(resumed.status).toBe(200);
+		expect(dispatches("/local-apply/resume")).toEqual([{ path: "/local-apply/resume", body: { runId, answers: [], allowDomains: allow_domains } }]);
+		expect((await call("GET", "/ap/application-runner/settings")).body).toEqual(settingsBefore);
+		expect(resumed.body.item.fillRunId).toBe(runId);
+	});
+
 	it("a paused fill offers resume with the owner's answer, and cancel", async () => {
 		readyApp("pz");
 		const started = await call("POST", "/t1/application-queue/actions", { action: "request_review", application_id: "pz", expected_status: "materials_ready" });

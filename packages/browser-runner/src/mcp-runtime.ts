@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { BrowserContext, Page } from "playwright";
 import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
-import { guardedToolRefusal, navigationRefusal, type McpCallPolicy } from "./mcp-call-policy.js";
+import { domainAdmissionUrl, guardedToolRefusal, navigationRefusal, type McpCallPolicy } from "./mcp-call-policy.js";
 import { UploadVerifier, type PreparedUpload } from "./upload-verification.js";
 
 /** The caller owns the browser in either case. Native contexts work across all engines (#1431). */
@@ -200,7 +200,23 @@ export class McpRuntime {
 				refusal = upload.error ?? null;
 			} else if (pageBefore) this.uploads.clear(pageBefore);
 		}
-		// Stop can arrive while a DOM/origin/upload probe was in flight. Check again at dispatch.
+		// Redirects can land after a click or supervisor checkpoint, or during an awaited probe.
+		// The current native URL and live per-run allowlist decide at the actual dispatch boundary.
+		if (!refusal && this.policy.isDomainAllowed) {
+			const candidate = () => domainAdmissionUrl(name, args, currentPage()?.url(), opts.internal ?? false);
+			const allowed = (url: string | null) => {
+				if (url === null) return true;
+				try { const parsed = new URL(url); return (parsed.protocol === "https:" || parsed.protocol === "http:") && this.policy.isDomainAllowed?.(parsed.hostname) === true; } catch { return false; }
+			};
+			const url = candidate();
+			if (!allowed(url)) {
+				if (url) await this.policy.requestDomainApproval?.(url);
+				refusal = allowed(candidate())
+					? "No action was dispatched while site approval was pending. Inspect the current page and request a fresh supervisor checkpoint before retrying."
+					: "BLOCKED by the runner — the current browser site has not been approved for this application. No action was dispatched; explicit owner domain approval is required.";
+			}
+		}
+		// Stop can arrive while a DOM/origin/upload/admission check was in flight. Check again at dispatch.
 		refusal ??= cancelled();
 		if (refusal) {
 			this.refused(name, args, refusal);

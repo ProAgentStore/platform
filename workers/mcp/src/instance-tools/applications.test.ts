@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
+import { z } from "zod";
 import { registerApplicationTools } from "./applications.js";
 
 type Handler = (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>;
@@ -18,13 +19,14 @@ function tools(scopes: SafetyContext["scopes"] = ["read", "write", "runtime"]) {
 		return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
 	});
 	const handlers = new Map<string, Handler>();
+	const schemas = new Map<string, z.ZodRawShape>();
 	const env: McpEnv = { API_BASE: "https://api.test" };
-	registerApplicationTools({ tool: (name: string, _d: string, _s: unknown, h: Handler) => handlers.set(name, h) } as never, {
+	registerApplicationTools({ tool: (name: string, _d: string, schema: z.ZodRawShape, h: Handler) => { handlers.set(name, h); schemas.set(name, schema); } } as never, {
 		env,
 		tokenFor: (p?: string) => p || "session-token",
 		safetyFor: (): SafetyContext => ({ env, subject: "user-1", scopes }),
 	});
-	return { seen, names: [...handlers.keys()], call: (name: string, args: Record<string, unknown>) => (handlers.get(name) as Handler)(args).then((r) => r.content[0].text) };
+	return { seen, schemas, names: [...handlers.keys()], call: (name: string, args: Record<string, unknown>) => (handlers.get(name) as Handler)(args).then((r) => r.content[0].text) };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -192,6 +194,22 @@ describe("the Applications tools (#958, #953)", () => {
 		const { seen, call } = tools();
 		await call(name, { instance_id: "t1", ...args });
 		expect(seen).toEqual([{ url: ACTIONS, method: "POST", body }]);
+	});
+
+	it("passes an exact per-run domain grant with its application state, without editing settings", async () => {
+		const { seen, call } = tools();
+		const args = { instance_id: "t1", application_id: "a1", expected_status: "blocked", expected_version: 7, allow_domains: ["jobs.smartrecruiters.com"] };
+		await call("resume_application", { ...args, dry_run: true });
+		expect(seen).toEqual([]);
+		await call("resume_application", args);
+		expect(seen).toEqual([{ url: ACTIONS, method: "POST", body: { action: "resume", application_id: "a1", expected_status: "blocked", expected_version: 7, allow_domains: args.allow_domains } }]);
+	});
+
+	it("rejects malformed and oversized domain grants at the MCP boundary", () => {
+		const schema = z.object(tools().schemas.get("resume_application")!);
+		const base = { instance_id: "t1", application_id: "a1", expected_status: "blocked", expected_version: 7 };
+		for (const allow_domains of ["jobs.example.com", ["https://jobs.example.com"], ["*.example.com"], ["jobs.example.com/path"], ["jobs.example.com:443"], Array(11).fill("jobs.example.com")]) expect(schema.safeParse({ ...base, allow_domains }).success).toBe(false);
+		expect(schema.safeParse({ ...base, allow_domains: ["jobs.smartrecruiters.com"] }).success).toBe(true);
 	});
 
 	// #973 — the issue's parity requirement: "the UI button and MCP tool call the same owner-scoped
