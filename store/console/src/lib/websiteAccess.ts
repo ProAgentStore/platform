@@ -1,4 +1,6 @@
 import { api } from "@proagentstore/sdk/client";
+import type { WebsiteGrantsResponse } from "../../../../workers/api/src/lib/website-access-response-types";
+export type { WebsiteGrantsResponse } from "../../../../workers/api/src/lib/website-access-response-types";
 
 export type WebsiteAccessMode = "allow_all" | "allowlist" | "ask_once";
 export interface WebsiteAccessSettings { mode: WebsiteAccessMode; domains: string[] }
@@ -51,7 +53,7 @@ export interface WebsiteAnswerResponse extends WebsiteRequestResponse {
 const instancePath = (id: string) => `/v1/instances/${encodeURIComponent(id)}`;
 export const getWebsiteRequest = (instanceId: string, requestId: string) => api<WebsiteRequestResponse>(`${instancePath(instanceId)}/website-requests/${encodeURIComponent(requestId)}`);
 export const answerWebsiteRequest = (instanceId: string, requestId: string, decision: "approve" | "deny") => api<WebsiteAnswerResponse>(`${instancePath(instanceId)}/website-requests/${encodeURIComponent(requestId)}/answer`, { method: "POST", body: JSON.stringify({ decision }) });
-export const getWebsiteGrants = (instanceId: string) => api<{ domains: string[]; decisions?: Array<{ hostname: string; decision: "allow" | "deny" }> }>(`${instancePath(instanceId)}/website-grants`);
+export const getWebsiteGrants = (instanceId: string) => api<WebsiteGrantsResponse>(`${instancePath(instanceId)}/website-grants`);
 export const revokeWebsiteGrant = (instanceId: string, hostname: string) => api(`${instancePath(instanceId)}/website-grants/${encodeURIComponent(hostname)}`, { method: "DELETE" });
 
 /** Keep the originating run inside the existing console router and its instance scope. */

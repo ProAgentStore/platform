@@ -1,5 +1,6 @@
 /** Owner-authenticated website questions and remembered exact-host decisions (#1480). */
 import type { Hono } from "hono";
+import type { WebsiteGrantsResponse } from "../lib/website-access-response-types.js";
 import type { Env } from "../types.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -34,7 +35,7 @@ export function registerWebsiteAccessRoutes(router: Hono<{ Bindings: Env }>, ada
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, uid);
 		const decisions = await listWebsiteDomainDecisions(c.env, uid, instanceId);
-		return c.json({ domains: decisions.filter((d) => d.decision === "allow").map((d) => d.hostname), decisions });
+		return c.json({ domains: decisions.filter((d) => d.decision === "allow").map((d) => d.hostname), decisions } satisfies WebsiteGrantsResponse);
 	});
 	router.delete("/:instanceId/website-grants/:hostname", async (c) => {
 		const { uid } = await requireUser(c);

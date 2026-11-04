@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { WebsiteGrantsResponse } from "./websiteAccess";
+import type { WebsiteGrantsResponse as WorkerWebsiteGrantsResponse } from "../../../../workers/api/src/lib/website-access-response-types";
 import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
 import type { KeyVerifyResponse as WorkerKeyVerifyResponse } from "../../../../workers/api/src/lib/key-verify-types";
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
@@ -58,6 +60,9 @@ import type { ActionsRecoveryResponse } from "./actionsRunnerStatus";
 
 /** The console field names the producer does not have. `never` when the two agree. */
 type Extra<Console, Producer> = Exclude<keyof Console, keyof Producer>;
+
+const _websiteGrantsHaveNoInventedFields: Extra<WebsiteGrantsResponse, WorkerWebsiteGrantsResponse> extends never ? true : never = true;
+const _websiteDecisionsHaveNoInventedFields: Extra<WebsiteGrantsResponse["decisions"][number], WorkerWebsiteGrantsResponse["decisions"][number]> extends never ? true : never = true;
 
 const _actionsRecoveryHasNoInventedFields: Extra<ActionsRecoveryResponse, WorkerActionsRecoveryResponse> extends never ? true : never = true;
 const _actionsRecoveryReceiptHasNoInventedFields: Extra<ActionsRecoveryResponse["recovery"], WorkerActionsRecoveryResponse["recovery"]> extends never ? true : never = true;
