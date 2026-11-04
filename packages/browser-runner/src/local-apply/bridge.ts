@@ -88,8 +88,6 @@ const BRIDGE_TOOLS = ["upload_artifact", "request_answer", "ready_for_review", "
 const SESSION_BUTTON = /\b(sign ?in|log ?in|continue|next|verify|confirm|submit|send|email me|text me|get (a |the )?code|resend)\b/i;
 /** The one secret name a model may type that is never provisioned up front: it asks for it with `request_sign_in_code`. */
 const SECRET_NAME = /^PAGS_LOGIN_[A-Z_]+$/;
-/** Playwright's own wording when a target — typically a sign-in popup — closes mid-call (#1476). */
-const TARGET_CLOSED_RE = /target page, context or browser has been closed/i;
 // #1420: `browser_run_code` was renamed `browser_run_code_unsafe` in @playwright/mcp 0.0.84; kept
 // here too so a downgrade (or an older runner still speaking the old name) refuses it by the same
 // named message rather than falling through to the generic one. Either way the dispatch allowlist
@@ -232,8 +230,6 @@ export class ApplyBridge {
 	private signInActionTaken = false;
 	private signInCredentialEntered = false;
 	private signInReturnOrigin: string | null = null;
-	/** A secret value whose last type ended unresolved (#1476): refused on an exact repeat until a fresh code/pause clears it — never a blind replay. */
-	private signInAmbiguousValue: string | null = null;
 
 	private readonly replay: ApplyReplay;
 	private readonly browser: BrowserTools;
@@ -337,9 +333,6 @@ export class ApplyBridge {
 			this.signInActionTaken = false;
 			this.signInCredentialEntered = false;
 			this.signInReturnOrigin = null;
-			// signInAmbiguousValue is deliberately NOT cleared here (#1476): going back and forth
-			// cannot manufacture the fresh code/pause that is the only legitimate way to earn another
-			// attempt at the exact same value.
 			const state = await this.inspect();
 			if (state) return this.landed(textOf(res), state);
 		}
@@ -389,7 +382,6 @@ export class ApplyBridge {
 			this.signInActionTaken = false;
 			this.signInCredentialEntered = false;
 			this.signInReturnOrigin = null;
-			this.signInAmbiguousValue = null;
 			const state = await this.inspect();
 			if (state) this.observeSignIn(state);
 			this.supervisorApproved = false;
@@ -449,30 +441,6 @@ export class ApplyBridge {
 		return this.signInWallSeen && this.signInActionTaken && !this.blockerOf(state) && this.host.isAllowed(host);
 	}
 
-	/**
-	 * Reconcile a credential type whose target closed mid-call (#1476). The popup may have accepted
-	 * the password/code and closed itself, or crashed with nothing accepted — Playwright's error
-	 * says the target is gone, not which. Whatever page remains (usually the opener) is never trusted
-	 * as proof either way — not even one that LOOKS like the application's own oauth callback: a
-	 * single post-hoc read cannot tell a callback this attempt actually produced from the opener's
-	 * unrelated, unchanged resting address (an opener parked on a stale callback from some earlier,
-	 * already-settled event is indistinguishable from a fresh one by URL shape alone — verified
-	 * against a real reconstruction of that case). So nothing here is ever accepted as an immediate
-	 * success, under any shape of landing page. `signInActionTaken` stays false — the one flag
-	 * `observeSignIn`'s "no blocker now" check actually requires to declare success — so no later
-	 * clean read can be mistaken for proof either. Only a BRAND NEW, cleanly-typed credential (no
-	 * error) can set it true again; the credential is never retyped blindly in the meantime.
-	 */
-	private async reconcileClosedSignIn(kind: "password" | "code", value: string, toolText: string): Promise<ToolResult> {
-		this.signInActionTaken = false;
-		this.signInCredentialEntered = false;
-		this.signInAmbiguousValue = value;
-		return text(
-			`${toolText}\n\nThe sign-in popup closed while the ${kind} was being entered; this proves nothing either way, even if the page now looks like a return from the sign-in site. Do not retype the ${kind} — it may already have been consumed, and retyping the exact same value is refused until a fresh one is provisioned. Take a browser_snapshot: continue from a credential wall if one is still visible, otherwise call ready_for_review so a person can check whether the sign-in actually completed.`,
-			true,
-		);
-	}
-
 	private async signInControl(ref: string, label: string): Promise<SignInControlFacts | null> {
 		const res = await this.browser.callTool("browser_evaluate", { element: label || "sign-in control", target: ref, function: SIGN_IN_CONTROL_PROBE_FN }, { internal: true }).catch(() => null);
 		const facts = res && !res.isError ? evaluateResult(textOf(res)) as SignInControlFacts | null : null;
@@ -488,7 +456,6 @@ export class ApplyBridge {
 		this.signInActionTaken = false;
 		this.signInCredentialEntered = false;
 		this.signInReturnOrigin = null;
-		this.signInAmbiguousValue = null;
 		this.host.signInDone?.();
 		if (site) await this.recordSignIn(site);
 		this.host.emit({ type: "policy.decision", ...(host ? { domain: host } : {}), detail: { tool: "agent_sign_in", class: "session", decision: "signed_in", site } });
@@ -503,7 +470,6 @@ export class ApplyBridge {
 		const ok = await this.host.requestSignInCode();
 		if (!ok || !this.signIn) return text("No sign-in code arrived in time. Do not guess one. Call ready_for_review and say the sign-in is incomplete.", true);
 		this.signIn.names = this.host.signInSecrets?.() ?? this.signIn.names;
-		this.signInAmbiguousValue = null; // A freshly provisioned code is never the one an unresolved type left in question.
 		return text("The code arrived and is available as PAGS_LOGIN_CODE. Type exactly that name into the code box (one box: the whole name; several single-digit boxes are not supported — tell the owner).");
 	}
 
@@ -563,8 +529,6 @@ export class ApplyBridge {
 				this.signInActionTaken = false;
 				this.signInCredentialEntered = false;
 				this.signInReturnOrigin = null;
-				// signInAmbiguousValue stays latched (#1476): navigating elsewhere and back cannot
-				// manufacture the fresh code/pause that alone earns another attempt at the same value.
 			}
 		}
 		const res = await this.browser.callTool("browser_navigate", { url });
@@ -683,20 +647,10 @@ export class ApplyBridge {
 			const origin = state && signInOrigin(state.url);
 			const facts = await this.signInControl(t.ref, t.name);
 			const kind = value === "PAGS_LOGIN_PASSWORD" ? "password" : value === "PAGS_LOGIN_CODE" ? "code" : value === "PAGS_LOGIN_USERNAME" ? "username" : null;
-			// A prior type of this exact value ended unresolved — the popup closed mid-call, so it may
-			// already have been consumed (#1476). Never dispatch the same value again on a guess; only a
-			// freshly provisioned code, or a fresh sign-in pause, earns another attempt.
-			if (this.signInAmbiguousValue === value) return this.refuse("browser_type", "session", `${value} was already typed once and its outcome is unresolved (the sign-in popup closed). Retyping the exact same value is refused. Take a browser_snapshot: if a credential wall is visible, call request_sign_in_code for a fresh code, or stop and call ready_for_review.`);
 			if (!origin || !this.signInOrigin || origin !== this.signInOrigin || facts?.origin !== this.signInOrigin || !facts.visible || !facts.safeDestination || facts.credential !== kind || !kind) return this.refuse("browser_type", "session", "The credential field is not on the bound sign-in origin or does not match this secret. Nothing was typed.");
 			this.host.emit({ type: "policy.decision", detail: { tool: "browser_type", class: "session", decision: "allowed", reason: `secret:${value}`, role: t.role } });
 			const res = await this.browser.callTool("browser_type", { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value }, { expectedOrigin: this.signInOrigin });
-			if (res.isError) {
-				// The sign-in popup can close itself mid-type (#1476): Playwright then errors with its own
-				// "target closed" wording, and the CLI is left on whatever page remains — usually the opener,
-				// which never carried the wall and so proves nothing by its absence.
-				if ((kind === "password" || kind === "code") && TARGET_CLOSED_RE.test(textOf(res))) return this.reconcileClosedSignIn(kind, value, textOf(res));
-				return { content: [{ type: "text", text: textOf(res) }], isError: true };
-			}
+			if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 			if (kind === "password" || kind === "code") {
 				this.signInActionTaken = true;
 				this.signInCredentialEntered = true;
@@ -911,7 +865,6 @@ export class ApplyBridge {
 			this.signInActionTaken = false;
 			this.signInCredentialEntered = false;
 			this.signInReturnOrigin = null;
-			// signInAmbiguousValue stays latched (#1476): a followed link is not a fresh code or pause.
 		}
 		const before = await tabCount(this.browser);
 		const res = await this.browser.callTool("browser_click", forward);
