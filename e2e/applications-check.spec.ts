@@ -37,6 +37,7 @@ async function mockRunner(page: Page, opts: { blockReason: string; submitAttempt
 		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user"], boardConfig: null });
 		if (path === "/v1/instances/my/instances") return json({ instances: [{ id: "runner-1", name: "Job Application Runner", slug: "job-application-runner", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: [], runtime: "local_apply", workflow: null } }] });
 		if (path === "/v1/instances/runner-1/runtime/status") return json({ runtime: { instanceId: "runner-1", status: "online", runnerNode: "my-machine" }, relay: { connected: true, runnerNode: "my-machine", live: true }, attachment: { state: "attached", message: "Connected.", remedy: null } });
+		if (path === "/v1/instances/runner-1/application-queue/item") return json({ item });
 		if (path === "/v1/instances/runner-1/application-queue") {
 			return json({ pipeline: { scouts: [], tailors: [], runners: [] }, items: [item], counts: { blocked: 1 }, limits: [], connections: [], notes: [] });
 		}
@@ -61,7 +62,7 @@ async function mockRunner(page: Page, opts: { blockReason: string; submitAttempt
 /** The queue lists rows; a row opens its card. */
 async function openCard(page: Page) {
 	await page.goto("/console/instances/runner-1/applications");
-	await page.getByRole("button", { name: /Director of Engineering APAC/ }).click();
+	await page.getByRole("link", { name: /Director of Engineering APAC/ }).click();
 }
 
 test("an unconfirmed submit offers the read-only check; a sign-in wall opens the read-only handoff (#1068)", async ({ page }) => {

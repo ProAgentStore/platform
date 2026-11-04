@@ -10,6 +10,7 @@ import Dashboard from "./pages/Dashboard";
 import Browse from "./pages/Browse";
 import AgentDetail from "./pages/AgentDetail";
 import InstanceDetail from "./pages/InstanceDetail";
+import ApplicationDetail from "./pages/ApplicationDetail";
 import Profile from "./pages/Profile";
 import Notifications from "./pages/Notifications";
 import Terminals from "./pages/Terminals";
@@ -89,6 +90,7 @@ function AuthGate() {
 				<Route path="agents/:id" element={<AgentDetail />} />
 				<Route path="agents/:id/:tab" element={<AgentDetail />} />
 				<Route path="instances" element={<Dashboard />} />
+				<Route path="instances/:id/applications/:applicationId" element={<ApplicationDetail />} />
 				<Route path="instances/:id/tasks/:taskId" element={<RunDetail />} />
 				<Route path="instances/:id/secure-inputs/:requestId" element={<SecureInputDetail />} />
 				<Route path="instances/:id/website-requests/:requestId" element={<WebsiteRequest />} />

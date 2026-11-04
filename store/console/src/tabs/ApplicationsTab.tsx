@@ -5,8 +5,8 @@ import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
 import { type AutoSubmitAllowance, type AutoSubmitRules, disablePayload, enablePayload, rulesPayload } from "../lib/autoSubmitPolicy";
 import { type Ref, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "@proagentstore/sdk/client";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { api, ApiError } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import Card from "../components/Card";
@@ -38,7 +38,18 @@ interface ApplicationHandoffView {
 	reason: string | null;
 }
 
-export default function ApplicationsTab({ instanceId, isTailor = false }: { instanceId: string; isTailor?: boolean }) {
+export default function ApplicationsTab(props: { instanceId: string; isTailor?: boolean }) {
+	const [params] = useSearchParams();
+	const applicationId = params.get("application")?.trim();
+	if (applicationId) {
+		const remaining = new URLSearchParams(params); remaining.delete("application");
+		return <Navigate replace to={`/instances/${encodeURIComponent(props.instanceId)}/applications/${encodeURIComponent(applicationId)}${remaining.size ? `?${remaining}` : ""}`} />;
+	}
+	return <ApplicationsView {...props} />;
+}
+
+/** Detail mode mounts only the requested application's live controls, never the queue UI. */
+export function ApplicationsView({ instanceId, isTailor = false, applicationId }: { instanceId: string; isTailor?: boolean; applicationId?: string }) {
 	const [searchParams] = useSearchParams();
 	// Canonical #1013 links use query state so the existing `<tab>/<sessionId>` grammar remains
 	// honest. The opaque value is no browser/profile identifier and is re-authorized by the API.
@@ -46,14 +57,10 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 	const requestedReconciliationHandoffId = searchParams.get("reconciliation_handoff")?.trim() || undefined;
 	const requestedAnyHandoffId = requestedReconciliationHandoffId ?? requestedHandoffId;
 	const reconciliationHandoff = !!requestedReconciliationHandoffId;
-	// #1136: a notification about one application opens IT — its row selected, its decisions in view.
-	const requestedApplicationId = searchParams.get("application")?.trim() || undefined;
-	const focusApplied = useRef<string | null>(null);
-	const [focusMissing, setFocusMissing] = useState(false);
 	const actionsRef = useRef<HTMLFieldSetElement>(null);
-	const [focusScrollKey, setFocusScrollKey] = useState<string | null>(null);
 	const [view, setView] = useState<ApplicationQueueView | null>(null);
 	const [error, setError] = useState("");
+	const [notFound, setNotFound] = useState(false);
 	const [filter, setFilter] = useState<ApplicationQueueStatus | "">("");
 	const [open, setOpen] = useState<string | null>(null);
 	const [handoff, setHandoff] = useState<ApplicationHandoffView | null>(null);
@@ -62,12 +69,19 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 
 	const load = useCallback(async () => {
 		try {
-			setView(await api<ApplicationQueueView>(`/v1/instances/${instanceId}/application-queue`));
-			setError("");
+			const [queue, exact] = await Promise.all([
+				api<ApplicationQueueView>(`/v1/instances/${instanceId}/application-queue`),
+				applicationId ? api<{ item: ApplicationQueueItem }>(`/v1/instances/${instanceId}/application-queue/item?application_id=${encodeURIComponent(applicationId)}`) : Promise.resolve(null),
+			]);
+			if (applicationId && exact?.item?.applicationId !== applicationId) throw new Error("The application response does not match this link. Reload to try again.");
+			// The queue is bounded; only the exact owner-scoped endpoint decides whether this item exists.
+			setView(exact ? { ...queue, items: [exact.item] } : queue);
+			setError(""); setNotFound(false);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
+			setNotFound(e instanceof ApiError && e.status === 404);
 		}
-	}, [instanceId]);
+	}, [instanceId, applicationId]);
 	useEffect(() => {
 		load();
 	}, [load]);
@@ -87,38 +101,16 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 			.catch((e) => { if (!cancelled) setHandoffError(e instanceof Error ? e.message : String(e)); });
 		return () => { cancelled = true; };
 	}, [requestedAnyHandoffId, reconciliationHandoff, instanceId]);
-	usePolling(load, 5000, !!view?.items.some((i) => i.status === "tailoring" || i.status === "filling" || i.fillRun));
-	// Once per requested id, on the first loaded queue: later polls never take the owner's selection away.
-	useEffect(() => {
-		if (!view || !requestedApplicationId || focusApplied.current === requestedApplicationId) return;
-		focusApplied.current = requestedApplicationId;
-		const hit = view.items.find((i) => i.applicationId === requestedApplicationId);
-		setFocusMissing(!hit);
-		if (!hit) return;
-		setFilter("");
-		setOpen(hit.key);
-		setFocusScrollKey(hit.key);
-	}, [view, requestedApplicationId]);
-	// Wait for the selected detail to commit; its decisions can be below a long
-	// summary on a phone. Later queue polls and manual selections never refocus it.
-	useEffect(() => {
-		if (!focusScrollKey || open !== focusScrollKey) return;
-		const frame = requestAnimationFrame(() => {
-			if (!actionsRef.current) return;
-			actionsRef.current.scrollIntoView({ block: "center" });
-			setFocusScrollKey(null);
-		});
-		return () => cancelAnimationFrame(frame);
-	}, [focusScrollKey, open]);
+	usePolling(load, 5000, !!applicationId || !!view?.items.some((i) => i.status === "tailoring" || i.status === "filling" || i.fillRun));
 
-	if (error && !view) return <LoadFailed what="applications" detail={error} onRetry={load} />;
+	if (error && (applicationId || !view)) return <LoadFailed what={applicationId ? "this application" : "applications"} detail={error} onRetry={load} testId={applicationId && notFound ? "application-focus-missing" : undefined} />;
 	if (!view) return <p className="text-sm text-muted">Loading applications…</p>;
 	const items = filter ? view.items.filter((i) => i.status === filter) : view.items;
-	const selected = view.items.find((i) => i.key === open) ?? null;
+	const selected = view.items.find((i) => applicationId ? i.applicationId === applicationId : i.key === open) ?? null;
 
 	return (
 		<div className="max-w-4xl">
-			{isTailor && <UploadedTailorSourcesSection instanceId={instanceId} />}
+			{!applicationId && isTailor && <UploadedTailorSourcesSection instanceId={instanceId} />}
 			{requestedAnyHandoffId && (
 				<Card className="mb-3 sm:mb-4" data-testid="application-handoff">
 					<h3 className="text-base font-bold">{reconciliationHandoff ? "Read-only application reconciliation" : "Application browser handoff"}</h3>
@@ -141,6 +133,7 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 					)}
 				</Card>
 			)}
+			{!applicationId && <>
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Applications</h3>
 				<fieldset className="flex flex-wrap gap-1.5 border-0 p-0 m-0 min-w-0" aria-label="Filter by status">
@@ -175,28 +168,37 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 						const s = QUEUE_STATUS_LABEL[i.status];
 						return (
 							<li key={i.key}>
-								<button type="button" onClick={() => setOpen(open === i.key ? null : i.key)} className="w-full text-left py-2 flex gap-3 items-baseline hover:bg-panel-hover">
+								{i.applicationId ? <Link to={`/instances/${encodeURIComponent(instanceId)}/applications/${encodeURIComponent(i.applicationId)}`} className="w-full text-left py-2 flex gap-3 items-baseline hover:bg-panel-hover">
 									<span className={`text-xs font-semibold shrink-0 w-36 ${TONE_CLASS[s.tone]}`}>{s.label}</span>
 									<span className="text-sm truncate flex-1">
 										{i.title}
 										{i.company ? ` — ${i.company}` : ""}
 									</span>
 									<span className="text-xs text-muted-soft shrink-0">{i.location ?? ""}</span>
-								</button>
+								</Link> : <button type="button" onClick={() => setOpen(open === i.key ? null : i.key)} className="w-full text-left py-2 flex gap-3 items-baseline hover:bg-panel-hover">
+									<span className={`text-xs font-semibold shrink-0 w-36 ${TONE_CLASS[s.tone]}`}>{s.label}</span>
+									<span className="text-sm truncate flex-1">
+										{i.title}
+										{i.company ? ` — ${i.company}` : ""}
+									</span>
+									<span className="text-xs text-muted-soft shrink-0">{i.location ?? ""}</span>
+								</button>}
 							</li>
 						);
 					})}
 				</ul>
 			</Card>
 
-			{focusMissing && (
+			</>}
+
+			{applicationId && !selected && (
 				<p className="mb-3 text-sm text-muted" data-testid="application-focus-missing">
 					The application this link is about is no longer in this queue — it may have been archived or removed.
 				</p>
 			)}
-			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} />}</div>
+			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} live={!!applicationId} />}</div>
 
-			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} allowance={view.limits.find((l) => l.runnerInstanceId === view.pipeline.runners[0])} onChanged={load} />}
+			{!applicationId && view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} allowance={view.limits.find((l) => l.runnerInstanceId === view.pipeline.runners[0])} onChanged={load} />}
 			{handoffOpen && handoff && (
 				<ApplicationHandoffLive
 					instanceId={instanceId}
@@ -265,7 +267,7 @@ function Limits({ view, instanceId, onChanged }: { view: ApplicationQueueView; i
 	);
 }
 
-function Detail({ instanceId, item, connections, onChanged, actionsRef }: { instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void; actionsRef: Ref<HTMLFieldSetElement> }) {
+function Detail({ instanceId, item, connections, onChanged, actionsRef, live = false }: { live?: boolean; instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void; actionsRef: Ref<HTMLFieldSetElement> }) {
 	const [busy, setBusy] = useState<ApplicationQueueAction | "check" | null>(null);
 	const [msg, setMsg] = useState("");
 	const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -277,7 +279,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef }: { inst
 	const progress = item.execution?.progress ?? item.fillProgress;
 	const questions = pause?.question ? [pause.question] : item.questions;
 	// #1063: the fill run's replay — every form control blurred by the runner before each frame was taken.
-	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, item.stateVersion);
+	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, live ? item : item.stateVersion);
 	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
 
 	const act = async (action: ApplicationQueueAction) => {
@@ -321,14 +323,17 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef }: { inst
 		}
 		setBusy(null);
 	};
-	const loadTrace = async () => {
+	const loadTrace = useCallback(async () => {
 		if (!item.applicationId) return;
 		try {
-			setTrace(await api<ApplicationTraceView>(`/v1/instances/${instanceId}/application-queue/${encodeURIComponent(item.applicationId)}/trace`));
+			const next = await api<ApplicationTraceView>(`/v1/instances/${instanceId}/application-queue/${encodeURIComponent(item.applicationId)}/trace`);
+			setTrace({ ...next, entries: next.entries ?? [] });
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
-	};
+	}, [instanceId, item.applicationId]);
+	useEffect(() => { if (live) void loadTrace(); }, [live, loadTrace]);
+	usePolling(loadTrace, 5000, live);
 	const pausedTransfers = item.status === "materials_ready" && item.tailorInstanceId ? connections.filter((c) => !c.enabled && c.sourceInstanceId === item.tailorInstanceId && c.eventType === "job.application.materials_ready" && c.action === "start_application_fill") : [];
 	const transfer = async () => {
 		const connection = pausedTransfers.find((c) => c.id === (transferConnection || pausedTransfers[0]?.id));
@@ -470,19 +475,22 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef }: { inst
 			</fieldset>
 			{msg && <p className="text-xs mt-2">{msg}</p>}
 
-			{(frames.length > 0 || screenshotsOff) && (
+			{(live || frames.length > 0 || screenshotsOff) && (
 				<div className="mt-3">
-					<RunReplay frames={frames} emptyText={SCREENSHOTS_OFF_TEXT} />
+					<h4 className="font-semibold mb-2">Screenshot timeline</h4>
+					<RunReplay frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : "No screenshots captured yet. New frames appear here as the browser works."} />
 				</div>
 			)}
 
+			{live && <h4 className="font-semibold mt-4 mb-2">Live steps</h4>}
+			{live && trace?.entries.length === 0 && <p className="text-sm text-muted">No steps recorded yet.</p>}
 			{trace && (
 				<ol className="mt-3 text-xs flex flex-col gap-0.5" aria-label="Application trace">
 					{trace.entries.map((e) => (
-						<li key={`${e.at}|${e.source}|${e.type}|${e.runId ?? ""}|${JSON.stringify(e.detail)}`} className="flex gap-2">
+						<li key={`${e.at}|${e.source}|${e.type}|${e.runId ?? ""}|${JSON.stringify(e.detail)}`} className="flex flex-wrap sm:flex-nowrap gap-2">
 							<span className="text-muted-soft shrink-0 w-40">{e.at ? new Date(e.at).toLocaleString() : ""}</span>
 							<span className="shrink-0 w-16">{e.source}</span>
-							<span className="min-w-0 break-words">{applicationTraceLabel(e)}</span>
+							<span className="min-w-0 basis-full sm:basis-auto break-words [overflow-wrap:anywhere]">{applicationTraceLabel(e)}</span>
 						</li>
 					))}
 				</ol>

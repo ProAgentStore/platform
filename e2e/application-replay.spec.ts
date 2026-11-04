@@ -15,7 +15,7 @@ const application = {
 	execution: null, diagnostic: null, queue: null, submitAuthorization: null, updatedAt: "2026-11-03T11:00:00Z", actions: [],
 };
 
-async function mockReplay(page: Page, options: { missing?: number; longUrl?: boolean; livePause?: boolean } = {}) {
+async function mockReplay(page: Page, options: { missing?: number; longUrl?: boolean; livePause?: boolean; liveUpdates?: boolean } = {}) {
 	await page.addInitScript(() => window.localStorage.setItem("pags:session", "test-pags-token"));
 	const item = options.livePause ? { ...application, fillRun: { id: "run-1", status: "paused", mode: "dry_run", pause: { reason: "login_required", url: LOGIN_URL } }, actions: ["resume"] } : application;
 	const jobUrl = options.longUrl ? `https://jobs.example.com/${"long-path-segment".repeat(18)}` : JOB_URL;
@@ -30,14 +30,16 @@ async function mockReplay(page: Page, options: { missing?: number; longUrl?: boo
 		{ type: "policy.decision", detail: { tool: "browser_click", class: "action", decision: "completed", target: "Apply", url: jobUrl } },
 		{ type: "browser.blocked", detail: { reason: "login_required", url: LOGIN_URL } },
 	].map((entry, index) => ({ ...entry, at: `2026-11-03T10:46:0${index}Z`, source: "runner", instanceId: "runner-1", runId: "run-1" }));
+	let traceReads = 0, artifactReads = 0;
 	await page.route(`${API}/**`, (route) => {
 		const path = new URL(route.request().url()).pathname;
 		const json = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
 		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", roles: ["user"], boardConfig: null });
 		if (path === "/v1/instances/my/instances") return json({ instances: [INSTANCE] });
+		if (path === "/v1/instances/runner-1/application-queue/item") return json({ item });
 		if (path === "/v1/instances/runner-1/application-queue") return json({ pipeline: { scouts: [], tailors: [], runners: [] }, items: [item], counts: { blocked: 1 }, limits: [], connections: [], notes: [] });
-		if (path === "/v1/instances/runner-1/application-queue/app-1/trace") return json({ applicationId: "app-1", correlation: {}, entries });
-		if (path === "/v1/instances/runner-1/browser-artifacts") return json({ subjectKind: "local_apply_run", subjectId: "run-1", artifacts: frames, screenshotsOff: false });
+		if (path === "/v1/instances/runner-1/application-queue/app-1/trace") return json({ applicationId: "app-1", correlation: {}, entries: options.liveUpdates && ++traceReads > 1 ? [...entries, { at: "2026-11-03T10:47:00Z", source: "runner", type: "field.filled", detail: { target: "Email" } }] : entries });
+		if (path === "/v1/instances/runner-1/browser-artifacts") return json({ subjectKind: "local_apply_run", subjectId: "run-1", artifacts: options.liveUpdates && ++artifactReads === 1 ? frames.filter((frame) => frame.seq < 3) : frames, screenshotsOff: false });
 		const frame = path.match(/\/browser-artifacts\/frame-(\d)$/);
 		if (frame) {
 			const seq = Number(frame[1]);
@@ -48,7 +50,7 @@ async function mockReplay(page: Page, options: { missing?: number; longUrl?: boo
 		if (path.includes("/connections/deliveries")) return json({ deliveries: [] });
 		return json({});
 	});
-	await page.goto("/console/instances/runner-1/applications?application=app-1");
+	await page.goto("/console/instances/runner-1/applications/app-1");
 	return page.getByTestId("run-replay");
 }
 
@@ -88,7 +90,7 @@ test("replay switches actual frame pixels, labels and capture timestamps", async
 	expect(await renderedPixel(image)).toEqual([0, 0, 255, 255]);
 	await replay.getByRole("button", { name: "Previous", exact: true }).click();
 	expect(await renderedPixel(image)).toEqual([0, 255, 0, 255]);
-	await page.getByRole("button", { name: "Trace", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "Live steps", exact: true })).toBeVisible();
 	const trace = page.getByRole("list", { name: "Application trace" });
 	await expect(trace).toContainText(`Opened page — ${JOB_URL}`);
 	await expect(trace).toContainText("Allowed click “Apply”");
@@ -120,7 +122,7 @@ test("mobile — replay and descriptive trace wrap long URLs within 375px", asyn
 	await page.setViewportSize({ width: 375, height: 812 });
 	const replay = await mockReplay(page, { longUrl: true });
 	await expect(replay.getByRole("img")).toBeVisible();
-	await page.getByRole("button", { name: "Trace", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "Live steps", exact: true })).toBeVisible();
 	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Allowed click “Apply”");
 	await replay.scrollIntoViewIfNeeded();
 	const box = await replay.boundingBox();
@@ -128,4 +130,18 @@ test("mobile — replay and descriptive trace wrap long URLs within 375px", asyn
 	expect(await replay.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
 	expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
 	await page.screenshot({ path: "/tmp/pags1464-replay-mobile.png", fullPage: true });
+});
+
+
+test("standalone detail refreshes live steps and screenshots without a state-version change", async ({ page }) => {
+	const replay = await mockReplay(page, { liveUpdates: true });
+	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("aria-valuetext", "Frame 1 of 2");
+	await expect(page.getByRole("list", { name: "Application trace" })).not.toContainText("Filled field “Email”");
+	await page.evaluate(() => { (window as unknown as { applicationPageSentinel: string }).applicationPageSentinel = "same-page"; });
+	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Filled field “Email”", { timeout: 12000 });
+	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("aria-valuetext", "Frame 1 of 3", { timeout: 12000 });
+	expect(await page.evaluate(() => (window as unknown as { applicationPageSentinel: string }).applicationPageSentinel)).toBe("same-page");
+	await replay.getByRole("slider", { name: "Frame" }).fill("2");
+	expect(await renderedPixel(replay.getByRole("img"))).toEqual([0, 0, 255, 255]);
+	await expect(page.getByRole("group", { name: "Filter by status" })).toHaveCount(0);
 });
