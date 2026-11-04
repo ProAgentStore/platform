@@ -16,7 +16,11 @@ export async function observeUploadSelection(input: ReturnType<FileChooser["elem
 		view?.addEventListener("change", onSelection, true);
 		return {
 			read: () => {
-				return { connected: el.isConnected, files: files(), selected, ariaInvalid: el.getAttribute("aria-invalid") === "true", nativeValid: el.validity.valid, customError: el.validity.customError, validationMessage: el.validationMessage.slice(0, 2000) };
+				const message = el.validationMessage;
+				const limit = 2000;
+				const marker = `\n[TRUNCATED: native validation message has ${message.length} characters]`;
+				const validationMessage = message.length > limit ? `${message.slice(0, limit - marker.length)}${marker}` : message;
+				return { connected: el.isConnected, files: files(), selected, ariaInvalid: el.getAttribute("aria-invalid") === "true", nativeValid: el.validity.valid, customError: el.validity.customError, validationMessage };
 			},
 			dispose: () => { view?.removeEventListener("input", onSelection, true); view?.removeEventListener("change", onSelection, true); },
 		};

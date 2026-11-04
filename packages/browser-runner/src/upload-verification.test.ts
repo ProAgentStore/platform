@@ -97,6 +97,16 @@ describe("actual Playwright MCP selection receipts and uninterpreted site feedba
 		expect(result.uploadSelection).toMatchObject({ nativeValid: false, customError: true, validationMessage: "Format refusé", websiteAcceptance: "unconfirmed" });
 	});
 
+	it("marks bounded native validation text instead of presenting it as complete", async () => {
+		await choose('<input id="resume" type="file" onchange="this.setCustomValidity(\'x\'.repeat(5000))">');
+		const result = await upload();
+		expect(result.isError).not.toBe(true);
+		const message = result.uploadSelection?.validationMessage ?? "";
+		expect(message).toHaveLength(2000);
+		expect(message).toContain("[TRUNCATED: native validation message has 5000 characters]");
+		expect(mcp.textOf(result)).toContain("TRUNCATED");
+	});
+
 	it("reports selection only, retains exact approved bytes, and does not treat existing guidance as rejection", async () => {
 		await choose('<input id="resume" type="file" accept="text/plain" aria-describedby="hint"><div id="hint">Maximum file size 5 MB</div>');
 		const result = await upload();
