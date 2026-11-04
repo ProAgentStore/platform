@@ -17,7 +17,7 @@ import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
 import { ASSERT_STATEMENT_PROMPT, QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
 import { notificationRoute } from "../lib/deepLink";
 import { TONE_CLASS } from "../lib/localBrowser";
-import type { ApplicationActionResponse, ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
+import type { ApplicationActionResponse, ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueItemResponse, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
 import type { PreparedApplicationTransferReceipt } from "../lib/applicationTransfer";
 
 /**
@@ -71,7 +71,7 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 		try {
 			const [queue, exact] = await Promise.all([
 				api<ApplicationQueueView>(`/v1/instances/${instanceId}/application-queue`),
-				applicationId ? api<{ item: ApplicationQueueItem }>(`/v1/instances/${instanceId}/application-queue/item?application_id=${encodeURIComponent(applicationId)}`) : Promise.resolve(null),
+				applicationId ? api<ApplicationQueueItemResponse>(`/v1/instances/${instanceId}/application-queue/item?application_id=${encodeURIComponent(applicationId)}`) : Promise.resolve(null),
 			]);
 			if (applicationId && exact?.item?.applicationId !== applicationId) throw new Error("The application response does not match this link. Reload to try again.");
 			// The queue is bounded; only the exact owner-scoped endpoint decides whether this item exists.

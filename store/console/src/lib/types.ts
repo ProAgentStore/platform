@@ -964,3 +964,6 @@ export interface KeyVerifyResponse {
 	error?: string;
 	remedy?: string;
 }
+
+/** Exact application endpoint projects only the item from the Worker lookup. */
+export type ApplicationQueueItemResponse = Pick<Awaited<ReturnType<typeof import("../../../../workers/api/src/lib/applications/control").getQueueItem>>, "item">;

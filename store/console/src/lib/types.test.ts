@@ -9,7 +9,7 @@ import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, Ac
 import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, DiscordChannelListResponse as WorkerDiscordChannelListResponse, DiscordGrantListResponse as WorkerDiscordGrantListResponse, DiscordGrantResponse as WorkerDiscordGrantResponse, DiscordGuildListResponse as WorkerDiscordGuildListResponse, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse, PreparedApplicationTransferReceipt as WorkerPreparedApplicationTransferReceipt } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { AccountCodingDefaultApplyResponse, KeyVerifyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
+import type { AccountCodingDefaultApplyResponse, KeyVerifyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, ApplicationQueueItemResponse, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
 import type { DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuildListResponse } from "./discordTypes";
 import type { GmailScoutScanResponse, LeadVerification, LeadVerificationListResponse } from "./gmailScout";
 import type { RemoteAuthRequestResponse, RemoteAuthRequestView } from "./remoteAuth";
@@ -356,3 +356,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 		}
 	});
 });
+
+// The exact-item endpoint omits the lookup's internal pipeline metadata.
+type WorkerApplicationQueueItemResponse = Pick<Awaited<ReturnType<typeof import("../../../../workers/api/src/lib/applications/control").getQueueItem>>, "item">;
+const _exactApplicationHasNoInventedFields: Extra<ApplicationQueueItemResponse, WorkerApplicationQueueItemResponse> extends never ? true : never = true;
+const _exactApplicationAcceptsTheProducer: ApplicationQueueItemResponse = {} as WorkerApplicationQueueItemResponse;
