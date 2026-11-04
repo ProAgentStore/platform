@@ -68,7 +68,7 @@ describe("application admission retry receipts (#1520)", () => {
 		gate(false);
 		const first = await startApplicationFill(env(), "apply", "owner", readyEvent, "owner", { review: true });
 		const firstId = first.run?.id;
-		expect(firstId).toBeTruthy();
+		if (!firstId) throw new Error("Expected the initial fill run to start");
 		d1.sqlite.prepare("UPDATE local_apply_runs SET status = 'blocked' WHERE id = ?").run(firstId);
 		d1.exec("UPDATE job_applications SET status = 'blocked', block_reason = 'incomplete' WHERE id = 'application'");
 		gate(true);
