@@ -8258,6 +8258,132 @@ paths:
         "200": { $ref: "#/components/responses/OkObject" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-runs/calls:
+    get:
+      summary: Read a browser run's retained native calls
+      description: |
+        Owner-only diagnostics for an exact instance and run. Default refresh collects read-only
+        native evidence into cloud retention; refresh=false reads storage only. Neither mode launches,
+        navigates, approves, resumes or replays an action. Normal run sync also collects evidence,
+        including final sync. Calls already stored survive runner restarts; uncollected calls do not.
+        Follow nextCursor while hasMore is true. The cursor is bound to this owner's instance and run;
+        ordering is durable insertion order, not native seq across recorder epochs. Inspect coverage:
+        an empty page with unavailable/unsupported evidence never proves no action happened.
+      operationId: listBrowserRunCalls
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: subject_kind, in: query, required: true, schema: { type: string, enum: [runtime_task, local_apply_run, local_browser_run] } }
+        - { name: subject_id, in: query, required: true, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque nextCursor from this run's previous page. }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: refresh, in: query, schema: { type: boolean, default: true } }
+      responses:
+        "200":
+          description: Retained calls and coverage, served no-store even if the native source is unavailable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subject, calls, nextCursor, hasMore, coverage]
+                properties:
+                  subject: { type: object, properties: { kind: { type: string }, id: { type: string } } }
+                  nextCursor: { type: string, nullable: true }
+                  hasMore: { type: boolean }
+                  calls:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seq: { type: integer, description: Native sequence; can reset after a recorder restart. }
+                        callId: { type: string }
+                        epoch: { type: string, nullable: true }
+                        subject: { type: object, properties: { kind: { type: string }, id: { type: string } } }
+                        tool: { type: string }
+                        args: { type: object, additionalProperties: true, description: Bounded redacted summaries; typed text and file contents omitted. }
+                        startedAt: { type: string, format: date-time }
+                        retainedAt: { type: string, format: date-time }
+                        durationMs: { type: integer, minimum: 0 }
+                        outcome: { type: string, enum: [ok, tool_error, thrown, refused] }
+                        internal: { type: boolean }
+                        errorHead: { type: string, maxLength: 200 }
+                        urlAfter: { type: string, description: Known navigation argument without query or fragment; not proof of the final loaded URL. }
+                        browserState: { type: object, additionalProperties: true, description: Optional bounded tab and native modal observation at this call. }
+                  coverage:
+                    type: object
+                    properties:
+                      status: { type: string, enum: [not_collected, available, unavailable, unsupported, refused, invalid_response, partial] }
+                      epoch: { type: string, nullable: true }
+                      lastSeq: { type: integer }
+                      dropped: { type: integer }
+                      priorEpochDropped: { type: integer }
+                      invalidRecords: { type: integer }
+                      restartObserved: { type: boolean }
+                      legacyEpochUnknown: { type: boolean }
+                      pageLimitReached: { type: boolean }
+                      refreshedAt: { type: string, format: date-time, nullable: true }
+                      retentionDays: { type: integer, const: 30 }
+                      errorTextMaxChars: { type: integer, const: 200 }
+                      arguments: { type: string }
+                      sequenceMeaning: { type: string }
+                      urlAfterMeaning: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-runs/state:
+    get:
+      summary: Read a browser run's native tab and modal observations
+      description: |
+        Owner-only diagnostics, not a live control surface. Reads never select tabs, inspect page
+        contents, navigate or resume. Default refresh asks the native source for its retained state;
+        an unavailable or older unsupported source does not erase the last saved snapshot. Check
+        availability, freshness, capturedAt and snapshot.current together. Dialog status is a past
+        observation, not proof that a dialog is still open. No dialog text, form values or cookies.
+      operationId: getBrowserRunState
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: subject_kind, in: query, required: true, schema: { type: string, enum: [runtime_task, local_apply_run, local_browser_run] } }
+        - { name: subject_id, in: query, required: true, schema: { type: string } }
+        - { name: refresh, in: query, schema: { type: boolean, default: true } }
+      responses:
+        "200":
+          description: Observation and freshness, served no-store; snapshot can be null.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subject, availability, freshness, capturedAt, snapshot, refreshedAt, notice]
+                properties:
+                  subject: { type: object, properties: { kind: { type: string }, id: { type: string } } }
+                  availability: { type: string, enum: [not_collected, available, unavailable, unsupported, refused, invalid_response, partial] }
+                  freshness: { type: string, enum: [observed_this_read, retained] }
+                  capturedAt: { type: string, format: date-time, nullable: true }
+                  refreshedAt: { type: string, format: date-time, nullable: true }
+                  notice: { type: string }
+                  snapshot:
+                    type: object
+                    nullable: true
+                    properties:
+                      subject: { type: object, properties: { kind: { type: string }, id: { type: string } } }
+                      epoch: { type: string }
+                      capturedAt: { type: string, format: date-time }
+                      current: { type: boolean }
+                      availability: { type: string, enum: [available, unavailable] }
+                      state:
+                        type: object
+                        properties:
+                          nativeActivePageId: { type: string, nullable: true }
+                          mcpSelectedPageId: { type: string, nullable: true }
+                          selection: { type: string, enum: [aligned, different, unknown] }
+                          tabCount: { type: integer }
+                          tabsTruncated: { type: boolean }
+                          tabs: { type: array, maxItems: 20, items: { type: object, properties: { pageId: { type: string, nullable: true }, index: { type: integer, nullable: true }, url: { type: string, nullable: true }, title: { type: string, maxLength: 200 }, nativeActive: { type: boolean }, mcpSelected: { type: boolean } } } }
+                          pendingChooser: { type: object, nullable: true, properties: { pageId: { type: string }, chooserId: { type: string } } }
+                          dialog: { type: object, properties: { status: { type: string, enum: [unknown, observed] }, type: { type: string, enum: [alert, confirm, prompt, beforeunload] }, observedAt: { type: string, format: date-time } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/browser-artifacts:
     get:
       summary: List a browser run's replay screenshots
@@ -8266,16 +8392,21 @@ paths:
         BROWSER_TASK workflow task), `local_browser_run` (a Scout's research run) or `local_apply_run` (an
         Application Runner fill). Metadata only, in capture order — a capture point, a URL without its query
         or fragment, its domain and an action class; never page text, form values or typed values. Fetch a
-        frame's bytes by `id`. 404 when the run is not the caller's on this instance.
+        frame's bytes by `id`. 404 when the run is not the caller's on this instance. Supplying limit
+        or cursor enables pagination with nextCursor and hasMore; omit both for the existing bounded
+        list response. A read never takes a new screenshot. capturedAt can be null for older frames;
+        createdAt is the cloud storage time, not a substitute for a missing capture timestamp.
       operationId: listBrowserArtifacts
       tags: [Instances]
       parameters:
         - { $ref: "#/components/parameters/InstanceId" }
         - { name: subject_kind, in: query, required: true, schema: { type: string, enum: [runtime_task, local_browser_run, local_apply_run] } }
         - { name: subject_id, in: query, required: true, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string }, description: Previous nextCursor (capture sequence) for this run. }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
       responses:
         "200":
-          description: The run's frames (`Cache-Control: no-store`)
+          description: "The run's frames (`Cache-Control: no-store`)"
           content:
             application/json:
               schema:
@@ -8283,6 +8414,8 @@ paths:
                 properties:
                   subjectKind: { type: string }
                   subjectId: { type: string }
+                  nextCursor: { type: string, nullable: true, description: Present when pagination is requested. }
+                  hasMore: { type: boolean, description: Present when pagination is requested. }
                   screenshotsOff: { type: boolean, description: "The run started with the owner's screenshot switch off (#1064) — no frames by design." }
                   artifacts:
                     type: array
@@ -8299,6 +8432,8 @@ paths:
                         url: { type: string, nullable: true }
                         domain: { type: string, nullable: true }
                         action: { type: string, nullable: true }
+                        target: { type: string, nullable: true, maxLength: 160 }
+                        capturedAt: { type: string, format: date-time, nullable: true }
                         createdAt: { type: string, format: date-time }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -8309,17 +8444,23 @@ paths:
       description: |
         #1063. The image bytes, served `no-store` and only to the run's owner: the instance, the artifact
         row and the run it belongs to are all checked, so another owner's frame is a 404. Application
-        Runner frames follow the owner's frozen form-field blurring choice (default on).
+        Runner frames follow the owner's frozen form-field blurring choice (default on). metadata=true
+        returns the artifact metadata instead of image bytes, with the same ownership checks and no
+        storage key. The image may be unavailable even when retained metadata exists.
       operationId: getBrowserArtifact
       tags: [Instances]
       parameters:
         - { $ref: "#/components/parameters/InstanceId" }
         - { name: artifactId, in: path, required: true, schema: { type: string } }
+        - { name: metadata, in: query, schema: { type: boolean, default: false } }
       responses:
         "200":
           description: The screenshot
           content:
             image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            application/json: { schema: { type: object, additionalProperties: true, description: Artifact metadata only when metadata=true; never a storage key. } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/browser-takeovers:

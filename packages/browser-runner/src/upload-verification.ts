@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { basename, extname } from "node:path";
 import type { FileChooser, Page } from "playwright";
 
@@ -19,6 +20,7 @@ export function acceptsUpload(path: string, accept: string): boolean {
 
 export interface PreparedUpload {
 	error?: string;
+	chooserId?: string;
 	/** Selection is a browser fact, never proof of acceptance by the receiving website. */
 	verify?(): Promise<{ error?: string }>;
 }
@@ -26,16 +28,24 @@ export interface PreparedUpload {
 /** Bind validation to the exact native chooser, including hidden inputs and iframe inputs. */
 export class UploadVerifier {
 	private readonly pending = new WeakMap<Page, FileChooser>();
+	private readonly identities = new WeakMap<FileChooser, string>();
 	private readonly listeners = new Map<Page, { chooser: (chooser: FileChooser) => void; close: () => void }>();
 
 	track(page: Page): void {
 		if (this.listeners.has(page)) return;
-		const chooser = (value: FileChooser) => this.pending.set(page, value);
+		const chooser = (value: FileChooser) => { this.identities.set(value, randomUUID()); this.pending.set(page, value); };
 		const close = () => { page.off("filechooser", chooser); this.listeners.delete(page); this.pending.delete(page); };
 		this.listeners.set(page, { chooser, close });
 		page.on("filechooser", chooser);
 		page.once("close", close);
 	}
+
+	/** Opaque identity from a real native event, scoped to this exact live page. */
+	pendingId(page: Page | undefined): string | null {
+		const chooser = page && !page.isClosed() ? this.pending.get(page) : undefined;
+		return chooser ? this.identities.get(chooser) ?? null : null;
+	}
+	chooserId(chooser: FileChooser): string | null { return this.identities.get(chooser) ?? null; }
 
 	clear(page: Page): void { this.pending.delete(page); }
 	stop(): void {
@@ -63,8 +73,8 @@ export class UploadVerifier {
 				return { connected: el.isConnected, files: Array.from(el.files ?? [], (file) => file.name), invalid: el.getAttribute("aria-invalid") === "true" || !!el.validity?.customError, alerts };
 			});
 			const before = await inspect();
-			return { verify: async () => {
-				this.clear(page);
+			return { chooserId: this.chooserId(chooser) ?? undefined, verify: async () => {
+				if (this.pending.get(page) === chooser) this.clear(page);
 				try {
 					const after = await inspect();
 					if (after.invalid || after.alerts.some((alert) => !before.alerts.includes(alert))) return { error: "The upload field reported a validation error after file selection. Inspect the field's feedback before proceeding; website acceptance is unconfirmed." };

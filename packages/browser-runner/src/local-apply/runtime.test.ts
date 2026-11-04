@@ -603,6 +603,31 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		expect((await call(rt, "supervisor_checkpoint", { checkpointId: "after-profile", phase: "initial" })).content[0].text).toMatch(/directive is continue/);
 		expect(rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "after-profile", directive: "continue" }).state).toBe("running");
 		expect(() => rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "after-profile", directive: "stop" })).toThrow(/different directive/);
+		await call(rt, "browser_snapshot");
+		expect((await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
+		rt.cancel({ runId: "run-1" });
+	});
+
+	it.each(["request_review", "stop"] as const)("consumes an early %s exactly once and refuses queued browser actions", async (directive) => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		const command = { runId: "run-1", schemaVersion: 1, checkpointId: "early-terminal", directive };
+		expect(rt.directive(command).state).toBe("running");
+		expect(rt.directive(command).state).toBe("running");
+		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: command.checkpointId, phase: "uncertain" });
+		const queuedAction = call(rt, "browser_navigate", { url: "https://jobs.example.com/next" });
+		expect((await checkpoint).isError).toBe(true);
+		expect((await queuedAction).isError).toBe(true);
+		const status = rt.status({ runId: "run-1" });
+		expect(status).toMatchObject({ state: "ended", result: { outcome: "blocked", blockReason: "incomplete", filled: 0, uploaded: [], submitAttempted: false } });
+		expect(nativeCancelled?.()).toBe(true);
+		expect(status.events.filter((event) => event.type === "supervisor.directive")).toHaveLength(1);
+		expect(status.events.some((event) => event.type === "browser.navigated")).toBe(false);
+		expect(rt.directive(command).result).toEqual(status.result);
+		expect(() => rt.directive({ ...command, directive: "continue" })).toThrow(/different directive/);
+		expect(() => rt.directive({ ...command, checkpointId: "unknown" })).toThrow(/ended/);
+		await expect(call(rt, "browser_snapshot")).rejects.toThrow(/not active/);
 	});
 
 	it.each(["request_review", "stop"] as const)("terminally resolves a persisted %s directive without trusting the CLI", async (directive) => {
@@ -612,7 +637,59 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: "final-check", phase: "uncertain" });
 		await settle();
 		const status = rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "final-check", directive });
-		expect(status).toMatchObject({ state: "ended", result: directive === "request_review" ? { outcome: "awaiting_review" } : { outcome: "blocked", blockReason: "incomplete" } });
+		expect(status).toMatchObject({ state: "ended", result: { outcome: "blocked", blockReason: "incomplete", filled: 0, uploaded: [], submitAttempted: false } });
+		if (directive === "request_review") {
+			expect(status.result?.summary).toMatch(/uncertain checkpoint.*no fields were filled.*no files were selected/);
+			expect(runtime().status({ runId: "run-1" }).result).toEqual(status.result);
+		}
+		expect((await checkpoint).isError).toBe(true);
+	});
+
+	it("does not turn an unreadable uncertain checkpoint into a populated review", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		const probe = vi.spyOn(browser, "callTool").mockResolvedValueOnce({ isError: true, content: [{ text: "Tool is not allowed while a file chooser is open." }] });
+		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: "unreadable-review", phase: "uncertain" });
+		await settle();
+		probe.mockRestore();
+		expect(rt.status({ runId: "run-1" }).pause?.checkpoint?.facts.url).toBeUndefined();
+		const status = rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "unreadable-review", directive: "request_review" });
+		expect(status.result).toMatchObject({ outcome: "blocked", blockReason: "incomplete", filled: 0, uploaded: [], submitAttempted: false });
+		expect(status.result?.summary).toMatch(/uncertain checkpoint.*no fields were filled.*no files were selected/);
+		expect(status.events.some((event) => event.type === "review.ready")).toBe(false);
+		expect((await checkpoint).isError).toBe(true);
+	});
+
+	it.each([["field", "before"], ["field", "after"], ["upload", "before"], ["upload", "after"]])("retains a valid supervisor review after an observed %s when the directive arrives %s the checkpoint", async (progress, delivery) => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		await call(rt, "browser_snapshot");
+		await approve(rt);
+		const filled = progress === "field";
+		expect((await call(rt, filled ? "browser_type" : "upload_artifact", filled ? { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" } : { kind: "resume" })).isError).toBeFalsy();
+		const command = { runId: "run-1", schemaVersion: 1, checkpointId: "review-progress", directive: "request_review" };
+		if (delivery === "before") rt.directive(command);
+		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: "review-progress", phase: "before_submit" });
+		await settle();
+		const status = rt.directive(command);
+		expect(status.result).toMatchObject({ outcome: "awaiting_review", filled: filled ? 1 : 0, uploaded: filled ? [] : ["resume"], submitAttempted: false });
+		expect((await checkpoint).isError).toBe(true);
+	});
+
+	it("retains the known blocker when the supervisor requests review without progress", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		await approve(rt);
+		writeFileSync(join(home, "jobs/applications/lead-1/t-run/resume.md"), `${RESUME}edited\n`);
+		expect((await call(rt, "upload_artifact", { kind: "resume" })).isError).toBe(true);
+		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: "blocked-review", phase: "uncertain" });
+		await settle();
+		const status = rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "blocked-review", directive: "request_review" });
+		expect(status.result).toMatchObject({ outcome: "blocked", blockReason: "artifact_changed", filled: 0, uploaded: [], submitAttempted: false });
+		expect(status.result?.questions?.[0]).toMatch(/changed|hash/i);
 		expect((await checkpoint).isError).toBe(true);
 	});
 
@@ -1053,4 +1130,14 @@ it.each(["allowlist", "ask_once"] as const)("preflight %s refuses before opening
  const rt = runtime({ browserFor });
  expect(await rt.preflight({ jobUrl: "https://employer.test/posting" }, { mode, domains: [] })).toMatchObject({ state: "unverifiable", reason: "access_blocked", websiteAccess: { decision: mode === "ask_once" ? "ask" : "deny", hostname: "employer.test", actionDispatched: false } });
  expect(browserFor).not.toHaveBeenCalled();
+});
+
+it("browser observability refuses a different agent instance without reading or selecting its page", async () => {
+ const rt = runtime();
+ try {
+  rt.start(envelope()); await settle();
+  expect(() => rt.browserCalls("run-1", 0, "another-instance")).toThrow(/another agent/);
+  expect(() => rt.browserState("run-1", "another-instance")).toThrow(/another agent/);
+  expect(rt.browserState("run-1", "runner-1")).toMatchObject({ availability: "unavailable", current: false });
+ } finally { rt.closeAll(); }
 });

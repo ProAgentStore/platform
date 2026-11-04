@@ -643,3 +643,13 @@ it.each(["allow", "deny"] as const)("research website %s requires the current op
   expect(rt.status({ runId: "run-1" }).websitePause).toBeUndefined();
  } finally { rt.closeAll(); }
 });
+
+it("browser observability is bound to the research run's owning instance", async () => {
+ const rt = runtime();
+ try {
+  rt.start(envelope()); await settle();
+  expect(() => rt.browserCalls("run-1", 0, "another-instance")).toThrow(/another agent/);
+  expect(() => rt.browserState("run-1", "another-instance")).toThrow(/another agent/);
+  expect(rt.browserState("run-1", "inst-1")).toMatchObject({ availability: "unavailable", current: false });
+ } finally { rt.closeAll(); }
+});

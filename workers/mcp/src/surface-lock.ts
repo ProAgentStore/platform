@@ -1267,4 +1267,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.198": "sha256:ea5fe2cb8005ebddcf17b7ef232364369402a30e90b63fb97dc8685d9f559d35", // #1431: browser engine/profile settings, actual session evidence, creator capability fields.
 	"0.1.199": "sha256:43dcde8193b4554d38ada05159ee106ec729b5262e05a4c7a63d2b2273f038f6", // #1433: screenshot capture and form blur become independently patchable.
 	"0.1.200": "sha256:9e9f61e4dd3f004146ae2435753d8cf7adfe89ab2e76ddafca12204e84c0c486", // #1480/#1478: per-agent website modes, remembered owner questions, and bounded per-run domain grants.
+	"0.1.201": "sha256:4e2daeb34459d66a8c4842e2ebc1722385b69985eed85fd95d68bfb97c385c8f", // #1487: owner-scoped browser calls, retained/current tab state, paged screenshots and image retrieval.
 };

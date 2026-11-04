@@ -1067,3 +1067,33 @@ describe("#1409: refusals and internal probes reach the call recorder", () => {
 		expect(internalCalls.some((c) => c.name === "browser_evaluate" && !c.args.target)).toBe(true);
 	});
 });
+
+
+it("an Upload-labelled button without a newly observed native chooser still invalidates its checkpoint", async () => {
+ const b = fakeBrowser(); const h = fakeHost();
+ b.tools.uploadContext = () => null;
+ const bridge = new ApplyBridge(b.tools, h.host);
+ await bridge.callTool("browser_navigate", { url: FORM });
+ await bridge.callTool("browser_snapshot");
+ await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial", phase: "initial" });
+ expect((await bridge.callTool("browser_click", { target: "e7" })).isError).not.toBe(true);
+ const upload = await bridge.callTool("upload_artifact", { kind: "resume" });
+ expect(upload.isError).toBe(true);
+ expect(upload.content[0].text).toContain("supervisor_checkpoint");
+ expect(b.sent("browser_file_upload")).toHaveLength(0);
+});
+
+it("a chooser on a different page cannot inherit the previous page's checkpoint", async () => {
+ const b = fakeBrowser(); const h = fakeHost();
+ const original = {}; const popup = {}; let observations = 0;
+ b.tools.uploadContext = () => ++observations === 1 ? { page: original, chooserId: null } : { page: popup, chooserId: "native-popup-chooser" };
+ const bridge = new ApplyBridge(b.tools, h.host);
+ await bridge.callTool("browser_navigate", { url: FORM });
+ await bridge.callTool("browser_snapshot");
+ await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial", phase: "initial" });
+ await bridge.callTool("browser_click", { target: "e7" });
+ const upload = await bridge.callTool("upload_artifact", { kind: "resume" });
+ expect(upload.isError).toBe(true);
+ expect(upload.content[0].text).toContain("supervisor_checkpoint");
+ expect(b.sent("browser_file_upload")).toHaveLength(0);
+});

@@ -82,6 +82,7 @@ import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
 import { registerCoderBrainRoutes } from "./instances-coder-brain.js";
 import { registerInstanceDescriptionRoutes } from "./instances-description.js";
 import { instanceRoutes } from "./instances.js";
+import { registerBrowserEvidenceRoutes } from "./instances-browser-evidence.js";
 
 const SECRET = "instances-contract-secret";
 
@@ -317,6 +318,8 @@ const ROUTES = [
 	"POST /:instanceId/browser-takeovers",
 	"GET /:instanceId/browser-takeovers/:takeoverId",
 	"PATCH /:instanceId/browser-takeovers/:takeoverId",
+	"GET /:instanceId/browser-runs/calls",
+	"GET /:instanceId/browser-runs/state",
 	"GET /:instanceId/browser-artifacts",
 	"GET /:instanceId/browser-artifacts/:artifactId",
 	"GET /:instanceId/gmail-scout/config",
@@ -494,6 +497,7 @@ function routesOf(register: (app: Hono<{ Bindings: Env }>) => void): string[] {
 }
 
 const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
+	"instances-browser-evidence.ts": registerBrowserEvidenceRoutes,
 	"instances-website-access.ts": registerWebsiteAccessRoutes,
 	"instances-browser-settings.ts": registerBrowserSettingsRoutes,
 	"instances-browser-mode.ts": registerBrowserModeRoutes,
@@ -524,6 +528,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 
 /** module → the routes it owns. `instances.ts` is the remainder, computed not listed. */
 const OWNERSHIP: Record<string, string[]> = {
+	"instances-browser-evidence.ts": ["GET /:instanceId/browser-runs/calls", "GET /:instanceId/browser-runs/state"],
 	"instances-apply.ts": [
 		"PUT /:instanceId/apply-resume",
 		"POST /:instanceId/apply-resume/parse",
@@ -898,6 +903,8 @@ const GATES: Record<string, [number, number]> = {
 	"PUT /:instanceId/browser-verification": [401, 404],
 	"GET /:instanceId/browser-verification/runtimes": [401, 404],
 	"GET /:instanceId/browser-takeovers": [401, 404],
+	"GET /:instanceId/browser-runs/calls": [401, 404],
+	"GET /:instanceId/browser-runs/state": [401, 404],
 	"GET /:instanceId/browser-artifacts": [401, 404],
 	"GET /:instanceId/browser-artifacts/:artifactId": [401, 404],
 	"POST /:instanceId/browser-takeovers": [401, 404],

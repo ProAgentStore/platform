@@ -121,3 +121,8 @@ describe("the relay socket refuses before forwarding (#1164)", () => {
 		handle.close();
 	});
 });
+
+it.each(["browser", "local_apply", "local_browser"])("%s can read scoped browser diagnostics without gaining coding routes", (runtime) => {
+ for (const path of ["/browser-calls", "/browser-state"]) expect(routeRefusal({ runtime }, path)).toBeNull();
+ expect(routeRefusal({ runtime }, "/coding/start")).toBeTruthy();
+});

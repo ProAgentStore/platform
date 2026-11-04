@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpRuntime } from "./mcp-runtime.js";
 import { acceptsUpload, UploadVerifier } from "./upload-verification.js";
 
@@ -100,5 +100,49 @@ describe("actual Playwright MCP upload selection and site validation (#1473)", (
 		const repeated = await upload();
 		expect(repeated.isError).toBe(true);
 		expect(mcp.textOf(repeated)).toContain("No verified file chooser");
+	});
+
+	it.each(["stop", "task_binding", "chooser", "domain"] as const)("refuses an upload when %s changes during awaited validation (#1490)", async (change) => {
+		await page.route("https://fixture.test/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>Fixture</title>" }));
+		await page.goto("https://fixture.test/");
+		await choose('<input id="resume" type="file" accept=".txt"><input id="other" type="file" accept=".txt">');
+		let stopped = false, authorized = true, allowed = true;
+		mcp.setCallPolicy({ isCancelled: () => stopped, websiteAccess: () => ({ mode: allowed ? "allow_all" : "allowlist", domains: [] }) });
+		const expectedUploadId = mcp.pendingUploadId()!;
+		const prepare = UploadVerifier.prototype.prepare;
+		const mutation = vi.spyOn(UploadVerifier.prototype, "prepare").mockImplementationOnce(async function (...args) {
+			const prepared = await prepare.apply(this, args);
+			if (change === "stop") stopped = true;
+			if (change === "task_binding") authorized = false;
+			if (change === "domain") allowed = false;
+			if (change === "chooser") {
+				const changed = page.waitForEvent("filechooser");
+				await page.locator("#other").click();
+				await changed;
+			}
+			return prepared;
+		});
+		try {
+			const result = await mcp.callTool("browser_file_upload", { paths: [path] }, { expectedUploadId, isUploadAuthorized: () => authorized });
+			expect(result.isError).toBe(true);
+			expect(await page.locator('input[type="file"]').evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).files?.length))).toEqual([0, 0]);
+		} finally { mutation.mockRestore(); }
+	});
+
+	it("verification of one upload preserves a newer native chooser", async () => {
+		const verifier = new UploadVerifier();
+		verifier.track(page);
+		try {
+			const original = await choose('<input id="resume" type="file"><input id="other" type="file">');
+			const prepared = await verifier.prepare(page, [path]);
+			await original.setFiles(path);
+			const changed = page.waitForEvent("filechooser");
+			await page.locator("#other").click();
+			await changed;
+			const newer = verifier.pendingId(page);
+			expect(newer).not.toBe(prepared.chooserId);
+			await prepared.verify?.();
+			expect(verifier.pendingId(page)).toBe(newer);
+		} finally { verifier.stop(); }
 	});
 });

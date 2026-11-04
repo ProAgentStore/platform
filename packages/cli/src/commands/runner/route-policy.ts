@@ -38,14 +38,14 @@ const ALWAYS = ["/health", "/capabilities", "/events"];
 const READ_ALWAYS = ["/tasks"];
 
 /** A browser agent's task run: tasks, the browser, takeovers. */
-const BROWSER = ["/tasks", "/browser/", "/takeover", "/sessions"];
+const BROWSER = ["/browser-calls", "/browser-state", "/tasks", "/browser/", "/takeover", "/sessions"];
 
 const BY_RUNTIME: Record<string, readonly string[]> = {
 	// The coding engine, the website runtime builder's task, and the engine's own SIGN-IN: the cloud relays the
 	// login page through `/browser/act` + `/browser/handoff` and its card through `/takeover` (coding-sessions-open.ts).
 	coding: ["/coding/", "/tasks", "/browser/act", "/browser/handoff", "/takeover"],
 	browser: BROWSER,
-	local_browser: ["/local-browser/", "/browser/session"],
+	local_browser: ["/local-browser/", "/browser/session", "/browser-calls", "/browser-state"],
 	local_artifact: ["/local-artifact/"],
 	local_apply: ["/local-apply/", ...BROWSER],
 	local_native: ["/native/"],
@@ -76,7 +76,7 @@ export function allowedPrefixes(caps: DeclaredCapabilities | null | undefined): 
 	if (caps.runtime && BY_RUNTIME[caps.runtime]) out.push(...BY_RUNTIME[caps.runtime]);
 	const tools = caps.tools ?? [];
 	if (hasTerminal(caps)) out.push(...TERMINAL);
-	if (tools.some((t) => t.startsWith("browser_"))) out.push("/browser/");
+	if (tools.some((t) => t.startsWith("browser_"))) out.push("/browser/", "/browser-calls", "/browser-state");
 	if (tools.some((t) => t.startsWith("repo_"))) out.push(...REPO_READS);
 	return out;
 }

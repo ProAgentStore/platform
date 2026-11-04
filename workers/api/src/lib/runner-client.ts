@@ -1,3 +1,4 @@
+import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "./browser-evidence.js";
 import { type BrowserScreenshotsSetting, withBrowserCaptureSettings } from "./browser-screenshots.js";
 import { browserSettingsForDispatch } from "./browser-settings-dispatch.js";
 import { decryptKey } from "./crypto.js";
@@ -351,7 +352,21 @@ function routeTimeoutMs(path: string): number | undefined {
 /** Send a command to the runner via the WebSocket relay DO. `opts.timeoutMs` caps how long
  *  the relay waits for the runner's reply (defaults to the DO's 120s); pass READ_TIMEOUT_MS
  *  for reads so a hung runner can't wedge the UI. */
+/** Preserve workflow evidence without allowing a failed diagnostic pull to replay an action. */
 export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown, opts?: { timeoutMs?: number; frozenScreenshotPolicy?: BrowserScreenshotsSetting }): Promise<T> {
+ try { return await callRunnerUnrecorded<T>(conn, path, body, opts); }
+ finally {
+  const taskId = body && typeof body === "object" && "taskId" in body && typeof body.taskId === "string" ? body.taskId : null;
+  if (taskId && ["/browser/act", "/browser/snapshot", "/browser/complete"].includes(path)) {
+   await refreshBrowserEvidence(conn.env, { userId: conn.userId, instanceId: conn.instanceId, subjectKind: "runtime_task", subjectId: taskId }, async (diagnosticPath, diagnosticBody) => {
+    const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.relayName || conn.instanceId));
+    return stub.fetch(new Request("https://relay/command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: "POST", path: diagnosticPath, body: diagnosticBody, timeoutMs: BROWSER_EVIDENCE_TIMEOUT_MS }) }));
+   }).catch(() => undefined);
+  }
+ }
+}
+
+async function callRunnerUnrecorded<T = unknown>(conn: RunnerConn, path: string, body?: unknown, opts?: { timeoutMs?: number; frozenScreenshotPolicy?: BrowserScreenshotsSetting }): Promise<T> {
 	if (!conn.env.RELAY) throw new Error("RELAY binding not configured");
 	body = opts?.frozenScreenshotPolicy
 		? { ...(body as Record<string, unknown>), screenshot: opts.frozenScreenshotPolicy.enabled, blurFormFields: opts.frozenScreenshotPolicy.blurFormFields }

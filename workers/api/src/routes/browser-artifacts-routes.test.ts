@@ -15,6 +15,7 @@ vi.mock("../lib/auth.js", async () => {
 	const actual = await vi.importActual<typeof import("../lib/auth.js")>("../lib/auth.js");
 	return { ...actual, requireUser: async () => ({ uid: who.uid, roles: [] }) };
 });
+import { registerBrowserEvidenceRoutes } from "./instances-browser-evidence.js";
 const { registerBrowserArtifactRoutes } = await import("./instances-browser-artifacts.js");
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 9]);
@@ -26,6 +27,7 @@ async function call(path: string, uid = "u1") {
 	who.uid = uid;
 	const router = new Hono<{ Bindings: Env }>();
 	registerBrowserArtifactRoutes(router);
+	registerBrowserEvidenceRoutes(router, async () => async () => new Response(null, { status: 403 }));
 	const app = new Hono<{ Bindings: Env }>().route("/v1/instances", router);
 	app.onError((e, c) => (e instanceof HttpError ? c.json({ error: e.message }, e.status as 400) : c.json({ error: String(e) }, 500)));
 	return app.request(`/v1/instances${path}`, {}, env());
@@ -97,4 +99,21 @@ describe("anyone else gets a 404 — never another owner's pixels", () => {
 		expect((await call("/i1/browser-artifacts?subject_kind=desktop&subject_id=run-1")).status).toBe(400);
 		expect((await call("/i1/browser-artifacts?subject_kind=local_browser_run")).status).toBe(400);
 	});
+});
+
+it("returns paginated screenshots and authenticated metadata without storage keys",async()=>{
+ await putBrowserArtifact(env(),{userId:"u1",instanceId:"i1",subjectKind:"local_browser_run",subjectId:"run-1",seq:2,bytes:JPEG,metadata:{point:"clicked",action:"browser_click",target:"Apply"}});
+ const first=await (await call(`${LIST}&limit=1`)).json() as {artifacts:Array<{id:string}>,nextCursor:string,hasMore:boolean};
+ expect(first).toMatchObject({hasMore:true,nextCursor:"1"});
+ const second=await (await call(`${LIST}&limit=1&cursor=${first.nextCursor}`)).json();
+ expect(second).toMatchObject({hasMore:false,artifacts:[{seq:2,target:"Apply"}]});
+ const metadata=await call(`/i1/browser-artifacts/${artifactId}?metadata=true`);expect(await metadata.json()).toMatchObject({id:artifactId});
+ expect((await call(`/i1/browser-artifacts/${artifactId}?metadata=true`,"u2")).status).toBe(404);
+});
+it("checks owner and original subject before read-only diagnostics refresh",async()=>{
+ const path="/i1/browser-runs/calls?subject_kind=local_browser_run&subject_id=run-1";
+ const response=await call(path);expect(response.status).toBe(200);expect(await response.json()).toMatchObject({calls:[],coverage:{status:"refused"}});
+ expect((await call(path,"u2")).status).toBe(404);
+ expect((await call(path.replace("run-1","run-x"))).status).toBe(404);
+ expect((await call(path.replace("/i1/","/i1b/"))).status).toBe(404);
 });

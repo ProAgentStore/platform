@@ -165,16 +165,18 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(res.feedback ?? "").toContain("+61404453580");
 	}, 120_000);
 
-	it("upload falls back to setInputFiles when the target isn't the chooser trigger (Ashby drop-zone)", async () => {
+	it("upload refuses an unbound drop-zone instead of guessing a hidden file input (#1490)", async () => {
 		// Ashby: the labeled 'Resume' control is a drop-zone/button that does NOT open a
 		// native file chooser on click, so the standard two-step (click → browser_file_upload)
-		// gets 'no modal state'. The runner must fall back to setting the hidden file input.
+		// gets 'no modal state'. That does not identify which hidden input the owner intended.
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
-		await runner.browsers.current.activePage!.setContent("<button aria-label='Resume'>Upload</button><input type=file style='position:absolute;left:-9999px' onchange=\"document.title='FILE:'+this.files[0].name\">");
+		await runner.browsers.current.activePage!.setContent("<button aria-label='Resume'>Upload</button><button aria-label='Choose Resume' onclick=\"document.querySelector('input').click()\">Browse</button><input type=file style='position:absolute;left:-9999px' onchange=\"document.title='FILE:'+this.files[0].name\">");
 		const snap = await runner.browserSnapshot();
-		// Target the BUTTON (which never opens a chooser) — the fallback must still attach.
-		await runner.browserAct({ action: "upload", ref: ref(snap.snapshot, "button", "Resume"), name: "Resume" }, resume());
-		// The input's onchange set the title to FILE:<name> → the file really attached.
+		await expect(runner.browserAct({ action: "upload", ref: ref(snap.snapshot, "button", "Resume"), name: "Resume" }, resume())).rejects.toThrow(/verified file chooser/i);
+		expect(await runner.browsers.current.activePage!.locator('input[type="file"]').evaluate((input) => (input as HTMLInputElement).files?.length)).toBe(0);
+		expect((await runner.browserSnapshot()).title).not.toContain("FILE:");
+		const fresh = await runner.browserSnapshot();
+		await runner.browserAct({ action: "upload", ref: ref(fresh.snapshot, "button", "Choose Resume"), name: "Choose Resume" }, resume());
 		expect((await runner.browserSnapshot()).title).toContain("FILE:");
 	}, 120_000);
 

@@ -12,7 +12,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    unless the user explicitly overrides this.
 
 2. **Discover the surface before using it.** The tool list is versioned and
-   *per-connection*: of the 418 tool registrations, 29 are gated to the console surfaces
+   *per-connection*: of the 422 tool registrations, 29 are gated to the console surfaces
    of the agents the connected user actually subscribes to (`apply`, `repo`, `coding`). A
    tool you used last week may be absent today, and a tool present for one user is absent
    for another. Call `tools/list` first; never assume a name exists.
@@ -36,8 +36,9 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    guessed aliases.
 
 4. **Detect failure structurally, not by reading prose — but know the shape.** This
-   server does **not** set `isError` on results. Every tool returns a single text content
-   block. A failure looks like one of two things:
+   server does **not** set `isError` on results. Every tool returns text content.
+   `browser_run_screenshot` also returns an MCP image block with the retained pixels.
+   A failure looks like one of two things:
    - text beginning `Error: ` — auth required, denied scope, missing confirmation, or an
      upstream error message;
    - JSON text with an `error` key — the HTTP layer converts any non-2xx into
@@ -45,7 +46,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
 
    Check for both. Treat anything else as success.
 
-   Two tools are the exception to "a single text block", and their shape is a contract a
+   Two tools additionally return structured objects, and their shape is a contract a
    client may build against: `list_agents` returns `{"agents": [...]}` and `my_instances`
    returns `{"instances": [...]}` — **objects, not bare arrays**. Both declare an
    `outputSchema` and answer with `structuredContent` on every path, including refusals

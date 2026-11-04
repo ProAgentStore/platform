@@ -55,6 +55,8 @@ export interface RunnerSession {
 }
 
 export interface RunnerTask {
+	/** Trusted relay instance binding; absent on pre-210 tasks. */
+	instanceId?: string;
 	id: string;
 	type: string;
 	status: TaskStatus;

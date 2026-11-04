@@ -1,3 +1,4 @@
+import type { BrowserStateObservation, BrowserStateSnapshot } from "./browser-state-contract.js";
 /**
  * One recorder at the runner's Playwright chokepoint (#1409) — every browser call the agent makes,
  * on every path, lands in one ordered, redacted, in-memory stream the cloud can pull.
@@ -74,9 +75,13 @@ export interface BrowserCallRecord {
 	/** Origin + path, when cheaply known from the call's own arguments — never a live page read. */
 	urlAfter?: string;
 	internal: boolean;
+	browserState?: BrowserStateSnapshot;
 }
 
 export interface BrowserCallsPage {
+	epoch?: string;
+	latestSeq?: number;
+	hasMore?: boolean;
 	calls: BrowserCallRecord[];
 	lastSeq: number;
 	dropped: number;
@@ -92,6 +97,7 @@ interface CallStream {
 	seq: number;
 	dropped: number;
 	records: BrowserCallRecord[];
+	state?: BrowserStateObservation;
 }
 
 /** A page URL reduced to origin + path — no query, no fragment, no credentials. Empty-safe: never throws. */
@@ -134,7 +140,13 @@ export function summarizeCallArgs(args: Record<string, unknown>, secrets: Readon
 	if (str(args.ref, 100) !== undefined) out.ref = str(args.ref, 100);
 	if (str(args.target, 100) !== undefined) out.target = str(args.target, 100);
 	if (typeof args.text === "string") out.textLength = args.text.length;
-	if (typeof args.url === "string") { const u = originPath(args.url); if (u) out.url = u; }
+	if (typeof args.url === "string") {
+		let url = originPath(args.url);
+		if (url) {
+			for (const secret of Object.values(secrets)) if (secret) for (const value of new Set([secret, encodeURIComponent(secret)])) url = url.split(value).join("[REDACTED]");
+			out.url = url;
+		}
+	}
 	if (str(args.key, 40) !== undefined) out.key = str(args.key, 40);
 	if (typeof args.time === "number") out.time = args.time;
 	if (typeof args.accept === "boolean") out.accept = args.accept;
@@ -158,6 +170,7 @@ export interface RecordInput {
 	outcome: BrowserCallOutcome;
 	errorHead?: string;
 	internal: boolean;
+	browserState?: BrowserStateSnapshot;
 }
 
 /** Tool errors may echo supplied text; apply the same value policy before keeping an error. */
@@ -172,6 +185,7 @@ function redactCallError(error: string, args: Record<string, unknown>, secrets: 
 }
 
 export class BrowserCallRecorder {
+	readonly epoch = crypto.randomUUID();
 	private readonly streams = new Map<string, CallStream>();
 
 	constructor(private readonly cap: number = BROWSER_CALL_CAP) {}
@@ -212,6 +226,7 @@ export class BrowserCallRecorder {
 				...(input.errorHead ? { errorHead: redactCallError(input.errorHead, input.args, input.secrets).slice(0, 200) } : {}),
 				...(typeof args.url === "string" ? { urlAfter: args.url } : {}),
 				internal: input.internal,
+				...(input.browserState ? { browserState: structuredClone(input.browserState) } : {}),
 			};
 			stream.records.push(record);
 		} catch {
@@ -220,9 +235,25 @@ export class BrowserCallRecorder {
 	}
 
 	/** The calls after `afterSeq` for one subject, paged, with the subject's own cumulative drop count. */
-	page(subject: BrowserCallSubject | null, afterSeq: number): BrowserCallsPage {
+	page(subject: BrowserCallSubject | null, afterSeq: number, limit = 100): BrowserCallsPage {
 		const stream = this.streamFor(subject);
-		const calls = stream.records.filter((r) => r.seq > afterSeq);
-		return { calls, lastSeq: Math.max(stream.seq, afterSeq), dropped: stream.dropped };
+		const pending = stream.records.filter((r) => r.seq > afterSeq);
+		const calls: BrowserCallRecord[] = [];
+		const max = Math.max(1, Math.min(100, Math.floor(limit) || 100));
+		let bytes = 0;
+		for (const record of pending) {
+			const size = new TextEncoder().encode(JSON.stringify(record)).byteLength;
+			if (calls.length && (calls.length >= max || bytes + size > 256 * 1024)) break;
+			calls.push(record); bytes += size;
+		}
+		const hasMore = calls.length < pending.length;
+		return { calls, epoch: this.epoch, latestSeq: stream.seq, hasMore, lastSeq: hasMore ? calls.at(-1)!.seq : stream.seq, dropped: stream.dropped };
+	}
+	rememberState(subject: BrowserCallSubject, state: BrowserStateSnapshot): void {
+		this.streamFor(subject).state = { subject: { ...subject }, epoch: this.epoch, capturedAt: new Date().toISOString(), current: false, availability: "available", state: structuredClone(state) };
+	}
+	state(subject: BrowserCallSubject, current = false): BrowserStateObservation {
+		const saved = this.streamFor(subject).state;
+		return saved ? { ...structuredClone(saved), current } : { subject: { ...subject }, epoch: this.epoch, capturedAt: new Date().toISOString(), current: false, availability: "unavailable" };
 	}
 }

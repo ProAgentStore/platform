@@ -1,3 +1,4 @@
+import type { BrowserStateObservation } from "./browser-state-contract.js";
 import { parseBrowserWebsiteAccess, refreshWebsiteAccess, websiteAccessBlock, websiteResumePolicy, type BrowserWebsiteAccess, type WebsiteAccessBlock } from "./browser-website-access.js";
 import { CrashLog, crashReport, describeError, runtimeCrashIdentity } from "./crash-reports.js";
 import { existsSync, mkdirSync } from "node:fs";
@@ -189,6 +190,7 @@ export class LocalRunner {
 			const task: RunnerTask = {
 				id: `task_${crypto.randomUUID()}`,
 				type: normalized.type,
+			...(this.browsers.current.instanceId ? { instanceId: this.browsers.current.instanceId } : {}),
 				status: "running",
 				input: normalized.input,
 				...card,
@@ -219,6 +221,7 @@ export class LocalRunner {
 		const task: RunnerTask = {
 			id: `task_${crypto.randomUUID()}`,
 			type: normalized.type,
+			...(this.browsers.current.instanceId ? { instanceId: this.browsers.current.instanceId } : {}),
 			status: requiresApproval ? "needs_approval" : "queued",
 			input: normalized.input,
 			...card,
@@ -537,21 +540,31 @@ export class LocalRunner {
 	// render the real <input type=file> hidden behind a button/drop-zone). Playwright's
 	// filechooser event fires BEFORE the native OS dialog, so the file attaches without
 	// a blocking dialog, regardless of the upload DOM. Idempotent per page.
-	private armFileAutoAttach(page: Page): void {
+	private async armFileAutoAttach(page: Page): Promise<void> {
 		if (this.fileAttachArmed.has(page)) return;
+		const mcp = await this.getMcp();
+		mcp.trackUploadPage(page);
 		this.fileAttachArmed.add(page);
 		const browserState = this.browsers.current;
 		page.on("filechooser", (chooser) => {
 			// Read the current run's attachment at event time. A reused tab must never
 			// retain a previous application's résumé in the listener's closure.
-			if (browserState.suppressAutoAttach || !browserState.applyResumePath) return;
-			if (browserState.resumeTaskId) {
-				const task = this.store.getTask(browserState.resumeTaskId);
-				if (!task || isTerminalTaskStatus(task.status)) return;
-			}
-			const websitePolicy = this.websitePolicies.get(browserState.resumeTaskId || browserState.dataDir);
-			if (websitePolicy && websiteAccessBlock(websitePolicy, page.url())) return;
-			chooser.setFiles(browserState.applyResumePath).catch(() => undefined);
+			const path = browserState.applyResumePath, taskId = browserState.resumeTaskId;
+			if (browserState.suppressAutoAttach || !path) return;
+			const authorized = () => {
+				if (browserState.suppressAutoAttach || browserState.applyResumePath !== path || browserState.resumeTaskId !== taskId || browserState.activePage !== page || page.isClosed()) return false;
+				const task = taskId ? this.store.getTask(taskId) : undefined;
+				if (taskId && (!task || isTerminalTaskStatus(task.status))) return false;
+				if (taskCommitGuard(task?.input, undefined, taskId ? this.taskGuards.get(taskId) : undefined)?.mode === "read_only") return false;
+				const policy = this.websitePolicies.get(taskId || browserState.dataDir);
+				return !policy || !websiteAccessBlock(policy, page.url());
+			};
+			// Let all native chooser listeners bind this exact event before the standard upload tool consumes it.
+			queueMicrotask(() => {
+				const expectedUploadId = mcp.chooserId(chooser);
+				if (!expectedUploadId || !authorized()) return;
+				void mcp.callTool("browser_file_upload", { paths: [path] }, { expectedUploadId, isUploadAuthorized: authorized }).catch(() => undefined);
+			});
 		});
 	}
 
@@ -568,7 +581,7 @@ export class LocalRunner {
 			state.applyResumePath = await this.resumeFiles.resolve(ref, state.dataDir, taskId);
 			if (!state.applyResumePath) throw new RunnerInputError("The requested résumé could not be loaded; no previous attachment was reused.");
 		}
-		if (state.applyResumePath) this.armFileAutoAttach(page);
+		if (state.applyResumePath) await this.armFileAutoAttach(page);
 	}
 
 	/** End a takeover session (human finished or gave up). */
@@ -601,9 +614,13 @@ export class LocalRunner {
 			// human triggers in the takeover — never a native picker.
 			const attachPath = stringValue(task.input.resumePath ?? task.input.attachPath);
 			if (attachPath && existsSync(resolve(attachPath))) {
+				this.browsers.current.activePage = page;
 				this.browsers.current.applyResumePath = resolve(attachPath);
 				this.browsers.current.resumeTaskId = task.id;
-				this.armFileAutoAttach(page);
+				const mcp = await this.getMcp();
+				mcp.setSubject({ kind: "runtime_task", id: task.id });
+				mcp.setCallPolicy({ guard: taskCommitGuard(task.input, undefined, this.taskGuards.get(task.id)), websiteAccess: () => this.websitePolicies.get(task.id), isCancelled: () => isTerminalTaskStatus(this.store.getTask(task.id)?.status ?? "cancelled") });
+				await this.armFileAutoAttach(page);
 				this.addTaskEvent(task, "browser.file.armed", "File will auto-attach via Playwright", {
 					file: basename(resolve(attachPath)),
 				});
@@ -689,7 +706,7 @@ export class LocalRunner {
 		const state = this.browsers.current;
 		state.activePage = page;
 		page.once("crash", () => { if (state.context === page.context()) void state.stopBrowser?.().catch(() => undefined); });
-		if (this.browsers.current.applyResumePath) this.armFileAutoAttach(page);
+		if (this.browsers.current.applyResumePath) void this.armFileAutoAttach(page).catch(() => undefined);
 		page.once("close", this.browsers.bind(() => {
 			if (this.browsers.current.activePage === page) {
 				this.browsers.current.activePage = this.browsers.current.context?.pages().at(-1) ?? null;
@@ -874,16 +891,7 @@ export class LocalRunner {
 						const clicked = await mcp.callTool("browser_click", { element: label, target: ref });
 						if (clicked.isError) return clicked;
 					}
-					const res = await mcp.callTool("browser_file_upload", { paths: [this.browsers.current.applyResumePath] });
-					if (!res.isError || !/modal state|file chooser/i.test(mcp.textOf(res))) return res;
-					// The target was a LABEL / DROP-ZONE, not the chooser trigger, so no file
-					// chooser opened. Fall back to setting the résumé directly on the page's
-					// file input — robust across hidden inputs, drop-zones and custom upload
-					// widgets (the semantically-correct upload field the brain clicks is often
-					// a container, not the button that fires the chooser).
-					const page = await this.getActivePage();
-					await page.locator('input[type="file"]').first().setInputFiles(this.browsers.current.applyResumePath, { timeout: 8_000 });
-					return { content: [{ type: "text", text: "résumé attached directly to the file input" }] };
+					return mcp.callTool("browser_file_upload", { paths: [this.browsers.current.applyResumePath] });
 				} finally {
 					this.browsers.current.suppressAutoAttach = false;
 				}
@@ -1121,8 +1129,16 @@ export class LocalRunner {
 	}
 
 	/** This task's recorded browser calls after `afterSeq` (#1409), for the shared `/browser-calls` pull route. */
-	async browserCalls(taskId: string, afterSeq: number): Promise<BrowserCallsPage> {
-		return this.browsers.current.calls.page({ kind: "runtime_task", id: taskId }, afterSeq);
+	async browserCalls(taskId: string, afterSeq: number, limit?: number): Promise<BrowserCallsPage> {
+		const task = this.store.getTask(taskId);
+		if (task?.instanceId && this.browsers.current.instanceId && task.instanceId !== this.browsers.current.instanceId) throw new RunnerInputError("This task belongs to another agent instance", 403);
+		return this.browsers.current.calls.page({ kind: "runtime_task", id: taskId }, afterSeq, limit);
+	}
+	browserState(taskId: string): BrowserStateObservation {
+		const task = this.requireTask(taskId);
+		if (task.instanceId && this.browsers.current.instanceId && task.instanceId !== this.browsers.current.instanceId) throw new RunnerInputError("This task belongs to another agent instance", 403);
+		const subject = { kind: "runtime_task", id: taskId };
+		return this.browsers.current.mcp?.browserState(subject, !isTerminalTaskStatus(task.status)) ?? this.browsers.current.calls.state(subject);
 	}
 
 	/**

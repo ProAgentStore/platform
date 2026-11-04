@@ -1,3 +1,4 @@
+import { sweepBrowserEvidence } from "./lib/browser-evidence.js";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
@@ -449,6 +450,7 @@ export default {
 		// with no explicit outcome ever recorded. Independent of the pull above.
 		ctx.waitUntil(failExpiredCodeWaits(env).catch((err) => logUnhandled(env, err, { path: "scheduled:agent-sign-in-code-wait", method: "CRON" })));
 		// Replay screenshots past their retention (#1063): the R2 object and its row, together.
+		ctx.waitUntil(sweepBrowserEvidence(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-evidence", method: "CRON" })));
 		ctx.waitUntil(sweepExpiredBrowserArtifacts(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-artifacts", method: "CRON" })));
 		// The Runner owns the ten-minute reconciliation deadline.  Pull the terminal result here so
 		// expiry remains durable when the owner closes Console instead of polling its handoff.

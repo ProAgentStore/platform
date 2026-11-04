@@ -1,3 +1,4 @@
+import { browserObservation } from "./browser-observation-routes.js";
 import { websiteAccessFromRequest } from "./website-access-request.js";
 import { withBrowserRequest } from "./browser-request.js";
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
@@ -244,20 +245,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const b = await readJson<{ taskId: string; type: string; message: string; data?: unknown }>(req);
 		return json(res, 200, runner.browserEvent(b.taskId, b.type, b.message, b.data));
 	}
-	// One pull route over every subject kind (#1409) — paged like `/local-browser/shots`, dispatched to
-	// whichever runtime owns the subject. Same contract as `/local-browser/shots` and `/local-apply/shots`:
-	// an unknown runId on those subject kinds is a 404 (`get()`'s own refusal), not a silent empty page.
-	if (req.method === "POST" && path === "/browser-calls") {
-		const b = await readJson<{ subjectKind?: unknown; subjectId?: unknown; afterSeq?: unknown }>(req);
-		const subjectId = typeof b.subjectId === "string" ? b.subjectId : "";
-		const afterSeq = typeof b.afterSeq === "number" && b.afterSeq > 0 ? b.afterSeq : 0;
-		const empty = { calls: [], lastSeq: afterSeq, dropped: 0 };
-		if (!subjectId) return json(res, 200, empty);
-		// `runtime_task` has no durable run record to 404 against — a task the runner never heard of simply has no calls.
-		if (b.subjectKind === "runtime_task") return json(res, 200, await runner.browserCalls(subjectId, afterSeq).catch(() => empty));
-		if (b.subjectKind === "local_browser_run") return json(res, 200, runner.localBrowser.browserCalls(subjectId, afterSeq));
-		if (b.subjectKind === "local_apply_run") return json(res, 200, runner.localApply.browserCalls(subjectId, afterSeq));
-		return json(res, 200, empty);
+	if (req.method === "POST" && (path === "/browser-calls" || path === "/browser-state")) {
+		return json(res, 200, await browserObservation(runner, path, await readJson(req), caller));
 	}
 	if (req.method === "POST" && path === "/browser/handoff") {
 		const b = await readJson<{ taskId: string; challenge?: string; label?: string; reason?: string; blurFormFields?: boolean; screenshot?: boolean }>(req);

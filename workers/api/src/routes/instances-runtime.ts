@@ -1,3 +1,4 @@
+import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "../lib/browser-evidence.js";
 import { withBrowserCaptureSettings } from "../lib/browser-screenshots.js";
 import { browserSettingsForDispatch } from "../lib/browser-settings-dispatch.js";
 import { overLimit } from "../lib/write-limits.js";
@@ -285,6 +286,10 @@ export async function mirrorRuntimeTask(
 	)
 		.bind(id, instanceId, userId, type, status, safeJsonStringify(task), createdAt, updatedAt)
 		.run();
+	if (type.startsWith("browser.") || type === "job.apply_agent") {
+		const runtime = await getLiveRuntime(env, instanceId, userId).catch(() => null);
+		await refreshBrowserEvidence(env, { userId, instanceId, subjectKind: "runtime_task", subjectId: id }, runtime ? (path, body) => callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(body) }, { timeoutMs: BROWSER_EVIDENCE_TIMEOUT_MS }) : null).catch(() => undefined);
+	}
 	if (type === "browser.open" && status === "needs_human") {
 		const { mirrorNativeWebsitePause } = await import("../lib/browser-website-native-pause.js");
 		await mirrorNativeWebsitePause(env, instanceId, userId, task);

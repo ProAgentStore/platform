@@ -1,3 +1,4 @@
+import type { BrowserStateObservation } from "../browser-state-contract.js";
 /**
  * The policy-enforcing browser a local CLI researches through (#944, #947).
  *
@@ -31,6 +32,8 @@ import { websiteDecision, type BrowserWebsiteAccess, type WebsiteAccessBlock } f
 export interface BrowserTools {
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
 	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean; expectedOrigin?: string }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean; websiteAccess?: WebsiteAccessBlock }>;
+	/** Native chooser identity, scoped to the browser's current live page. */
+	uploadContext?(): { page: object; chooserId: string | null } | null;
 	/** A refusal that never reached Playwright (#1409) — recorded in the same ordered call stream as a `callTool`. */
 	refused?(tool: string, args: Record<string, unknown>, reason: string): void;
 	/** The run claiming this browser sets its own subject (#1409) — every call it makes is then recorded under it. */
@@ -38,7 +41,8 @@ export interface BrowserTools {
 	/** Owner/run policy enforced at the actual MCP dispatch, including after a DOM probe awaits. */
 	setCallPolicy?(policy: McpCallPolicy): void;
 	/** The recorded calls for one subject, after `afterSeq` — the runner's `/browser-calls` pull route reaches this. */
-	pullCalls?(subject: BrowserCallSubject | null, afterSeq: number): BrowserCallsPage;
+	pullCalls?(subject: BrowserCallSubject | null, afterSeq: number, limit?: number): BrowserCallsPage;
+	browserState?(subject: BrowserCallSubject, live?: boolean): BrowserStateObservation;
 }
 
 /** What the run gives the bridge: the trace, the pause machinery, and the live consent state. */

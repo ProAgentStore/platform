@@ -210,6 +210,13 @@ export async function listBrowserArtifacts(env: Pick<Env, "DB">, userId: string,
 	return recoverApplyCaptureMetadata(env, userId, instanceId, subjectKind, subjectId, (results ?? []).map(view));
 }
 
+/** Sequence pagination for MCP replay; absence of more rows is checked, never inferred from a cap. */
+export async function pageBrowserArtifacts(env: Pick<Env, "DB">, userId: string, instanceId: string, subjectKind: BrowserArtifactSubject, subjectId: string, afterSeq: number, limit: number) {
+ const { results } = await env.DB.prepare("SELECT * FROM browser_run_artifacts WHERE user_id = ?1 AND instance_id = ?2 AND subject_kind = ?3 AND subject_id = ?4 AND seq > ?5 ORDER BY seq LIMIT ?6").bind(userId, instanceId, subjectKind, subjectId, afterSeq, limit + 1).all<ArtifactRow>();
+ const rows = results ?? []; const hasMore = rows.length > limit; if (hasMore) rows.pop();
+ return { artifacts: await recoverApplyCaptureMetadata(env, userId, instanceId, subjectKind, subjectId, rows.map(view)), hasMore, nextCursor: hasMore ? String(rows.at(-1)!.seq) : null };
+}
+
 /** One screenshot's row (with its key), only for its owner and instance. */
 export async function readBrowserArtifact(env: Pick<Env, "DB">, userId: string, instanceId: string, artifactId: string): Promise<(BrowserArtifactView & { r2Key: string }) | null> {
 	const row = await env.DB.prepare("SELECT * FROM browser_run_artifacts WHERE id = ?1 AND user_id = ?2 AND instance_id = ?3").bind(artifactId, userId, instanceId).first<ArtifactRow>();

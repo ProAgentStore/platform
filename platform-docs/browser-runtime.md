@@ -318,7 +318,9 @@ workflow task, a Scout's research run, and an Application Runner fill. They shar
 screenshot is stored evidence addressed by its run (`runtime_task`, `local_browser_run`,
 `local_apply_run`), its bytes are kept in owner-scoped storage, and they are only served through
 `GET /v1/instances/:id/browser-artifacts`, which checks the instance, the frame and the run all belong
-to the caller. They are not exposed over MCP.
+to the caller. MCP `browser_run_screenshots` lists the same stored frames and
+`browser_run_screenshot` returns one frame as image content with its metadata. Neither read takes a
+new screenshot. Image access applies the same instance, run and owner checks as the console.
 
 - **The runner takes them, never the model.** Frames are captured at fixed points — after a
   navigation, an accepted click, a page read or wait, a pause or blocker, and at completion; on an
@@ -338,6 +340,41 @@ to the caller. They are not exposed over MCP.
   capped in size, held in the runner's memory until the cloud pulls it. Research frames are kept as long
   as the run's trace (default 30 days); workflow tasks and application runs, 30 days. Screenshots taken
   before this contract (`runshot/`) are still served as they were.
+
+### Inspect browser evidence through MCP
+
+Use the instance id and the exact run address: `subject_kind` is `runtime_task`, `local_apply_run`,
+or `local_browser_run`, and `subject_id` is that run's id. An application id is not a fill-run id.
+
+| Tool | Evidence returned |
+| --- | --- |
+| `browser_run_calls` | Ordered native calls with tool name, bounded target/argument summaries, start time, duration, outcome, internal-call flag and redacted error heads (at most 200 characters). |
+| `browser_run_state` | The retained or freshly observed native/MCP selected tabs, bounded tab inventory, pending native file chooser and last observed dialog type. |
+| `browser_run_screenshots` | Stored frame metadata, capture timestamps when available, URL/action/target captions, capture-off status and pagination. |
+| `browser_run_screenshot` | One listed artifact's metadata and actual image, preserving the run's frozen blurring setting. |
+
+For call and screenshot lists, follow `nextCursor` while `hasMore` is true. The default MCP page has
+25 entries; `limit` can reduce it. Cursors belong to their respective listing and run. Calls use
+durable insertion order; native `seq` can reset when the recorder's `epoch` changes.
+
+Call and state reads default to `refresh: true`: they collect diagnostics still retained by the
+connected runner and save them in the cloud. `refresh: false` reads only saved cloud evidence.
+Collection also occurs during normal run sync, including final sync; evidence already collected
+survives the runner's restart. No diagnostic read launches a browser, selects a tab, navigates,
+approves a website, resumes a run or repeats a browser action.
+
+Read `coverage` before drawing conclusions from calls. It reports unsupported or unavailable
+sources, dropped calls, detected restarts, invalid records and a bounded collection limit. Older
+runners may expose calls without an epoch, or refuse diagnostics entirely; missing evidence is not
+proof that no action occurred. Calls and state are retained for 30 days after collection. Evidence
+that was never collected before a restart cannot be recovered by these tools.
+
+For state, check `availability`, `freshness`, `capturedAt` and `snapshot.current` together. A retained
+snapshot is not necessarily the current browser. Tab lists are capped at 20 and report truncation.
+Dialog state describes a past observation, not proof that a dialog is still open. These diagnostics
+do not include page HTML, form contents, dialog messages or cookies. Typed values and file contents
+are omitted; URLs omit queries and fragments. A call's `urlAfter` is its known navigation argument,
+not proof of the final loaded URL. Use stored screenshots for visual evidence when available.
 
 ### Turning screenshots off
 

@@ -1,3 +1,4 @@
+import type { BrowserStateObservation } from "../browser-state-contract.js";
 /**
  * Local application execution on the runner (#957) — the Job Application Runner's hands.
  *
@@ -655,8 +656,30 @@ export class LocalApplyRuntime {
 				detail: { checkpointId, phase: supervisor.facts.phase, actions: supervisor.facts.actions, filled: supervisor.facts.filled, uploaded: supervisor.facts.uploaded },
 			});
 		}
-		if (checkpoint.directive) return Promise.resolve(checkpoint.directive);
+		if (checkpoint.directive) {
+			if (checkpoint.directive !== "continue") this.finishSupervisorDirective(run, checkpoint.directive, checkpointId, supervisor);
+			return Promise.resolve(checkpoint.directive);
+		}
 		return this.pause(run, { reason: "supervisor_checkpoint", checkpoint: supervisor }).then(() => run.checkpoints.get(checkpointId)?.directive ?? "stop");
+	}
+
+	/** Cached and waiting terminal directives have the same observed outcome (#1488). */
+	private finishSupervisorDirective(run: Run, directive: "request_review" | "stop", checkpointId: string, checkpoint?: LocalApplySupervisorCheckpoint): void {
+		if (directive === "stop") {
+			this.end(run, { outcome: "blocked", blockReason: "incomplete", questions: ["The supervisor stopped this run before it could continue."] });
+			return;
+		}
+		const bridge = run.bridge;
+		if (bridge?.submitAttempted) this.end(run, this.outcomeOf(run, run.child?.exitCode ?? -1));
+		else if (!bridge?.filled && !bridge?.uploaded.size) {
+			// #1484: requesting human attention is not evidence that a form was populated.
+			// Preserve the observed blocker and checkpoint instead of inviting approval of an empty form.
+			const reason = bridge?.blocked?.reason ?? "incomplete";
+			const phase = checkpoint?.facts.phase ?? "uncertain";
+			const summary = `The supervisor requested review at the ${phase} checkpoint, but no fields were filled and no files were selected. Nothing was submitted. The run ended ${reason.replace(/_/g, " ")}; check the browser action log and resolve the blocker before retrying.`;
+			this.emit(run, { type: "policy.decision", detail: { tool: "supervisor_checkpoint", class: "review", decision: "refused", reason, count: 0, checkpointId, phase } });
+			this.end(run, { outcome: "blocked", blockReason: reason, summary, questions: bridge?.blocked?.questions.length ? bridge.blocked.questions : [summary] });
+		} else this.end(run, { outcome: "awaiting_review", summary: "The supervisor requested an owner review." });
 	}
 
 	private release(run: Run, outcome: PauseOutcome): void {
@@ -758,13 +781,12 @@ export class LocalApplyRuntime {
 		const checkpointId = typeof o.checkpointId === "string" && SAFE_ID.test(o.checkpointId) ? o.checkpointId : null;
 		const directive: LocalApplySupervisorDirective | null = o.directive === "continue" || o.directive === "request_review" || o.directive === "stop" ? o.directive : null;
 		if (o.schemaVersion !== 1 || !checkpointId || !directive) throw new RunnerInputError("directive needs schemaVersion: 1, a safe checkpointId, and directive continue, request_review or stop");
-		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
-
 		let checkpoint = run.checkpoints.get(checkpointId);
 		if (checkpoint?.directive) {
 			if (checkpoint.directive !== directive) throw new RunnerInputError("A different directive is already recorded for this checkpoint", 409);
 			return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
 		}
+		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
 		checkpoint ??= {};
 		checkpoint.directive = directive;
 		run.checkpoints.set(checkpointId, checkpoint);
@@ -772,11 +794,7 @@ export class LocalApplyRuntime {
 
 		const waitingForThis = run.state === "paused" && run.pause?.reason === "supervisor_checkpoint" && run.pause.checkpoint?.checkpointId === checkpointId;
 		if (waitingForThis && directive === "continue") this.release(run, "resumed");
-		else if (waitingForThis && directive === "request_review") {
-			this.end(run, { outcome: "awaiting_review", summary: "The supervisor requested an owner review." });
-		} else if (waitingForThis && directive === "stop") {
-			this.end(run, { outcome: "blocked", blockReason: "incomplete", questions: ["The supervisor stopped this run before it could continue."] });
-		}
+		else if (waitingForThis && directive !== "continue") this.finishSupervisorDirective(run, directive, checkpointId, checkpoint.checkpoint);
 		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
 	}
 
@@ -800,9 +818,16 @@ export class LocalApplyRuntime {
 	}
 
 	/** This run's recorded browser calls after `afterSeq` (#1409), for the shared `/browser-calls` pull route. */
-	browserCalls(runId: string, afterSeq: number): BrowserCallsPage {
+	browserCalls(runId: string, afterSeq: number, caller?: string, limit?: number): BrowserCallsPage {
 		const run = this.get(runId);
-		return run.browser?.tools.pullCalls?.({ kind: "local_apply_run", id: run.envelope.runId }, afterSeq) ?? { calls: [], lastSeq: afterSeq, dropped: 0 };
+		if (caller && run.envelope.instanceId !== caller) throw new RunnerInputError("This browser run belongs to another agent instance", 403);
+		return run.browser?.tools.pullCalls?.({ kind: "local_apply_run", id: run.envelope.runId }, afterSeq, limit) ?? { calls: [], lastSeq: 0, dropped: 0 };
+	}
+	browserState(runId: string, caller?: string): BrowserStateObservation {
+		const run = this.get(runId);
+		if (caller && run.envelope.instanceId !== caller) throw new RunnerInputError("This browser run belongs to another agent instance", 403);
+		const subject = { kind: "local_apply_run", id: run.envelope.runId };
+		return run.browser?.tools.browserState?.(subject, run.state !== "ended") ?? { subject, epoch: "unavailable", capturedAt: new Date().toISOString(), current: false, availability: "unavailable" };
 	}
 
 	status(raw: unknown): LocalApplyStatusResponse {

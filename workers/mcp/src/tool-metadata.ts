@@ -117,6 +117,10 @@ export function titleFor(name: string): string {
 /** What the server ANNOUNCES about a tool. Same vocabulary as `McpScope` on purpose: this
  *  is the enforced classification restated, not a second one. */
 export const TOOL_RISK: Record<string, McpScope> = {
+	browser_run_calls: "read",
+	browser_run_state: "read",
+	browser_run_screenshots: "read",
+	browser_run_screenshot: "read",
 	// ── read: only reads. Announced `readOnlyHint: true`. ──
 	agent_activity: "read",
 	agent_analytics: "read",

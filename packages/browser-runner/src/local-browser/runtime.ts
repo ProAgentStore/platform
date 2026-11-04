@@ -1,3 +1,4 @@
+import type { BrowserStateObservation } from "../browser-state-contract.js";
 /**
  * Local CLI browser research on the runner (#944) — the run registry and its lifecycle.
  *
@@ -481,9 +482,16 @@ export class LocalBrowserRuntime {
 	}
 
 	/** This run's recorded browser calls after `afterSeq` (#1409), for the shared `/browser-calls` pull route. */
-	browserCalls(runId: string, afterSeq: number): BrowserCallsPage {
+	browserCalls(runId: string, afterSeq: number, caller?: string, limit?: number): BrowserCallsPage {
 		const run = this.get(runId);
-		return run.browser?.tools.pullCalls?.({ kind: "local_browser_run", id: run.envelope.runId }, afterSeq) ?? { calls: [], lastSeq: afterSeq, dropped: 0 };
+		if (caller && run.envelope.instanceId !== caller) throw new RunnerInputError("This browser run belongs to another agent instance", 403);
+		return run.browser?.tools.pullCalls?.({ kind: "local_browser_run", id: run.envelope.runId }, afterSeq, limit) ?? { calls: [], lastSeq: 0, dropped: 0 };
+	}
+	browserState(runId: string, caller?: string): BrowserStateObservation {
+		const run = this.get(runId);
+		if (caller && run.envelope.instanceId !== caller) throw new RunnerInputError("This browser run belongs to another agent instance", 403);
+		const subject = { kind: "local_browser_run", id: run.envelope.runId };
+		return run.browser?.tools.browserState?.(subject, run.state !== "ended") ?? { subject, epoch: "unavailable", capturedAt: new Date().toISOString(), current: false, availability: "unavailable" };
 	}
 
 	/** Does this token belong to this run? The bridge forwarder's only credential. */

@@ -1,0 +1,105 @@
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { McpRuntime, type McpToolResult } from "./mcp-runtime.js";
+const subject = { kind: "local_apply_run", id: "first" };
+describe("native browser state is observation, never browser control", () => {
+ let browser: Browser; let context: BrowserContext; let page: Page; let active: Page | null; let mcp: McpRuntime;
+ beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
+ beforeEach(async () => {
+  context = await browser.newContext();
+  await context.route("https://**/*", (route) => route.fulfill({ contentType: "text/html", body: '<title>Fixture 42</title><input id="upload" type="file"><button onclick="alert(\'never expose this message\')">Dialog</button>' }));
+  page = await context.newPage(); active = page;
+  mcp = new McpRuntime(); await mcp.start({ context, activePage: () => active, onPageSelected: (p) => { active = p; } }); mcp.setSubject(subject); mcp.provideSecrets({ PIN: "42" });
+ });
+ afterEach(async () => { await mcp.stop(); await context.close(); });
+ afterAll(async () => { await browser.close(); });
+ it("state reads do not initialize MCP, create tabs, select a page, or add dialog handlers", () => {
+  const listeners = page.listenerCount("dialog"), calls = mcp.pullCalls(subject, 0).latestSeq;
+  const observed = mcp.browserState(subject);
+  expect(observed).toMatchObject({ current: true, availability: "available", state: { selection: "unknown", tabCount: 1, dialog: { status: "unknown" } } });
+  expect(context.pages()).toHaveLength(1); expect(page.listenerCount("dialog")).toBe(listeners);
+  expect(mcp.pullCalls(subject, 0).latestSeq).toBe(calls);
+ });
+ it("shows native/MCP divergence without changing selection and retains only redacted metadata", async () => {
+  await mcp.callTool("browser_navigate", { url: "https://fixture.test/start?token=secret#private" });
+  await mcp.callTool("browser_snapshot");
+  const second = await context.newPage(); await second.goto("https://other.test/job?session=secret"); active = second;
+  const before = mcp.pullCalls(subject, 0).latestSeq;
+  const observed = mcp.browserState(subject);
+  expect(observed.state).toMatchObject({ selection: "different", tabCount: 2 });
+  expect(observed.state?.tabs[0]).toMatchObject({ url: "https://fixture.test/start", title: "Fixture <secret>PIN</secret>", nativeActive: false, mcpSelected: true });
+  expect(observed.state?.tabs[1]).toMatchObject({ url: "https://other.test/job", nativeActive: true, mcpSelected: false });
+  expect(mcp.pullCalls(subject, 0).latestSeq).toBe(before);
+  expect(JSON.stringify(observed)).not.toMatch(/token=|session=|Fixture 42/);
+  await mcp.callTool("browser_snapshot");
+  expect(mcp.browserState(subject).state?.selection).toBe("aligned");
+ });
+ it("identifies a verified chooser, captures error state, and records early dispatch failures once", async () => {
+  await mcp.callTool("browser_navigate", { url: "https://fixture.test/form" });
+  const pending = page.waitForEvent("filechooser"); await page.locator("#upload").click(); await pending;
+  expect(mcp.browserState(subject).state?.pendingChooser).toMatchObject({ pageId: expect.any(String), chooserId: expect.any(String) });
+  await mcp.callTool("browser_snapshot");
+  const calls = mcp.pullCalls(subject, 0).calls;
+  expect(calls.at(-1)).toMatchObject({ tool: "browser_snapshot", outcome: "tool_error", browserState: { pendingChooser: { chooserId: expect.any(String) } } });
+  expect(calls.at(-1)?.errorHead).toContain("modal state");
+  await page.close(); active = null;
+  expect((await mcp.callTool("browser_snapshot")).isError).toBe(true);
+  expect(mcp.pullCalls(subject, 0).calls.at(-1)).toMatchObject({ tool: "browser_snapshot", outcome: "refused", browserState: { nativeActivePageId: null } });
+ });
+ it("retains an ended subject's state instead of reading the next subject's page", async () => {
+  await mcp.callTool("browser_navigate", { url: "https://fixture.test/original" });
+  const saved = mcp.browserState(subject, false);
+  mcp.setSubject({ kind: "local_apply_run", id: "second" });
+  await mcp.callTool("browser_navigate", { url: "https://different.test/private" });
+  const retained = mcp.browserState(subject);
+  expect(retained.current).toBe(false); expect(retained.state).toEqual(saved.state);
+  expect(JSON.stringify(retained)).not.toContain("different.test");
+  await mcp.stop();
+  expect(mcp.browserState(subject).state).toEqual(saved.state);
+ });
+ it("masks cleared credentials in later state and asynchronous error receipts", async () => {
+  const secret = "FAKE_REVIEW_SECRET";
+  mcp.provideSecrets({ PASSWORD: secret });
+  await mcp.callTool("browser_navigate", { url: `https://fixture.test/reset/${secret}` });
+  let finish!: (result: McpToolResult) => void;
+  const dispatch = vi.spyOn(mcp as unknown as { dispatchTool(): Promise<McpToolResult> }, "dispatchTool").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = mcp.callTool("browser_snapshot");
+  mcp.clearSecrets();
+  expect(mcp.secretNames()).toEqual([]);
+  finish({ isError: true, content: [{ type: "text", text: `late error ${secret}` }] });
+  await pending;
+  expect(JSON.stringify(mcp.pullCalls(subject, 0))).not.toContain(secret);
+  expect(JSON.stringify(mcp.browserState(subject))).not.toContain(secret);
+  dispatch.mockRejectedValueOnce(new Error(`later error ${secret}`));
+  await expect(mcp.callTool("browser_snapshot")).rejects.toThrow("later error");
+  expect(mcp.pullCalls(subject, 0).calls.at(-1)?.errorHead).not.toContain(secret);
+  dispatch.mockRestore();
+ });
+ it("does not apply an old subject's late result to a new subject's page metadata", async () => {
+  await mcp.callTool("browser_navigate", { url: "https://fixture.test/original" });
+  let finish!: (result: McpToolResult) => void;
+  const dispatch = vi.spyOn(mcp as unknown as { dispatchTool(): Promise<McpToolResult> }, "dispatchTool").mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = mcp.callTool("browser_snapshot");
+  const next = { kind: "local_apply_run", id: "second" };
+  mcp.setSubject(next);
+  await mcp.callTool("browser_navigate", { url: "https://fixture.test/next" });
+  const state = mcp.browserState(next).state;
+  finish({ content: [{ type: "text", text: '### Page\n- Page Title: OLD PRIVATE TITLE\n### Modal state\n- "alert" dialog' }] });
+  await pending;
+  expect(mcp.browserState(next).state).toEqual(state);
+  expect(mcp.pullCalls(subject, 0).calls.at(-1)?.browserState).toBeUndefined();
+  dispatch.mockRestore();
+ });
+ it("dialog facts come only from existing MCP output, without messages or extra dialog listeners", async () => {
+  await mcp.callTool("browser_navigate", { url: "https://fixture.test/form" });
+  const listeners = page.listenerCount("dialog");
+  const snapshot = mcp.textOf(await mcp.callTool("browser_snapshot"));
+  const target = snapshot.match(/button "Dialog"[^\n]*\[ref=(\w+)\]/)?.[1];
+  await mcp.callTool("browser_click", { target });
+  const observed = mcp.browserState(subject);
+  expect(observed.state?.dialog).toMatchObject({ status: "observed", type: "alert", observedAt: expect.any(String) });
+  expect(JSON.stringify(observed)).not.toContain("never expose this message");
+  expect(page.listenerCount("dialog")).toBe(listeners);
+  await mcp.callTool("browser_handle_dialog", { accept: false }, { internal: true });
+ });
+});

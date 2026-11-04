@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**418 tool registrations.** 389 are always registered; 29 are gated to the console
+**422 tool registrations.** 393 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -372,6 +372,10 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_browser_verification` | Browser verification settings for one instance (#1031): enabled, runtime (pinned / any_eligible), fallback, wait limit, takeover preference, mobile; plus whether the agent declares a local browser, its pin, and the events it raises (push decided by the notification policy) | read | | |
 | `set_instance_browser_verification` | Change those settings; turning it on needs a declared local browser, out-of-range values are refused, never clamped. Not the pin, consent or notifications | write | yes | |
 | `get_instance_browser_settings` | Read next-session browser engine, visibility and profile policy, with inheritance | read | | |
+| `browser_run_calls` | Ordered browser calls and bounded errors for one owned run, with pagination and explicit evidence gaps | read | | |
+| `browser_run_state` | Current or last-observed tab, selected page and modal state for one owned run, with availability and observation time | read | | |
+| `browser_run_screenshots` | Page the recorded screenshot metadata for one owned browser run | read | | |
+| `browser_run_screenshot` | Read one owned run screenshot as image content; validates both artifact and run ownership | read | | |
 | `list_instance_website_requests` | Page exact-host website questions and unique owner links for one agent | read | | |
 | `get_instance_website_request` | Read one immutable website question without granting access | read | | |
 | `list_instance_website_decisions` | Read remembered exact-host allow and deny choices | read | | |

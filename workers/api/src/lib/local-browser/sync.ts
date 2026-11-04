@@ -1,3 +1,4 @@
+import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "../browser-evidence.js";
 /**
  * Bringing a local browser run's state from the runner into PAGS (#944).
  *
@@ -270,6 +271,7 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	// NOT a malformed result, which only a runner that reported the run ended can send (#1153).
 	if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) return lostByTime ? endLost(env, instanceId, uid, run, "The runner stopped answering for this run with a readable status.", now) : run;
 	const body = parsedBody as { state?: unknown; pauseReason?: unknown; websitePause?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
+	await refreshBrowserEvidence(env, { userId: uid, instanceId: instanceId, subjectKind: "local_browser_run", subjectId: run.id }, (path, body) => callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(body) }, { timeoutMs: BROWSER_EVIDENCE_TIMEOUT_MS }), now).catch(() => undefined);
 	const events = Array.isArray(body.events) ? body.events : [];
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await ingestRunnerEvents(env, instanceId, uid, run, events, now, { runnerSeq: lastSeq })).run;

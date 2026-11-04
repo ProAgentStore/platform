@@ -155,7 +155,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.200`
+- `serverInfo.version`: `0.1.201`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -290,7 +290,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 418 tools under two different scope sets and reads the required scope out
+which drives all 422 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -356,7 +356,9 @@ Investigation evidence and remaining limits for #905 are recorded in
 
 ## Result And Error Shape
 
-Every tool returns a text content block. Two tools **also** return `structuredContent`,
+Every tool returns a text content block. `browser_run_screenshot` additionally returns an
+MCP image block with the actual retained pixels; its text block carries screenshot metadata.
+Two tools **also** return `structuredContent`,
 because they declare an `outputSchema` — MCP pairs the two, and the pinned SDK enforces the
 pair, so a declared schema is a binding contract rather than a hint:
 
@@ -533,7 +535,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **418 tools**. 389 are always present. The remaining 29 are gated to
+The server registers **422 tools**. 393 are always present. The remaining 29 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -594,8 +596,7 @@ looking and tells the user which console screen to use instead.
 |---|---|---|
 | Deciding or withdrawing an account approval (#1268) | Approving or denying a change the account approval gate is holding is the OWNER's act, at the console or from the push link. An MCP tool for it would let the agent that asked for a change approve its own request with the owner's token, which is exactly what the gate exists to prevent; the API also refuses an approve or deny that arrives with MCP's client marker. MCP follows a held change with `approval_status` and changes the gate's settings with `set_approval_gate` (weakening an enabled gate is itself held). | `check-mcp-parity.mjs` |
 | The fleet telemetry feed (#1259) | A live chart feed for the console's Fleet page: every machine's points in one response, polled about every 30 seconds. MCP keeps the same data per machine and in an agent-sized shape (`list_runner_nodes` for the fleet's latest readings, `runner_resource_history` for one machine's series, paged to the wire budget); a 12,000-point multi-machine payload is not something to hand a model. | `check-mcp-parity.mjs` |
-| Browser-run replay screenshots (#1063) | Binary routes: MCP results are text, and a screenshot of the owner's own pages is evidence for the owner in the console, not something to stream into an agent's transcript. | `check-mcp-parity.mjs` |
-| The live takeover frame | A JPEG of the owner's own page, ~2 per second, for the person driving the takeover in the console (#1100, #1105) — the same reason as the replay screenshots above: MCP results are text, and a live picture of the owner's pages is not something to stream into an agent's transcript. MCP keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`). The route was always console-only; it was counted once the console named its shape (#1105). | `check-mcp-parity.mjs` |
+| The live takeover frame | A live JPEG feed, ~2 frames per second, for the person driving an active takeover in the console (#1100, #1105). This interactive transport stays console-only. MCP can inspect retained replay screenshots with `browser_run_screenshots` and `browser_run_screenshot`, and keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`). | `check-mcp-parity.mjs` |
 | Approving a machine's device sign-in (`pags login --device`) | Approving mints a full account session for another machine (#1157). That decision belongs to the person signed in on the console, looking at which machine asked and from where — never to an agent holding an MCP token, which could otherwise sign in any machine that showed it a code. | `check-mcp-parity.mjs` |
 | The credentials vault — site logins, passwords, PINs, recovery codes | Secrets. Console → Knowledge → Credentials. | `check-mcp-parity.mjs` |
 | API-key **values** | `keys_status` returns provider names only. There is no reveal tool and no route that returns a stored key, and no tool writes a provider key slot — a key sent through a tool call is a secret in a transcript. The two deliberate exceptions take a credential IN and never return it: `create_http_profile` / `rotate_http_profile_secret` (#1123) and `connect_discord_bot`, which Discord verifies before storing (#1132). Gmail refresh tokens are never revealable at all. | `check-mcp-parity.mjs` |
@@ -817,3 +818,18 @@ Do not retry it — an identical retry returns the same `approval_id`. Follow it
 `applied`, `denied`, `cancelled`, `expired`, `failed`; a `failed` one says why, for example that the target changed since the
 request). The tool audit records such a call as `held_for_approval`, not `completed`. There is deliberately no MCP tool to approve
 or deny: the owner decides in the console or from the push link.
+
+### Browser-run diagnostics (#1487)
+
+Use `browser_run_calls` and `browser_run_state` with the owning instance, subject kind
+(`runtime_task`, `local_browser_run`, or `local_apply_run`) and exact run ID. Call logs
+identify agent calls versus internal probes, timestamps, targets, outcomes and bounded
+errors. Follow pagination and inspect coverage, dropped-data and unavailable-state fields;
+an unavailable runner is not evidence that no browser calls occurred. State observations
+identify the active page, tab inventory and modal state when supported.
+
+`browser_run_screenshots` lists saved frames and `browser_run_screenshot` returns the
+actual image. These read tools never repeat an action, answer a website question, resume
+a run or submit an application. Existing capture/redaction settings still govern what is
+recorded. Older runners may not provide native diagnostics; that limitation is returned
+explicitly rather than represented as an empty successful log.

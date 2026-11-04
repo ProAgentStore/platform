@@ -10,7 +10,7 @@
 import type { Hono } from "hono";
 import type { BrowserArtifactListResponse } from "../agent-types.js";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { isBrowserArtifactSubject, listBrowserArtifacts, readBrowserArtifact, subjectBelongsTo, subjectScreenshotsOff } from "../lib/browser-artifacts.js";
+import { isBrowserArtifactSubject, listBrowserArtifacts, pageBrowserArtifacts, readBrowserArtifact, subjectBelongsTo, subjectScreenshotsOff } from "../lib/browser-artifacts.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -24,6 +24,11 @@ export function registerBrowserArtifactRoutes(router: Hono<{ Bindings: Env }>): 
 		if (!isBrowserArtifactSubject(subjectKind)) throw new HttpError(400, "subject_kind must be runtime_task, local_browser_run or local_apply_run");
 		if (!subjectId) throw new HttpError(400, "subject_id required");
 		if (!(await subjectBelongsTo(c.env, session.uid, instanceId, subjectKind, subjectId))) throw new HttpError(404, "Run not found");
+		if (c.req.query("limit") !== undefined || c.req.query("cursor") !== undefined) {
+			const limit = Number(c.req.query("limit") ?? 25); const cursor = c.req.query("cursor"); const after = cursor === undefined ? -1 : Number(cursor);
+			if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(after) || after < -1) throw new HttpError(400, "Invalid screenshot page limit or cursor");
+			return c.json({ subjectKind, subjectId, ...await pageBrowserArtifacts(c.env, session.uid, instanceId, subjectKind, subjectId, after, limit), screenshotsOff: await subjectScreenshotsOff(c.env, session.uid, subjectKind, subjectId) }, 200, { "Cache-Control": "no-store" });
+		}
 		const body: BrowserArtifactListResponse = {
 			subjectKind,
 			subjectId,
@@ -39,6 +44,10 @@ export function registerBrowserArtifactRoutes(router: Hono<{ Bindings: Env }>): 
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const artifact = await readBrowserArtifact(c.env, session.uid, instanceId, c.req.param("artifactId"));
 		if (!artifact || !(await subjectBelongsTo(c.env, session.uid, instanceId, artifact.subjectKind, artifact.subjectId))) throw new HttpError(404, "Screenshot not found");
+		if (c.req.query("metadata") === "true") {
+			const { r2Key: _storageKey, ...metadata } = artifact;
+			return c.json(metadata, 200, { "Cache-Control": "no-store" });
+		}
 		const obj = await c.env.STORAGE?.get(artifact.r2Key);
 		if (!obj) throw new HttpError(404, "Screenshot not found");
 		return new Response(obj.body, { headers: { "Content-Type": artifact.contentType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });

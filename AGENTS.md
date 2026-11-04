@@ -235,8 +235,9 @@ list_agents   -> {"agents": [...]}
 my_instances  -> {"instances": [...]}
 ```
 
-Both also declare an `outputSchema` and answer with `structuredContent`. Every other tool
-returns a single text content block.
+Both also declare an `outputSchema` and answer with `structuredContent`. Other tools return
+text content; `browser_run_screenshot` additionally returns an MCP image block containing
+the retained screenshot pixels. Read its text metadata and image content separately.
 
 Failure is detected structurally, not by reading prose. This server does not set `isError`.
 A failure is either text beginning `Error: `, or JSON carrying an `error` key. Check both;

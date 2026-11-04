@@ -37,6 +37,9 @@ describe("MCP selected page follows the runner's native page", () => {
 		const login = mcp.textOf(await mcp.callTool("browser_snapshot"));
 		expect(active?.url()).toBe("https://fixture.test/login");
 		expect(login).toContain('heading "Login"');
+		expect(login).toContain("### Open tabs");
+		expect(login).toContain("https://fixture.test/job");
+		expect(login).toMatch(/- 1: \(current\).*https:\/\/fixture\.test\/login/);
 		const codeRef = login.match(/textbox "Verification code"[^\n]*\[ref=(\w+)\]/)?.[1];
 		expect(codeRef).toBeTruthy();
 		// The completed input may close its page before MCP finishes its response.

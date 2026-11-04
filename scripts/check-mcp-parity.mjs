@@ -90,14 +90,9 @@ const EXCLUSIONS = [
 		match: /^GET \/v1\/terminals\/resources$/,
 	},
 	{
-		label: "Browser-run replay screenshots (#1063)",
-		why: "Binary routes: MCP results are text, and a screenshot of the owner's own pages is evidence for the owner in the console, not something to stream into an agent's transcript.",
-		match: /^GET \/v1\/instances\/\{\}\/browser-artifacts/,
-	},
-	{
 		label: "The live takeover frame",
 		why:
-			"A JPEG of the owner's own page, ~2 per second, for the person driving the takeover in the console (#1100, #1105) — the same reason as the replay screenshots above: MCP results are text, and a live picture of the owner's pages is not something to stream into an agent's transcript. MCP keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`). The route was always console-only; it was counted once the console named its shape (#1105).",
+			"A live JPEG feed, ~2 frames per second, for the person driving an active takeover in the console (#1100, #1105). This interactive transport stays console-only. MCP can inspect retained replay screenshots with `browser_run_screenshots` and `browser_run_screenshot`, and keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`).",
 		match: /^GET \/v1\/instances\/\{\}\/takeover\/\{\}\/frame$/,
 	},
 	{

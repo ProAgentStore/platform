@@ -242,7 +242,7 @@ export class ApplyBridge {
 		shots?: ShotRecorder,
 	) {
 		this.replay = new ApplyReplay(host, shots);
-		this.browser = { listTools: () => browser.listTools(), callTool: (name, args, opts) => this.replay.call(browser, name, args, opts), refused: (tool, args, reason) => browser.refused?.(tool, args, reason) };
+		this.browser = { uploadContext: () => browser.uploadContext?.() ?? null, listTools: () => browser.listTools(), callTool: (name, args, opts) => this.replay.call(browser, name, args, opts), refused: (tool, args, reason) => browser.refused?.(tool, args, reason) };
 	}
 
 	callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
@@ -634,9 +634,12 @@ export class ApplyBridge {
 			const checkpoint = this.requireSupervisor("browser_click", "fill");
 			if (checkpoint) return checkpoint;
 			this.allow("browser_click", "fill");
+			const chooserBefore = this.browser.uploadContext?.();
 			const res = await this.browser.callTool("browser_click", forward);
-			if (!res.isError && !fileInput) this.supervisorApproved = false;
-			return { content: [{ type: "text", text: textOf(res) }], ...(res.isError ? { isError: true } : {}) };
+			const chooserAfter = this.browser.uploadContext?.();
+			const openedChooser = !!chooserAfter?.chooserId && chooserAfter.page === chooserBefore?.page && chooserAfter.chooserId !== chooserBefore.chooserId;
+			if (!res.isError && !fileInput && !openedChooser) this.supervisorApproved = false;
+			return { content: [{ type: "text", text: `${textOf(res)}${!res.isError && openedChooser ? "\nThe intended file chooser opened. Call upload_artifact with the approved document kind now; the existing supervisor approval still covers this upload. Browser reads and navigation cannot proceed while the chooser is open." : ""}` }], ...(res.isError ? { isError: true } : {}) };
 		}
 		return this.refuse("browser_click", "read", `"${t.name || t.role}" is not a control an application run may press. Links, form-step buttons (Next, Upload, Add) and answers are allowed.`);
 	}

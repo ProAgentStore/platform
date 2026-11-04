@@ -1,3 +1,4 @@
+import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "../browser-evidence.js";
 import { websiteAccessForInstance, withWebsiteDecisions } from "../browser-settings-dispatch.js";
 import { websiteAccessRunnerProblem } from "../browser-website-policy.js";
 import { loadCloudDocuments } from "../local-artifact/cloud-documents.js";
@@ -665,6 +666,7 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		return lostByTime ? endLost(env, uid, run, "The runner stopped answering for this run.", now) : run;
 	}
 	const body = (await runtimeJson(res)) as { state?: unknown; pause?: unknown; signIn?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
+	await refreshBrowserEvidence(env, { userId: uid, instanceId: run.instanceId, subjectKind: "local_apply_run", subjectId: run.id }, (path, body) => callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(body) }, { timeoutMs: BROWSER_EVIDENCE_TIMEOUT_MS }), now).catch(() => undefined);
 	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalApplyEvent).filter((e): e is NonNullable<typeof e> => e !== null) as ApplyTraceEvent[];
 	// #1412: the runner says the CLI is signing in with provisioned secrets (names only), and whether it wants the emailed code.
 	const signInSync = { signIn: body.state === "running" ? parseRunnerSignIn(body.signIn) : null, events };

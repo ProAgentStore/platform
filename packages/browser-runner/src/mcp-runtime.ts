@@ -1,8 +1,10 @@
+import { BrowserStateSampler } from "./browser-state.js";
+import type { BrowserStateObservation, BrowserStateSnapshot } from "./browser-state-contract.js";
 import { createConnection } from "@playwright/mcp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, FileChooser, Page } from "playwright";
 import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
 import { domainAdmissionUrl, guardedToolRefusal, navigationRefusal, type McpCallPolicy } from "./mcp-call-policy.js";
 import { UploadVerifier, type PreparedUpload } from "./upload-verification.js";
@@ -14,7 +16,9 @@ export type McpRuntimeOptions = (
 	| { cdpEndpoint: string; context?: never }
 ) & { activePage?: () => Page | null; onPageSelected?: (page: Page) => void };
 
+const REFUSED_CALL = Symbol("runner refused call");
 export interface McpToolResult {
+	[REFUSED_CALL]?: true;
 	/** `text` blocks, or an `image` block (base64 `data` + `mimeType`) from `browser_take_screenshot` (#1063). */
 	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 	isError?: boolean;
@@ -53,7 +57,16 @@ export class McpRuntime {
 	private onPageSelected?: (page: Page) => void;
 	private policy: McpCallPolicy = {};
 	private readonly uploads = new UploadVerifier();
+	private readonly stateSampler = new BrowserStateSampler(() => Object.values(this.diagnosticSecrets));
 	setCallPolicy(policy: McpCallPolicy): void { this.policy = policy; }
+	/** A page-bound native chooser identity; tool text cannot manufacture it. */
+	pendingUploadId(): string | null { return this.uploadContext()?.chooserId ?? null; }
+	trackUploadPage(page: Page): void { this.uploads.track(page); }
+	chooserId(chooser: FileChooser): string | null { return this.uploads.chooserId(chooser); }
+	uploadContext(): { page: object; chooserId: string | null } | null {
+		const page = this.activePage?.() ?? this.selectedPage ?? this.context?.pages().at(-1);
+		return page && !page.isClosed() ? { page, chooserId: this.uploads.pendingId(page) } : null;
+	}
 
 	/** Keep the native page used for policy/takeover identical to the MCP selected tab. */
 	async selectPage(page: Page): Promise<void> {
@@ -78,13 +91,19 @@ export class McpRuntime {
 	 * library, which is why the apply bridge refuses a name that is not in {@link secretNames}.
 	 */
 	private readonly secrets: Record<string, string> = {};
+	/** Redaction only: never supplied to MCP for typing; retained until teardown for live pages and late errors. */
+	private readonly diagnosticSecrets: Record<string, string> = {};
+	private subjectVersion = 0;
 	/** One recorder at this chokepoint (#1409) — every `callTool`, every path, redacted before it is kept. */
 	constructor(private readonly calls = new BrowserCallRecorder()) {}
 	/** The run that currently holds this browser, set by whoever claimed it. Null until one does. */
 	private subject: BrowserCallSubject | null = null;
 
 	provideSecrets(map: Record<string, string>): void {
-		for (const [name, value] of Object.entries(map)) if (value) this.secrets[name] = value;
+		for (const [name, value] of Object.entries(map)) if (value) {
+			this.secrets[name] = value;
+			if (!Object.values(this.diagnosticSecrets).includes(value)) this.diagnosticSecrets[this.diagnosticSecrets[name] ? `${name}_${Object.keys(this.diagnosticSecrets).length}` : name] = value;
+		}
 	}
 
 	clearSecrets(): void {
@@ -97,6 +116,7 @@ export class McpRuntime {
 
 	/** The run claiming this browser sets its own subject (#1409); null leaves calls recorded as `subject: null`. */
 	setSubject(subject: BrowserCallSubject | null): void {
+		if (this.subject?.kind !== subject?.kind || this.subject?.id !== subject?.id) this.subjectVersion++;
 		this.subject = subject;
 	}
 
@@ -164,8 +184,36 @@ export class McpRuntime {
 	 * dialog auto-clear, the bridges' own page inspection) — never set by an agent-driven call. Every
 	 * call is recorded regardless; `internal` only tells a reader which ones were the agent's own.
 	 */
-	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean; expectedOrigin?: string } = {}): Promise<McpToolResult> {
-		const startedAt = Date.now();
+	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean } = {}): Promise<McpToolResult> {
+		const startedAt = Date.now(), subject = this.subject, version = this.subjectVersion;
+		// Snapshot before awaiting: teardown may clear the live store while this call is in flight.
+		const initialSecrets = { ...this.diagnosticSecrets };
+		const secrets = () => ({ ...this.diagnosticSecrets, ...initialSecrets });
+		const state = () => version === this.subjectVersion ? this.captureState(subject) : undefined;
+		try {
+			const result = await this.dispatchTool(name, args, opts);
+			try { if (version === this.subjectVersion) this.stateSampler.observe(this.textOf(result), this.context, this.selectedPage); } catch { /* Observability cannot fail the browser action. */ }
+			this.calls.record({ subject, tool: name, args, secrets: secrets(), startedAt, outcome: result[REFUSED_CALL] ? "refused" : result.isError ? "tool_error" : "ok", ...(result.isError ? { errorHead: this.textOf(result) } : {}), internal: opts.internal ?? false, browserState: state() });
+			return result;
+		} catch (error) {
+			this.calls.record({ subject, tool: name, args, secrets: secrets(), startedAt, outcome: "thrown", errorHead: error instanceof Error ? error.message : String(error), internal: opts.internal ?? false, browserState: state() });
+			throw error;
+		}
+	}
+	private captureState(subject: BrowserCallSubject | null): BrowserStateSnapshot | undefined {
+		if (!subject || this.subject?.kind !== subject.kind || this.subject.id !== subject.id || !this.client || !this.context) return undefined;
+		try {
+		const active = this.activePage ? this.activePage() : this.selectedPage;
+		const state = this.stateSampler.sample(this.context, active, this.selectedPage, this.uploads.pendingId(active ?? undefined));
+		this.calls.rememberState(subject, state);
+		return state;
+		} catch { return undefined; }
+	}
+	browserState(subject: BrowserCallSubject, live = true): BrowserStateObservation {
+		const current = live && !!this.captureState(subject);
+		return this.calls.state(subject, current);
+	}
+	private async dispatchTool(name: string, args: Record<string, unknown>, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean }): Promise<McpToolResult> {
 		const client = this.connected();
 		const cancelled = () => this.policy.isCancelled?.() ? "BLOCKED by the runner — this task was stopped; no further browser action is permitted." : null;
 		let refusal = cancelled();
@@ -202,6 +250,7 @@ export class McpRuntime {
 				refusal = upload.error ?? null;
 			} else if (pageBefore) this.uploads.clear(pageBefore);
 		}
+		if (!refusal && name === "browser_navigate" && this.pendingUploadId()) refusal = "A verified file chooser is still open. No navigation was dispatched. Upload the approved artifact first, or explicitly cancel the chooser with browser_file_upload and no paths before navigating.";
 		// Redirects can land after a click or supervisor checkpoint, or during an awaited probe.
 		// The current native URL and live per-run allowlist decide at the actual dispatch boundary.
 		let websiteBlock: WebsiteAccessBlock | null = null;
@@ -231,9 +280,12 @@ export class McpRuntime {
 		}
 		// Stop can arrive while a DOM/origin/upload/admission check was in flight. Check again at dispatch.
 		refusal ??= cancelled();
+		if (!refusal && name === "browser_file_upload" && (opts.expectedUploadId || upload?.chooserId)) {
+			const pending = this.uploads.pendingId(currentPage());
+			if ((opts.expectedUploadId && pending !== opts.expectedUploadId) || (upload?.chooserId && pending !== upload.chooserId) || opts.isUploadAuthorized?.() === false) refusal = "The upload's chooser or task authorization changed before dispatch. No file was attached; inspect the intended upload control again.";
+		}
 		if (refusal) {
-			this.refused(name, args, refusal);
-			return { isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
+			return { [REFUSED_CALL]: true, isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
 		}
 		try {
 			let res = (await client.callTool({ name, arguments: args })) as McpToolResult;
@@ -242,8 +294,10 @@ export class McpRuntime {
 				res = { ...res, ...(checked.error ? { isError: true } : {}), content: [...res.content, { type: "text", text: checked.error ?? "Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback." }] };
 			}
 			if (!res.isError && name === "browser_tabs") {
-				this.selectedPage = args.action === "select" && typeof args.index === "number" ? this.context?.pages()[args.index] : undefined;
-				if (this.selectedPage) this.onPageSelected?.(this.selectedPage);
+				if (args.action === "select" && typeof args.index === "number") this.selectedPage = this.context?.pages()[args.index];
+				else if (args.action === "new") this.selectedPage = this.context?.pages().at(-1);
+				else if (args.action === "close" && this.selectedPage?.isClosed()) this.selectedPage = undefined;
+				if (this.selectedPage && (args.action === "select" || args.action === "new")) this.onPageSelected?.(this.selectedPage);
 			}
 			// Back, a link or a popup can navigate without browser_navigate. Never return a
 			// snapshot from a local/internal page even if an already-open tab reached one.
@@ -257,35 +311,13 @@ export class McpRuntime {
 					res = { isError: true, websiteAccess: blockedAfter, content: [{ type: "text", text: "The browser reached a website that this agent has not been permitted to access. The previous action may already have run; do not replay it. After an owner decision, inspect the page and decide again." }] };
 				}
 			}
-			this.calls.record({
-				subject: this.subject,
-				tool: name,
-				args,
-				secrets: this.secrets,
-				startedAt,
-				outcome: res.isError ? "tool_error" : "ok",
-				...(res.isError ? { errorHead: this.textOf(res) } : {}),
-				internal: opts.internal ?? false,
-			});
 			return res;
-		} catch (err) {
-			this.calls.record({
-				subject: this.subject,
-				tool: name,
-				args,
-				secrets: this.secrets,
-				startedAt,
-				outcome: "thrown",
-				errorHead: err instanceof Error ? err.message : String(err),
-				internal: opts.internal ?? false,
-			});
-			throw err;
-		}
+		} catch (error) { throw error; }
 	}
 
 	/** A refusal that never reached Playwright at all (a policy/commit-guard refusal) — recorded in the same ordered stream. */
 	refused(tool: string, args: Record<string, unknown>, reason: string): void {
-		this.calls.record({ subject: this.subject, tool, args, secrets: this.secrets, startedAt: Date.now(), outcome: "refused", errorHead: reason, internal: false });
+		this.calls.record({ subject: this.subject, tool, args, secrets: this.diagnosticSecrets, startedAt: Date.now(), outcome: "refused", errorHead: reason, internal: false, browserState: this.captureState(this.subject) });
 	}
 
 	/**
@@ -293,12 +325,12 @@ export class McpRuntime {
 	 * has no standard tool). `startedAt` is the caller's own, so the duration reflects the real wait.
 	 */
 	recordExternal(tool: string, args: Record<string, unknown>, outcome: BrowserCallOutcome, opts: { startedAt?: number; errorHead?: string; internal?: boolean } = {}): void {
-		this.calls.record({ subject: this.subject, tool, args, secrets: this.secrets, startedAt: opts.startedAt ?? Date.now(), outcome, ...(opts.errorHead ? { errorHead: opts.errorHead } : {}), internal: opts.internal ?? false });
+		this.calls.record({ subject: this.subject, tool, args, secrets: this.diagnosticSecrets, startedAt: opts.startedAt ?? Date.now(), outcome, ...(opts.errorHead ? { errorHead: opts.errorHead } : {}), internal: opts.internal ?? false, browserState: this.captureState(this.subject) });
 	}
 
 	/** The recorded calls for one subject after `afterSeq`, paged — the runner's `/browser-calls` pull route. */
-	pullCalls(subject: BrowserCallSubject | null, afterSeq: number): BrowserCallsPage {
-		return this.calls.page(subject, afterSeq);
+	pullCalls(subject: BrowserCallSubject | null, afterSeq: number, limit?: number): BrowserCallsPage {
+		return this.calls.page(subject, afterSeq, limit);
 	}
 
 	/** Text of the last tool result (the standard tools return their output as text content). */
@@ -307,6 +339,7 @@ export class McpRuntime {
 	}
 
 	async stop(): Promise<void> {
+		this.subjectVersion++;
 		this.uploads.stop();
 		// Bounded. Closing a persistent context flushes the whole profile to disk and
 		// on a cold/slow machine that measurably exceeds 10s — and a browser wedged
@@ -322,5 +355,6 @@ export class McpRuntime {
 		this.activePage = undefined;
 		this.onPageSelected = undefined;
 		this.policy = {};
+		for (const name of Object.keys(this.diagnosticSecrets)) delete this.diagnosticSecrets[name];
 	}
 }

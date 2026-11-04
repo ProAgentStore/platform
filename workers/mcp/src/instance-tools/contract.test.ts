@@ -21,6 +21,7 @@ import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerBrowserVerificationTools } from "./browser-verification.js";
 import { registerBrowserModeTools } from "./browser-mode.js";
 import { registerBrowserSettingsTools } from "./browser-settings.js";
+import { registerBrowserEvidenceTools } from "./browser-evidence.js";
 import { registerWebsiteAccessTools } from "./website-access.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerCoderBrainTools } from "./coder-brain.js";
@@ -501,6 +502,10 @@ const TABLE: Record<string, Row> = {
 	get_instance_browser_verification: ["browserVerification", "read", null, null, "instance_id,token"],
 	set_instance_browser_verification: ["browserVerification", "write", null, "envelope", "allow_mobile,dry_run,enabled,fallback,instance_id,runtime,takeover,token,wait_limit_minutes"],
 	get_instance_browser_settings: ["browserSettings", "read", null, null, "instance_id,token"],
+	browser_run_calls: ["browserEvidence", "read", null, null, "cursor,instance_id,limit,refresh,subject_id,subject_kind,token"],
+	browser_run_state: ["browserEvidence", "read", null, null, "instance_id,refresh,subject_id,subject_kind,token"],
+	browser_run_screenshots: ["browserEvidence", "read", null, null, "cursor,instance_id,limit,subject_id,subject_kind,token"],
+	browser_run_screenshot: ["browserEvidence", "read", null, null, "artifact_id,instance_id,token"],
 	list_instance_website_requests: ["websiteAccess", "read", null, null, "cursor,instance_id,token"],
 	get_instance_website_request: ["websiteAccess", "read", null, null, "instance_id,request_id,token"],
 	list_instance_website_decisions: ["websiteAccess", "read", null, null, "instance_id,token"],
@@ -737,6 +742,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	browserMode: registerBrowserModeTools as any,
 	browserSettings: registerBrowserSettingsTools as any,
 	websiteAccess: registerWebsiteAccessTools as any,
+	browserEvidence: registerBrowserEvidenceTools as any,
 	gmailScout: registerGmailScoutTools as any,
 	coderBrain: registerCoderBrainTools as any,
 	applications: registerApplicationTools as any,

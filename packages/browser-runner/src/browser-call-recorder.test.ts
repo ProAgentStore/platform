@@ -4,6 +4,14 @@ import { BROWSER_CALL_CAP, BrowserCallRecorder, isBrowserCallSubjectKind, summar
 const SUBJECT = { kind: "local_apply_run", id: "run-1" };
 
 describe("BrowserCallRecorder", () => {
+	it("masks known credentials in URL paths before keeping args or urlAfter", () => {
+		const recorder = new BrowserCallRecorder();
+		for (const path of ["FAKE_REVIEW_SECRET", "with%20space"]) recorder.record({ subject: SUBJECT, tool: "browser_navigate", args: { url: `https://fixture.test/reset/${path}?token=hidden` }, secrets: { PIN: "FAKE_REVIEW_SECRET", OTHER: "with space" }, startedAt: Date.now(), outcome: "ok", internal: false });
+		for (const record of recorder.page(SUBJECT, 0).calls) {
+			expect(record.args.url).toBe("https://fixture.test/reset/[REDACTED]");
+			expect(record.urlAfter).toBe(record.args.url);
+		}
+	});
 	it("redacts echoed values and short secrets before storing or truncating an error", () => {
 		const r = new BrowserCallRecorder();
 		r.record({ subject: SUBJECT, tool: "browser_type", args: { text: "typed-password" }, secrets: { PIN: "42" }, startedAt: Date.now(), outcome: "tool_error", errorHead: "Rejected typed-password with PIN 42", internal: false });
@@ -74,7 +82,7 @@ describe("BrowserCallRecorder", () => {
 		expect(BROWSER_CALL_CAP).toBe(2000);
 	});
 
-	it("pages by seq: only calls after `afterSeq`, `lastSeq` never regresses", () => {
+	it("pages by seq and reports the actual stream watermark when a cursor belongs to an older epoch", () => {
 		const r = new BrowserCallRecorder();
 		for (let i = 0; i < 5; i++) r.record({ subject: SUBJECT, tool: "browser_navigate", args: {}, startedAt: Date.now(), outcome: "ok", internal: false });
 		const first = r.page(SUBJECT, 0);
@@ -82,10 +90,12 @@ describe("BrowserCallRecorder", () => {
 		const second = r.page(SUBJECT, 3);
 		expect(second.calls.map((c) => c.seq)).toEqual([4, 5]);
 		expect(second.lastSeq).toBe(5);
-		// Asking past the latest seq is a legitimate "nothing new yet", not a regression.
+		// A future cursor must not hide a restarted recorder with fewer calls.
 		const ahead = r.page(SUBJECT, 100);
 		expect(ahead.calls).toEqual([]);
-		expect(ahead.lastSeq).toBe(100);
+		expect(ahead.lastSeq).toBe(5);
+		expect(ahead.latestSeq).toBe(5);
+		expect(ahead.epoch).toBe(r.epoch);
 	});
 
 	it("never throws, even if an input is malformed — recording is best-effort", () => {
@@ -146,4 +156,18 @@ describe("summarizeCallArgs — the safe args summary (#1409)", () => {
 	it("an unrecognised tool's args produce an empty summary, not a guess", () => {
 		expect(summarizeCallArgs({ somethingNew: "whatever" })).toEqual({});
 	});
+});
+
+it("bounded pages advance only past returned calls and expose recorder epochs and drops", () => {
+ const recorder = new BrowserCallRecorder(105);
+ for (let i = 0; i < 110; i++) recorder.record({ subject: SUBJECT, tool: "browser_snapshot", args: {}, startedAt: Date.now(), outcome: "ok", internal: false });
+ const first = recorder.page(SUBJECT, 0, 100);
+ expect(first).toMatchObject({ lastSeq: 100, latestSeq: 110, hasMore: true, dropped: 5, epoch: recorder.epoch });
+ expect(first.calls).toHaveLength(100);
+ const next = recorder.page(SUBJECT, first.lastSeq, 100);
+ expect(next.calls.map((c) => c.seq)).toEqual([101, 102, 103, 104, 105]);
+ expect(next).toMatchObject({ lastSeq: 110, latestSeq: 110, hasMore: false, dropped: 5 });
+ const restarted = new BrowserCallRecorder();
+ expect(restarted.page(SUBJECT, 110)).toMatchObject({ lastSeq: 0, latestSeq: 0 });
+ expect(restarted.epoch).not.toBe(recorder.epoch);
 });
