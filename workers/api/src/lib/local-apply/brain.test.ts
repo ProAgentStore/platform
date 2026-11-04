@@ -73,6 +73,14 @@ describe("Application Runner cloud brain", () => {
 		expect(body.messages[1].content).not.toMatch(/resume|cover|answer|snapshot|cookie/i);
 	});
 
+	it("uses the acting model assessment and frozen threshold without consulting a second model", async () => {
+		runUserWorkersAi.mockClear();
+		const r = run("fill_and_review"); r.policy.escalationLevel = "balanced";
+		const c = checkpoint("uncertain"); c.facts.decision = { risk: "minor", reason: "The source supports the visible option." };
+		await expect(decideApplicationCheckpoint(env(), "u1", r, c)).resolves.toMatchObject({ directive: "continue", source: "policy", reason: "escalation_allows_decision" });
+		expect(runUserWorkersAi).not.toHaveBeenCalled();
+	});
+
 	it("keeps policy as the final authority over a model's continue", () => {
 		expect(constrainBrainDirective(run("fill_and_review"), checkpoint("before_submit"), "continue")).toBe("request_review");
 		expect(constrainBrainDirective(run(), checkpoint("initial", ["captcha"]), "continue")).toBe("stop");
@@ -137,8 +145,8 @@ describe("safe routine checkpoints continue deterministically (#982)", () => {
 
 	it("an `uncertain` phase is an unknown condition, so it still asks a person", () => {
 		expect(decideCheckpoint(run(), checkpoint("uncertain"), null)).toMatchObject({ directive: "request_review", reason: "unknown_phase_needs_review" });
-		// …but the model's judgement is still used when it has one, because `uncertain` is its job.
-		expect(decideCheckpoint(run(), checkpoint("uncertain"), "continue")).toMatchObject({ directive: "continue", source: "brain" });
+		// A cloud continue is not a substitute for the acting model assessing the decision.
+		expect(decideCheckpoint(run(), checkpoint("uncertain"), "continue")).toMatchObject({ directive: "request_review", source: "policy" });
 	});
 
 	describe("the one-job gate is untouched", () => {

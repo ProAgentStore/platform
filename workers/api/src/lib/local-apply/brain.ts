@@ -4,8 +4,10 @@
  * This is deliberately not another catalog agent or a second application workflow.  It uses the
  * Runner instance's existing selected brain to decide one bounded, runner-observed checkpoint,
  * persists exactly one directive, then lets the relay deliver that directive to the local CLI.
- * The model never receives browser snapshots, form values, source files, or CLI prose.
+ * The model receives bounded checkpoint facts and a labelled decision assessment, never source files or browser snapshots.
  */
+import { parseDecisionAssessment } from "./escalation-config.js";
+import type { LocalApplyEscalationLevel } from "./contract.js";
 import type { Env } from "../../types.js";
 import { readInstanceBrain } from "../instance-brain.js";
 import { runUserWorkersAi } from "../user-ai.js";
@@ -40,8 +42,8 @@ const parsedDirective = (value: unknown): SupervisorDirectiveKind | null =>
 /**
  * The phases where the next local action CANNOT submit, so continuing is safe (#982).
  *
- * `uncertain` is deliberately absent: it is the runner saying it does not know what it is looking
- * at, which is the "unknown or unsafe condition" that must still stop. `before_submit` is absent
+ * `uncertain` is deliberately absent: its model-assessed decision follows the owner
+ * escalation threshold; missing assessments still request review. `before_submit` is absent
  * because it is the one checkpoint that CAN release an irreversible outward action.
  */
 const ROUTINE_PHASES: ReadonlySet<string> = new Set(["initial", "post_navigation"]);
@@ -60,9 +62,12 @@ export type DirectiveReason =
 	| "routine_checkpoint_cannot_submit"
 	| "unknown_phase_needs_review"
 	| "brain_unavailable"
-	| "brain_decision";
+	| "brain_decision"
+	| "escalation_allows_decision"
+	| "escalation_requires_review";
 
 export interface CheckpointDecision {
+	escalationLevel: LocalApplyEscalationLevel;
 	directive: SupervisorDirectiveKind;
 	source: DirectiveSource;
 	reason: DirectiveReason;
@@ -89,12 +94,14 @@ export interface CheckpointDecision {
  *   2. `fill_and_review` never crosses the final-submit checkpoint;
  *   3. nor does an ungated run, so a model cannot turn one into an auto-submit by saying continue;
  *   4. only then does the routine auto-continue apply;
- *   5. a phase this platform does not recognise as routine keeps asking for a person.
+ *   5. assessed uncertainty follows the frozen owner threshold; unassessed uncertainty asks for a person.
  */
 export function decideCheckpoint(run: ApplyRun, checkpoint: SupervisorCheckpoint, proposed: SupervisorDirectiveKind | null): CheckpointDecision {
 	const phase = checkpoint.facts.phase;
+	const escalationLevel = run.policy.escalationLevel ?? "conservative";
 	const policy = (directive: SupervisorDirectiveKind, reason: DirectiveReason): CheckpointDecision => ({
 		directive,
+		escalationLevel,
 		source: "policy",
 		reason,
 		overrodeBrain: proposed !== null && proposed !== directive,
@@ -105,11 +112,17 @@ export function decideCheckpoint(run: ApplyRun, checkpoint: SupervisorCheckpoint
 	if (phase === "before_submit" && (!run.policy.gate.allowed || !run.policy.gate.gateId)) return policy("request_review", "no_submit_authorization");
 	// #982: routine, non-final, nothing wrong — continue, and say that the platform decided it.
 	if (ROUTINE_PHASES.has(phase)) return policy("continue", "routine_checkpoint_cannot_submit");
+	if (phase === "uncertain") {
+		const decision = parseDecisionAssessment(checkpoint.facts.decision);
+		if (!decision) return policy("request_review", "unknown_phase_needs_review");
+		const allowed = escalationLevel === "autonomous" || (escalationLevel === "balanced" && decision.risk === "minor");
+		return policy(allowed ? "continue" : "request_review", allowed ? "escalation_allows_decision" : "escalation_requires_review");
+	}
 	// `before_submit` WITH a valid one-shot gate, or a phase we do not recognise as routine. The
 	// model's judgement is used where it has one; with no answer the owner is asked, because the
 	// only actions left here are the ones that reach the employer.
 	if (!proposed) return policy("request_review", phase === "before_submit" ? "brain_unavailable" : "unknown_phase_needs_review");
-	return { directive: proposed, source: "brain", reason: "brain_decision", overrodeBrain: false };
+	return { directive: proposed, escalationLevel, source: "brain", reason: "brain_decision", overrodeBrain: false };
 }
 
 /**
@@ -124,9 +137,11 @@ export function constrainBrainDirective(run: ApplyRun, checkpoint: SupervisorChe
 
 /**
  * Decide the exact checkpoint. Invalid/missing credentials and invalid model output are all a
- * safe review request: no browser write gets released merely because the cloud brain is absent.
+ * safe review request before submission. Assessed decisions follow the owner threshold without a second model call.
  */
 export async function decideApplicationCheckpoint(env: Env, uid: string, run: ApplyRun, checkpoint: SupervisorCheckpoint): Promise<CheckpointDecision> {
+	// The acting model already assessed this decision. Its owner threshold needs no second model call.
+	if (checkpoint.facts.phase === "uncertain") return decideCheckpoint(run, checkpoint, null);
 	const brain = await readInstanceBrain(env, run.instanceId);
 	// No brain configured, or it could not be read: the POLICY still decides. Before #982 this fell
 	// straight to `request_review`, which is how a safe initial checkpoint became a terminal review
@@ -149,7 +164,7 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 					{
 						role: "user",
 						content: JSON.stringify({
-							policy: { mode: run.policy.mode, submitGateAllowed: run.policy.gate.allowed, hasSubmitGate: !!run.policy.gate.gateId },
+							policy: { escalationLevel: run.policy.escalationLevel ?? "conservative", mode: run.policy.mode, submitGateAllowed: run.policy.gate.allowed, hasSubmitGate: !!run.policy.gate.gateId },
 							checkpoint: { schemaVersion: checkpoint.schemaVersion, checkpointId: checkpoint.checkpointId, facts: checkpoint.facts },
 						}),
 					},
@@ -176,8 +191,7 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
  * The trace line a decision leaves behind (#982) — the phase it was taken at, the progress that
  * made it safe or not, WHO decided and WHY.
  *
- * Pure, and a closed vocabulary throughout: ids, counts and a phase, never a page value, a typed
- * answer or a browser snapshot. This is what lets an owner (and the board, and MCP) see that a run
+ * Pure: ids, counts, policy and a bounded model decision explanation, never source quotes or browser snapshots. This is what lets an owner (and the board, and MCP) see that a run
  * continued because the platform decided it rather than because a model happened to say so — the
  * fact that was missing when two runs stopped at `filled: 0`.
  */
@@ -188,6 +202,8 @@ export function checkpointDecisionEvent(checkpoint: SupervisorCheckpoint, decisi
 		at,
 		detail: {
 			class: "checkpoint",
+			escalationLevel: decision.escalationLevel,
+			...(f.decision ? { decisionRisk: f.decision.risk, decisionReason: f.decision.reason.slice(0, 1000) } : {}),
 			checkpointId: checkpoint.checkpointId,
 			phase: f.phase,
 			decision: decision.directive,

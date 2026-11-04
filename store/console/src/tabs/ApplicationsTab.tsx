@@ -14,6 +14,7 @@ import LoadFailed from "../components/LoadFailed";
 import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSection";
 import ApplicationMaterials from "../components/ApplicationMaterials";
 import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
+import ApplicationEscalationSettings from "../components/ApplicationEscalationSettings";
 import { ASSERT_STATEMENT_PROMPT, QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
 import { notificationRoute } from "../lib/deepLink";
 import { TONE_CLASS } from "../lib/localBrowser";
@@ -508,7 +509,7 @@ const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
  * irreversible (the server requires it too, as MCP's set_application_runner_settings does), and while
  * it is on a danger banner offers the one-click way out. The server's refusals are shown as they come.
  */
-function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string; allowance?: AutoSubmitAllowance | null; onChanged: () => void }) {
+export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string; allowance?: AutoSubmitAllowance | null; onChanged: () => void }) {
 	const [s, setS] = useState<ApplicationRunnerSettingsView["settings"] | null>(null);
 	const [draft, setDraft] = useState({ profile: "", answers: "", signInEmail: "", allowDomains: "", roles: "", locations: "", exclude: "", minSalary: "", dailyCap: "0" });
 	const [msg, setMsg] = useState("");
@@ -554,6 +555,21 @@ function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
 	};
+	const saveEscalation = async (body: Pick<ApplicationRunnerSettingsView["settings"], "escalationLevel">) => {
+		setBusy(true);
+		setMsg("");
+		try {
+			const saved = await api<ApplicationRunnerSettingsView>(`/v1/instances/${runnerId}/application-runner/settings`, { method: "PUT", body: JSON.stringify(body) });
+			// This immediate save must not replace unsaved source or submission-rule drafts.
+			setS(saved.settings);
+			onChanged();
+			setMsg("Escalation level saved for new runs.");
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
 	const enable = async () => {
 		setBusy(true);
 		setConfirmError("");
@@ -585,6 +601,7 @@ function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string
 	);
 	return (
 		<Card className="mt-3 sm:mt-4">
+			<ApplicationEscalationSettings value={s.escalationLevel} busy={busy} onChange={(body) => void saveEscalation(body)} />
 			{s.autoSubmit.enabled && <AutoSubmitDangerBanner rules={savedRules} allowance={allowance} onDisable={() => void disable()} busy={busy} />}
 			<div className="flex flex-wrap items-center gap-2 mb-1">
 				<h3 className="text-base font-bold">Submission policy</h3>

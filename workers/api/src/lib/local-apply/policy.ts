@@ -19,7 +19,7 @@
  */
 import { domainWithin, normalizeDomain } from "../local-browser/policy.js";
 import { APPROVAL_SATISFIES } from "./approval.js";
-import { LOCAL_APPLY_AUTH_MODES, LOCAL_APPLY_ENGINES, type LocalApplyAuthMode, type LocalApplyEngine, type LocalApplyProfile } from "./contract.js";
+import { LOCAL_APPLY_AUTH_MODES, LOCAL_APPLY_ENGINES, LOCAL_APPLY_ESCALATION_LEVELS, type LocalApplyEscalationLevel, type LocalApplyAuthMode, type LocalApplyEngine, type LocalApplyProfile } from "./contract.js";
 import { isHomeRelative, isWorkspaceRelative } from "../local-artifact/contract.js";
 
 export interface AutoSubmitPolicy {
@@ -43,6 +43,8 @@ export interface AutoSubmitPolicy {
 }
 
 export interface ApplicationRunnerSettings {
+	/** Which model-assessed decisions need owner review; never grants submission permission. */
+	escalationLevel: LocalApplyEscalationLevel;
 	engine: LocalApplyEngine;
 	/** Local browser-driving model; null keeps the CLI default. Independent of the cloud supervisor. */
 	model?: string | null;
@@ -74,6 +76,7 @@ export interface ApplicationRunnerSettings {
 }
 
 export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
+	escalationLevel: "conservative",
 	engine: "claude",
 	model: null,
 	reasoningEffort: null,
@@ -103,6 +106,10 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 	if (!patch || typeof patch !== "object" || Array.isArray(patch)) return { error: "settings must be an object" };
 	const p = patch as Record<string, unknown>;
 	const next: ApplicationRunnerSettings = { ...current, sources: { ...current.sources }, autoSubmit: { ...current.autoSubmit } };
+	if (p.escalationLevel !== undefined) {
+		if (!LOCAL_APPLY_ESCALATION_LEVELS.includes(p.escalationLevel as LocalApplyEscalationLevel)) return { error: `escalationLevel must be one of ${LOCAL_APPLY_ESCALATION_LEVELS.join(", ")}` };
+		next.escalationLevel = p.escalationLevel as LocalApplyEscalationLevel;
+	}
 	if (p.engine !== undefined) {
 		if (!LOCAL_APPLY_ENGINES.includes(p.engine as LocalApplyEngine)) return { error: `engine must be one of ${LOCAL_APPLY_ENGINES.join(", ")}` };
 		next.engine = p.engine as LocalApplyEngine;

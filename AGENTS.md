@@ -34,6 +34,9 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - Model choice belongs to each agent's execution configuration. Distinguish the cloud supervisor
   from the local browser-driving model. Do not claim a model switch from changing only the other
   model or adding prose. Verify the effective model from execution evidence.
+- Escalation belongs to per-instance configuration, frozen per run. Let the acting model assess
+  uncertainty and risk; code enforces the selected threshold without page-content heuristics.
+  Delegated interpretation is not permission to invent missing personal facts or submit.
 - Test reusable behavior on varied independent forms/components. A fix working on one employer
   page is not evidence of a generic solution. Report unsupported capabilities honestly.
 

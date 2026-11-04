@@ -940,6 +940,7 @@ export interface ApplicationRunnerSettingsView {
 		engine: "claude" | "codex";
 		authMode: "machine" | "subscription";
 		browserProfile: "isolated" | "default";
+		escalationLevel: "conservative" | "balanced" | "autonomous";
 		workspace: string;
 		sources: { profile?: string; answers?: string };
 		allowDomains: string[];

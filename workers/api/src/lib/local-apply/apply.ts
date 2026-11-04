@@ -1,3 +1,4 @@
+import { escalationRunnerProblem } from "./escalation-config.js";
 import { browserModelRunnerProblem } from "./model-config.js";
 import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "../browser-evidence.js";
 import { websiteAccessForInstance, withWebsiteDecisions } from "../browser-settings-dispatch.js";
@@ -237,7 +238,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		workspace: s.workspace,
 		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
+		policy: { mode: run.policy.mode, escalationLevel: run.policy.escalationLevel ?? "conservative", allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
 		limits: run.policy.limits,
 		// #1079: what the owner already answered for this application, kept since an earlier fill stopped waiting.
 		...(ownerAnswers.length ? { ownerAnswers: ownerAnswers.map((a) => ({ question: a.question, answer: a.answer })) } : {}),
@@ -291,7 +292,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const blurProblem = screenshotBlurRunnerProblem(screenshotsOn ? blurFormFields : true, runtime.runner_version, runtime.runner_node);
 	if (blurProblem) throw new HttpError(409, blurProblem);
 	const browserWebsiteAccess = await websiteAccessForInstance(env, uid, instanceId);
-	const contractProblem = browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const contractProblem = escalationRunnerProblem(s, runtime.runner_version) ?? browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version);
@@ -335,6 +336,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	// The owner's screenshot switch, fixed into this run as it starts (#1064).
 
 	const policy: ApplyRunPolicy = {
+		escalationLevel: s.escalationLevel,
 		engine: s.engine,
 		model: s.model ?? null,
 		reasoningEffort: s.reasoningEffort ?? null,
@@ -351,7 +353,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	};
 	const failing = checks.filter((c) => !c.ok).map((c) => c.check);
 	const trace: ApplyTraceEvent[] = [
-		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, requestedModel: s.model ?? "cli_default", requestedReasoningEffort: s.reasoningEffort ?? "cli_default", modelVerification: "unverified", authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", blurFormFields, ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
+		{ type: "run.requested", at: iso(now), detail: { escalationLevel: s.escalationLevel, engine: s.engine, requestedModel: s.model ?? "cli_default", requestedReasoningEffort: s.reasoningEffort ?? "cli_default", modelVerification: "unverified", authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", blurFormFields, ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
 		...(instancePreferences ? [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] : []),
 		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
@@ -931,7 +933,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		await noteQueued(env, "local_apply_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
 		return "queued";
 	}
-	const contractProblem = browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const contractProblem = escalationRunnerProblem(run.policy, runtime.runner_version) ?? browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) {
 		await noteQueued(env, "local_apply_runs", run.id, contractProblem, now);
 		return "queued";

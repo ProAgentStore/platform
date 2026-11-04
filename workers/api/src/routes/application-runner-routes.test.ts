@@ -115,6 +115,45 @@ function readyApp(id: string, over: { title?: string; url?: string } = {}) {
 const enableAutoSubmit = (over: Record<string, unknown> = {}) =>
 	call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1, ...over }, acknowledgeRealSubmissions: true });
 
+describe("application escalation setting survives dispatch and queue waits", () => {
+	it("round-trips only this instance's level and refuses old runtimes before claiming the application", async () => {
+		expect((await call("GET", "/ap/application-runner/settings")).body.settings.escalationLevel).toBe("conservative");
+		expect((await call("PUT", "/ap/application-runner/settings", { escalationLevel: "balanced" })).body.settings.escalationLevel).toBe("balanced");
+		expect((await call("GET", "/t1/application-runner/settings")).body.settings.escalationLevel).toBe("conservative");
+		expect((await call("PUT", "/ap/application-runner/settings", { escalationLevel: "invalid" })).status).toBe(400);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.219' WHERE instance_id = 'ap'");
+		const event = readyApp("escalation-old");
+		const refused = await call("POST", "/ap/application-runs", event);
+		expect(refused.status).toBe(409);
+		expect(refused.body.error).toContain("0.4.220");
+		expect((await appRow("escalation-old"))?.status).toBe("materials_ready");
+		expect(dispatches()).toHaveLength(0);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
+		const started = await call("POST", "/ap/application-runs", event);
+		expect(started.status).toBe(201);
+		expect(started.body.run.policy).toMatchObject({ escalationLevel: "balanced", mode: "fill_and_review" });
+		expect(dispatches()[0].body.policy).toMatchObject({ escalationLevel: "balanced", mode: "fill_and_review" });
+		expect(started.body.run.trace).toContainEqual(expect.objectContaining({ type: "run.requested", detail: expect.objectContaining({ escalationLevel: "balanced" }) }));
+	});
+	it("checks the frozen policy on queued retries instead of a later permissive or conservative setting", async () => {
+		await call("PUT", "/ap/application-runner/settings", { escalationLevel: "balanced" });
+		answers["/local-apply/run"] = { status: 409, body: { error: "This machine is already filling 1 application(s) for this agent (limit 1)." } };
+		const started = await call("POST", "/ap/application-runs", readyApp("escalation-queued"));
+		expect(started.body.run.status).toBe("queued");
+		await call("PUT", "/ap/application-runner/settings", { escalationLevel: "conservative" });
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.219' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
+		expect(dispatches()).toHaveLength(1);
+		await call("PUT", "/ap/application-runner/settings", { escalationLevel: "autonomous" });
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("dispatched");
+		expect(dispatches().at(-1)?.body.policy).toMatchObject({ escalationLevel: "balanced", mode: "fill_and_review" });
+	});
+});
+
 describe("owner instance memory reaches application dispatch (#1508)", () => {
 	const preference = (answer: string) => ({ key: "job_application_preferences", source: "user", type: "preference", updatedAt: Date.now(), content: JSON.stringify({ version: 1, facts: [{ field: "salary_expectation", answer, confirmedAt: "2026-10-01" }], pendingFields: ["salary_super_basis", "disclosures"] }) });
 	it("binds the Runner's own current facts without changing documents or submission authority", async () => {
@@ -532,7 +571,7 @@ describe("submission is gated", () => {
 		const r = await call("POST", "/ap/application-runs", readyApp("lead-6"));
 		const gateId = r.body.run.policy.gate.gateId;
 		expect(r.body.run.policy).toMatchObject({ mode: "auto_submit", gate: { allowed: true } });
-		expect(dispatches()[0].body.policy).toEqual({ mode: "auto_submit", allowDomains: ["jobs.example.com", "example.com"], submitGate: { gateId }, blurFormFields: true });
+		expect(dispatches()[0].body.policy).toEqual({ mode: "auto_submit", escalationLevel: "conservative", allowDomains: ["jobs.example.com", "example.com"], submitGate: { gateId }, blurFormFields: true });
 
 		const runId = r.body.run.id;
 		runner("ended", {

@@ -449,7 +449,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"get_application_runner_settings",
-		"An Application Runner's handoff and submission policy (#953): which signed-in CLI fills applications, from which of the owner's files, on which sites, and the auto-submit policy (off by default — every application stops for review). Pass the Runner's instance_id. Read-only.",
+		"An Application Runner's handoff and submission policy (#953): signed-in CLI, local browser model/reasoningEffort, owner sources, sites, escalationLevel (conservative by default), and auto-submit policy (off by default). Escalation permits model-assessed source-supported judgments; it does not authorize submission or invent missing personal facts. Returns effective settings for roundtrip through set_application_runner_settings. Pass the Runner's instance_id. Read-only.",
 		{ ...who },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
@@ -473,6 +473,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 					engine: z.enum(["claude", "codex"]).optional(),
 					model: z.string().nullable().optional().describe("Local browser-driving CLI model ID, independent of the cloud supervisor. null uses the CLI default."),
 					reasoningEffort: z.string().nullable().optional().describe("Codex reasoning effort token supported by the selected model/client. null uses the CLI default. Other engines refuse explicit effort."),
+					escalationLevel: z.enum(["conservative", "balanced", "autonomous"]).optional().describe("Owner's delegation of model-assessed judgments: conservative (default) asks for minor and major decisions; balanced permits minor and asks for major; autonomous permits both. Unknown personal facts remain unresolved. Submission authorization, Stop, credential-origin and source permissions remain independent. Frozen per run; nondefault levels require CLI 0.4.220 or newer."),
 					authMode: z.enum(["machine", "subscription"]).optional(),
 					browserProfile: z.enum(["isolated", "default"]).optional(),
 					workspace: z.string().optional(),

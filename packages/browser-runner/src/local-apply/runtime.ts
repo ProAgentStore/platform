@@ -1,3 +1,4 @@
+import { parseEscalationLevel } from "./answer-decision.js";
 import { CodexModelObserver } from "../local-browser/model-observation.js";
 import { modelConfigurationProblem, requestedModelEvidence } from "../local-browser/model-config.js";
 import type { BrowserStateObservation } from "../browser-state-contract.js";
@@ -249,7 +250,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		sources,
 		artifacts,
 		...(o.cloudDocuments !== undefined ? { cloudDocuments: parseCloudDocuments(o.cloudDocuments, artifacts) } : {}),
-		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
+		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
 		...(o.instancePreferences !== undefined ? { instancePreferences: validatePreferences(o.instancePreferences, o.instanceId as string) } : {}),
@@ -484,7 +485,7 @@ export class LocalApplyRuntime {
 			isStopped: () => run.cancelled || run.timedOut || run.state === "ended",
 			now: this.now,
 			limits: e.limits,
-			mode: e.policy.mode,
+			mode: e.policy.mode, escalationLevel: e.policy.escalationLevel,
 			gateId: e.policy.submitGate?.gateId,
 			sessions: run.browser.sessions,
 			signInSecrets: () => [...(run.signIn?.names ?? [])],
@@ -586,6 +587,7 @@ export class LocalApplyRuntime {
 				diagnostic: { ...d, signals: [...d.signals, ...(b.confirmation ? (confirmationSignals(b.confirmation) as LocalApplySignal[]) : [])] },
 			};
 		}
+		if (b?.unresolvedQuestions.length) return { outcome: "blocked", summary: [summary, "Incomplete: unresolved owner questions; nothing was submitted."].filter(Boolean).join("\n"), blockReason: "incomplete", questions: [...b.unresolvedQuestions] };
 		if (b?.reviewReady) return { outcome: "awaiting_review", summary };
 		if (!b?.filled && missingLogin(e.engine, run.output.join("\n"))) return { outcome: "blocked", summary, blockReason: "engine_not_signed_in", questions: [signInHelp(e.engine)], engineAuth: "missing_login" };
 		if (b?.blocked) {
@@ -686,11 +688,11 @@ export class LocalApplyRuntime {
 	/** Cached and waiting terminal directives have the same observed outcome (#1488). */
 	private finishSupervisorDirective(run: Run, directive: "request_review" | "stop", checkpointId: string, checkpoint?: LocalApplySupervisorCheckpoint): void {
 		if (directive === "stop") {
-			this.end(run, { outcome: "blocked", blockReason: "incomplete", questions: ["The supervisor stopped this run before it could continue."] });
+			this.end(run, run.bridge?.unresolvedQuestions.length ? this.outcomeOf(run, run.child?.exitCode ?? -1) : { outcome: "blocked", blockReason: "incomplete", questions: ["The supervisor stopped this run before it could continue."] });
 			return;
 		}
 		const bridge = run.bridge;
-		if (bridge?.submitAttempted) this.end(run, this.outcomeOf(run, run.child?.exitCode ?? -1));
+		if (bridge?.submitAttempted || bridge?.unresolvedQuestions.length) this.end(run, this.outcomeOf(run, run.child?.exitCode ?? -1));
 		else if (!bridge?.filled && !bridge?.uploaded.size) {
 			// #1484: requesting human attention is not evidence that a form was populated.
 			// Preserve the observed blocker and checkpoint instead of inviting approval of an empty form.

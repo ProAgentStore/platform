@@ -27,6 +27,15 @@
  * read and from the per-minute cron — exactly like local browser research.
  */
 
+/** Owner-selected threshold for model-assessed decisions; submission permission is independent. */
+export const LOCAL_APPLY_ESCALATION_LEVELS = ["conservative", "balanced", "autonomous"] as const;
+export type LocalApplyEscalationLevel = (typeof LOCAL_APPLY_ESCALATION_LEVELS)[number];
+export interface LocalApplyDecisionAssessment {
+	risk: "minor" | "major";
+	/** Model explanation, nonempty and at most 1000 characters; never a credential or source quote. */
+	reason: string;
+}
+
 export const LOCAL_APPLY_TASK_TYPE = "local_browser.apply";
 export const LOCAL_APPLY_RUN_PATH = "/local-apply/run";
 export const LOCAL_APPLY_STATUS_PATH = "/local-apply/status";
@@ -134,6 +143,8 @@ export interface LocalApplyTaskEnvelope {
 	cloudDocuments?: import("../local-artifact/document-contract.js").PortableDocument[];
 	policy: {
 		mode: LocalApplyMode;
+		/** Frozen per-run decision threshold. Absent on older runs means conservative. */
+		escalationLevel?: LocalApplyEscalationLevel;
 		/** The sites the run may be on. Leaving them pauses (`external_redirect`). */
 		allowDomains: string[];
 		/** Explicit owner website policy (CLI 0.4.209); absent retains legacy behavior. */
@@ -459,10 +470,12 @@ export const LOCAL_APPLY_SUPERVISOR_DIRECTIVES: readonly LocalApplySupervisorDir
 export type LocalApplySupervisorPhase = "initial" | "before_submit" | "post_navigation" | "uncertain";
 export const LOCAL_APPLY_SUPERVISOR_PHASES: readonly LocalApplySupervisorPhase[] = ["initial", "before_submit", "post_navigation", "uncertain"];
 
-/** Stable, non-prose signals a cloud supervisor may use to decide. */
+/** Stable blocker signals a cloud supervisor may use to decide. */
 export type LocalApplySupervisorBlocker = "captcha" | "login_required" | "anti_bot" | "missing_answer" | "screening_ambiguity" | "external_redirect" | "duplicate_application";
 export interface LocalApplySupervisorFacts {
 	phase: LocalApplySupervisorPhase;
+	/** The acting model assesses the decision; code does not classify page content. */
+	decision?: LocalApplyDecisionAssessment;
 	actions: number;
 	filled: number;
 	uploaded: number;
@@ -472,7 +485,7 @@ export interface LocalApplySupervisorFacts {
 	title?: string;
 }
 
-/** The durable identity and runner-derived facts for one bridge checkpoint. No model prose crosses this boundary. */
+/** The durable identity and bounded facts for one bridge checkpoint, including an optional model assessment. */
 export interface LocalApplySupervisorCheckpoint {
 	schemaVersion: 1;
 	checkpointId: string;
@@ -520,8 +533,8 @@ const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 // `marker`, `looks`, `urlChanged` and `titleChanged` are #994's post-click evidence: a marker ID
 // from `LOCAL_APPLY_CONFIRMATION_MARKERS`, how many times the page was read, and whether it moved.
 // Those fields carry ids/counts/booleans, never receipt prose. `target` is the intentional exception:
-// a bounded observed control label, scrubbed of run secrets by the runner; typed values stay excluded.
-const DETAIL_KEYS = new Set(["observedModel", "observedReasoningEffort", "requestedModel", "requestedReasoningEffort", "modelVerification", "engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site", "target"]);
+// a bounded observed control label. `decisionReason` is a bounded model explanation. Both are scrubbed of run secrets by the runner; typed values stay excluded.
+const DETAIL_KEYS = new Set(["sourceId", "escalationLevel", "decisionRisk", "decisionReason", "observedModel", "observedReasoningEffort", "requestedModel", "requestedReasoningEffort", "modelVerification", "engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site", "target"]);
 
 /**
  * A page URL as a trace may keep it (#1069): origin and path, no query or fragment — a sign-in page's
@@ -561,6 +574,16 @@ export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
 		const detail: Record<string, string | number | boolean> = {};
 		for (const [k, v] of Object.entries(o.detail as Record<string, unknown>)) {
 			if (!DETAIL_KEYS.has(k)) continue;
+			if (k === "sourceId") {
+				if (typeof v === "string" && /^source-[a-f0-9]{64}$/.test(v)) detail[k] = v;
+				continue;
+			}
+			if (k === "escalationLevel" || k === "decisionRisk" || k === "decisionReason") {
+				if (k === "escalationLevel" && LOCAL_APPLY_ESCALATION_LEVELS.includes(v as LocalApplyEscalationLevel)) detail[k] = v as string;
+				if (k === "decisionRisk" && (v === "minor" || v === "major")) detail[k] = v;
+				if (k === "decisionReason" && typeof v === "string" && v.trim() && v.length <= 1000) detail[k] = v.trim();
+				continue;
+			}
 			// #994: `marker` is a runner-defined confirmation ID, never the success sentence the
 			// page displayed. Keep the closed vocabulary closed even if a compromised/outdated
 			// runner tries to use this otherwise-string field as a prose channel.

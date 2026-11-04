@@ -155,7 +155,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.204`
+- `serverInfo.version`: `0.1.205`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -272,6 +272,23 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `runner_restart`: `confirm: "runner_restart"`, and only with `force: true` (#1032)
 - `set_application_runner_settings`: `confirm: "auto_submit_real_submissions"`, and only when enabling auto-submit — the owner's acknowledgement that submissions are real and irreversible (#1039)
 - `remove_repo`: `confirm: "remove_all_repos"`, and only when removing **all** indexed repos
+
+### Application Runner escalation
+
+`get_application_runner_settings` returns the effective `escalationLevel`, local browser
+`model` and `reasoningEffort`. `set_application_runner_settings` patches those same fields
+inside `settings`; omitted fields stay unchanged. For example, preview
+`{ instance_id, settings: { escalationLevel: "balanced" }, dry_run: true }`, then send the
+same change without `dry_run`. Read the settings back to verify the saved policy.
+
+- `conservative` (default): ask the owner about model-assessed minor and major judgments.
+- `balanced`: delegate minor judgments and ask about major judgments.
+- `autonomous`: delegate both levels. Unknown personal facts remain unresolved.
+
+The model assesses meaning and risk using current page evidence and authorized owner
+sources. These levels do not change submission authorization, Stop, credential-origin or
+source permissions. Settings are frozen for each run; balanced and autonomous require
+CLI 0.4.220 or newer. Changing the local browser model does not change the cloud supervisor.
 
 ### Tool annotations
 

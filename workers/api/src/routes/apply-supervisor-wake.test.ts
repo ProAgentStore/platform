@@ -180,7 +180,7 @@ async function fillForReview(): Promise<{ applicationId: string; fillRunId: stri
 	await call("GET", `/t1/applications/${applicationId}`);
 	const fillRunId = dispatches("/local-apply/run")[0].body.runId as string;
 	// The default configuration: fill and STOP. No submit gate exists for this run.
-	expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", allowDomains: ["jobs.example.com"], blurFormFields: true });
+	expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", escalationLevel: "conservative", allowDomains: ["jobs.example.com"], blurFormFields: true });
 	return { applicationId, fillRunId };
 }
 
@@ -438,5 +438,22 @@ describe("#985: the hard stops are preserved", () => {
 		expect((await checkpointEvents(fillRunId))[0]?.detail).toMatchObject({ decision: expected, source: "policy" });
 		// Nothing was sent to the employer, and the application is visibly waiting.
 		expect((await call("GET", `/t1/applications/${applicationId}`)).body.application.submitAttemptedAt).toBeNull();
+	});
+});
+
+
+describe("model decision escalation is persisted and delivered through the supervisor relay", () => {
+	it.each([
+		["balanced", "minor", "continue"], ["balanced", "major", "request_review"], ["autonomous", "major", "continue"],
+	] as const)("%s handles a %s decision as %s", async (escalationLevel, risk, expected) => {
+		const { fillRunId } = await fillForReview();
+		// Freeze this run's policy while leaving the instance at its default: the dispatcher must use the run.
+		d1.DB.prepare("UPDATE local_apply_runs SET policy = json_set(policy, '$.escalationLevel', ?1) WHERE id = ?2").bind(escalationLevel, fillRunId).run();
+		const decision = { risk, reason: "The source supports this interpretation." };
+		answers["/local-apply/status"] = pausedAt(fillRunId, { schemaVersion: 1, checkpointId: "assessed-decision", facts: { phase: "uncertain", actions: 3, filled: 1, uploaded: 0, blockers: [], decision } });
+		await syncActiveApplyRuns(env());
+		expect((await directives())[0]).toMatchObject({ directive: expected });
+		expect(dispatched()[0]?.body).toMatchObject({ directive: expected });
+		expect((await checkpointEvents(fillRunId))[0]?.detail).toMatchObject({ decision: expected, escalationLevel, decisionRisk: risk, decisionReason: decision.reason });
 	});
 });

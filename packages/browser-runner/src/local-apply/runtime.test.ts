@@ -748,6 +748,23 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		expect((await checkpoint).isError).toBe(true);
 	});
 
+	it.each([["before", "request_review"], ["after", "request_review"], ["before", "stop"], ["after", "stop"]])("keeps deferred questions incomplete for %s checkpoint delivery of %s", async (delivery, directive) => {
+		const rt = runtime();
+		const input = envelope(); input.policy.escalationLevel = "autonomous";
+		rt.start(input); await settle(); await call(rt, "browser_snapshot"); await approve(rt);
+		await call(rt, "request_answer", { question: "What is your registration number?" });
+		expect(rt.status({ runId: "run-1" }).state).toBe("running");
+		await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
+		const command = { runId: "run-1", schemaVersion: 1, checkpointId: "deferred-review", directive };
+		if (delivery === "before") rt.directive(command);
+		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: "deferred-review", phase: "before_submit" });
+		await settle();
+		const status = rt.directive(command);
+		expect(status.result).toMatchObject({ outcome: "blocked", blockReason: "incomplete", filled: 1, questions: ["What is your registration number?"], submitAttempted: false });
+		expect(runtime().status({ runId: "run-1" }).result).toEqual(status.result);
+		expect((await checkpoint).isError).toBe(true);
+	});
+
 	it("retains the known blocker when the supervisor requests review without progress", async () => {
 		const rt = runtime();
 		rt.start(envelope());

@@ -21,6 +21,9 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - Distinguish model/prompt failures, unavailable tools and deterministic guard refusals. Verify the
   acting model and screenshot-input path; require varied-form evidence before calling a fix generic.
 
+- Require explicit escalation configuration in browser acceptance criteria: model-owned risk,
+  frozen user thresholds, truthful unresolved facts and separate submission permission.
+
 ## Outputs
 
 - For triage, lead with the most pressing issue and the reason it matters.

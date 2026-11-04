@@ -22,6 +22,9 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - Verify the browser-driving model separately from the cloud brain, and image input separately
   from replay capture. Never report a configuration or capability as active without evidence.
 
+- Keep escalation as frozen per-instance configuration. Model-assessed risk controls owner takeover;
+  source identity and submission authorization remain independent. Do not classify page wording in code.
+
 ## Completion Bar
 
 Development work is not complete until:

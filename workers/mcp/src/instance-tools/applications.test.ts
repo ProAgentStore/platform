@@ -267,6 +267,33 @@ describe("the Applications tools (#958, #953)", () => {
 });
 
 describe("the Runner's submission policy over MCP (#953)", () => {
+	it.each(["conservative", "balanced", "autonomous"])("publishes and forwards escalation level %s without changing submission authorization", async (escalationLevel) => {
+		const { seen, call, schemas } = tools();
+		const schema = z.object(schemas.get("set_application_runner_settings")!);
+		const args = schema.parse({ instance_id: "ap", settings: { escalationLevel, model: "gpt-6-astra", reasoningEffort: "high" } });
+		await call("set_application_runner_settings", args);
+		expect(seen).toEqual([{ url: "https://api.test/v1/instances/ap/application-runner/settings", method: "PUT", body: { escalationLevel, model: "gpt-6-astra", reasoningEffort: "high" } }]);
+		const out = await call("set_application_runner_settings", { instance_id: "ap", settings: { escalationLevel, autoSubmit: { enabled: true } } });
+		expect(out).toMatch(/auto_submit_real_submissions/);
+		expect(seen).toHaveLength(1);
+	});
+
+	it("rejects unsupported escalation levels and leaves omitted settings absent from a patch", () => {
+		const schema = z.object(tools().schemas.get("set_application_runner_settings")!);
+		expect(schema.safeParse({ instance_id: "ap", settings: { escalationLevel: "always" } }).success).toBe(false);
+		expect(schema.parse({ instance_id: "ap", settings: { maxPages: 3 } }).settings).toEqual({ maxPages: 3 });
+	});
+
+	it("returns effective escalation and model settings unchanged and previews without writing", async () => {
+		const { call } = tools();
+		const settings = { escalationLevel: "autonomous", model: "gpt-6-astra", reasoningEffort: "high", autoSubmit: { enabled: false } };
+		const fetch = vi.fn(async () => new Response(JSON.stringify({ settings }), { headers: { "Content-Type": "application/json" } }));
+		vi.stubGlobal("fetch", fetch);
+		expect(JSON.parse(await call("get_application_runner_settings", { instance_id: "ap" }))).toEqual({ settings });
+		expect(await call("set_application_runner_settings", { instance_id: "ap", settings: { escalationLevel: "autonomous" }, dry_run: true })).toMatch(/dryRun/);
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
 	it("reads and patches the settings route the console's policy card uses", async () => {
 		const { seen, call } = tools();
 		await call("get_application_runner_settings", { instance_id: "ap" });

@@ -1,4 +1,5 @@
-import { withQuote } from "./tool-schemas.js";
+import { answerDecision, parseDecision, sourceCatalog } from "./answer-decision.js";
+import { applyTools } from "./tool-schemas.js";
 /**
  * The apply bridge (#957): the only way an application CLI reaches the page, and where the write
  * policy is enforced. Like the research bridge (`local-browser/bridge.ts`), the CLI gets no web
@@ -10,8 +11,9 @@ import { withQuote } from "./tool-schemas.js";
  *    allowed sites only. Leaving them pauses the run (`external_redirect`).
  *  - fill: `browser_type`, `browser_select_option`, and clicks on checkboxes, radios and options.
  *    Each carries a `source_quote` that must be verbatim text from the owner's profile, answers or
- *    approved materials, and the value must appear in that quote — a form answer not grounded in
- *    the profile is refused, and the CLI is told to ask (`request_answer`). Uploads go through
+ *    approved materials. Literal answers must appear in the quote; delegated interpretations use
+ *    a model risk assessment and quote bound to a trusted source ID. Code checks source provenance
+ *    and owner risk thresholds; the model interprets meaning and precedence. Uploads go through
  *    `upload_artifact`, which can only attach an approved artifact whose hash still matches, once.
  *  - submit: any click on a control that submits a POST form (a DOM fact, read from the page by
  *    the commit-guard probe) or whose own accessible name commits, in any of the guard's
@@ -51,7 +53,7 @@ import { ApplyReplay } from "./apply-replay.js";
 import { type AnswerSource, isCombinedCitizenshipOption, observedCitizenshipOption } from "./citizenship-option.js";
 import { PREFERENCE_FIELD_PROBE_FN, preferenceDecision, preferenceField, type PreferenceDecision, type PreferenceSource } from "../instance-preferences.js";
 import type { InstancePreferences } from "../instance-preferences-contract.js";
-import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
+import type { LocalApplyEscalationLevel, LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
 	emit(event: Omit<LocalApplyEvent, "at">): void;
@@ -79,6 +81,7 @@ export interface ApplyBridgeHost {
 	now(): number;
 	limits: LocalApplyLimits;
 	mode: LocalApplyMode;
+	escalationLevel?: LocalApplyEscalationLevel;
 	gateId?: string;
 	/** This browser profile's site sign-in ledger (#1094). Absent: no session gate. */
 	sessions?: SiteSessionLedger;
@@ -199,6 +202,8 @@ export class ApplyBridge {
 	filled = 0;
 	readonly uploaded = new Set<LocalApplyArtifactKind>();
 	reviewReady = false;
+	private reviewEnded = false;
+	readonly unresolvedQuestions: string[] = [];
 	summary: string | null = null;
 	/** Present only after the CLI explicitly reports a notice that the runner independently saw. */
 	unavailable: LocalApplyUnavailableEvidence | null = null;
@@ -240,52 +245,11 @@ export class ApplyBridge {
 	}
 
 	private get done(): boolean {
-		return this.reviewReady || this.submitAttempted || this.unavailable !== null;
+		return this.reviewEnded || this.reviewReady || this.submitAttempted || this.unavailable !== null;
 	}
 
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
-		const own = (await this.browser.listTools()).filter((t) => t.name !== "browser_take_screenshot" && (READ_TOOLS.has(t.name) || FILL_TOOLS.has(t.name) || t.name === "browser_click" || t.name === "browser_press_key"));
-		const tools = own.map((t) => {
-			if (t.name === "browser_click")
-				return { ...t, description: "Click an observed control. Answers need source_quote. To focus/open a combobox or use a non-submit editor button, declare action_intent=edit_form only when live context establishes local form editing, never consent, sharing or submission. Verify the resulting state. Submission policy cannot be overridden by intent.", inputSchema: withQuote(t.inputSchema, false, { action_intent: { type: "string", enum: ["edit_form"], description: "Required for generic editor buttons and combobox focus/open: local noncommitting form editing only. Opening is not answering; take a fresh snapshot before choosing an option with source_quote. Never terms/consent, sharing, submission or unrelated actions. This declaration cannot override submission policy." }, answer_value: { type: "string", description: "For an option whose name is omitted from the snapshot: its complete observed accessible label. Requires source_quote. The runner verifies this exact ref and native name; never supply a guessed label or an internal value." } }) };
-			if (t.name === "browser_press_key") return { ...t, description: "Press Tab, Shift+Tab, an arrow key, Escape, Home/End or PageUp/PageDown. Nothing that types or submits." };
-			if (FILL_TOOLS.has(t.name)) return { ...t, ...(t.name === "browser_select_option" ? { description: "Select options in a native HTML select only. For custom comboboxes/autocomplete, use current observed option clicks or supported keyboard interactions, then verify fresh evidence. Requires source_quote." } : {}), inputSchema: withQuote(t.inputSchema, true) };
-			return t;
-		});
-		return [
-			...tools,
-			...(this.replay.visionEnabled ? [{ name: "browser_take_screenshot", description: "Read current viewport pixels when a snapshot does not explain layout, a control or feedback. Uses the run's screenshot privacy settings. Refresh the snapshot for actionable element refs.", inputSchema: { type: "object", properties: {}, additionalProperties: false } }] : []),
-			{
-				name: "upload_artifact",
-				description: "Attach an approved document. Obtain the page's supervisor approval before clicking its upload control, then complete the opened chooser with this tool. A same-page chooser retains that approval; do not insert another checkpoint or page read. Each document can be selected once; verify website acceptance afterward.",
-				inputSchema: { type: "object", properties: { kind: { type: "string", enum: ["resume", "cover_letter"] } }, required: ["kind"] },
-			},
-			{
-				name: "request_answer",
-				description: "Ask the owner for an answer the sources do not give (missing_answer), or when a question is ambiguous (screening_ambiguity). The run waits for them.",
-				inputSchema: { type: "object", properties: { question: { type: "string", maxLength: LOCAL_APPLY_CAPS.questionChars }, kind: { type: "string", enum: ["missing_answer", "screening_ambiguity"] } }, required: ["question"] },
-			},
-			{
-				name: "ready_for_review",
-				description: "The form is filled as far as the sources allow. Stop here; the owner reviews it. Call once, last.",
-				inputSchema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
-			},
-			{
-				name: "supervisor_checkpoint",
-				description: "Obtain supervisor approval after the initial snapshot, after page changes, or immediately before final submission. Choose a stable checkpointId. A continue covers subsequent same-page fills and uploads. Do not insert this into an already approved file-chooser upload. Use uncertain only for an unresolved issue requiring review. request_review and stop end the run.",
-				inputSchema: { type: "object", properties: { checkpointId: { type: "string", minLength: 1, maxLength: 300 }, phase: { type: "string", enum: ["initial", "post_navigation", "before_submit", "uncertain"] } }, required: ["checkpointId", "phase"], additionalProperties: false },
-			},
-			{
-				name: "report_job_unavailable",
-				description: "End the run when a fresh browser snapshot shows that this job is expired, closed or unavailable. The runner independently verifies the page notice; it refuses unsupported reports.",
-				inputSchema: { type: "object", properties: { reason: { type: "string", enum: ["expired", "unavailable"] } }, required: ["reason"] },
-			},
-			{
-				name: "request_sign_in_code",
-				description: "Only while PAGS has asked you to sign in: after clicking the button that emails a sign-in code, call this and wait. When it returns, type the name PAGS_LOGIN_CODE into the code box; the runner substitutes the code.",
-				inputSchema: { type: "object", properties: {}, additionalProperties: false },
-			},
-		];
+		return applyTools(await this.browser.listTools(), this.replay.visionEnabled);
 	}
 
 	private async dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -592,11 +556,7 @@ export class ApplyBridge {
 				if ("error" in answer) return this.refuse("browser_click", "fill", answer.error);
 				t.name = answer.value; expectedAccessibility = answer.expected;
 			}
-			const preference = await this.preference(t, t.name, args.source_quote);
-			if (preference.kind === "refuse") return this.refuse("browser_click", "fill", preference.reason);
-			const refusal = preference.kind === "allow" ? null : isCombinedCitizenshipOption(t.role, t.name)
-				? observedCitizenshipOption(t.role, t.name, args.source_quote, this.host.groundingSources?.()) ? null : "This citizenship option needs a verified affirmative profile fact, with no conflicting or uncertain source statement. Quote that profile fact, or call request_answer."
-				: groundingRefusal(t.name, args.source_quote, this.host.grounding());
+			const refusal = await this.answer(t, t.name, args, true);
 			if (refusal) return this.refuse("browser_click", "fill", refusal);
 			return this.fill("browser_click", t.role, forward, expectedAccessibility);
 		}
@@ -660,6 +620,20 @@ export class ApplyBridge {
 		return text(textOf(res));
 	}
 
+	private async answer(t: { role: string; name: string; ref: string }, value: string, args: Record<string, unknown>, citizenship = false): Promise<string | null> {
+		if (args.decision !== undefined) {
+			const result = answerDecision({ decision: args.decision, quote: args.source_quote, value, sources: this.host.groundingSources?.() ?? [], level: this.host.escalationLevel ?? "conservative" });
+			this.host.emit({ type: "policy.decision", detail: { class: "fill", decision: result.refusal ? "refused" : "allowed", reason: result.refusal ? "answer_decision_refused" : "source_supported_decision", decisionReason: (this.host.redact?.(result.assessment?.reason ?? "invalid_decision") ?? result.assessment?.reason ?? "invalid_decision").slice(0, 1000), decisionRisk: result.assessment?.risk ?? "unknown", escalationLevel: this.host.escalationLevel ?? "conservative", sourceId: result.sourceId ?? "unknown" } });
+			return result.refusal;
+		}
+		const preference = await this.preference(t, value, args.source_quote);
+		if (preference.kind === "refuse") return preference.reason;
+		if (preference.kind === "allow") return null;
+		return citizenship && isCombinedCitizenshipOption(t.role, value)
+			? observedCitizenshipOption(t.role, value, args.source_quote, this.host.groundingSources?.()) ? null : "This citizenship option needs a verified affirmative profile fact, with no conflicting or uncertain source statement. Quote that profile fact, or call request_answer."
+			: groundingRefusal(value, args.source_quote, this.host.grounding());
+	}
+
 	private async preference(t: { role: string; name: string; ref: string }, value: string, sourceQuote: unknown): Promise<PreferenceDecision> {
 		const preferences = this.host.instancePreferences?.();
 		if (!preferences) return { kind: "legacy" };
@@ -708,9 +682,7 @@ export class ApplyBridge {
 			if (ok && this.signIn) return text(this.signInInstructions());
 			return ok ? text("The owner handled the sign-in. Take a browser_snapshot and continue.") : text("A sign-in needs the owner and was not handled. Stop now.", true);
 		}
-		const preference = await this.preference(t, value, args.source_quote);
-		if (preference.kind === "refuse") return this.refuse("browser_type", "fill", preference.reason);
-		const refusal = preference.kind === "allow" ? null : groundingRefusal(value, args.source_quote, this.host.grounding());
+		const refusal = await this.answer(t, value, args);
 		if (refusal) return this.refuse("browser_type", "fill", refusal);
 		return this.fill("browser_type", t.role, { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, text: value });
 	}
@@ -721,9 +693,7 @@ export class ApplyBridge {
 		const values = Array.isArray(args.values) ? args.values.filter((v): v is string => typeof v === "string") : [];
 		if (!values.length) return this.refuse("browser_select_option", "fill", "values is required.");
 		for (const v of values) {
-			const preference = await this.preference(t, v, args.source_quote);
-			if (preference.kind === "refuse") return this.refuse("browser_select_option", "fill", preference.reason);
-			const refusal = preference.kind === "allow" ? null : groundingRefusal(v, args.source_quote, this.host.grounding());
+			const refusal = await this.answer(t, v, args);
 			if (refusal) return this.refuse("browser_select_option", "fill", refusal);
 		}
 		return this.fill("browser_select_option", t.role, { element: typeof args.element === "string" ? args.element : t.name, target: t.ref, values });
@@ -767,13 +737,21 @@ export class ApplyBridge {
 			this.blocked = { reason: "login_required", questions: ["The browser has not verified that sign-in completed. Continue sign-in or take over this browser."] };
 			return text("Sign-in is still unresolved; it is not a missing profile or screening answer. Continue the sign-in, or call ready_for_review to report login_required. No profile question was sent.", true);
 		}
+		if (this.host.escalationLevel === "autonomous") {
+			if (!this.unresolvedQuestions.includes(question)) {
+				if (this.unresolvedQuestions.length >= LOCAL_APPLY_CAPS.answers) return text("The unresolved-question limit was reached. Complete independent known fields, then ready_for_review; do not invent answers.", true);
+				this.unresolvedQuestions.push(question);
+				this.host.emit({ type: "policy.decision", detail: { tool: "request_answer", decision: "deferred", reason: "missing_owner_fact", count: this.unresolvedQuestions.length } });
+			}
+			return text("Recorded as unresolved without pausing. Leave this answer empty, complete other supported fields and verify the form. Do not submit: report these questions with ready_for_review.");
+		}
 		const reason: LocalApplyPauseReason = args.kind === "screening_ambiguity" ? "screening_ambiguity" : "missing_answer";
 		const before = this.host.grounding().length;
 		const ok = await this.pauseFor({ reason, question });
 		if (!ok) return text("Nobody answered. Do not guess. Stop now.", true);
 		// Resumed without an answer: the owner chose to leave it — never a cue to guess.
 		if (this.host.grounding().length === before) return text("The owner resumed without answering: leave that field empty and continue with the others.");
-		return text("The owner answered. Their answer is now part of your sources — quote it as source_quote. Take a browser_snapshot and continue.");
+		return text(`The owner answered. Their answer is now part of your sources — quote it as source_quote. Take a browser_snapshot and continue.\n${sourceCatalog(this.host.groundingSources?.() ?? [])}`);
 	}
 
 	/**
@@ -786,6 +764,8 @@ export class ApplyBridge {
 		if (!/^[A-Za-z0-9_.:-]{1,300}$/.test(checkpointId)) return text("supervisor_checkpoint needs a safe checkpointId (letters, numbers, dot, underscore, colon or hyphen).", true);
 		const phase: LocalApplySupervisorPhase | null = args.phase === "initial" || args.phase === "post_navigation" || args.phase === "before_submit" || args.phase === "uncertain" ? args.phase : null;
 		if (!phase) return text("supervisor_checkpoint needs phase initial, post_navigation, before_submit or uncertain.", true);
+		const decision = args.decision === undefined ? null : parseDecision(args.decision);
+		if (args.decision !== undefined && !decision || phase === "uncertain" && this.host.escalationLevel && this.host.escalationLevel !== "conservative" && !decision) return text("This checkpoint needs decision with risk minor or major and a nonempty reason of at most 1000 characters. Nothing ended; assess the actual uncertainty and retry, or continue independent supported fields.", true);
 		const state = await this.inspect();
 		// A sign-in reached after the last landing — a late redirect (#1100, run 804bed49): hold for the owner as
 		// on landing. Reported to the cloud as a blocker it was stopped, and ended `incomplete`.
@@ -813,6 +793,7 @@ export class ApplyBridge {
 			checkpointId,
 			facts: {
 				phase,
+				...(decision ? { decision: { ...decision, reason: (this.host.redact?.(decision.reason) ?? decision.reason).slice(0, 1000) } } : {}),
 				actions: this.actions,
 				filled: this.filled,
 				uploaded: this.uploaded.size,
@@ -849,6 +830,13 @@ export class ApplyBridge {
 	}
 
 	private async review(summary: string): Promise<ToolResult> {
+		if (this.unresolvedQuestions.length) {
+			this.summary = `${summary}\nIncomplete: ${this.unresolvedQuestions.length} unresolved owner question(s). Nothing was submitted.`;
+			this.blocked = { reason: "incomplete", questions: [...this.unresolvedQuestions] };
+			this.reviewEnded = true;
+			this.host.emit({ type: "policy.decision", detail: { tool: "ready_for_review", decision: "incomplete", reason: "unresolved_questions", count: this.unresolvedQuestions.length } });
+			return text("Recorded incomplete with the unresolved questions. Nothing was submitted. Stop now.");
+		}
 		this.summary = summary; // bounded where the result is built (runtime.ts `end`)
 		// Nothing entered, on a sign-in page (#1100; runs abb37433, 7fb1e4f5): the outcome is the owner's sign-in,
 		// not an empty form "awaiting review" — a card that is not `login_required` offers them no sign-in at all.
@@ -922,6 +910,7 @@ export class ApplyBridge {
 
 	/** The final Submit. Never under fill_and_review; once, gated and traced, under auto_submit. */
 	private async submit(forward: Record<string, unknown>, why = "terminal_label"): Promise<ToolResult> {
+		if (this.unresolvedQuestions.length) return this.refuse("browser_click", "submit", "Unresolved owner questions remain. Complete independent known fields, then ready_for_review; do not submit.");
 		const checkpoint = this.requireSupervisor("browser_click", "submit");
 		if (checkpoint) return checkpoint;
 		if (this.host.mode !== "auto_submit" || !this.host.gateId) {

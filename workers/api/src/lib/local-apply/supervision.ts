@@ -6,6 +6,7 @@
  * gives retries an unambiguous operation: deliver the already-recorded directive, never decide a
  * second time.
  */
+import { parseDecisionAssessment } from "./escalation-config.js";
 import type { Env } from "../../types.js";
 import type { LocalApplySupervisorFacts } from "./contract.js";
 import type { ApplyRun } from "./store.js";
@@ -86,14 +87,17 @@ interface DirectiveRow {
 const validId = (value: unknown): value is string => typeof value === "string" && SAFE_ID.test(value);
 export const isSupervisorDirective = (value: unknown): value is SupervisorDirectiveKind => DIRECTIVES.includes(value as SupervisorDirectiveKind);
 
-/** Accept only decision evidence the runner derived from bridge state, never arbitrary model text. */
+/** Validate runner facts and the separately labelled, bounded model decision assessment. */
 export function sanitizeSupervisorFacts(value: unknown): LocalApplySupervisorFacts | null {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 	const facts = value as Record<string, unknown>;
 	if (!PHASES.has(facts.phase as LocalApplySupervisorFacts["phase"]) || !validCount(facts.actions) || !validCount(facts.filled) || !validCount(facts.uploaded)) return null;
 	if (!Array.isArray(facts.blockers) || facts.blockers.length > BLOCKERS.size || facts.blockers.some((v) => typeof v !== "string" || !BLOCKERS.has(v))) return null;
 	if ((facts.url !== undefined && !validUrl(facts.url)) || (facts.domain !== undefined && !validDomain(facts.domain)) || (facts.title !== undefined && !validTitle(facts.title))) return null;
+	const decision = facts.decision === undefined ? undefined : parseDecisionAssessment(facts.decision);
+	if (decision === null) return null;
 	return {
+		...(decision ? { decision } : {}),
 		phase: facts.phase as LocalApplySupervisorFacts["phase"],
 		actions: facts.actions,
 		filled: facts.filled,
