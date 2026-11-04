@@ -19,6 +19,24 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
   Delegate codebase exploration, documentation research, testing, and reviews where appropriate.
   Wait for relevant agents and consolidate their results before finishing.
 
+## Browser automation design (owner directive, 2026-11-04)
+
+- Read `docs/browser-agent-design.md` before browser automation work.
+- AI interprets the live page, questions, controls and validation feedback. Do not fix a failed
+  application by adding site-specific code, answer mappings, page-text regexes, CSS/HTML shape
+  heuristics, or scripted form playbooks. Improve the model, its prompt, memory and available
+  evidence first. Existing heuristics are technical debt, not precedent for adding more.
+- Code may provide generic browser tools, screenshots, logging, configuration and execution
+  integrity. Keep identity, source provenance, Stop, credential-origin and explicit submission
+  authorization checks; do not remove them under the pretext of making the agent generic.
+- Use current snapshots and, when needed and supported, screenshots as model input. Replay
+  screenshots alone do not establish that the acting model can see images. Verify the tool path.
+- Model choice belongs to each agent's execution configuration. Distinguish the cloud supervisor
+  from the local browser-driving model. Do not claim a model switch from changing only the other
+  model or adding prose. Verify the effective model from execution evidence.
+- Test reusable behavior on varied independent forms/components. A fix working on one employer
+  page is not evidence of a generic solution. Report unsupported capabilities honestly.
+
 ## Git workflow
 
 - Commit finished work and push directly to `main` (see *Delivery mode*). Do not open pull requests unless Serge

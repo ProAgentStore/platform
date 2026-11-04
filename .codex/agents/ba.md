@@ -16,6 +16,10 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - When a request turns into development work, hand it to the Dev Agent expectations: implementation must be verified, committed, and pushed unless the user explicitly says not to.
 - Do not claim a ticket, issue comment, deployment, or repo state exists without checking the source that owns it.
 - Preserve the distinction between product ProAgentStore agents and local Codex project agents when discussing "agents."
+- Follow `docs/browser-agent-design.md` for browser work. Scope AI-led interpretation and recovery,
+  not site-specific scripts, page-text/HTML heuristics or hardcoded answer mappings.
+- Distinguish model/prompt failures, unavailable tools and deterministic guard refusals. Verify the
+  acting model and screenshot-input path; require varied-form evidence before calling a fix generic.
 
 ## Outputs
 

@@ -16,6 +16,11 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - If verification cannot pass because of an unrelated pre-existing failure, report that failure clearly, then still commit and push the completed scoped change unless the user asked otherwise.
 - Preserve unrelated user changes. Never reset, checkout, clean, or discard work you did not create unless the user explicitly asks for that exact destructive action.
 - Prefer the repo's existing patterns and smallest safe change over broad refactors.
+- Follow `docs/browser-agent-design.md`: let AI interpret forms from current snapshots and images.
+  Do not patch employer-specific behavior with selectors, page-text/HTML heuristics or answer
+  mappings. Improve model/prompt/evidence first; generic tooling and authorization remain code.
+- Verify the browser-driving model separately from the cloud brain, and image input separately
+  from replay capture. Never report a configuration or capability as active without evidence.
 
 ## Completion Bar
 
