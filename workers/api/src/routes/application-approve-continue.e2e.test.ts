@@ -14,6 +14,7 @@
  * Durable Object storage behind the real storage-route handlers.
  */
 import { Hono } from "hono";
+import { completeRunnerBatch } from "../lib/local-apply/__fixtures__/status.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRecord, insertRecord, queryRecords, triageJobLead, writeJobLeadApplication } from "../agent-do-storage-routes.js";
 import type { CollectionRecord } from "../agent-storage-types.js";
@@ -43,7 +44,7 @@ const relay = {
 			const body = typeof cmd.body === "string" ? JSON.parse(cmd.body) : (cmd.body ?? {});
 			sent.push({ path: cmd.path, body });
 			const a = answers[cmd.path] ?? { status: 404, body: { error: "unknown path" } };
-			return new Response(JSON.stringify(a.body), { status: a.status });
+			return new Response(JSON.stringify(cmd.path === "/local-apply/status" && a.status === 200 ? completeRunnerBatch(a.body, body.afterSeq) : a.body), { status: a.status });
 		},
 	}),
 };

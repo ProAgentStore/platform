@@ -32,6 +32,7 @@ import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { readInstanceConfigPair } from "../instance-config.js";
 import { type JobApplication, getOwnedApplication } from "../local-artifact/store.js";
 import type { Env } from "../../types.js";
+import { parseApplyRunnerBatch } from "./trace-integrity.js";
 import { overloadRefusal } from "../runner-admission-gate.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import {
@@ -47,7 +48,6 @@ import {
 	type LocalApplyPause,
 	type LocalApplyResultEnvelope,
 	type LocalApplyTaskEnvelope,
-	parseLocalApplyEvent,
 	parseLocalApplyResult,
 	traceUrl,
 } from "./contract.js";
@@ -111,9 +111,8 @@ const str = (v: unknown) => (typeof v === "string" ? v : "");
  * indistinguishable silence. The run that #985 was filed from was in fact fully delivered; proving
  * that took a database read nobody outside the platform can make.
  *
- * RE-READS the run first, for the reason #982 records: `updateApplyRun` writes the trace wholesale
- * from the object it is handed, and the decision event was appended by `directApplicationCheckpoint`
- * against the same (now stale) object a moment ago. Appending from the stale copy would drop it.
+ * Read the latest lifecycle state before appending delivery evidence. The store appends
+ * atomically against its current trace (#1524); a stale caller cannot replace newer evidence.
  *
  * Bounded to two events per directive — the FIRST attempt, and the transition to delivered — so a
  * run parked for hours at one tick a minute cannot fill its own trace with retries.
@@ -489,7 +488,7 @@ async function notifyTerminalOutcome(env: Env, uid: string, run: ApplyRun, outco
 }
 
 /** End a run's application from its result — result receipt precedes outcome projection. */
-async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult: unknown, now: number): Promise<ApplyRun> {
+async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult: unknown, now: number, expectedRunnerSeq: number): Promise<ApplyRun> {
 	const attempted = run.trace.some((e) => e.type === "submit.attempted") || (rawResult as { submitAttempted?: unknown } | null)?.submitAttempted === true;
 	if (attempted) await markSubmitAttempted(env, run.applicationId, uid, now);
 	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
@@ -497,18 +496,18 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 	if (!r) {
 		const checked = parseLocalApplyResult(rawResult);
 		const error = "error" in checked ? `The runner sent a result PAGS cannot accept: ${checked.error}` : "The runner's result names another run.";
-		const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_result_invalid", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_result_invalid" } }] }, now);
+		const failed = await updateApplyRun(env, run, { to: "failed", expectedRunnerSeq, errorCode: "runner_result_invalid", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_result_invalid" } }] }, now);
 		if (failed) await move(env, uid, run.applicationId, ["filling", "blocked"], { ...base, to: "blocked", reason: attempted ? "submit_state_unknown" : "runner_result_invalid", questions: [error] }, now);
-		return failed ?? run;
+		return failed ?? (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	}
 	const to = r.outcome;
 	const moved = await updateApplyRun(
 		env,
 		run,
-		{ to, pause: null, result: r, engineAuth: r.engineAuth, ...(to === "failed" ? { errorCode: "engine_failed", error: r.error ?? null } : {}), events: [{ type: "run.ended", at: iso(now), detail: { status: to, engineAuth: r.engineAuth, count: r.filled, ...(r.blockReason ? { reason: r.blockReason } : {}) } }] },
+		{ to, expectedRunnerSeq, pause: null, result: r, engineAuth: r.engineAuth, ...(to === "failed" ? { errorCode: "engine_failed", error: r.error ?? null } : {}), events: [{ type: "run.ended", at: iso(now), detail: { status: to, engineAuth: r.engineAuth, count: r.filled, ...(r.blockReason ? { reason: r.blockReason } : {}) } }] },
 		now,
 	);
-	if (!moved) return run;
+	if (!moved) return (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	await reconcileResultOutcome(env, uid, moved, r, now);
 	return moved;
 }
@@ -677,10 +676,11 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	}
 	const body = (await runtimeJson(res)) as { state?: unknown; pause?: unknown; signIn?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
 	await refreshBrowserEvidence(env, { userId: uid, instanceId: run.instanceId, subjectKind: "local_apply_run", subjectId: run.id }, (path, body) => callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(body) }, { timeoutMs: BROWSER_EVIDENCE_TIMEOUT_MS }), now).catch(() => undefined);
-	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalApplyEvent).filter((e): e is NonNullable<typeof e> => e !== null) as ApplyTraceEvent[];
+	const batch = parseApplyRunnerBatch(body.events, body.lastSeq, run.runnerSeq);
+	if (!batch) return (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
+	const { events, lastSeq } = batch;
 	// #1412: the runner says the CLI is signing in with provisioned secrets (names only), and whether it wants the emailed code.
 	const signInSync = { signIn: body.state === "running" ? parseRunnerSignIn(body.signIn) : null, events };
-	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	// A submit attempt is recorded the moment PAGS sees it, before anything else can go wrong.
 	if (events.some((e) => e.type === "submit.attempted")) await markSubmitAttempted(env, run.applicationId, uid, now);
 	// Replay frames (#1063) — every form control blurred by the runner before capture — pulled beside the
@@ -708,13 +708,15 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 				...(p.reason === "supervisor_checkpoint" && checkpoint ? { checkpoint } : {}),
 			}
 			: null;
+	const to = body.state === "paused" && pause ? "paused" : body.state === "running" ? "running" : run.status;
+	const accepted = await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now);
+	if (!accepted || accepted.runnerSeq > lastSeq) return (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
+	let current: ApplyRun = accepted;
 	// Receipt is durable before a cloud brain can see the pause. The checkpoint has no prose or
 	// form values — only runner-derived facts validated by `sanitizeSupervisorFacts` above.
 	if (pause?.reason === "supervisor_checkpoint" && pause.checkpoint) {
 		await receiveSupervisorCheckpoint(env, run, uid, { ...pause.checkpoint, runnerSeq: lastSeq }, now);
 	}
-	const to = body.state === "paused" && pause ? "paused" : body.state === "running" ? "running" : run.status;
-	let current = (await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now)) ?? (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
 	const signInSettings = current.pause?.reason === "login_required" ? await runnerSettingsFor(env, run.instanceId, uid).catch(() => RUNNER_DEFAULTS) : RUNNER_DEFAULTS;
 	if (current.status === "paused" && run.status !== "paused" && pause) {
@@ -729,7 +731,8 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	} else if (current.status === "running" && run.status === "paused") {
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
-	if (body.state === "ended" && body.result !== undefined && !isTerminalApplyRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now);
+	if (body.state === "ended" && body.result !== undefined && !isTerminalApplyRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now, lastSeq);
+	if (current.runnerSeq > lastSeq) return current;
 	current = await syncApplyWebsiteQuestion(env, uid, current, (run, pause, decision) => resumeApplyRun(env, uid, run, { expectedWebsitePauseKey: pause.pauseKey, websiteDecision: decision })).catch(() => current);
 	// A result is authoritative if it arrived at the deadline.  Otherwise a still-running CLI
 	// cannot turn status polling into an unbounded lease; PAGS stops and settles it itself.
@@ -762,9 +765,7 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		}
 		// `continue`, `request_review` and `stop` all change the local runtime synchronously. Pull
 		// once more so this API read does not return a stale `paused` application for another minute.
-		// RE-READ before re-entering. `updateApplyRun` writes the trace wholesale from the run object
-		// it is handed, so passing this stale `current` would silently drop anything the loop above
-		// just wrote — including the checkpoint decision's own rationale (#982).
+		// Re-read the state/cursor after delivery before polling again (#982/#1524).
 		if (runnerStateMayHaveChanged) return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
 	}
 	// #978 — the card follows the run through every transition this function makes: running, the
@@ -780,7 +781,6 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	return current;
 }
 
-/** The owner handled the pause: send their answers / newly allowed sites, release the run, read it back. */
 /** The block reasons an owner's answer resolves — a question, not the page (#1121). */
 const ANSWERABLE_BLOCKS: ReadonlySet<string> = new Set(["missing_answer", "screening_ambiguity"]);
 

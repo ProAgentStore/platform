@@ -5,6 +5,7 @@
  * against the real migrations.
  */
 import { Hono } from "hono";
+import { completeRunnerBatch } from "../lib/local-apply/__fixtures__/status.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { realSchemaD1, type RealSchemaD1 } from "../lib/d1-sqlite.js";
@@ -38,7 +39,7 @@ const relay = {
 			sent.push({ path: cmd.path, body });
 			const canned = answers[cmd.path];
 			const a = (typeof canned === "function" ? canned(body) : canned) ?? { status: 404, body: { error: "unknown path" } };
-			return new Response(JSON.stringify(a.body), { status: a.status });
+			return new Response(JSON.stringify(cmd.path === "/local-apply/status" && a.status === 200 ? completeRunnerBatch(a.body, body.afterSeq) : a.body), { status: a.status });
 		},
 	}),
 };

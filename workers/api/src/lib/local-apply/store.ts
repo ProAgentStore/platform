@@ -1,3 +1,4 @@
+import { APPEND_APPLY_TRACE_SQL, validTraceAppend } from "./trace-integrity.js";
 import type { BrowserWebsiteAccessWire } from "../browser-website-policy.js";
 /**
  * Application Runner (#957) — D1 reads/writes: the application lifecycle (compare-and-set + audit)
@@ -570,7 +571,7 @@ export interface ApplyRunPolicy {
 	blurFormFields?: boolean;
 }
 
-export type ApplyTraceEvent = Omit<LocalApplyEvent, "type"> & { type: LocalApplyEvent["type"] | LocalApplyPlatformEventType };
+export type ApplyTraceEvent = Omit<LocalApplyEvent, "type"> & { type: LocalApplyEvent["type"] | LocalApplyPlatformEventType; seq?: number };
 
 export interface ApplyRun {
 	id: string;
@@ -707,27 +708,26 @@ export async function insertApplyRun(env: DB, r: { id: string; instanceId: strin
  * dropped every later one, so past 500 a long fill stopped recording exactly where it was going —
  * its end. The card's action log (`task-action-log.ts`) is the unbounded record of the run's steps.
  */
-export const MAX_APPLY_TRACE = 500;
-
-/** Move a run — compare-and-set on the status it was read in — appending trace events. Null when it lost a race. */
+export { MAX_APPLY_TRACE } from "./trace-integrity.js";
+/** Atomic trace append with status/cursor fences (#1524). Null when stale or invalid. */
 export async function updateApplyRun(
 	env: DB,
 	run: ApplyRun,
-	u: { to?: ApplyRunStatus; pause?: LocalApplyPause | null; result?: unknown; engineAuth?: string | null; errorCode?: string | null; error?: string | null; runnerNode?: string | null; events?: ApplyTraceEvent[]; runnerSeq?: number; policy?: ApplyRunPolicy },
+	u: { to?: ApplyRunStatus; pause?: LocalApplyPause | null; result?: unknown; engineAuth?: string | null; errorCode?: string | null; error?: string | null; runnerNode?: string | null; events?: ApplyTraceEvent[]; runnerSeq?: number; expectedRunnerSeq?: number; policy?: ApplyRunPolicy },
 	now: number,
 ): Promise<ApplyRun | null> {
 	const to = u.to ?? run.status;
-	const trace = [...run.trace, ...(u.events ?? [])].slice(-MAX_APPLY_TRACE);
+	if (!validTraceAppend(u.events ?? [], u.runnerSeq)) return null;
 	const res = await env.DB.prepare(
 		`UPDATE local_apply_runs
 		    SET status = ?1, pause = CASE WHEN ?2 THEN ?3 ELSE pause END, result = COALESCE(?4, result), engine_auth = COALESCE(?5, engine_auth),
-		        error_code = COALESCE(?6, error_code), error = COALESCE(?7, error), runner_node = COALESCE(?8, runner_node), trace = ?9,
+		        error_code = COALESCE(?6, error_code), error = COALESCE(?7, error), runner_node = COALESCE(?8, runner_node), trace = ${APPEND_APPLY_TRACE_SQL},
 		        runner_seq = MAX(runner_seq, ?10), last_synced_at = CASE WHEN ?11 THEN ?12 ELSE last_synced_at END,
 		        active_elapsed_ms = active_elapsed_ms + CASE WHEN status = 'running' AND ?1 != 'running' THEN MAX(0, ?12 - COALESCE(active_started_at, ?12)) ELSE 0 END,
 		        active_started_at = CASE WHEN ?1 = 'running' THEN COALESCE(active_started_at, ?12) ELSE NULL END,
 		        started_at = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?12 ELSE started_at END,
 		        ended_at = CASE WHEN ?13 THEN ?12 ELSE ended_at END, policy = COALESCE(?17, policy), updated_at = ?12
-		  WHERE id = ?14 AND instance_id = ?15 AND status = ?16`,
+		  WHERE id = ?14 AND instance_id = ?15 AND status = ?16 AND (?11 = 0 OR runner_seq <= ?10) AND (?18 IS NULL OR runner_seq = ?18)`,
 	)
 		.bind(
 			to,
@@ -738,7 +738,7 @@ export async function updateApplyRun(
 			u.errorCode ?? null,
 			u.error ?? null,
 			u.runnerNode ?? null,
-			JSON.stringify(trace),
+			JSON.stringify(u.events ?? []),
 			u.runnerSeq ?? 0,
 			u.runnerSeq !== undefined ? 1 : 0,
 			now,
@@ -750,7 +750,7 @@ export async function updateApplyRun(
 			// approval earns `auto_submit` once the machine is free. `COALESCE` keeps every other
 			// update from touching it, so the column still cannot drift behind the envelope the
 			// runner was given — that pairing is why the mode is persisted at all.
-			u.policy === undefined ? null : JSON.stringify(u.policy),
+			u.policy === undefined ? null : JSON.stringify(u.policy), u.expectedRunnerSeq ?? null,
 		)
 		.run();
 	if ((res.meta?.changes ?? 0) === 0) return null;
