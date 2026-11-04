@@ -13,7 +13,7 @@ import { JobApplyWorkflow, type JobApplyParams } from "./job-apply.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 
 let db: RealSchemaD1;
-const job: ApplyJob = { url: "https://jobs.example.com/apply", candidate: { fullName: "Candidate", email: "candidate@example.com", phone: "+61 412 345 678" } };
+const job: ApplyJob = { resumePath: "/task-documents/resume.pdf", url: "https://jobs.example.com/apply", candidate: { fullName: "Candidate", email: "candidate@example.com", phone: "+61 412 345 678" } };
 beforeEach(() => {
 	vi.clearAllMocks();
 	db = realSchemaD1();
@@ -24,7 +24,8 @@ beforeEach(() => {
 afterEach(() => db.close());
 
 async function run(dryRun: boolean) {
-	const env = { DB: db.DB } as Env;
+	const bindings: Pick<Env, "DB"> = { DB: db.DB };
+	const env = bindings as Env;
 	const workflow = new JobApplyWorkflow({} as ExecutionContext, env);
 	const step = { do: async (_name: string, a: unknown, b?: unknown) => ((typeof a === "function" ? a : b) as () => Promise<unknown>)(), sleep: async () => undefined } as unknown as WorkflowStep;
 	return workflow.run({ payload: { instanceId: "instance", userId: "owner", taskId: "task", job: { ...job, dryRun }, screenshots: false } } as WorkflowEvent<JobApplyParams>, step);

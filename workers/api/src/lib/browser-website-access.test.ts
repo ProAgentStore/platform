@@ -41,12 +41,12 @@ describe("website permission never masquerades as action success", () => {
 		const d = deps();
 		if (condition === "cancelled") d.park = vi.fn(async () => true);
 		if (condition === "stale") d.isCurrent = vi.fn(async () => false);
-		if (condition === "revoked") { d.read = vi.fn(async () => ({ ...request, status: "approved" })); d.granted = vi.fn(async () => false); }
-		if (condition === "denied") d.read = vi.fn(async () => ({ ...request, status: "denied" }));
+		if (condition === "revoked") { d.read = vi.fn<BrowserWebsiteWaitDeps["read"]>(async () => ({ ...request, status: "approved" })); d.granted = vi.fn(async () => false); }
+		if (condition === "denied") d.read = vi.fn<BrowserWebsiteWaitDeps["read"]>(async () => ({ ...request, status: "denied" }));
 		expect(await waitForWebsiteDecision(access, d, 2)).toMatchObject({ approved: false });
 	});
 	it("after opening approval only takes a fresh snapshot, including post-dispatch redirects", async () => {
-		const initial = { url: "https://start.example.com/", websiteAccess: { ...access, actionDispatched: true } };
+		const initial: { url: string; websiteAccess?: BrowserWebsiteBlock } = { url: "https://start.example.com/", websiteAccess: { ...access, actionDispatched: true } };
 		const snapshot = vi.fn(async () => ({ url: "about:blank", websiteAccess: undefined }));
 		const wait = vi.fn(async () => ({ approved: true as const, questionUrl: "/question" }));
 		expect(await resolveOpeningWebsiteAccess(initial, wait, snapshot)).toMatchObject({ receipt: { url: "about:blank" } });
@@ -68,7 +68,8 @@ describe("durable generic browser website pause", () => {
 		db = realSchemaD1();
 		seedTenant(db, { userId: "owner", instanceIds: ["instance"] });
 		db.exec("INSERT INTO instance_runtime_tasks(id,instance_id,user_id,type,status,payload,created_at,updated_at) VALUES ('task','instance','owner','browser.task','running','{}',datetime('now'),datetime('now'))");
-		return { DB: db.DB } as Env;
+		const bindings: Pick<Env, "DB"> = { DB: db.DB };
+		return bindings as Env;
 	}
 	it("records the exact waiting task, survives runner mirroring, and clears before fresh continuation", async () => {
 		const env = fixture();

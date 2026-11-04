@@ -13,7 +13,8 @@ const task = { id: "task", type: "browser.open", status: "needs_human", approval
 async function fixture() {
 	db = realSchemaD1();
 	seedTenant(db, { userId: "owner", instanceIds: ["instance"] });
-	const env = { DB: db.DB } as Env;
+	const bindings: Pick<Env, "DB"> = { DB: db.DB };
+	const env = bindings as Env;
 	await mirrorRuntimeTask(env, "instance", "owner", task);
 	const id = (await env.DB.prepare("SELECT id FROM website_access_requests").first<{ id: string }>())!.id;
 	const request = (await getWebsiteAccessRequest(env, "owner", "instance", id))!;

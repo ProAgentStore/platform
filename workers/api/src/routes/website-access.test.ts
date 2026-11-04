@@ -16,7 +16,9 @@ beforeEach(async () => {
 	db = realSchemaD1();
 	seedTenant(db, { userId: "u1", instanceIds: ["i1", "i2"] });
 	seedTenant(db, { userId: "u2", instanceIds: ["other"] });
-	env = { DB: db.DB } as Env;
+	// Only D1 is exercised; verify its fixture contract before supplying the narrower test bindings.
+	const bindings: Pick<Env, "DB"> = { DB: db.DB };
+	env = bindings as Env;
 	adapters = { canAnswer: async () => true, isCurrent: async () => true, resume: vi.fn(async () => ({ resumed: true })) };
 	app = new Hono<{ Bindings: Env }>();
 	registerWebsiteAccessRoutes(app, () => adapters);
@@ -27,8 +29,8 @@ afterEach(() => db.close());
 const call = (path: string, method = "GET", body?: unknown) => app.request(path, { method, headers: { "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) }, env);
 
 it("GET resolves the question without granting or resuming; cross-instance reads are refused", async () => {
-	expect((await (await call(`/i1/website-requests/${id}`)).json()).request).toMatchObject({ hostname: "jobs.example.com", status: "pending" });
-	expect((await (await call("/i1/website-grants")).json()).decisions).toEqual([]);
+	expect(await (await call(`/i1/website-requests/${id}`)).json()).toMatchObject({ request: { hostname: "jobs.example.com", status: "pending" } });
+	expect(await (await call("/i1/website-grants")).json()).toMatchObject({ decisions: [] });
 	expect(adapters.resume).not.toHaveBeenCalled();
 	expect((await call(`/i2/website-requests/${id}`)).status).toBe(404);
 	expect((await call(`/other/website-requests/${id}`)).status).toBe(404);
@@ -41,6 +43,6 @@ it("POST cannot retarget a linked question and repeated/revoked answers cannot g
 	expect(await (await call("/i1/website-grants")).json()).toEqual({ domains: ["jobs.example.com"], decisions: [{ hostname: "jobs.example.com", decision: "allow" }] });
 	expect((await call("/i1/website-grants/jobs.example.com", "DELETE")).status).toBe(200);
 	expect(await (await call(path, "POST", { decision: "approve" })).json()).toMatchObject({ resumed: false, repeated: true });
-	expect((await (await call("/i1/website-grants")).json()).decisions).toEqual([]);
+	expect(await (await call("/i1/website-grants")).json()).toMatchObject({ decisions: [] });
 	expect(adapters.resume).toHaveBeenCalledTimes(1);
 });

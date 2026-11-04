@@ -12,7 +12,9 @@ beforeEach(() => {
 	db = realSchemaD1();
 	seedTenant(db, { userId: "u1", instanceIds: ["i1", "i2"] });
 	seedTenant(db, { userId: "u2", instanceIds: ["other"] });
-	env = { DB: db.DB } as Env;
+	// Only D1 is exercised; verify its fixture contract before supplying the narrower test bindings.
+	const bindings: Pick<Env, "DB"> = { DB: db.DB };
+	env = bindings as Env;
 	notify = vi.fn(async () => undefined);
 	adapters = { canAnswer: vi.fn(async () => true), isCurrent: vi.fn(async () => true), resume: vi.fn(async () => ({ resumed: true })) };
 });

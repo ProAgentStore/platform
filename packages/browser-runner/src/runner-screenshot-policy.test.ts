@@ -10,7 +10,7 @@ import { LocalRunner } from "./runner.js";
 function pageFixture(challenge = false) {
 	const screenshot = vi.fn(async (_options: Parameters<Page["screenshot"]>[0]) => Buffer.from("rendered-jpeg"));
 	const page = {
-		url: () => "https://jobs.example/form", title: async () => "Form", screenshot,
+		isClosed: () => false, url: () => "https://jobs.example/form", title: async () => "Form", screenshot,
 		locator: () => ({ count: async () => challenge ? 1 : 0 }), evaluate: async () => false,
 		mouse: { wheel: async () => undefined }, waitForTimeout: async () => undefined,
 		goto: async () => undefined,
