@@ -398,7 +398,12 @@ describe("lost outcomes are journalled facts, not re-derived (#1019 case 4)", ()
 		hooks.capture = () => (failing && captures < 1_000 ? new Error("capture unavailable") : null);
 		const drain = route;
 		callRunner.mockImplementation(async (_c: unknown, path: string, body?: Record<string, unknown>) => {
-			if (path === "/coding/capture" && body?.drainUsage && failing) failing = false; // the final drain gets through
+			if (path === "/coding/capture" && body?.platformRun === false && failing) {
+				// Regular captures also drain usage. Only the closing drain recovers, after the
+				// runner has parsed the result: the child log write alone is not a read receipt.
+				await until(() => target.rt.snapshot("s1").consumedInputs?.includes(actIds[0]) === true);
+				failing = false;
+			}
 			return drain(path, body);
 		});
 		decisions = [SEND("the only act"), FINISH];
