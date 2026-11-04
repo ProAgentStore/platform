@@ -501,16 +501,17 @@ export class LocalApplyRuntime {
 		const modelObserver = e.engine === "codex" ? new CodexModelObserver(spec.env.CODEX_HOME || join(spec.env.HOME || home, ".codex"), join(run.dir, "scratch"), this.now()) : null;
 		const observeModel = () => { const detail = modelObserver?.read(); if (detail) this.emit(run, { type: "engine.model_observed", detail }); };
 		let buf = "";
+		const rememberOutput = (line: string) => run.output.push(line.length > 20_000 ? `${line.slice(0, 20_000)}…[truncated]` : line);
 		const keep = (chunk: Buffer | string) => {
 			buf += chunk.toString();
 			const lines = buf.split("\n");
 			buf = lines.pop() ?? "";
-			for (const line of lines) if (line.trim()) { run.output.push(line.slice(0, 20_000)); modelObserver?.acceptLine(line); }
+			for (const line of lines) if (line.trim()) { rememberOutput(line); modelObserver?.acceptLine(line); }
 			observeModel();
 			if (run.output.length > OUTPUT_LINES) run.output.splice(0, run.output.length - OUTPUT_LINES);
 		};
 		child.stdout?.on("data", keep);
-		child.stderr?.on("data", (chunk: Buffer | string) => { run.output.push(chunk.toString().slice(0, 20_000)); if (run.output.length > OUTPUT_LINES) run.output.shift(); });
+		child.stderr?.on("data", (chunk: Buffer | string) => { rememberOutput(chunk.toString()); if (run.output.length > OUTPUT_LINES) run.output.shift(); });
 		child.on("error", (err: NodeJS.ErrnoException) => {
 			this.end(run, { outcome: "failed", error: err.code === "ENOENT" ? `The ${e.engine === "claude" ? "Claude Code" : "Codex"} CLI is not installed on this machine (\`${spec.command}\` was not found).` : err.message });
 		});

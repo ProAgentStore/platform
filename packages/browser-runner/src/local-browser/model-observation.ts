@@ -31,7 +31,7 @@ export class CodexModelObserver {
 		if (!this.threadId || this.observed || !this.canonicalCwd) return null;
 		// Rollout folders can use the host's local date. Bound lookup to the launch date +/- a day.
 		for (const offset of [-1, 0, 1]) {
-			const date = new Date(this.startedAt + offset * 86_400_000).toISOString().slice(0, 10).replaceAll("-", "/");
+			const date = new Date(this.startedAt + offset * 86_400_000).toISOString().split("T", 1)[0].replaceAll("-", "/");
 			const directory = join(this.codexHome, "sessions", date);
 			try {
 				if (realpathSync(directory) !== resolve(directory)) continue;
