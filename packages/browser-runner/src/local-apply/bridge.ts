@@ -1,4 +1,4 @@
-import { answerDecision, parseDecision, sourceCatalog } from "./answer-decision.js";
+import { answerDecision, decisionReason, parseDecision, sourceCatalog } from "./answer-decision.js";
 import { applyTools } from "./tool-schemas.js";
 /**
  * The apply bridge (#957): the only way an application CLI reaches the page, and where the write
@@ -623,7 +623,7 @@ export class ApplyBridge {
 	private async answer(t: { role: string; name: string; ref: string }, value: string, args: Record<string, unknown>, citizenship = false): Promise<string | null> {
 		if (args.decision !== undefined) {
 			const result = answerDecision({ decision: args.decision, quote: args.source_quote, value, sources: this.host.groundingSources?.() ?? [], level: this.host.escalationLevel ?? "conservative" });
-			this.host.emit({ type: "policy.decision", detail: { class: "fill", decision: result.refusal ? "refused" : "allowed", reason: result.refusal ? "answer_decision_refused" : "source_supported_decision", decisionReason: (this.host.redact?.(result.assessment?.reason ?? "invalid_decision") ?? result.assessment?.reason ?? "invalid_decision").slice(0, 1000), decisionRisk: result.assessment?.risk ?? "unknown", escalationLevel: this.host.escalationLevel ?? "conservative", sourceId: result.sourceId ?? "unknown" } });
+			this.host.emit({ type: "policy.decision", detail: { class: "fill", decision: result.refusal ? "refused" : "allowed", reason: result.refusal ? "answer_decision_refused" : "source_supported_decision", decisionReason: decisionReason(result.assessment?.reason ?? "invalid_decision", this.host.redact), decisionRisk: result.assessment?.risk ?? "unknown", escalationLevel: this.host.escalationLevel ?? "conservative", sourceId: result.sourceId ?? "unknown" } });
 			return result.refusal;
 		}
 		const preference = await this.preference(t, value, args.source_quote);
@@ -793,7 +793,7 @@ export class ApplyBridge {
 			checkpointId,
 			facts: {
 				phase,
-				...(decision ? { decision: { ...decision, reason: (this.host.redact?.(decision.reason) ?? decision.reason).slice(0, 1000) } } : {}),
+				...(decision ? { decision: { ...decision, reason: decisionReason(decision.reason, this.host.redact) } } : {}),
 				actions: this.actions,
 				filled: this.filled,
 				uploaded: this.uploaded.size,

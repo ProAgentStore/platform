@@ -203,7 +203,7 @@ export function checkpointDecisionEvent(checkpoint: SupervisorCheckpoint, decisi
 		detail: {
 			class: "checkpoint",
 			escalationLevel: decision.escalationLevel,
-			...(f.decision ? { decisionRisk: f.decision.risk, decisionReason: f.decision.reason.slice(0, 1000) } : {}),
+			...(f.decision ? { decisionRisk: f.decision.risk, decisionReason: f.decision.reason } : {}),
 			checkpointId: checkpoint.checkpointId,
 			phase: f.phase,
 			decision: decision.directive,

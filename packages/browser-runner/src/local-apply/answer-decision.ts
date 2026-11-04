@@ -48,3 +48,9 @@ export function answerDecision(input: { decision: unknown; quote: unknown; value
 
 export const DECISION_SCHEMA = { type: "object", properties: { risk: { type: "string", enum: ["minor", "major"] }, reason: { type: "string", minLength: 1, maxLength: 1000, description: "Model assessment from current context. Do not include credentials or source excerpts." } }, required: ["risk", "reason"], additionalProperties: false };
 export const ANSWER_DECISION_SCHEMA = { ...DECISION_SCHEMA, properties: { ...DECISION_SCHEMA.properties, sourceId: { type: "string", description: "ID of the current trusted source supplied by the runner." }, sourceStatus: { type: "string", enum: ["supported", "missing", "ambiguous", "conflicting"] } }, required: ["risk", "reason", "sourceId", "sourceStatus"] };
+
+/** Redaction can expand a valid assessment; never present a cut explanation as complete. */
+export function decisionReason(reason: string, redact?: (value: string) => string): string {
+	const safe = redact?.(reason) ?? reason;
+	return safe.length <= 1000 ? safe : `[Decision explanation omitted: redacted text contains ${safe.length} characters, exceeding the 1000-character limit.]`;
+}

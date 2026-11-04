@@ -109,7 +109,8 @@ describe("configured model discretion through the real Playwright bridge", () =>
 		expect(checkpoints.at(-1)?.facts.decision?.reason).toContain("[REDACTED]");
 		expect(JSON.stringify(checkpoints)).not.toContain(secret);
 		await bridge.callTool("supervisor_checkpoint", { checkpointId: "expanded-redaction", phase: "uncertain", decision: { risk: "minor", reason: "1234 ".repeat(200).trim() } });
-		expect(checkpoints.at(-1)?.facts.decision?.reason.length).toBe(1000);
+		expect(checkpoints.at(-1)?.facts.decision?.reason.length).toBeLessThanOrEqual(1000);
+		expect(checkpoints.at(-1)?.facts.decision?.reason).toContain("explanation omitted");
 		expect(checkpoints.at(-1)?.facts.decision?.reason).not.toContain("1234");
 	});
 
