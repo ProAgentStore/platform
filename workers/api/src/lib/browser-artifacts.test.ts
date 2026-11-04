@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 import { MAX_BROWSER_ARTIFACT_BYTES, artifactMetadata, browserArtifactKey, captionUrl, ingestRunnerShots, listBrowserArtifacts, putBrowserArtifact, storeWorkflowShot, subjectScreenshotsOff, sweepExpiredBrowserArtifacts } from "./browser-artifacts.js";
+import { browserArtifactCoverage } from "./browser-artifact-coverage.js";
+import { ShotRecorder, type MaskablePage } from "../../../../packages/browser-runner/src/local-browser/replay.js";
 
 class FakeR2 {
 	objects = new Map<string, Uint8Array>();
@@ -138,6 +140,51 @@ describe("the storage guard — a run started with screenshots OFF never gets a 
 });
 
 describe("ingestRunnerShots — the cloud pulls a run's frames (the runner cannot push)", () => {
+	it("keeps all regularly collected cloud frames after the runner's rolling buffer evicts them", async () => {
+		const recorder = new ShotRecorder(40);
+		const page = { locator: () => ({}), screenshot: async () => Buffer.from(JPEG) } as unknown as MaskablePage;
+		const target = { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run" as const, subjectId: "rolling" };
+		for (let seq = 1; seq <= 85; seq++) {
+			await recorder.capture(page, seq === 85 ? "completed" : "clicked");
+			if (seq % 5 === 0) await ingestRunnerShots(env, target, async (after) => recorder.page(target.subjectId, after));
+		}
+		expect(recorder.shots).toHaveLength(40);
+		expect(rows()).toHaveLength(85);
+		expect(rows().at(-1)).toMatchObject({ seq: 85, point: "completed" });
+		expect(await browserArtifactCoverage(env, "u1", "i1", "local_apply_run", "rolling")).toMatchObject({ storedFrames: 85, firstStoredSeq: 1, lastStoredSeq: 85, missingRanges: [], rangesTruncated: false });
+	});
+	it("reports lost stored-sequence ranges when collection misses the rolling window, isolated by owner and instance", async () => {
+		const recorder = new ShotRecorder(2);
+		const page = { locator: () => ({}), screenshot: async () => Buffer.from(JPEG) } as unknown as MaskablePage;
+		for (let i = 0; i < 5; i++) await recorder.capture(page, "clicked");
+		expect(recorder.page("late", 0).coverage?.gap).toEqual({ fromSeq: 1, toSeq: 3 });
+		await ingestRunnerShots(env, { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run", subjectId: "late" }, async (after) => recorder.page("late", after));
+		expect(await browserArtifactCoverage(env, "u1", "i1", "local_apply_run", "late")).toMatchObject({ storedFrames: 2, firstStoredSeq: 4, lastStoredSeq: 5, missingRanges: [{ fromSeq: 1, toSeq: 3 }] });
+		for (const [user, instance] of [["u2", "i1"], ["u1", "i2"]]) expect(await browserArtifactCoverage(env, user, instance, "local_apply_run", "late")).toMatchObject({ storedFrames: 0, missingRanges: [] });
+	});
+	it("stops at a transient storage failure and retries before storing higher sequences", async () => {
+		const target = { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run" as const, subjectId: "retry" };
+		const original = r2.put.bind(r2); let fail = true;
+		r2.put = async (key, value) => { if (fail && key.endsWith("00002.jpg")) throw new Error("temporary storage failure"); await original(key, value); };
+		const fetchPage = async (after: number) => ({ shots: [shot(1), shot(2), shot(3)].filter((frame) => Number(frame.seq) > after) });
+		expect(await ingestRunnerShots(env, target, fetchPage)).toBe(1);
+		expect(rows().map((row) => row.seq)).toEqual([1]);
+		fail = false;
+		expect(await ingestRunnerShots(env, target, fetchPage)).toBe(2);
+		expect(rows().map((row) => row.seq)).toEqual([1, 2, 3]);
+	});
+	it("continues undrained pages on the next sync without claiming a frame that was not returned", async () => {
+		const target = { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run" as const, subjectId: "pages" };
+		const fetchPage = async (after: number) => ({ shots: after < 12 ? [shot(after + 1)] : [], lastSeq: 9999 });
+		expect(await ingestRunnerShots(env, target, fetchPage)).toBe(8);
+		expect(await ingestRunnerShots(env, target, fetchPage)).toBe(4);
+		expect(rows().map((row) => row.seq)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+	});
+	it("refuses unordered or unsafe-sequence pages before advancing durable history", async () => {
+		const target = { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run" as const, subjectId: "bad-order" };
+		for (const frames of [[shot(3), shot(2)], [shot(Number.MAX_SAFE_INTEGER + 1)]]) expect(await ingestRunnerShots(env, target, async () => ({ shots: frames }))).toBe(0);
+		expect(rows()).toEqual([]);
+	});
 	const shot = (seq: number, extra: Record<string, unknown> = {}) => ({ seq, point: "clicked", url: "https://au.seek.com/job/1?x=1", mimeType: "image/jpeg", data: b64(JPEG), at: "2026-10-14T00:00:00Z", ...extra });
 
 	it("preserves each capture time and target when a batch arrives later, without extending retention", async () => {

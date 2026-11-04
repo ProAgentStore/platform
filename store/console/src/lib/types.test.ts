@@ -363,3 +363,9 @@ const _exactApplicationHasNoInventedFields: Extra<ApplicationQueueItemResponse, 
 const _exactApplicationAcceptsTheProducer: ApplicationQueueItemResponse = {} as WorkerApplicationQueueItemResponse;
 
 const _exactApplicationItemHasNoInventedFields: Extra<ApplicationQueueItem, WorkerApplicationQueueItemResponse["item"]> extends never ? true : never = true;
+
+// Screenshot pagination is a plain wire DTO, never an import of Worker implementations.
+type ConsoleArtifactPage = import("./replayHistory").BrowserArtifactPageResponse;
+type WorkerArtifactPage = import("../../../../workers/api/src/lib/browser-artifact-response-types").BrowserArtifactPageResponse;
+const _artifactPageHasNoInventedFields: Extra<ConsoleArtifactPage, WorkerArtifactPage> extends never ? true : never = true;
+const _artifactPageAcceptsTheProducer: ConsoleArtifactPage = {} as WorkerArtifactPage;

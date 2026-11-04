@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { basename, extname } from "node:path";
 import type { FileChooser, Page } from "playwright";
+import { observeUploadSelection } from "./upload-selection-observation.js";
 
 // Document MIME types used by approved application artifacts. Unknown types require an
 // explicit extension match; never relabel bytes to satisfy a site's accept attribute.
@@ -21,6 +22,7 @@ export function acceptsUpload(path: string, accept: string): boolean {
 export interface PreparedUpload {
 	error?: string;
 	chooserId?: string;
+	dispose?(): Promise<void>;
 	/** Selection is a browser fact, never proof of acceptance by the receiving website. */
 	verify?(): Promise<{ error?: string }>;
 }
@@ -66,24 +68,21 @@ export class UploadVerifier {
 			const shownAccept = accept.length > 200 ? "accepted-types list omitted because it exceeds 200 characters; inspect the upload control" : accept;
 			if (paths.length > 1 && !chooser.isMultiple()) return { error: "This upload field accepts only one file." };
 			if (paths.some((path) => !acceptsUpload(path, accept))) return { error: `The approved document format does not match this upload field's accepted types (${shownAccept}). No file was attached. Request an approved artifact in a supported format; do not rename its extension.` };
-			const inspect = () => input.evaluate((element) => {
-				const el = element as HTMLInputElement;
-				const ids = `${el.getAttribute("aria-describedby") ?? ""} ${el.getAttribute("aria-errormessage") ?? ""}`.trim().split(/\s+/);
-				const alerts = ids.map((id) => el.ownerDocument.getElementById(id)).filter((node) => node?.getAttribute("role") === "alert" && node.getClientRects().length).map((node) => node?.textContent?.trim() ?? "").filter(Boolean);
-				return { connected: el.isConnected, files: Array.from(el.files ?? [], (file) => file.name), invalid: el.getAttribute("aria-invalid") === "true" || !!el.validity?.customError, alerts };
-			});
-			const before = await inspect();
-			return { chooserId: this.chooserId(chooser) ?? undefined, verify: async () => {
+			const expected = paths.map((path) => basename(path)).sort();
+			const observation = await observeUploadSelection(input, expected);
+			let before: Awaited<ReturnType<typeof observation.read>>;
+			try { before = await observation.read(); } catch (error) { await observation.dispose(); throw error; }
+			return { chooserId: this.chooserId(chooser) ?? undefined, dispose: observation.dispose, verify: async () => {
 				if (this.pending.get(page) === chooser) this.clear(page);
 				try {
-					const after = await inspect();
+					const after = await observation.read();
 					if (after.invalid || after.alerts.some((alert) => !before.alerts.includes(alert))) return { error: "The upload field reported a validation error after file selection. Inspect the field's feedback before proceeding; website acceptance is unconfirmed." };
-					const expected = paths.map((path) => basename(path)).sort();
-					if (!after.connected || JSON.stringify(after.files.sort()) !== JSON.stringify(expected)) return { error: "The approved file selection could not be verified after upload: the field was cleared or changed. Inspect the page before retrying; website acceptance is unconfirmed." };
+					const retained = after.connected && JSON.stringify(after.files.sort()) === JSON.stringify(expected);
+					if (!retained && !(after.selected && after.newFilenameAcknowledgment)) return { error: "The approved file selection could not be verified after upload: the field was cleared or changed without new filename acknowledgment. Inspect the page before retrying; website acceptance is unconfirmed." };
 					return {};
 				} catch {
 					return { error: "The upload field is no longer available for verification. Inspect the page before retrying; website acceptance is unconfirmed." };
-				}
+				} finally { await observation.dispose(); }
 			} };
 		} catch {
 			return { error: "The upload field could not be inspected. Reopen the intended document upload control before proceeding." };

@@ -148,9 +148,9 @@ const EXCLUSIONS = [
 		match: null,
 	},
 	{
-		label: "Binary routes — voice-audio, R2 multipart upload parts, file byte download",
+		label: "Binary routes — voice-audio, R2 multipart upload parts, non-text files",
 		why:
-			"MCP results are text. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not. `upload_agent_file` takes text only; `upload_resume` is the single binary path, and is apply-scoped.",
+			"`read_instance_file` reads original private UTF-8 text with bounded downloads and hash-bound pages; it refuses binary files. Browser screenshots use an MCP image block. Voice streams, multipart byte parts and arbitrary binary-file downloads remain outside the text file reader.",
 		match: null,
 	},
 	{

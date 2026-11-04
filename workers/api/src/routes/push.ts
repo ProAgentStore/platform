@@ -5,6 +5,7 @@ import { logError } from "../lib/error-log.js";
 import { type NotificationPolicy, resolveNotificationDelivery, sanitizeNotificationPolicy } from "../lib/notification-policy.js";
 import { DUPLICATE_WINDOW_MINUTES, type NotificationKind, notificationDedupeKey } from "../lib/notifications.js";
 import { parseAccountPreferences } from "../lib/preferences.js";
+import { attentionPushAllowed } from "../lib/owner-attention.js";
 import { type PushSubscription, sendWebPush, type VapidConfig } from "../lib/web-push.js";
 import type { Env } from "../types.js";
 import { createNotification } from "./notifications.js";
@@ -318,19 +319,21 @@ export async function notifyUser(
 	let record = true;
 	let outcome: NotifyDeliveryOutcome = "unavailable";
 	try {
-		const account = parseAccountPreferences(
+		const preferences = parseAccountPreferences(
 			(await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1").bind(userId).first<{ preferences: string | null }>())?.preferences,
-		).notifications;
+		);
+		interrupt = !opts.event || attentionPushAllowed(preferences.attention, opts.event);
+		if (!interrupt) outcome = "muted";
 		// A second read ONLY when the notification names an instance: that is the only case an
 		// instance-level rule can apply to, and account-level notifications (a résumé parsed, a new
 		// subscriber) must not pay for a lookup that cannot change their outcome.
 		const instance = opts.instanceId ? await readInstanceNotificationPolicy(env, opts.instanceId, userId) : undefined;
-		const decision = resolveNotificationDelivery({ type, severity: kind, event: opts.event, instanceId: opts.instanceId }, { account, instance });
-		interrupt = decision.push.allowed;
+		const decision = resolveNotificationDelivery({ type, severity: kind, event: opts.event, instanceId: opts.instanceId }, { account: preferences.notifications, instance });
+		interrupt = interrupt && decision.push.allowed;
 		record = decision.inapp.allowed;
 		if (!interrupt) outcome = "muted";
 	} catch {
-		// Fall open — an unreadable preference must not swallow a notification.
+		// Keep an established attention mute even if a later policy lookup fails.
 	}
 
 	if (interrupt) {

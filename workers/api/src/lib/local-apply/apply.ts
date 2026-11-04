@@ -84,6 +84,7 @@ export { syncActiveApplyReconciliations } from "./reconciliation-sync.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
 import { notifyLiveBrowserBlocker, notifyUncertainSubmit } from "./handoff-notification.js";
+import { notifyApplyInputRequired, reconcileApplyInputAttention } from "./input-attention.js";
 import { assertionFor, consumeNotSubmittedAssertion, hasUnspentAssertion } from "./owner-assertion.js";
 import { answerDecision, type DecisionVia, markDecisionsApplied, pendingAnswersFor, recordPauseDecision } from "../owner-decisions.js";
 
@@ -620,6 +621,7 @@ async function stopTimedOutRun(env: Env, runtime: Awaited<ReturnType<typeof getL
 /** Bring one run up to date from its runner, then tell the owner what changed (#1107: progress, blockers, a stall). */
 export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = Date.now()): Promise<ApplyRun> {
 	const synced = await syncApplyRunFromRunner(env, uid, run, now);
+	await notifyApplyInputRequired(env, uid, synced, now).catch(() => undefined);
 	await applyRunSignals(env, uid, synced, now).catch(() => undefined);
 	return synced;
 }
@@ -991,6 +993,7 @@ export async function syncActiveApplyRuns(env: Env, limit = 25): Promise<number>
 		await syncApplyRun(env, r.userId, run, now).catch(() => undefined);
 		synced++;
 	}
+	await reconcileApplyInputAttention(env, limit, now).catch(() => undefined);
 	// Then move the line along (#974). AFTER the pulls above, so a run that just ended has already
 	// released the machine slot in this same tick and the next queued application starts now rather
 	// than a minute later. Each instance is independent: one that cannot dispatch must not stop the rest.

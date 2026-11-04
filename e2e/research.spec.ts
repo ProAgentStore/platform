@@ -23,7 +23,7 @@ type Pause = { reason: "consent_required" | "captcha" | "login_required" | "acce
 type Failure = { errorCode: string; error: string };
 
 /** A signed-in owner with one local browser research agent, and a run that finishes on cue. */
-async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Failure } = {}) {
+async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Failure; screenshotsOff?: boolean } = {}) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
 	const recorded: Recorded = { settingsPuts: [], runPosts: [], saves: [], consentPuts: [], resumes: 0 };
 	const state = { started: !!(opts.pause || opts.failure), finished: false, saved: false, allowDomains: [] as string[], pause: opts.pause ?? null, failure: opts.failure ?? null };
@@ -79,6 +79,7 @@ async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Fa
 		const json = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
 		const base = "/v1/instances/inst-1/local-browser";
 
+		if (path.endsWith("/browser-artifacts")) return json({ subjectKind: "local_browser_run", subjectId: RUN_ID, artifacts: [], hasMore: false, nextCursor: null, screenshotsOff: opts.screenshotsOff === true });
 		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user"], boardConfig: null });
 		if (path === "/v1/instances/my/instances") {
 			return json({ instances: [{ id: "inst-1", name: "Job Search Scout", slug: "job-search-scout", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: [], runtime: "local_browser", workflow: null } }] });
@@ -417,4 +418,12 @@ test.describe("mobile — the research screens fit a phone (#946)", () => {
 			await expectFits(page, width, "settings section");
 		});
 	}
+});
+
+
+test("research replay respects the run's recorded screenshots-off mode", async ({ page }) => {
+	await mockResearchAgent(page, { pause: { reason: "captcha", domain: "jobs.example.com" }, screenshotsOff: true });
+	await page.goto(`/console/instances/inst-1/research/${RUN_ID}`);
+	await expect(page.getByTestId("replay-empty")).toContainText("Screenshots were off for this run");
+	await expect(page.getByRole("slider", { name: "Frame" })).toHaveCount(0);
 });

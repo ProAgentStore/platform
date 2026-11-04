@@ -8417,6 +8417,17 @@ paths:
                   nextCursor: { type: string, nullable: true, description: Present when pagination is requested. }
                   hasMore: { type: boolean, description: Present when pagination is requested. }
                   screenshotsOff: { type: boolean, description: "The run started with the owner's screenshot switch off (#1064) — no frames by design." }
+                  coverage:
+                    type: object
+                    description: Retained cloud history only; neither capture completeness nor the current browser screen. Workflow step sequences are not assumed contiguous.
+                    properties:
+                      basis: { type: string, enum: [stored_local_capture_sequences, stored_workflow_steps] }
+                      storedFrames: { type: integer }
+                      firstStoredSeq: { type: integer, nullable: true }
+                      lastStoredSeq: { type: integer, nullable: true }
+                      missingRanges: { type: array, maxItems: 128, items: { type: object, properties: { fromSeq: { type: integer }, toSeq: { type: integer } } } }
+                      rangesTruncated: { type: boolean }
+                      notice: { type: string }
                   artifacts:
                     type: array
                     items:

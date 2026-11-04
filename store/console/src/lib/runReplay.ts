@@ -107,7 +107,7 @@ export function replayFrames(instanceId: string, artifacts: readonly BrowserArti
 	if (legacy) {
 		for (const s of legacy.shots) {
 			if (s.artifactId || stored.has(s.seq)) continue;
-			frames.push({ key: `l:${s.seq}`, seq: s.seq, caption: s.msg, at: s.at, src: legacyShotSrc(instanceId, legacy.taskId, s.seq) });
+			frames.push({ key: `l:${instanceId}:${legacy.taskId}:${s.seq}`, seq: s.seq, caption: s.msg, at: s.at, src: legacyShotSrc(instanceId, legacy.taskId, s.seq) });
 		}
 	}
 	return frames.sort((a, b) => a.seq - b.seq);

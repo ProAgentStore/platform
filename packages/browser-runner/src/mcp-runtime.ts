@@ -244,54 +244,54 @@ export class McpRuntime {
 			if (origin !== opts.expectedOrigin) refusal = "BLOCKED by the runner — the sign-in page changed origin before credential entry.";
 		}
 		let upload: PreparedUpload | undefined;
-		if (!refusal && name === "browser_file_upload") {
-			if (Array.isArray(args.paths) && args.paths.length && args.paths.every((path) => typeof path === "string")) {
-				upload = await this.uploads.prepare(currentPage(), args.paths as string[]);
-				refusal = upload.error ?? null;
-			} else if (pageBefore) this.uploads.clear(pageBefore);
-		}
-		if (!refusal && name === "browser_navigate" && this.pendingUploadId()) refusal = "A verified file chooser is still open. No navigation was dispatched. Upload the approved artifact first, or explicitly cancel the chooser with browser_file_upload and no paths before navigating.";
-		// Redirects can land after a click or supervisor checkpoint, or during an awaited probe.
-		// The current native URL and live per-run allowlist decide at the actual dispatch boundary.
-		let websiteBlock: WebsiteAccessBlock | null = null;
-		const websitePolicy = this.policy.websiteAccess?.();
-		const websiteUrl = () => name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined) ? String(args.url ?? "") : name === "browser_tabs" && args.action === "select" && typeof args.index === "number" ? this.context?.pages()[args.index]?.url() ?? "" : currentPage()?.url() ?? "";
-		const inspectWebsite = !opts.internal && (name !== "browser_tabs" || args.action === "new" || args.action === "select");
-		if (!refusal && websitePolicy && inspectWebsite) {
-			websiteBlock = websiteAccessBlock(websitePolicy, websiteUrl());
-			if (websiteBlock) {
-				if (websiteBlock.decision === "ask") await this.policy.requestWebsiteApproval?.(websiteBlock);
-				refusal = websiteBlock.decision === "ask" ? "Website approval is required. No action was dispatched. After the owner decides, inspect the page and make a fresh decision." : "This website is denied by this agent's website access policy. No action was dispatched.";
-			}
-		}
-		if (!refusal && !websitePolicy && this.policy.isDomainAllowed) {
-			const candidate = () => domainAdmissionUrl(name, args, currentPage()?.url(), opts.internal ?? false);
-			const allowed = (url: string | null) => {
-				if (url === null) return true;
-				try { const parsed = new URL(url); return (parsed.protocol === "https:" || parsed.protocol === "http:") && this.policy.isDomainAllowed?.(parsed.hostname) === true; } catch { return false; }
-			};
-			const url = candidate();
-			if (!allowed(url)) {
-				if (url) await this.policy.requestDomainApproval?.(url);
-				refusal = allowed(candidate())
-					? "No action was dispatched while site approval was pending. Inspect the current page and request a fresh supervisor checkpoint before retrying."
-					: "BLOCKED by the runner — the current browser site has not been approved for this application. No action was dispatched; explicit owner domain approval is required.";
-			}
-		}
-		// Stop can arrive while a DOM/origin/upload/admission check was in flight. Check again at dispatch.
-		refusal ??= cancelled();
-		if (!refusal && name === "browser_file_upload" && (opts.expectedUploadId || upload?.chooserId)) {
-			const pending = this.uploads.pendingId(currentPage());
-			if ((opts.expectedUploadId && pending !== opts.expectedUploadId) || (upload?.chooserId && pending !== upload.chooserId) || opts.isUploadAuthorized?.() === false) refusal = "The upload's chooser or task authorization changed before dispatch. No file was attached; inspect the intended upload control again.";
-		}
-		if (refusal) {
-			return { [REFUSED_CALL]: true, isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
-		}
 		try {
+			if (!refusal && name === "browser_file_upload") {
+				if (Array.isArray(args.paths) && args.paths.length && args.paths.every((path) => typeof path === "string")) {
+					upload = await this.uploads.prepare(currentPage(), args.paths as string[]);
+					refusal = upload.error ?? null;
+				} else if (pageBefore) this.uploads.clear(pageBefore);
+			}
+			if (!refusal && name === "browser_navigate" && this.pendingUploadId()) refusal = "A verified file chooser is still open. No navigation was dispatched. Upload the approved artifact first, or explicitly cancel the chooser with browser_file_upload and no paths before navigating.";
+			// Redirects can land after a click or supervisor checkpoint, or during an awaited probe.
+			// The current native URL and live per-run allowlist decide at the actual dispatch boundary.
+			let websiteBlock: WebsiteAccessBlock | null = null;
+			const websitePolicy = this.policy.websiteAccess?.();
+			const websiteUrl = () => name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined) ? String(args.url ?? "") : name === "browser_tabs" && args.action === "select" && typeof args.index === "number" ? this.context?.pages()[args.index]?.url() ?? "" : currentPage()?.url() ?? "";
+			const inspectWebsite = !opts.internal && (name !== "browser_tabs" || args.action === "new" || args.action === "select");
+			if (!refusal && websitePolicy && inspectWebsite) {
+				websiteBlock = websiteAccessBlock(websitePolicy, websiteUrl());
+				if (websiteBlock) {
+					if (websiteBlock.decision === "ask") await this.policy.requestWebsiteApproval?.(websiteBlock);
+					refusal = websiteBlock.decision === "ask" ? "Website approval is required. No action was dispatched. After the owner decides, inspect the page and make a fresh decision." : "This website is denied by this agent's website access policy. No action was dispatched.";
+				}
+			}
+			if (!refusal && !websitePolicy && this.policy.isDomainAllowed) {
+				const candidate = () => domainAdmissionUrl(name, args, currentPage()?.url(), opts.internal ?? false);
+				const allowed = (url: string | null) => {
+					if (url === null) return true;
+					try { const parsed = new URL(url); return (parsed.protocol === "https:" || parsed.protocol === "http:") && this.policy.isDomainAllowed?.(parsed.hostname) === true; } catch { return false; }
+				};
+				const url = candidate();
+				if (!allowed(url)) {
+					if (url) await this.policy.requestDomainApproval?.(url);
+					refusal = allowed(candidate())
+						? "No action was dispatched while site approval was pending. Inspect the current page and request a fresh supervisor checkpoint before retrying."
+						: "BLOCKED by the runner — the current browser site has not been approved for this application. No action was dispatched; explicit owner domain approval is required.";
+				}
+			}
+			// Stop can arrive while a DOM/origin/upload/admission check was in flight. Check again at dispatch.
+			refusal ??= cancelled();
+			if (!refusal && name === "browser_file_upload" && (opts.expectedUploadId || upload?.chooserId)) {
+				const pending = this.uploads.pendingId(currentPage());
+				if ((opts.expectedUploadId && pending !== opts.expectedUploadId) || (upload?.chooserId && pending !== upload.chooserId) || opts.isUploadAuthorized?.() === false) refusal = "The upload's chooser or task authorization changed before dispatch. No file was attached; inspect the intended upload control again.";
+			}
+			if (refusal) {
+				return { [REFUSED_CALL]: true, isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
+			}
 			let res = (await client.callTool({ name, arguments: args })) as McpToolResult;
 			if (!res.isError && upload?.verify) {
 				const checked = await upload.verify();
-				res = { ...res, ...(checked.error ? { isError: true } : {}), content: [...res.content, { type: "text", text: checked.error ?? "Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback." }] };
+				res = { ...res, ...(checked.error ? { isError: true } : {}), content: [{ type: "text", text: checked.error ?? "Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback." }, ...res.content] };
 			}
 			if (!res.isError && name === "browser_tabs") {
 				if (args.action === "select" && typeof args.index === "number") this.selectedPage = this.context?.pages()[args.index];
@@ -312,7 +312,7 @@ export class McpRuntime {
 				}
 			}
 			return res;
-		} catch (error) { throw error; }
+		} finally { await upload?.dispose?.(); }
 	}
 
 	/** A refusal that never reached Playwright at all (a policy/commit-guard refusal) — recorded in the same ordered stream. */

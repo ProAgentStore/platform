@@ -336,8 +336,13 @@ new screenshot. Image access applies the same instance, run and owner checks as 
   sequence number and capture point) — never the image, page text, form values or typed values. Stored
   metadata is the capture point, the page URL without its query or fragment, its domain and an action
   class.
-- **Bounded.** At most 60 frames per research run and 40 per application run, viewport only, each frame
-  capped in size, held in the runner's memory until the cloud pulls it. Research frames are kept as long
+- **Bounded.** From CLI 0.4.211, the runner retains the latest 60 research frames or 40 application
+  frames in memory, while continuing to capture later actions and review/completion frames. Older
+  runners stop capturing when that lifetime cap is reached. Frames are viewport only and individually
+  size-capped. The cloud retains frames already collected even after the runner evicts them. A slow
+  collector can miss the rolling window: native pulls report the exact gap relative to the requested
+  cursor, and stored replay coverage reports missing sequence ranges without claiming the latest frame
+  is the current screen. Research frames are kept as long
   as the run's trace (default 30 days); workflow tasks and application runs, 30 days. Screenshots taken
   before this contract (`runshot/`) are still served as they were.
 
@@ -354,7 +359,8 @@ or `local_browser_run`, and `subject_id` is that run's id. An application id is 
 | `browser_run_screenshot` | One listed artifact's metadata and actual image, preserving the run's frozen blurring setting. |
 
 For call and screenshot lists, follow `nextCursor` while `hasMore` is true. The default MCP page has
-25 entries; `limit` can reduce it. Cursors belong to their respective listing and run. Calls use
+25 entries; `limit` can reduce it. A page may be smaller to fit the MCP text budget; use its returned
+cursor, not the requested limit, to continue without skipping records. Cursors belong to their respective listing and run. Calls use
 durable insertion order; native `seq` can reset when the recorder's `epoch` changes.
 
 Call and state reads default to `refresh: true`: they collect diagnostics still retained by the

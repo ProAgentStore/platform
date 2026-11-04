@@ -281,6 +281,9 @@ export interface ReplayShotsPage {
 	shots: ReplayShot[];
 	/** The highest seq returned — the next `afterSeq`. Never past a frame not yet returned. */
 	lastSeq: number;
+	/** New runners keep a rolling buffer; old runners omit these fields. A gap is relative to the requested cursor, not all evictions. */
+	hasMore?: boolean;
+	coverage?: { mode: "rolling"; capacity: number; oldestSeq: number | null; latestSeq: number; evicted: number; gap?: { fromSeq: number; toSeq: number } };
 }
 
 /** `POST /local-browser/resume` — the owner's current decisions, sent when they unblock a pause. */

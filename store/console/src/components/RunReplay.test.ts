@@ -46,6 +46,14 @@ describe("replayFrames", () => {
 		]);
 	});
 
+	it("legacy frame cache identities cannot alias across tasks or instances", () => {
+		const shots = [{ seq: 1, msg: "First frame" }];
+		const first = replayFrames("i1", [], { taskId: "task-1", shots })[0];
+		const otherTask = replayFrames("i1", [], { taskId: "task-2", shots })[0];
+		const otherInstance = replayFrames("i2", [], { taskId: "task-1", shots })[0];
+		expect(new Set([first.key, otherTask.key, otherInstance.key]).size).toBe(3);
+		expect(new Set([first.src, otherTask.src, otherInstance.src]).size).toBe(3);
+	});
 	it("a workflow task merges its stored frames with older shots that predate the contract — no duplicates", () => {
 		const frames = replayFrames("i1", [artifact("runtime_task", 3, { point: "action", action: "click" })], {
 			taskId: "task-1",

@@ -163,7 +163,7 @@ export async function subjectScreenshotsOff(env: Pick<Env, "DB">, userId: string
  */
 export async function putBrowserArtifact(env: Pick<Env, "DB" | "STORAGE">, input: PutBrowserArtifact): Promise<PutBrowserArtifactResult> {
 	if (!env.STORAGE) return { stored: false, reason: "no_storage" };
-	if (!Number.isInteger(input.seq) || input.seq < 0) return { stored: false, reason: "bad_seq" };
+	if (!Number.isSafeInteger(input.seq) || input.seq < 0) return { stored: false, reason: "bad_seq" };
 	const contentType = input.contentType ?? "image/jpeg";
 	if (!CONTENT_TYPES.has(contentType)) return { stored: false, reason: "bad_type" };
 	if (!input.bytes.byteLength) return { stored: false, reason: "empty" };
@@ -299,7 +299,7 @@ export async function storeWorkflowShot(env: Pick<Env, "DB" | "STORAGE">, input:
 	return out?.stored ? out.artifact.id : null;
 }
 
-/** Enough pages to drain a whole run's capped frames in one sync (a page is ~900 KB of frames). */
+/** Bounded work per sync. Remaining frames continue from the last durably stored sequence next sync. */
 const MAX_SHOT_PAGES_PER_SYNC = 8;
 
 /**
@@ -318,15 +318,23 @@ export async function ingestRunnerShots(
 	let after = Math.max(await lastBrowserArtifactSeq(env, target.userId, target.subjectKind, target.subjectId), 0);
 	let stored = 0;
 	for (let page = 0; page < MAX_SHOT_PAGES_PER_SYNC; page++) {
-		const body = (await fetchPage(after).catch(() => null)) as { shots?: unknown; lastSeq?: unknown } | null;
+		const body = (await fetchPage(after).catch(() => null)) as { runId?: unknown; shots?: unknown; lastSeq?: unknown } | null;
 		const shots = Array.isArray(body?.shots) ? (body.shots as Array<Record<string, unknown>>) : [];
-		if (!shots.length) break;
+		if (!shots.length || shots.length > 100 || (body?.runId !== undefined && body.runId !== target.subjectId)) break;
+		// Validate ordering before any write: a high sequence must not bury an earlier retry behind the cloud cursor.
+		let previous = after;
+		if (shots.some((shot) => {
+			if (!shot || typeof shot !== "object" || !Number.isSafeInteger(shot.seq) || Number(shot.seq) < 1) return true;
+			if (Number(shot.seq) <= after) return false;
+			if (Number(shot.seq) <= previous) return true;
+			previous = Number(shot.seq); return false;
+		})) break;
 		let advanced = after;
 		for (const shot of shots) {
 			const seq = shot.seq;
-			if (typeof seq !== "number" || !Number.isInteger(seq) || seq <= after) continue;
+			if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq <= after) continue;
 			advanced = Math.max(advanced, seq);
-			const bytes = typeof shot.data === "string" ? base64Bytes(shot.data) : null;
+			const bytes = typeof shot.data === "string" && shot.data.length <= Math.ceil(MAX_BROWSER_ARTIFACT_BYTES * 4 / 3) ? base64Bytes(shot.data) : null;
 			if (!bytes) continue;
 			const out = await putBrowserArtifact(env, {
 				userId: target.userId,
@@ -342,6 +350,7 @@ export async function ingestRunnerShots(
 				now,
 			});
 			if (out.stored) stored++;
+			else if (out.reason === "write_failed" || out.reason === "no_storage") return stored;
 		}
 		if (advanced <= after) break;
 		after = advanced;

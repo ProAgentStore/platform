@@ -4,7 +4,7 @@
  * bounded by a per-run cap, a per-frame size cap and a paged pull.
  */
 import { describe, expect, it } from "vitest";
-import { MASK_CSS, MASK_SELECTOR, MAX_SHOT_BASE64, type MaskablePage, SHOTS_PAGE_BASE64, ShotRecorder } from "./replay.js";
+import { APPLY_SHOT_CAP, SCOUT_SHOT_CAP, MASK_CSS, MASK_SELECTOR, MAX_SHOT_BASE64, type MaskablePage, SHOTS_PAGE_BASE64, ShotRecorder } from "./replay.js";
 
 function fakePage(opts: { shotThrows?: boolean; image?: string } = {}) {
 	const calls: string[] = [];
@@ -49,12 +49,29 @@ describe("ShotRecorder.capture", () => {
 		expect(rec.shots).toEqual([]);
 	});
 
-	it("is capped per run, and refuses an oversized frame", async () => {
+	it("keeps recent frames with monotonic sequences, and refuses an oversized frame", async () => {
 		const rec = new ShotRecorder(2);
 		const p = fakePage();
-		expect([await rec.capture(p.page, "clicked"), await rec.capture(p.page, "clicked"), await rec.capture(p.page, "clicked")]).toEqual([1, 2, null]);
+		expect([await rec.capture(p.page, "clicked"), await rec.capture(p.page, "clicked"), await rec.capture(p.page, "clicked")]).toEqual([1, 2, 3]);
+		expect(rec.shots.map((shot) => shot.seq)).toEqual([2, 3]);
 		const big = new ShotRecorder(5);
 		expect(await big.capture(fakePage({ image: "A".repeat(MAX_SHOT_BASE64 + 4) }).page, "clicked")).toBeNull();
+	});
+	it.each([APPLY_SHOT_CAP, SCOUT_SHOT_CAP])("can capture review and completion after %i frames while retaining only its capacity", async (cap) => {
+		const rec = new ShotRecorder(cap); const p = fakePage();
+		for (let i = 0; i < cap + 5; i++) await rec.capture(p.page, "clicked");
+		expect(await rec.capture(p.page, "review")).toBe(cap + 6);
+		expect(await rec.capture(p.page, "completed")).toBe(cap + 7);
+		expect(rec.shots).toHaveLength(cap);
+		expect(rec.shots.at(-1)?.point).toBe("completed");
+		expect(rec.page("run", 0).coverage).toMatchObject({ oldestSeq: 8, latestSeq: cap + 7, evicted: 7, gap: { fromSeq: 1, toSeq: 7 } });
+		// If the cloud already stored the evicted frames, those evictions are not a missing-history gap.
+		expect(rec.page("run", 7).coverage).not.toHaveProperty("gap");
+	});
+	it("never captures or retains frames when screenshots are off", async () => {
+		const rec = new ShotRecorder(0, () => 0, false); const p = fakePage();
+		for (let i = 0; i < 45; i++) expect(await rec.capture(p.page, "completed")).toBeNull();
+		expect(p.calls).toEqual([]); expect(rec.shots).toEqual([]);
 	});
 });
 
@@ -68,6 +85,7 @@ describe("ShotRecorder.page — what the cloud pulls", () => {
 		expect(first.shots.map((s) => s.seq)).toEqual([1]);
 		expect(first.lastSeq).toBe(1);
 		expect(rec.page("run-1", first.lastSeq).shots.map((s) => s.seq)).toEqual([2]);
-		expect(rec.page("run-1", 3)).toEqual({ runId: "run-1", shots: [], lastSeq: 3 });
+		expect(first.hasMore).toBe(true);
+		expect(rec.page("run-1", 3)).toMatchObject({ runId: "run-1", shots: [], lastSeq: 3, hasMore: false, coverage: { oldestSeq: 1, latestSeq: 3, evicted: 0 } });
 	});
 });

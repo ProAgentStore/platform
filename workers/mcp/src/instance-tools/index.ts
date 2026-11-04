@@ -36,6 +36,7 @@ import { registerBrowserEvidenceTools } from "./browser-evidence.js";
 import { registerWebsiteAccessTools } from "./website-access.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerCoderBrainTools } from "./coder-brain.js";
+import { registerFileReadTools } from "./file-read.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerMachineControlTools } from "./machine-control.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
@@ -65,6 +66,7 @@ export function registerInstanceTools(
 	registerRuntimeTools(server, ctx);
 	registerMachineControlTools(server, ctx);
 	registerKnowledgeTools(server, ctx);
+	registerFileReadTools(server, ctx);
 	registerObservabilityTools(server, ctx);
 	// The per-instance connection guide (#772) — ungated: the discovery problem it solves
 	// belongs to every agent type, not only the ones with a console surface.

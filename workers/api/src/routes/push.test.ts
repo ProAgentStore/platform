@@ -119,7 +119,7 @@ describe("sendPushToUser", () => {
  * subscription list) and records every notification row written, so a test can assert the two
  * things that matter separately: did the ROW get written, and did the phone BUZZ.
  */
-function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: unknown[]; instanceConfig?: unknown }) {
+function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: unknown[]; instanceConfig?: unknown; instanceReadError?: boolean }) {
 	const inserted: Array<Record<string, unknown>> = [];
 	const DB = {
 		prepare(sql: string) {
@@ -142,6 +142,7 @@ function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: un
 							// The per-instance policy read (#992). Absent by default, so every assertion
 							// above this one measures the account baseline exactly as it did before.
 							if (/SELECT config FROM agent_instances/i.test(sql)) {
+								if (opts.instanceReadError) throw new Error("Instance policy unavailable");
 								return opts.instanceConfig === undefined ? null : { config: JSON.stringify(opts.instanceConfig) };
 							}
 							if (/FROM notifications/i.test(sql)) return opts.duplicate ? { 1: 1 } : null;
@@ -161,6 +162,31 @@ function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: un
  * hid it in the OS tray.
  */
 describe("notifyUser", () => {
+	it("retains a known attention opt-out when the later instance policy lookup fails", async () => {
+		const { env, inserted } = notifyEnv({ preferences: { attention: { pushOff: ["input_required"] } }, instanceReadError: true, subs: [await realSub("phone")] });
+		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+		vi.stubGlobal("fetch", fetchSpy);
+		expect(await notifyUser({ ...env, ...(await vapidEnvKeys()) }, "u1", "apply", "Answers needed", "Notice period?", link("/console/instances/i1/applications/a1"), { instanceId: "i1", event: "input_required", kind: "update" })).toBe("muted");
+		expect(inserted).toHaveLength(1);
+		expect(inserted[0].pushedAt).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it.each(["alert", "update"] as const)("keeps the row without pushing a %s when the owner disabled this attention event", async (kind) => {
+		const { env, inserted } = notifyEnv({
+			preferences: { attention: { pushOff: ["input_required"] } },
+			instanceConfig: { notifications: { rules: [{ event: "input_required", push: true }] } },
+			subs: [await realSub("phone")],
+		});
+		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+		vi.stubGlobal("fetch", fetchSpy);
+		const result = await notifyUser({ ...env, ...(await vapidEnvKeys()) }, "u1", "apply", "Answers needed", "Notice period?", link("/console/instances/i1/applications/a1"), { instanceId: "i1", event: "input_required", kind });
+		expect(result).toBe("muted");
+		expect(inserted).toHaveLength(1);
+		expect(inserted[0].pushedAt).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
 	it("records the event key and the kind on the row", async () => {
 		const { env, inserted } = notifyEnv({});
 		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", link("/console/"), { key: "deploy:r1:abc" });

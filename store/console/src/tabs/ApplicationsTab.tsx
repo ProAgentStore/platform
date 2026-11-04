@@ -279,7 +279,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 	const progress = item.execution?.progress ?? item.fillProgress;
 	const questions = pause?.question ? [pause.question] : item.questions;
 	// #1063: the fill run's replay — every form control blurred by the runner before each frame was taken.
-	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, live ? item : item.stateVersion);
+	const { artifacts, screenshotsOff, history, historyLoading, loadHistory } = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, live ? item : item.stateVersion);
 	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
 
 	const act = async (action: ApplicationQueueAction) => {
@@ -475,10 +475,10 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 			</fieldset>
 			{msg && <p className="text-xs mt-2">{msg}</p>}
 
-			{(live || frames.length > 0 || screenshotsOff) && (
+			{(live || !!item.fillRunId || frames.length > 0 || screenshotsOff) && (
 				<div className="mt-3">
 					<h4 className="font-semibold mb-2">Screenshot timeline</h4>
-					<RunReplay frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : "No screenshots captured yet. New frames appear here as the browser works."} />
+					<RunReplay key={`${instanceId}:${item.fillRunId ?? item.applicationId}`} history={history} historyLoading={historyLoading} onLoadMore={() => void loadHistory()} frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : "No screenshots captured yet. New frames appear here as the browser works."} />
 				</div>
 			)}
 

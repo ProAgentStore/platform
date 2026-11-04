@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 422;
+export const MCP_TOOL_COUNT = 423;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 393;
+export const MCP_TOOL_ALWAYS_ON = 394;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -63,4 +63,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 413, issue: "#1431", date: "2026-11-03", reason: "get/set_instance_browser_settings patch browser engine, visibility and profile lifetime independently; get_instance_browser_session reads the actual runtime separately from saved settings. The mode-only1429 tools remain compatibility doors; neither supports engine/profile choice or live session evidence." },
 	{ count: 418, issue: "#1480", date: "2026-11-04", reason: "Five website permission tools read/list immutable owner questions, answer their exact host, and list/revoke remembered allow or deny decisions. Existing browser settings choose a mode but cannot inspect or answer a unique pending question, and research consent cannot cover application or generic browser runs." },
 	{ count: 422, issue: "#1487", date: "2026-11-04", reason: "browser_run_calls/state/screenshots/screenshot: owner-scoped diagnostic calls, tab/modal state and image evidence across all browser run kinds. Existing application_run exposes coarse workflow trace; screenshot settings only toggle capture. Neither returns native call errors, current page state or stored image bytes." },
+	{ count: 423, issue: "#1504", date: "2026-11-04", reason: "read_instance_file reads bounded original UTF-8 bytes with hash-bound paging and provenance. Existing list_instance_files returns metadata only; read_agent_file reads a template GitHub repo, and search cannot retrieve unindexed generated application files." },
 ];

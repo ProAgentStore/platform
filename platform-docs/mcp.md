@@ -155,7 +155,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.202`
+- `serverInfo.version`: `0.1.203`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -290,7 +290,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 422 tools under two different scope sets and reads the required scope out
+which drives all 423 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -535,7 +535,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **422 tools**. 393 are always present. The remaining 29 are gated to
+The server registers **423 tools**. 394 are always present. The remaining 29 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -606,7 +606,7 @@ looking and tells the user which console screen to use instead.
 | Web Push subscription plumbing | A push subscription is a browser object (a VAPID key and an endpoint minted by the user's own browser). There is nothing for a server-side caller to subscribe WITH. | `check-mcp-parity.mjs` |
 | Permission writes on instance state | `get_instance_state` is read-only for the permission block; toggles stay in the console. The one carve-out is `set_instance_model`, which writes the `model` field and nothing else. | — |
 | Stripe checkout and the customer portal | Browser redirects — a redirect URL is useless to a headless caller. `billing_status` reads; nothing writes. | — |
-| Binary routes — voice-audio, R2 multipart upload parts, file byte download | MCP results are text. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not. `upload_agent_file` takes text only; `upload_resume` is the single binary path, and is apply-scoped. | — |
+| Binary routes — voice-audio, R2 multipart upload parts, non-text files | `read_instance_file` reads original private UTF-8 text with bounded downloads and hash-bound pages; it refuses binary files. Browser screenshots use an MCP image block. Voice streams, multipart byte parts and arbitrary binary-file downloads remain outside the text file reader. | — |
 | Arbitrary shell execution, or a generic API proxy | No shell tool, no open proxy. `call_instance_tool` reaches only the connector tools an instance declares and its owner has left enabled. | — |
 | The MCP audit log over HTTP | MCP already reads these events, through `mcp_audit_log`. `GET /v1/mcp-audit` (#704) is the console's path to the SAME KV, and its whole reason to exist is that it needs no MCP connection — when the MCP connection is what broke, a tool that wraps it answers nothing. A second tool over the same bytes would add a surface, not a capability. | `check-mcp-parity.mjs` |
 | Writing a supervisor's DIRECTION | `PUT /v1/instances/:id/supervision/:sid/direction` is the only path that stamps `setBy: "user"`, and that is a security boundary rather than a detail of the URL: a direction is durable and reaches the supervisor's prompt on every later turn, so something able to write its own would turn one prompt injection — in a repo file, an issue body, a remote MCP resource — into a standing instruction. Provenance may only move agent → owner: the agent proposes through its own `set_direction` (recorded as `setBy: "agent"`, surfaced as `proposedDirection`) and the OWNER confirms by re-sending the text in the console. A tool here would be the injection path that route exists to close. `list_supervision` reads the direction and the proposal; nothing writes either. | — |
@@ -833,3 +833,11 @@ actual image. These read tools never repeat an action, answer a website question
 a run or submit an application. Existing capture/redaction settings still govern what is
 recorded. Older runners may not provide native diagnostics; that limitation is returned
 explicitly rather than represented as an empty successful log.
+
+### Reading original private instance files
+
+`read_instance_file` reads the original stored UTF-8 text, including generated Markdown that has never been extracted or indexed. Supply the exact `instance_id` and `file_id` from `list_instance_files`. It uses the existing owner-checked Files API, accepts no external URL or local path, and performs no extraction or writes.
+
+The original download is bounded to 1MiB. Text pages contain at most 6,000 UTF-16 code units; `page.nextOffset` preserves Unicode surrogate pairs. Continue with that offset and the first page's `sha256` as `expected_sha256`; changed bytes are refused before content is returned. Supplying an expected hash on the first page also verifies a selected application bundle. Binary, invalid UTF-8, oversized, mismatched and unavailable files return explicit errors.
+
+`sha256` is computed from the complete downloaded original bytes. `provenance` separately reports the registered hash and the version/ETag from the metadata snapshot; missing registered hashes remain explicitly unverified. Pages describe their actual boundaries and do not silently truncate files.

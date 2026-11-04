@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**422 tool registrations.** 393 are always registered; 29 are gated to the console
+**423 tool registrations.** 394 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -302,6 +302,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `delete_instance_knowledge` | Delete one document | destructive | yes | `delete_instance_knowledge` |
 | `search_instance_knowledge` | Vector search — what is actually retrievable | — | | |
 | `vector_stats` | Vector-store inventory grouped by source | — | | |
+| `read_instance_file` | Read original private UTF-8 file text with SHA-256 provenance and hash-bound pages; refuses binary/oversize files | read | | |
 | `list_instance_files` | List uploaded files + extraction status | — | | |
 | `upload_instance_file` | Upload base64 bytes to owner-scoped instance Files (12 MiB decoded limit; returns metadata/hashes, never bytes) | write | yes | |
 | `delete_instance_file` | Delete a file, its metadata, and its vectors | destructive | yes | `delete_instance_file` |

@@ -27,6 +27,7 @@ import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerCoderBrainTools } from "./coder-brain.js";
 import { registerApplicationTools } from "./applications.js";
 import { registerInstanceTools } from "./index.js";
+import { registerFileReadTools } from "./file-read.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
 import { registerObservabilityTools } from "./observability.js";
@@ -419,6 +420,7 @@ const TABLE: Record<string, Row> = {
 	list_errors: ["observability", "none", null, null, "build,cursor,instance_id,level,limit,offset,request_id,run_id,scope,since,source,token,until"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
 	list_instance_drive_files: ["connectors", "none", null, null, "folder,grant_id,instance_id,limit,q,token"],
+	read_instance_file: ["fileRead", "read", null, null, "expected_sha256,file_id,instance_id,max_chars,offset,token"],
 	list_instance_files: ["knowledge", "none", null, null, "instance_id,token"],
 	list_instance_knowledge: ["knowledge", "none", null, null, "instance_id,token"],
 	// +schemas at #569: the input schemas are opt-in now, because the default response was 89 KB.
@@ -747,6 +749,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	coderBrain: registerCoderBrainTools as any,
 	applications: registerApplicationTools as any,
 	knowledge: registerKnowledgeTools as any,
+	fileRead: registerFileReadTools as any,
 	machineControl: registerMachineControlTools as any,
 	emailWorker: registerEmailWorkerTools as any,
 	gmailIdentity: registerGmailIdentityTools as any,

@@ -102,6 +102,58 @@ describe("actual Playwright MCP upload selection and site validation (#1473)", (
 		expect(mcp.textOf(repeated)).toContain("No verified file chooser");
 	});
 
+	it.each(["this.value=''", "this.replaceWith(document.createElement('input'))"])("confirms selected bytes when a SPA consumes its file input: %s (#1496)", async (consume) => {
+		await choose(`<input id="resume" type="file" accept=".txt" onchange="document.querySelector('#ack').textContent=this.files[0].name;${consume}"><span id="ack"></span>`);
+		const result = await upload();
+		expect(result.isError).not.toBe(true);
+		expect(mcp.textOf(result)).toContain("Website acceptance remains unconfirmed");
+		expect(await page.locator("#ack").innerText()).toBe("resume.txt");
+	});
+
+	it.each(["preexisting", "hidden", "transparent_parent", "wrong_name", "other_frame"])("does not accept %s filename text as new selection evidence", async (kind) => {
+		const ack = kind === "preexisting" ? "resume.txt" : "";
+		const value = kind === "wrong_name" ? "other.txt" : "resume.txt";
+		const update = kind === "other_frame" ? `document.querySelector('iframe').contentDocument.body.textContent='resume.txt'` : `document.querySelector('#ack').textContent='${value}'`;
+		await choose(`<input id="resume" type="file" onchange="this.value='';${update}"><div ${kind === "transparent_parent" ? 'style="opacity:0"' : ""}><span id="ack" ${kind === "hidden" ? 'style="display:none"' : ""}>${ack}</span></div><iframe srcdoc="<body></body>"></iframe>`);
+		expect((await upload()).isError).toBe(true);
+	});
+
+	it("recognizes a consumed input's acknowledgment inside its own iframe", async () => {
+		await page.setContent('<iframe srcdoc="<body></body>"></iframe>');
+		const frame = page.frames()[1];
+		await frame.setContent('<input id="resume" type="file" onchange="document.querySelector(\'#ack\').textContent=this.files[0].name;this.remove()"><span id="ack"></span>');
+		await mcp.callTool("browser_snapshot");
+		const opened = page.waitForEvent("filechooser");
+		await frame.locator("#resume").click();
+		await opened;
+		expect((await upload()).isError).not.toBe(true);
+	});
+
+	it("a replacement input's explicit invalid state outweighs its new filename acknowledgment", async () => {
+		await choose('<input id="resume" type="file" onchange="document.querySelector(\'#ack\').textContent=this.files[0].name;const next=this.cloneNode();next.setAttribute(\'aria-invalid\',\'true\');this.replaceWith(next)"><span id="ack"></span>');
+		expect((await upload()).isError).toBe(true);
+	});
+
+	it("a new filename does not override explicit rejection, and the bounded error starts with its reason", async () => {
+		mcp.setSubject({ kind: "local_apply_run", id: "upload-rejection" });
+		await choose('<input id="resume" type="file" aria-describedby="error" onchange="document.querySelector(\'#ack\').textContent=this.files[0].name;this.value=\'\';document.querySelector(\'#error\').textContent=\'Unsupported document\'"><span id="ack"></span><div id="error" role="alert"></div>');
+		const result = await upload();
+		expect(result.isError).toBe(true);
+		expect(mcp.textOf(result)).toMatch(/^The upload field reported a validation error/);
+		expect(mcp.pullCalls({ kind: "local_apply_run", id: "upload-rejection" }, 0).calls.at(-1)?.errorHead).toMatch(/^The upload field reported a validation error/);
+	});
+
+	it("requires observed native selection as well as a new filename acknowledgment", async () => {
+		const verifier = new UploadVerifier();
+		verifier.track(page);
+		try {
+			await choose('<input id="resume" type="file"><span id="ack"></span>');
+			const prepared = await verifier.prepare(page, [path]);
+			await page.evaluate(() => { document.querySelector("#ack")!.textContent = "resume.txt"; document.querySelector("#resume")!.remove(); });
+			expect((await prepared.verify?.())?.error).toBeTruthy();
+		} finally { verifier.stop(); }
+	});
+
 	it.each(["stop", "task_binding", "chooser", "domain"] as const)("refuses an upload when %s changes during awaited validation (#1490)", async (change) => {
 		await page.route("https://fixture.test/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>Fixture</title>" }));
 		await page.goto("https://fixture.test/");

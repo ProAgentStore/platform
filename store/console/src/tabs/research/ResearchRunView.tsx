@@ -72,7 +72,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 		);
 
 	// #1063: the run's replay frames, re-read as its trace grows. Above the early return: hooks run in the same order on every render.
-	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId, "local_browser_run", runId, events.length);
+	const { artifacts, screenshotsOff, history, historyLoading, loadHistory } = useBrowserArtifacts(instanceId, "local_browser_run", runId, events);
 	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
 
 	if (!run) return error ? <LoadFailed what="this research run" detail={error} onRetry={load} /> : <p className="text-sm text-muted p-2">Loading…</p>;
@@ -157,7 +157,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 				</Card>
 			)}
 
-			{(frames.length > 0 || screenshotsOff) && <RunReplay frames={frames} emptyText={SCREENSHOTS_OFF_TEXT} />}
+			{(frames.length > 0 || screenshotsOff || history.status === "partial" || history.status === "unavailable") && <RunReplay key={`${instanceId}:${runId}`} history={history} historyLoading={historyLoading} onLoadMore={() => void loadHistory()} frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : "No stored screenshots for this research run yet."} />}
 
 			{pages.length > 0 && (
 				<Card>

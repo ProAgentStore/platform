@@ -416,13 +416,13 @@ export default function RunDetail() {
 	// still play from their original route.
 	const legacyShots: LegacyShot[] = useMemo(() =>
 		events
-			.filter((e) => e.type === "agent.shot" && (e.data as Record<string, unknown>)?.seq != null)
+			.filter((e) => String(e.taskId ?? e.data?.taskId ?? "") === taskId && e.type === "agent.shot" && (e.data as Record<string, unknown>)?.seq != null)
 			.map((e) => {
 				const d = (e.data ?? {}) as Record<string, unknown>;
 				return { seq: Number(d.seq), artifactId: typeof d.artifactId === "string" ? d.artifactId : undefined, msg: e.message || humanEvent({ type: "agent.decision", message: String(d.action ?? "") } as RuntimeEvent), at: e.createdAt };
 			}),
-	[events]);
-	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId ?? "", "runtime_task", taskId, legacyShots.length);
+	[events, taskId]);
+	const { artifacts, screenshotsOff, history, historyLoading, loadHistory } = useBrowserArtifacts(instanceId ?? "", "runtime_task", taskId, events);
 	const frames = useMemo(() => replayFrames(instanceId ?? "", artifacts, { taskId: taskId ?? "", shots: legacyShots }), [instanceId, taskId, artifacts, legacyShots]);
 
 	const status = task?.status ?? "";
@@ -571,7 +571,7 @@ export default function RunDetail() {
 			<TicketThread instanceId={instanceId} taskId={taskId} autoFocus={askIntent} />
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
-			<RunReplay frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : `No screenshots for this run${running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}`} />
+			<RunReplay key={`${instanceId}:${taskId}`} history={history} historyLoading={historyLoading} onLoadMore={() => void loadHistory()} frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : `No screenshots for this run${running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}`} />
 
 			{/* ── The card's ordered action log (#1108), the same one every task type writes ── */}
 			{instanceId && taskId && (

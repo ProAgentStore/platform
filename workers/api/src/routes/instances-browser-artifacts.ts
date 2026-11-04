@@ -1,3 +1,4 @@
+import type { BrowserArtifactPageResponse } from "../lib/browser-artifact-response-types.js";
 /**
  * Replay screenshots of an instance's browser runs (#1063) — owner-only, by subject.
  *
@@ -13,6 +14,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { isBrowserArtifactSubject, listBrowserArtifacts, pageBrowserArtifacts, readBrowserArtifact, subjectBelongsTo, subjectScreenshotsOff } from "../lib/browser-artifacts.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import { browserArtifactCoverage, type BrowserArtifactCoverage } from "../lib/browser-artifact-coverage.js";
 
 export function registerBrowserArtifactRoutes(router: Hono<{ Bindings: Env }>): void {
 	router.get("/:instanceId/browser-artifacts", async (c) => {
@@ -27,12 +29,14 @@ export function registerBrowserArtifactRoutes(router: Hono<{ Bindings: Env }>): 
 		if (c.req.query("limit") !== undefined || c.req.query("cursor") !== undefined) {
 			const limit = Number(c.req.query("limit") ?? 25); const cursor = c.req.query("cursor"); const after = cursor === undefined ? -1 : Number(cursor);
 			if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(after) || after < -1) throw new HttpError(400, "Invalid screenshot page limit or cursor");
-			return c.json({ subjectKind, subjectId, ...await pageBrowserArtifacts(c.env, session.uid, instanceId, subjectKind, subjectId, after, limit), screenshotsOff: await subjectScreenshotsOff(c.env, session.uid, subjectKind, subjectId) }, 200, { "Cache-Control": "no-store" });
+			const page: BrowserArtifactPageResponse = { subjectKind, subjectId, ...await pageBrowserArtifacts(c.env, session.uid, instanceId, subjectKind, subjectId, after, limit), coverage: await browserArtifactCoverage(c.env, session.uid, instanceId, subjectKind, subjectId), screenshotsOff: await subjectScreenshotsOff(c.env, session.uid, subjectKind, subjectId) };
+			return c.json(page, 200, { "Cache-Control": "no-store" });
 		}
-		const body: BrowserArtifactListResponse = {
+		const body: BrowserArtifactListResponse & { coverage: BrowserArtifactCoverage } = {
 			subjectKind,
 			subjectId,
 			artifacts: await listBrowserArtifacts(c.env, session.uid, instanceId, subjectKind, subjectId),
+			coverage: await browserArtifactCoverage(c.env, session.uid, instanceId, subjectKind, subjectId),
 			screenshotsOff: await subjectScreenshotsOff(c.env, session.uid, subjectKind, subjectId),
 		};
 		return c.json(body, 200, { "Cache-Control": "no-store" });

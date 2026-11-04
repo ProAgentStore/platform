@@ -14,18 +14,28 @@ export class BrowserStateSampler {
   if (!id) { id = crypto.randomUUID(); this.ids.set(page, id); }
   return id;
  }
- private safe(value: string, max: number): string {
+ private maskKnown(value: string): string {
   for (const secret of this.secrets()) if (secret) for (const variant of new Set([secret, encodeURIComponent(secret)])) value = value.split(variant).join("[REDACTED]");
-  const safe = redactText(value);
-  return safe.length > max ? `${safe.slice(0, max - 1)}…` : safe;
+  return value;
+ }
+ private webUrl(raw: string): string {
+  try {
+   const url = new URL(raw);
+   if (url.protocol !== "https:" && url.protocol !== "http:") return "[non-web URL]";
+   // Generic token detection must not join a hostname and ordinary path segments into one token.
+   const path = url.pathname.split("/").map(segment => redactText(this.maskKnown(segment))).join("/");
+   return this.maskKnown(`${url.origin}${path}`);
+  } catch { return "[URL redacted]"; }
+ }
+ private bounded(value: string, max: number): string { return value.length > max ? `${value.slice(0, max - 1)}…` : value; }
+ private safe(value: string, max: number): string {
+  // Loading titles may themselves be URLs. Strip credentials before clipping any text prefix.
+  const safe = value.split(/(https?:\/\/[^\s<>"'`]+)/gi).map((part, index) => index % 2 ? this.webUrl(part) : redactText(this.maskKnown(part))).join("");
+  return this.bounded(safe, max);
  }
  private url(page: Page): string {
-  try {
-   const raw = page.url();
-   if (raw === "about:blank") return raw;
-   const url = new URL(raw);
-   return url.protocol === "https:" || url.protocol === "http:" ? this.safe(`${url.origin}${url.pathname}`, 2000) : "[non-web URL]";
-  } catch { return "[unavailable]"; }
+  try { const raw = page.url(); return raw === "about:blank" ? raw : this.bounded(this.webUrl(raw), 2000); }
+  catch { return "[unavailable]"; }
  }
  /** Consume metadata already returned by MCP. Text supplied by a page is never executed. */
  observe(text: string, context: BrowserContext | undefined, selected: Page | undefined): void {

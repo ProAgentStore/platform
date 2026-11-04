@@ -4,7 +4,8 @@
  * Captured by the RUNNER at points the bridge chooses (after a navigation, an accepted click, a snapshot,
  * a fill, a pause, completion), never by the model: `browser_take_screenshot` stays refused to the CLI, so
  * a screenshot is evidence the platform keeps, not a tool that could read a page around the redacted
- * trace. Frames stay in this process's memory until the cloud PULLS them (the runner holds no API token);
+ * trace. Recent frames stay in a bounded rolling buffer for the cloud to PULL (the runner holds no API token);
+ * old uncollected frames can be evicted, which the pull reports as a cursor-relative gap.
  * the trace only ever says that a frame exists — `screenshot.captured` with its seq and capture point.
  *
  * ── Form-control policy (default masked; owner opt-out #1433)
@@ -29,7 +30,7 @@ export type { ReplayShot, ReplayShotsPage } from "./contract.js";
 /** Where a frame was taken — the API's `CAPTURE_POINTS` vocabulary. */
 export type ReplayPoint = ReplayShot["point"];
 
-/** Per-run caps (#1063): enough to replay a run, not enough to make storage unbounded. */
+/** In-memory rolling capacities. Cloud history is independent of this recent-frame buffer. */
 export const SCOUT_SHOT_CAP = 60;
 export const APPLY_SHOT_CAP = 40;
 /** One frame, as base64 characters (~768 KiB of JPEG) — the API refuses larger, so the runner never sends one. */
@@ -92,7 +93,7 @@ export class ShotRecorder {
 	) {}
 
 	/**
-	 * Take one frame, best-effort. Returns its seq, or null when none was kept: the cap is reached, this
+	 * Take one frame, best-effort. Returns its seq, or null when capture is disabled, this
 	 * run has no real page to capture (#1419 — a browser the runner did not itself launch), or the
 	 * masked screenshot failed.
 	 */
@@ -102,13 +103,14 @@ export class ShotRecorder {
 
 	/** The reason is explicit so a replay can distinguish missing evidence from an unchanged page. */
 	async captureResult(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string; target?: string } = {}): Promise<{ seq: number } | { seq: null; reason: "capture_limit" | "page_unavailable" | "capture_failed" | "frame_too_large" }> {
-		if (this.nextSeq >= this.cap) return { seq: null, reason: "capture_limit" };
+		if (this.cap <= 0 || this.nextSeq >= Number.MAX_SAFE_INTEGER) return { seq: null, reason: "capture_limit" };
 		if (!page) return { seq: null, reason: "page_unavailable" };
 		const data = await capturePageScreenshot(page, { quality: 50, timeout: 8_000, blurFormFields: this.blurFormFields });
 		if (!data) return { seq: null, reason: "capture_failed" };
 		if (data.length > MAX_SHOT_BASE64) return { seq: null, reason: "frame_too_large" };
 		const seq = ++this.nextSeq;
 		this.shots.push({ seq, point, ...(meta.url ? { url: meta.url } : {}), ...(meta.action ? { action: meta.action } : {}), ...(meta.target ? { target: meta.target } : {}), mimeType: "image/jpeg", data, at: new Date(this.now()).toISOString() });
+		if (this.shots.length > this.cap) this.shots.splice(0, this.shots.length - this.cap);
 		return { seq };
 	}
 
@@ -122,6 +124,11 @@ export class ShotRecorder {
 			out.push(s);
 			size += s.data.length;
 		}
-		return { runId, shots: out, lastSeq: out.length ? out[out.length - 1].seq : afterSeq };
+		const lastSeq = out.length ? out[out.length - 1].seq : afterSeq;
+		const oldestSeq = this.shots[0]?.seq ?? null;
+		return { runId, shots: out, lastSeq, hasMore: this.shots.some((shot) => shot.seq > lastSeq), coverage: {
+			mode: "rolling", capacity: this.cap, oldestSeq, latestSeq: this.nextSeq, evicted: Math.max(0, this.nextSeq - this.shots.length),
+			...(oldestSeq !== null && afterSeq < oldestSeq - 1 ? { gap: { fromSeq: Math.max(1, afterSeq + 1), toSeq: oldestSeq - 1 } } : {}),
+		} };
 	}
 }
