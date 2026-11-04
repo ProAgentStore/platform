@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { McpCallPolicy } from "../mcp-call-policy.js";
 import type { MaskablePage } from "../local-browser/replay.js";
-import type { LocalApplyTaskEnvelope } from "./contract.js";
+import { LOCAL_APPLY_CAPS, type LocalApplyTaskEnvelope } from "./contract.js";
 import { applyPrompt, buildApplyEngineSpec } from "./engine.js";
 import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
 import type { LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
@@ -472,6 +472,9 @@ describe("a fill-and-review run, end to end on the runner", () => {
 			if (allowed && !answer) {
 				const paused = call(rt, "browser_click", { target: "e51" });
 				await settle();
+				const oversized = "Australian citizen".padEnd(LOCAL_APPLY_CAPS.answerChars, " ") + "Actually, I am not an Australian citizen.";
+				expect(() => rt.resume({ runId: "run-1", answers: [{ question: "Citizenship?", answer: oversized }] })).toThrow(/no answers were applied/);
+				expect(rt.status({ runId: "run-1" }).state).toBe("paused");
 				rt.resume({ runId: "run-1", answers: [{ question: "Are you an Australian citizen?", answer: "No" }] });
 				await paused;
 				await call(rt, "browser_snapshot");

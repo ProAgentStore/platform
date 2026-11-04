@@ -759,11 +759,16 @@ export class LocalApplyRuntime {
 		const websitePolicy = websiteResumePolicy(run.envelope.policy.browserWebsiteAccess, o.browserWebsiteAccess, websitePause, o.expectedWebsitePauseKey, o.websiteDecision);
 		const domains = resumeDomainGrants(o.allowDomains, run.state, run.pause);
 		if (run.pause?.reason === "supervisor_checkpoint") throw new RunnerInputError("This run is waiting for a persisted supervisor directive, not an owner resume", 409);
-		if (websitePolicy) run.envelope.policy.browserWebsiteAccess = websitePolicy;
+		const answers: SourceBlock[] = [];
 		for (const a of (Array.isArray(o.answers) ? o.answers : []).slice(0, LOCAL_APPLY_CAPS.answers)) {
 			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
-			if (typeof r.question === "string" && typeof r.answer === "string" && r.answer.trim()) run.grounding.push({ label: "owner answers", text: `Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars)}`, answerText: r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars) });
+			if (typeof r.question !== "string" || typeof r.answer !== "string") continue;
+			const answer = r.answer.trim();
+			if (answer.length > LOCAL_APPLY_CAPS.answerChars) throw new RunnerInputError(`Each answer must be at most ${LOCAL_APPLY_CAPS.answerChars} characters; no answers were applied.`, 400);
+			if (answer) answers.push({ label: "owner answers", text: `Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${answer}`, answerText: answer });
 		}
+		if (websitePolicy) run.envelope.policy.browserWebsiteAccess = websitePolicy;
+		run.grounding.push(...answers);
 		for (const domain of domains) run.allow.add(domain);
 		// The owner took the sign-in over: whatever was provisioned for the CLI is wiped (#1412).
 		if (run.signIn) this.signInDone(run);
