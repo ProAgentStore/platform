@@ -174,6 +174,12 @@ const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const PHONE = /\+?\d[\d\s().-]{7,}\d/g;
 const digits = (s: string) => s.replace(/\D/g, "");
 
+/** A bounded draft excerpt must say when content was omitted; it is never a complete quote. */
+function draftExcerpt(value: string, maxChars: number): string {
+	const text = value.replace(/\s+/g, " ").trim();
+	return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
+}
+
 export type DraftCheck =
 	| { ok: true; resume: string; coverLetter: string; claims: number }
 	| { ok: false; reason: "missing_information" | "uncertain_claim" | "invalid_cli_output"; questions: string[]; claims: number; unmatched: number; validationError: DraftValidationError; parseAttempts: LocalArtifactParseAttempt[] };
@@ -209,16 +215,17 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[]):
 		const src = typeof c.source === "string" ? byRole.get(c.source as LocalArtifactPromptRole) : undefined;
 		if (quote.length >= 3 && src?.includes(quote)) continue;
 		const claim = typeof c.text === "string" ? c.text.trim() : "";
-		const role = typeof c.source === "string" ? c.source.slice(0, 20) : "unspecified source";
-		const rejectedQuote = typeof c.quote === "string" ? c.quote.replace(/\s+/g, " ").slice(0, 65) : "(missing quote)";
-		flag(`Citation ${index + 1} does not match ${role} verbatim; factual accuracy is undetermined. Claim: “${claim.slice(0, 65) || "(unnamed claim)"}”. Draft quote: “${rejectedQuote}”. Correct the citation or omit unsupported content.`);
+		const role = typeof c.source === "string" ? draftExcerpt(c.source, 20) : "unspecified source";
+		const rejectedQuote = typeof c.quote === "string" ? draftExcerpt(c.quote, 65) : "(missing quote)";
+		flag(`Citation ${index + 1} does not match ${role} verbatim; factual accuracy is undetermined. Claim: “${draftExcerpt(claim, 65) || "(unnamed claim)"}”. Draft quote: “${rejectedQuote}”. Correct the citation or omit unsupported content.`);
 	}
 	const text = `${resume}\n${coverLetter}`;
 	const sourceDigits = digits(sources.map((s) => s.text).join("\n"));
 	for (const y of new Set(text.match(YEAR) ?? [])) if (!all.includes(y)) {
 		const [document, body] = resume.includes(y) ? ["résumé", resume] : ["cover letter", coverLetter];
 		const offset = body.indexOf(y);
-		const context = body.slice(Math.max(0, offset - 40), offset + y.length + 40).replace(/\s+/g, " ");
+		const start = Math.max(0, offset - 40), end = offset + y.length + 40;
+		const context = `${start > 0 ? "…" : ""}${body.slice(start, end).replace(/\s+/g, " ")}${end < body.length ? "…" : ""}`;
 		flag(`The year ${y} in the ${document} is absent from the sources. Draft context: “${context}”. Check its meaning: omit an incidental document date; do not invent or change a factual date.`);
 	}
 	for (const e of new Set(text.match(EMAIL) ?? [])) if (!all.includes(e.toLowerCase())) flag("Confirm the email address in the draft — it does not appear in your sources.");

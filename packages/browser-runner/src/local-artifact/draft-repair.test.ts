@@ -41,6 +41,9 @@ describe("citation and date diagnostics preserve validation (#1472)", () => {
 		const result = checked({ ...draft(), claims: [{ text: "x".repeat(10000), quote: "y".repeat(10000), source: "z".repeat(10000) }] });
 		if (result.ok) throw new Error("Expected citation rejection");
 		expect(result.questions[0].length).toBeLessThanOrEqual(300);
+		expect(result.questions[0]).toContain(`${"z".repeat(19)}… verbatim`);
+		expect(result.questions[0]).toContain(`Claim: “${"x".repeat(64)}…”`);
+		expect(result.questions[0]).toContain(`Draft quote: “${"y".repeat(64)}…”`);
 	});
 });
 
