@@ -1,5 +1,6 @@
-import { parseLocalApplyEvent } from "./contract.js";
-import type { ApplyTraceEvent } from "./store.js";
+import { type LocalApplyEvent, type LocalApplyPlatformEventType, parseLocalApplyEvent } from "./contract.js";
+
+export type ApplyTraceEvent = Omit<LocalApplyEvent, "type"> & { type: LocalApplyEvent["type"] | LocalApplyPlatformEventType; seq?: number };
 
 export const MAX_APPLY_TRACE = 500;
 const cursor = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;

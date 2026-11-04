@@ -1,4 +1,4 @@
-import { APPEND_APPLY_TRACE_SQL, validTraceAppend } from "./trace-integrity.js";
+import { APPEND_APPLY_TRACE_SQL, type ApplyTraceEvent, validTraceAppend } from "./trace-integrity.js";
 import type { BrowserWebsiteAccessWire } from "../browser-website-policy.js";
 /**
  * Application Runner (#957) — D1 reads/writes: the application lifecycle (compare-and-set + audit)
@@ -7,7 +7,7 @@ import type { BrowserWebsiteAccessWire } from "../browser-website-policy.js";
 import type { Env } from "../../types.js";
 import { type ApplicationStatus, type JobApplication, writeBackToLead } from "../local-artifact/store.js";
 import { fingerprintOf, jobIdentityOf, sameFingerprint, type ApprovalFingerprint } from "./approval.js";
-import { type LocalApplyEvent, type LocalApplyMode, type LocalApplyPause, type LocalApplyPlatformEventType, traceUrl } from "./contract.js";
+import { type LocalApplyMode, type LocalApplyPause, traceUrl } from "./contract.js";
 import type { LocalApplyHandoffTerminalReason } from "./handoff-contract.js";
 import type { GateCheck } from "./policy.js";
 
@@ -571,7 +571,7 @@ export interface ApplyRunPolicy {
 	blurFormFields?: boolean;
 }
 
-export type ApplyTraceEvent = Omit<LocalApplyEvent, "type"> & { type: LocalApplyEvent["type"] | LocalApplyPlatformEventType; seq?: number };
+export type { ApplyTraceEvent } from "./trace-integrity.js";
 
 export interface ApplyRun {
 	id: string;
