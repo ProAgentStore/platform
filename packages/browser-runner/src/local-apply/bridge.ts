@@ -279,7 +279,7 @@ export class ApplyBridge {
 			...(this.replay.visionEnabled ? [{ name: "browser_take_screenshot", description: "Read current viewport pixels when a snapshot does not explain layout, a control or feedback. Uses the run's screenshot privacy settings. Refresh the snapshot for actionable element refs.", inputSchema: { type: "object", properties: {}, additionalProperties: false } }] : []),
 			{
 				name: "upload_artifact",
-				description: "Attach an approved document. First click the field's upload control (it opens a file chooser), then call this. Each document can be attached once.",
+				description: "Attach an approved document. Obtain the page's supervisor approval before clicking its upload control, then complete the opened chooser with this tool. A same-page chooser retains that approval; do not insert another checkpoint or page read. Each document can be selected once; verify website acceptance afterward.",
 				inputSchema: { type: "object", properties: { kind: { type: "string", enum: ["resume", "cover_letter"] } }, required: ["kind"] },
 			},
 			{
@@ -294,7 +294,7 @@ export class ApplyBridge {
 			},
 			{
 				name: "supervisor_checkpoint",
-				description: "Pause safely for the cloud supervisor. Use the exact checkpointId supplied in your task; do not continue until this returns continue. request_review and stop are terminally handled by the runner.",
+				description: "Obtain supervisor approval after the initial snapshot, after page changes, or immediately before final submission. Choose a stable checkpointId. A continue covers subsequent same-page fills and uploads. Do not insert this into an already approved file-chooser upload. Use uncertain only for an unresolved issue requiring review. request_review and stop end the run.",
 				inputSchema: { type: "object", properties: { checkpointId: { type: "string", minLength: 1, maxLength: 300 }, phase: { type: "string", enum: ["initial", "post_navigation", "before_submit", "uncertain"] } }, required: ["checkpointId", "phase"], additionalProperties: false },
 			},
 			{
