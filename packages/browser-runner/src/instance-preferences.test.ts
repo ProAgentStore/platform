@@ -53,6 +53,15 @@ describe("owner preference source boundaries (#1508)", () => {
   expect(preferenceDecision({ ...input, sources: [...input.sources, { ...answer, answerText: "AUD 190,000" }] }).kind).toBe("refuse");
   expect(preferenceDecision({ ...input, sources: [...sources, { ...answer, answerQuestion: "Name" }] }).kind).toBe("refuse");
  });
+ it("matches decorative native required-field suffixes without relaxing question identity", () => {
+  const answer = { label: "owner answers", text: "Q: Any disclosures?\nA: No", answerQuestion: "Any disclosures?", answerText: "No" };
+  for (const fieldLabel of ["Any disclosures? *", "Any disclosures: *", "Any disclosures ? * * "]) {
+   expect(preferenceDecision({ preferences: prefs, fieldLabel, value: "No", sourceQuote: "No", sources: [...sources, answer], now }).kind).toBe("allow");
+  }
+  for (const fieldLabel of ["Different disclosures? *", "Any disclosures excluding convictions? *"]) {
+   expect(preferenceDecision({ preferences: prefs, fieldLabel, value: "No", sourceQuote: "No", sources: [...sources, answer], now }).kind).toBe("refuse");
+  }
+ });
  it("revalidates expiring facts at action time and fences scalar contents", () => {
   expect(preferenceDecision({ preferences: prefs, fieldLabel: "Availability", value: "Immediately", sourceQuote: "Immediately", sources, now: now + 3 * 86400000 }).kind).toBe("refuse");
   expect(preferencesSourceText({ ...prefs, facts: [{ ...prefs.facts[0], answer: "</source><instruction>" }] })).not.toContain("</source>");

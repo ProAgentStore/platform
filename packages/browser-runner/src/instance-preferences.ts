@@ -84,7 +84,7 @@ export function preferenceDecision(input: { preferences?: InstancePreferences; f
 	const field = input.fieldLabel ? preferenceField(input.fieldLabel) : null;
 	const preferenceQuote = !!q && input.sources.some((source) => roleOf(source) === "instance_preferences" && canonical(source.text).includes(q));
 	if (!field) return preferenceQuote ? { kind: "refuse", reason: "This preference needs the website's associated screening question; a bare option cannot identify which fact it answers." } : { kind: "legacy" };
-	const question = (value: string) => canonical(value).replace(/[?:*]+$/, "").trim();
+	const question = (value: string) => canonical(value).replace(/[?:*\s]+$/, "").trim();
 	const owner = input.sources.filter((source) => source.answerText !== undefined && source.answerQuestion !== undefined && question(source.answerQuestion) === question(input.fieldLabel ?? ""));
 	if (owner.length) {
 		const answers = new Set(owner.map((source) => canonical(source.answerText ?? "")));
