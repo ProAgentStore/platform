@@ -26,7 +26,7 @@ const event = (seq: number) => ({ seq, type: "field.filled" as const, at: new Da
 beforeEach(async () => {
 	d1 = realSchemaD1();
 	seedTenant(d1, { userId: "u", instanceIds: ["runner"] });
-	env = { DB: d1.DB } as Env;
+	env = { DB: d1.DB } as unknown as Env;
 	await insertApplyRun(env, { id: "run", instanceId: "runner", userId: "u", applicationId: "app", requestId: "request", policy: { mode: "fill_and_review", screenshots: false, limits: { maxMinutes: 20 } } as ApplyRunPolicy, trace: [], now: 1 });
 	await updateApplyRun(env, await read(), { to: "paused" }, 2);
 	runtimeCall.mockReset();
