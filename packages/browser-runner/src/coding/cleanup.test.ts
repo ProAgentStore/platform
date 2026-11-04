@@ -201,6 +201,36 @@ describe("killSession — SIGTERM now, SIGKILL for survivors after the grace per
 		expect(await killSession(1, HARSH, ops, 0)).toEqual([]);
 		expect(sent).toEqual([]);
 	});
+
+	it("#1470: a failed FIRST ps read still kills the engine's children once a later read succeeds", async () => {
+		// Models readProcessTable() timing out/failing once under load: the first table() call returns
+		// null, so the initial plan sees no descendants at all — only the root can be signalled. Every
+		// call after that succeeds, the way the issue's own evidence showed a retried `ps` recovering
+		// in well under a second.
+		let calls = 0;
+		const survivors = new Set([201]); // 201 ignores SIGTERM; 202 and the root die on it
+		const sent: Array<[number, string]> = [];
+		const ops: SystemOps = {
+			table: () => (calls++ === 0 ? null : TABLE),
+			signal: (t, sig) => {
+				sent.push([t, sig]);
+				if (sig === "SIGKILL" && t > 0) survivors.delete(t);
+			},
+			alive: (pid) => survivors.has(pid),
+			sleep: async () => undefined,
+		};
+		const result = await killSession(200, GENTLE, ops, 50);
+		// The root was signalled immediately despite the degraded first read — the engine still stops.
+		expect(sent[0]).toEqual([200, "SIGTERM"]);
+		// 201 and 202 are the root's real descendants: the first read missed them entirely, but a later
+		// read found them and they were SIGTERM'd too, not left running forever.
+		const termed = sent.filter(([, s]) => s === "SIGTERM").map(([t]) => t);
+		expect(termed).toContain(201);
+		expect(termed).toContain(202);
+		// 201 never responded to SIGTERM, so it is escalated to SIGKILL like any other survivor would be.
+		expect(sent.filter(([, s]) => s === "SIGKILL")).toEqual([[201, "SIGKILL"]]);
+		expect(result.sort((a, b) => a - b)).toEqual([200, 201, 202]);
+	});
 });
 
 describe("2. the leftover sweep", () => {

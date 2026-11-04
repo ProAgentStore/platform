@@ -198,6 +198,14 @@ function termPlan(plan: KillPlan, ops: SystemOps): void {
  * whatever is still alive. The SIGTERM goes out SYNCHRONOUSLY (stop() is synchronous); the escalation is
  * returned as a promise the caller may ignore — its timer never keeps the runner alive. On Windows
  * there are no groups: `taskkill /T /F` ends the tree.
+ *
+ * #1470: the initial `ps` read can fail or time out under load (`readProcessTable`'s 5s ceiling), and
+ * `planSessionKill` over an empty table in GENTLE mode has no group-wide fallback to fall back on — it
+ * signals only the root, and a real descendant that read would have found is never signalled at all. So
+ * a bad first read is not final: while waiting out the grace period, keep re-reading and fold in (and
+ * SIGTERM) anything a later read finds that the first one missed, until either a read has succeeded and
+ * every pid it named is dead, or the grace period runs out. A read that keeps succeeding behaves exactly
+ * as before — this only changes outcomes when the FIRST read was the one that failed.
  */
 export function killSession(rootPid: number, policy: CleanupPolicy, ops: SystemOps = realOps, graceMs: number = KILL_GRACE_MS): Promise<number[]> {
 	if (!rootPid || rootPid <= 1) return Promise.resolve([]);
@@ -209,11 +217,24 @@ export function killSession(rootPid: number, policy: CleanupPolicy, ops: SystemO
 		}
 		return Promise.resolve([rootPid]);
 	}
-	const plan = planSessionKill(ops.table() ?? [], { pid: rootPid }, policy);
+	const initialRows = ops.table();
+	let plan = planSessionKill(initialRows ?? [], { pid: rootPid }, policy);
 	termPlan(plan, ops);
+	let tableConfirmed = initialRows !== null;
 	return (async () => {
 		const deadline = Date.now() + graceMs;
-		while (Date.now() < deadline && plan.pids.some((p) => ops.alive(p))) await ops.sleep(100);
+		while (Date.now() < deadline && (!tableConfirmed || plan.pids.some((p) => ops.alive(p)))) {
+			await ops.sleep(100);
+			const rows = ops.table();
+			if (rows === null) continue;
+			tableConfirmed = true;
+			const next = planSessionKill(rows, { pid: rootPid }, policy);
+			const missed = next.pids.filter((p) => !plan.pids.includes(p));
+			if (missed.length) {
+				for (const p of missed) ops.signal(p, "SIGTERM");
+				plan = { groups: next.groups, pids: [...plan.pids, ...missed] };
+			}
+		}
 		const survivors = plan.pids.filter((p) => ops.alive(p));
 		for (const g of plan.groups) ops.signal(-g, "SIGKILL");
 		for (const p of survivors) ops.signal(p, "SIGKILL");
