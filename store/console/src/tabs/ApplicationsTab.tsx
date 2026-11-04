@@ -15,6 +15,8 @@ import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSec
 import ApplicationMaterials from "../components/ApplicationMaterials";
 import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
 import ApplicationEscalationSettings from "../components/ApplicationEscalationSettings";
+import FullBrowserRunNotice from "../components/FullBrowserRunNotice";
+import ApplicationToolAccessSettings, { type ToolAccessPatch } from "../components/ApplicationToolAccessSettings";
 import { ASSERT_STATEMENT_PROMPT, QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
 import { notificationRoute } from "../lib/deepLink";
 import { TONE_CLASS } from "../lib/localBrowser";
@@ -364,6 +366,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 					</>
 				)}
 			</p>
+			<FullBrowserRunNotice toolAccess={item.toolAccess} submissionVerification={item.submissionVerification} submitAttempted={item.submitAttempted} />
 			{item.matchRationale && <p className="text-sm mb-2">Why it matched: {item.matchRationale}</p>}
 
 			{/* #986: what the RUNNER did, not what the status word implies. The sentence is the
@@ -400,7 +403,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 
 			{item.submitPolicy && (
 				<p className="text-xs mb-2">
-					Submit policy: {item.submitPolicy.allowed ? <span className="text-success">this application may be submitted automatically</span> : <span>fill and wait for your review ({item.submitPolicy.failing.join(", ").replace(/_/g, " ")})</span>}
+					Submit policy: {item.submitPolicy.allowed ? <span className="text-success">this application may be submitted automatically</span> : <span>{item.toolAccess === "full" ? "the model is instructed to fill and wait for review; full tools cannot guarantee this" : "fill and wait for your review"} ({item.submitPolicy.failing.join(", ").replace(/_/g, " ")})</span>}
 				</p>
 			)}
 			{/* #975: "it did nothing on the page" is a distinct, actionable cause — the counts that
@@ -517,10 +520,13 @@ export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId:
 	const [confirming, setConfirming] = useState(false);
 	const [acknowledged, setAcknowledged] = useState(false);
 	const [confirmError, setConfirmError] = useState("");
+	const [toolDisclosure, setToolDisclosure] = useState<ApplicationRunnerSettingsView["toolAccessDisclosure"]>();
+	const [fullToolsAcknowledged, setFullToolsAcknowledged] = useState(false);
 	const load = useCallback(async () => {
 		try {
 			const v = await api<ApplicationRunnerSettingsView>(`/v1/instances/${runnerId}/application-runner/settings`);
 			setS(v.settings);
+			setToolDisclosure(v.toolAccessDisclosure);
 			const a = v.settings.autoSubmit;
 			setDraft({ profile: v.settings.sources.profile ?? "", answers: v.settings.sources.answers ?? "", signInEmail: v.settings.signInEmail ?? "", allowDomains: v.settings.allowDomains.join(", "), roles: a.roles.join(", "), locations: a.locations.join(", "), exclude: a.exclude.join(", "), minSalary: a.minSalary === null ? "" : String(a.minSalary), dailyCap: String(a.dailyCap) });
 			if (v.error) setMsg(v.error);
@@ -570,6 +576,23 @@ export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId:
 			setBusy(false);
 		}
 	};
+	const saveToolAccess = async (body: ToolAccessPatch) => {
+		setBusy(true);
+		setMsg("");
+		try {
+			const saved = await api<ApplicationRunnerSettingsView>(`/v1/instances/${runnerId}/application-runner/settings`, { method: "PUT", body: JSON.stringify(body) });
+			if (saved.settings.toolAccess !== body.toolAccess || (body.toolAccess === "guarded" && saved.settings.toolAccessAcceptance !== null) || (body.toolAccess === "full" && (saved.settings.toolAccessAcceptance?.revision !== body.acknowledgeFullBrowserTools || saved.settings.toolAccessAcceptance.instanceId !== runnerId))) throw new Error("The server did not confirm the requested tool access and acceptance. Reload before trying again.");
+			setS(saved.settings);
+			setToolDisclosure(saved.toolAccessDisclosure);
+			setFullToolsAcknowledged(false);
+			onChanged();
+			setMsg(body.toolAccess === "full" ? "Full browser tools enabled for new runs; risk acceptance recorded." : "Guarded tools enabled for new runs; full-tool acceptance cleared.");
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
 	const enable = async () => {
 		setBusy(true);
 		setConfirmError("");
@@ -587,7 +610,7 @@ export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId:
 		setBusy(true);
 		try {
 			await put(disablePayload());
-			setMsg("Auto-submit is off. Every application stops for your review.");
+			setMsg(s.toolAccess === "full" ? "Auto-submit is off. Full browser tools can still perform unintended real actions." : "Auto-submit is off. Every application stops for your review.");
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
@@ -601,14 +624,15 @@ export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId:
 	);
 	return (
 		<Card className="mt-3 sm:mt-4">
-			<ApplicationEscalationSettings value={s.escalationLevel} busy={busy} onChange={(body) => void saveEscalation(body)} />
+			<ApplicationToolAccessSettings settings={s} disclosure={toolDisclosure} busy={busy} acknowledged={fullToolsAcknowledged} onAcknowledge={setFullToolsAcknowledged} onChange={(body) => void saveToolAccess(body)} />
+			<ApplicationEscalationSettings value={s.escalationLevel} fullToolAccess={s.toolAccess === "full"} busy={busy} onChange={(body) => void saveEscalation(body)} />
 			{s.autoSubmit.enabled && <AutoSubmitDangerBanner rules={savedRules} allowance={allowance} onDisable={() => void disable()} busy={busy} />}
 			<div className="flex flex-wrap items-center gap-2 mb-1">
 				<h3 className="text-base font-bold">Submission policy</h3>
-				{!s.autoSubmit.enabled && <ManualReviewBadge />}
+				{!s.autoSubmit.enabled && (s.toolAccess === "full" ? <span className="text-xs font-semibold">Auto-submit off · full tools can still perform real actions</span> : <ManualReviewBadge />)}
 			</div>
 			<p className="text-sm text-muted mb-2">
-				By default every application is filled on your machine and stops for your review — nothing is submitted. Auto-submit applies only to applications that match every rule below, up to the daily cap.
+				{s.toolAccess === "full" ? "The model is instructed to respect submission authorization, but arbitrary browser code can perform real actions even with auto-submit off. Full-tool risk acceptance does not enable the standing auto-submit policy." : "By default every application is filled on your machine and stops for your review — nothing is submitted."} Auto-submit applies only to applications that match every rule below, up to the daily cap.
 			</p>
 			<div className="grid sm:grid-cols-2 gap-2 mb-2">
 				{field("profile", "Profile file (in your workspace)", "profile.md")}

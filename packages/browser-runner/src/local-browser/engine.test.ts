@@ -40,6 +40,7 @@ describe("Codex", () => {
 		expect(s.args.slice(0, 6)).toEqual(["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--ignore-user-config"]);
 		const config = s.args.filter((_, i) => s.args[i - 1] === "-c");
 		expect(config).toEqual([
+			"features.shell_tool=false", "features.plugins=false", "features.remote_plugin=false", "features.apps=false", "features.computer_use=false", "features.browser_use=false", "features.browser_use_external=false", "features.browser_use_full_cdp_access=false", "features.in_app_browser=false", "features.image_generation=false", "features.view_image=false", "features.multi_agent=false", "features.hooks=false", "features.skill_search=false", "features.skill_mcp_dependency_install=false", "features.skip_host_skill_discovery=true",
 			'mcp_servers.pags_browser.command="/usr/bin/node"',
 			'mcp_servers.pags_browser.args=["/r/bridge-stdio.js"]',
 			'mcp_servers.pags_browser.env={ PAGS_BRIDGE_URL = "http://127.0.0.1:1", PAGS_BRIDGE_RUN = "r1", PAGS_BRIDGE_TOKEN = "t" }',

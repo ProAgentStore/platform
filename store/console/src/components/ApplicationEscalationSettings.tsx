@@ -4,9 +4,10 @@ type EscalationLevel = ApplicationRunnerSettingsView["settings"]["escalationLeve
 type EscalationPatch = Pick<ApplicationRunnerSettingsView["settings"], "escalationLevel">;
 
 /** Only this policy changes; selecting autonomy never enables submission. */
-export default function ApplicationEscalationSettings({ value, busy, onChange }: {
+export default function ApplicationEscalationSettings({ value, busy, onChange, fullToolAccess }: {
 	value?: EscalationLevel;
 	busy: boolean;
+	fullToolAccess?: boolean;
 	onChange: (patch: EscalationPatch) => void;
 }) {
 	return (
@@ -28,7 +29,7 @@ export default function ApplicationEscalationSettings({ value, busy, onChange }:
 				The model assesses whether a judgment is minor or major. Higher autonomy accepts the risk of its source-supported decisions without asking you first. Unknown personal facts remain unresolved; the model cannot invent them.
 			</p>
 			<p className="text-xs text-muted mt-1">
-				Changes save immediately for new runs. Submission permission is configured separately below. Stop, credential and website restrictions still apply; this setting does not remove technical blockers or guarantee completion.
+				Changes save immediately for new runs. Submission permission is configured separately below. {fullToolAccess ? "Full browser tools may bypass website, masking and no-submit controls; see the accepted tool-access disclosure." : "Stop, credential and website restrictions still apply; this setting does not remove technical blockers or guarantee completion."}
 			</p>
 		</div>
 	);

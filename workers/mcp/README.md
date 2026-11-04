@@ -329,7 +329,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_connection_guide` | The pasteable per-instance connection guide: id, agent type, repos, exposed tools with exact field names, worked `call_instance_tool` example | read | | |
 | `get_console_link` | A console URL for an instance, one of its loop runs, a task, a secret request or a tab — `url` for chat, `path` for a push; refuses a tab the instance does not show | read | | |
 | `list_instance_permission_requests` | An instance's permission recovery requests (#1009), newest first: status, control, connector, resource, requested/current scope, operation, the verified `link` to the exact Permissions & Connections control and, while open, the structured blocker. Grants and decides nothing | read | | |
-| `get_application_runner_settings` | An Application Runner's effective policy: engine, local browser model/effort, escalation level (conservative by default), files, sites, auto-submit rules (off by default) | read | | |
+| `get_application_runner_settings` | An Application Runner's effective policy: engine, local browser model/effort, escalation level, browser tool access/disclosure/acceptance, files, sites and auto-submit rules | read | | |
 | `set_application_runner_settings` | Patch that policy, including model-assessed judgment delegation (`conservative`, `balanced`, `autonomous`); submission permission remains separate. Auto-submit refused until a profile, approved roles, an allowed site and a daily cap exist, and enabling it needs the acknowledgement that submissions are real and irreversible (#1039) | write | yes | `auto_submit_real_submissions` (only when enabling auto-submit) |
 | `list_applications` | The job-application queue across the owner's Scout → Tailor → Runner pipeline: every state, each item's compare-and-set version, artifact handles, submit-policy verdict, pause reason and allowed actions; counts, auto-submit allowance, connection health (#958) | read | | |
 | `get_application` | One application, or one lead with no application yet, as it stands now | read | | |
@@ -754,3 +754,5 @@ npx vitest run workers/mcp                 # from the repo root
 ```
 
 Deploys run from CI on push to `main` (see `.github/workflows/`), not from a laptop.
+
+Application Runner full tool access is a separate opt-in from escalation and auto-submit: read `toolAccessDisclosure`, preview `settings.toolAccess: "full"` with `dry_run`, then send `confirm_full_browser_tools: "full_playwright_v1"`. Unsafe native code can access machine files, processes and network, bypass masking/domain/no-submit controls, and is not a sandbox. The API records owner/instance/time acceptance. Guarded mode clears acceptance and invalidates queued full-tool runs; active runs retain their frozen policy until stopped. See [the browser tool access contract](../../platform-docs/mcp.md#application-runner-browser-tool-access).

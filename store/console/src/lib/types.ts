@@ -868,6 +868,8 @@ export interface ApplicationQueueItem {
 	submittedAt: string | null;
 	submittedUrl: string | null;
 	submitAttempted: boolean;
+	toolAccess?: "guarded" | "full";
+	submissionVerification?: "unverified";
 	submitPolicy: { allowed: boolean; failing: string[] } | null;
 	/**
 	 * How far the fill actually got, from the runner's own facts (#986). `label` is the server's
@@ -941,6 +943,8 @@ export interface ApplicationRunnerSettingsView {
 		authMode: "machine" | "subscription";
 		browserProfile: "isolated" | "default";
 		escalationLevel: "conservative" | "balanced" | "autonomous";
+		toolAccess: "guarded" | "full";
+		toolAccessAcceptance: { revision: "full_playwright_v1"; acceptedAt: string; acceptedBy: string; instanceId: string } | null;
 		workspace: string;
 		sources: { profile?: string; answers?: string };
 		allowDomains: string[];
@@ -951,6 +955,7 @@ export interface ApplicationRunnerSettingsView {
 		accountCreation?: boolean; // #1230: may the Runner create an account on an allow-listed job board when you have none
 		autoSubmit: { enabled: boolean; roles: string[]; locations: string[]; exclude: string[]; minSalary: number | null; dailyCap: number; acknowledgedAt?: string | null }; // acknowledgedAt (#1039): server-set when the owner acknowledged real submissions
 	};
+	toolAccessDisclosure?: { revision: "full_playwright_v1"; title: string; risks: string[] };
 	error?: string;
 }
 

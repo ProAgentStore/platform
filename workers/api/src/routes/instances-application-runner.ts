@@ -9,6 +9,8 @@
  * Owner-scoped throughout. Responses carry classes, decisions and artifact handles — never a value
  * typed into a form.
  */
+import { acknowledgeFullBrowserTools, TOOL_ACCESS_DISCLOSURE } from "../lib/local-apply/tool-access.js";
+import { logEvent } from "../lib/events.js";
 import { isMcpRequest } from "../lib/coding-api-policy.js";
 import type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse } from "../agent-types.js";
 import type { Context, Hono } from "hono";
@@ -111,7 +113,7 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 	router.get("/:instanceId/application-runner/settings", async (c) => {
 		const { uid, instanceId } = await owned(c);
 		const effective = effectiveRunnerSettings(await storedSettings(c, instanceId, uid));
-		return c.json("error" in effective ? { settings: RUNNER_DEFAULTS, error: effective.error } : { settings: effective.settings });
+		return c.json({ ...("error" in effective ? { settings: RUNNER_DEFAULTS, error: effective.error } : { settings: effective.settings }), toolAccessDisclosure: TOOL_ACCESS_DISCLOSURE });
 	});
 
 	/**
@@ -124,7 +126,9 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		const stored = effectiveRunnerSettings(await storedSettings(c, instanceId, uid));
 		const current = "error" in stored ? RUNNER_DEFAULTS : stored.settings;
 		const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
-		const { acknowledgeRealSubmissions, ...patch } = body && typeof body === "object" && !Array.isArray(body) ? body : ({} as Record<string, unknown>);
+		const { acknowledgeRealSubmissions, acknowledgeFullBrowserTools: fullAcknowledgement, ...patch } = body && typeof body === "object" && !Array.isArray(body) ? body : ({} as Record<string, unknown>);
+		if (patch.toolAccess === "full" && fullAcknowledgement !== TOOL_ACCESS_DISCLOSURE.revision) return c.json({ error: `Explicit full access requires acknowledgeFullBrowserTools: ${TOOL_ACCESS_DISCLOSURE.revision}`, acknowledgementRequired: true, toolAccessDisclosure: TOOL_ACCESS_DISCLOSURE }, 400);
+		if ("toolAccessAcceptance" in patch) return c.json({ error: "toolAccessAcceptance is server-owned; use acknowledgeFullBrowserTools to accept the current disclosure" }, 400);
 		if (patch.autoSubmit && typeof patch.autoSubmit === "object" && !Array.isArray(patch.autoSubmit)) {
 			const { acknowledgedAt: _ignored, ...autoSubmit } = patch.autoSubmit as Record<string, unknown>;
 			patch.autoSubmit = autoSubmit;
@@ -133,8 +137,11 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		if ("error" in merged) return c.json({ error: merged.error }, 400);
 		const acknowledged = acknowledgeAutoSubmit(current, merged.settings, acknowledgeRealSubmissions === true, new Date().toISOString());
 		if ("error" in acknowledged) return c.json({ error: acknowledged.error, acknowledgementRequired: true }, 400);
-		await patchInstanceConfig(c.env, instanceId, uid, RUNNER_SETTINGS_KEY, acknowledged.settings);
-		return c.json({ settings: acknowledged.settings });
+		const full = acknowledgeFullBrowserTools(current, acknowledged.settings, fullAcknowledgement, { uid, instanceId }, new Date().toISOString());
+		if ("error" in full) return c.json({ error: full.error, acknowledgementRequired: true, toolAccessDisclosure: TOOL_ACCESS_DISCLOSURE }, 400);
+		await patchInstanceConfig(c.env, instanceId, uid, RUNNER_SETTINGS_KEY, full.settings);
+		if (patch.toolAccess !== undefined || fullAcknowledgement !== undefined) await logEvent(c.env, { source: "apply", event: "apply.tool_access.changed", userId: uid, instanceId, context: { toolAccess: full.settings.toolAccess, acceptance: full.settings.toolAccessAcceptance, previousToolAccess: current.toolAccess } });
+		return c.json({ settings: full.settings, toolAccessDisclosure: TOOL_ACCESS_DISCLOSURE });
 	});
 
 	router.get("/:instanceId/application-runs", async (c) => {

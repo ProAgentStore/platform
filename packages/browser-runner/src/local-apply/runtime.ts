@@ -1,3 +1,4 @@
+import { parseToolAccess, fullArtifactPaths, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { parseEscalationLevel } from "./answer-decision.js";
 import { CodexModelObserver } from "../local-browser/model-observation.js";
 import { modelConfigurationProblem, requestedModelEvidence } from "../local-browser/model-config.js";
@@ -40,7 +41,7 @@ import { redactReplayText } from "./apply-replay.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { Blocked, clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 import { ApplyBridge } from "./bridge.js";
-import { preferenceReceipt, projectPreferenceSources, validatePreferences } from "../instance-preferences.js";
+import { preferencesSourceText, preferenceReceipt, projectPreferenceSources, validatePreferences } from "../instance-preferences.js";
 import { resumeDomainGrants } from "./resume-domains.js";
 import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy, websiteAccessBlock, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
@@ -250,7 +251,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		sources,
 		artifacts,
 		...(o.cloudDocuments !== undefined ? { cloudDocuments: parseCloudDocuments(o.cloudDocuments, artifacts) } : {}),
-		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
+		policy: { ...parseToolAccess(p, o.instanceId as string), mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
 		...(o.instancePreferences !== undefined ? { instancePreferences: validatePreferences(o.instancePreferences, o.instanceId as string) } : {}),
@@ -441,15 +442,16 @@ export class LocalApplyRuntime {
 		const home = this.deps.homeDir ?? homedir();
 		const prepared = prepareApplyDocuments(e, run.dir, home, (event) => this.emit(run, event));
 		const preferences = validatePreferences(e.instancePreferences, e.instanceId, this.now());
-		const blocks = projectPreferenceSources(prepared.blocks, preferences);
-		const artifactPath = prepared.artifactPath;
+		const blocks = e.policy.toolAccess === "full" ? [...prepared.blocks, ...(preferences ? [{ label: "instance_preferences", text: preferencesSourceText(preferences) }] : [])] : projectPreferenceSources(prepared.blocks, preferences);
+		const artifactPath = e.policy.toolAccess === "full" ? fullArtifactPaths(prepared.artifactPath, e.artifacts, run.dir) : prepared.artifactPath;
+		if (e.policy.toolAccess === "full") blocks.push({ label: "approved_document_paths", text: JSON.stringify(e.artifacts.map(({ kind }) => ({ kind, ...artifactPath(kind) }))) });
 		if (preferences) this.emit(run, { type: "source.read", detail: preferenceReceipt(preferences) });
 		// #1079: answers the owner already gave this application, as a source — the same shape a resume's answers take.
 		for (const a of e.ownerAnswers ?? []) blocks.push({ label: "owner answers", text: `Q: ${a.question}\nA: ${a.answer}`, answerText: a.answer, answerQuestion: a.question });
 		run.grounding = blocks;
 
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("../local-browser/bridge-stdio.js", import.meta.url));
-		const spec = buildApplyEngineSpec(e, applyPrompt(e, blocks), { command: process.execPath, args: [bridgeScript], env: { [BRIDGE_ENV.url]: selfUrl, [BRIDGE_ENV.runId]: e.runId, [BRIDGE_ENV.token]: run.token } }, join(run.dir, "mcp.json"));
+		let spec = buildApplyEngineSpec(e, applyPrompt(e, blocks), { command: process.execPath, args: [bridgeScript], env: { [BRIDGE_ENV.url]: selfUrl, [BRIDGE_ENV.runId]: e.runId, [BRIDGE_ENV.token]: run.token } }, join(run.dir, "mcp.json"));
 		run.secrets = secretEnvValues({ ...process.env, ...spec.env });
 		run.engineAuth = observedApplyAuth(e.engine, spec.env);
 		this.emit(run, { type: "engine.auth_checked", detail: { engine: e.engine, authMode: e.authMode, engineAuth: run.engineAuth, mode: e.policy.mode } });
@@ -460,11 +462,15 @@ export class LocalApplyRuntime {
 			await run.browser.stop();
 			return;
 		}
+		if (e.policy.toolAccess === "full" && !run.browser.tools.configureToolAccess) throw new Error("This browser cannot expose full native tools.");
+		await run.browser.tools.configureToolAccess?.(e.policy.toolAccess ?? "guarded", run.dir);
 		run.browser.tools.setSubject?.({ kind: "local_apply_run", id: e.runId });
 		// Configured site families keep their subdomain scope. A temporary owner grant admits
 		// only the exact paused hostname, never its descendants or another run's allowlist.
 		const isAllowedDomain = (host: string) => e.policy.browserWebsiteAccess ? websiteDecision(e.policy.browserWebsiteAccess, host) === "allow" : e.policy.allowDomains.some((domain) => domainWithin(host, domain)) || run.allow.has(host);
 		run.browser.tools.setCallPolicy?.({
+			toolAccess: e.policy.toolAccess,
+			approvedUploadPaths: () => e.artifacts.map(({ kind }) => { const approved = artifactPath(kind); if ("error" in approved) throw new Error(approved.error); return approved.path; }),
 			isCancelled: () => run.cancelled || run.timedOut || run.state === "ended",
 			isDomainAllowed: isAllowedDomain,
 			requestDomainApproval: (url) => run.bridge?.admitDomain(url) ?? Promise.resolve(false),
@@ -485,7 +491,7 @@ export class LocalApplyRuntime {
 			isStopped: () => run.cancelled || run.timedOut || run.state === "ended",
 			now: this.now,
 			limits: e.limits,
-			mode: e.policy.mode, escalationLevel: e.policy.escalationLevel,
+			mode: e.policy.mode, escalationLevel: e.policy.escalationLevel, toolAccess: e.policy.toolAccess,
 			gateId: e.policy.submitGate?.gateId,
 			sessions: run.browser.sessions,
 			signInSecrets: () => [...(run.signIn?.names ?? [])],
@@ -494,8 +500,14 @@ export class LocalApplyRuntime {
 			page: () => run.browser?.handoffPage?.() ?? null,
 			redact: (value) => redactReplayText(value, run.secrets),
 		}, e.policy.screenshots === false ? undefined : run.shots);
+		if (e.policy.toolAccess === "full") {
+			const toolNames = (await run.bridge.listTools()).map((tool) => tool.name);
+			spec = buildApplyEngineSpec(e, applyPrompt(e, blocks), { command: process.execPath, args: [bridgeScript], env: { [BRIDGE_ENV.url]: selfUrl, [BRIDGE_ENV.runId]: e.runId, [BRIDGE_ENV.token]: run.token } }, join(run.dir, "mcp.json"), toolNames);
+			this.emit(run, { type: "policy.decision", detail: { toolAccess: "full", nativeToolCount: (await run.browser.tools.listTools()).length, decision: "owner_accepted" } });
+		}
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
 
+		if (run.cancelled || run.endedAt !== undefined) return;
 		const child = this.spawn(spec.command, spec.args, { cwd: join(run.dir, "scratch"), env: spec.env, stdio: ["ignore", "pipe", "pipe"] });
 		run.child = child;
 		this.emit(run, { type: "engine.started", detail: { engine: e.engine, mode: e.policy.mode, ...requestedModelEvidence(e) } });
@@ -587,12 +599,12 @@ export class LocalApplyRuntime {
 				diagnostic: { ...d, signals: [...d.signals, ...(b.confirmation ? (confirmationSignals(b.confirmation) as LocalApplySignal[]) : [])] },
 			};
 		}
-		if (b?.unresolvedQuestions.length) return { outcome: "blocked", summary: [summary, "Incomplete: unresolved owner questions; nothing was submitted."].filter(Boolean).join("\n"), blockReason: "incomplete", questions: [...b.unresolvedQuestions] };
+		if (b?.unresolvedQuestions.length) return { outcome: "blocked", summary: [summary, e.policy.toolAccess === "full" ? `Incomplete: unresolved owner questions. ${FULL_SUBMISSION_UNKNOWN}` : "Incomplete: unresolved owner questions; nothing was submitted."].filter(Boolean).join("\n"), blockReason: "incomplete", questions: [...b.unresolvedQuestions] };
 		if (b?.reviewReady) return { outcome: "awaiting_review", summary };
 		if (!b?.filled && missingLogin(e.engine, run.output.join("\n"))) return { outcome: "blocked", summary, blockReason: "engine_not_signed_in", questions: [signInHelp(e.engine)], engineAuth: "missing_login" };
 		if (b?.blocked) {
 			// #1464: the CLI can describe a live pause after its held tool times out. This result is terminal.
-			const blockedSummary = b.blocked.reason === "login_required" ? "This run ended at the sign-in page before sign-in was completed. Nothing was submitted. Check the action log for sign-in details, then start a new run when access is ready." : summary;
+			const blockedSummary = b.blocked.reason === "login_required" && e.policy.toolAccess !== "full" ? "This run ended at the sign-in page before sign-in was completed. Nothing was submitted. Check the action log for sign-in details, then start a new run when access is ready." : summary;
 			return { outcome: "blocked", summary: blockedSummary, blockReason: b.blocked.reason, questions: b.blocked.questions };
 		}
 		if (run.timedOut) {
@@ -693,6 +705,7 @@ export class LocalApplyRuntime {
 		}
 		const bridge = run.bridge;
 		if (bridge?.submitAttempted || bridge?.unresolvedQuestions.length) this.end(run, this.outcomeOf(run, run.child?.exitCode ?? -1));
+		else if (run.envelope.policy.toolAccess === "full") this.end(run, { outcome: "awaiting_review", summary: `The supervisor requested owner review. ${FULL_SUBMISSION_UNKNOWN}` });
 		else if (!bridge?.filled && !bridge?.uploaded.size) {
 			// #1484: requesting human attention is not evidence that a form was populated.
 			// Preserve the observed blocker and checkpoint instead of inviting approval of an empty form.
@@ -936,6 +949,7 @@ export class LocalApplyRuntime {
 			filled: b?.filled ?? 0,
 			uploaded: [...(b?.uploaded ?? [])],
 			submitAttempted: b?.submitAttempted ?? false,
+			...(run.envelope.policy.toolAccess === "full" && !b?.submitted ? { submissionVerification: "unverified" as const } : {}),
 			summary: redactText((r.summary ?? "").slice(0, LOCAL_APPLY_CAPS.summary), run.secrets),
 			...(r.outcome === "submitted" && r.submitted ? { submitted: r.submitted } : {}),
 			...(r.outcome === "blocked" ? { blockReason: r.blockReason ?? "incomplete", questions: (r.questions ?? []).map((q) => redactText(q, run.secrets)), ...(r.blockReason === "job_unavailable" && r.unavailable ? { unavailable: r.unavailable } : {}) } : {}),

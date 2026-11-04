@@ -40,6 +40,21 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - Test reusable behavior on varied independent forms/components. A fix working on one employer
   page is not evidence of a generic solution. Report unsupported capabilities honestly.
 
+## Accepted full-browser mode (owner directive, 2026-11-05)
+
+- Offer per-instance Guarded or Full Playwright tool access, separate from escalation and
+  submission permission. Full mode requires explicit, versioned risk acceptance through UI or MCP.
+- Full mode exposes the installed native capabilities and schemas, including unsafe code execution.
+  AI owns page interpretation and actions. Do not add site-specific scripts or semantic heuristics.
+- Describe the actual risk: arbitrary code is not a sandbox and can bypass no-submit, domain,
+  file-access and privacy expectations. Do not claim reliable fill-only enforcement or that a
+  supervised submit flag proves no other submission occurred.
+- Keep Stop checks at tool dispatch, source/artifact identity checks and credential-broker origin
+  checks. Keep deliberate submission permission explicit. These boundaries do not establish that
+  arbitrary code cannot bypass them; record uncertain submission state honestly.
+- Freeze accepted mode/revision per run. Reject unsupported runners and revoked queued acceptance.
+  Disabling Full changes future/queued work; Stop is the control for an already active run.
+
 ## Git workflow
 
 - Commit finished work and push directly to `main` (see *Delivery mode*). Do not open pull requests unless Serge

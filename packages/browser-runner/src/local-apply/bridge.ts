@@ -1,3 +1,4 @@
+import { FullApplyTools, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { answerDecision, decisionReason, parseDecision, sourceCatalog } from "./answer-decision.js";
 import { applyTools } from "./tool-schemas.js";
 /**
@@ -5,7 +6,9 @@ import { applyTools } from "./tool-schemas.js";
  * policy is enforced. Like the research bridge (`local-browser/bridge.ts`), the CLI gets no web
  * access of its own and exactly one MCP server, whose calls land HERE, in the runner.
  *
- * Every call is put in an action class (see contract.ts) and allowed or refused by code:
+ * The default guarded mode classifies actions below. Accepted full access uses FullApplyTools,
+ * preserving native schemas and model-owned page interpretation; arbitrary-code effects are unverified.
+ * Guarded calls are put in an action class (see contract.ts) and allowed or refused by code:
  *
  *  - read: navigate / back / snapshot / wait, and clicks on links, tabs and pagination — on the
  *    allowed sites only. Leaving them pauses the run (`external_redirect`).
@@ -81,6 +84,7 @@ export interface ApplyBridgeHost {
 	now(): number;
 	limits: LocalApplyLimits;
 	mode: LocalApplyMode;
+	toolAccess?: "guarded" | "full";
 	escalationLevel?: LocalApplyEscalationLevel;
 	gateId?: string;
 	/** This browser profile's site sign-in ledger (#1094). Absent: no session gate. */
@@ -188,7 +192,7 @@ interface PageState {
 
 const signInQuestion = (site: string) => `Sign in to ${site} on this machine's application browser, then retry. Nothing was submitted.`;
 const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
-const textOf = (r: { content?: Array<{ text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
+const textOf = (r: { content?: Array<{ type?: string; text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
 export class ApplyBridge {
 	/** Read by the runtime for the #975 diagnostic: 0 calls is the finding, not an internal detail. */
 	actions = 0;
@@ -221,6 +225,7 @@ export class ApplyBridge {
 	private signInCredentialEntered = false;
 	private signInReturnOrigin: string | null = null;
 
+	private readonly full?: FullApplyTools;
 	private readonly replay: ApplyReplay;
 	private readonly browser: BrowserTools;
 	constructor(
@@ -231,6 +236,7 @@ export class ApplyBridge {
 	) {
 		this.replay = new ApplyReplay(host, shots);
 		this.browser = { uploadContext: () => browser.uploadContext?.() ?? null, listTools: () => browser.listTools(), callTool: (name, args, opts) => this.replay.call(browser, name, args, opts), refused: (tool, args, reason) => browser.refused?.(tool, args, reason) };
+		if (host.toolAccess === "full") this.full = new FullApplyTools(this.browser, host, () => ({ actions: this.actions, filled: this.filled, uploaded: this.uploaded.size }), (approved) => { this.supervisorApproved = approved; });
 	}
 
 	callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
@@ -249,15 +255,39 @@ export class ApplyBridge {
 	}
 
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
-		return applyTools(await this.browser.listTools(), this.replay.visionEnabled);
+		return this.full ? this.full.listTools() : applyTools(await this.browser.listTools(), this.replay.visionEnabled);
 	}
 
 	private async dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
 		if (this.host.isStopped?.()) return this.refuse(name, "read", "The application was stopped. No further browser action is allowed.");
 		if (this.done) return text("The application is finished for this run. Stop now.", true);
+		if (name !== "submit_application" && name !== "supervisor_checkpoint") this.full?.invalidateSubmission();
 		if (name === "ready_for_review") return this.review(typeof args.summary === "string" ? args.summary : "");
 		if (name === "request_answer") return this.requestAnswer(args);
-		if (name === "supervisor_checkpoint") return this.supervisorCheckpoint(args);
+		if (name === "supervisor_checkpoint") return this.full ? this.full.checkpoint(args) : this.supervisorCheckpoint(args);
+		if (this.full && name === "submit_application") {
+			const target = this.target(args);
+			if (!target || !this.full.canSubmit()) return text("Take a current snapshot and obtain a before_submit checkpoint immediately before submitting.", true);
+			if (this.host.mode !== "auto_submit" || !this.host.gateId) return text("Intentional submission is not authorized for this run.", true);
+			const result = await this.submit({ target: target.ref, element: target.name }, "explicit_submission");
+			return { ...result, content: [{ type: "text", text: `Supervised-action result only. ${FULL_SUBMISSION_UNKNOWN}` }, ...result.content] };
+		}
+		if (this.full && name === "request_sign_in") return this.full.signIn();
+		if (this.full && name === "finish_sign_in") return this.full.finishSignIn();
+		if (this.full && name === "request_sign_in_code") return this.full.signInCode();
+		if (this.full && name === "upload_artifact") {
+			if (this.host.overTime() || ++this.actions > this.host.limits.maxActions) return text("The action or time limit is reached.", true);
+			return this.upload(args);
+		}
+		if (this.full && await this.full.has(name)) {
+			if (this.host.overTime() || ++this.actions > this.host.limits.maxActions) return text("The browser action or time limit is reached. Call ready_for_review.", true);
+			if ((name === "browser_navigate" || name === "browser_navigate_back") && ++this.pages > this.host.limits.maxPages) return text("The navigation limit is reached. Call ready_for_review.", true);
+			this.lastSnapshot = "";
+			const result = await this.full.call(name, args, this.signInOrigin ?? undefined);
+			if (name === "browser_snapshot") this.lastSnapshot = textOf(result);
+			return result;
+		}
+		if (this.full) return this.refuse(name, "read", "This tool is not in the native inventory or task tool set.");
 		if (name === "report_job_unavailable") return this.reportUnavailable(args);
 		if (name === "request_sign_in_code") return this.requestSignInCode();
 		if (REFUSED.has(name)) return this.refuse(name, "read", `${name} is not available to an application run.`);
@@ -707,7 +737,7 @@ export class ApplyBridge {
 	}
 
 	private async upload(args: Record<string, unknown>): Promise<ToolResult> {
-		const checkpoint = this.requireSupervisor("upload_artifact", "fill");
+		const checkpoint = this.full ? null : this.requireSupervisor("upload_artifact", "fill");
 		if (checkpoint) return checkpoint;
 		const kind = args.kind === "resume" || args.kind === "cover_letter" ? args.kind : null;
 		if (!kind) return this.refuse("upload_artifact", "fill", "kind must be resume or cover_letter.");
@@ -751,7 +781,7 @@ export class ApplyBridge {
 		if (!ok) return text("Nobody answered. Do not guess. Stop now.", true);
 		// Resumed without an answer: the owner chose to leave it — never a cue to guess.
 		if (this.host.grounding().length === before) return text("The owner resumed without answering: leave that field empty and continue with the others.");
-		return text(`The owner answered. Their answer is now part of your sources — quote it as source_quote. Take a browser_snapshot and continue.\n${sourceCatalog(this.host.groundingSources?.() ?? [])}`);
+		return text(`The owner answered. Their answer is now part of your sources${this.full ? "; use this trusted fact in your reasoning" : " — quote it as source_quote"}. Take a browser_snapshot and continue.\n${sourceCatalog(this.host.groundingSources?.() ?? [])}`);
 	}
 
 	/**
@@ -830,6 +860,14 @@ export class ApplyBridge {
 	}
 
 	private async review(summary: string): Promise<ToolResult> {
+		if (this.full) {
+			this.summary = `${summary}\n${FULL_SUBMISSION_UNKNOWN}`;
+			this.reviewEnded = true;
+			if (this.unresolvedQuestions.length || !this.full.calls && !this.uploaded.size) this.blocked = { reason: "incomplete", questions: [...this.unresolvedQuestions] };
+			else this.reviewReady = true;
+			this.host.emit({ type: "policy.decision", detail: { tool: "ready_for_review", decision: this.reviewReady ? "review_requested" : "incomplete", toolAccess: "full", count: this.full.calls, reason: "native_calls_attempted" } });
+			return text(`Recorded the model report for owner review. ${FULL_SUBMISSION_UNKNOWN} Stop now.`);
+		}
 		if (this.unresolvedQuestions.length) {
 			this.summary = `${summary}\nIncomplete: ${this.unresolvedQuestions.length} unresolved owner question(s). Nothing was submitted.`;
 			this.blocked = { reason: "incomplete", questions: [...this.unresolvedQuestions] };

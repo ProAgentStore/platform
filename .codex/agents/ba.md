@@ -24,6 +24,10 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - Require explicit escalation configuration in browser acceptance criteria: model-owned risk,
   frozen user thresholds, truthful unresolved facts and separate submission permission.
 
+- Full browser access is an explicit owner-accepted mode. Preserve native tool schemas and
+  disclose unsafe-code limits; never claim sandboxing or reliable no-submit enforcement from it.
+  Keep dispatch Stop, source identity and credential-broker checks, and label unverifiable outcomes.
+
 ## Outputs
 
 - For triage, lead with the most pressing issue and the reason it matters.

@@ -155,7 +155,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.205`
+- `serverInfo.version`: `0.1.206`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -289,6 +289,29 @@ The model assesses meaning and risk using current page evidence and authorized o
 sources. These levels do not change submission authorization, Stop, credential-origin or
 source permissions. Settings are frozen for each run; balanced and autonomous require
 CLI 0.4.220 or newer. Changing the local browser model does not change the cloud supervisor.
+
+### Application Runner browser tool access
+
+Read `get_application_runner_settings` before changing access: its `toolAccessDisclosure`
+contains the current risk revision and text. `toolAccess: "guarded"` is the default.
+`toolAccess: "full"` exposes the installed Playwright MCP tool set, including unsafe code
+that can access machine files, network and processes. It is **not a sandbox**. Full tools
+may bypass website restrictions, screenshot masking and no-submit intent, and can perform
+unintended real actions through signed-in accounts. Stop cannot undo completed actions.
+
+Preview with `{ instance_id, settings: { toolAccess: "full" }, dry_run: true }`. After the
+owner explicitly accepts the disclosure, save with
+`{ instance_id, settings: { toolAccess: "full" }, confirm_full_browser_tools: "full_playwright_v1" }`.
+The API records the acceptance revision, owner, instance and time in the read-only
+`toolAccessAcceptance`; callers cannot forge that record. Read the saved settings back.
+Full access requires CLI 0.4.221 or newer and is frozen with its acceptance in each run.
+
+This acceptance is independent of `confirm: "auto_submit_real_submissions"`; changing
+browser tool access never enables standing auto-submit. Nevertheless, auto-submit off or
+fill-only instructions cannot guarantee no real actions when full tools are enabled.
+To disable full tools, save `{ settings: { toolAccess: "guarded" } }` with the instance ID.
+This clears acceptance and invalidates queued full-tool runs. Active runs keep their frozen
+access until stopped; enabling full tools again requires new acceptance.
 
 ### Tool annotations
 

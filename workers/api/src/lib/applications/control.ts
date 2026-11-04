@@ -289,6 +289,8 @@ function applicationItem(
 		tailoringRunId: app.tailoringRunId,
 		fillRunId: app.fillRunId,
 		fillRun: run,
+		...(fill.toolAccess ? { toolAccess: fill.toolAccess } : {}),
+		...(fill.submissionVerification ? { submissionVerification: fill.submissionVerification } : {}),
 		submittedAt: app.submittedAt,
 		submittedUrl: app.submittedUrl,
 		submitAttempted: !!app.submitAttemptedAt,

@@ -1,3 +1,4 @@
+import { fullApplyPrompt } from "./full-prompt.js";
 import { sourceCatalog } from "./answer-decision.js";
 /**
  * How an application run launches its CLI (#957). The research launch (`local-browser/engine.ts`) —
@@ -15,7 +16,7 @@ import type { LocalApplyTaskEnvelope } from "./contract.js";
 
 export { observedArtifactAuth as observedApplyAuth };
 
-export function buildApplyEngineSpec(e: LocalApplyTaskEnvelope, prompt: string, bridge: BridgeLaunch, mcpConfigPath: string): EngineSpec {
+export function buildApplyEngineSpec(e: LocalApplyTaskEnvelope, prompt: string, bridge: BridgeLaunch, mcpConfigPath: string, toolNames: readonly string[] = APPLY_BRIDGE_TOOL_NAMES): EngineSpec {
 	return buildEngineSpec({
 		engine: e.engine,
 		model: e.model,
@@ -26,7 +27,7 @@ export function buildApplyEngineSpec(e: LocalApplyTaskEnvelope, prompt: string, 
 		mcpConfigPath,
 		toolTimeoutMs: e.limits.maxMinutes * 60_000,
 		baseEnv: artifactEngineEnv(e.authMode),
-		toolNames: APPLY_BRIDGE_TOOL_NAMES,
+		toolNames,
 	});
 }
 
@@ -40,6 +41,7 @@ export interface SourceBlock {
 
 /** The brief. The bridge, not this text, is what enforces the rules. */
 export function applyPrompt(e: LocalApplyTaskEnvelope, sources: readonly SourceBlock[]): string {
+	if (e.policy.toolAccess === "full") return fullApplyPrompt(e, sources);
 	const t = (name: string) => `mcp__${BRIDGE_SERVER_NAME}__${name}`;
 	const job = [`Title: ${e.job.title}`, e.job.company ? `Company: ${e.job.company}` : "", e.job.location ? `Location: ${e.job.location}` : "", `Application page: ${e.applicationUrl}`].filter(Boolean).join("\n");
 	const finish =

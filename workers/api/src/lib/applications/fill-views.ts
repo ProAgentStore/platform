@@ -31,6 +31,8 @@ export interface RunDiagnostic {
 }
 
 export interface FillViews {
+	toolAccess?: "guarded" | "full";
+	submissionVerification?: "unverified";
 	diagnostic: RunDiagnostic | null;
 	progress: FillProgress | null;
 	/** Latest durable, redacted supervisor state. Never exposes raw page/runner payloads. */
@@ -58,12 +60,15 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick<JobApplication, "id" | "fillRunId" | "status" | "submitAttemptedAt" | "blockReason">): Promise<FillViews> {
 	if (!app.fillRunId) return NO_FILL_VIEWS;
 	const ownerAssertion = app.submitAttemptedAt ? await assertionFor(env, uid, app).catch(() => null) : null;
-	const row = await env.DB.prepare("SELECT status, pause, result, trace FROM local_apply_runs WHERE id = ?1 AND user_id = ?2")
+	const row = await env.DB.prepare("SELECT status, pause, result, trace, policy FROM local_apply_runs WHERE id = ?1 AND user_id = ?2")
 		.bind(app.fillRunId, uid)
-		.first<{ status: string; pause: string | null; result: string | null; trace: string | null }>()
+		.first<{ status: string; pause: string | null; result: string | null; trace: string | null; policy: string | null }>()
 		.catch(() => null);
 	if (!row) return { ...NO_FILL_VIEWS, ownerAssertion };
 	const result = parse(row.result);
+	const policy = parse(row.policy);
+	const access: Pick<FillViews, "toolAccess" | "submissionVerification"> = policy?.toolAccess === "full" ? { toolAccess: "full" as const, ...(result?.outcome !== "submitted" ? { submissionVerification: "unverified" as const } : {}) } : {};
+
 	const pause = parse(row.pause);
 	// The supervisor store is the authoritative record of what the runner measured at a checkpoint.
 	// The pause carries a copy, but only when the checkpoint resolved at pause time, and a sentence
@@ -109,6 +114,7 @@ export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick
 		}
 		: null;
 	const progress = fillProgressOf({
+		toolAccess: access.toolAccess,
 		applicationStatus: app.status,
 		runStatus: row.status,
 		pause,
@@ -118,9 +124,10 @@ export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick
 		...(checkpoint ? { checkpoint: { checkpointId: checkpoint.id, phase: checkpoint.phase, filled: checkpoint.facts.filled, uploaded: checkpoint.facts.uploaded } } : {}),
 	});
 	const d = result?.diagnostic;
-	if (!d || typeof d !== "object") return { diagnostic: null, progress, checkpoint, runStatus: row.status, ownerAssertion };
+	if (!d || typeof d !== "object") return { ...access, diagnostic: null, progress, checkpoint, runStatus: row.status, ownerAssertion };
 	const f = d as Record<string, unknown>;
 	return {
+		...access,
 		diagnostic: {
 			cause: String(f.cause ?? ""),
 			bridgeCalls: num(f.bridgeCalls),

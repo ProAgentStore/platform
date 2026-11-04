@@ -320,3 +320,16 @@ stop looking and tell the user which console screen to use.
   `requireConfirmation`, `dryRun`, `audit`, `listAuditEvents`, `redact`.
 - Published doc: [`platform-docs/mcp.md`](../../platform-docs/mcp.md).
 - Registry entry: [`server.json`](../../server.json).
+
+## Application Runner full browser access (#1532)
+
+`settings.toolAccess: "full"` is a separate owner opt-in from escalation or auto-submit.
+Read `toolAccessDisclosure` from `get_application_runner_settings`, preview with `dry_run`,
+and pass `confirm_full_browser_tools: "full_playwright_v1"` only with owner acceptance.
+Native unsafe code is not sandboxed and can access runner-machine files, processes and network;
+it can bypass website, masking and no-submit controls. Never promise that full-mode fill-only
+or read-only instructions prevent real effects. Accepting tool risks does not authorize intentional
+submission: auto-submit uses its separate `confirm: "auto_submit_real_submissions"`.
+Acceptance identity/time/instance are server-owned. Disabling clears it and invalidates queued
+full-tool runs; active runs retain frozen policy until stopped. A missing observed submit event
+is not proof that nothing was submitted; use the run's `submissionVerification` evidence.

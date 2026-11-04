@@ -27,6 +27,17 @@
  * read and from the per-minute cron — exactly like local browser research.
  */
 
+/** Full tools include unsafe code; acceptance is server recorded, scoped and frozen per run. */
+export const LOCAL_APPLY_TOOL_ACCESS_MODES = ["guarded", "full"] as const;
+export type LocalApplyToolAccess = (typeof LOCAL_APPLY_TOOL_ACCESS_MODES)[number];
+export const LOCAL_APPLY_FULL_TOOLS_REVISION = "full_playwright_v1" as const;
+export interface LocalApplyToolAccessAcceptance {
+	revision: typeof LOCAL_APPLY_FULL_TOOLS_REVISION;
+	acceptedAt: string;
+	acceptedBy: string;
+	instanceId: string;
+}
+
 /** Owner-selected threshold for model-assessed decisions; submission permission is independent. */
 export const LOCAL_APPLY_ESCALATION_LEVELS = ["conservative", "balanced", "autonomous"] as const;
 export type LocalApplyEscalationLevel = (typeof LOCAL_APPLY_ESCALATION_LEVELS)[number];
@@ -145,6 +156,8 @@ export interface LocalApplyTaskEnvelope {
 		mode: LocalApplyMode;
 		/** Frozen per-run decision threshold. Absent on older runs means conservative. */
 		escalationLevel?: LocalApplyEscalationLevel;
+		toolAccess?: LocalApplyToolAccess;
+		toolAccessAcceptance?: LocalApplyToolAccessAcceptance | null;
 		/** The sites the run may be on. Leaving them pauses (`external_redirect`). */
 		allowDomains: string[];
 		/** Explicit owner website policy (CLI 0.4.209); absent retains legacy behavior. */
@@ -435,6 +448,8 @@ export interface LocalApplyResultEnvelope {
 	uploaded: LocalApplyArtifactKind[];
 	/** Was a final submit click performed? True even when its success could not be confirmed. */
 	submitAttempted: boolean;
+	/** Full native tools cannot prove the absence of external submission effects. */
+	submissionVerification?: "unverified";
 	/** Present only when `outcome` is `submitted`: the confirmed final page. */
 	submitted?: { url: string; at: string; gateId: string };
 	summary: string;
@@ -534,7 +549,7 @@ const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 // from `LOCAL_APPLY_CONFIRMATION_MARKERS`, how many times the page was read, and whether it moved.
 // Those fields carry ids/counts/booleans, never receipt prose. `target` is the intentional exception:
 // a bounded observed control label. `decisionReason` is a bounded model explanation. Both are scrubbed of run secrets by the runner; typed values stay excluded.
-const DETAIL_KEYS = new Set(["sourceId", "escalationLevel", "decisionRisk", "decisionReason", "observedModel", "observedReasoningEffort", "requestedModel", "requestedReasoningEffort", "modelVerification", "engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site", "target"]);
+const DETAIL_KEYS = new Set(["toolAccess", "nativeToolCount", "acceptanceRevision", "acceptedAt", "sourceId", "escalationLevel", "decisionRisk", "decisionReason", "observedModel", "observedReasoningEffort", "requestedModel", "requestedReasoningEffort", "modelVerification", "engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point", "site", "target"]);
 
 /**
  * A page URL as a trace may keep it (#1069): origin and path, no query or fragment — a sign-in page's
@@ -574,6 +589,13 @@ export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
 		const detail: Record<string, string | number | boolean> = {};
 		for (const [k, v] of Object.entries(o.detail as Record<string, unknown>)) {
 			if (!DETAIL_KEYS.has(k)) continue;
+			if (k === "toolAccess" || k === "nativeToolCount" || k === "acceptanceRevision" || k === "acceptedAt") {
+				if (k === "toolAccess" && (v === "guarded" || v === "full")) detail[k] = v;
+				if (k === "nativeToolCount" && typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 10000) detail[k] = v;
+				if (k === "acceptanceRevision" && v === LOCAL_APPLY_FULL_TOOLS_REVISION) detail[k] = v;
+				if (k === "acceptedAt" && typeof v === "string" && v.length <= 40 && Number.isFinite(Date.parse(v))) detail[k] = v;
+				continue;
+			}
 			if (k === "sourceId") {
 				if (typeof v === "string" && /^source-[a-f0-9]{64}$/.test(v)) detail[k] = v;
 				continue;
@@ -630,6 +652,8 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 	const filled = typeof o.filled === "number" && Number.isInteger(o.filled) && o.filled >= 0 ? o.filled : 0;
 	const uploaded = (Array.isArray(o.uploaded) ? o.uploaded : []).filter((k): k is LocalApplyArtifactKind => k === "resume" || k === "cover_letter");
 	const out: LocalApplyResultEnvelope = { runId, outcome, mode, traceId, engineAuth, filled, uploaded: [...new Set(uploaded)], submitAttempted: o.submitAttempted === true, summary: str(o.summary, LOCAL_APPLY_CAPS.summary) ?? "" };
+	if (o.submissionVerification === "unverified") out.submissionVerification = "unverified";
+	else if (o.submissionVerification !== undefined) return { error: "submissionVerification must be unverified when present" };
 	if (outcome === "submitted") {
 		const s = (o.submitted && typeof o.submitted === "object" ? o.submitted : {}) as Record<string, unknown>;
 		const url = str(s.url, 2000);

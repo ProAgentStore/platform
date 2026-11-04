@@ -16,6 +16,14 @@ const checkpointPause = (phase: string, filled: number, uploaded: number) => ({
 });
 
 describe("the stage a fill is actually at (#986)", () => {
+	it("does not infer absence of submission from full-access action counts", () => {
+		expect(fillProgressOf({ applicationStatus: "submitted", toolAccess: "full", result: { filled: 0, uploaded: [] } }).label).toBe("Submission to the employer was confirmed. Native action counters do not measure all completed fields.");
+		for (const runStatus of ["running", "paused", "awaiting_review", "failed", "blocked"]) {
+			const progress = fillProgressOf({ applicationStatus: "awaiting_review", runStatus, toolAccess: "full", result: { filled: 0, uploaded: [], submitAttempted: false } });
+			expect(progress.label).toContain("Submission status is unverified");
+			expect(progress.label).not.toContain("nothing was sent");
+		}
+	});
 	it("THE LIVE CASE: an initial checkpoint with nothing entered is not a filled form", () => {
 		const p = fillProgressOf({ applicationStatus: "awaiting_review", runStatus: "paused", pause: checkpointPause("initial", 0, 0) });
 		expect(p.stage).toBe("supervisor_pending");

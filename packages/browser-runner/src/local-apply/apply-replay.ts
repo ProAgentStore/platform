@@ -70,7 +70,7 @@ export class ApplyReplay {
 		try {
 			const result = await dispatch();
 			if (!this.current.captured && (!result.isError || this.current.attempted)) {
-				const point = result.isError ? "blocked" : submitted() && !submittedBefore ? "submit" : POINTS[tool];
+				const point = result.isError ? "blocked" : submitted() && !submittedBefore ? "submit" : POINTS[tool] ?? (tool.startsWith("browser_") ? "action" : undefined);
 				if (point) await this.capture(point);
 			}
 			return result;
@@ -83,7 +83,7 @@ export class ApplyReplay {
 	/** Observe actual browser dispatch, not policy permission. Internal probes and tab bookkeeping are not agent actions. */
 	async call(browser: BrowserTools, name: string, args: Record<string, unknown> | undefined, opts: Parameters<BrowserTools["callTool"]>[2]): ReturnType<BrowserTools["callTool"]> {
 		const context = this.current;
-		if (!context || opts?.internal || !(name in POINTS || name === "browser_file_upload")) return browser.callTool(name, args, opts);
+		if (!context || opts?.internal || !(name in POINTS || name === "browser_file_upload" || name === context.tool && name.startsWith("browser_"))) return browser.callTool(name, args, opts);
 		context.attempted = true;
 		const outcome = (decision: "completed" | "failed") => this.host.emit({ type: "policy.decision", url: this.url(), detail: { class: "action", tool: context.tool, decision, ...(context.target ? { target: context.target } : {}) } });
 		try {

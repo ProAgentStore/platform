@@ -38,7 +38,7 @@ export class BrowserStateSampler {
   catch { return "[unavailable]"; }
  }
  /** Consume metadata already returned by MCP. Text supplied by a page is never executed. */
- observe(text: string, context: BrowserContext | undefined, selected: Page | undefined): void {
+ observe(text: string, context: Pick<BrowserContext, "pages"> | undefined, selected: Page | undefined): void {
   if (!context || !selected || selected.isClosed()) return;
   const title = text.match(/^### Page\n(?:[^\n]*\n)*?- Page Title: ([^\n]*)/m)?.[1];
   if (title !== undefined) this.titles.set(selected, this.safe(title, 200));
@@ -52,7 +52,7 @@ export class BrowserStateSampler {
   const type = modal?.match(/"(alert|confirm|prompt|beforeunload)" dialog/)?.[1] as BrowserStateSnapshot["dialog"]["type"];
   this.dialogs.set(selected, type ? { status: "observed", type, observedAt: new Date().toISOString() } : { status: "unknown" });
  }
- sample(context: BrowserContext | undefined, active: Page | null | undefined, selected: Page | undefined, chooserId: string | null): BrowserStateSnapshot {
+ sample(context: Pick<BrowserContext, "pages"> | undefined, active: Page | null | undefined, selected: Page | undefined, chooserId: string | null): BrowserStateSnapshot {
   const pages = context?.pages().filter((page) => !page.isClosed()) ?? [];
   const nativeActivePageId = this.id(active), mcpSelectedPageId = this.id(selected);
   const tabs = pages.slice(0, 20).map((page, index) => ({ pageId: this.id(page)!, index, url: this.url(page), ...(this.titles.has(page) ? { title: this.titles.get(page)! } : {}), nativeActive: page === active, mcpSelected: page === selected }));

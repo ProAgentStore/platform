@@ -552,6 +552,8 @@ const TERMINAL: readonly ApplyRunStatus[] = ["awaiting_review", "submitted", "bl
 export const isTerminalApplyRun = (s: ApplyRunStatus) => TERMINAL.includes(s);
 
 export interface ApplyRunPolicy {
+	toolAccess?: import("./contract.js").LocalApplyToolAccess;
+	toolAccessAcceptance?: import("./contract.js").LocalApplyToolAccessAcceptance | null;
 	/** Frozen at creation; older runs retain conservative escalation. */
 	escalationLevel?: import("./contract.js").LocalApplyEscalationLevel;
 	browserWebsiteAccess?: BrowserWebsiteAccessWire;

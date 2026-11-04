@@ -112,6 +112,7 @@ export function prepareApplyDocuments(envelope: LocalApplyTaskEnvelope, dir: str
 
 /** Remove payloads before journaling; terminal hydration needs only identity and result metadata. */
 export function clearCloudDocuments(envelope: LocalApplyTaskEnvelope, dir: string): void {
+	if (envelope.policy.toolAccess === "full") { try { rmSync(join(dir, "native-documents"), { recursive: true, force: true }); } catch { /* Preserve the terminal receipt even if cleanup fails. */ } }
 	if (!envelope.cloudDocuments) return;
 	for (const document of envelope.cloudDocuments) document.contentBase64 = "";
 	delete envelope.cloudDocuments;

@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { completeRunnerBatch } from "../lib/local-apply/__fixtures__/status.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
+import { readFillViews } from "../lib/applications/fill-views.js";
 import { realSchemaD1, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { JOB_LEAD_APPLY_EVENT, planJobLeadTriage } from "../lib/job-lead-triage.js";
 import type { ApplicationExecutionProjection } from "../lib/applications/execution-projection.js";
@@ -114,6 +115,74 @@ function readyApp(id: string, over: { title?: string; url?: string } = {}) {
 }
 const enableAutoSubmit = (over: Record<string, unknown> = {}) =>
 	call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1, ...over }, acknowledgeRealSubmissions: true });
+
+describe("full browser tool acceptance and dispatch", () => {
+	const accept = { toolAccess: "full", acknowledgeFullBrowserTools: "full_playwright_v1" };
+	it("requires acknowledgement, rejects forged receipts, stamps owner provenance and records the change", async () => {
+		const initial = await call("GET", "/ap/application-runner/settings");
+		expect(initial.body.settings.toolAccess).toBe("guarded");
+		expect(initial.body.toolAccessDisclosure.revision).toBe("full_playwright_v1");
+		expect(initial.body.toolAccessDisclosure.risks.join(" ")).toContain("not sandboxed");
+		for (const patch of [{ toolAccess: "full" }, { ...accept, acknowledgeFullBrowserTools: true }, { ...accept, toolAccessAcceptance: { acceptedBy: "u1" } }]) expect((await call("PUT", "/ap/application-runner/settings", patch)).status).toBe(400);
+		expect((await call("PUT", "/other/application-runner/settings", accept)).status).toBe(404);
+		const enabled = await call("PUT", "/ap/application-runner/settings", accept);
+		expect(enabled.status).toBe(200);
+		expect((await call("PUT", "/ap/application-runner/settings", { toolAccess: "full" })).status).toBe(400);
+		expect((await call("PUT", "/ap/application-runner/settings", { escalationLevel: "autonomous" })).body.settings.toolAccessAcceptance).toEqual(enabled.body.settings.toolAccessAcceptance);
+		expect(enabled.body.settings).toMatchObject({ toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", acceptedBy: "u1", instanceId: "ap", acceptedAt: expect.any(String) }, autoSubmit: { enabled: false } });
+		const audit = await d1.DB.prepare("SELECT context FROM agent_events WHERE event = 'apply.tool_access.changed' AND instance_id = 'ap'").first<{ context: string }>();
+		expect(JSON.parse(audit?.context ?? "{}")).toMatchObject({ toolAccess: "full", acceptance: { acceptedBy: "u1" } });
+		const disabled = await call("PUT", "/ap/application-runner/settings", { toolAccess: "guarded" });
+		expect(disabled.body.settings.toolAccessAcceptance).toBeNull();
+		expect((await call("PUT", "/ap/application-runner/settings", { toolAccess: "full" })).status).toBe(400);
+	});
+	it("gates full mode at CLI221 and freezes accepted provenance in the dispatched run", async () => {
+		const accepted = await call("PUT", "/ap/application-runner/settings", accept);
+		const event = readyApp("full-old");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
+		const refused = await call("POST", "/ap/application-runs", event);
+		expect(refused.status).toBe(409); expect(refused.body.error).toContain("0.4.221"); expect(dispatches()).toHaveLength(0);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.221' WHERE instance_id = 'ap'");
+		const started = await call("POST", "/ap/application-runs", event);
+		expect(started.status).toBe(201);
+		expect(dispatches()[0].body.policy).toMatchObject({ toolAccess: "full", toolAccessAcceptance: accepted.body.settings.toolAccessAcceptance, mode: "fill_and_review" });
+		await call("PUT", "/ap/application-runner/settings", { toolAccess: "guarded" });
+		expect(started.body.run.policy.toolAccess).toBe("full");
+		const viewInput = { id: "full-old", fillRunId: started.body.run.id as string, status: "filling" as const, submitAttemptedAt: null, blockReason: null };
+		expect(await readFillViews(env(), "u1", viewInput)).toMatchObject({ toolAccess: "full", submissionVerification: "unverified" });
+		runner("ended", { result: RESULT(started.body.run.id, { filled: 0, uploaded: [] }) });
+		const ended = await call("GET", `/ap/application-runs/${started.body.run.id}`);
+		expect(ended.body.run.result).toMatchObject({ submissionVerification: "unverified", submitAttempted: false });
+		const endedView = await readFillViews(env(), "u1", { ...viewInput, status: "awaiting_review" });
+		expect(endedView).toMatchObject({ toolAccess: "full", submissionVerification: "unverified" });
+		expect(endedView.progress?.label).toContain("Submission status is unverified");
+	});
+	it("never records an explicitly unverified full result as a confirmed submission", async () => {
+		await enableAutoSubmit();
+		await call("PUT", "/ap/application-runner/settings", accept);
+		const started = await call("POST", "/ap/application-runs", readyApp("full-unverified"));
+		const run = started.body.run;
+		runner("ended", { result: RESULT(run.id, { outcome: "submitted", mode: "auto_submit", submissionVerification: "unverified", submitAttempted: true, submitted: { url: "https://jobs.example.com/confirmation", at: "2026-11-05T02:00:00.000Z", gateId: run.policy.gate.gateId } }) });
+		const ended = await call("GET", `/ap/application-runs/${run.id}`);
+		expect(ended.body.run.result).toMatchObject({ outcome: "blocked", blockReason: "submit_unconfirmed", submissionVerification: "unverified" });
+		expect((await appRow("full-unverified"))?.status).toBe("blocked");
+	});
+	it("holds queued full work on old CLI or revoked acknowledgement", async () => {
+		await call("PUT", "/ap/application-runner/settings", accept);
+		answers["/local-apply/run"] = { status: 409, body: { error: "This machine is already filling 1 application(s) for this agent (limit 1)." } };
+		const started = await call("POST", "/ap/application-runs", readyApp("full-queued"));
+		expect(started.body.run.status).toBe("queued");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
+		expect(dispatches()).toHaveLength(1);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.221' WHERE instance_id = 'ap'");
+		await call("PUT", "/ap/application-runner/settings", { toolAccess: "guarded" });
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
+		expect(dispatches()).toHaveLength(1);
+	});
+});
 
 describe("application escalation setting survives dispatch and queue waits", () => {
 	it("round-trips only this instance's level and refuses old runtimes before claiming the application", async () => {

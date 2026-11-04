@@ -392,3 +392,50 @@ describe("durable execution projection reaches MCP verbatim (#988)", () => {
 		expect(body.item.execution.permittedActions).toEqual(["resume", "cancel"]);
 	});
 });
+
+describe("full browser tool acceptance (#1532)", () => {
+	it("publishes only the two access modes and exact separate acknowledgement", () => {
+		const schema = z.object(tools().schemas.get("set_application_runner_settings")!);
+		const base = { instance_id: "r1", settings: { toolAccess: "full" } };
+		expect(schema.safeParse({ ...base, confirm_full_browser_tools: "full_playwright_v1" }).success).toBe(true);
+		expect(schema.safeParse({ ...base, confirm_full_browser_tools: "yes" }).success).toBe(false);
+		expect(schema.safeParse({ ...base, settings: { toolAccess: "unrestricted" } }).success).toBe(false);
+	});
+	it.each([undefined, "yes", "auto_submit_real_submissions"])("refuses full access without the exact separate acceptance: %s", async (confirm_full_browser_tools) => {
+		const { seen, call } = tools();
+		expect(await call("set_application_runner_settings", { instance_id: "r1", settings: { toolAccess: "full" }, confirm_full_browser_tools })).toContain('confirm_full_browser_tools="full_playwright_v1"');
+		expect(seen).toEqual([]);
+	});
+	it("passes full-tool acceptance to the owner-scoped API without enabling auto-submit", async () => {
+		const { seen, call } = tools();
+		await call("set_application_runner_settings", { instance_id: "r1", settings: { toolAccess: "full" }, confirm_full_browser_tools: "full_playwright_v1" });
+		expect(seen).toEqual([{ url: "https://api.test/v1/instances/r1/application-runner/settings", method: "PUT", body: { toolAccess: "full", acknowledgeFullBrowserTools: "full_playwright_v1" } }]);
+	});
+	it("requires both independent acknowledgements when both policies are enabled", async () => {
+		const { seen, call } = tools();
+		const args = { instance_id: "r1", settings: { toolAccess: "full", autoSubmit: { enabled: true } } };
+		expect(await call("set_application_runner_settings", { ...args, confirm_full_browser_tools: "full_playwright_v1" })).toContain('confirm="auto_submit_real_submissions"');
+		expect(await call("set_application_runner_settings", { ...args, confirm: "auto_submit_real_submissions" })).toContain('confirm_full_browser_tools="full_playwright_v1"');
+		expect(seen).toEqual([]);
+		await call("set_application_runner_settings", { ...args, confirm: "auto_submit_real_submissions", confirm_full_browser_tools: "full_playwright_v1" });
+		expect(seen[0].body).toEqual({ ...args.settings, acknowledgeRealSubmissions: true, acknowledgeFullBrowserTools: "full_playwright_v1" });
+	});
+	it("disables without acknowledgement and does not manufacture an acceptance receipt", async () => {
+		const { seen, call } = tools();
+		await call("set_application_runner_settings", { instance_id: "r1", settings: { toolAccess: "guarded" } });
+		expect(seen[0].body).toEqual({ toolAccess: "guarded" });
+	});
+	it("previews the unsafe-code risks without acknowledgement or an API write", async () => {
+		const { seen, call } = tools();
+		const preview = await call("set_application_runner_settings", { instance_id: "r1", settings: { toolAccess: "full" }, dry_run: true });
+		expect(preview).toContain("machine files, network and processes");
+		expect(preview).toContain("no sandbox or reliable no-submit");
+		expect(seen).toEqual([]);
+	});
+	it("preserves the API's disclosure and server-stamped receipt on readback", async () => {
+		const t = tools();
+		const result = { settings: { toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", instanceId: "r1", acceptedBy: "owner", acceptedAt: "2026-11-05T00:00:00Z" } }, toolAccessDisclosure: { revision: "full_playwright_v1", title: "Full browser tools", risks: ["Not a sandbox"] } };
+		vi.stubGlobal("fetch", async () => new Response(JSON.stringify(result), { status: 200 }));
+		expect(JSON.parse(await t.call("get_application_runner_settings", { instance_id: "r1" }))).toEqual(result);
+	});
+});

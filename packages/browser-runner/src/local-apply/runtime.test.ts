@@ -1262,3 +1262,22 @@ describe("owner instance preferences in local application launch (#1508)", () =>
   expect(spawned).toHaveLength(0);
  });
 });
+
+describe("accepted full native runtime wiring", () => {
+	it("freezes full authority, configures workspace tools, passes actual inventory to the engine and reports unverified submission", async () => {
+		const configure = vi.fn(async () => {}); browser.configureToolAccess = configure;
+		const rt = runtime(); const input = envelope({ engine: "codex" });
+		input.policy = { ...input.policy, toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", acceptedAt: "2026-11-05T00:00:00Z", acceptedBy: "owner", instanceId: input.instanceId } };
+		try {
+			rt.start(input); await settle();
+			expect(spawned).toHaveLength(1); expect(configure).toHaveBeenCalledWith("full", expect.stringContaining("run-1"));
+			expect(nativePolicy?.toolAccess).toBe("full");
+			expect(nativePolicy?.approvedUploadPaths?.()).toEqual([expect.stringContaining("native-documents/resume.md"), expect.stringContaining("native-documents/cover_letter.md")]);
+			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"browser_evaluate"');
+			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"submit_application"');
+			await call(rt, "browser_type", { target: "e1", text: "Jane Citizen" });
+			await call(rt, "ready_for_review", { summary: "Model report" }); child.exit(0);
+			expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "awaiting_review", filled: 0, submitAttempted: false, submissionVerification: "unverified" });
+		} finally { rt.closeAll(); delete browser.configureToolAccess; }
+	});
+});

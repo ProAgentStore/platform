@@ -4,6 +4,9 @@ import type { BrowserWebsiteAccess, WebsiteAccessBlock } from "./browser-website
 /** Owner/run policy, supplied by the runner. Never read from model tool arguments. */
 export interface McpCallPolicy {
 	guard?: CommitGuardSpec;
+	toolAccess?: "guarded" | "full";
+	/** Revalidates run-owned artifact identities at each native upload dispatch. */
+	approvedUploadPaths?: () => string[];
 	isCancelled?: () => boolean;
 	/** Live per-run allowlist, including sites explicitly admitted by the owner on resume. */
 	isDomainAllowed?: (host: string) => boolean;
@@ -47,7 +50,8 @@ const GUARDED_TOOLS = new Set([
 ]);
 
 /** The standard tool boundary, including calls made by check/upload helper actions. */
-export async function guardedToolRefusal(name: string, args: Record<string, unknown>, guard: CommitGuardSpec | undefined, probe: Probe, internal: boolean): Promise<string | null> {
+export async function guardedToolRefusal(name: string, args: Record<string, unknown>, guard: CommitGuardSpec | undefined, probe: Probe, internal: boolean, fullAccess = false): Promise<string | null> {
+	if (fullAccess) return name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined) ? navigationRefusal(args.url) : null;
 	if (!internal && (name === "browser_evaluate" || name === "browser_run_code" || name === "browser_run_code_unsafe")) return "BLOCKED by the runner — arbitrary page code is reserved for the runner's own fixed probes.";
 	if (name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined)) {
 		const refused = navigationRefusal(args.url);

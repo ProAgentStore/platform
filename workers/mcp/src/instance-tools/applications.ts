@@ -86,7 +86,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"list_applications",
-		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each application has `execution`, the ONE durable redacted projection shared with Board and Console: lifecycle, current run, checkpoint counts, directive delivery/runner acknowledgement, evidence-based progress, reconciliation state and permitted actions. It excludes page text, snapshots, typed values, credentials and artifact contents. `fillProgress` remains a compatibility alias; read `execution.progress` rather than inferring progress from `status`. The projection does not grant submission authority — actions remain fail-closed. Also returns counts, limits, connection outbox health and `health` (#1022): `ok`, every `problems[]` entry (a disabled or dead-lettered edge, a missing Tailor/Runner, a Scout source that is unavailable, disabled, without email access, failing, unscheduled, never scanned or stale, or that still holds stored leads today's intake rules reject) and each Scout source's readiness and last scan. Read-only." + PIPELINE_INSTANCE,
+		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each application has `execution`, the ONE durable redacted projection shared with Board and Console: lifecycle, current run, checkpoint counts, directive delivery/runner acknowledgement, evidence-based progress, reconciliation state and permitted actions. It excludes page text, snapshots, typed values, credentials and artifact contents. `fillProgress` remains a compatibility alias; read `execution.progress` rather than inferring progress from `status`. The projection does not grant submission authority. Frozen `toolAccess: full` means arbitrary native code can bypass submission guards; `submissionVerification: unverified` and `submitAttempted: false` never establish that nothing was submitted. Also returns counts, limits, connection outbox health and `health` (#1022): `ok`, every `problems[]` entry (a disabled or dead-lettered edge, a missing Tailor/Runner, a Scout source that is unavailable, disabled, without email access, failing, unscheduled, never scanned or stale, or that still holds stored leads today's intake rules reject) and each Scout source's readiness and last scan. Read-only." + PIPELINE_INSTANCE,
 		{
 			...who,
 			status: z.enum(["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"]).optional().describe("Only this status."),
@@ -118,7 +118,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"get_application",
-		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now. Applications include the shared durable `execution` projection (lifecycle, current run, redacted checkpoint/directive delivery state, progress and permitted actions) plus compatibility `fillProgress`; it never says a form is filled without durable counts and never exposes page/form/credential/artifact contents. Read-only." + PIPELINE_INSTANCE,
+		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now. Applications include the shared durable `execution` projection (lifecycle, current run, redacted checkpoint/directive delivery state, progress and permitted actions) plus compatibility `fillProgress`; it never says a form is filled without durable counts and never exposes page/form/credential/artifact contents. Frozen `toolAccess: full` and `submissionVerification: unverified` warn that arbitrary code can bypass submission guards: an absent observed submit is not proof of no submission. Read-only." + PIPELINE_INSTANCE,
 		{ ...who, application_id: target.application_id, scout_instance_id: target.scout_instance_id, record_id: target.record_id },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
@@ -208,7 +208,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"application_run",
-		"ONE fill run as it stands RIGHT NOW — the live view of an Application Runner, the counterpart of coding_session_capture for a coding agent. Reading it pulls the owner's machine first, so a just-emitted event is already here. Returns the run (`status`, `pause` — what it is waiting for and the questions it asked, `policy` with the mode, limits, allowed domains and every submit-gate check with its verdict, `result` with the outcome, how many fields were filled, what was uploaded and whether a submit was attempted, `engineAuth`, `runnerNode`, `errorCode`/`error`, timings), its `trace` of runner-reported events (`browser.navigated`, `field.filled`, `artifact.uploaded`, `policy.decision`, `browser.blocked`, `submit.*`, `supervisor.*`) with `runnerSeq`, plus the application and its lifecycle audit. A trace holding only `engine.started`/`engine.ended` is a real finding, not a gap in this tool: the CLI called no browser tool, which is usually why such a run ends blocked and incomplete. The CLI's own output stays on the machine by contract — `result.summary` is the only part of it the platform receives. Read-only.",
+		"ONE fill run as it stands RIGHT NOW — the live view of an Application Runner, the counterpart of coding_session_capture for a coding agent. Reading it pulls the owner's machine first, so a just-emitted event is already here. Returns the run (`status`, `pause` — what it is waiting for and the questions it asked, `policy` with the mode, limits, allowed domains and every submit-gate check with its verdict, `result` with the outcome, how many fields were filled, what was uploaded and whether a submit was attempted, `engineAuth`, `runnerNode`, `errorCode`/`error`, timings), its `trace` of runner-reported events (`browser.navigated`, `field.filled`, `artifact.uploaded`, `policy.decision`, `browser.blocked`, `submit.*`, `supervisor.*`) with `runnerSeq`, plus the application and its lifecycle audit. A trace holding only `engine.started`/`engine.ended` is a real finding, not a gap in this tool: the CLI called no browser tool, which is usually why such a run ends blocked and incomplete. In full tool mode, native code can have unobserved effects; missing browser/submit events and result.submitAttempted false do not verify no submission. The CLI's own output stays on the machine by contract — `result.summary` is the only part of it the platform receives. Read-only.",
 		{ ...who, run_id: z.string().describe("The fill run's id (`id` from application_runs, or fillRunId from list_applications).") },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
@@ -449,7 +449,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"get_application_runner_settings",
-		"An Application Runner's handoff and submission policy (#953): signed-in CLI, local browser model/reasoningEffort, owner sources, sites, escalationLevel (conservative by default), and auto-submit policy (off by default). Escalation permits model-assessed source-supported judgments; it does not authorize submission or invent missing personal facts. Returns effective settings for roundtrip through set_application_runner_settings. Pass the Runner's instance_id. Read-only.",
+		"An Application Runner's handoff and submission policy (#953): signed-in CLI, local browser model/reasoningEffort, owner sources, sites, escalationLevel (conservative by default), toolAccess and server-recorded toolAccessAcceptance, current toolAccessDisclosure, and auto-submit policy (off by default). Escalation permits model-assessed source-supported judgments; it does not authorize submission or invent missing personal facts. Returns effective settings for roundtrip through set_application_runner_settings. Pass the Runner's instance_id. Read-only.",
 		{ ...who },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
@@ -465,7 +465,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"set_application_runner_settings",
-		"Change an Application Runner's handoff and submission policy. Only the fields you pass change. Manual review (fill_and_review) is the default. Auto-submit sends REAL job applications to third-party sites, and a submission cannot be undone: sending autoSubmit.enabled: true requires confirm: \"auto_submit_real_submissions\", which is the owner's acknowledgement of that (#1039), and the server stamps autoSubmit.acknowledgedAt. It is also REFUSED until a profile source, at least one approved role, at least one allowed site and a daily cap of at least 1 exist — and even then each application is submitted only when it matches every rule. Turning it off (enabled: false) needs no confirmation. Never takes a provider API key. Call with dry_run first.",
+		"Change an Application Runner's handoff and submission policy. Only the fields you pass change. Manual review (fill_and_review) is the default. Auto-submit sends REAL job applications to third-party sites, and a submission cannot be undone: sending autoSubmit.enabled: true requires confirm: \"auto_submit_real_submissions\", which is the owner's acknowledgement of that (#1039), and the server stamps autoSubmit.acknowledgedAt. It is also REFUSED until a profile source, at least one approved role, at least one allowed site and a daily cap of at least 1 exist — and even then each application is submitted only when it matches every rule. Turning it off (enabled: false) needs no confirmation. Full toolAccess exposes the installed Playwright MCP tools, including arbitrary unsafe code with machine files/network/process access: it is not a sandbox and can bypass masking, website and submission controls. Enabling it requires confirm_full_browser_tools: \"full_playwright_v1\" for the owner risk acceptance. Read toolAccessDisclosure from get_application_runner_settings first. Full-tool acceptance does not enable auto-submit, and auto-submit off is not a guarantee of no real actions in full mode. Disabling full tools clears acceptance and invalidates queued full-tool runs; active runs keep their frozen policy until stopped. Never takes a provider API key. Call with dry_run first.",
 		{
 			...who,
 			settings: z
@@ -474,6 +474,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 					model: z.string().nullable().optional().describe("Local browser-driving CLI model ID, independent of the cloud supervisor. null uses the CLI default."),
 					reasoningEffort: z.string().nullable().optional().describe("Codex reasoning effort token supported by the selected model/client. null uses the CLI default. Other engines refuse explicit effort."),
 					escalationLevel: z.enum(["conservative", "balanced", "autonomous"]).optional().describe("Owner's delegation of model-assessed judgments: conservative (default) asks for minor and major decisions; balanced permits minor and asks for major; autonomous permits both. Unknown personal facts remain unresolved. Submission authorization, Stop, credential-origin and source permissions remain independent. Frozen per run; nondefault levels require CLI 0.4.220 or newer."),
+					toolAccess: z.enum(["guarded", "full"]).optional().describe("Guarded (default) exposes the constrained Application Runner surface. Full exposes all installed Playwright MCP tools, including unsafe code; requires separate confirm_full_browser_tools acceptance and CLI 0.4.221+. Full tools may bypass fill-only intent, website and masking controls. Changing this does not enable auto-submit."),
 					authMode: z.enum(["machine", "subscription"]).optional(),
 					browserProfile: z.enum(["isolated", "default"]).optional(),
 					workspace: z.string().optional(),
@@ -496,6 +497,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 						.optional(),
 				})
 				.describe("The fields to change, as GET returns them."),
+			confirm_full_browser_tools: z.literal("full_playwright_v1").optional().describe("Explicit owner acceptance of the current full-browser risk disclosure from get_application_runner_settings. Required when settings.toolAccess is full; separate from confirm for auto-submit. The API stamps acceptance identity, instance and time; never supply a fabricated stored acceptance."),
 			confirm: z.string().optional().describe('When enabling auto-submit, pass "auto_submit_real_submissions" to confirm that submissions are real and irreversible third-party actions. Required when settings.autoSubmit.enabled is true.'),
 			dry_run: z.boolean().optional().describe("Describe the change without saving it."),
 		},
@@ -508,14 +510,17 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			const denied = await requirePermission(safetyFor(token), "write", "set_application_runner_settings", auditInput);
 			if (denied) return denied;
 			const enabling = (input.settings as { autoSubmit?: { enabled?: unknown } } | undefined)?.autoSubmit?.enabled === true;
+			const fullTools = (input.settings as { toolAccess?: unknown } | undefined)?.toolAccess === "full";
 			if (input.dry_run) {
 				return dryRun(safetyFor(token), "set_application_runner_settings", "change an Application Runner's submission policy", auditInput, {
 					endpoint: `/v1/instances/${instance_id}/application-runner/settings`,
 					method: "PUT",
-					effect: enabling
-						? "Auto-submit would be ENABLED: matching applications would be submitted for real, without review, and a submission cannot be undone. Needs confirm \"auto_submit_real_submissions\" and the policy prerequisites."
-						: "The Runner's settings would be patched with the fields given; auto-submit stays refused until its prerequisites exist.",
+					effect: [enabling ? "Auto-submit would be ENABLED: matching applications would be submitted for real, without review, and a submission cannot be undone. Needs confirm \"auto_submit_real_submissions\" and the policy prerequisites." : "Standing auto-submit is unchanged unless explicitly patched.", fullTools ? "Full browser tools would be enabled after explicit confirm_full_browser_tools=full_playwright_v1 acceptance. Unsafe code can access machine files, network and processes; no sandbox or reliable no-submit, website or masking boundary is promised. This dry run changes nothing." : "The Runner's settings would be patched with the fields given."].join(" "),
 				});
+			}
+			if (fullTools && input.confirm_full_browser_tools !== "full_playwright_v1") {
+				await audit(safetyFor(token), { tool: "set_application_runner_settings", action: "denied", reason: "missing_confirmation", expected: "full_playwright_v1", input: auditInput });
+				return text('Error: set_application_runner_settings requires confirm_full_browser_tools="full_playwright_v1" after the owner accepts toolAccessDisclosure. Full tools can perform unintended real actions and are not a sandbox.');
 			}
 			// #1039: the owner's acknowledgement that submissions are real — the MCP counterpart of the
 			// console's confirmation dialog, checked after the dry run like every confirmed tool.
@@ -523,7 +528,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 				const unconfirmed = await requireConfirmation(safetyFor(token), "set_application_runner_settings", input.confirm as string | undefined, "auto_submit_real_submissions", auditInput);
 				if (unconfirmed) return unconfirmed;
 			}
-			const body = { ...((input.settings as Record<string, unknown>) ?? {}), ...(enabling ? { acknowledgeRealSubmissions: true } : {}) };
+			const body = { ...((input.settings as Record<string, unknown>) ?? {}), ...(enabling ? { acknowledgeRealSubmissions: true } : {}), ...(fullTools ? { acknowledgeFullBrowserTools: "full_playwright_v1" } : {}) };
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runner/settings`, t, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "set_application_runner_settings", action: "completed", input: auditInput });

@@ -10,18 +10,22 @@ import { modelArguments } from "./model-config.js";
  *  - Claude Code: `--tools ""` removes EVERY built-in tool (WebFetch, WebSearch, Bash, file edits),
  *    `--strict-mcp-config` loads only the bridge, `--allowedTools mcp__pags_browser` pre-approves
  *    it, and `--permission-mode dontAsk` refuses anything else without stopping to ask.
- *  - Codex: `--sandbox read-only` (its shell cannot write, and per Codex's sandbox design has no
- *    network), `--ignore-user-config` (no MCP servers or providers from the user's own config — auth
- *    still comes from the login), web search switched off, and the bridge as its only MCP server.
+ *  - Codex: `--sandbox read-only` as defense in depth and `--ignore-user-config`
+ *    (no MCP servers or providers from the user's own config — auth
+ *    still comes from the login), shell-tool exposure, ambient plugins/skills/apps, computer-use and other agents disabled explicitly,
+ *    web search switched off, and the bridge as its only MCP server.
  *    `codex exec` runs with approval policy `never`, so an MCP tool that needs approval is simply
  *    refused — a live run on 2026-10-07 opened no page for exactly that reason (#952). The bridge is
  *    therefore pre-approved, and ONLY it: `default_tools_approval_mode="approve"` on the
  *    `pags_browser` server, and `enabled_tools` pinned to the bridge's own tool names
- *    (`BRIDGE_TOOL_NAMES`). Nothing else is approved — the shell stays read-only with no network,
+ *    (`BRIDGE_TOOL_NAMES`, or the full application bridge inventory). Nothing else is approved;
  *    there is no other server — and the bridge still enforces sites, consent, limits and the
  *    research-only tool set in the runner, whatever the CLI is allowed to call.
- *    NOT VERIFIED END TO END on a live machine: that read-only shell commands get no network, and
+ *    The read-only sandbox remains defense in depth; feature availability depends on Codex version.
+ *    NOT VERIFIED END TO END on a live machine: older versions ignoring tool-disable flags, and
  *    which of the two web-search keys a given Codex version honours. #947 holds that test.
+ *    Accepted full Playwright code executes in the separate MCP server process; these CLI
+ *    restrictions do not sandbox that code or constrain its host access.
  *
  * Neither ever gets a provider API key unless the owner chose `api-key`: subscription and machine
  * sign-in remove ANTHROPIC_API_KEY and OPENAI_API_KEY from the inherited environment (an empty
@@ -123,6 +127,9 @@ export function buildEngineSpec(input: {
 			"--sandbox",
 			"read-only",
 			"--ignore-user-config",
+			// Ignore config does not disable built-in shell tools or ambient skills/plugins.
+			// Browser engines receive only the explicitly wired MCP server, including its images.
+			...Object.entries({ shell_tool: false, plugins: false, remote_plugin: false, apps: false, computer_use: false, browser_use: false, browser_use_external: false, browser_use_full_cdp_access: false, in_app_browser: false, image_generation: false, view_image: false, multi_agent: false, hooks: false, skill_search: false, skill_mcp_dependency_install: false, skip_host_skill_discovery: true }).flatMap(([name, value]) => ["-c", `features.${name}=${value}`]),
 			...modelArgs,
 			"-c",
 			`${key}.command=${toml(input.bridge.command)}`,

@@ -88,6 +88,7 @@ export interface FillPauseFacts {
 }
 
 export interface FillProgressInput {
+	toolAccess?: "guarded" | "full";
 	/** The APPLICATION's lifecycle status — the fallback, and the only thing #978's card read. */
 	applicationStatus: string;
 	/** The fill run's status, when one is bound: `queued` | `running` | `paused` | terminal. */
@@ -139,9 +140,13 @@ export function fillProgressOf(input: FillProgressInput): FillProgress {
 	const evidence: FillEvidence = result ? "runner_result" : checkpointPhase || pause ? "runner_checkpoint" : "run_status";
 	const at = (stage: FillStage, label: string): FillProgress => ({ stage, label, filled, uploaded, checkpointPhase, checkpointId, submitAttempted, evidence });
 
-	if (input.applicationStatus === "submitted") return at("submitted", `Submitted to the employer after filling ${did}.`);
+	if (input.applicationStatus === "submitted") return at("submitted", input.toolAccess === "full" ? "Submission to the employer was confirmed. Native action counters do not measure all completed fields." : `Submitted to the employer after filling ${did}.`);
 	// An attempt whose outcome nobody confirmed is the one state that must never read as progress.
 	if (submitAttempted) return at("submitted", "A final submit was attempted — check the employer's site before anything else is done.");
+	if (input.toolAccess === "full" || result?.submissionVerification === "unverified") {
+		const stage: FillStage = input.applicationStatus === "archived" ? "unavailable" : input.applicationStatus === "cancelled" ? "cancelled" : input.runStatus === "failed" ? "failed" : input.runStatus === "blocked" || input.runStatus === "paused" ? "blocked" : input.runStatus === "queued" ? "queued" : input.runStatus === "running" ? "filling" : "ready_for_review";
+		return at(stage, "Full browser access: logged actions may not capture every effect. Submission status is unverified; inspect the employer site before retrying or submitting.");
+	}
 	if (input.applicationStatus === "archived") {
 		return at("unavailable", input.blockReason === "job_unavailable" ? "The listing is no longer available; nothing was sent." : "Archived; nothing was sent.");
 	}

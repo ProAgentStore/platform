@@ -1,3 +1,4 @@
+import { toolAccessRunnerProblem, queuedToolAccessProblem } from "./tool-access.js";
 import { escalationRunnerProblem } from "./escalation-config.js";
 import { browserModelRunnerProblem } from "./model-config.js";
 import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "../browser-evidence.js";
@@ -238,7 +239,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		workspace: s.workspace,
 		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode: run.policy.mode, escalationLevel: run.policy.escalationLevel ?? "conservative", allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
+		policy: { mode: run.policy.mode, ...(run.policy.toolAccess === "full" ? { toolAccess: "full" as const, toolAccessAcceptance: run.policy.toolAccessAcceptance } : {}), escalationLevel: run.policy.escalationLevel ?? "conservative", allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
 		limits: run.policy.limits,
 		// #1079: what the owner already answered for this application, kept since an earlier fill stopped waiting.
 		...(ownerAnswers.length ? { ownerAnswers: ownerAnswers.map((a) => ({ question: a.question, answer: a.answer })) } : {}),
@@ -292,7 +293,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const blurProblem = screenshotBlurRunnerProblem(screenshotsOn ? blurFormFields : true, runtime.runner_version, runtime.runner_node);
 	if (blurProblem) throw new HttpError(409, blurProblem);
 	const browserWebsiteAccess = await websiteAccessForInstance(env, uid, instanceId);
-	const contractProblem = escalationRunnerProblem(s, runtime.runner_version) ?? browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const contractProblem = toolAccessRunnerProblem(s, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(s, runtime.runner_version) ?? browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version);
@@ -336,6 +337,8 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	// The owner's screenshot switch, fixed into this run as it starts (#1064).
 
 	const policy: ApplyRunPolicy = {
+		toolAccess: s.toolAccess,
+		toolAccessAcceptance: s.toolAccessAcceptance ? { ...s.toolAccessAcceptance } : null,
 		escalationLevel: s.escalationLevel,
 		engine: s.engine,
 		model: s.model ?? null,
@@ -353,7 +356,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	};
 	const failing = checks.filter((c) => !c.ok).map((c) => c.check);
 	const trace: ApplyTraceEvent[] = [
-		{ type: "run.requested", at: iso(now), detail: { escalationLevel: s.escalationLevel, engine: s.engine, requestedModel: s.model ?? "cli_default", requestedReasoningEffort: s.reasoningEffort ?? "cli_default", modelVerification: "unverified", authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", blurFormFields, ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
+		{ type: "run.requested", at: iso(now), detail: { toolAccess: s.toolAccess, ...(s.toolAccessAcceptance ? { acceptanceRevision: s.toolAccessAcceptance.revision, acceptedAt: s.toolAccessAcceptance.acceptedAt } : {}), escalationLevel: s.escalationLevel, engine: s.engine, requestedModel: s.model ?? "cli_default", requestedReasoningEffort: s.reasoningEffort ?? "cli_default", modelVerification: "unverified", authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", blurFormFields, ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
 		...(instancePreferences ? [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] : []),
 		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
@@ -414,10 +417,13 @@ function acceptedResult(run: ApplyRun, rawResult: unknown): LocalApplyResultEnve
 	const checked = parseLocalApplyResult(rawResult);
 	if ("error" in checked || checked.result.runId !== run.id) return null;
 	let r = checked.result;
+	if (r.outcome === "submitted" && r.submissionVerification === "unverified") r = { ...r, outcome: "blocked", blockReason: "submit_unconfirmed", submitted: undefined, questions: ["The runner cannot verify this submission. Check the employer site before retrying or submitting again."] };
+
 	// A submit PAGS did not gate is not a submission PAGS records — whatever the runner says.
 	if (r.outcome === "submitted" && (run.policy.mode !== "auto_submit" || r.submitted?.gateId !== run.policy.gate.gateId)) {
 		r = { ...r, outcome: "blocked", blockReason: "submit_unconfirmed", questions: ["The runner reported a submission this run's policy did not permit. Check the employer's site before anything else is done."], submitted: undefined };
 	}
+	if (run.policy.toolAccess === "full" && r.outcome !== "submitted") r = { ...r, submissionVerification: "unverified" };
 	return r;
 }
 
@@ -559,7 +565,7 @@ async function askForApprovalIfWaiting(env: Env, uid: string, run: ApplyRun): Pr
 			title: `Approve to send: ${role}${company}`.slice(0, 120),
 			// The owner's own sentence from the run. Marked rather than head-cut (#898): a shortened
 			// question read as complete is how a person decides on half a condition.
-			body: clipMarked(app.blockQuestions?.[0] ?? "This application is filled and waiting for your decision; nothing has been sent.", 300, { within: true }),
+			body: clipMarked(run.policy.toolAccess === "full" ? "The full-access browser run ended. Submission status is unverified; check the employer site before authorizing another attempt." : app.blockQuestions?.[0] ?? "This application is filled and waiting for your decision; nothing has been sent.", 300, { within: true }),
 		},
 		attentionDeps,
 	);
@@ -933,13 +939,15 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		await noteQueued(env, "local_apply_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
 		return "queued";
 	}
-	const contractProblem = escalationRunnerProblem(run.policy, runtime.runner_version) ?? browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const contractProblem = toolAccessRunnerProblem(run.policy, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(run.policy, runtime.runner_version) ?? browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) {
 		await noteQueued(env, "local_apply_runs", run.id, contractProblem, now);
 		return "queued";
 	}
 	const s = await runnerSettingsFor(env, instanceId, uid).catch(() => null);
 	if (!s) return "queued";
+	const accessProblem = queuedToolAccessProblem(run.policy, s);
+	if (accessProblem) { await noteQueued(env, "local_apply_runs", run.id, accessProblem, now); return "queued"; }
 	let cloudDocuments: LocalApplyTaskEnvelope["cloudDocuments"];
 	try { cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version); }
 	catch { await noteQueued(env, "local_apply_runs", run.id, "Prepared PAGS documents are unavailable or the runner needs updating. No browser action was dispatched.", now); return "queued"; }

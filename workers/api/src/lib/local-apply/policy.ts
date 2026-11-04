@@ -17,6 +17,8 @@
  * A failed gate never blocks the application: it runs fill-and-review, and the verdict — with
  * each failing check — is on the run's trace.
  */
+import { parseToolAccessAcceptance } from "./tool-access.js";
+import { LOCAL_APPLY_TOOL_ACCESS_MODES, type LocalApplyToolAccess, type LocalApplyToolAccessAcceptance } from "./contract.js";
 import { domainWithin, normalizeDomain } from "../local-browser/policy.js";
 import { APPROVAL_SATISFIES } from "./approval.js";
 import { LOCAL_APPLY_AUTH_MODES, LOCAL_APPLY_ENGINES, LOCAL_APPLY_ESCALATION_LEVELS, type LocalApplyEscalationLevel, type LocalApplyAuthMode, type LocalApplyEngine, type LocalApplyProfile } from "./contract.js";
@@ -43,6 +45,8 @@ export interface AutoSubmitPolicy {
 }
 
 export interface ApplicationRunnerSettings {
+	toolAccess: LocalApplyToolAccess;
+	toolAccessAcceptance: LocalApplyToolAccessAcceptance | null;
 	/** Which model-assessed decisions need owner review; never grants submission permission. */
 	escalationLevel: LocalApplyEscalationLevel;
 	engine: LocalApplyEngine;
@@ -76,6 +80,8 @@ export interface ApplicationRunnerSettings {
 }
 
 export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
+	toolAccess: "guarded",
+	toolAccessAcceptance: null,
 	escalationLevel: "conservative",
 	engine: "claude",
 	model: null,
@@ -106,6 +112,16 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 	if (!patch || typeof patch !== "object" || Array.isArray(patch)) return { error: "settings must be an object" };
 	const p = patch as Record<string, unknown>;
 	const next: ApplicationRunnerSettings = { ...current, sources: { ...current.sources }, autoSubmit: { ...current.autoSubmit } };
+	if (p.toolAccess !== undefined) {
+		if (!LOCAL_APPLY_TOOL_ACCESS_MODES.includes(p.toolAccess as LocalApplyToolAccess)) return { error: "toolAccess must be guarded or full" };
+		next.toolAccess = p.toolAccess as LocalApplyToolAccess;
+	}
+	if (p.toolAccessAcceptance !== undefined) {
+		const receipt = parseToolAccessAcceptance(p.toolAccessAcceptance);
+		if (p.toolAccessAcceptance !== null && !receipt) return { error: "toolAccessAcceptance is invalid or uses an unsupported revision" };
+		next.toolAccessAcceptance = receipt;
+	}
+	if (next.toolAccess !== "full") next.toolAccessAcceptance = null;
 	if (p.escalationLevel !== undefined) {
 		if (!LOCAL_APPLY_ESCALATION_LEVELS.includes(p.escalationLevel as LocalApplyEscalationLevel)) return { error: `escalationLevel must be one of ${LOCAL_APPLY_ESCALATION_LEVELS.join(", ")}` };
 		next.escalationLevel = p.escalationLevel as LocalApplyEscalationLevel;

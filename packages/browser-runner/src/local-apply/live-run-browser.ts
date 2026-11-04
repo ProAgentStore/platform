@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { launchRunnerBrowser, type BrowserLaunchOptions, type BrowserLaunchReceipt } from "../browser-launch.js";
 import type { BrowserContext, Page } from "playwright";
@@ -120,7 +120,17 @@ export function createRunnerBrowserFactories(options: {
 	const browserFor = async (profile: LocalApplyProfile, runDir: string): Promise<RunBrowser> => {
 		if (profile === "default") {
 			const tools = await options.defaultTools();
-			return { tools, secrets: tools, handoffPage: options.sharedPage, stop: async () => undefined };
+			// A borrowed cached context starts and ends with the ordinary tool configuration.
+			// Full capability roots and tabs belong to the lease, not to the next workflow.
+			if (tools.configureToolAccess) mkdirSync(runDir, { recursive: true, mode: 0o700 });
+			await tools.configureToolAccess?.("guarded", runDir);
+			tools.setCallPolicy?.({}); tools.setSubject?.(null); tools.clearSecrets();
+			let stopped = false;
+			return { tools, secrets: tools, handoffPage: options.sharedPage, stop: async () => {
+				if (stopped) return; stopped = true; tools.clearSecrets();
+				try { await tools.configureToolAccess?.("guarded", runDir); }
+				finally { tools.setCallPolicy?.({}); tools.setSubject?.(null); }
+			} };
 		}
 		// A throwaway browser for this run alone (#1419): a fresh temp dir, launched and attached
 		// directly to MCP like the persistent `isolated` profile above, deleted on stop — never

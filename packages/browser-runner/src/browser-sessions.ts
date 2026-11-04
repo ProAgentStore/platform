@@ -107,7 +107,15 @@ export class BrowserSessions {
 			}
 
 			let stopped = false;
-			return { ...browser, stop: async () => { if (stopped) return; stopped = true; try { await browser.stop(); } finally { state.leases--; } } };
+			return { ...browser, stop: async () => {
+				if (stopped) return; stopped = true;
+				try { await browser.stop(); }
+				catch (error) {
+					// A failed borrowed-runtime reset must not leave a dead/full cached client for the next task.
+					if (state.mcp === browser.tools) await this.closeSession(state).catch(() => undefined);
+					throw error;
+				} finally { state.leases--; }
+			} };
 		} catch (error) { state.leases--; throw error; }
 	}
 

@@ -57,6 +57,20 @@ const env = () => ({
 }) as never;
 
 describe("Application Runner cloud brain", () => {
+	it("explains full native evidence limits without claiming routine tools cannot submit", async () => {
+		runUserWorkersAi.mockClear();
+		runUserWorkersAi.mockResolvedValueOnce({ tool_calls: [{ name: "decide_application_checkpoint", arguments: { directive: "continue" } }] });
+		const full = run(); full.policy.toolAccess = "full";
+		await decideApplicationCheckpoint(env(), "u1", full, checkpoint("before_submit"));
+		const body = runUserWorkersAi.mock.calls[0][3] as { messages: Array<{ content: string }> };
+		const supplied = JSON.parse(body.messages[1].content);
+		expect(supplied.policy.toolAccess).toBe("full");
+		expect(supplied.evidenceLimits).toContain("Zero tracked fills is not proof of an empty form");
+		expect(decideCheckpoint(full, checkpoint("initial"), null).reason).toBe("routine_checkpoint_full_access");
+		full.policy.mode = "fill_and_review";
+		expect(decideCheckpoint(full, checkpoint("before_submit"), "continue")).toMatchObject({ directive: "request_review", reason: "submission_authorization_required" });
+		runUserWorkersAi.mockClear();
+	});
 	it("uses the Runner instance's selected brain and exposes only bounded checkpoint facts", async () => {
 		runUserWorkersAi.mockResolvedValueOnce({ tool_calls: [{ name: "decide_application_checkpoint", arguments: { directive: "continue" } }] });
 		await expect(decideApplicationCheckpoint(env(), "u1", run(), checkpoint())).resolves.toMatchObject({ directive: "continue" });

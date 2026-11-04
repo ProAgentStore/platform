@@ -25,6 +25,10 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - Keep escalation as frozen per-instance configuration. Model-assessed risk controls owner takeover;
   source identity and submission authorization remain independent. Do not classify page wording in code.
 
+- Full browser access is an explicit owner-accepted mode. Preserve native tool schemas and
+  disclose unsafe-code limits; never claim sandboxing or reliable no-submit enforcement from it.
+  Keep dispatch Stop, source identity and credential-broker checks, and label unverifiable outcomes.
+
 ## Completion Bar
 
 Development work is not complete until:

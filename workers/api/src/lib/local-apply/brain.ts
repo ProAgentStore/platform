@@ -60,6 +60,8 @@ export type DirectiveReason =
 	| "fill_and_review_never_submits"
 	| "no_submit_authorization"
 	| "routine_checkpoint_cannot_submit"
+	| "routine_checkpoint_full_access"
+	| "submission_authorization_required"
 	| "unknown_phase_needs_review"
 	| "brain_unavailable"
 	| "brain_decision"
@@ -108,10 +110,10 @@ export function decideCheckpoint(run: ApplyRun, checkpoint: SupervisorCheckpoint
 	});
 	if (checkpoint.facts.blockers.length) return policy("stop", "blocker");
 	// The local bridge independently refuses the click; this turns it into the correct outcome.
-	if (phase === "before_submit" && run.policy.mode !== "auto_submit") return policy("request_review", "fill_and_review_never_submits");
+	if (phase === "before_submit" && run.policy.mode !== "auto_submit") return policy("request_review", run.policy.toolAccess === "full" ? "submission_authorization_required" : "fill_and_review_never_submits");
 	if (phase === "before_submit" && (!run.policy.gate.allowed || !run.policy.gate.gateId)) return policy("request_review", "no_submit_authorization");
 	// #982: routine, non-final, nothing wrong — continue, and say that the platform decided it.
-	if (ROUTINE_PHASES.has(phase)) return policy("continue", "routine_checkpoint_cannot_submit");
+	if (ROUTINE_PHASES.has(phase)) return policy("continue", run.policy.toolAccess === "full" ? "routine_checkpoint_full_access" : "routine_checkpoint_cannot_submit");
 	if (phase === "uncertain") {
 		const decision = parseDecisionAssessment(checkpoint.facts.decision);
 		if (!decision) return policy("request_review", "unknown_phase_needs_review");
@@ -164,7 +166,8 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 					{
 						role: "user",
 						content: JSON.stringify({
-							policy: { escalationLevel: run.policy.escalationLevel ?? "conservative", mode: run.policy.mode, submitGateAllowed: run.policy.gate.allowed, hasSubmitGate: !!run.policy.gate.gateId },
+							policy: { toolAccess: run.policy.toolAccess ?? "guarded", escalationLevel: run.policy.escalationLevel ?? "conservative", mode: run.policy.mode, submitGateAllowed: run.policy.gate.allowed, hasSubmitGate: !!run.policy.gate.gateId },
+							...(run.policy.toolAccess === "full" ? { evidenceLimits: "Full native browser tools may have effects outside supervised action counters. Zero tracked fills is not proof of an empty form, and no tracked submit is not proof that nothing was submitted. Acceptance does not authorize intentional submission; respect the separate submit gate." } : {}),
 							checkpoint: { schemaVersion: checkpoint.schemaVersion, checkpointId: checkpoint.checkpointId, facts: checkpoint.facts },
 						}),
 					},

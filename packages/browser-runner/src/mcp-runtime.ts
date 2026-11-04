@@ -3,6 +3,12 @@ import { accessibleTargetRefusal, type ExpectedAccessibility } from "./native-ac
 import { BrowserStateSampler } from "./browser-state.js";
 import type { BrowserStateObservation, BrowserStateSnapshot } from "./browser-state-contract.js";
 import { createConnection } from "@playwright/mcp";
+import { NativeTabRegistry } from "./native-tab-registry.js";
+import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { pathToFileURL } from "node:url";
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
+import { FULL_PLAYWRIGHT_CAPABILITIES, unsafeNativeTool } from "./native-tool-access.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -56,10 +62,23 @@ export class McpRuntime {
 	private server?: Server;
 	private client?: Client;
 	private context?: BrowserContext;
+	private readonly tabs = new NativeTabRegistry(
+		page => { this.uploads.track(page); this.onPageSelected?.(page); },
+		(page, replacement) => {
+			if (this.toolAccess !== "full" || this.policy.toolAccess !== "full") return;
+			const active = this.activePage?.();
+			if (this.selectedPage === page) this.selectedPage = replacement;
+			if ((!active || active === page) && replacement) this.onPageSelected?.(replacement);
+		},
+	);
 	private selectedPage?: Page;
 	private activePage?: () => Page | null;
 	private onPageSelected?: (page: Page) => void;
 	private policy: McpCallPolicy = {};
+	private startOptions?: McpRuntimeOptions;
+	private toolAccess: "guarded" | "full" = "guarded";
+	private guardedToolNames = new Set<string>();
+	private runDir?: string;
 	private readonly uploads = new UploadVerifier();
 	private readonly stateSampler = new BrowserStateSampler(() => Object.values(this.diagnosticSecrets));
 	setCallPolicy(policy: McpCallPolicy): void { this.policy = policy; }
@@ -68,7 +87,7 @@ export class McpRuntime {
 	trackUploadPage(page: Page): void { this.uploads.track(page); }
 	chooserId(chooser: FileChooser): string | null { return this.uploads.chooserId(chooser); }
 	uploadContext(): { page: object; chooserId: string | null } | null {
-		const page = this.activePage?.() ?? this.selectedPage ?? this.context?.pages().at(-1);
+		const page = this.activePage?.() ?? this.selectedPage ?? this.tabs.pages().at(-1);
 		return page && !page.isClosed() ? { page, chooserId: this.uploads.pendingId(page) } : null;
 	}
 
@@ -80,7 +99,7 @@ export class McpRuntime {
 			const listed = await this.callTool("browser_tabs", { action: "list" }, { internal: true });
 			if (listed.isError) throw new Error("Could not initialize the browser's tab registry.");
 		}
-		const index = this.context?.pages().indexOf(page) ?? -1;
+		const index = this.tabs.pages().indexOf(page) ?? -1;
 		if (index < 0) throw new Error("Browser page is no longer owned by this runtime.");
 		const result = await this.callTool("browser_tabs", { action: "select", index }, { internal: true });
 		if (result.isError) throw new Error("Could not select the browser's active page.");
@@ -124,19 +143,43 @@ export class McpRuntime {
 		this.subject = subject;
 	}
 
+	/** Trusted run setup, before the engine receives any tools; never selected by model arguments. */
+	async configureToolAccess(mode: "guarded" | "full", runDir: string): Promise<void> {
+		const opts = this.startOptions;
+		if (!opts) throw new Error("MCP runtime must be started before configuring run tool access.");
+		if (mode === "full" && !opts.context) throw new Error("Full Playwright access requires a runner-owned native browser context for exact tab ownership.");
+		const root = await realpath(runDir);
+		if (mode === this.toolAccess && this.runDir === root && this.tabs.healthy()) return;
+		await this.tabs.closeIsolated();
+		await withTimeout(this.client?.close(), 20_000);
+		await withTimeout(this.server?.close(), 20_000);
+		this.client = undefined;
+		this.server = undefined;
+		this.selectedPage = undefined;
+		this.toolAccess = mode;
+		this.runDir = root;
+		await this.start(opts);
+		if (!this.activePage?.()) {
+			const page = this.context?.pages().at(-1);
+			if (page) this.onPageSelected?.(page);
+		}
+	}
+
 	async start(opts: McpRuntimeOptions): Promise<void> {
 		if (this.client) return;
 		if ((!opts.context && !opts.cdpEndpoint) || (opts.context && opts.cdpEndpoint)) throw new Error("MCP needs exactly one caller-owned browser context or CDP endpoint.");
+		this.startOptions = opts;
 		this.context = opts.context;
+		this.tabs.reset(opts.context);
 		this.activePage = opts.activePage;
 		this.onPageSelected = opts.onPageSelected;
-		// The runner is a trusted local process uploading the user's OWN résumé, which
-		// lives under the runner's data dir (outside the CWD). Lift the file-root guard
-		// (meant to stop an LLM reading arbitrary host files) so browser_file_upload can
-		// attach it — the runner, not the model, chooses the path.
+		// Guarded callers select approved paths outside CWD. Full mode instead roots
+		// ordinary native file tools in the prepared run directory. Neither roots nor
+		// this adapter sandbox accepted arbitrary code execution.
 		this.server = await createConnection({
 			...(opts.context ? {} : { browser: { cdpEndpoint: opts.cdpEndpoint } }),
-			allowUnrestrictedFileAccess: true,
+			allowUnrestrictedFileAccess: this.toolAccess !== "full",
+			...(this.toolAccess === "full" ? { capabilities: [...FULL_PLAYWRIGHT_CAPABILITIES], outputDir: this.runDir } : {}),
 			secrets: this.secrets,
 			// The caller controls browser lifetime, including a paused owner takeover.
 			timeouts: { idle: 0 },
@@ -154,8 +197,10 @@ export class McpRuntime {
 		}, opts.context ? async () => opts.context : undefined);
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		await this.server.connect(serverTransport);
-		this.client = new Client({ name: "pags-runner", version: "1.0.0" });
+		this.client = new Client({ name: "pags-runner", version: "1.0.0" }, this.runDir ? { capabilities: { roots: {} } } : undefined);
+		if (this.runDir) this.client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(this.runDir!).href, name: "run" }] }));
 		await this.client.connect(clientTransport);
+		if (this.toolAccess === "guarded") this.guardedToolNames = new Set((await this.client.listTools()).tools.map(tool => tool.name));
 	}
 
 	/**
@@ -173,7 +218,7 @@ export class McpRuntime {
 	/** The standard Playwright MCP tool schemas — advertised to the cloud brain verbatim. */
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
 		const res = await this.connected().listTools();
-		return res.tools.filter((tool) => tool.name !== "browser_evaluate" && tool.name !== "browser_run_code") as Array<{ name: string; description?: string; inputSchema: unknown }>;
+		return res.tools.filter((tool) => (this.toolAccess === "full" && this.policy.toolAccess === "full") || (this.guardedToolNames.has(tool.name) && !unsafeNativeTool(tool.name))) as Array<{ name: string; description?: string; inputSchema: unknown }>;
 	}
 
 	private async probe<T>(args: Record<string, unknown>): Promise<T | null> {
@@ -196,7 +241,7 @@ export class McpRuntime {
 		const state = () => version === this.subjectVersion ? this.captureState(subject) : undefined;
 		try {
 			const result = await this.dispatchTool(name, args, opts);
-			try { if (version === this.subjectVersion) this.stateSampler.observe(this.textOf(result), this.context, this.selectedPage); } catch { /* Observability cannot fail the browser action. */ }
+			try { if (version === this.subjectVersion) this.stateSampler.observe(this.textOf(result), this.tabs, this.selectedPage); } catch { /* Observability cannot fail the browser action. */ }
 			this.calls.record({ subject, tool: name, args, secrets: secrets(), startedAt, outcome: result[REFUSED_CALL] ? "refused" : result.isError ? "tool_error" : "ok", ...(result.isError ? { errorHead: this.textOf(result) } : {}), internal: opts.internal ?? false, browserState: state() });
 			return result;
 		} catch (error) {
@@ -208,7 +253,7 @@ export class McpRuntime {
 		if (!subject || this.subject?.kind !== subject.kind || this.subject.id !== subject.id || !this.client || !this.context) return undefined;
 		try {
 		const active = this.activePage ? this.activePage() : this.selectedPage;
-		const state = this.stateSampler.sample(this.context, active, this.selectedPage, this.uploads.pendingId(active ?? undefined));
+		const state = this.stateSampler.sample(this.tabs, active, this.selectedPage, this.uploads.pendingId(active ?? undefined));
 		this.calls.rememberState(subject, state);
 		return state;
 		} catch { return undefined; }
@@ -221,7 +266,8 @@ export class McpRuntime {
 		const client = this.connected();
 		const cancelled = () => this.policy.isCancelled?.() ? "BLOCKED by the runner — this task was stopped; no further browser action is permitted." : null;
 		let refusal = cancelled();
-		const currentPage = () => this.activePage?.() ?? this.selectedPage ?? this.context?.pages().at(-1);
+		if (!refusal && !opts.internal && this.toolAccess === "full" && this.policy.toolAccess !== "full" && !this.guardedToolNames.has(name)) refusal = "This native tool requires the current run to have accepted Full Playwright access.";
+		const currentPage = () => this.activePage?.() ?? this.selectedPage ?? this.tabs.pages().at(-1);
 		const pageBefore = currentPage();
 		if (pageBefore) this.uploads.track(pageBefore);
 		if (!refusal && name !== "browser_navigate" && name !== "browser_tabs" && pageBefore) refusal = navigationRefusal(pageBefore.url());
@@ -230,7 +276,7 @@ export class McpRuntime {
 			if (!page || page.isClosed()) refusal = "BLOCKED by the runner — the run's active page is no longer available.";
 			else await this.selectPage(page);
 		}
-		if (!refusal) refusal = await guardedToolRefusal(name, args, this.policy.guard, (probeArgs) => this.probe(probeArgs), opts.internal ?? false);
+		if (!refusal) refusal = await guardedToolRefusal(name, args, this.policy.guard, (probeArgs) => this.probe(probeArgs), opts.internal ?? false, this.toolAccess === "full" && this.policy.toolAccess === "full");
 		const fields = name === "browser_fill_form" && Array.isArray(args.fields) ? args.fields as Record<string, unknown>[] : [];
 		const secretEntry = (name === "browser_type" && typeof args.text === "string" && !!this.secrets[args.text]) || fields.some((field) => typeof field.value === "string" && !!this.secrets[field.value]);
 		if (!refusal && secretEntry && !opts.expectedOrigin) refusal = "BLOCKED by the runner — credential entry requires a runner-bound sign-in origin.";
@@ -242,18 +288,25 @@ export class McpRuntime {
 				const targetOrigin = await this.probe<string>({ target, element: "sign-in control", function: "el => el.ownerDocument.location.origin" });
 				if (targetOrigin !== opts.expectedOrigin) refusal = "BLOCKED by the runner — the sign-in control changed origin before credential entry.";
 			}
-			const page = this.selectedPage ?? this.context?.pages().at(-1);
+			const page = this.selectedPage ?? this.tabs.pages().at(-1);
 			let origin: string | undefined;
 			try { origin = page && !page.isClosed() ? new URL(page.url()).origin : undefined; } catch { /* Unknown means refused. */ }
 			if (origin !== opts.expectedOrigin) refusal = "BLOCKED by the runner — the sign-in page changed origin before credential entry.";
 		}
 		if (!refusal && opts.expectedAccessibility) refusal = name === "browser_click" ? await accessibleTargetRefusal(currentPage, args.target ?? args.ref, opts.expectedAccessibility) : "An accessibility-bound answer must use browser_click.";
+		if (!refusal && this.toolAccess === "full" && (name === "browser_file_upload" || name === "browser_drop") && Array.isArray(args.paths) && args.paths.length) {
+			try {
+				const approved = await Promise.all((this.policy.approvedUploadPaths?.() ?? []).map(path => realpath(path)));
+				const paths = await Promise.all((args.paths as string[]).map(path => realpath(resolve(this.runDir!, path))));
+				if (paths.some(path => !approved.includes(path))) refusal = "Only this run's approved, verified documents may be selected by the native upload tool.";
+			} catch { refusal = "The approved document identity could not be verified; no upload was dispatched."; }
+		}
 		let upload: PreparedUpload | undefined;
 		try {
 			if (!refusal && name === "browser_file_upload") {
 				if (Array.isArray(args.paths) && args.paths.length && args.paths.every((path) => typeof path === "string")) {
-					upload = await this.uploads.prepare(currentPage(), args.paths as string[]);
-					refusal = upload.error ?? null;
+					if (!refusal) upload = await this.uploads.prepare(currentPage(), (args.paths as string[]).map((path) => this.toolAccess === "full" ? resolve(this.runDir!, path) : path));
+					refusal ??= upload?.error ?? null;
 				} else if (pageBefore) this.uploads.clear(pageBefore);
 			}
 			if (!refusal && name === "browser_navigate" && this.pendingUploadId()) refusal = "A verified file chooser is still open. No navigation was dispatched. Upload the approved artifact first, or explicitly cancel the chooser with browser_file_upload and no paths before navigating.";
@@ -261,7 +314,7 @@ export class McpRuntime {
 			// The current native URL and live per-run allowlist decide at the actual dispatch boundary.
 			let websiteBlock: WebsiteAccessBlock | null = null;
 			const websitePolicy = this.policy.websiteAccess?.();
-			const websiteUrl = () => name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined) ? String(args.url ?? "") : name === "browser_tabs" && args.action === "select" && typeof args.index === "number" ? this.context?.pages()[args.index]?.url() ?? "" : currentPage()?.url() ?? "";
+			const websiteUrl = () => name === "browser_navigate" || (name === "browser_tabs" && args.action === "new" && args.url !== undefined) ? String(args.url ?? "") : name === "browser_tabs" && args.action === "select" && typeof args.index === "number" ? this.tabs.pages()[args.index]?.url() ?? "" : currentPage()?.url() ?? "";
 			const inspectWebsite = !opts.internal && (name !== "browser_tabs" || args.action === "new" || args.action === "select");
 			if (!refusal && websitePolicy && inspectWebsite) {
 				websiteBlock = websiteAccessBlock(websitePolicy, websiteUrl());
@@ -293,17 +346,33 @@ export class McpRuntime {
 			if (refusal) {
 				return { [REFUSED_CALL]: true, isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
 			}
+			const beforeNew = name === "browser_tabs" && args.action === "new" ? this.tabs.beforeNew() : undefined;
+			const selectedIndexBefore = this.tabs.pages().indexOf(this.selectedPage!) ?? -1;
 			const dispatch = async () => (await client.callTool({ name, arguments: args })) as McpToolResult;
 			let res = opts.expectedAccessibility?.role === "combobox" ? await observeControlOpening(currentPage(), currentPage, dispatch) : await dispatch();
 			if (!res.isError && upload?.verify) {
 				const checked = await upload.verify();
 				res = { ...res, ...(checked.error ? { isError: true } : {}), ...(checked.selection ? { uploadSelection: checked.selection } : {}), content: [{ type: "text", text: checked.error ?? `Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback. Native selection receipt: ${JSON.stringify(checked.selection)}` }, ...res.content] };
 			}
-			if (!res.isError && name === "browser_tabs") {
-				if (args.action === "select" && typeof args.index === "number") this.selectedPage = this.context?.pages()[args.index];
-				else if (args.action === "new") this.selectedPage = this.context?.pages().at(-1);
-				else if (args.action === "close" && this.selectedPage?.isClosed()) this.selectedPage = undefined;
-				if (this.selectedPage && (args.action === "select" || args.action === "new")) this.onPageSelected?.(this.selectedPage);
+			if (name === "browser_tabs") {
+				if (!res.isError && args.action === "select" && typeof args.index === "number") this.selectedPage = this.tabs.pages()[args.index];
+				else if (args.action === "new" && beforeNew) this.selectedPage = this.tabs.finishNew(args.isolatedContext, beforeNew) ?? this.selectedPage;
+				else if (args.action === "close" && this.selectedPage?.isClosed()) {
+					const pages = this.tabs.pages() ?? [];
+					this.selectedPage = pages[Math.min(Math.max(0, selectedIndexBefore), pages.length - 1)];
+				}
+				if (this.selectedPage && (args.action === "select" || args.action === "new" || args.action === "close")) this.onPageSelected?.(this.selectedPage);
+			}
+			// Upstream close disposes its tab registry, but this injected default context
+			// belongs to the caller. Reinitialize native tab identity before another action.
+			if (!res.isError && name === "browser_close") {
+				// Upstream marks its backend permanently disposed. Reusing that backend
+				// would leave subsequently created isolated contexts outside its cleanup.
+				const startOptions = this.startOptions!;
+				await withTimeout(this.client?.close(), 20_000);
+				await withTimeout(this.server?.close(), 20_000);
+				this.client = undefined; this.server = undefined; this.selectedPage = undefined;
+				await this.start(startOptions);
 			}
 			// Back, a link or a popup can navigate without browser_navigate. Never return a
 			// snapshot from a local/internal page even if an already-open tab reached one.
@@ -346,6 +415,7 @@ export class McpRuntime {
 
 	async stop(): Promise<void> {
 		this.subjectVersion++;
+		await this.tabs.closeIsolated();
 		this.uploads.stop();
 		// Bounded. Closing a persistent context flushes the whole profile to disk and
 		// on a cold/slow machine that measurably exceeds 10s — and a browser wedged
@@ -357,10 +427,14 @@ export class McpRuntime {
 		this.client = undefined;
 		this.server = undefined;
 		this.context = undefined;
+		this.tabs.reset();
 		this.selectedPage = undefined;
 		this.activePage = undefined;
 		this.onPageSelected = undefined;
 		this.policy = {};
+		this.startOptions = undefined;
+		this.toolAccess = "guarded";
+		this.runDir = undefined;
 		for (const name of Object.keys(this.diagnosticSecrets)) delete this.diagnosticSecrets[name];
 	}
 }

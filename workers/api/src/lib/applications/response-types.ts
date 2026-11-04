@@ -29,6 +29,8 @@ export interface ApplicationQueueItem {
 	profileVersion: string | null;
 	tailoringRunId: string | null;
 	fillRunId: string | null;
+	toolAccess?: "guarded" | "full";
+	submissionVerification?: "unverified";
 	fillRun: { id: string; status: string; mode: string | null; pause: { reason: string; url?: string; domain?: string; question?: string } | null } | null;
 	submittedAt: string | null;
 	submittedUrl: string | null;
