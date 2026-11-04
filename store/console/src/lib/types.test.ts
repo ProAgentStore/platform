@@ -358,6 +358,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 });
 
 // The exact-item endpoint omits the lookup's internal pipeline metadata.
-type WorkerApplicationQueueItemResponse = Pick<Awaited<ReturnType<typeof import("../../../../workers/api/src/lib/applications/control").getQueueItem>>, "item">;
+type WorkerApplicationQueueItemResponse = import("../../../../workers/api/src/lib/applications/response-types").ApplicationQueueItemResponse;
 const _exactApplicationHasNoInventedFields: Extra<ApplicationQueueItemResponse, WorkerApplicationQueueItemResponse> extends never ? true : never = true;
 const _exactApplicationAcceptsTheProducer: ApplicationQueueItemResponse = {} as WorkerApplicationQueueItemResponse;
+
+const _exactApplicationItemHasNoInventedFields: Extra<ApplicationQueueItem, WorkerApplicationQueueItemResponse["item"]> extends never ? true : never = true;

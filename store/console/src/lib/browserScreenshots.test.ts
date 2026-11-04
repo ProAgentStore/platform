@@ -41,12 +41,12 @@ describe("the replay's empty state for a run started with screenshots OFF", () =
 	it.each([
 		["pages/RunDetail.tsx", "screenshotsOff ? SCREENSHOTS_OFF_TEXT :"],
 		["tabs/research/ResearchRunView.tsx", "(frames.length > 0 || screenshotsOff) && <RunReplay frames={frames} emptyText={SCREENSHOTS_OFF_TEXT} />"],
-		["tabs/ApplicationsTab.tsx", "(frames.length > 0 || screenshotsOff) && ("],
 	])("%s shows it from the run's own record", (file, wiring) => {
 		const src = read(file);
 		expect(src).toContain("const { artifacts, screenshotsOff } = useBrowserArtifacts(");
 		expect(src).toContain(wiring);
 	});
+	// Application off/on empty states are exercised through the real page in e2e/application-replay.spec.ts.
 
 	it("the flag comes from the server's list response, never inferred from an empty list", () => {
 		expect(read("components/RunReplay.tsx")).toContain("screenshotsOff: r.screenshotsOff === true");

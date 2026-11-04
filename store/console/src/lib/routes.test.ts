@@ -22,6 +22,14 @@ describe("the table is the app's, not a copy of it", () => {
 });
 
 describe("checkConsoleLink", () => {
+	it("routes an application to its dedicated page while preserving the queue and rejecting extra segments", () => {
+		for (const url of [
+			"/console/instances/i1/applications/app_1",
+			"/console/instances/i1/applications/app%2F1?handoff=handoff_1",
+		]) expect(checkConsoleLink(url)).toEqual({ ok: true, route: "instances/:id/applications/:applicationId" });
+		expect(checkConsoleLink("/console/instances/i1/applications")).toEqual({ ok: true, route: "instances/:id/*" });
+		expect(checkConsoleLink("/console/instances/i1/applications/app_1/extra").ok).toBe(false);
+	});
 	it("routes website questions to their dedicated page and rejects incomplete or extra segments", () => {
 		expect(checkConsoleLink("/console/instances/i1/website-requests/question_1")).toEqual({ ok: true, route: "instances/:id/website-requests/:requestId" });
 		expect(checkConsoleLink("/console/instances/i1/website-requests").ok).toBe(false);

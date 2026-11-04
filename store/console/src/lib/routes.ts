@@ -30,6 +30,7 @@ export const CONSOLE_ROUTES = [
 	"agents/:id",
 	"agents/:id/:tab",
 	"instances",
+	"instances/:id/applications/:applicationId",
 	"instances/:id/tasks/:taskId",
 	"instances/:id/secure-inputs/:requestId",
 	"instances/:id/website-requests/:requestId",

@@ -15,7 +15,7 @@ const application = {
 	execution: null, diagnostic: null, queue: null, submitAuthorization: null, updatedAt: "2026-11-03T11:00:00Z", actions: [],
 };
 
-async function mockReplay(page: Page, options: { missing?: number; longUrl?: boolean; livePause?: boolean; liveUpdates?: boolean } = {}) {
+async function mockReplay(page: Page, options: { missing?: number; longUrl?: boolean; livePause?: boolean; liveUpdates?: boolean; screenshotsOff?: boolean; emptyFrames?: boolean } = {}) {
 	await page.addInitScript(() => window.localStorage.setItem("pags:session", "test-pags-token"));
 	const item = options.livePause ? { ...application, fillRun: { id: "run-1", status: "paused", mode: "dry_run", pause: { reason: "login_required", url: LOGIN_URL } }, actions: ["resume"] } : application;
 	const jobUrl = options.longUrl ? `https://jobs.example.com/${"long-path-segment".repeat(18)}` : JOB_URL;
@@ -39,7 +39,7 @@ async function mockReplay(page: Page, options: { missing?: number; longUrl?: boo
 		if (path === "/v1/instances/runner-1/application-queue/item") return json({ item });
 		if (path === "/v1/instances/runner-1/application-queue") return json({ pipeline: { scouts: [], tailors: [], runners: [] }, items: [item], counts: { blocked: 1 }, limits: [], connections: [], notes: [] });
 		if (path === "/v1/instances/runner-1/application-queue/app-1/trace") return json({ applicationId: "app-1", correlation: {}, entries: options.liveUpdates && ++traceReads > 1 ? [...entries, { at: "2026-11-03T10:47:00Z", source: "runner", type: "field.filled", detail: { target: "Email" } }] : entries });
-		if (path === "/v1/instances/runner-1/browser-artifacts") return json({ subjectKind: "local_apply_run", subjectId: "run-1", artifacts: options.liveUpdates && ++artifactReads === 1 ? frames.filter((frame) => frame.seq < 3) : frames, screenshotsOff: false });
+		if (path === "/v1/instances/runner-1/browser-artifacts") return json({ subjectKind: "local_apply_run", subjectId: "run-1", artifacts: options.screenshotsOff || options.emptyFrames ? [] : options.liveUpdates && ++artifactReads === 1 ? frames.filter((frame) => frame.seq < 3) : frames, screenshotsOff: options.screenshotsOff === true });
 		const frame = path.match(/\/browser-artifacts\/frame-(\d)$/);
 		if (frame) {
 			const seq = Number(frame[1]);
@@ -144,4 +144,22 @@ test("standalone detail refreshes live steps and screenshots without a state-ver
 	await replay.getByRole("slider", { name: "Frame" }).fill("2");
 	expect(await renderedPixel(replay.getByRole("img"))).toEqual([0, 0, 255, 255]);
 	await expect(page.getByRole("group", { name: "Filter by status" })).toHaveCount(0);
+});
+
+
+test("standalone replay shows the run's recorded screenshots-off setting", async ({ page }) => {
+	let imageRequests = 0;
+	page.on("request", (request) => { if (/\/browser-artifacts\/frame-/.test(request.url())) imageRequests++; });
+	await mockReplay(page, { screenshotsOff: true });
+	await expect(page.getByTestId("replay-empty")).toContainText("Screenshots were off for this run");
+	await expect(page.getByTestId("replay-empty")).toContainText("Turn it on in Settings");
+	await expect(page.getByRole("slider", { name: "Frame" })).toHaveCount(0);
+	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Allowed click “Apply”");
+	expect(imageRequests).toBe(0);
+});
+
+test("standalone replay does not infer screenshots-off from an empty artifact list", async ({ page }) => {
+	await mockReplay(page, { emptyFrames: true });
+	await expect(page.getByTestId("replay-empty")).toContainText("No screenshots captured yet");
+	await expect(page.getByTestId("replay-empty")).not.toContainText("Screenshots were off");
 });

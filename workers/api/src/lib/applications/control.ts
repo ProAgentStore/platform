@@ -37,12 +37,12 @@ import { approveAndContinue, approveContinueResult, isPostFillApproval } from ".
 import { traceUrl } from "../local-apply/contract.js";
 import type { FillProgress } from "./fill-progress.js";
 import { projectApplicationExecution, type ApplicationExecutionProjection } from "./execution-projection.js";
-import { type FillViews, NO_FILL_VIEWS, type RunDiagnostic, readFillViews } from "./fill-views.js";
+import { type FillViews, NO_FILL_VIEWS, readFillViews } from "./fill-views.js";
 import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
 import { approvalRuns } from "./approval-runs.js";
 import { canRegenerateMissingMaterials } from "./material-recovery.js";
 import { pipelineForTargetedTransfer } from "./targeted-transfer-runner.js";
-import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
+import { queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
 import { type ApplyRun, type ApplyRunStatus, applicationAudit, getApplyRun, isTerminalApplyRun, moveApplication } from "../local-apply/store.js";
 import { type OwnerAssertion, assertNotSubmitted, canAssertNotSubmitted } from "../local-apply/owner-assertion.js";
@@ -59,76 +59,10 @@ export interface Pipeline {
 	runners: string[];
 }
 
-export interface QueueItem {
-	/** `lead:<scout>:<recordId>` or `app:<applicationId>` — stable across reads. */
-	key: string;
-	kind: "lead" | "application";
-	status: QueueStatus;
-	title: string;
-	company: string | null;
-	location: string | null;
-	url: string | null;
-	source: string | null;
-	postedDate: string | null;
-	matchRationale: string | null;
-	scoutInstanceId: string | null;
-	leadId: string;
-	/** The lead's lifecycle_version — compare-and-set for a lead action. */
-	leadVersion: number | null;
-	applicationId: string | null;
-	tailorInstanceId: string | null;
-	/** The application's state_version — compare-and-set for an application action. */
-	stateVersion: number | null;
-	blockReason: string | null;
-	/** What the owner must answer or do — actionable, never a source excerpt chosen by us. */
-	questions: string[];
-	artifacts: { resume: unknown; coverLetter: unknown } | null;
-	profileVersion: string | null;
-	tailoringRunId: string | null;
-	fillRunId: string | null;
-	/** The open fill run's status and pause, when there is one. */
-	fillRun: { id: string; status: string; mode: string | null; pause: unknown } | null;
-	submittedAt: string | null;
-	submittedUrl: string | null;
-	submitAttempted: boolean;
-	/**
-	 * Would a fill submit on its own? Only on a `materials_ready` application: the Runner's gate,
-	 * previewed. `start_fill` appears in `actions` ONLY when this says allowed — the final-submit
-	 * control is never offered under the default fill-and-review policy.
-	 */
-	submitPolicy: { allowed: boolean; failing: string[] } | null;
-	/**
-	 * The owner's per-application submission approval (#973), when one has ever been granted:
-	 * whether it is still usable, the words to show, who granted it and when, and the run that
-	 * spent it. Null when this application was never approved — which is the default, and the
-	 * reason an unapproved application cannot submit.
-	 */
-	/**
-	 * Why nothing reached the page (#975), when the run says so: the structured cause, the counts
-	 * that prove it (0 bridge calls after N seconds) and the signals the runner observed. Closed
-	 * vocabularies only — no CLI prose, no form values, no document text.
-	 */
-	diagnostic: RunDiagnostic | null;
-	/**
-	 * How far the fill actually GOT, from the runner's own facts (#986): the stage, the sentence to
-	 * show, the field/attachment counts, the checkpoint phase it is parked at, and what the claim
-	 * rests on. The Board card carries the SAME object from the same function, so a card and this
-	 * item cannot describe one run differently — which is exactly what went wrong when both read
-	 * the `awaiting_review` status word and called an untouched form "Filled".
-	 */
+export type QueueItem = import("./response-types.js").ApplicationQueueItem & {
 	fillProgress: FillProgress | null;
 	execution: ApplicationExecutionProjection | null;
-	/**
-	 * Why a run is WAITING rather than working (#974): its place in its machine's line, how many
-	 * times the machine has been asked, when the next attempt is due, and the sentence to show.
-	 * Null unless this card's run is queued — so its presence IS "this is waiting its turn", which
-	 * is what the owner could not tell from a terminal `runner_rejected` before.
-	 */
-	queue: (RunQueueView & { label: string }) | null;
-	submitAuthorization: { id: string; usable: boolean; label: string; approvedBy: string; approvedAt: string; approvedStateVersion: number; idempotencyKey: string; consumedAt: string | null; consumedRunId: string | null; recoveryPending?: boolean } | null;
-	updatedAt: string;
-	actions: ApplicationAction[];
-}
+};
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -239,7 +173,7 @@ interface OpenRun {
 	id: string;
 	status: string;
 	mode: string | null;
-	pause: unknown;
+	pause: NonNullable<QueueItem["fillRun"]>["pause"];
 }
 
 /** The actions an application in this state can take — the lifecycle table, read for the owner. */
