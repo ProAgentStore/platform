@@ -1,3 +1,4 @@
+import { observeControlOpening, type ControlOpeningReceipt } from "./control-opening.js";
 import { accessibleTargetRefusal, type ExpectedAccessibility } from "./native-accessibility.js";
 import { BrowserStateSampler } from "./browser-state.js";
 import type { BrowserStateObservation, BrowserStateSnapshot } from "./browser-state-contract.js";
@@ -25,6 +26,7 @@ export interface McpToolResult {
 	isError?: boolean;
 	websiteAccess?: WebsiteAccessBlock;
 	uploadSelection?: UploadSelectionReceipt;
+	controlOpening?: ControlOpeningReceipt;
 }
 
 /** Await a promise, giving up (never throwing) after `ms`. */
@@ -291,7 +293,8 @@ export class McpRuntime {
 			if (refusal) {
 				return { [REFUSED_CALL]: true, isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
 			}
-			let res = (await client.callTool({ name, arguments: args })) as McpToolResult;
+			const dispatch = async () => (await client.callTool({ name, arguments: args })) as McpToolResult;
+			let res = opts.expectedAccessibility?.role === "combobox" ? await observeControlOpening(currentPage(), currentPage, dispatch) : await dispatch();
 			if (!res.isError && upload?.verify) {
 				const checked = await upload.verify();
 				res = { ...res, ...(checked.error ? { isError: true } : {}), ...(checked.selection ? { uploadSelection: checked.selection } : {}), content: [{ type: "text", text: checked.error ?? `Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback. Native selection receipt: ${JSON.stringify(checked.selection)}` }, ...res.content] };

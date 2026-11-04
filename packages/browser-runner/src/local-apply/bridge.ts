@@ -40,7 +40,9 @@ import {
 	observe,
 } from "./confirmation.js";
 import { ELEMENT_PROBE_FN, type ElementFacts } from "../commit-guard.js";
-import { normalize } from "../local-artifact/engine.js";
+import { groundingRefusal } from "./answer-grounding.js";
+export { groundingRefusal } from "./answer-grounding.js";
+import { canOpenCombobox } from "../combobox-control.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
 import { looksLikeSignIn, type SiteSessionLedger, siteKeyOf } from "./site-session.js";
 import { followOpenedTab, tabCount } from "./follow-tab.js";
@@ -184,22 +186,6 @@ interface PageState {
 const signInQuestion = (site: string) => `Sign in to ${site} on this machine's application browser, then retry. Nothing was submitted.`;
 const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 const textOf = (r: { content?: Array<{ text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * Is `value` grounded? The quote must be verbatim text from the owner's sources, and the value must
- * appear in the quote as a whole phrase ("No" is not found inside "Notice"). Returns the refusal,
- * or null. Pure, so the rule is tested as a rule.
- */
-export function groundingRefusal(value: string, quote: unknown, grounding: string): string | null {
-	const q = typeof quote === "string" ? normalize(quote) : "";
-	if (q.length < 2) return "Every answer needs a source_quote: the exact text from the owner's profile, answers or materials that this value comes from.";
-	if (!normalize(grounding).includes(q)) return "The source_quote is not text from the owner's profile, answers or materials. Quote them exactly, or call request_answer.";
-	const v = normalize(value);
-	if (!v) return "The value is empty.";
-	if (!new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(v)}(?![\\p{L}\\p{N}])`, "u").test(q)) return `"${value.slice(0, 80)}" does not appear in the source_quote. Use the owner's value as written, or call request_answer.`;
-	return null;
-}
 export class ApplyBridge {
 	/** Read by the runtime for the #975 diagnostic: 0 calls is the finding, not an internal detail. */
 	actions = 0;
@@ -261,7 +247,7 @@ export class ApplyBridge {
 		const own = (await this.browser.listTools()).filter((t) => t.name !== "browser_take_screenshot" && (READ_TOOLS.has(t.name) || FILL_TOOLS.has(t.name) || t.name === "browser_click" || t.name === "browser_press_key"));
 		const tools = own.map((t) => {
 			if (t.name === "browser_click")
-				return { ...t, description: "Click an observed control. Answers need source_quote. For a non-submit editor button, declare action_intent=edit_form only when live context establishes local form editing, never consent, sharing or submission. Verify the resulting state. Submission policy cannot be overridden by intent.", inputSchema: withQuote(t.inputSchema, false, { action_intent: { type: "string", enum: ["edit_form"], description: "Required for generic editor buttons: local noncommitting form editing only. Never terms/consent, sharing, submission or unrelated actions. This declaration cannot override submission policy." }, answer_value: { type: "string", description: "For an option whose name is omitted from the snapshot: its complete observed accessible label. Requires source_quote. The runner verifies this exact ref and native name; never supply a guessed label or an internal value." } }) };
+				return { ...t, description: "Click an observed control. Answers need source_quote. To focus/open a combobox or use a non-submit editor button, declare action_intent=edit_form only when live context establishes local form editing, never consent, sharing or submission. Verify the resulting state. Submission policy cannot be overridden by intent.", inputSchema: withQuote(t.inputSchema, false, { action_intent: { type: "string", enum: ["edit_form"], description: "Required for generic editor buttons and combobox focus/open: local noncommitting form editing only. Opening is not answering; take a fresh snapshot before choosing an option with source_quote. Never terms/consent, sharing, submission or unrelated actions. This declaration cannot override submission policy." }, answer_value: { type: "string", description: "For an option whose name is omitted from the snapshot: its complete observed accessible label. Requires source_quote. The runner verifies this exact ref and native name; never supply a guessed label or an internal value." } }) };
 			if (t.name === "browser_press_key") return { ...t, description: "Press Tab, Shift+Tab, an arrow key, Escape, Home/End or PageUp/PageDown. Nothing that types or submits." };
 			if (FILL_TOOLS.has(t.name)) return { ...t, ...(t.name === "browser_select_option" ? { description: "Select options in a native HTML select only. For custom comboboxes/autocomplete, use current observed option clicks or supported keyboard interactions, then verify fresh evidence. Requires source_quote." } : {}), inputSchema: withQuote(t.inputSchema, true) };
 			return t;
@@ -617,6 +603,7 @@ export class ApplyBridge {
 
 		const facts = await this.probe(t.ref, t.name);
 		if (!facts) return this.refuse("browser_click", "read", "That element could not be read from the page, so the click cannot be shown to be safe. Take a fresh browser_snapshot.");
+		if (t.role === "combobox" && !canOpenCombobox(facts)) return this.refuse("browser_click", "fill", "This is not a supported non-answering combobox opener. Use the native select tool or a grounded answer control as appropriate; no click was dispatched.");
 		// WHICH control is this? (#985) The rule is in the shared contract, which states the three
 		// families and why the order of the tests is the safety property. It replaced a test against
 		// `FALLBACK_COMMIT_RE` — the READ-ONLY floor, which matches bare `apply` on purpose — under
@@ -632,6 +619,14 @@ export class ApplyBridge {
 			uploaded: this.uploaded.size,
 		});
 		if (klass.klass === "submit") return this.submit(forward, klass.reason);
+		if (t.role === "combobox") {
+			if (args.action_intent !== "edit_form") return this.refuse("browser_click", "fill", "Opening or focusing a combobox requires action_intent=edit_form. Choosing an answer still requires source_quote.");
+			const checkpoint = this.requireSupervisor("browser_click", "fill"); if (checkpoint) return checkpoint;
+			this.allow("browser_click", "fill"); this.lastSnapshot = ""; this.supervisorApproved = false;
+			const result = await this.browser.callTool("browser_click", forward, { expectedAccessibility: { role: "combobox" } });
+			this.supervisorApproved = !result.isError && result.controlOpening?.sameDocument === true;
+			return text(`${textOf(result)}\nTake browser_snapshot before choosing an option. ${this.supervisorApproved ? "No navigation was observed during the click; the existing supervisor approval remains valid. Verify whether the control opened." : "Page continuity is unverified or changed; obtain a fresh supervisor checkpoint before filling."}`, result.isError === true);
+		}
 		if (klass.klass === "entry") return this.entry(forward, t, klass.reason);
 		if (NAV_ROLES.has(t.role) || (t.role === "button" && PAGINATION_NAME.test(t.name.trim()))) {
 			if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
