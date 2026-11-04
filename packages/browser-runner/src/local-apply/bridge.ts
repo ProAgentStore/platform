@@ -337,7 +337,9 @@ export class ApplyBridge {
 			this.signInActionTaken = false;
 			this.signInCredentialEntered = false;
 			this.signInReturnOrigin = null;
-			this.signInAmbiguousValue = null;
+			// signInAmbiguousValue is deliberately NOT cleared here (#1476): going back and forth
+			// cannot manufacture the fresh code/pause that is the only legitimate way to earn another
+			// attempt at the exact same value.
 			const state = await this.inspect();
 			if (state) return this.landed(textOf(res), state);
 		}
@@ -447,42 +449,26 @@ export class ApplyBridge {
 		return this.signInWallSeen && this.signInActionTaken && !this.blockerOf(state) && this.host.isAllowed(host);
 	}
 
-	/** Strict evidence for a credential-entry return (#1474, #1476): a real oauth callback, never merely "no wall visible now". */
-	private isWitnessedReturn(state: PageState): boolean {
-		if (!this.signIn || !this.signInOrigin) return false;
-		const host = hostOf(state.url) ?? "";
-		const origin = signInOrigin(state.url);
-		return !!(origin && origin !== this.signInOrigin && siteKeyOf(host) === this.signIn.site && this.host.isAllowed(host) && isSignInReturn(state.url) && !state.credentialWall && !state.captcha && !state.antiBot && !state.duplicate);
-	}
-
 	/**
 	 * Reconcile a credential type whose target closed mid-call (#1476). The popup may have accepted
 	 * the password/code and closed itself, or crashed with nothing accepted — Playwright's error
-	 * says the target is gone, not which. Whatever page remains (usually the opener) never carried
-	 * the wall, so its absence is not the evidence `observeSignIn`'s loose "no blocker now" check
-	 * relies on elsewhere in this file: an opener that never had a wall proves nothing by lacking
-	 * one. Only a witnessed return to the application's own oauth callback is trusted here — the
-	 * same strict evidence #1474 requires for an automatic mid-flow redirect. Anything else is
-	 * reported unresolved: the credential is never retyped, and `signInActionTaken` stays false so
-	 * an ordinary clean read right after this cannot be mistaken for success.
+	 * says the target is gone, not which. Whatever page remains (usually the opener) is never trusted
+	 * as proof either way — not even one that LOOKS like the application's own oauth callback: a
+	 * single post-hoc read cannot tell a callback this attempt actually produced from the opener's
+	 * unrelated, unchanged resting address (an opener parked on a stale callback from some earlier,
+	 * already-settled event is indistinguishable from a fresh one by URL shape alone — verified
+	 * against a real reconstruction of that case). So nothing here is ever accepted as an immediate
+	 * success, under any shape of landing page. `signInActionTaken` stays false — the one flag
+	 * `observeSignIn`'s "no blocker now" check actually requires to declare success — so no later
+	 * clean read can be mistaken for proof either. Only a BRAND NEW, cleanly-typed credential (no
+	 * error) can set it true again; the credential is never retyped blindly in the meantime.
 	 */
 	private async reconcileClosedSignIn(kind: "password" | "code", value: string, toolText: string): Promise<ToolResult> {
-		const state = await this.inspect();
-		if (state && this.isWitnessedReturn(state)) {
-			this.signInActionTaken = true;
-			this.signInCredentialEntered = true;
-			this.signInReturnOrigin = signInOrigin(state.url);
-			this.signInAmbiguousValue = null;
-			return text(`${toolText}\n\nThe sign-in popup closed, but the page now shows a witnessed return from ${this.signIn?.site ?? "the sign-in site"}. Do not retype the ${kind}. Take a browser_snapshot, then continue toward the job page to confirm the sign-in.`);
-		}
-		// Defensive, not merely "leave unset": an earlier session action on this same sign-in (a click on
-		// "Email me a code", say) may already have set these, and this page was never the proof for that
-		// click either — only a witnessed return earns them back (#1476).
 		this.signInActionTaken = false;
 		this.signInCredentialEntered = false;
 		this.signInAmbiguousValue = value;
 		return text(
-			`${toolText}\n\nThe sign-in popup closed while the ${kind} was being entered; this proves nothing either way. Do not retype the ${kind} — it may already have been consumed, and retyping the exact same value is refused until a fresh one is provisioned. Take a browser_snapshot: continue from a credential wall if one is still visible, otherwise call ready_for_review so a person can check whether the sign-in actually completed.`,
+			`${toolText}\n\nThe sign-in popup closed while the ${kind} was being entered; this proves nothing either way, even if the page now looks like a return from the sign-in site. Do not retype the ${kind} — it may already have been consumed, and retyping the exact same value is refused until a fresh one is provisioned. Take a browser_snapshot: continue from a credential wall if one is still visible, otherwise call ready_for_review so a person can check whether the sign-in actually completed.`,
 			true,
 		);
 	}
@@ -577,7 +563,8 @@ export class ApplyBridge {
 				this.signInActionTaken = false;
 				this.signInCredentialEntered = false;
 				this.signInReturnOrigin = null;
-				this.signInAmbiguousValue = null;
+				// signInAmbiguousValue stays latched (#1476): navigating elsewhere and back cannot
+				// manufacture the fresh code/pause that alone earns another attempt at the same value.
 			}
 		}
 		const res = await this.browser.callTool("browser_navigate", { url });
@@ -924,7 +911,7 @@ export class ApplyBridge {
 			this.signInActionTaken = false;
 			this.signInCredentialEntered = false;
 			this.signInReturnOrigin = null;
-			this.signInAmbiguousValue = null;
+			// signInAmbiguousValue stays latched (#1476): a followed link is not a fresh code or pause.
 		}
 		const before = await tabCount(this.browser);
 		const res = await this.browser.callTool("browser_click", forward);

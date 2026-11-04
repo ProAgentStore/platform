@@ -932,7 +932,10 @@ describe("the agent-driven sign-in (#1412)", () => {
 	});
 
 	describe("reconciling a sign-in popup that closes mid-type (#1476)", () => {
-		it("a popup that closes onto a witnessed oauth callback still signs in, once the job page confirms it", async () => {
+		it("a popup that closes onto what LOOKS like an oauth callback is still reported unresolved — a single post-hoc read cannot tell it apart from the opener's unrelated, unchanged resting address", async () => {
+			// A direct reconstruction of the failure mode: the opener's address is a callback-shaped
+			// URL from the very start, never caused by this attempt — exactly what a stale, already-
+			// settled earlier redirect would leave behind. Accepting it as proof was the actual bug.
 			const callback = "https://au.seek.com/oauth/callback";
 			const job = "https://au.seek.com/job/95534692";
 			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true }, [callback]: {}, [job]: {} };
@@ -946,15 +949,17 @@ describe("the agent-driven sign-in (#1412)", () => {
 			await bridge.callTool("browser_snapshot", {});
 
 			const typed = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
-			expect(typed.isError).toBeUndefined();
-			expect(typed.content[0].text).toMatch(/witnessed return/);
-			expect(h.done).toEqual([]); // The callback itself is still not proof on its own (#1474's same rule).
+			expect(typed.isError).toBe(true);
+			expect(typed.content[0].text).toMatch(/proves nothing either way/);
+			expect(h.done).toEqual([]);
 			expect(bridge.signIn).not.toBeNull();
 
+			// The regression this closes: navigating on to the job page afterward must NOT be read as
+			// a confirmed sign-in either — nothing here ever armed real proof of it.
 			const returned = await bridge.callTool("browser_navigate", { url: job });
-			expect(returned.content[0].text).toContain("Signed in to seek.com");
-			expect(bridge.signIn).toBeNull();
-			expect(h.done).toEqual([1]);
+			expect(returned.content[0].text).not.toContain("Signed in to seek.com");
+			expect(bridge.signIn).not.toBeNull();
+			expect(h.done).toEqual([]);
 		});
 
 		it("a popup that closes with no witnessed return stays unresolved, and a bare clean read right after is never mistaken for success", async () => {
@@ -1087,6 +1092,36 @@ describe("the agent-driven sign-in (#1412)", () => {
 			const retried = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
 			expect(retried.content[0].text).not.toMatch(/already typed once/);
 			expect(b.sent("browser_type")).toHaveLength(2);
+		});
+
+		it.each<[string, (bridge: ApplyBridge) => Promise<unknown>]>([
+			["a navigate elsewhere", (bridge) => bridge.callTool("browser_navigate", { url: FORM })],
+			["a navigate_back", (bridge) => bridge.callTool("browser_navigate_back", {})],
+			["a followed link", (bridge) => bridge.callTool("browser_click", { target: "e10" })],
+		])("%s after an unresolved popup close does not lift the retype latch — only a fresh code or pause does", async (_label, recover) => {
+			const pages: Record<string, PageFlags> = { [FORM]: {}, [SIGN_IN]: { login: true } };
+			const b = fakeBrowser(pages, { clicks: { e42: SIGN_IN, e41: BACK, e10: FORM }, typeCloses: { e30: FORM } });
+			const h = signInHost(["PAGS_LOGIN_USERNAME"], { code: true });
+			const bridge = new ApplyBridge(b.tools, h.host);
+			await bridge.callTool("browser_navigate", { url: FORM });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+			await bridge.callTool("browser_navigate", { url: SIGN_IN });
+			await bridge.callTool("browser_snapshot", {});
+			await bridge.callTool("browser_click", { target: "e42" });
+			await bridge.callTool("request_sign_in_code", {});
+
+			const first = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(first.isError).toBe(true);
+			expect(b.sent("browser_type")).toHaveLength(1);
+
+			await recover(bridge);
+			await bridge.callTool("browser_snapshot", {}); // refreshes lastSnapshot so e30 resolves again
+
+			const repeat = await bridge.callTool("browser_type", { target: "e30", text: "PAGS_LOGIN_CODE" });
+			expect(repeat.isError).toBe(true);
+			expect(repeat.content[0].text).toMatch(/already typed once/);
+			expect(b.sent("browser_type")).toHaveLength(1); // still never reached the browser a second time
 		});
 	});
 
