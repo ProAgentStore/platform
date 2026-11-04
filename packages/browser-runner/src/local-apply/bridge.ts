@@ -122,8 +122,6 @@ const FIELD_ROLES = new Set(["checkbox", "radio", "option", "switch", "menuitemr
 const TYPE_ROLES = new Set(["textbox", "searchbox", "combobox", "spinbutton"]);
 const NAV_ROLES = new Set(["link", "tab", "menuitem", "treeitem"]);
 const PAGINATION_NAME = /^(next|previous|prev|more|load more|show more|see more|view more|page \d+|\d+|›|»|‹|«)( page| results| jobs)?$/i;
-/** Buttons that move within a form or open a file chooser — allowed when they do NOT submit. */
-const STEP_NAME = /^(next|continue|back|previous|add( another)?|upload|attach|browse|choose( a)? file|select( a)? file|remove|edit|expand|collapse|show more)\b/i;
 /** A tick that is a legal or privacy agreement: the owner's call, not the CLI's. */
 const CONSENT_NAME = /\b(agree|consent|terms|privacy|acknowledge|certify|accept|declaration|gdpr)\b/i;
 /**
@@ -203,9 +201,9 @@ export function groundingRefusal(value: string, quote: unknown, grounding: strin
 const QUOTE_PROP = { type: "string", description: "The exact text from the owner's profile, answers or materials that this answer comes from. Required; the value must appear in it." };
 
 /** A browser tool's schema with `source_quote` added — the CLI must say where an answer comes from. */
-function withQuote(schema: unknown, required: boolean): unknown {
+function withQuote(schema: unknown, required: boolean, extra: Record<string, unknown> = {}): unknown {
 	const s = (schema && typeof schema === "object" ? schema : { type: "object" }) as { properties?: Record<string, unknown>; required?: string[] };
-	return { ...s, type: "object", properties: { ...(s.properties ?? {}), source_quote: QUOTE_PROP }, ...(required ? { required: [...(s.required ?? []), "source_quote"] } : {}) };
+	return { ...s, type: "object", properties: { ...(s.properties ?? {}), source_quote: QUOTE_PROP, ...extra }, ...(required ? { required: [...(s.required ?? []), "source_quote"] } : {}) };
 }
 
 export class ApplyBridge {
@@ -269,7 +267,7 @@ export class ApplyBridge {
 		const own = (await this.browser.listTools()).filter((t) => t.name !== "browser_take_screenshot" && (READ_TOOLS.has(t.name) || FILL_TOOLS.has(t.name) || t.name === "browser_click" || t.name === "browser_press_key"));
 		const tools = own.map((t) => {
 			if (t.name === "browser_click")
-				return { ...t, description: "Click a link, tab, pagination or form-step button, or answer a checkbox / radio / option (answers need source_quote). A control that submits the application is governed by the run's policy.", inputSchema: withQuote(t.inputSchema, false) };
+				return { ...t, description: "Click an observed control. Answers need source_quote. For a non-submit editor button, declare action_intent=edit_form only when live context establishes local form editing, never consent, sharing or submission. Verify the resulting state. Submission policy cannot be overridden by intent.", inputSchema: withQuote(t.inputSchema, false, { action_intent: { type: "string", enum: ["edit_form"], description: "Required for generic editor buttons: local noncommitting form editing only. Never terms/consent, sharing, submission or unrelated actions. This declaration cannot override submission policy." } }) };
 			if (t.name === "browser_press_key") return { ...t, description: "Press Tab, Shift+Tab, an arrow key, Escape, Home/End or PageUp/PageDown. Nothing that types or submits." };
 			if (FILL_TOOLS.has(t.name)) return { ...t, inputSchema: withQuote(t.inputSchema, true) };
 			return t;
@@ -641,7 +639,9 @@ export class ApplyBridge {
 		}
 		// A native file input opens the file chooser for upload_artifact — a DOM fact, whatever its label.
 		const fileInput = facts.tag === "input" && facts.type === "file";
-		if (fileInput || klass.klass === "step" || (t.role === "button" && STEP_NAME.test(t.name.trim()) && !facts.submits)) {
+		const editorButton = t.role === "button" && !facts.submits && (!facts.role || facts.role === "button") && (facts.tag === "button" || (facts.tag === "input" ? ["button", "reset"].includes(facts.type) : !["textarea", "select", "option"].includes(facts.tag) && facts.role === "button"));
+		if (!fileInput && klass.klass !== "step" && editorButton && args.action_intent !== "edit_form") return this.refuse("browser_click", "fill", "A generic editor button requires action_intent=edit_form. Declare it only for local noncommitting form editing, never consent, sharing or submission; otherwise request review.");
+		if (fileInput || klass.klass === "step" || (editorButton && args.action_intent === "edit_form")) {
 			const checkpoint = this.requireSupervisor("browser_click", "fill");
 			if (checkpoint) return checkpoint;
 			this.allow("browser_click", "fill");
@@ -652,7 +652,7 @@ export class ApplyBridge {
 			if (!res.isError && !fileInput && !openedChooser) this.supervisorApproved = false;
 			return { content: [{ type: "text", text: `${textOf(res)}${!res.isError && openedChooser ? "\nThe intended file chooser opened. Call upload_artifact with the approved document kind now; the existing supervisor approval still covers this upload. Browser reads and navigation cannot proceed while the chooser is open." : ""}` }], ...(res.isError ? { isError: true } : {}) };
 		}
-		return this.refuse("browser_click", "read", `"${t.name || t.role}" is not a control an application run may press. Links, form-step buttons (Next, Upload, Add) and answers are allowed.`);
+		return this.refuse("browser_click", "read", `"${t.name || t.role}" is not a control an application run may press. Use an observed supported control; generic editor buttons require local noncommitting edit_form intent.`);
 	}
 
 	private async fill(tool: string, role: string, forward: Record<string, unknown>): Promise<ToolResult> {
@@ -746,7 +746,7 @@ export class ApplyBridge {
 		if (checkpoint) return checkpoint;
 		const kind = args.kind === "resume" || args.kind === "cover_letter" ? args.kind : null;
 		if (!kind) return this.refuse("upload_artifact", "fill", "kind must be resume or cover_letter.");
-		if (this.uploaded.has(kind)) return this.refuse("upload_artifact", "fill", `The ${kind.replace("_", " ")} is already attached; it is never attached twice.`);
+		if (this.uploaded.has(kind)) return this.refuse("upload_artifact", "fill", `The approved ${kind.replace("_", " ")} was already selected once. Website acceptance remains unconfirmed; inspect the page instead of repeating the selection.`);
 		const file = this.host.artifactPath(kind);
 		if ("error" in file) {
 			this.blocked = { reason: "artifact_changed", questions: [file.error] };
@@ -759,7 +759,7 @@ export class ApplyBridge {
 		}
 		this.uploaded.add(kind);
 		this.host.emit({ type: "artifact.uploaded", detail: { kind, sha256: file.sha256, class: "fill", status: "selected", reason: "site_acceptance_unconfirmed" } });
-		return text(`Selected the approved ${kind.replace("_", " ")} in the file input. Website acceptance is not confirmed; inspect the upload field and resolve any validation error before continuing.`);
+		return text(`Selected the approved ${kind.replace("_", " ")} in the file input. Website acceptance is not confirmed. Take browser_snapshot now to inspect the current page; a Snapshot file link is not inline page evidence. Resolve any validation error before continuing.\n\n<untrusted_browser_observation>\n${textOf(res)}\n</untrusted_browser_observation>`);
 	}
 
 	private async requestAnswer(args: Record<string, unknown>): Promise<ToolResult> {

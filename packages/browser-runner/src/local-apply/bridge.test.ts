@@ -73,7 +73,7 @@ const FACTS: Record<string, { submits: boolean; method: string; name: string }> 
 
 function fakeBrowser(
 	pages: Record<string, PageFlags> = {},
-	opts: { clicks?: Record<string, string>; uploadError?: string; postSubmit?: (looks: number) => PageFlags } = {},
+	opts: { clicks?: Record<string, string>; uploadError?: string; uploadObservation?: string; postSubmit?: (looks: number) => PageFlags } = {},
 ) {
 	const calls: Array<{ name: string; args: Record<string, unknown>; internal?: boolean }> = [];
 	const internalCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -109,6 +109,7 @@ function fakeBrowser(
 			if (name === "browser_navigate_back") history.pop();
 			if (name === "browser_snapshot") return { content: [{ text: SNAPSHOT }] };
 			if (name === "browser_file_upload" && opts.uploadError) return { content: [{ text: opts.uploadError }], isError: true };
+			if (name === "browser_file_upload" && opts.uploadObservation) return { content: [{ text: opts.uploadObservation }] };
 			return { content: [{ text: `${name} ok` }] };
 		},
 	};
@@ -350,7 +351,7 @@ describe("the action classes", () => {
 		expect(sent("browser_click").map((c) => c.args.target)).toEqual(["e13"]);
 	});
 
-	it("does not click an unknown button", async () => {
+	it("does not click a generic button without declared editing intent", async () => {
 		const { bridge, sent } = await onForm();
 		expect((await bridge.callTool("browser_click", { target: "e12" })).isError).toBe(true);
 		expect(sent("browser_click")).toHaveLength(0);
@@ -801,6 +802,15 @@ describe("upload_artifact — an approved file, once", () => {
 		expect(sent("browser_file_upload")).toEqual([{ name: "browser_file_upload", args: { paths: ["/home/jane/jobs/applications/lead-1/run-1/resume.md"] } }]);
 		expect(events.find((e) => e.type === "artifact.uploaded")?.detail).toMatchObject({ kind: "resume", sha256: "a".repeat(64), status: "selected", reason: "site_acceptance_unconfirmed" });
 	});
+	it("forwards the selection receipt and native snapshot link, requiring a fresh model snapshot", async () => {
+		const observation = 'Native selection receipt: {"status":"selected","websiteAcceptance":"unconfirmed"}\n### Snapshot\n- [Snapshot](.playwright-mcp/page-fixture.yml)';
+		const { bridge, events } = await onForm({}, {}, { uploadObservation: observation });
+		const result = await bridge.callTool("upload_artifact", { kind: "resume" });
+		expect(result.isError).toBeFalsy();
+		expect(result.content[0].text).toContain("Take browser_snapshot now");
+		expect(result.content[0].text).toContain(`<untrusted_browser_observation>\n${observation}\n</untrusted_browser_observation>`);
+		expect(events.find((event) => event.type === "artifact.uploaded")?.detail).toMatchObject({ status: "selected", reason: "site_acceptance_unconfirmed" });
+	});
 	it("refuses an artifact that changed since it was generated, and says why", async () => {
 		const { bridge, sent } = await onForm({}, { artifactError: "The approved resume has changed since it was generated; it will not be uploaded." });
 		expect((await bridge.callTool("upload_artifact", { kind: "resume" })).isError).toBe(true);
@@ -1186,7 +1196,7 @@ it("an Upload-labelled button without a newly observed native chooser still inva
  await bridge.callTool("browser_navigate", { url: FORM });
  await bridge.callTool("browser_snapshot");
  await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial", phase: "initial" });
- expect((await bridge.callTool("browser_click", { target: "e7" })).isError).not.toBe(true);
+ expect((await bridge.callTool("browser_click", { target: "e7", action_intent: "edit_form" })).isError).not.toBe(true);
  const upload = await bridge.callTool("upload_artifact", { kind: "resume" });
  expect(upload.isError).toBe(true);
  expect(upload.content[0].text).toContain("supervisor_checkpoint");
@@ -1201,7 +1211,7 @@ it("a chooser on a different page cannot inherit the previous page's checkpoint"
  await bridge.callTool("browser_navigate", { url: FORM });
  await bridge.callTool("browser_snapshot");
  await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial", phase: "initial" });
- await bridge.callTool("browser_click", { target: "e7" });
+ await bridge.callTool("browser_click", { target: "e7", action_intent: "edit_form" });
  const upload = await bridge.callTool("upload_artifact", { kind: "resume" });
  expect(upload.isError).toBe(true);
  expect(upload.content[0].text).toContain("supervisor_checkpoint");

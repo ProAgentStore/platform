@@ -31,7 +31,7 @@ it.each(["approved", "stopped", "revoked", "format"] as const)("styled upload ke
   const snapshot = text(await bridge.callTool("browser_snapshot"));
   const ref = snapshot.match(/button "Upload resume"[^\n]*\[ref=(\w+)\]/)?.[1]; expect(ref).toBeTruthy();
   await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial", phase: "initial" });
-  const clicked = await bridge.callTool("browser_click", { target: ref });
+  const clicked = await bridge.callTool("browser_click", { target: ref, action_intent: "edit_form" });
   expect(clicked.isError).not.toBe(true);
   expect(text(clicked)).toMatch(/file chooser/i);
   const snapshotAfter = await bridge.callTool("browser_snapshot");

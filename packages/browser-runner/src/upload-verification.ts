@@ -24,7 +24,21 @@ export interface PreparedUpload {
 	chooserId?: string;
 	dispose?(): Promise<void>;
 	/** Selection is a browser fact, never proof of acceptance by the receiving website. */
-	verify?(): Promise<{ error?: string }>;
+	verify?(): Promise<{ error?: string; selection?: UploadSelectionReceipt }>;
+}
+
+/** No website text is interpreted here, and no receipt attests receiving-site acceptance. */
+export interface UploadSelectionReceipt {
+	status: "selected";
+	evidence: "input_event" | "retained_files";
+	inputConnected: boolean;
+	inputRetainsSelection: boolean;
+	ariaInvalid: boolean;
+	nativeValid: boolean;
+	customError: boolean;
+	/** Untrusted native validation text, bounded to 2,000 characters. */
+	validationMessage: string;
+	websiteAcceptance: "unconfirmed";
 }
 
 /** Bind validation to the exact native chooser, including hidden inputs and iframe inputs. */
@@ -70,16 +84,13 @@ export class UploadVerifier {
 			if (paths.some((path) => !acceptsUpload(path, accept))) return { error: `The approved document format does not match this upload field's accepted types (${shownAccept}). No file was attached. Request an approved artifact in a supported format; do not rename its extension.` };
 			const expected = paths.map((path) => basename(path)).sort();
 			const observation = await observeUploadSelection(input, expected);
-			let before: Awaited<ReturnType<typeof observation.read>>;
-			try { before = await observation.read(); } catch (error) { await observation.dispose(); throw error; }
 			return { chooserId: this.chooserId(chooser) ?? undefined, dispose: observation.dispose, verify: async () => {
 				if (this.pending.get(page) === chooser) this.clear(page);
 				try {
 					const after = await observation.read();
-					if (after.invalid || after.alerts.some((alert) => !before.alerts.includes(alert))) return { error: "The upload field reported a validation error after file selection. Inspect the field's feedback before proceeding; website acceptance is unconfirmed." };
 					const retained = after.connected && JSON.stringify(after.files.sort()) === JSON.stringify(expected);
-					if (!retained && !(after.selected && after.newFilenameAcknowledgment)) return { error: "The approved file selection could not be verified after upload: the field was cleared or changed without new filename acknowledgment. Inspect the page before retrying; website acceptance is unconfirmed." };
-					return {};
+					if (!retained && !after.selected) return { error: "The approved file selection could not be observed in the intended input. The action may have run; inspect the page before deciding whether to retry. Website acceptance is unconfirmed." };
+					return { selection: { status: "selected", evidence: after.selected ? "input_event" : "retained_files", inputConnected: after.connected, inputRetainsSelection: retained, ariaInvalid: after.ariaInvalid, nativeValid: after.nativeValid, customError: after.customError, validationMessage: after.validationMessage, websiteAcceptance: "unconfirmed" } };
 				} catch {
 					return { error: "The upload field is no longer available for verification. Inspect the page before retrying; website acceptance is unconfirmed." };
 				} finally { await observation.dispose(); }

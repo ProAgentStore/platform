@@ -7,7 +7,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { BrowserContext, FileChooser, Page } from "playwright";
 import { type BrowserCallOutcome, type BrowserCallsPage, type BrowserCallSubject, BrowserCallRecorder } from "./browser-call-recorder.js";
 import { domainAdmissionUrl, guardedToolRefusal, navigationRefusal, type McpCallPolicy } from "./mcp-call-policy.js";
-import { UploadVerifier, type PreparedUpload } from "./upload-verification.js";
+import { UploadVerifier, type PreparedUpload, type UploadSelectionReceipt } from "./upload-verification.js";
 import { websiteAccessBlock, type WebsiteAccessBlock } from "./browser-website-access.js";
 
 /** The caller owns the browser in either case. Native contexts work across all engines (#1431). */
@@ -23,6 +23,7 @@ export interface McpToolResult {
 	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 	isError?: boolean;
 	websiteAccess?: WebsiteAccessBlock;
+	uploadSelection?: UploadSelectionReceipt;
 }
 
 /** Await a promise, giving up (never throwing) after `ms`. */
@@ -291,7 +292,7 @@ export class McpRuntime {
 			let res = (await client.callTool({ name, arguments: args })) as McpToolResult;
 			if (!res.isError && upload?.verify) {
 				const checked = await upload.verify();
-				res = { ...res, ...(checked.error ? { isError: true } : {}), content: [{ type: "text", text: checked.error ?? "Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback." }, ...res.content] };
+				res = { ...res, ...(checked.error ? { isError: true } : {}), ...(checked.selection ? { uploadSelection: checked.selection } : {}), content: [{ type: "text", text: checked.error ?? `Approved file selected in the intended upload field. Website acceptance remains unconfirmed; inspect the site's upload feedback. Native selection receipt: ${JSON.stringify(checked.selection)}` }, ...res.content] };
 			}
 			if (!res.isError && name === "browser_tabs") {
 				if (args.action === "select" && typeof args.index === "number") this.selectedPage = this.context?.pages()[args.index];
