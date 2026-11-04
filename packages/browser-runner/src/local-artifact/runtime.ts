@@ -1,7 +1,7 @@
 /**
  * Local artifact generation on the runner (#956) — the Application Tailor's hands.
  *
- * One run = one Codex or Claude Code process, signed in on this machine, that turns ONE approved
+ * One run = a Codex or Claude Code draft and at most one citation repair, signed in on this machine, for ONE approved
  * job lead plus the owner's own source files into a tailored résumé and cover letter. No browser,
  * no repository, no provider API key. The runtime, not the CLI, does every read and every write:
  *
@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { exportArtifactDocuments, snapshotAnswerSources } from "./documents.js";
+import { draftRepairPrompt } from "./draft-repair.js";
 import type { PortableDocument, LocalArtifactDocumentsResponse } from "./document-contract.js";
 import { RunnerInputError } from "../errors.js";
 import { redactText, secretEnvValues } from "../local-browser/contract.js";
@@ -94,9 +95,13 @@ interface Run {
 	engineAuth: LocalArtifactEngineAuth;
 	cancelled: boolean;
 	timedOut: boolean;
+	repairAttempted?: boolean;
+	deadlineAt?: number;
 	endedAt?: number;
 	timer?: ReturnType<typeof setTimeout>;
 }
+
+type DraftContext = { workspace: string; outDir: string; outRel: string; lead: LocalArtifactLead; hashes: LocalArtifactSourceHash[]; texts: SourceText[] };
 
 const intIn = (v: unknown, min: number, max: number): number | null => (typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : null);
 
@@ -298,18 +303,31 @@ export class LocalArtifactRuntime {
 			throw new Pause("workspace_unavailable", [`Cannot create ${e.workspace}/${outRel}: ${err instanceof Error ? err.message : String(err)}`]);
 		}
 
-		const spec = buildArtifactEngineSpec({ engine: e.engine, authMode: e.authMode, prompt: tailorPrompt(lead, texts) });
+		// Both processes share this deadline. A repair cannot extend the original run budget.
+		run.deadlineAt = this.now() + e.policy.maxMinutes * 60_000;
+		run.timer = setTimeout(() => {
+			run.timedOut = true;
+			this.kill(run);
+		}, e.policy.maxMinutes * 60_000);
+		run.timer.unref?.();
+		this.launchDraft(run, { workspace, outDir, outRel, lead, hashes, texts }, tailorPrompt(lead, texts));
+	}
+
+	private launchDraft(run: Run, ctx: DraftContext, prompt: string): void {
+		const e = run.envelope;
+		const spec = buildArtifactEngineSpec({ engine: e.engine, authMode: e.authMode, prompt });
 		run.secrets = secretEnvValues({ ...process.env, ...spec.env });
 		run.engineAuth = observedArtifactAuth(e.engine, spec.env);
 		this.emit(run, { type: "engine.auth_checked", detail: { engine: e.engine, authMode: e.authMode, engineAuth: run.engineAuth } });
 		if (run.engineAuth === "api-key") {
-			rmdirSync(outDir);
+			this.removeIfEmpty(ctx.outDir);
 			throw new Pause("api_key_refused", ["A provider API key would reach the CLI. The Application Tailor runs on your machine's sign-in only — remove the key from the runner's environment."]);
 		}
 
 		const child = this.spawn(spec.command, spec.args, { cwd: run.scratch, env: spec.env, stdio: ["ignore", "pipe", "pipe"] });
 		run.child = child;
-		this.emit(run, { type: "engine.started", detail: { engine: e.engine } });
+		run.output = [];
+		this.emit(run, { type: "engine.started", detail: { engine: e.engine, ...(run.repairAttempted ? { status: "citation_repair" } : {}) } });
 		let buf = "";
 		const keep = (chunk: Buffer | string) => {
 			buf += chunk.toString();
@@ -321,31 +339,27 @@ export class LocalArtifactRuntime {
 		child.stdout?.on("data", keep);
 		child.stderr?.on("data", keep);
 		child.on("error", (err: NodeJS.ErrnoException) => {
-			this.removeIfEmpty(outDir);
+			this.removeIfEmpty(ctx.outDir);
 			this.end(run, { outcome: "failed", error: err.code === "ENOENT" ? `The ${e.engine === "claude" ? "Claude Code" : "Codex"} CLI is not installed on this machine (\`${spec.command}\` was not found).` : err.message });
 		});
 		child.on("close", (code) => {
 			if (buf.trim()) run.output.push(buf);
 			this.emit(run, { type: "engine.ended", detail: { exitCode: code ?? -1 } });
 			try {
-				this.finish(run, code ?? -1, { workspace, outDir, outRel, lead, hashes, texts });
+				this.finish(run, code ?? -1, ctx);
 			} catch (err) {
-				this.removeIfEmpty(outDir);
+				this.removeIfEmpty(ctx.outDir);
 				this.end(run, { outcome: "failed", error: err instanceof Error ? err.message : String(err) });
 			}
 		});
-		run.timer = setTimeout(() => {
-			run.timedOut = true;
-			this.kill(run);
-		}, e.policy.maxMinutes * 60_000);
-		run.timer.unref?.();
 	}
 
 	/** The CLI exited: check its draft against the sources, and only then write the artifacts. */
-	private finish(run: Run, code: number, ctx: { workspace: string; outDir: string; outRel: string; lead: LocalArtifactLead; hashes: LocalArtifactSourceHash[]; texts: SourceText[] }): void {
+	private finish(run: Run, code: number, ctx: DraftContext): void {
 		if (run.state === "ended") return;
 		const e = run.envelope;
 		const output = run.output.join("\n");
+		if (run.deadlineAt !== undefined && this.now() >= run.deadlineAt) run.timedOut = true;
 		if (run.cancelled || run.timedOut) {
 			this.removeIfEmpty(ctx.outDir);
 			this.end(run, { outcome: "failed", error: run.cancelled ? "Cancelled by the owner" : `Stopped at the ${e.policy.maxMinutes}-minute limit.` });
@@ -363,7 +377,8 @@ export class LocalArtifactRuntime {
 			this.end(run, { outcome: "failed", error: `The ${e.engine} CLI exited with code ${code}: ${run.output.slice(-5).join("\n").slice(-800)}` });
 			return;
 		}
-		const check = checkDraft(parseDraft(text), ctx.texts);
+		const parsed = parseDraft(text);
+		const check = checkDraft(parsed, ctx.texts);
 		const retry = /:retry:(\d+)$/.exec(e.requestId);
 		const attemptNumber = retry ? Number(retry[1]) : 1;
 		const diagnostic: LocalArtifactValidationDiagnostic | undefined = check.ok ? undefined : {
@@ -375,6 +390,13 @@ export class LocalArtifactRuntime {
 		};
 		this.emit(run, { type: "claims.checked", detail: { total: check.claims, unmatched: check.ok ? 0 : check.unmatched, ...(diagnostic ? { validationError: diagnostic.validationError, parseAttempts: diagnostic.parseAttempts.join(","), rawOutputChars: diagnostic.rawOutputChars, runId: diagnostic.runId, attemptNumber } : {}) } });
 		if (!check.ok) {
+			const prompt = !run.repairAttempted && code === 0 ? draftRepairPrompt(ctx.lead, ctx.texts, parsed, check) : null;
+			if (prompt) {
+				run.repairAttempted = true;
+				this.emit(run, { type: "note", detail: { status: "citation_repair", count: 1 } });
+				this.launchDraft(run, ctx, prompt);
+				return;
+			}
 			this.removeIfEmpty(ctx.outDir);
 			this.pauseEnd(run, check.reason, check.questions, diagnostic);
 			return;

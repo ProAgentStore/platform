@@ -14,8 +14,8 @@
  *
  * Truthfulness is checked, not requested: the CLI must cite, for every claim, a verbatim quote
  * from a named source, and every quote is looked up in that source. Years, emails and phone
- * numbers in the generated text must also appear in the sources. Anything that does not check
- * out pauses the run with `needs_human` — no file is written from an unverified draft.
+ * numbers in the generated text must also appear in the sources. One bounded citation repair
+ * can use the same sources; remaining failures end `needs_human`. Unverified drafts never write files.
  */
 import { mergeEnv } from "../coding/engine-env.js";
 import { resolveEngineAuth } from "../coding/engine-auth.js";
@@ -96,6 +96,7 @@ export function tailorPrompt(lead: LocalArtifactLead, sources: readonly SourceTe
 		"- Use ONLY facts stated in the sources. Never invent or embellish an employer, title, qualification, date, skill, metric, work authorisation, salary expectation or answer.",
 		'- For EVERY factual claim about the owner in either document, add an entry to "claims" with the claim, the source role it comes from, and a short VERBATIM quote copied exactly from that source.',
 		"- Every year, email address and phone number you write must appear in the sources.",
+		"- Omit a cover-letter date or other incidental date unless it appears in the sources; the current calendar date is not a new fact about the owner.",
 		"- Reword and reorder to fit the job; do not add what the sources do not say. Leave out what does not fit.",
 		...(sources.some((x) => x.role === OWNER_ANSWERS_ROLE)
 			? [`- <source role="${OWNER_ANSWERS_ROLE}"> holds the owner's own answers to questions asked on earlier applications. They are the owner's facts and preferences: use them, cite them like any source, and do not ask again a question they already answer.`]
@@ -178,8 +179,8 @@ export type DraftCheck =
 	| { ok: false; reason: "missing_information" | "uncertain_claim" | "invalid_cli_output"; questions: string[]; claims: number; unmatched: number; validationError: DraftValidationError; parseAttempts: LocalArtifactParseAttempt[] };
 
 /**
- * Check the CLI's draft against the sources. Questions name WHAT to confirm, bounded, and are
- * returned only to the owner's own record — never to a trace.
+ * Check the CLI's draft against the sources. Bounded feedback distinguishes a rejected citation
+ * from a missing fact and is returned only to the owner's own record — never to a trace.
  */
 export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[]): DraftCheck {
 	const draft = parsed.draft;
@@ -202,17 +203,24 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[]):
 		unmatched++;
 		if (questions.length < 20) questions.push(question);
 	};
-	for (const raw of claims) {
+	for (const [index, raw] of claims.entries()) {
 		const c = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 		const quote = typeof c.quote === "string" ? normalize(c.quote) : "";
 		const src = typeof c.source === "string" ? byRole.get(c.source as LocalArtifactPromptRole) : undefined;
 		if (quote.length >= 3 && src?.includes(quote)) continue;
 		const claim = typeof c.text === "string" ? c.text.trim() : "";
-		flag(`Confirm or correct: “${claim.slice(0, 200) || "(an unnamed claim)"}” — no matching text was found in your ${typeof c.source === "string" ? c.source : "sources"}.`);
+		const role = typeof c.source === "string" ? c.source.slice(0, 20) : "unspecified source";
+		const rejectedQuote = typeof c.quote === "string" ? c.quote.replace(/\s+/g, " ").slice(0, 65) : "(missing quote)";
+		flag(`Citation ${index + 1} does not match ${role} verbatim; factual accuracy is undetermined. Claim: “${claim.slice(0, 65) || "(unnamed claim)"}”. Draft quote: “${rejectedQuote}”. Correct the citation or omit unsupported content.`);
 	}
 	const text = `${resume}\n${coverLetter}`;
 	const sourceDigits = digits(sources.map((s) => s.text).join("\n"));
-	for (const y of new Set(text.match(YEAR) ?? [])) if (!all.includes(y)) flag(`Confirm the year ${y} — it does not appear in your sources.`);
+	for (const y of new Set(text.match(YEAR) ?? [])) if (!all.includes(y)) {
+		const [document, body] = resume.includes(y) ? ["résumé", resume] : ["cover letter", coverLetter];
+		const offset = body.indexOf(y);
+		const context = body.slice(Math.max(0, offset - 40), offset + y.length + 40).replace(/\s+/g, " ");
+		flag(`The year ${y} in the ${document} is absent from the sources. Draft context: “${context}”. Check its meaning: omit an incidental document date; do not invent or change a factual date.`);
+	}
 	for (const e of new Set(text.match(EMAIL) ?? [])) if (!all.includes(e.toLowerCase())) flag("Confirm the email address in the draft — it does not appear in your sources.");
 	// Nine digits or more, so a year range ("2019 - 2021") is not read as a phone number.
 	for (const p of new Set(text.match(PHONE) ?? [])) if (digits(p).length >= 9 && !sourceDigits.includes(digits(p))) flag("Confirm the phone number in the draft — it does not appear in your sources.");

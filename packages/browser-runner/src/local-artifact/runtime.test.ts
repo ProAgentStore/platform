@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalArtifactTaskEnvelope } from "./contract.js";
 import { ARTIFACT_MANIFEST, LocalArtifactRuntime, parseArtifactEnvelope } from "./runtime.js";
 
@@ -110,6 +110,7 @@ beforeEach(() => {
 	now = Date.parse("2026-10-07T00:00:00Z");
 });
 afterEach(() => {
+	vi.useRealTimers();
 	rmSync(data, { recursive: true, force: true });
 	rmSync(home, { recursive: true, force: true });
 });
@@ -317,10 +318,13 @@ describe("it pauses instead of guessing", () => {
 		rt.start(envelope());
 		await settle();
 		answer(0, { ...GOOD, claims: [...GOOD.claims, { text: "PhD in Computer Science", source: "resume", quote: "PhD, University of Sydney" }] });
+		expect(rt.status({ runId: "run-1" }).state).toBe("running");
+		answer(1, { ...GOOD, claims: [...GOOD.claims, { text: "PhD in Computer Science", source: "resume", quote: "PhD, University of Sydney" }] });
 		const r = await ended(rt);
 		expect(r).toMatchObject({ outcome: "needs_human", blockReason: "uncertain_claim", artifacts: [] });
 		expect(r?.questions?.join(" ")).toContain("PhD in Computer Science");
 		expect(existsSync(join(jobs(), "applications", "lead-1", "run-1"))).toBe(false);
+		expect(spawned).toHaveLength(2); // the unchanged invalid draft never starts a third process
 	});
 
 	it("accepts fenced application JSON surrounded by prose and malformed braces", async () => {
@@ -356,6 +360,7 @@ describe("it pauses instead of guessing", () => {
 		rt.start(envelope());
 		await settle();
 		answer(0, { ...GOOD, resume_markdown: `${GOOD.resume_markdown}\nPhone +61 400 111 222. Certified 2015. jane.c@other.com` });
+		answer(1, { ...GOOD, resume_markdown: `${GOOD.resume_markdown}\nPhone +61 400 111 222. Certified 2015. jane.c@other.com` });
 		const r = await ended(rt);
 		expect(r).toMatchObject({ outcome: "needs_human", blockReason: "uncertain_claim" });
 		expect(r?.questions).toHaveLength(3);
@@ -376,6 +381,87 @@ describe("it pauses instead of guessing", () => {
 		spawned[0].child.stderr.write("Error: Not logged in · Please run /login\n");
 		spawned[0].child.exit(1);
 		expect(await ended(rt)).toMatchObject({ outcome: "needs_human", blockReason: "engine_not_signed_in", engineAuth: "missing_login" });
+	});
+});
+
+describe("one bounded citation repair (#1472)", () => {
+	const badCitation = () => ({ ...GOOD, claims: [{ text: "Migrated 40 services", source: "profile", quote: "Led the migration of 40 services to Cloudflare Workers." }] });
+
+	it("repairs the source role using the original snapshot even when the source files change", () => {
+		const rt = runtime();
+		rt.start(envelope());
+		writeFileSync(join(jobs(), "resume.md"), "Unrelated changed résumé");
+		writeFileSync(join(jobs(), "profile.md"), "Unrelated changed profile");
+		answer(0, badCitation());
+		expect(spawned).toHaveLength(2);
+		expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "running" });
+		expect(readdirSync(join(jobs(), "applications/lead-1/run-1"))).toEqual([]);
+		expect(spawned[1].args[1]).toContain(RESUME);
+		expect(spawned[1].args[1]).toContain(PROFILE);
+		expect(spawned[1].args[1]).not.toContain("Unrelated changed");
+		expect(spawned[1].args).toContain("--strict-mcp-config");
+		answer(1, GOOD);
+		const s = rt.status({ runId: "run-1" });
+		expect(s.result).toMatchObject({ outcome: "completed", sourceHashes: [expect.objectContaining({ sha256: hash(RESUME) }), expect.objectContaining({ sha256: hash(PROFILE) })] });
+		expect(s.events.filter((event) => event.type === "engine.started").map((event) => event.detail?.status)).toEqual([undefined, "citation_repair"]);
+		expect(JSON.stringify(s.events)).not.toContain("Migrated 40 services");
+		expect(JSON.stringify(s.events)).not.toContain("Australian citizen");
+		expect(spawned).toHaveLength(2);
+	});
+
+	it("accepts omission of an incidental cover-letter year only after the full unchanged validator passes", () => {
+		const rt = runtime();
+		rt.start(envelope());
+		answer(0, { ...GOOD, cover_letter_markdown: `4 November 2026\n${GOOD.cover_letter_markdown}` });
+		expect(spawned).toHaveLength(2);
+		expect(spawned[1].args[1]).toContain("year 2026 in the cover letter");
+		answer(1, GOOD);
+		expect(rt.status({ runId: "run-1" }).result?.outcome).toBe("completed");
+		expect(readFileSync(join(jobs(), "applications/lead-1/run-1/cover-letter.md"), "utf8")).toBe(`${GOOD.cover_letter_markdown}\n`);
+	});
+
+	it("never starts repair after cancellation, nor writes late successful output", () => {
+		const rt = runtime();
+		rt.start(envelope());
+		rt.cancel({ runId: "run-1" });
+		answer(0, badCitation());
+		expect(spawned).toHaveLength(1);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", artifacts: [], error: "Cancelled by the owner" });
+		expect(existsSync(join(jobs(), "applications/lead-1/run-1"))).toBe(false);
+	});
+
+	it("cancels an active repair with no third process or artifact", () => {
+		const rt = runtime();
+		rt.start(envelope());
+		answer(0, badCitation());
+		rt.cancel({ runId: "run-1" });
+		answer(1, GOOD);
+		expect(spawned).toHaveLength(2);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", artifacts: [], error: "Cancelled by the owner" });
+	});
+
+	it("keeps the original execution timer across the repair process", () => {
+		vi.useFakeTimers();
+		const rt = runtime();
+		rt.start(envelope());
+		vi.advanceTimersByTime(9 * 60_000);
+		now += 9 * 60_000;
+		answer(0, badCitation());
+		expect(spawned).toHaveLength(2);
+		expect(rt.status({ runId: "run-1" }).state).toBe("running");
+		now += 60_000;
+		vi.advanceTimersByTime(60_000);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", artifacts: [], error: "Stopped at the 10-minute limit." });
+		expect(existsSync(join(jobs(), "applications/lead-1/run-1"))).toBe(false);
+	});
+
+	it("checks the absolute deadline before starting repair even if the timer callback is delayed", () => {
+		const rt = runtime();
+		rt.start(envelope());
+		now += 10 * 60_000;
+		answer(0, badCitation());
+		expect(spawned).toHaveLength(1);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", artifacts: [], error: "Stopped at the 10-minute limit." });
 	});
 });
 

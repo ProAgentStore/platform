@@ -236,7 +236,7 @@ export interface LocalArtifactResultEnvelope {
 	generatedAt?: string;
 	/** Present when `outcome` is `needs_human`. */
 	blockReason?: LocalArtifactBlockReason;
-	/** What the owner must supply or confirm. Questions only — never a source excerpt. */
+	/** Bounded questions or rejected-draft feedback; never complete sources or documents. */
 	questions?: string[];
 	/** Safe diagnostic metadata for a rejected CLI draft; never CLI/source text. */
 	diagnostic?: LocalArtifactValidationDiagnostic;
