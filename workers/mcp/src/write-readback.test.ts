@@ -74,6 +74,7 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"token",
 	"dry_run",
 	"confirm",
+	"confirm_full_browser_tools", // #1532: acknowledgement control; the server-owned receipt is read via settings.
 	// compare-and-set (#955): the state the caller READ, checked and never stored
 	"expected_status",
 	"expected_version",
