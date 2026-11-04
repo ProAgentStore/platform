@@ -6,7 +6,7 @@ function fixture(fetcher:(url:string,init?:RequestInit)=>Promise<Response>,authe
  vi.stubGlobal("fetch",fetcher);
  const handlers=new Map<string,{schema:z.ZodObject<z.ZodRawShape>,handler:(args:Record<string,unknown>)=>Promise<Result>}>();
  const env={API_BASE:"https://api.test"};
- registerBrowserEvidenceTools({tool:(name:string,_description:string,schema:z.ZodRawShape,handler:(args:Record<string,unknown>)=>Promise<Result>)=>handlers.set(name,{schema:z.object(schema),handler})} as never,{env,tokenFor:()=>authenticated?"session":undefined,safetyFor:()=>({env,scopes:["read"]}),groups:new Set()});
+ registerBrowserEvidenceTools({tool:(name:string,_description:string,schema:z.ZodRawShape,handler:(args:Record<string,unknown>)=>Promise<Result>)=>handlers.set(name,{schema:z.object(schema),handler})} as never,{env,tokenFor:()=>authenticated?"session":null,safetyFor:()=>({env,scopes:["read"]}),groups:new Set()});
  return async(name:string,args:Record<string,unknown>)=>{const tool=handlers.get(name)!;return tool.handler(tool.schema.parse(args));};
 }
 afterEach(()=>vi.unstubAllGlobals());
