@@ -127,6 +127,8 @@ export interface LocalApplyTaskEnvelope {
 	workspace: string;
 	sources: LocalApplySource[];
 	artifacts: LocalApplyArtifact[];
+	/** Exact PAGS Files bytes over the private relay, materialized only for this run. */
+	cloudDocuments?: import("../local-artifact/document-contract.js").PortableDocument[];
 	policy: {
 		mode: LocalApplyMode;
 		/** The sites the run may be on. Leaving them pauses (`external_redirect`). */

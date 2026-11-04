@@ -145,6 +145,28 @@ describe("a tailoring run", () => {
 		expect(s.events.map((e) => e.type)).toEqual(["source.read", "source.read", "engine.auth_checked", "engine.started", "engine.ended", "claims.checked", "artifact.written", "artifact.written"]);
 	});
 
+	it("exports only this completed run's exact documents and generation-time sources (#1468)", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		expect(() => rt.documents({ runId: "run-1" }, "tailor-1")).toThrow(/only after/);
+		writeFileSync(join(jobs(), "profile.md"), "changed after CLI launch");
+		answer(0, GOOD);
+		await settle();
+		expect(() => rt.documents({ runId: "run-1", instanceId: "tailor-1" }, "another-agent")).toThrow(/another instance/);
+		const exported = rt.documents({ runId: "run-1" }, "tailor-1");
+		expect(exported.documents.map((doc) => doc.role)).toEqual(["resume", "cover_letter", "profile"]);
+		expect(Buffer.from(exported.documents[2].contentBase64, "base64").toString()).toBe(PROFILE);
+		for (const doc of exported.documents) {
+			const bytes = Buffer.from(doc.contentBase64, "base64");
+			expect(doc.sha256).toBe(hash(bytes.toString()));
+			expect(doc.bytes).toBe(bytes.length);
+		}
+		expect(JSON.stringify(rt.status({ runId: "run-1" }))).not.toContain("Jane Citizen");
+		writeFileSync(join(jobs(), "applications/lead-1/run-1/resume.md"), "tampered document");
+		expect(() => rt.documents({ runId: "run-1" }, "tailor-1")).toThrow(/changed/);
+	});
+
 	it("materializes only the exact uploaded extracted texts under fixed scratch paths, never local masters", async () => {
 		const uploadedResume = RESUME.replace("Jane Citizen", "Synthetic Uploaded Candidate");
 		const uploadedProfile = PROFILE;

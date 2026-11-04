@@ -74,6 +74,7 @@ export function uploadedTailorReadinessMessage(readiness: UploadedTailorReadines
 	if (readiness.ready) return "Uploaded sources are ready for the runner.";
 	if (readiness.sources.some((source) => source.isStale)) return "A selected uploaded source changed or was deleted. Select the exact current file again.";
 	if (readiness.blockers.includes("runner_unavailable")) return "Your runner is offline. Reconnect it before uploaded sources can be used.";
+	if (readiness.blockers.includes("runner_too_old")) return "Update the runner on your selected machine before using uploaded documents.";
 	if (readiness.sources.some((source) => source.blockers.includes("materialization_unsupported"))) return "Uploaded sources are selected but are not yet transferable to the runner. Tailoring will fail closed and will not use local or historical files.";
 	return "Uploaded sources are not ready. Resolve the listed blockers before tailoring.";
 }

@@ -152,6 +152,8 @@ async function fillForReview(): Promise<{ applicationId: string; fillRunId: stri
 	await runDueDeliveries(env());
 	const applicationId = (await call("GET", "/t1/applications")).body.applications[0].id as string;
 	const tailorRun = dispatches("/local-artifact/run")[0].body.runId as string;
+	// Pre-cloud stored run: this fixture exercises supervisor wake decisions, not byte transport.
+	d1.DB.prepare("UPDATE local_artifact_runs SET policy = json_remove(policy, '$.cloudDocuments') WHERE id = ?1").bind(tailorRun).run();
 	answers["/local-artifact/status"] = {
 		status: 200,
 		body: {

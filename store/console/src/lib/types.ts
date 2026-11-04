@@ -838,12 +838,7 @@ export interface AgentLocalBrowserCapabilities {
 export type ApplicationQueueStatus = "new" | "apply_requested" | "tailoring" | "materials_ready" | "filling" | "awaiting_review" | "submitted" | "blocked" | "deferred" | "skipped" | "archived" | "failed";
 export type ApplicationQueueAction = "apply" | "skip" | "defer" | "archive" | "generate_materials" | "retry_tailoring" | "start_fill" | "request_review" | "retry_fill" | "cancel" | "resume" | "mark_not_interested" | "approve_and_proceed" | "assert_not_submitted";
 
-export interface ApplicationArtifactHandle {
-	kind: "resume" | "cover_letter";
-	path: string;
-	sha256: string;
-	bytes: number;
-}
+export type ApplicationArtifactHandle = import("../../../../workers/api/src/lib/local-artifact/contract").LocalArtifactFile;
 
 export interface ApplicationQueueItem {
 	key: string;

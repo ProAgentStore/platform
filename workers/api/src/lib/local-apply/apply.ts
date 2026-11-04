@@ -1,3 +1,4 @@
+import { loadCloudDocuments } from "../local-artifact/cloud-documents.js";
 import { activeApplyMilliseconds } from "./active-clock.js";
 /**
  * The Application Runner (#957): materials ready → a local CLI fills the application in a real
@@ -282,6 +283,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	if (blurProblem) throw new HttpError(409, blurProblem);
 	const contractProblem = runnerContractProblem(runtime.runner_version, runtime.runner_node);
 	if (contractProblem) throw new HttpError(409, contractProblem);
+	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	// The admission gate (#1175): refused HERE, before the application leaves materials_ready, like an outdated machine — but 503,
 	// because the machine recovers by itself and the outbox should retry.
 	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "application runs", true);
@@ -347,7 +349,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
 
 	const kept = await keptAnswers(env, uid, run);
-	const envelope = applyTaskEnvelope(run, app, s, kept.answers);
+	const envelope = { ...applyTaskEnvelope(run, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}) };
 	const fail = async (errorCode: string, error: string) => {
 		// The machine never took it, so nothing was sent and the approval goes back (#993).
 		await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
@@ -913,6 +915,9 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	}
 	const s = await runnerSettingsFor(env, instanceId, uid).catch(() => null);
 	if (!s) return "queued";
+	let cloudDocuments: LocalApplyTaskEnvelope["cloudDocuments"];
+	try { cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version); }
+	catch { await noteQueued(env, "local_apply_runs", run.id, "Prepared PAGS documents are unavailable or the runner needs updating. No browser action was dispatched.", now); return "queued"; }
 	// #993: the mode is decided HERE, not when the run was queued. `dispatched` is the run whose
 	// envelope the machine receives, so the policy it carries and the policy stored on the row are
 	// the same object — the property `settleFromResult` relies on when it checks a reported submit
@@ -933,7 +938,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	if (!claimedDispatch) return "queued";
 	dispatched = claimedDispatch;
 	try {
-		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(applyTaskEnvelope(dispatched, app, s, kept.answers)) });
+		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify({ ...applyTaskEnvelope(dispatched, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}) }) });
 	} catch {
 		// A response gap is not a refusal. Poll this run; never dispatch it a second time.
 		return "dispatched";

@@ -39,6 +39,7 @@ import { projectApplicationExecution, type ApplicationExecutionProjection } from
 import { type FillViews, NO_FILL_VIEWS, type RunDiagnostic, readFillViews } from "./fill-views.js";
 import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
 import { approvalRuns } from "./approval-runs.js";
+import { canRegenerateMissingMaterials } from "./material-recovery.js";
 import { pipelineForTargetedTransfer } from "./targeted-transfer-runner.js";
 import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
@@ -46,7 +47,6 @@ import { type ApplyRun, type ApplyRunStatus, applicationAudit, getApplyRun, isTe
 import { type OwnerAssertion, assertNotSubmitted, canAssertNotSubmitted } from "../local-apply/owner-assertion.js";
 import type { Env } from "../../types.js";
 import { runJobLeadTriage } from "../../routes/instances-job-leads.js";
-
 export const QUEUE_STATUSES = ["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"] as const;
 export type QueueStatus = (typeof QUEUE_STATUSES)[number];
 export const APPLICATION_ACTIONS = ["apply", "skip", "defer", "archive", "generate_materials", "retry_tailoring", "start_fill", "request_review", "retry_fill", "cancel", "resume", "mark_not_interested", "approve_and_proceed", "assert_not_submitted"] as const;
@@ -270,12 +270,12 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			return ["cancel"];
 		case "blocked":
 			if (run) return run.status === "paused" ? [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), "resume", "cancel"] : ["cancel"];
-			// A terminal fill remains retryable, but approval is offered only when approvalRuns supplied
-			// the exact verified one-click refusal; generic incomplete states never qualify (#1011).
+			// Terminal fills retain their exact approval/recovery evidence (#1011, #1468).
 			if (app.fillRunId) {
 				return [
 					...(postFillApprovable ? (["approve_and_proceed"] as const) : []),
 					...(canFill && !attemptBlocks ? (["retry_fill"] as const) : []),
+					...(!auth && canRegenerateMissingMaterials(app, approvalRun) ? (["retry_tailoring"] as const) : []),
 					...assertable,
 					"defer",
 					"archive",

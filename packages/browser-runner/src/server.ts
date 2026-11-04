@@ -322,6 +322,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-artifact/run") {
 		return json(res, 202, runner.localArtifact.start(await readJson(req)));
 	}
+	if (req.method === "POST" && path === "/local-artifact/documents") return json(res, 200, runner.localArtifact.documents(await readJson(req), instanceOf(req)));
 	if (req.method === "POST" && path === "/local-artifact/status") {
 		return json(res, 200, runner.localArtifact.status(await readJson(req)));
 	}

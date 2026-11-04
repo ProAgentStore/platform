@@ -1620,7 +1620,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		await mockSignedInConsole(page);
 		await page.goto("/console/instances/inst-1/knowledge?subtab=files");
 		await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
-		await expect(page.getByText("Upload File", { exact: true })).toBeVisible();
+		await expect(page.getByText("Upload files", { exact: true })).toBeVisible();
 
 		await page.reload();
 		await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
@@ -1653,7 +1653,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.setViewportSize({ width: 320, height: 800 });
 		await mockSignedInConsole(page);
 		await page.goto("/console/instances/inst-1/knowledge?subtab=files");
-		await expect(page.getByText("Upload File", { exact: true })).toBeVisible();
+		await expect(page.getByText("Upload files", { exact: true })).toBeVisible();
 		const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 		expect(overflow).toBeLessThanOrEqual(0);
 	});

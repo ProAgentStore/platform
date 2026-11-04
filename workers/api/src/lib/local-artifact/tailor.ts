@@ -1,3 +1,4 @@
+import { cloudDocumentsRunnerProblem, InvalidCloudDocuments, persistCloudDocuments } from "./cloud-documents.js";
 /**
  * The Application Tailor (#956): approved lead → tailored résumé + cover letter on the owner's
  * machine → `job.application.materials_ready`, exactly once.
@@ -14,6 +15,7 @@
  */
 import { HttpError } from "../auth.js";
 import { syncApplicationCard } from "../applications/application-board.js";
+import { canRecoverMissingMaterials } from "../applications/material-recovery.js";
 import { tailorRunSignals } from "../applications/run-signals.js";
 import { workKeyForLead } from "../job-lead-triage.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
@@ -229,6 +231,8 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the lead will be tailored when it connects.");
 	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", true); // #1175
 	if (overloaded) throw new HttpError(503, overloaded);
+	const cloudProblem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
+	if (cloudProblem) throw new HttpError(409, cloudProblem);
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
@@ -263,7 +267,7 @@ async function dispatchTailoring(
 	now: number,
 	uploadedSources?: LocalArtifactUploadedSource[],
 ): Promise<TailorRun> {
-	const policy: TailorRunPolicy = { engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), ...(uploadedSources ? { uploadedSources: uploadedSources.map(({ text: _text, ...source }) => source) } : {}), retainDays: s.retainDays, maxMinutes: s.maxMinutes, stallMinutes: s.stallMinutes };
+	const policy: TailorRunPolicy = { cloudDocuments: true, engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), ...(uploadedSources ? { uploadedSources: uploadedSources.map(({ text: _text, ...source }) => source) } : {}), retainDays: s.retainDays, maxMinutes: s.maxMinutes, stallMinutes: s.stallMinutes };
 	const runId = crypto.randomUUID();
 	await createTailorRun(env, {
 		id: runId,
@@ -309,7 +313,7 @@ async function dispatchTailoring(
  * audit row), then a fresh run under a per-attempt key, so a repeated click finds the same run.
  */
 export async function retryTailoring(env: Env, instanceId: string, uid: string, app: JobApplication, now = Date.now(), rawAnswers?: unknown): Promise<{ application: JobApplication; run: TailorRun; savedAnswers: number }> {
-	if (!["blocked", "failed", "cancelled"].includes(app.status) || app.fillRunId || app.submitAttemptedAt) {
+	if (!["blocked", "failed", "cancelled"].includes(app.status) || app.submitAttemptedAt || (app.fillRunId && !(await canRecoverMissingMaterials(env, uid, app)))) {
 		throw new HttpError(409, `Tailoring can be retried only for an application that stopped while tailoring; this one is ${app.status}${app.fillRunId ? " and has been filled" : ""}.`);
 	}
 	// The owner's answers to this application's questions are saved to their Profile FIRST, so this
@@ -326,6 +330,8 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials, then retry.");
 	const overloadedRetry = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", true); // #1175
 	if (overloadedRetry) throw new HttpError(503, overloadedRetry);
+	const cloudProblem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
+	if (cloudProblem) throw new HttpError(409, cloudProblem);
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
@@ -340,7 +346,7 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 }
 
 /** End a run's application when its result arrives — exactly once, by compare-and-set. */
-async function settleFromResult(env: Env, uid: string, run: TailorRun, rawResult: unknown, now: number): Promise<TailorRun> {
+async function settleFromResult(env: Env, uid: string, run: TailorRun, rawResult: unknown, now: number, runtime: LiveRuntime): Promise<TailorRun> {
 	const checked = parseLocalArtifactResult(rawResult);
 	const app = await getApplication(env, run.instanceId, uid, run.applicationId);
 	if ("error" in checked || checked.result.runId !== run.id) {
@@ -350,6 +356,19 @@ async function settleFromResult(env: Env, uid: string, run: TailorRun, rawResult
 		return failed ?? run;
 	}
 	const r = checked.result;
+	if (r.outcome === "completed" && run.policy.cloudDocuments) {
+		try { await persistCloudDocuments(env, runtime, uid, run, r, now); }
+		catch (error) {
+			if (error instanceof InvalidCloudDocuments || now - (run.startedAt ?? run.createdAt) > run.policy.maxMinutes * 60_000 + LOST_RUNNER_GRACE_MS) {
+				const message = "The exact prepared documents could not be stored in PAGS. Re-run tailoring; no application fill has started.";
+				const failed = await updateTailorRun(env, run, { to: "failed", errorCode: "cloud_documents_unavailable", error: message }, now);
+				if (failed && app) await settleApplication(env, run.instanceId, uid, app.id, run.id, { to: "blocked", blockReason: "cloud_documents_unavailable", blockQuestions: [message] }, now);
+				return failed ?? run;
+			}
+			// Keep the run nonterminal so the next poll can finish durable storage safely.
+			return (await updateTailorRun(env, run, { errorCode: "cloud_documents_pending", error: "Prepared documents are waiting for verified PAGS storage. No application fill has started." }, now)) ?? run;
+		}
+	}
 	const to = r.outcome;
 	const moved = await updateTailorRun(
 		env,
@@ -365,7 +384,7 @@ async function settleFromResult(env: Env, uid: string, run: TailorRun, rawResult
 		const generatedAt = r.generatedAt ?? iso(now);
 		const readyEvent: MaterialsReadyEvent = {
 			eventType: MATERIALS_READY_EVENT,
-			eventId: `${run.instanceId}:${app.leadId}:${app.lifecycleVersion}:materials`,
+			eventId: `${run.instanceId}:${app.leadId}:${app.lifecycleVersion}:materials${run.policy.cloudDocuments ? `:${run.id}` : ""}`,
 			applicationId: app.id,
 			tailorInstanceId: run.instanceId,
 			sourceInstanceId: app.sourceInstanceId,
@@ -448,7 +467,7 @@ async function syncTailorRunFromRunner(env: Env, uid: string, run: TailorRun, no
 	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalArtifactEvent).filter((e): e is NonNullable<typeof e> => e !== null) as TraceEvent[];
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await updateTailorRun(env, run, { events, runnerSeq: lastSeq }, now)) ?? (await getTailorRun(env, run.instanceId, uid, run.id)) ?? run;
-	if (body.state === "ended" && body.result !== undefined && !isTerminalRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now);
+	if (body.state === "ended" && body.result !== undefined && !isTerminalRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now, runtime);
 	// #978 — the tailoring run on the owner's normal board, through the one function every
 	// runner-reported transition comes through.
 	await syncApplicationCard(env, uid, current, "tailor");
@@ -551,6 +570,10 @@ export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, 
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
 	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
 	if ("error" in settings) return "queued";
+	if (run.policy.cloudDocuments) {
+		const problem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
+		if (problem) { await noteQueued(env, "local_artifact_runs", run.id, problem, now); return "queued"; }
+	}
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if (run.policy.uploadedSources?.length) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);

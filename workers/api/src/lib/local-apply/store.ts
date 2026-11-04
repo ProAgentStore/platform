@@ -87,7 +87,8 @@ export async function moveApplication(env: DB, app: Pick<JobApplication, "id" | 
 			`UPDATE job_applications
 			    SET status = ?1, state_version = ?2, updated_at = ?3,
 			        block_reason = ?4, block_questions = ?5,
-			        fill_run_id = COALESCE(?6, fill_run_id),
+			        fill_run_id = CASE WHEN ?1 = 'tailoring' THEN NULL ELSE COALESCE(?6, fill_run_id) END,
+			        ready_emitted_at = CASE WHEN ?1 = 'tailoring' THEN NULL ELSE ready_emitted_at END,
 			        submit_attempted_at = COALESCE(submit_attempted_at, ?7),
 			        submitted_at = COALESCE(?8, submitted_at), submitted_url = COALESCE(?9, submitted_url),
 			        archive_reason = CASE WHEN ?10 = 'archived' THEN COALESCE(?11, archive_reason) ELSE archive_reason END,

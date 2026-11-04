@@ -465,6 +465,8 @@ const TERMINAL: readonly TailorRunStatus[] = ["completed", "needs_human", "faile
 export const isTerminalRun = (s: TailorRunStatus) => TERMINAL.includes(s);
 
 export interface TailorRunPolicy {
+	/** New runs require durable Files before publishing materials_ready (#1468). */
+	cloudDocuments?: true;
 	engine: LocalArtifactEngine;
 	authMode: LocalArtifactAuthMode;
 	workspace: string;
@@ -571,8 +573,8 @@ export async function updateTailorRun(
 	const trace = [...run.trace, ...(u.events ?? [])].slice(0, MAX_TRACE);
 	const res = await env.DB.prepare(
 		`UPDATE local_artifact_runs
-		    SET status = ?1, result = COALESCE(?2, result), engine_auth = COALESCE(?3, engine_auth), error_code = COALESCE(?4, error_code),
-		        error = COALESCE(?5, error), runner_node = COALESCE(?6, runner_node), trace = ?7, runner_seq = MAX(runner_seq, ?8),
+		    SET status = ?1, result = COALESCE(?2, result), engine_auth = COALESCE(?3, engine_auth), error_code = CASE WHEN ?1 = 'completed' THEN NULL ELSE COALESCE(?4, error_code) END,
+		        error = CASE WHEN ?1 = 'completed' THEN NULL ELSE COALESCE(?5, error) END, runner_node = COALESCE(?6, runner_node), trace = ?7, runner_seq = MAX(runner_seq, ?8),
 		        last_synced_at = CASE WHEN ?9 THEN ?10 ELSE last_synced_at END,
 		        started_at = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?10 ELSE started_at END,
 		        ended_at = CASE WHEN ?11 THEN ?10 ELSE ended_at END, updated_at = ?10

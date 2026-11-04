@@ -1,3 +1,4 @@
+import { materializeApplicationDocument } from "./agent-document-routes.js";
 /**
  * AgentDO — one Durable Object per agent.
  *
@@ -369,6 +370,8 @@ export class AgentDO extends DurableObject<Env> {
 			if (path.match(/^\/job-leads\/[^/]+\/application$/) && request.method === "POST")
 				return this.withEngine((e) => storageRoutes.writeJobLeadApplication(e, path.split("/")[2], request));
 
+			if (path.match(/^\/files\/[^/]+\/application-document$/) && request.method === "POST")
+				return this.withEngine((e) => materializeApplicationDocument(e, path.split("/")[2], request));
 			// Files
 			if (path === "/files" && request.method === "GET")
 				return this.withEngine((e) => storageRoutes.listFiles(e, url));

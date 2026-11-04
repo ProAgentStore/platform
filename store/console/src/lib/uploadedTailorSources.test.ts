@@ -38,6 +38,7 @@ describe("uploaded Tailor source Console contract", () => {
 	it("reports server readiness truthfully and does not present a selected file as usable", () => {
 		expect(uploadedTailorReadinessMessage(readiness())).toContain("not yet transferable");
 		expect(uploadedTailorReadinessMessage(readiness({ blockers: ["runner_unavailable"], sources: [] }))).toContain("offline");
+		expect(uploadedTailorReadinessMessage(readiness({ blockers: ["runner_too_old"], sources: [] }))).toContain("Update the runner");
 		expect(uploadedTailorReadinessMessage(readiness({ sources: [{ ...readiness().sources[0], isStale: true }] }))).toContain("changed or was deleted");
 		expect(uploadedTailorReadinessMessage(readiness({ ready: true, blockers: [], sources: [] }))).toContain("ready for the runner");
 		expect(shortHash("a".repeat(64))).toBe("aaaaaaaaaaaa…");

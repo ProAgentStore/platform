@@ -3,6 +3,8 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import Card from "./Card";
 import LoadFailed from "./LoadFailed";
+import FileUploadControls from "./FileUploadControls";
+import { useUploader } from "../lib/use-uploader";
 import {
 	shortHash,
 	uploadedTailorReadinessMessage,
@@ -24,9 +26,8 @@ const bytes = (size: number | undefined) =>
 /**
  * Owner-facing selection of exact Instance Files for Application Tailor.
  *
- * This is intentionally separate from FilesSection: that component owns upload/preview/delete,
- * while this component records a source-role decision and exposes the Worker’s fail-closed
- * readiness verdict. Neither component receives source bytes.
+ * Uploads use the same private Files pipeline as Knowledge. Selection records a source-role
+ * decision; the Worker supplies the fail-closed readiness verdict.
  */
 export default function UploadedTailorSourcesSection({ instanceId }: { instanceId: string }) {
 	const [files, setFiles] = useState<UploadedTailorFile[] | null>(null);
@@ -57,6 +58,7 @@ export default function UploadedTailorSourcesSection({ instanceId }: { instanceI
 	}, [instanceId]);
 
 	useEffect(() => { void load(); }, [load]);
+	const uploader = useUploader(instanceId, load);
 
 	const select = async (role: UploadedTailorSourceRole, fileId: string) => {
 		if (!fileId) return;
@@ -95,7 +97,8 @@ export default function UploadedTailorSourcesSection({ instanceId }: { instanceI
 	return (
 		<Card className="mb-3 sm:mb-4" data-testid="uploaded-tailor-sources">
 			<h3 className="text-base font-bold">Uploaded résumé sources</h3>
-			<p className="text-xs text-muted mt-1">Choose the exact files Application Tailor may use. Files are checked by ID and provenance; their contents are never shown here.</p>
+			<p className="text-xs text-muted mt-1">Upload your résumé and profile to PAGS, then select which file serves each role. These private files can be used from any connected machine.</p>
+			<div className="mt-3"><FileUploadControls title="Upload source documents" jobs={uploader.jobs} onUpload={uploader.start} onPause={uploader.pause} onResume={uploader.resume} onCancel={uploader.cancel} /></div>
 			{error && <LoadFailed what="the latest uploaded-source state" detail={error} onRetry={load} compact />}
 			{hasSelection ? (
 				<div className={`mt-3 text-xs rounded-lg border px-3 py-2 ${readiness.ready ? "border-success-line bg-success-soft text-success" : "border-warning-line bg-warning-soft text-warning"}`}>
@@ -127,7 +130,7 @@ export default function UploadedTailorSourcesSection({ instanceId }: { instanceI
 							{selected && <p className="mt-2 text-xs text-muted">Selected: {selected.name} · {selected.extractionStatus ?? "extraction status unavailable"}</p>}
 							{state?.provenance && (
 								<p className="mt-1 text-xs text-muted-soft break-words">
-									Version {state.provenance.version ?? "unavailable"} · PDF SHA-256 {shortHash(state.provenance.originalHash)} · text SHA-256 {shortHash(state.provenance.extractedHash)}{state.provenance.extractedAt ? ` · extracted ${new Date(state.provenance.extractedAt).toLocaleString()}` : ""}
+									Version {state.provenance.version ?? "unavailable"} · file SHA-256 {shortHash(state.provenance.originalHash)} · text SHA-256 {shortHash(state.provenance.extractedHash)}{state.provenance.extractedAt ? ` · extracted ${new Date(state.provenance.extractedAt).toLocaleString()}` : ""}
 								</p>
 							)}
 							{state?.blockers.length ? <p className="mt-1 text-xs text-warning">{state.blockers.join(" · ").replaceAll("_", " ")}</p> : null}

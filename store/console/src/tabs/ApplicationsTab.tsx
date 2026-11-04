@@ -12,6 +12,7 @@ import Button from "../components/Button";
 import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
 import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSection";
+import ApplicationMaterials from "../components/ApplicationMaterials";
 import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
 import { ASSERT_STATEMENT_PROMPT, QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
 import { notificationRoute } from "../lib/deepLink";
@@ -379,16 +380,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef }: { inst
 				</p>
 			)}
 
-			{item.artifacts && (
-				<ul className="text-xs mb-2" aria-label="Tailored materials">
-					{[item.artifacts.resume, item.artifacts.coverLetter].filter(Boolean).map((a) => (
-						<li key={a?.kind}>
-							{a?.kind === "resume" ? "Résumé" : "Cover letter"}: <code>{a?.path}</code> <span className="text-muted-soft">sha256 {a?.sha256.slice(0, 12)}…</span>
-						</li>
-					))}
-					{item.profileVersion && <li className="text-muted-soft">From profile version {item.profileVersion}</li>}
-				</ul>
-			)}
+			{item.artifacts && <ApplicationMaterials artifacts={item.artifacts} profileVersion={item.profileVersion} />}
 			{pausedTransfers.length > 0 && item.artifacts?.resume && item.artifacts?.coverLetter && (
 				<div className="mb-3 rounded border border-line p-2 text-sm" data-testid="reviewed-material-transfer">
 					<p className="font-semibold">Transfer this reviewed set</p>

@@ -25,6 +25,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { exportArtifactDocuments, snapshotAnswerSources } from "./documents.js";
+import type { PortableDocument, LocalArtifactDocumentsResponse } from "./document-contract.js";
 import { RunnerInputError } from "../errors.js";
 import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
@@ -86,6 +88,8 @@ interface Run {
 	result?: LocalArtifactResultEnvelope;
 	child?: ChildProcess;
 	output: string[];
+	documentSources?: PortableDocument[];
+	documentDir?: string;
 	secrets: string[];
 	engineAuth: LocalArtifactEngineAuth;
 	cancelled: boolean;
@@ -377,6 +381,8 @@ export class LocalArtifactRuntime {
 		}
 
 		const at = new Date(this.now()).toISOString();
+		run.documentSources = snapshotAnswerSources(ctx.texts);
+		run.documentDir = ctx.outDir;
 		const artifacts: LocalArtifactFile[] = [];
 		for (const [kind, name, body] of [
 			["resume", "resume.md", check.resume],
@@ -386,7 +392,7 @@ export class LocalArtifactRuntime {
 			writeFileSync(join(ctx.outDir, name), content, { flag: "wx", mode: 0o600 });
 			const file: LocalArtifactFile = { kind, path: `${e.workspace}/${ctx.outRel}/${name}`, sha256: sha256(content), bytes: Buffer.byteLength(content) };
 			artifacts.push(file);
-			this.emit(run, { type: "artifact.written", detail: { ...file } });
+			this.emit(run, { type: "artifact.written", detail: { kind: file.kind, path: file.path, sha256: file.sha256, bytes: file.bytes } });
 		}
 		const profileVersion = sha256(ctx.hashes.map((h) => `${h.role}:${h.sha256}`).sort().join("\n")).slice(0, 16);
 		const retainUntil = e.policy.retainDays > 0 ? this.now() + e.policy.retainDays * DAY_MS : null;
@@ -485,6 +491,12 @@ export class LocalArtifactRuntime {
 		const run = this.runs.get(runId);
 		if (!run) throw new RunnerInputError(`No local artifact run ${runId} on this runner (it may have restarted)`, 404);
 		return run;
+	}
+
+	documents(raw: unknown, caller?: string): LocalArtifactDocumentsResponse {
+		const input = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown };
+		const run = this.get(String(input.runId ?? ""));
+		return exportArtifactDocuments({ runId: run.envelope.runId, instanceId: run.envelope.instanceId, caller, result: run.result, outDir: run.documentDir, sources: run.documentSources });
 	}
 
 	status(raw: unknown): LocalArtifactStatusResponse {

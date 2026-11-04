@@ -20,22 +20,21 @@
  * restart after completion does not erase observed evidence before PAGS pulls it.
  */
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
 import type { BrowserCallsPage } from "../browser-call-recorder.js";
 import { isHomeRelative, isWorkspaceRelative } from "../local-artifact/contract.js";
-import { resolveSource } from "../local-artifact/runtime.js";
 import { type BrowserTools, domainWithin } from "../local-browser/bridge.js";
 import { BRIDGE_ENV } from "../local-browser/bridge-stdio.js";
 import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { redactReplayText } from "./apply-replay.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
-import { resolveWorkspacePath } from "../local-browser/runtime.js";
+import { Blocked, clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 import { ApplyBridge } from "./bridge.js";
 import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
 import type { SiteSessionLedger } from "./site-session.js";
@@ -55,8 +54,6 @@ import {
 	type LocalApplySignInSecretName,
 	type LocalApplySignInSecretsRequest,
 	type LocalApplyArtifact,
-	type LocalApplyArtifactKind,
-	type LocalApplyBlockReason,
 	type LocalApplyDirectiveRequest,
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
@@ -74,7 +71,7 @@ import {
 	traceUrl,
 } from "./contract.js";
 import type { LocalApplyHandoffStatus } from "./handoff-contract.js";
-import { applyPrompt, buildApplyEngineSpec, observedApplyAuth, type SourceBlock } from "./engine.js";
+import { applyPrompt, buildApplyEngineSpec, observedApplyAuth } from "./engine.js";
 import { LocalApplyHandoffRuntime, type LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
 /** The run browser's native secret placeholders (#1412) — what `McpRuntime` provides. */
@@ -110,7 +107,6 @@ export interface LocalApplyRuntimeDeps {
 
 const MAX_EVENTS = 1000;
 const OUTPUT_LINES = 400;
-const SOURCE_BYTES = 256 * 1024;
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,300}$/;
 const HASH = /^[a-f0-9]{64}$/;
 /** One application at a time per agent: two runs on one employer's form is how duplicates happen. */
@@ -175,18 +171,8 @@ interface TerminalJournal {
 	endedAt: number;
 }
 
-class Blocked extends Error {
-	constructor(
-		readonly reason: LocalApplyBlockReason,
-		readonly questions: string[],
-	) {
-		super(reason);
-	}
-}
-
 const posInt = (v: unknown, max: number): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= max ? v : null);
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map((x) => x.trim().toLowerCase()).filter(Boolean) : []);
-const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 
 /** The envelope, validated at the runner's boundary. */
 export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
@@ -251,27 +237,11 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		workspace: o.workspace,
 		sources,
 		artifacts,
+		...(o.cloudDocuments !== undefined ? { cloudDocuments: parseCloudDocuments(o.cloudDocuments, artifacts) } : {}),
 		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
 	};
-}
-
-/**
- * An approved artifact on the real disk: inside the workspace's `applications/`, and still the
- * file #956 hashed. Anything else is not uploaded.
- */
-export function verifyArtifact(workspace: string, home: string, a: LocalApplyArtifact): { path: string; text: string } | { error: string } {
-	const label = a.kind.replace("_", " ");
-	try {
-		const real = realpathSync(resolve(realpathSync(home), a.path.slice(2)));
-		if (!real.startsWith(join(workspace, "applications") + sep)) return { error: `The approved ${label} is not inside the workspace's applications/ folder.` };
-		const buf = readFileSync(real);
-		if (sha256(buf) !== a.sha256) return { error: `The approved ${label} at ${a.path} has changed since it was generated; it will not be uploaded.` };
-		return { path: real, text: buf.toString("utf8") };
-	} catch {
-		return { error: `The approved ${label} at ${a.path} could not be read.` };
-	}
 }
 
 /**
@@ -452,32 +422,7 @@ export class LocalApplyRuntime {
 	private async launch(run: Run, selfUrl: string): Promise<void> {
 		const e = run.envelope;
 		const home = this.deps.homeDir ?? homedir();
-		let workspace: string;
-		try {
-			workspace = resolveWorkspacePath(e.workspace, home);
-		} catch (err) {
-			throw new Blocked("source_unavailable", [`The workspace ${e.workspace} cannot be used: ${err instanceof Error ? err.message : String(err)}`]);
-		}
-		const blocks: SourceBlock[] = [];
-		const missing: string[] = [];
-		if (!e.sources.some((s) => s.role === "profile")) missing.push("No profile source is configured. Choose one in the Application Runner settings.");
-		for (const s of e.sources) {
-			const shown = `${e.workspace}/${s.path}`;
-			try {
-				const buf = readFileSync(resolveSource(workspace, s.path));
-				if (!buf.length || buf.length > SOURCE_BYTES) throw new Error("empty or too large");
-				blocks.push({ label: s.role, text: buf.toString("utf8") });
-				this.emit(run, { type: "source.read", detail: { role: s.role, path: shown, sha256: sha256(buf), bytes: buf.length } });
-			} catch {
-				missing.push(`Your ${s.role} at ${shown} could not be read. Add it, or choose another file in the Application Runner settings.`);
-			}
-		}
-		if (missing.length) throw new Blocked("source_unavailable", missing);
-		for (const a of e.artifacts) {
-			const v = verifyArtifact(workspace, home, a);
-			if ("error" in v) throw new Blocked("artifact_changed", [`${v.error} Re-run tailoring for this application.`]);
-			blocks.push({ label: a.kind, text: v.text });
-		}
+		const { blocks, artifactPath } = prepareApplyDocuments(e, run.dir, home, (event) => this.emit(run, event));
 		// #1079: answers the owner already gave this application, as a source — the same shape a resume's answers take.
 		if (e.ownerAnswers?.length) blocks.push({ label: "owner answers", text: e.ownerAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n") });
 		run.grounding = blocks.map((b) => b.text);
@@ -496,19 +441,13 @@ export class LocalApplyRuntime {
 		}
 		run.browser.tools.setSubject?.({ kind: "local_apply_run", id: e.runId });
 		run.browser.tools.setCallPolicy?.({ isCancelled: () => run.cancelled || run.timedOut || run.state === "ended" });
-		const artifactsByKind = new Map(e.artifacts.map((a) => [a.kind, a] as const));
 		run.bridge = new ApplyBridge(run.browser.tools, {
 			emit: (ev) => this.emit(run, ev),
 			pause: (p) => this.pause(run, p),
 			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
 			isAllowed: (host) => [...run.allow].some((d) => domainWithin(host, d)),
 			grounding: () => run.grounding.join("\n"),
-			artifactPath: (kind: LocalApplyArtifactKind) => {
-				const a = artifactsByKind.get(kind);
-				if (!a) return { error: `No approved ${kind.replace("_", " ")} for this application.` };
-				const v = verifyArtifact(workspace, home, a);
-				return "error" in v ? v : { path: v.path, sha256: a.sha256 };
-			},
+			artifactPath,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			isStopped: () => run.cancelled || run.timedOut || run.state === "ended",
 			now: this.now,
@@ -933,6 +872,9 @@ export class LocalApplyRuntime {
 		};
 		// This must happen before stopping the browser or exposing `ended`: a process restart in the
 		// narrow handoff window must not turn an observed result into `runner_lost` in the cloud.
+		clearCloudDocuments(run.envelope, run.dir);
+		run.grounding = [];
+		run.output = [];
 		this.persistTerminal(run);
 		if (run.child && run.child.exitCode === null) this.kill(run);
 		void run.browser?.stop().catch(() => undefined);

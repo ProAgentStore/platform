@@ -185,7 +185,18 @@ export const LOCAL_ARTIFACT_ENGINE_AUTHS: readonly LocalArtifactEngineAuth[] = [
 export type LocalArtifactKind = "resume" | "cover_letter";
 
 /** A generated file, by handle: its owner-visible path and content hash — never its content. */
+export interface CloudArtifactReference {
+	instanceId: string;
+	fileId: string;
+	name: string;
+	version: string;
+	sha256: string;
+	bytes: number;
+}
+
 export interface LocalArtifactFile {
+	/** Platform-verified Files receipt; never accepted from a runner result. */
+	cloud?: CloudArtifactReference;
 	kind: LocalArtifactKind;
 	path: string;
 	sha256: string;

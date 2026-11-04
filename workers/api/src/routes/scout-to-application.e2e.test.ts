@@ -276,6 +276,8 @@ describe("#953: Scout → Connection → Application Runner → status writeback
 
 		// 5. The Tailor's CLI (scripted) finishes: materials_ready, which the connection hands to the Runner.
 		const tailorRun = dispatches("/local-artifact/run")[0].body.runId as string;
+		// Pre-cloud stored run: this fixture exercises lifecycle/approval rather than byte transport.
+		d1.DB.prepare("UPDATE local_artifact_runs SET policy = json_remove(policy, '$.cloudDocuments') WHERE id = ?1").bind(tailorRun).run();
 		answers["/local-artifact/status"] = {
 			status: 200,
 			body: {

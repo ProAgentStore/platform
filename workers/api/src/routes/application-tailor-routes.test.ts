@@ -159,13 +159,13 @@ it("dispatches only re-extracted, provenance-pinned uploaded text when both owne
 	// masters. The API must therefore refuse before it asks the DO for text or creates a run.
 	d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.92' WHERE instance_id = 't1'");
 	const oldRunner = await call("POST", "/t1/applications", { event: leadEvent() });
-	expect(oldRunner).toMatchObject({ status: 409, body: { error: expect.stringMatching(/needs 0\.4\.93 or newer.*No local source was used/i) } });
+	expect(oldRunner).toMatchObject({ status: 409, body: { error: expect.stringMatching(/needs CLI 0\.4\.205 or newer.*local files will not be substituted/i) } });
 	expect(await appCount()).toBe(0);
 	expect(await runCount()).toBe(0);
 	expect(sent.filter((entry) => entry.path === "/local-artifact/run")).toHaveLength(0);
 
-	// The first published compatible release accepts the same pinned fixture text.
-	d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.93' WHERE instance_id = 't1'");
+	// New tailoring also requires cloud document export; use its first compatible release.
+	d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.205' WHERE instance_id = 't1'");
 	const result = await call("POST", "/t1/applications", { event: leadEvent() });
 	expect(result.status).toBe(201);
 	const dispatched = sent.find((entry) => entry.path === "/local-artifact/run")?.body;
@@ -235,6 +235,8 @@ describe("approved work queues behind a busy machine (#974)", () => {
 
 		// The first run ends; the machine is free and accepts the next.
 		const runningId = String((await runRows()).find((r) => r.status === "running")?.id);
+		// Pre-cloud stored run: this fixture tests queue advancement, not document transport.
+		d1.DB.prepare("UPDATE local_artifact_runs SET policy = json_remove(policy, '$.cloudDocuments') WHERE id = ?1").bind(runningId).run();
 		runnerEnds(RESULT(runningId));
 		answers["/local-artifact/run"] = { status: 202, body: { status: "running" } };
 		await syncActiveTailorRuns(env());
@@ -425,6 +427,8 @@ describe("end to end: apply_requested → materials_ready, exactly once", () => 
 
 		const app = viaRoute.body.application;
 		expect(app).toMatchObject({ status: "tailoring", leadId: "lead-1", lifecycleVersion: 1, sourceInstanceId: "scout", idempotencyKey: event.eventId });
+		// Pre-cloud stored run: retain the legacy result/outbox idempotency contract.
+		d1.DB.prepare("UPDATE local_artifact_runs SET policy = json_remove(policy, '$.cloudDocuments') WHERE id = ?1").bind(app.tailoringRunId).run();
 		runnerEnds(RESULT(app.tailoringRunId));
 		const read = await call("GET", `/t1/applications/${app.id}`);
 		expect(read.body.application).toMatchObject({

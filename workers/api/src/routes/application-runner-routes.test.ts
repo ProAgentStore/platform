@@ -117,6 +117,8 @@ describe("end to end: approved lead → materials_ready → filled and awaiting 
 		if (!plan.ok || !plan.event) throw new Error("fixture lead did not plan");
 		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [plan.event], { traceId: plan.event.eventId });
 		const tailorRun = sent.find((s) => s.path === "/local-artifact/run")?.body.runId as string;
+		// A pre-cloud run completing after upgrade still drives the existing fill lifecycle.
+		d1.DB.prepare("UPDATE local_artifact_runs SET policy = json_remove(policy, '$.cloudDocuments') WHERE id = ?1").bind(tailorRun).run();
 		answers["/local-artifact/status"] = {
 			status: 200,
 			body: {

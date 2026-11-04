@@ -1,3 +1,4 @@
+import { cloudDocumentsRunnerProblem } from "../lib/local-artifact/cloud-documents.js";
 /**
  * Application Tailor (#956) — settings and the application records it produces.
  *
@@ -13,7 +14,7 @@
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { readInstanceConfigPair, patchInstanceConfig } from "../lib/instance-config.js";
-import { cancelTailoring, startTailoring, syncTailorRun, uploadedSourcesRunnerProblem } from "../lib/local-artifact/tailor.js";
+import { cancelTailoring, startTailoring, syncTailorRun } from "../lib/local-artifact/tailor.js";
 import { LOCAL_ARTIFACT_CAPS } from "../lib/local-artifact/contract.js";
 import {
 	APPLICATION_STATUSES,
@@ -146,7 +147,7 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 		const selections = await listUploadedTailorSourceSelections(c.env, instanceId, uid);
 		const live = await ownedUploadedFiles(c, instanceId, uid);
 		const runner = await getLiveRuntime(c.env, instanceId, uid);
-		const runnerProblem = runner ? uploadedSourcesRunnerProblem(runner.runner_version, runner.runner_node) : null;
+		const runnerProblem = runner ? cloudDocumentsRunnerProblem(runner.runner_version, runner.runner_node) : null;
 		const byRole = new Map(selections.map((source) => [source.role, source]));
 		const sources = (["resume", "profile"] as const).map((role) => {
 			const selected = byRole.get(role);

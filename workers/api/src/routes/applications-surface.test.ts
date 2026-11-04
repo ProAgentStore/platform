@@ -496,6 +496,35 @@ describe("no submit path under the default fill-and-review policy", () => {
 });
 
 describe("retry, cancel and resume", () => {
+	it("#1468: regenerates documents after a material preflight failure, preserving the old fill history", async () => {
+		readyApp("missing-docs");
+		const started = await act("ap", { action: "request_review", application_id: "missing-docs", expected_status: "materials_ready" });
+		const runId = started.body.result.runId;
+		answers["/local-apply/status"] = { status: 200, body: { state: "ended", lastSeq: 0, events: [], result: { runId, outcome: "blocked", mode: "fill_and_review", traceId: runId, engineAuth: "unknown", filled: 0, uploaded: [], submitAttempted: false, summary: "", blockReason: "artifact_changed", questions: ["The approved résumé could not be read. Re-run tailoring."] } } };
+		await call("GET", `/ap/application-runs/${runId}`);
+		const blocked = (await call("GET", "/t1/application-queue/item?application_id=missing-docs")).body.item;
+		expect(blocked.actions).toContain("retry_tailoring");
+		const recovered = await act("ap", { action: "retry_tailoring", application_id: "missing-docs", expected_status: "blocked", expected_version: blocked.stateVersion });
+		expect(recovered.status).toBe(200);
+		expect(recovered.body.item).toMatchObject({ status: "tailoring", fillRunId: null, submitAttempted: false });
+		expect(await d1.DB.prepare("SELECT status FROM local_apply_runs WHERE id = ?1").bind(runId).first()).toEqual({ status: "blocked" });
+		expect(await d1.DB.prepare("SELECT ready_emitted_at FROM job_applications WHERE id = 'missing-docs'").first()).toEqual({ ready_emitted_at: null });
+		expect(dispatches("/local-artifact/run")).toHaveLength(1);
+		expect(dispatches("/local-apply/run")).toHaveLength(1);
+		expect((await audit("missing-docs")).at(-1)).toMatchObject({ from_status: "blocked", to_status: "tailoring", reason: "retry_tailoring" });
+	});
+	it("#1468: a preflight failure with a live submission approval cannot regenerate its approved documents", async () => {
+		readyApp("approved-docs");
+		const started = await act("ap", { action: "approve_and_proceed", application_id: "approved-docs", expected_status: "materials_ready" });
+		const runId = started.body.result.runId;
+		answers["/local-apply/status"] = { status: 200, body: { state: "ended", lastSeq: 0, events: [], result: { runId, outcome: "blocked", mode: "auto_submit", traceId: runId, engineAuth: "unknown", filled: 0, uploaded: [], submitAttempted: false, summary: "", blockReason: "artifact_changed", questions: ["Document unavailable."] } } };
+		await call("GET", `/ap/application-runs/${runId}`);
+		const blocked = (await call("GET", "/t1/application-queue/item?application_id=approved-docs")).body.item;
+		expect(blocked.actions).not.toContain("retry_tailoring");
+		expect((await act("ap", { action: "retry_tailoring", application_id: "approved-docs", expected_status: "blocked" })).status).toBe(409);
+		expect(dispatches("/local-artifact/run")).toHaveLength(0);
+	});
+
 	it("retries tailoring that stopped, under a fresh key, with an audit row", async () => {
 		d1.exec(
 			"INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, block_reason, created_at, updated_at) VALUES ('rt', 't1', 'u1', 'scout', 'rt', 1, 'scout:rt:1', 'blocked', '{\"eventId\":\"scout:rt:1\",\"sourceInstanceId\":\"scout\",\"leadId\":\"rt\",\"leadUrl\":\"https://jobs.example.com/rt\",\"lifecycleVersion\":1,\"requestedAt\":\"2026-10-07T00:00:00Z\",\"lead\":{\"title\":\"Engineer\"}}', 'runner_lost', 1, 1)",
@@ -675,6 +704,8 @@ describe("the trace: Scout lead → triage → Tailor run → Runner run → fin
 		await call("POST", "/t1/application-queue/actions", { action: "apply", scout_instance_id: "scout", record_id: "lead-new", expected_status: "new", expected_version: 0 });
 		const appId = (await call("GET", "/t1/application-queue?status=tailoring")).body.items[0].applicationId as string;
 		const tailorRun = dispatches("/local-artifact/run")[0].body.runId as string;
+		// Pre-cloud stored run: this fixture exercises lifecycle/approval rather than byte transport.
+		d1.DB.prepare("UPDATE local_artifact_runs SET policy = json_remove(policy, '$.cloudDocuments') WHERE id = ?1").bind(tailorRun).run();
 		answers["/local-artifact/status"] = {
 			status: 200,
 			body: {
