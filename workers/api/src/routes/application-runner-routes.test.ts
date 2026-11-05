@@ -2598,7 +2598,7 @@ describe("a Runner answer is a durable decision on the application (#1079)", () 
 		finalPause("final-1", ["Expected salary?"], 1, expiresAt); await call("GET", `/ap/application-runs/${runId}`);
 		const original = await d1.DB.prepare("SELECT pause, runner_seq FROM local_apply_runs WHERE id = ?1").bind(runId).first();
 		const version = (await appRow(id))!.state_version;
-		const marker = { kind: "final_review", expiresAt, budgetMs: 60_000, questions: ["Expected salary?"], ...(change === "questions" ? { questions: ["Another question"] } : change === "expiresAt" ? { expiresAt: expiresAt + 1 } : change === "budgetMs" ? { budgetMs: 90_000 } : {}) };
+		const marker = { kind: "final_review", expiresAt: change === "expiresAt" ? expiresAt + 1 : expiresAt, budgetMs: change === "budgetMs" ? 90_000 : 60_000, questions: change === "questions" ? ["Another question"] : ["Expected salary?"] };
 		runner("paused", { pause: { reason: "missing_answer", handoffRequestId: "final-1", ...(change === "removed" ? {} : { answerWait: marker }) }, lastSeq: 2, events: [{ seq: 2, type: "run.paused", at: new Date().toISOString(), pauseReason: "missing_answer" }] });
 		const changed = await call("GET", `/ap/application-runs/${runId}`);
 		expect(changed.status).toBe(409); expect(changed.body.error).toContain("without a new key");
