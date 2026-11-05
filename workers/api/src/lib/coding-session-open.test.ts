@@ -863,7 +863,7 @@ describe("the machine is asked whether it can run the engine before a fresh laun
 		const res = await ensureActiveSession(env, "inst", "u", repo);
 		expect(res.ok).toBe(false);
 		if (res.ok) throw new Error("expected a refusal"); // narrows to the refusal arm, which carries startError
-		expect(res.startError).toMatch(/Codex is not installed on machine "mac"/);
+		expect(res.startError).toMatch(/Codex is unavailable to the runner on machine "mac"/);
 		expect(res.startError).toContain("npm i -g @openai/codex");
 		expect(res.startError).not.toMatch(/api[ _-]?key/i);
 		expect(paths()).not.toContain("/coding/start");

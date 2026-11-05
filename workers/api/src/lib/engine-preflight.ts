@@ -74,7 +74,7 @@ export function enginePreflightMessage(
 	const setup = ENGINE_SETUP[input.clientType] ?? { install: `${name}`, login: `sign ${name} in` };
 	const signIn = `${setup.login} on that machine, or sign it in from any device with coding_engine_reauth`;
 	if (state === "no-binary") {
-		return `${name} is not installed on ${input.machine}: \`${input.bin || input.clientType}\` is not on the PATH \`pags up\` runs with. Install it there (${setup.install}), ${signIn}, then restart \`pags up\` — or choose an engine that machine already has.`;
+		return `${name} is unavailable to the runner on ${input.machine}: \`${input.bin || input.clientType}\` was not found by the runner's executable lookup. It may be installed outside its current PATH or other search locations. Make its executable available to the runner, or install it (${setup.install}) if absent; ${signIn} if needed, then recheck with coding_engine_get.`;
 	}
 	if (state === "signed-out") {
 		return `${name} is installed on ${input.machine} but not signed in there. Sign it in with your subscription — ${signIn} — then try again.`;

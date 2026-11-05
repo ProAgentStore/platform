@@ -7,8 +7,11 @@ describe("enginePreflightMessage", () => {
 
 	it("a missing binary names the engine, the machine, the executable and how to install it", () => {
 		const msg = enginePreflightMessage("no-binary", { clientType: "codex", bin: "codex", machine });
-		expect(msg).toContain('Codex is not installed on machine "pink-laptop"');
+		expect(msg).toContain('Codex is unavailable to the runner on machine "pink-laptop"');
 		expect(msg).toContain("`codex`");
+		expect(msg).toContain("It may be installed elsewhere");
+		expect(msg).not.toContain("is not installed");
+		expect(msg).not.toContain("restart `pags up`");
 		expect(msg).toContain("npm i -g @openai/codex");
 		expect(msg).toContain("codex login");
 	});

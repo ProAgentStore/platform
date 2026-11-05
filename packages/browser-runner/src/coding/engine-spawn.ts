@@ -7,7 +7,8 @@ import { posix, win32 } from "node:path";
  * the pre-launch check (`engine-check.ts`), so the check cannot pass a binary the spawn then fails
  * on (#1044).
  *
- * Off Windows a bare name is spawned as-is: the kernel resolves it on PATH, shebangs included.
+ * Off Windows a bare name is spawned as-is when PATH resolves it, shebangs included.
+ * Known per-user native installs outside a service PATH use their absolute executable.
  *
  * On Windows `CreateProcess` runs only real executables, and libuv only tries `.exe`/`.com`. An npm
  * global install puts nothing of the sort on PATH — just `claude.cmd`, `claude.ps1` and an sh
@@ -42,11 +43,12 @@ export interface EngineSpawnDeps {
 	readText?: (p: string) => string | null;
 	/** The Node that runs a script shim's target. */
 	nodePath?: string;
-	/** The user's home, where xAI's installer puts the Grok CLI. */
+	/** The current user's home, where native engine installers keep their executable links. */
 	home?: string;
 }
 
 /**
+ * Per-user native engine locations. Claude is a fallback after PATH; Grok resolves its vendor first.
  * xAI's Grok CLI for a bare `grok`, wherever PATH points (#1156). Its installer (x.ai/cli/install.sh, install.ps1) always
  * puts it in `~/.grok/bin` (`GROK_BIN_DIR` overrides), and adds that to PATH only in the SHELL's profile — so a
  * `pags up` started by launchd, systemd, a Scheduled Task or an older terminal does not see it. And an npm package of
@@ -55,8 +57,16 @@ export interface EngineSpawnDeps {
  * in a preset is the owner's choice and is never rewritten.
  */
 export function officialEngineBinary(bin: string, deps: EngineSpawnDeps = {}): string | null {
-	if (bin !== "grok") return null;
 	const windows = (deps.platform ?? process.platform) === "win32";
+	// Claude's native installer puts a versioned executable behind this per-user link.
+	// Service environments may predate its shell PATH change. Unlike Grok's vendor
+	// disambiguation, this is only a fallback: preserve the owner's PATH/explicit command.
+	if (bin === "claude") {
+		if (resolveBinary(bin, deps)) return null;
+		const file = (windows ? win32 : posix).join(deps.home ?? homedir(), ".local", "bin", windows ? "claude.exe" : "claude");
+		return (deps.isExecutable ?? defaultIsExecutable)(file) ? file : null;
+	}
+	if (bin !== "grok") return null;
 	const env = deps.env ?? process.env;
 	const dir = envVar(env, "GROK_BIN_DIR", windows)?.trim() || (windows ? win32 : posix).join(deps.home ?? homedir(), ".grok", "bin");
 	const file = (windows ? win32 : posix).join(dir, windows ? "grok.exe" : "grok");
