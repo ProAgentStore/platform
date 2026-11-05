@@ -1,6 +1,5 @@
 import { cliAtLeast } from "../runner-upgrade.js";
 import { LOCAL_APPLY_FULL_TOOLS_REVISION, type LocalApplyToolAccess, type LocalApplyToolAccessAcceptance } from "./contract.js";
-import type { ApplicationRunnerSettings } from "./policy.js";
 
 export const LOCAL_APPLY_FULL_TOOLS_MIN_CLI = "0.4.221";
 export const TOOL_ACCESS_DISCLOSURE = {
@@ -25,7 +24,7 @@ export function parseToolAccessAcceptance(value: unknown): LocalApplyToolAccessA
 	return { revision: LOCAL_APPLY_FULL_TOOLS_REVISION, acceptedAt: a.acceptedAt, acceptedBy: a.acceptedBy, instanceId: a.instanceId };
 }
 
-export function acknowledgeFullBrowserTools(current: ApplicationRunnerSettings, next: ApplicationRunnerSettings, acknowledgement: unknown, owner: { uid: string; instanceId: string }, nowIso: string): { settings: ApplicationRunnerSettings } | { error: string } {
+export function acknowledgeFullBrowserTools<T extends AccessPolicy>(current: T, next: T, acknowledgement: unknown, owner: { uid: string; instanceId: string }, nowIso: string): { settings: T } | { error: string } {
 	if (acknowledgement !== undefined && acknowledgement !== LOCAL_APPLY_FULL_TOOLS_REVISION) return { error: `acknowledgeFullBrowserTools must equal ${LOCAL_APPLY_FULL_TOOLS_REVISION}` };
 	if (next.toolAccess !== "full") return { settings: { ...next, toolAccessAcceptance: null } };
 	const receipt = parseToolAccessAcceptance(current.toolAccessAcceptance);

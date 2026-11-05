@@ -7,7 +7,7 @@ import { startRunnerServer } from "./server.js";
 
 const launch = vi.hoisted(() => vi.fn());
 vi.mock("playwright", () => ({ chromium: { launchPersistentContext: launch, executablePath: () => "/playwright/chromium" } }));
-vi.mock("./mcp-runtime.js", () => ({ McpRuntime: class { async start() {} async stop() {} } }));
+vi.mock("./mcp-runtime.js", () => ({ McpRuntime: class { async start() {} async stop() {} clearSecrets() {} } }));
 let directory: string;
 beforeEach(() => {
 	directory = mkdtempSync(join(tmpdir(), "pags-mode-launch-"));
