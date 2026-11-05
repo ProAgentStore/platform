@@ -26,11 +26,19 @@ describe("generic uploads keep the exact chooser and task binding (#1490)", () =
 		await runner.browserAct({ action: "navigate", url, screenshot: false });
 	}, 60_000);
 	afterEach(async () => {
+		// A timed-out hook can resume after the next test replaces these resources.
+		const owned = { runner, server, directory };
 		vi.restoreAllMocks();
-		await runner.close();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
 		vi.unstubAllEnvs();
-		rmSync(directory, { recursive: true, force: true });
+		try {
+			await owned.runner.close();
+		} finally {
+			try {
+				await new Promise<void>((resolve) => owned.server.close(() => resolve()));
+			} finally {
+				rmSync(owned.directory, { recursive: true, force: true });
+			}
+		}
 	}, 30_000);
 	async function ref(name: string) {
 		const snapshot = await runner.browserSnapshot();
