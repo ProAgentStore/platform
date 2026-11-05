@@ -31,6 +31,8 @@ import { ResumeFiles } from "./resume-files.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 import { SITE_BUILDER_TASK_TYPE, SiteBuilderRuntime } from "./site-builder/runtime.js";
+import { WorkPower } from "./work-power.js";
+import { actionsRunnerBusy } from "./coding/actions-runner.js";
 /** True for a plain object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -76,6 +78,7 @@ const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
  */
 
 export class LocalRunner {
+	readonly workPower: WorkPower;
 	readonly browsers: BrowserSessions;
 	private readonly fileAttachArmed = new WeakSet<Page>();
 	readonly store: RunnerStore;
@@ -136,6 +139,10 @@ export class LocalRunner {
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
 		if (expired > 0) console.log(`[runner] expired ${expired} orphaned in-flight task(s) from a previous session`);
+		this.workPower = new WorkPower({ hasWork: () => {
+			const work = this.liveWork();
+			return work.codingTurns + work.localRuns > 0 || actionsRunnerBusy() || this.store.listTasks().some((task) => task.status === "running");
+		} });
 	}
 
 	/**
@@ -337,6 +344,7 @@ export class LocalRunner {
 	}
 
 	async close(): Promise<void> {
+		this.workPower.close();
 		this.localBrowser.closeAll();
 		this.localArtifact.closeAll();
 		this.localApply.closeAll();

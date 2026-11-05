@@ -2,13 +2,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cachedPayloads } from "../bootstrap/payload.js";
 import { beginTrial, badVersions, markBad } from "../bootstrap/trial.js";
 import { writeInstalled } from "../bootstrap/test-payload.js";
 import { servicePlan, supervisorPath, type ServiceContext } from "../service-install.js";
 import { executeCommand, type WatchdogDeps } from "./core.js";
-import { logHistory, payloadFacts, realWatchdogDeps, runnerFromLocks, tailOf } from "./local.js";
+import { logHistory, observeLocalRunners, payloadFacts, realWatchdogDeps, runnerFromLocks, tailOf } from "./local.js";
 
 let dir: string;
 beforeEach(() => {
@@ -155,5 +155,42 @@ describe("restartRunner refreshes the supervisor script first (#1425)", () => {
 		const deps = realWatchdogDeps(() => undefined, ctx, "0.4.200");
 		await expect(deps.restartRunner()).rejects.toThrow(/no service manager is installed|was not started by a service/);
 		expect(existsSync(supervisorPath(ctx))).toBe(false);
+	});
+});
+
+
+describe("independent local recovery evidence", () => {
+	function liveLock(port: number | null = 49171) {
+		writeFileSync(join(dir, "up-live.lock"), JSON.stringify({ v: 1, rsid: "ours", pid: process.pid, pidStartedAt: "", startedAt: NOW, port, node: "n", machineId: null, account: "a", version: "0.4.177", launch: "service", launchDetail: "", childPids: [], nonce: "n", runnerToken: "private-token", heartbeatAt: 1 }));
+	}
+	const health = (body: unknown) => vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body)));
+	it.each([0, 1])("reads complete work evidence independently of stale cloud delivery (active turns %s)", async (codingTurns) => {
+		liveLock();
+		const fetcher = health({ ok: true, rsid: "ours", work: { codingTurns, localRuns: 0 } });
+		expect((await observeLocalRunners(dir, fetcher)).state).toBe(codingTurns ? "busy" : "healthy");
+		expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:49171/health", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+	});
+	it.each([
+		{ ok: true, rsid: "someone-else", work: { codingTurns: 0, localRuns: 0 } },
+		{ ok: true, rsid: "ours" },
+		{ ok: true, rsid: "ours", work: { codingTurns: 0 } },
+		{ ok: true, rsid: "ours", work: { codingTurns: -1, localRuns: 0 } },
+		{ ok: true, rsid: "ours", work: { codingTurns: "0", localRuns: 0 } },
+	])("cannot treat incomplete work or unverified identity as safe idle: %j", async (body) => {
+		liveLock();
+		expect((await observeLocalRunners(dir, health(body))).state).toBe("unknown");
+	});
+	it("bounds an unresponsive local request and treats it as unknown work", async () => {
+		liveLock();
+		const fetcher = vi.fn<typeof fetch>(async (_url, init) => new Promise((_resolve, reject) => {
+			init?.signal?.addEventListener("abort", () => reject(new Error("timed out")), { once: true });
+		}));
+		const observation = await observeLocalRunners(dir, fetcher);
+		expect(observation).toEqual({ state: "unknown", detail: "local health unavailable" });
+	}, 5000);
+	it("does not invent idle evidence when the address or locks are unavailable", async () => {
+		liveLock(null);
+		expect((await observeLocalRunners(dir, health({}))).state).toBe("unknown");
+		expect((await observeLocalRunners(join(dir, "missing"))).state).toBe("unknown");
 	});
 });

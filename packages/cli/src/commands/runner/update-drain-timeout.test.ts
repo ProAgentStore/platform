@@ -122,7 +122,7 @@ describe("a relayed command's wait on the local runtime is bounded (#1169)", () 
 		try {
 			const admission = new RelayMutationAdmission();
 			const handle = openRelaySocket("inst-1", "wss://api.test", async () => "t", "http://127.0.0.1:9", "rt", false, undefined, undefined, undefined, undefined, () => admission.begin());
-			await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeDefined());
+			await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeTypeOf("function"));
 			const ws = FakeSocket.last;
 			const pending = ws.onmessage?.({ data: JSON.stringify({ id: "hung-1", method: "POST", path: "/coding/run", body: {} }) });
 			await vi.waitFor(() => expect(admission.pending()).toBe(1));

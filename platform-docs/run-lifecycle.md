@@ -200,3 +200,18 @@ A flow noticed in a tmux session is timed from when the platform first saw its c
 - The **recent work** block the agent receives automatically, which is rendered by the same code, so the tool result and the context block can never tell different stories about one run.
 
 Quote `health` rather than re-deriving it. It is one verdict, produced in one place, and every surface that reports a run ships the same explanation of it.
+
+The fleet snapshot separates active execution from pending work: `working` requires run health `working`;
+a parked run is `waiting`, and pending objectives without an active run are `queued`. Automatic resume
+or task pickup does not make either state active coding. Read the reason and `work.waitNote` for the blocker.
+
+### Sleep prevention during owned work
+
+On macOS, the runtime holds an AC-only system-sleep assertion while its requests,
+owned coding turns, clones or other local jobs are active. Concurrent work shares
+one assertion; it is released after work completes or the runtime exits. This
+keeps network maintenance wakes from suspending an active job after a short wake
+window. It does not change persistent power settings, keep the display lit, or
+prevent idle sleep on battery. Explicit sleep, closed-lid restrictions and thermal
+shutdown remain operating-system controls. External Actions worker execution is
+not part of this runtime's owned-work inventory.

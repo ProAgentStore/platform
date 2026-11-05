@@ -230,6 +230,9 @@ const mask = (args: string[], token: string) => args.map((a) => (a === token ? "
 
 const jobs = new Map<string, ActionsRunnerJob>();
 
+/** Detached setup/removal is owned work even after its HTTP request returns. */
+export function actionsRunnerBusy(): boolean { return [...jobs.values()].some((job) => job.state === "running"); }
+
 /** For tests. */
 export function clearRunnerJobs(): void {
 	jobs.clear();

@@ -68,6 +68,11 @@ export interface WatchdogStatusBody {
 	service: "launchd" | "systemd" | "scheduled-task" | "unmanaged";
 }
 
+export interface LocalRunnerObservation {
+	state: "healthy" | "busy" | "unknown";
+	detail: string;
+}
+
 export interface WatchdogDeps {
 	now: () => number;
 	startedAt: number;
@@ -82,6 +87,8 @@ export interface WatchdogDeps {
 	 * read as "now" or as "dead": {@link isWedged} treats null as "nothing to judge", same as no lock.
 	 */
 	runner: () => { alive: boolean; uptimeSec: number | null; heartbeatAt: number | null };
+	/** Independent, bounded local health/work evidence. Missing evidence never authorizes a restart. */
+	observeRunner?: () => Promise<LocalRunnerObservation>;
 	/** Restarts and crashes the service manager's log shows in the last 24 hours, and the last failure line. */
 	history: () => { crashes24h: number | null; lastError: string | null };
 	machine: () => { cpuLoad1: number | null; memUsedPct: number | null; diskUsedPct: number | null; diskFreeGb: number | null };
@@ -231,8 +238,8 @@ export async function executeCommand(c: WatchdogCommand, d: WatchdogDeps): Promi
 }
 
 /**
- * Alive but not actually talking to the platform for a long time: the process is there (the OS
- * says so) but it is not doing its job, which "alive" alone cannot tell apart from "working fine".
+ * Legacy predicate name: identifies a live runner with stale cloud delivery, NOT a proven wedge.
+ * It only schedules independent observation; it must never authorize a restart.
  * `heartbeatAt === null` is "nothing to judge" (no lock, or no successful heartbeat has ever landed
  * — e.g. just started, or signed out), never treated as wedged. Pure.
  */
@@ -256,16 +263,17 @@ export async function runWatchdogLoop(d: WatchdogDeps, link: WatchdogLink, repor
 	let lastSelfHealAt = 0;
 	while (!link.stopped()) {
 		let wait = WATCHDOG_HEARTBEAT_MS;
-		// Self-heal BEFORE the beat (#1416): a wedged runner is detected and restarted ON THE MACHINE,
-		// which does not depend on reaching the platform at all — the very case a dead relay link is.
+		// Cloud delivery staleness is a reason to inspect locally, never proof of a hung process.
+		// A healthy runtime may be working throughout a network outage; an unresponsive one cannot
+		// prove its work is safe to interrupt. Leave process death recovery to the service manager.
 		const now = d.now();
 		if (isWedged(d.runner(), now) && now - lastSelfHealAt > SELF_HEAL_COOLDOWN_MS) {
 			lastSelfHealAt = now;
 			try {
-				d.log(`self-heal: the runner has been alive but has not reached the platform in over ${Math.round(SELF_HEAL_STALE_MS / 60_000)}m — restarting it`);
-				d.log(`self-heal: ${await d.restartRunner()}`);
+				const local = await d.observeRunner?.();
+				d.log(`recovery deferred: platform heartbeats are stale; local runtime ${local?.state ?? "unknown"}${local ? ` (${local.detail})` : ""}. No automatic restart: transport loss does not establish a safe restart.`);
 			} catch (e) {
-				d.log(`self-heal: restart failed — ${msg(e)}`);
+				d.log(`recovery deferred: local work is unknown (${msg(e)}); nothing restarted`);
 			}
 		}
 		try {

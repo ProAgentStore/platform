@@ -27,7 +27,8 @@ import { INFRA_STOP_REASONS, PROVIDER_ACCOUNT_STOP_REASONS, stopReasonsSql } fro
 import { clipMarked } from "./clip-marked.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
-import { listIssuesPage, postIssueComment, type IssueSummary } from "./github-issues.js";
+import { listIssuesPage, postIssueComment, type IssueSummary, type IssuesPage } from "./github-issues.js";
+import { scanAutoPickupIssues, type AutoPickupIssueScan } from "./auto-pickup-pages.js";
 import { patchInstanceConfig, parseConfigBlob } from "./instance-config.js";
 import { issueJobKey } from "./issue-tickets.js";
 import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS, HIGH_SIGNAL_TYPE_LABELS, LOW_SIGNAL_TYPE_LABELS } from "./label-vocabulary.js"; // the label vocabulary's single source (#1245)
@@ -198,7 +199,8 @@ export function autoPickupObjective(repo: string, issue: Pick<IssueSummary, "num
 // ── The wake ────────────────────────────────────────────────────────────────────────────────────
 
 export interface AutoPickupDeps {
-	listOpenIssues?: (repo: string) => Promise<{ issues: IssueSummary[]; unreadable: boolean }>;
+	listOpenIssues?: (repo: string) => Promise<AutoPickupIssueScan>;
+	listIssuePage?: (repo: string, page: number) => Promise<IssuesPage>;
 	postComment?: (repo: string, number: number, body: string) => Promise<boolean>;
 	notify?: (title: string, body: string) => Promise<void>;
 	startQueued?: (repoId: string) => Promise<unknown>;
@@ -405,15 +407,16 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		}
 
 		const listOpen = deps.listOpenIssues ?? (async (repo: string) => {
-			const page = await listIssuesPage(env, uid, repo, { limit: 100, order: "oldest" });
-			return { issues: page.issues, unreadable: !!page.unreadable };
+			return scanAutoPickupIssues((page) => deps.listIssuePage ? deps.listIssuePage(repo, page) : listIssuesPage(env, uid, repo, { limit: 100, order: "oldest", page }));
 		});
 		const positions = await boardPositions(env, iid);
 		const candidates: PickCandidate[] = [];
 		const unreadable: string[] = [];
+		const incomplete: string[] = [];
 		for (const r of await listRepos(env, iid, uid)) {
 			if (!r.githubRepo) continue;
 			const listed = await listOpen(r.githubRepo);
+			if (listed.incomplete || listed.unreadable) incomplete.push(r.githubRepo);
 			if (listed.unreadable) {
 				unreadable.push(r.githubRepo);
 				continue;
@@ -448,13 +451,13 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		}
 		if (!chosen) {
 			const base = verdict.pick ? `every eligible issue was refused by the start guard: ${passedOver.join(", ")}` : verdict.reason;
-			const reason = `${base}${unreadable.length ? ` (could not read ${unreadable.join(", ")})` : ""}`;
-			await log(env, iid, uid, "none_eligible", clipMarked(reason, 300), null, null, now);
+			const reason = incomplete.length ? `Issue scan incomplete for ${incomplete.join(", ")}; no eligible issue was found in the scanned pages and additional work may remain${unreadable.length ? ` (could not read ${unreadable.join(", ")})` : ""}` : base;
+			await log(env, iid, uid, incomplete.length ? "error" : "none_eligible", clipMarked(reason, 300), null, null, now);
 			// Told once per idle streak, then re-alerted every NONE_ELIGIBLE_RENOTIFY_MS while it stays idle (#1417)
 			// — the old rule told the owner once, ever, per streak, so an idle coder went silent for days.
 			const lastNotify = await lastNoneEligibleNotifyAt(env, iid, uid);
 			if (lastNotify == null || now - lastNotify >= NONE_ELIGIBLE_RENOTIFY_MS) {
-				await (deps.notify ?? defaultNotify(env, uid, iid))("Auto-pickup: nothing to start", `The queue is empty and ${reason}, so the coder is idle.`).catch(() => undefined);
+				await (deps.notify ?? defaultNotify(env, uid, iid))(incomplete.length ? "Auto-pickup: issue scan incomplete" : "Auto-pickup: nothing to start", `The queue is empty and ${reason}, so the coder is idle.`).catch(() => undefined);
 				await markNoneEligibleNotified(env, iid, uid, now);
 			}
 			return { started: false, reason };
@@ -465,7 +468,7 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		const entryId = `objq-${crypto.randomUUID()}`;
 		const admitted = await admitAutoPickup(env, { entryId, instanceId: iid, userId: uid, repoId, repo, issue: issue.number,
 			objective: autoPickupObjective(repo, issue), maxIterations: settings.maxIterations,
-			detail: `issue #${issue.number}: ${issue.title}${warn.note ? ` (${warn.note})` : ""}${passedOver.length ? ` — passed over ${passedOver.join(", ")}` : ""}`, now, observedAdmission, providerAccount });
+			detail: `issue #${issue.number}: ${issue.title}${incomplete.length ? ` (issue scan incomplete for ${incomplete.join(", ")}; selected from scanned pages)` : ""}${warn.note ? ` (${warn.note})` : ""}${passedOver.length ? ` — passed over ${passedOver.join(", ")}` : ""}`, now, observedAdmission, providerAccount });
 		if (admitted) await markNoneEligibleNotified(env, iid, uid, null); // picked something: the next idle spell is news again, not still debounced against the last one
 		if (!admitted) {
 			const gate = await queueGate(env, iid, uid); // includes a provider hold observed after the first gate (#1314)
@@ -547,7 +550,9 @@ export const AUTO_PICKUP_IDLE_RECHECK_MS = 30 * 60_000;
  * the wake was refused once (a gate, an error) and no run ever ended again. This looks, every few
  * minutes, for coders with auto-pickup on and nothing to do, and wakes each the same way a run's end
  * does — so every guard and every log row is the same. A coder whose last wake found nothing
- * eligible is left alone for {@link AUTO_PICKUP_IDLE_RECHECK_MS}. Never throws.
+ * eligible is left alone for {@link AUTO_PICKUP_IDLE_RECHECK_MS}. Selection rotates durably by
+ * last inspection, including busy/gated coders: lexical LIMIT alone starves everyone after the
+ * first batch forever. The cursor is independent of debounced outcome logs. Never throws.
  */
 export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof wakeIdleCoder = wakeIdleCoder): Promise<{ woken: number }> {
 	let woken = 0;
@@ -559,12 +564,15 @@ export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof w
 			    OR EXISTS (SELECT 1 FROM auto_pickup_log l JOIN instance_objective_queue q ON q.id = l.entry_id
 			      WHERE l.instance_id = i.id AND l.outcome = 'started' AND l.reserved = 0
 			        AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3)))
-			  ORDER BY i.id LIMIT ?2`,
+			  ORDER BY COALESCE(CASE WHEN json_type(i.config, '$.autoPickupSweep.lastInspectedAt') = 'integer'
+			     THEN json_extract(i.config, '$.autoPickupSweep.lastInspectedAt') END, 0), i.id LIMIT ?2`,
 		)
 			.bind(now - AUTO_PICKUP_IDLE_RECHECK_MS, AUTO_PICKUP_SWEEP_LIMIT, now)
 			.all<{ id: string; user_id: string }>();
 		for (const r of results ?? []) {
 			try {
+				// Stamp before every guard so a permanently busy or gated batch cannot monopolize the timer.
+				await patchInstanceConfig(env, r.id, r.user_id, "autoPickupSweep", { lastInspectedAt: now });
 				await recoverReservations(env, r.id, now);
 				// A run parked on a question whose answer is in counts as work, but only the wake resumes it (#1323):
 				// skipping its coder here left the answer waiting and the coder busy for ever.

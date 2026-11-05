@@ -214,13 +214,14 @@ describe("the loop (#1320)", () => {
 	});
 
 	describe("self-heal: a runner alive but silent for a long time (#1416)", () => {
-		it("restarts it, logs why, and does so BEFORE the beat — self-heal does not depend on reaching the platform", async () => {
-			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1 });
+		it.each(["healthy", "busy", "unknown"] as const)("stale cloud delivery with %s local evidence never restarts a live runner", async (state) => {
+			const observeRunner = vi.fn(async () => ({ state, detail: "local evidence" }));
+			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1, observeRunner });
 			const { l } = link([async () => ({}), async () => ({})]);
 			await runWatchdogLoop(d, l, reporter);
-			expect(d.restarts).toBe(1);
-			expect(d.lines.some((x) => x.includes("self-heal") && x.includes("restarting it"))).toBe(true);
-			expect(d.lines.some((x) => x.includes("self-heal: restart the runner's LaunchAgent: ok"))).toBe(true);
+			expect(d.restarts).toBe(0);
+			expect(observeRunner).toHaveBeenCalledTimes(1);
+			expect(d.lines.some((x) => x.includes(`local runtime ${state}`) && x.includes("No automatic restart"))).toBe(true);
 		});
 
 		it("does NOT self-heal while within the window — the same 'slow is not dead' caution as the lock's own rule", async () => {
@@ -244,19 +245,20 @@ describe("the loop (#1320)", () => {
 			expect(d.restarts).toBe(0);
 		});
 
-		it("does not hammer the restart every beat — cooldown applies even across several beats", async () => {
+		it("bounds repeated local observations and deferred logging with the cooldown", async () => {
 			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1 });
 			const { l } = link([async () => ({}), async () => ({}), async () => ({}), async () => ({})]);
 			await runWatchdogLoop(d, l, reporter);
-			expect(d.restarts).toBe(1);
+			expect(d.restarts).toBe(0);
+			expect(d.lines.filter((x) => x.includes("recovery deferred"))).toHaveLength(1);
 			expect(SELF_HEAL_COOLDOWN_MS).toBeGreaterThan(0);
 		});
 
-		it("a restart failure is logged, never thrown, and the beat still happens", async () => {
-			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1, restartRunner: async () => { throw new Error("launchctl: no such process"); } });
+		it("a local observation failure is logged, never thrown, and the beat still happens", async () => {
+			const d = deps({ heartbeatAt: 1_000_000 - SELF_HEAL_STALE_MS - 1, observeRunner: async () => { throw new Error("health unavailable"); } });
 			const { l, beats } = link([async () => ({}), async () => ({})]);
 			await expect(runWatchdogLoop(d, l, reporter)).resolves.toBeUndefined();
-			expect(d.lines.some((x) => x.includes("self-heal: restart failed") && x.includes("no such process"))).toBe(true);
+			expect(d.lines.some((x) => x.includes("local work is unknown") && x.includes("health unavailable"))).toBe(true);
 			expect(beats).toHaveLength(2);
 		});
 	});

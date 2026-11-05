@@ -468,6 +468,42 @@ describe("the token ceiling, skips and the timer (#1276)", () => {
 		expect(woken).not.toContain("off");
 	});
 
+	it("a durable sweep cursor reaches the 26th coder even when the first 25 remain busy", async () => {
+		await setAutoPickup(env, "coder", "u1", { enabled: false });
+		const ids = Array.from({ length: 26 }, (_, i) => `fleet-${String(i).padStart(2, "0")}`);
+		seedTenant(d1, { userId: "u1", instanceIds: ids });
+		for (const id of ids) await setAutoPickup(env, id, "u1", { enabled: true });
+		for (const id of ids.slice(0, 25)) d1.sqlite.prepare("INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at) VALUES (?, 'u1', ?, 'busy', 'running', 10, 1)").run(`run-${id}`, id);
+		const woken: string[] = [];
+		const wake = async (_e: Env, iid: string) => { woken.push(iid); return "ok"; };
+		const now = Date.now();
+		await sweepAutoPickup(env, now, wake);
+		expect(woken).toEqual([]);
+		// No in-memory scheduler state: each invocation reads the same durable database afresh.
+		await sweepAutoPickup({ ...env }, now + 60_000, wake);
+		expect(woken).toEqual([ids[25]]);
+	});
+
+	it("rotates the bounded fleet sweep even when inspected coders keep failing their admission gates", async () => {
+		await setAutoPickup(env, "coder", "u1", { enabled: false });
+		const ids = Array.from({ length: 26 }, (_, i) => `fleet-${String(i).padStart(2, "0")}`);
+		seedTenant(d1, { userId: "u1", instanceIds: ids });
+		for (const id of ids) await setAutoPickup(env, id, "u1", { enabled: true });
+		const inspected: string[][] = [[], []];
+		const now = Date.now();
+		for (let pass = 0; pass < 2; pass++) await sweepAutoPickup({ ...env }, now + pass * 60_000, async (_e, iid) => {
+			inspected[pass].push(iid);
+			return "provider hold; no run started";
+		});
+		expect(inspected[0]).toHaveLength(25);
+		expect(inspected[1]).toHaveLength(25);
+		expect(new Set(inspected.flat()).size).toBe(26);
+		expect(d1.sqlite.prepare("SELECT id FROM instance_objective_queue").all()).toEqual([]);
+		const config = JSON.parse((d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id = ?").get(ids[25]) as { config: string }).config);
+		expect(config.autoPickup).toMatchObject({ enabled: true, maxPerDay: AUTO_PICKUP_DEFAULTS.maxPerDay });
+		expect(config.autoPickupSweep.lastInspectedAt).toBe(now + 60_000);
+	});
+
 	it("an answered parked run is woken by the timer, and once its resume is past the grace it no longer keeps the coder busy", async () => {
 		const now = Date.now();
 		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status) VALUES ('s1', 'coder', 'r1', 'u1', 'claude', 'suspended')`);

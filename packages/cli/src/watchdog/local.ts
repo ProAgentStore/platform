@@ -14,7 +14,7 @@ import { sampleMemAvailable } from "../commands/runner/resources.js";
 import { configDir, lockDir, pidAlive, readLock } from "../runner-lock.js";
 import { serviceContext } from "../service-context.js";
 import { refreshSupervisorScript, runnerServiceRestart, serviceLogPath, servicePlan, type ServiceContext } from "../service-install.js";
-import type { PayloadFacts, WatchdogDeps } from "./core.js";
+import type { LocalRunnerObservation, PayloadFacts, WatchdogDeps } from "./core.js";
 import { scrubText } from "./scrub.js";
 
 const run = promisify(execFile);
@@ -50,6 +50,35 @@ export function runnerFromLocks(dir: string = lockDir(), now = Date.now()): { al
 		if (lock && pidAlive(lock.pid)) return { alive: true, uptimeSec: Math.max(0, Math.round((now - lock.startedAt) / 1000)), launch: lock.launch, heartbeatAt: lock.heartbeatAt ?? null };
 	}
 	return { alive: false, uptimeSec: null, launch: null, heartbeatAt: null };
+}
+
+/** Read every live holder independently of the relay. Identity and complete work counters are
+ * required: an old runtime, recycled port, timeout or unreadable lock is unknown, never idle. */
+export async function observeLocalRunners(dir: string = lockDir(), doFetch: typeof fetch = fetch): Promise<LocalRunnerObservation> {
+	let names: string[];
+	try {
+		names = readdirSync(dir).filter((n) => /^up-.*\.lock$/.test(n));
+	} catch {
+		return { state: "unknown", detail: "runner locks unavailable" };
+	}
+	const observations = await Promise.all(names.map(async (name): Promise<LocalRunnerObservation | null> => {
+		const lock = readLock(join(dir, name));
+		if (!lock) return { state: "unknown", detail: "runner lock unreadable" };
+		if (!pidAlive(lock.pid)) return null;
+		if (!lock.port || !lock.runnerToken) return { state: "unknown", detail: "local health address unavailable" };
+		try {
+			const response = await doFetch(`http://127.0.0.1:${lock.port}/health`, { headers: { Authorization: `Bearer ${lock.runnerToken}` }, signal: AbortSignal.timeout(3000) });
+			if (!response.ok) return { state: "unknown", detail: "local health request failed" };
+			const body = await response.json() as { ok?: unknown; rsid?: unknown; work?: { codingTurns?: unknown; localRuns?: unknown } };
+			if (body.ok !== true || body.rsid !== lock.rsid) return { state: "unknown", detail: "local runtime identity unverified" };
+			const counts = [body.work?.codingTurns, body.work?.localRuns];
+			if (!counts.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0)) return { state: "unknown", detail: "local work counters unavailable" };
+			return counts.some((n) => (n as number) > 0) ? { state: "busy", detail: "active local work" } : { state: "healthy", detail: "responsive with no active work observed" };
+		} catch {
+			return { state: "unknown", detail: "local health unavailable" };
+		}
+	}));
+	return observations.find((o) => o?.state === "busy") ?? observations.find((o) => o?.state === "unknown") ?? observations.find((o) => o?.state === "healthy") ?? { state: "unknown", detail: "no live runtime observed" };
 }
 
 /** Restarts the service manager's log shows in the last 24 hours (the supervisor writes one `exited (…)` line per death), and the last failure line. */
@@ -105,6 +134,7 @@ export function realWatchdogDeps(log: (line: string) => void, ctx: ServiceContex
 			const r = runnerFromLocks();
 			return { alive: r.alive, uptimeSec: r.uptimeSec, heartbeatAt: r.heartbeatAt };
 		},
+		observeRunner: () => observeLocalRunners(),
 		history: () => logHistory(logPath),
 		machine: () => {
 			let disk: { used: number | null; free: number | null } = { used: null, free: null };

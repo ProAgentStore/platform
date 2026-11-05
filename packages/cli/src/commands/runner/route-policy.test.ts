@@ -101,7 +101,7 @@ describe("the relay socket refuses before forwarding (#1164)", () => {
 
 	async function socketFor(caps: DeclaredCapabilities) {
 		const handle = openRelaySocket("inst-repo-coder", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, undefined, undefined, undefined, (_m, path) => routeRefusal(caps, path));
-		await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeDefined());
+		await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeTypeOf("function"));
 		return { ws: FakeSocket.last, handle };
 	}
 

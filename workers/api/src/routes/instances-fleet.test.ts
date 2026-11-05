@@ -78,6 +78,17 @@ async function call(path: string, init: RequestInit = {}) {
 type Snap = { instanceId: string; status: string; reason: string; tags: string[]; work: { objective: string } | null; decision: { pending: number; first: string } | null; issues: { actionable: number; next: Array<{ number: number }> } | null };
 
 describe("GET /my/snapshot (#961)", () => {
+	it("counts and filters parked and queued instances separately from working runs", async () => {
+		d1.exec(`UPDATE agent_loop_runs SET waiting_reason = 'runner_away', waiting_until = ${now + 600_000}, parked_since = ${now} WHERE run_id = 'r-work'`);
+		d1.exec(`INSERT INTO instance_objective_queue (id, instance_id, user_id, objective, status, created_at) VALUES ('q-truth', 'i-idle', 'u1', 'Waiting for admission', 'pending', ${now})`);
+		const { body } = await call("/v1/instances/my/snapshot?tag=store");
+		expect(body.counts).toMatchObject({ waiting: 1, queued: 1, working: 0 });
+		const filtered = await call("/v1/instances/my/snapshot?tag=store&status=waiting,queued");
+		expect(filtered.status).toBe(200);
+		expect((filtered.body.instances as Snap[]).map((row) => [row.instanceId, row.status])).toEqual([["i-work", "waiting"], ["i-idle", "queued"]]);
+		expect((await call("/v1/instances/my/snapshot?tag=store&status=working")).body.instances).toEqual([]);
+	});
+
 	it("one call: every tagged instance with its derived status, most-needs-attention first", async () => {
 		const { status, body } = await call("/v1/instances/my/snapshot?tag=store");
 		expect(status).toBe(200);

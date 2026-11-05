@@ -59,7 +59,8 @@ export function judgeMachine(m: MachineFacts, release: { version: string; firstS
 		out.push({ kind: "version_drift", detail: `${m.label} runs ${m.runnerVersion}; ${release.version} has been out for ${Math.floor((now - release.firstSeenAt) / 3_600_000)} hours.` });
 	}
 	if (m.updateStatus === "failed") out.push({ kind: "update_failed", detail: `${m.label}'s last update failed${m.updateError ? `: ${m.updateError}` : ""}. It was rolled back or left on its current version.` });
-	if (m.starts24h !== null && m.starts24h >= CRASH_LOOP_STARTS_24H) out.push({ kind: "crash_loop", detail: `${m.label}'s runner started ${m.starts24h} times in 24 hours, which is a crash loop or a restart storm.` });
+	// Keep the persisted legacy alert key; start counts alone cannot establish why processes ended.
+	if (m.starts24h !== null && m.starts24h >= CRASH_LOOP_STARTS_24H) out.push({ kind: "crash_loop", detail: `${m.label}'s runner started ${m.starts24h} times in 24 hours. This includes updates and manual restarts; inspect exit evidence before diagnosing a crash loop.` });
 	return out;
 }
 

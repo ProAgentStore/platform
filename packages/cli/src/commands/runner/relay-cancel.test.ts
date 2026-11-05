@@ -43,7 +43,7 @@ async function open() {
 	vi.stubGlobal("WebSocket", FakeSocket);
 	const admission = new RelayMutationAdmission();
 	const handle = openRelaySocket("inst-1", "wss://api.test", async () => "t", "http://127.0.0.1:9", "rt", false, undefined, undefined, undefined, undefined, () => admission.begin());
-	await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeDefined());
+	await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeTypeOf("function"));
 	const ws = FakeSocket.last;
 	const send = (frame: unknown) => ws.onmessage?.({ data: JSON.stringify(frame) });
 	return { admission, handle, ws, send };

@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it } from "vitest";
 import { fakeMachine } from "./windows-runner.fixture.js";
-import { type ActionsRunnerDeps, type ActionsRunnerJob, CAPABILITY_TOOLS, clearRunnerJobs, detectCapabilities, detectCapabilityLabels, macosTierLabels, readInstalledRunner, requestLocalActionsRecovery, routeActionsRunner, runnerAsset, runnerDir, runnerJob, startRunnerJob } from "./actions-runner.js";
+import { type ActionsRunnerDeps, type ActionsRunnerJob, actionsRunnerBusy, CAPABILITY_TOOLS, clearRunnerJobs, detectCapabilities, detectCapabilityLabels, macosTierLabels, readInstalledRunner, requestLocalActionsRecovery, routeActionsRunner, runnerAsset, runnerDir, runnerJob, startRunnerJob } from "./actions-runner.js";
 
 const TOKEN = "AABBCCDDEEFF00112233445566778899";
 const HOME = "/Users/pags";
@@ -59,6 +59,16 @@ const ORG = { url: "https://github.com/proappstore-online", token: TOKEN, name: 
 beforeEach(() => clearRunnerJobs());
 
 describe("install (#1209)", () => {
+	it("keeps detached setup visible to sleep prevention until the job completes", async () => {
+		let finish!: (version: string) => void;
+		const d = fake({ latestVersion: () => new Promise<string>((resolve) => { finish = resolve; }) });
+		expect(actionsRunnerBusy()).toBe(false);
+		const job = startRunnerJob("install", ORG, d);
+		expect(actionsRunnerBusy()).toBe(true);
+		finish("2.329.0");
+		await settle(job);
+		expect(actionsRunnerBusy()).toBe(false);
+	});
 	it("macOS: configures this CPU's runner, then gives the exact local system-service step without a login-only service", async () => {
 		const d = fake();
 		const job = await settle(startRunnerJob("install", { ...ORG, runnerGroup: "pags-pink-laptop", serviceMode: "macos_system" }, d));

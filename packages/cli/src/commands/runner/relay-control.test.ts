@@ -39,7 +39,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 async function open(onControl?: (path: string) => Promise<{ status: number; result: unknown }>, beginMutation: () => (() => void) | null = () => () => undefined) {
 	const handle = openRelaySocket("inst-1", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, onControl, undefined, beginMutation);
-	await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeDefined());
+	await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeTypeOf("function"));
 	return { ws: FakeSocket.last, handle };
 }
 

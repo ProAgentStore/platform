@@ -36,6 +36,8 @@ describe("what is wrong with a machine (#1320)", () => {
 		const j = judgeMachine(base({ updateStatus: "failed", updateError: "pre-flight failed: only 90 MB free", starts24h: CRASH_LOOP_STARTS_24H }), RELEASE, NOW);
 		expect(j.map((x) => x.kind).sort()).toEqual(["crash_loop", "update_failed"]);
 		expect(j.find((x) => x.kind === "update_failed")?.detail).toContain("only 90 MB free");
+		expect(j.find((x) => x.kind === "crash_loop")?.detail).toContain("includes updates and manual restarts");
+		expect(j.find((x) => x.kind === "crash_loop")?.detail).not.toContain("which is a crash loop");
 		expect(kinds(base({ starts24h: CRASH_LOOP_STARTS_24H - 1 }))).toEqual([]); // three starts (pink-laptop) is not yet a loop
 	});
 	it("an offline machine is not judged here at all: silence has its own alarm", () => {

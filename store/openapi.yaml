@@ -3044,6 +3044,8 @@ paths:
         `decision_blocked` is a pending remote-MCP elicitation, answerable over MCP. A coding run
         paused for a person is `hard_blocked`: its pause cannot be answered from chat (#960). A
         repository whose issues could not be read is reported unread, never as having none.
+        `working` means an active run. A parked run is `waiting` even when it resumes automatically;
+        pending objectives with no active run are `queued`. Neither is counted as `working`.
       operationId: getFleetSnapshot
       tags: [Instances]
       parameters:
@@ -3087,7 +3089,7 @@ paths:
                         name: { type: string, nullable: true }
                         slug: { type: string, nullable: true }
                         tags: { type: array, items: { type: string } }
-                        status: { type: string, enum: [decision_blocked, idle_needs_work, hard_blocked, working, unknown, paused, idle] }
+                        status: { type: string, enum: [decision_blocked, idle_needs_work, hard_blocked, waiting, queued, working, unknown, paused, idle] }
                         reason: { type: string }
                         health: { type: string, enum: [working, waiting, stalled, idle] }
                         work: { type: object, nullable: true, additionalProperties: true }

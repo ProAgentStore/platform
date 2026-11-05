@@ -89,7 +89,7 @@ export default function Fleet() {
 						<table className="w-full text-xs min-w-[760px]">
 							<thead>
 								<tr className="text-left text-muted-soft">
-									{["Machine", "Status", "Hardware", "Sessions / max", "Disk", "Load/core 24 h", "Relay p50", "Restarts", "Supervisor", "Last sample"].map((h) => (
+									{["Machine", "Telemetry", "Hardware", "Sessions / recommended", "Disk", "Load/core 24 h", "Relay p50", "Runner starts", "Supervisor", "Last sample"].map((h) => (
 										<th key={h} className="font-semibold pb-2 pr-3 whitespace-nowrap">
 											{h}
 										</th>
@@ -128,7 +128,7 @@ export default function Fleet() {
 								})}
 							</tbody>
 						</table>
-						<p className="text-2xs text-muted-soft mt-2">Load and relay figures are from 5-minute worst-of buckets over the last 24 hours. A machine with no heartbeat for 3 minutes is offline; its line ends where it stopped.</p>
+						<p className="text-2xs text-muted-soft mt-2">Load and relay figures are from 5-minute worst-of buckets over the last 24 hours. A resource sample older than 3 minutes is marked stale; its line ends at the last reading. This does not establish host power, runner responsiveness or task progress.</p>
 					</Card>
 					<FleetCharts machines={machines} tier={tier} nowMs={nowMs} />
 				</>

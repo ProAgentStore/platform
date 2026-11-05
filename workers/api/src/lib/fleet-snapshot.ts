@@ -21,7 +21,7 @@ import type { IssueSummary } from "./github-issues.js";
  * Most-needs-attention first. `paused` (#1028) sits just before `idle`: the owner paused it, so it
  * needs nothing from them and takes no work until resumed.
  */
-export const FLEET_STATUSES = ["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "paused", "idle"] as const;
+export const FLEET_STATUSES = ["decision_blocked", "idle_needs_work", "hard_blocked", "waiting", "queued", "working", "unknown", "paused", "idle"] as const;
 export type FleetStatus = (typeof FLEET_STATUSES)[number];
 
 /** Labels that mean "a person has to do this", so an agent picking it up would only stall on it. */
@@ -115,7 +115,7 @@ export function deriveFleetStatus(f: FleetFacts): { status: FleetStatus; reason:
 	// before every run, question and backlog verdict, and its backlog is never offered as work.
 	if (f.instanceStatus === "paused") return { status: "paused", reason: "Paused — it takes no work until it is resumed (resume_instance), so its backlog is not offered." };
 	if (f.health === "waiting" && f.waitingReason === "decision" && f.answerPending) {
-		return { status: "working", reason: "Your answer is in and the run has not applied it yet — it resumes with it as soon as its repository is free. Do not answer again." };
+		return { status: "waiting", reason: "Your answer is in and the run has not applied it yet — it resumes with it as soon as its repository is free. Do not answer again." };
 	}
 	if (f.health === "waiting" && f.waitingReason === "decision") {
 		const q = f.runQuestion;
@@ -140,8 +140,14 @@ export function deriveFleetStatus(f: FleetFacts): { status: FleetStatus; reason:
 	}
 	if (f.health === "stalled") return { status: "hard_blocked", reason: "The run is open but nothing has ticked — someone has to look at the machine." };
 	if (f.ownerSecrets > 0) return { status: "hard_blocked", reason: `${f.ownerSecrets} secret value${f.ownerSecrets === 1 ? "" : "s"} waiting to be entered in the console.` };
-	if (f.health === "working" || f.health === "waiting") return { status: "working", reason: f.health === "waiting" ? "The run is parked and resumes on its own." : "A run is in progress." };
-	if (f.queueDepth > 0) return { status: "working", reason: `${f.queueDepth} objective${f.queueDepth === 1 ? "" : "s"} queued to start.` };
+	if (f.health === "working") return { status: "working", reason: "A run is in progress." };
+	if (f.health === "waiting") return {
+		status: "waiting",
+		reason: f.waitingReason === "runner_away"
+			? "The run is waiting for its PAGS runner connection; host and runner process state are unknown. No instruction is advancing while it waits."
+			: "The run is parked and waiting to resume; no instruction is advancing while it waits.",
+	};
+	if (f.queueDepth > 0) return { status: "queued", reason: `${f.queueDepth} objective${f.queueDepth === 1 ? "" : "s"} queued to start; no run is working.` };
 	// #1404: checked only once nothing is actively working or queued — a run that started since
 	// supersedes it, and a stale failure must not outrank real work in progress. This is the gap a
 	// closed-while-queued issue fell into: queueDepth read 0 (it left `pending` the moment it failed)

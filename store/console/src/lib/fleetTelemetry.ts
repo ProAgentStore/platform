@@ -92,7 +92,7 @@ export const DISK_BAD = 95;
 export const LOAD_WARN = 1.5;
 export const LOAD_BAD = 3;
 
-export type FleetStatus = "healthy" | "disk-low" | "overloaded" | "too-many-sessions" | "offline";
+export type FleetStatus = "reporting" | "disk-low" | "overloaded" | "too-many-sessions" | "telemetry-stale";
 export type StatusTone = "success" | "warning" | "danger" | "muted";
 
 export interface StatusVerdict {
@@ -103,16 +103,16 @@ export interface StatusVerdict {
 	issues: string[];
 }
 
-const LABEL: Record<FleetStatus, string> = { healthy: "healthy", "disk-low": "disk low", overloaded: "overloaded", "too-many-sessions": "too many sessions", offline: "offline" };
+const LABEL: Record<FleetStatus, string> = { reporting: "reporting", "disk-low": "disk low", overloaded: "overloaded", "too-many-sessions": "too many sessions", "telemetry-stale": "telemetry stale" };
 
 /**
- * One machine's status pill. `offline` means SILENT (no sample, or a stale one) — the page cannot see a socket, only a heartbeat — and it
+ * One machine's status pill. `telemetry-stale` means no resource sample, or an old one — the page cannot see a socket, only a heartbeat — and it
  * outranks everything: the other numbers are then the last thing the machine said. Otherwise the worst severity wins, with load before
  * disk at equal severity (an overloaded machine drops work now; a full disk fails the next clone).
  */
 export function machineStatus(m: Pick<FleetMachine, "stale" | "latest">): StatusVerdict {
 	const l = m.latest;
-	if (m.stale || !l) return { status: "offline", label: LABEL.offline, tone: "muted", issues: [m.latest ? "no heartbeat for over 3 minutes" : "has not reported a sample"] };
+	if (m.stale || !l) return { status: "telemetry-stale", label: LABEL["telemetry-stale"], tone: "muted", issues: [m.latest ? "No resource sample for over 3 minutes. Host power, runner process and task state are unknown." : "No resource telemetry received. Host power, runner process and task state are unknown."] };
 	const found: Array<{ rank: number; status: FleetStatus; issue: string }> = [];
 	if (l.loadPerCpu !== null && l.loadPerCpu >= LOAD_BAD) found.push({ rank: 5, status: "overloaded", issue: `load ${l.loadPerCpu}/core (≥ ${LOAD_BAD})` });
 	if (l.diskUsedPct !== null && l.diskUsedPct >= DISK_BAD) found.push({ rank: 4, status: "disk-low", issue: `disk ${l.diskUsedPct}% (≥ ${DISK_BAD})` });
@@ -120,7 +120,7 @@ export function machineStatus(m: Pick<FleetMachine, "stale" | "latest">): Status
 	if (l.diskUsedPct !== null && l.diskUsedPct >= DISK_WARN && l.diskUsedPct < DISK_BAD) found.push({ rank: 2, status: "disk-low", issue: `disk ${l.diskUsedPct}% (≥ ${DISK_WARN})` });
 	if (l.activeSessions !== null && l.activeSessions > l.recommendedMaxSessions) found.push({ rank: 1, status: "too-many-sessions", issue: `${l.activeSessions} sessions against a recommended ${l.recommendedMaxSessions}` });
 	found.sort((a, b) => b.rank - a.rank);
-	if (!found.length) return { status: "healthy", label: LABEL.healthy, tone: "success", issues: [] };
+	if (!found.length) return { status: "reporting", label: LABEL.reporting, tone: "success", issues: [] };
 	const top = found[0];
 	return { status: top.status, label: LABEL[top.status], tone: top.rank >= 4 ? "danger" : "warning", issues: found.map((f) => f.issue) };
 }
@@ -174,7 +174,7 @@ export const CHARTS: readonly ChartSpec[] = [
 	{ id: "load", title: "Load per core", unit: "", scale: "log", threshold: { value: LOAD_WARN, label: "1.5 overload" }, value: (p) => p.loadPerCpu, nullWhy: (m) => (m.latest?.platform === "win32" ? "Windows has no load average" : null), note: "Log scale. A Windows machine has no load average and draws no line — it is not reported, not idle." },
 	{ id: "disk", title: "Disk used (checkout volume)", unit: "%", scale: "linear", fixedMax: 100, threshold: { value: DISK_WARN, label: "90% low" }, value: (p) => p.diskUsedPct },
 	{ id: "relay", title: "Relay round trip", unit: " ms", scale: "log", value: (p) => p.relayRttMs, note: "Log scale. Over about 1 s a machine answers its relay late." },
-	{ id: "restarts", title: "Runner starts in 24 h", unit: "", scale: "linear", value: (p) => p.starts24h, note: "A rising line is a crash loop." },
+	{ id: "restarts", title: "Runner starts in 24 h", unit: "", scale: "linear", value: (p) => p.starts24h, note: "Counts runner process starts, including updates and manual restarts. An increase alone does not establish a crash loop." },
 	{ id: "sessions", title: "Sessions against the recommended maximum", unit: "", scale: "linear", value: (p) => p.sessionCount, limit: (m) => m.latest?.recommendedMaxSessions ?? null, note: "Dashed: each machine's recommended maximum." },
 	{
 		id: "memory",
@@ -224,7 +224,7 @@ export function chartOmissions(spec: ChartSpec, machines: readonly FleetMachine[
 		if (drawn) return;
 		const why = spec.nullWhy?.(m);
 		if (why) out.push({ ...base, reason: why });
-		else if (m.stale) out.push({ ...base, reason: m.points.length ? `offline — last sample ${ageText(m.sampleAgeSec)}` : `offline — no samples in this range, last sample ${ageText(m.sampleAgeSec)}` });
+		else if (m.stale) out.push({ ...base, reason: m.points.length ? `telemetry stale — last sample ${ageText(m.sampleAgeSec)}` : `telemetry stale — no samples in this range, last sample ${ageText(m.sampleAgeSec)}` });
 		else out.push({ ...base, reason: "no reading in this range yet" });
 	});
 	return out;
@@ -531,7 +531,7 @@ export function fleetRow(m: FleetMachine): FleetRow {
 
 /** Worst first, so the machine that needs you is at the top; ties by name. */
 export function sortedRows(machines: readonly FleetMachine[]): FleetRow[] {
-	const rank: Record<FleetStatus, number> = { offline: 4, overloaded: 3, "disk-low": 2, "too-many-sessions": 1, healthy: 0 };
+	const rank: Record<FleetStatus, number> = { "telemetry-stale": 4, overloaded: 3, "disk-low": 2, "too-many-sessions": 1, reporting: 0 };
 	return machines
 		.map(fleetRow)
 		.sort((a, b) => rank[b.status.status] - rank[a.status.status] || (b.status.tone === "danger" ? 1 : 0) - (a.status.tone === "danger" ? 1 : 0) || a.name.localeCompare(b.name));

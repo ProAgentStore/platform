@@ -28,7 +28,7 @@ describe("deriveFleetStatus (#961)", () => {
 	it("a run whose answer is in is not reported as waiting on you (#1231)", () => {
 		const ask = { question: "Close #350 now?", taskId: "csess-s1" };
 		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "decision", runQuestion: ask }))).toMatchObject({ status: "decision_blocked" });
-		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "decision", runQuestion: ask, answerPending: true }))).toMatchObject({ status: "working", reason: expect.stringContaining("Your answer is in") });
+		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "decision", runQuestion: ask, answerPending: true }))).toMatchObject({ status: "waiting", reason: expect.stringContaining("Your answer is in") });
 	});
 
 	it("an answerable ask beats everything — even a working run", () => {
@@ -42,10 +42,12 @@ describe("deriveFleetStatus (#961)", () => {
 		expect(deriveFleetStatus(facts({ ownerSecrets: 1 })).status).toBe("hard_blocked");
 	});
 
-	it("a usage-limit park resumes on its own, so it is working — as is a queued objective", () => {
-		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "engine_limit" })).status).toBe("working");
+	it("only active run health is working; parked and merely queued work are distinct", () => {
+		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "engine_limit" })).status).toBe("waiting");
+		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: "runner_away", queueDepth: 5 }))).toMatchObject({ status: "waiting", reason: expect.stringContaining("runner connection") });
+		expect(deriveFleetStatus(facts({ health: "waiting", waitingReason: null })).status).toBe("waiting");
 		expect(deriveFleetStatus(facts({ health: "working" })).status).toBe("working");
-		expect(deriveFleetStatus(facts({ queueDepth: 1 })).status).toBe("working");
+		expect(deriveFleetStatus(facts({ queueDepth: 1 }))).toMatchObject({ status: "queued", reason: expect.stringContaining("no run is working") });
 	});
 
 	it("idle: work available, only human work, nothing, no repo, or unreadable", () => {
@@ -67,8 +69,8 @@ describe("deriveFleetStatus (#961)", () => {
 	});
 
 	it("orders most-needs-attention first", () => {
-		const sorted = (["idle", "paused", "working", "decision_blocked", "hard_blocked", "unknown", "idle_needs_work"] as const).slice().sort(fleetOrder);
-		expect(sorted).toEqual(["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "paused", "idle"]);
+		const sorted = (["idle", "paused", "working", "queued", "waiting", "decision_blocked", "hard_blocked", "unknown", "idle_needs_work"] as const).slice().sort(fleetOrder);
+		expect(sorted).toEqual(["decision_blocked", "idle_needs_work", "hard_blocked", "waiting", "queued", "working", "unknown", "paused", "idle"]);
 	});
 
 	describe("a recent admission failure (#1404)", () => {
@@ -91,7 +93,7 @@ describe("deriveFleetStatus (#961)", () => {
 
 		it("is superseded by a run or queued work that happened SINCE — stale news does not outrank real work", () => {
 			expect(deriveFleetStatus(facts({ admissionFailure: failed, health: "working" })).status).toBe("working");
-			expect(deriveFleetStatus(facts({ admissionFailure: failed, queueDepth: 1 })).status).toBe("working");
+			expect(deriveFleetStatus(facts({ admissionFailure: failed, queueDepth: 1 })).status).toBe("queued");
 		});
 
 		it("is superseded by anything more pressing — a question, a hard park, a stall, a secret", () => {

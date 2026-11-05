@@ -9,6 +9,7 @@ import { serviceContext } from "../service-context.js";
 import { installWatchdogService, uninstallWatchdogService, watchdogLogPath } from "../service-install.js";
 import { runWatchdogLoop, type WatchdogLink } from "../watchdog/core.js";
 import { payloadFacts, realWatchdogDeps, runnerFromLocks } from "../watchdog/local.js";
+import { stoppableSleep } from "../watchdog/sleep.js";
 import { sessionToken } from "./runner/session-token.js";
 import { apiPathSegment, requestPags } from "./runner/http.js";
 
@@ -38,24 +39,17 @@ export function platformLink(sleep: (ms: number) => Promise<void>, stopped: () =
 }
 
 const runCommand = new Command("run").description("Run the watchdog in the foreground (what the service executes)").action(async () => {
-	let stop = false;
-	const wake: Array<() => void> = [];
-	for (const sig of ["SIGTERM", "SIGINT"] as const) {
-		process.on(sig, () => {
-			stop = true;
-			for (const w of wake.splice(0)) w();
-		});
-	}
-	const sleep = (ms: number) => new Promise<void>((resolve) => {
-		const t = setTimeout(resolve, ms);
-		wake.push(() => {
-			clearTimeout(t);
-			resolve();
-		});
-	});
+	const stop = new AbortController();
+	const onStop = () => stop.abort();
+	for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, onStop);
+	const sleep = (ms: number) => stoppableSleep(ms, stop.signal);
 	stamp(`started (CLI ${CLI_VERSION || "unknown"}, Node ${process.versions.node})`);
 	const deps = realWatchdogDeps(stamp, serviceContext(), CLI_VERSION);
-	await runWatchdogLoop(deps, platformLink(sleep, () => stop), new CapabilityReporter());
+	try {
+		await runWatchdogLoop(deps, platformLink(sleep, () => stop.signal.aborted), new CapabilityReporter());
+	} finally {
+		for (const sig of ["SIGTERM", "SIGINT"] as const) process.off(sig, onStop);
+	}
 	stamp("stopped");
 });
 

@@ -36,18 +36,18 @@ const spec = (id: string) => {
 };
 
 describe("status rules (the prototype's thresholds)", () => {
-	it("healthy: nothing fires", () => {
-		expect(machineStatus(machine("a"))).toMatchObject({ status: "healthy", label: "healthy", tone: "success", issues: [] });
+	it("fresh telemetry reports without claiming runtime readiness", () => {
+		expect(machineStatus(machine("a"))).toMatchObject({ status: "reporting", label: "reporting", tone: "success", issues: [] });
 	});
 
 	it.each([
-		[{ diskUsedPct: 89.9 }, "healthy"],
+		[{ diskUsedPct: 89.9 }, "reporting"],
 		[{ diskUsedPct: 90 }, "disk-low"],
 		[{ diskUsedPct: 95 }, "disk-low"],
-		[{ loadPerCpu: 1.49 }, "healthy"],
+		[{ loadPerCpu: 1.49 }, "reporting"],
 		[{ loadPerCpu: 1.5 }, "overloaded"],
 		[{ loadPerCpu: 3 }, "overloaded"],
-		[{ activeSessions: 4 }, "healthy"],
+		[{ activeSessions: 4 }, "reporting"],
 		[{ activeSessions: 5 }, "too-many-sessions"],
 	] as const)("%j → %s", (over, status) => {
 		expect(machineStatus(machine("a", { latest: latest(over) })).status).toBe(status);
@@ -67,14 +67,15 @@ describe("status rules (the prototype's thresholds)", () => {
 		expect(v.issues).toEqual(["load 7.6/core (≥ 3)", "disk 97% (≥ 95)", "4 sessions against a recommended 2"]);
 	});
 
-	it("offline outranks everything: a stale machine's numbers are the last thing it said", () => {
+	it("stale telemetry outranks old resource readings without declaring the host offline", () => {
 		const v = machineStatus(machine("a", { stale: true, latest: latest({ diskUsedPct: 99, loadPerCpu: 9 }) }));
-		expect(v).toMatchObject({ status: "offline", tone: "muted" });
-		expect(machineStatus(machine("b", { latest: null, stale: true })).issues).toEqual(["has not reported a sample"]);
+		expect(v).toMatchObject({ status: "telemetry-stale", label: "telemetry stale", tone: "muted" });
+		expect(v.issues).toContain("No resource sample for over 3 minutes. Host power, runner process and task state are unknown.");
+		expect(machineStatus(machine("b", { latest: null, stale: true })).issues).toEqual(["No resource telemetry received. Host power, runner process and task state are unknown."]);
 	});
 
 	it("a Windows machine (null load) is never overloaded, and disk still counts", () => {
-		expect(machineStatus(machine("w", { latest: latest({ platform: "win32", loadPerCpu: null }) })).status).toBe("healthy");
+		expect(machineStatus(machine("w", { latest: latest({ platform: "win32", loadPerCpu: null }) })).status).toBe("reporting");
 		expect(machineStatus(machine("w", { latest: latest({ platform: "win32", loadPerCpu: null, diskUsedPct: 96 }) })).status).toBe("disk-low");
 	});
 });
@@ -360,7 +361,7 @@ describe("a chart says which machines it is not drawing, and why (#1380)", () =>
 
 	it("a machine silent for the whole range is listed as offline with when it last spoke, not dropped", () => {
 		const out = chartOmissions(spec("disk"), fleet);
-		expect(out).toEqual([expect.objectContaining({ name: "tiny-laptop", colorIndex: 4, reason: "offline — no samples in this range, last sample 3h ago" })]);
+		expect(out).toEqual([expect.objectContaining({ name: "tiny-laptop", colorIndex: 4, reason: "telemetry stale — no samples in this range, last sample 3h ago" })]);
 	});
 
 	it("an online machine with no reading yet is told apart from an offline one", () => {
