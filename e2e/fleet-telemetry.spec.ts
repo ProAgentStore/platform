@@ -4,6 +4,7 @@ async function fleetFixture(page: Page) {
 	await page.addInitScript(() => localStorage.setItem("pags:session", "fixture-session"));
 	const now = Date.now();
 	let changed = false;
+	let failPolls = false;
 	const machine = (name: string, stale: boolean, starts24h: number) => {
 		const sampledAt = new Date(now - (stale ? 240_000 : 10_000)).toISOString();
 		const firstReceivedAt = new Date(now - 50_000).toISOString(), lastReceivedAt = new Date(now - 20_000).toISOString();
@@ -20,12 +21,13 @@ async function fleetFixture(page: Page) {
 		if (path === "/v1/auth/me") body = { id: "fixture-user", login: "tester", name: "Tester", roles: ["user"] };
 		if (path === "/v1/instances/my/instances") body = { instances: [] };
 		if (path === "/v1/terminals/resources") {
+			if (failPolls) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "fixture poll unavailable" }) });
 			const machines = [machine("pink-laptop", !changed, 5), machine("tiny-laptop", !changed, 4), machine("macmini", changed, 15)];
 			body = { tier: new URL(route.request().url()).searchParams.get("tier") ?? "dense", from: new Date(now - 7_200_000).toISOString(), to: new Date(now).toISOString(), now: new Date(now).toISOString(), cursor: null, truncated: false, machines: changed ? [machine("alpha-new", false, 1), ...machines.reverse()] : machines };
 		}
 		return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 	});
-	return { change: () => { changed = true; } };
+	return { change: () => { changed = true; }, failPolls: () => { failPolls = true; } };
 }
 
 test("Fleet distinguishes stale telemetry from host availability", async ({ page }, testInfo) => {
@@ -87,4 +89,23 @@ test("Fleet keeps machine order and identity colors through refresh and range ch
 	await verify();
 	await page.getByRole("button", { name: "Last 2 h", exact: true }).click();
 	await verify();
+});
+
+
+test("availability ages and its unknown gap grows while polling fails, independently of browser wall-clock skew", async ({ page }) => {
+	await page.clock.install({ time: new Date(Date.now() + 86_400_000) });
+	const fixture = await fleetFixture(page);
+	await page.goto("/console/fleet");
+	const lane = page.getByRole("region", { name: "Availability history" }).locator('[data-availability-machine="pink-laptop"]');
+	await expect(lane).toContainText("Last heartbeat 20s ago");
+	const endpoint = lane.locator("svg g rect").last();
+	const beforeX = Number(await endpoint.getAttribute("x"));
+	fixture.failPolls();
+	await page.clock.runFor(5 * 60_000);
+	await expect(page.getByRole("alert")).toContainText("Could not refresh");
+	await expect(lane).toContainText("Last heartbeat 5m ago");
+	const afterX = Number(await endpoint.getAttribute("x"));
+	// Five minutes of no observations must visibly extend the unknown right-hand gap.
+	expect(beforeX - afterX).toBeGreaterThan(40);
+	await expect(lane).not.toContainText("offline");
 });

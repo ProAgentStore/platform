@@ -86,7 +86,7 @@ export default function Fleet() {
 				</Card>
 			) : (
 				<>
-					<AvailabilityTimeline machines={machines} tier={tier} nowMs={data && Number.isFinite(Date.parse(data.now)) ? Date.parse(data.now) : nowMs} />
+					<AvailabilityTimeline machines={machines} tier={tier} nowMs={nowMs} />
 					<Card className="mb-4 overflow-x-auto">
 						<table className="w-full text-xs min-w-[760px]">
 							<thead>

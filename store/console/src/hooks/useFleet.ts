@@ -16,6 +16,9 @@ export function useFleet(tier: FleetTier): { data: FleetResponse | null; loading
 	const [updatedAt, setUpdatedAt] = useState<number | null>(null);
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	const held = useRef<FleetResponse | null>(null);
+	// Receipt timestamps use the server clock; elapsed time must keep advancing when polls fail.
+	// performance.now() avoids inheriting browser wall-clock skew or later clock corrections.
+	const clock = useRef({ serverMs: nowMs, monotonicMs: performance.now() });
 	const tierRef = useRef(tier);
 	tierRef.current = tier;
 
@@ -28,15 +31,26 @@ export function useFleet(tier: FleetTier): { data: FleetResponse | null; loading
 			const next = await api<FleetResponse>(`/v1/terminals/resources?${qs.toString()}`);
 			if (tierRef.current !== asked) return; // the range changed while this was in flight: its answer is for a chart no longer shown
 			const now = Date.now();
-			held.current = mergeFleet(cursor ? held.current : null, next, now);
+			const serverNow = Date.parse(next.now);
+			const monotonicNow = performance.now();
+			const anchoredNow = Number.isFinite(serverNow) ? serverNow : clock.current.serverMs + Math.max(0, monotonicNow - clock.current.monotonicMs);
+			clock.current = { serverMs: anchoredNow, monotonicMs: monotonicNow };
+			held.current = mergeFleet(cursor ? held.current : null, next, anchoredNow);
 			setData(held.current);
 			setError(null);
 			setUpdatedAt(now);
-			setNowMs(now);
+			setNowMs(anchoredNow);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 		}
 		setLoading(false);
+	}, []);
+
+	useEffect(() => {
+		const timer = setInterval(() => {
+			setNowMs(clock.current.serverMs + Math.max(0, performance.now() - clock.current.monotonicMs));
+		}, 1000);
+		return () => clearInterval(timer);
 	}, []);
 
 	// A new range is a new chart: drop what is held and load it whole.
