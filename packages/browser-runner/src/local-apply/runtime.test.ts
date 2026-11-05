@@ -12,7 +12,7 @@ import type { Page } from "playwright";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { McpCallPolicy } from "../mcp-call-policy.js";
-import type { MaskablePage } from "../local-browser/replay.js";
+import { ShotRecorder, type MaskablePage } from "../local-browser/replay.js";
 import { LOCAL_APPLY_CAPS, type LocalApplyTaskEnvelope } from "./contract.js";
 import { applyPrompt, buildApplyEngineSpec } from "./engine.js";
 import { Blocked } from "./documents.js";
@@ -1339,5 +1339,87 @@ describe("accepted full native runtime wiring", () => {
 			await call(rt, "ready_for_review", { summary: "Model report" }); child.exit(0);
 			expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "awaiting_review", filled: 0, submitAttempted: false, submissionVerification: "unverified" });
 		} finally { rt.closeAll(); delete browser.configureToolAccess; }
+	});
+});
+
+describe("final-review answer handoff retains the original run (#1560)", () => {
+	const q1 = "Professional registration number?", q2 = "Earliest starting date?";
+	function finalRuntime(now?: () => number) {
+		browser.configureToolAccess = async () => {};
+		const stop = vi.fn(async () => {}); const browserFor = vi.fn(async () => ({ tools: browser, stop, handoffPage: () => runPage }));
+		const rt = runtime({ now, browserFor }); const e = envelope();
+		e.policy = { ...e.policy, toolAccess: "full", escalationLevel: "autonomous", toolAccessAcceptance: { revision: "full_playwright_v1", acceptedAt: "2026-11-05T00:00:00Z", acceptedBy: "owner", instanceId: e.instanceId } };
+		rt.start(e); return { rt, stop, browserFor };
+	}
+	afterEach(() => { delete browser.configureToolAccess; });
+	it("finishes independent work, accepts exact partial answers, and continues the same page without granting submit", async () => {
+		let now = 1000; const { rt, stop, browserFor } = finalRuntime(() => now);
+		try {
+			await settle(); await call(rt, "request_answer", { question: q1 }); await call(rt, "request_answer", { question: q2 });
+			expect(rt.status({ runId: "run-1" }).state).toBe("running");
+			await call(rt, "browser_type", { target: "e1", text: "Jane Citizen" }); now += 600_000;
+			const waiting = call(rt, "ready_for_review", { summary: "Known fields completed; two mandatory facts missing." }); await settle();
+			const first = rt.status({ runId: "run-1" }).pause!;
+			expect(first).toMatchObject({ reason: "missing_answer", answerWait: { kind: "final_review", questions: [q1, q2], budgetMs: 1_080_000, expiresAt: 1_681_000 } });
+			expect(stop).not.toHaveBeenCalled(); expect(child.exitCode).toBeNull();
+			expect(() => rt.resume({ runId: "run-1", answers: [{ question: q1, answer: "123" }] })).toThrow(/pause key/);
+			expect(() => rt.resume({ runId: "run-1", expectedAnswerPauseKey: first.handoffRequestId, answers: [{ question: "Other?", answer: "123" }] })).toThrow(/current final-review question/);
+			now += 840_000;
+			rt.resume({ runId: "run-1", expectedAnswerPauseKey: first.handoffRequestId, answers: [{ question: q1, answer: "REG-123" }] });
+			expect(() => rt.resume({ runId: "run-1", expectedAnswerPauseKey: first.handoffRequestId, answers: [{ question: q2, answer: "wrong epoch" }] })).toThrow(/no current paused answer epoch/);
+			expect(() => rt.resume({ runId: "run-1", answers: [{ question: q2, answer: "unkeyed concurrent answer" }] })).toThrow(/no current paused answer epoch/);
+			await settle(); const second = rt.status({ runId: "run-1" }).pause!;
+			expect(second.answerWait).toEqual({ ...first.answerWait, questions: [q2] }); expect(second.handoffRequestId).not.toBe(first.handoffRequestId);
+			expect(() => rt.resume({ runId: "run-1", expectedAnswerPauseKey: first.handoffRequestId, answers: [{ question: q2, answer: "wrong epoch" }] })).toThrow(/pause key/);
+			rt.resume({ runId: "run-1", expectedAnswerPauseKey: second.handoffRequestId, answers: [{ question: q2, answer: "1 December" }] });
+			const response = await waiting; expect(response.isError).not.toBe(true); expect(JSON.stringify(response)).toContain("REG-123"); expect(JSON.stringify(response)).toContain("fresh browser_snapshot"); expect(JSON.stringify(response)).not.toContain("wrong epoch");
+			expect(rt.status({ runId: "run-1" }).state).toBe("running"); expect(browserFor).toHaveBeenCalledOnce(); expect(spawned).toHaveLength(1); expect(stop).not.toHaveBeenCalled();
+			expect((await call(rt, "browser_snapshot")).isError, "14 owner-wait minutes must not consume the remaining active budget").not.toBe(true); expect((await call(rt, "submit_application", { ref: "e2" })).isError).toBe(true);
+			await call(rt, "ready_for_review", { summary: "Owner facts filled and observed; review requested." }); child.exit(0);
+			expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "awaiting_review", mode: "fill_and_review", submitAttempted: false, submissionVerification: "unverified" });
+		} finally { rt.closeAll(); }
+	});
+	it("owner Stop releases the pending tool call and closes this exact browser", async () => {
+		const { rt, stop } = finalRuntime();
+		try { await settle(); await call(rt, "request_answer", { question: q1 }); const waiting = call(rt, "ready_for_review"); await settle(); rt.cancel({ runId: "run-1" }); expect((await waiting).isError).toBe(true); expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: "Cancelled by the owner", submitAttempted: false, submissionVerification: "unverified" }); expect(stop).toHaveBeenCalledOnce(); } finally { rt.closeAll(); }
+	});
+	it("keeps the original absolute deadline after partial answers and expires honestly", async () => {
+		let now = 1000; const { rt, stop } = finalRuntime(() => now);
+		try {
+			await settle(); await call(rt, "request_answer", { question: q1 }); await call(rt, "request_answer", { question: q2 }); const waiting = call(rt, "ready_for_review"); await settle(); const first = rt.status({ runId: "run-1" }).pause!;
+			now = first.answerWait!.expiresAt - 1000; rt.resume({ runId: "run-1", expectedAnswerPauseKey: first.handoffRequestId, answers: [{ question: q1, answer: "REG-123" }] }); await settle();
+			const second = rt.status({ runId: "run-1" }).pause!; expect(second.answerWait!.expiresAt).toBe(first.answerWait!.expiresAt);
+			now = second.answerWait!.expiresAt; expect(() => rt.resume({ runId: "run-1", expectedAnswerPauseKey: second.handoffRequestId, answers: [{ question: q2, answer: "too late" }] })).toThrow(/expired/);
+			await vi.waitFor(() => expect(rt.status({ runId: "run-1" }).state).toBe("ended"), { timeout: 6000, interval: 50 });
+			expect((await waiting).isError).toBe(true); expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "blocked", blockReason: "incomplete", questions: [q2], submissionVerification: "unverified" }); expect(stop).toHaveBeenCalledOnce(); expect(spawned).toHaveLength(1);
+		} finally { rt.closeAll(); }
+	}, 10_000);
+	it("expires the same absolute owner wait while initial replay capture is still pending", async () => {
+		let now = 1000; const { rt, stop } = finalRuntime(() => now); let finishCapture!: (value: { seq: null; reason: "capture_failed" }) => void;
+		try {
+			await settle(); await call(rt, "request_answer", { question: q1 });
+			const capture = vi.spyOn(ShotRecorder.prototype, "captureResult").mockReturnValue(new Promise((resolve) => { finishCapture = resolve; }));
+			try {
+				const waiting = call(rt, "ready_for_review"); await settle(); expect(capture).toHaveBeenCalled(); expect(rt.status({ runId: "run-1" }).state).toBe("running");
+				await expect(rt.ownerPause({ runId: "run-1" })).rejects.toThrow(/final-review answer wait is already active/); expect(dispatchSuspended).toBe(false);
+				now += 1_080_000; await vi.waitFor(() => expect(rt.status({ runId: "run-1" }).state).toBe("ended"), { timeout: 6000, interval: 50 });
+				finishCapture({ seq: null, reason: "capture_failed" }); expect((await waiting).isError).toBe(true);
+				expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "blocked", blockReason: "incomplete", questions: [q1], submissionVerification: "unverified" }); expect(stop).toHaveBeenCalledOnce();
+			} finally { capture.mockRestore(); }
+		} finally { rt.closeAll(); }
+	}, 10_000);
+	it("ends honestly without an answer pause when the adapter lacks an owned live page", async () => {
+		runPage = null; const { rt, stop } = finalRuntime();
+		try { await settle(); await call(rt, "request_answer", { question: q1 }); expect((await call(rt, "ready_for_review")).isError).toBe(true);
+			expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "ended", result: { outcome: "blocked", blockReason: "incomplete", questions: [q1], submissionVerification: "unverified" } });
+			expect(rt.status({ runId: "run-1" }).pause).toBeUndefined(); expect(stop).toHaveBeenCalledOnce();
+		} finally { rt.closeAll(); }
+	});
+	it("refuses an answer if the original browser page was replaced", async () => {
+		const { rt } = finalRuntime();
+		try { await settle(); await call(rt, "request_answer", { question: q1 }); const waiting = call(rt, "ready_for_review"); await settle(); const pause = rt.status({ runId: "run-1" }).pause!; runPage = { isClosed: () => false } as Page;
+			expect(() => rt.resume({ runId: "run-1", expectedAnswerPauseKey: pause.handoffRequestId, answers: [{ question: q1, answer: "123" }] })).toThrow(/exact final-answer browser page/);
+			expect(rt.status({ runId: "run-1" }).state).toBe("paused"); rt.cancel({ runId: "run-1" }); await waiting;
+		} finally { rt.closeAll(); }
 	});
 });

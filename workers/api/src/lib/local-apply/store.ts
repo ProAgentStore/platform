@@ -57,6 +57,8 @@ export interface ApplicationMove {
 	runId?: string;
 	/** Only for `blocked` (and kept as the audit reason for any move). */
 	reason?: string | null;
+	/** An exact execution receipt in the audit; does not replace the application's blocking reason. */
+	auditReason?: string;
 	questions?: string[];
 	/** Bind this run as the application's fill run (on `filling` from `materials_ready`). */
 	bindRun?: string;
@@ -118,7 +120,7 @@ export async function moveApplication(env: DB, app: Pick<JobApplication, "id" | 
 			`INSERT OR IGNORE INTO job_application_events (id, application_id, instance_id, user_id, version, from_status, to_status, actor, actor_instance_id, run_id, reason, created_at)
 			 SELECT ?1, ?2, instance_id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
 			   FROM job_applications WHERE id = ?2 AND user_id = ?3 AND state_version = ?4 AND status = ?6`,
-		).bind(auditId, app.id, userId, version, app.status, m.to, m.actor, m.actorInstanceId ?? null, m.runId ?? null, m.reason ?? null, now),
+		).bind(auditId, app.id, userId, version, app.status, m.to, m.actor, m.actorInstanceId ?? null, m.runId ?? null, m.auditReason ?? m.reason ?? null, now),
 	]);
 	const moved = !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
 	// The lead the application came from shows its status (#953).

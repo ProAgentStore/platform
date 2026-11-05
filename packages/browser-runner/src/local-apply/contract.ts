@@ -533,8 +533,9 @@ export interface LocalApplyPause {
 	reason: LocalApplyPauseReason;
 	url?: string;
 	domain?: string;
-	/** The question to answer, for `missing_answer` / `screening_ambiguity`. */
 	question?: string;
+	/** Bounded live final-review wait; handoffRequestId binds the exact answer epoch. */
+	answerWait?: { kind: "final_review"; expiresAt: number; budgetMs: number; questions: string[] };
 	/** Present exactly for a `supervisor_checkpoint` pause. */
 	checkpoint?: LocalApplySupervisorCheckpoint;
 }
@@ -591,6 +592,7 @@ export interface LocalApplyStatusResponse {
 export interface LocalApplyResumeRequest {
 	runId: string;
 	expectedWebsitePauseKey?: string;
+	expectedAnswerPauseKey?: string;
 	websiteDecision?: "allow" | "deny";
 	browserWebsiteAccess?: LocalApplyTaskEnvelope["policy"]["browserWebsiteAccess"];
 	answers?: Array<{ question: string; answer: string }>;

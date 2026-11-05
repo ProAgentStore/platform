@@ -749,7 +749,7 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 		case "resume": {
 			const run = await fillRun(env, uid, applicationPipeline, app);
 			if (run.status !== "paused") return after(await saveEndedAnswers(env, app, run, { userId: uid, expectedVersion: input.expectedVersion, answers: input.answers, allowDomains: input.allowDomains, via: input.surface ?? "console" }, now));
-			const resumed = await resumeApplyRun(env, uid, run, { answers: input.answers ?? [], allowDomains: input.allowDomains }, now, input.surface ?? "console");
+			const resumed = await resumeApplyRun(env, uid, run, { answers: input.answers ?? [], allowDomains: input.allowDomains, ...(run.pause?.answerWait ? { expectedVersion: input.expectedVersion, expectedAnswerPauseKey: run.pause.handoffRequestId } : {}) }, now, input.surface ?? "console");
 			return after({ outcome: "resume_requested", runId: resumed.id, runStatus: resumed.status, ...(resumed.errorCode ? { errorCode: resumed.errorCode } : {}) });
 		}
 		default:

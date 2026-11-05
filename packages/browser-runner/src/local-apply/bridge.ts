@@ -1,3 +1,4 @@
+import { waitForFinalAnswers, type FinalAnswerPauseOptions } from "./final-answer-wait.js";
 import { FullApplyTools, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { answerDecision, decisionReason, parseDecision, sourceCatalog, sourceId } from "./answer-decision.js";
 import { applyTools, recoveryTools } from "./tool-schemas.js";
@@ -65,7 +66,9 @@ export interface ApplyBridgeHost {
 	recoverBrowser?(): ReturnType<BrowserTools["callTool"]>;
 	emit(event: Omit<LocalApplyEvent, "at">): void;
 	/** Pause until the owner resumes ("resumed"), the run is cancelled ("stopped"), or the cloud provisions sign-in secrets ("sign_in", #1412). */
-	pause(p: LocalApplyPause): Promise<"resumed" | "stopped" | "sign_in">;
+	pause(p: LocalApplyPause, options?: FinalAnswerPauseOptions): Promise<"resumed" | "stopped" | "sign_in">;
+	beginFinalAnswerWait?(options: FinalAnswerPauseOptions): void;
+	finishFinalAnswerWait?(key: string, expired: boolean): void;
 	/** The secret NAMES provisioned for the sign-in in progress (#1412); never a value. */
 	signInSecrets?(): string[];
 	/** The CLI asked for the emailed code: resolves true once `PAGS_LOGIN_CODE` is provisioned, false when the wait ran out. */
@@ -370,10 +373,10 @@ export class ApplyBridge {
 	 * with the cloud provisioning sign-in secrets (#1412): then the run is not resolved but SIGNING IN, `signIn` is
 	 * set, the recheck is skipped, and every caller answers the CLI with {@link signInInstructions} instead.
 	 */
-	private async pauseFor(p: LocalApplyPause, recheck?: () => Promise<boolean>): Promise<boolean> {
+	private async pauseFor(p: LocalApplyPause, recheck?: () => Promise<boolean>, options?: FinalAnswerPauseOptions): Promise<boolean> {
 		this.blocked = { reason: p.reason, questions: p.question ? [p.question] : [] };
 		await this.replay.beforePause(p);
-		const outcome = await this.host.pause(p);
+		const outcome = await this.host.pause(p, options);
 		if (outcome === "sign_in") {
 			// A pause raised from a credential FIELD carries no domain: the page it is on is the sign-in site.
 			const host = p.domain ?? hostOf((await this.inspect())?.url ?? "") ?? "";
@@ -887,6 +890,16 @@ export class ApplyBridge {
 	}
 
 	private async review(summary: string): Promise<ToolResult> {
+		if (this.unresolvedQuestions.length) {
+			this.summary = `Incomplete: mandatory owner answers remain.\n${summary}${this.full ? `\n${FULL_SUBMISSION_UNKNOWN}` : ""}`;
+			const outcome = await waitForFinalAnswers({ owner: this, questions: () => this.unresolvedQuestions, sources: () => this.host.groundingSources?.() ?? [], stopped: () => !!this.host.isStopped?.(), now: this.host.now, maxMinutes: this.host.limits.maxMinutes, started: (options) => this.host.beginFinalAnswerWait?.(options), finished: (key, expired) => this.host.finishFinalAnswerWait?.(key, expired),
+				wait: (question, options) => this.pauseFor({ reason: "missing_answer", question }, undefined, options),
+				answered: (question) => { this.unresolvedQuestions.splice(this.unresolvedQuestions.indexOf(question), 1); const i = this.deferredQuestions.findIndex((entry) => entry.question === question); if (i >= 0) this.deferredQuestions.splice(i, 1); },
+			});
+			if (outcome === "busy") return text("This exact final-review answer wait is already active. Do not replace it or start another application.", true);
+			if (outcome !== "answered") this.blocked = { reason: "incomplete", questions: [...this.unresolvedQuestions] };
+			return outcome === "answered" ? text(`The owner answered the recorded questions. This same run and browser continue; submission authorization is unchanged. Read a fresh browser_snapshot, fill supported answers and verify every remaining section before any completion or permitted submission.\n${sourceCatalog(this.host.groundingSources?.() ?? [])}`) : text("Required owner answers remain unresolved. No review or submission was authorized; do not guess or replay this application.", true);
+		}
 		if (this.full) {
 			this.summary = `${summary}\n${FULL_SUBMISSION_UNKNOWN}`;
 			this.reviewEnded = true;
@@ -894,13 +907,6 @@ export class ApplyBridge {
 			else this.reviewReady = true;
 			this.host.emit({ type: "policy.decision", detail: { tool: "ready_for_review", decision: this.reviewReady ? "review_requested" : "incomplete", toolAccess: "full", count: this.full.calls, reason: "native_calls_attempted" } });
 			return text(`Recorded the model report for owner review. ${FULL_SUBMISSION_UNKNOWN} Stop now.`);
-		}
-		if (this.unresolvedQuestions.length) {
-			this.summary = `${summary}\nIncomplete: ${this.unresolvedQuestions.length} unresolved owner question(s). Nothing was submitted.`;
-			this.blocked = { reason: "incomplete", questions: [...this.unresolvedQuestions] };
-			this.reviewEnded = true;
-			this.host.emit({ type: "policy.decision", detail: { tool: "ready_for_review", decision: "incomplete", reason: "unresolved_questions", count: this.unresolvedQuestions.length } });
-			return text("Recorded incomplete with the unresolved questions. Nothing was submitted. Stop now.");
 		}
 		this.summary = summary; // bounded where the result is built (runtime.ts `end`)
 		// Nothing entered, on a sign-in page (#1100; runs abb37433, 7fb1e4f5): the outcome is the owner's sign-in,
@@ -923,14 +929,7 @@ export class ApplyBridge {
 				],
 			};
 		}
-		// #989: "ready for review" with nothing entered is not a review state.
-		//
-		// The live run ended `awaiting_review` with `filled: 0, uploaded: 0` seconds after the cloud
-		// had let it through its initial checkpoint, because a refused submit-class click called
-		// this. An owner reading that is told a form is populated and waiting for them — and the one
-		// action it invites (#981's approve-and-continue) would send an empty application. There is
-		// no form to review, so the honest terminal outcome is the recorded blocker and its remedy
-		// (`runtime.ts` `outcomeOf` reads `blocked` once `reviewReady` is false).
+		// An empty or blocked form is not ready for review.
 		if (!this.filled && !this.uploaded.size && this.blocked) {
 			this.host.emit({ type: "policy.decision", detail: { tool: "ready_for_review", class: "review", decision: "refused", reason: this.blocked.reason, count: 0 } });
 			return text(`Nothing was entered on this application, so there is nothing to review: the run is recorded as ${this.blocked.reason.replace(/_/g, " ")}. Stop now.`, true);

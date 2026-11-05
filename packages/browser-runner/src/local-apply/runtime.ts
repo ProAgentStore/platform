@@ -1,3 +1,4 @@
+import { finalAnswerLease, finalAnswerPageAvailable, finalAnswerTimeout, finalAnswerUnavailable, readFinalAnswerPage, resumeAnswerSources, type FinalAnswerLease, type FinalAnswerPauseOptions } from "./final-answer-wait.js";
 import { parseToolAccess, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { parseEscalationLevel } from "./answer-decision.js";
 import { parseOwnerFacts } from "./owner-facts.js";
@@ -125,11 +126,7 @@ const SAFE_ID = /^[A-Za-z0-9_.:-]{1,300}$/;
 const HASH = /^[a-f0-9]{64}$/;
 /** One application at a time per agent: two runs on one employer's form is how duplicates happen. */
 const MAX_ACTIVE = 1;
-/**
- * Pauses that wait on a DECISION, not on the page (#1121): the owner's stored answer satisfies them on
- * a fresh fill, so a run paused on one gives the machine back. Every other pause — sign-in, CAPTCHA,
- * consent, a redirect, the supervisor's checkpoint — needs this exact live page and keeps it.
- */
+/** Ordinary immediate questions park; only the final-review answer handoff retains a bounded live session. */
 const PARKABLE_PAUSES: ReadonlySet<LocalApplyPause["reason"]> = new Set(["missing_answer", "screening_ambiguity"]);
 /** How a pause ends: the owner resumed, the run stopped, or the cloud provisioned sign-in secrets (#1412). */
 export type PauseOutcome = "resumed" | "stopped" | "sign_in";
@@ -169,6 +166,7 @@ interface Run {
 	timer?: ReturnType<typeof setInterval>;
 	handoff?: { handoffRequestId?: string; handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: import("./handoff-contract.js").LocalApplyHandoffTerminalReason };
 	ownerPauseReady?: boolean;
+	finalAnswerLease?: FinalAnswerLease;
 }
 
 /**
@@ -491,7 +489,9 @@ export class LocalApplyRuntime {
 			runId: e.runId,
 			...(run.browser.tools.recover ? { recoverBrowser: () => run.browser!.tools.recover!() } : {}),
 			emit: (ev) => this.emit(run, ev),
-			pause: (p) => this.pause(run, p),
+			pause: (p, options) => this.pause(run, p, options),
+			beginFinalAnswerWait: (options) => { run.finalAnswerLease = finalAnswerLease(run.finalAnswerLease, options, readFinalAnswerPage(() => run.browser?.handoffPage?.())); },
+			finishFinalAnswerWait: (key, expired) => { if (run.finalAnswerLease?.key === key) { const timeout = expired ? finalAnswerTimeout(run.finalAnswerLease, this.now(), run.bridge?.unresolvedQuestions ?? []) : null; if (timeout) this.end(run, timeout); delete run.finalAnswerLease; } },
 			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
 			isAllowed: isAllowedDomain,
 			websiteAccess: () => e.policy.browserWebsiteAccess,
@@ -548,6 +548,7 @@ export class LocalApplyRuntime {
 		});
 		run.timer = setInterval(() => {
 			observeModel();
+			const answerTimeout = finalAnswerTimeout(run.finalAnswerLease, this.now(), run.bridge?.unresolvedQuestions ?? []); if (answerTimeout) this.end(run, answerTimeout);
 			if (run.state !== "ended" && this.activeMs(run) >= e.limits.maxMinutes * 60_000 + 60_000) {
 				run.timedOut = true;
 				this.kill(run);
@@ -653,14 +654,15 @@ export class LocalApplyRuntime {
 		run.events.push({ ...rest, ...(url ? { url } : {}), at: new Date(this.now()).toISOString(), seq: ++run.seq });
 	}
 
-	private pause(run: Run, p: LocalApplyPause): Promise<PauseOutcome> {
+	private pause(run: Run, p: LocalApplyPause, options?: FinalAnswerPauseOptions): Promise<PauseOutcome> {
 		if (run.state === "ended" || run.cancelled) return Promise.resolve("stopped");
-		// #1121: a question only the owner can answer does not need this page — park it. The run ENDS
-		// `blocked` with the question, the browser and the CLI stop, and the machine's one slot is free
-		// for the next application. The owner's answer is stored (#1079) and re-fills this application
-		// from a fresh page, with the answer as a source. Never once a submit was attempted: that run
-		// must not be filled again (#1013, #1073), so it keeps holding the slot and its page.
-		if (run.state === "running" && PARKABLE_PAUSES.has(p.reason) && !run.bridge?.submitAttempted) {
+		if (options?.finalReviewAnswers) {
+			run.finalAnswerLease = finalAnswerLease(run.finalAnswerLease, options, readFinalAnswerPage(() => run.browser?.handoffPage?.()));
+			const timeout = finalAnswerTimeout(run.finalAnswerLease, this.now(), run.bridge?.unresolvedQuestions ?? []) ?? finalAnswerUnavailable(run.finalAnswerLease, readFinalAnswerPage(() => run.browser?.handoffPage?.()), run.bridge?.unresolvedQuestions ?? []); if (timeout) { this.end(run, timeout); return Promise.resolve("stopped"); }
+			p = { ...p, answerWait: { kind: "final_review", expiresAt: run.finalAnswerLease.expiresAt, budgetMs: run.finalAnswerLease.budgetMs, questions: [...options.finalReviewAnswers.questions] } };
+		}
+		// Ordinary immediate questions still park (#1121); final review retains this exact browser.
+		if (run.state === "running" && PARKABLE_PAUSES.has(p.reason) && !p.answerWait && !run.bridge?.submitAttempted) {
 			this.emit(run, { type: "run.paused", pauseReason: p.reason });
 			this.end(run, {
 				outcome: "blocked",
@@ -801,20 +803,15 @@ export class LocalApplyRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 		const run = this.get(String(o.runId ?? ""));
 		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
+		if (run.finalAnswerLease && !run.pause?.answerWait) throw new RunnerInputError("The final-answer wait has no current paused answer epoch; no answers were applied.", 409);
 		const websitePause = run.envelope.policy.browserWebsiteAccess?.mode === "ask_once" && run.pause?.reason === "external_redirect" && run.pause.domain && run.pause.handoffRequestId ? { hostname: run.pause.domain, pauseKey: run.pause.handoffRequestId } : undefined;
 		const websitePolicy = websiteResumePolicy(run.envelope.policy.browserWebsiteAccess, o.browserWebsiteAccess, websitePause, o.expectedWebsitePauseKey, o.websiteDecision);
 		const domains = resumeDomainGrants(o.allowDomains, run.state, run.pause);
 		if (run.pause?.reason === "supervisor_checkpoint") throw new RunnerInputError("This run is waiting for a persisted supervisor directive, not an owner resume", 409);
 		if (run.pause?.reason === "owner_requested" && (o.expectedOwnerPauseKey !== run.pause.handoffRequestId || run.handoff?.state === "ready" || this.handoffs.isBusy(run))) throw new RunnerInputError("Close and drain the exact owner handoff before resuming AI dispatch", 409);
-		const answers: SourceBlock[] = [];
-		for (const a of (Array.isArray(o.answers) ? o.answers : []).slice(0, LOCAL_APPLY_CAPS.answers)) {
-			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
-			if (typeof r.question !== "string" || typeof r.answer !== "string") continue;
-			const answer = r.answer.trim();
-			if (answer.length > LOCAL_APPLY_CAPS.answerChars) throw new RunnerInputError(`Each answer must be at most ${LOCAL_APPLY_CAPS.answerChars} characters; no answers were applied.`, 400);
-			if (r.question.length > LOCAL_APPLY_CAPS.questionChars) throw new RunnerInputError(`Each question must be at most ${LOCAL_APPLY_CAPS.questionChars} characters; no answers were applied.`, 400);
-			if (answer) answers.push({ label: "owner answers", text: `Q: ${r.question}\nA: ${answer}`, answerText: answer, answerQuestion: r.question });
-		}
+		const answers = resumeAnswerSources(o.answers, run.pause, o.expectedAnswerPauseKey, this.now());
+		if (run.pause?.answerWait && !finalAnswerPageAvailable(run.finalAnswerLease, readFinalAnswerPage(() => run.browser?.handoffPage?.()))) throw new RunnerInputError("The exact final-answer browser page is no longer available; this pause cannot resume.", 409);
+		if (run.pause?.answerWait && this.now() >= run.pause.answerWait.expiresAt) throw new RunnerInputError("The final-answer deadline passed before resume; no answers were applied.", 409);
 		if (websitePolicy) run.envelope.policy.browserWebsiteAccess = websitePolicy;
 		run.grounding.push(...answers);
 		for (const domain of domains) run.allow.add(domain);
@@ -904,7 +901,7 @@ export class LocalApplyRuntime {
 	}
 
 	/** A takeover only views the exact live page; it never authorizes the paused bridge. */
-	async ownerPause(raw: unknown): Promise<LocalApplyStatusResponse> { const o = raw as { runId?: string }; const run = this.get(o?.runId ?? ""); return requestOwnerPause(run, raw, () => { void this.pause(run, { reason: "owner_requested" }); }, () => this.status({ runId: run.envelope.runId })); }
+	async ownerPause(raw: unknown): Promise<LocalApplyStatusResponse> { const o = raw as { runId?: string }; const run = this.get(o?.runId ?? ""); if (run.finalAnswerLease) throw new RunnerInputError("The final-review answer wait is already active; answer its current question or use Stop before taking owner control.", 409); return requestOwnerPause(run, raw, () => { void this.pause(run, { reason: "owner_requested" }); }, () => this.status({ runId: run.envelope.runId })); }
 	async handoff(raw: unknown): Promise<LocalApplyHandoffStatus> { return this.handoffs.handoff(raw); }
 	async handoffStatus(raw: unknown): Promise<LocalApplyHandoffStatus> { return this.handoffs.status(raw); }
 	async handoffFrame(raw: unknown): Promise<{ frame: string; width: number; height: number }> { return this.handoffs.frame(raw); }

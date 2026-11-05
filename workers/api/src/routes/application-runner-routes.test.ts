@@ -2573,6 +2573,109 @@ describe("explicit acknowledgement for standing auto-submit (#1039)", () => {
 describe("a Runner answer is a durable decision on the application (#1079)", () => {
 	const decisions = () => d1.sqlite.prepare("SELECT question, answer, answered_via, task_id, scope, applied_ref FROM owner_decisions ORDER BY asked_at, rowid").all() as Array<Record<string, unknown>>;
 	const pause = () => runner("paused", { pause: { reason: "missing_answer", question: "Expected salary?" }, events: [{ seq: 1, type: "run.paused", at: "2026-10-07T00:06:00Z", pauseReason: "missing_answer" }] });
+	const finalPause = (key: string, questions: string[], seq: number, expiresAt = Date.now() + 60_000) => runner("paused", {
+		pause: { reason: "missing_answer", question: questions[0], handoffRequestId: key, answerWait: { kind: "final_review", expiresAt, budgetMs: 60_000, questions } },
+		lastSeq: seq, events: [{ seq, type: "run.paused", at: new Date().toISOString(), pauseReason: "missing_answer" }],
+	});
+	it("retains verified final-answer identity when a malformed replacement pause arrives (#1560)", async () => {
+		const runId = (await call("POST", "/ap/application-runs", readyApp("final-malformed"))).body.run.id;
+		finalPause("final-1", ["Expected salary?"], 1);
+		await call("GET", `/ap/application-runs/${runId}`);
+		const before = await d1.DB.prepare("SELECT pause, runner_seq FROM local_apply_runs WHERE id = ?1").bind(runId).first();
+		const version = (await appRow("final-malformed"))!.state_version;
+		runner("paused", { pause: { reason: "missing_answer", handoffRequestId: "final-2", answerWait: { kind: "final_review", expiresAt: "invalid", questions: ["Other question"] } }, lastSeq: 2, events: [{ seq: 2, type: "run.paused", at: new Date().toISOString(), pauseReason: "missing_answer" }] });
+		const invalid = await call("GET", `/ap/application-runs/${runId}`);
+		expect(invalid.status).toBe(409); expect(invalid.body.error).toContain("invalid final-answer pause");
+		expect(await d1.DB.prepare("SELECT pause, runner_seq FROM local_apply_runs WHERE id = ?1").bind(runId).first()).toEqual(before);
+		expect((await appRow("final-malformed"))!.state_version).toBe(version);
+		expect(decisions()).toEqual([expect.objectContaining({ question: "Expected salary?", answer: null })]);
+		expect(sent.some(s => s.path === "/local-apply/resume")).toBe(false);
+	});
+	it.each(["questions", "expiresAt", "budgetMs", "removed"])("rejects changed %s under the same final-answer pause key (#1560)", async change => {
+		const id = `final-immutable-${change}`;
+		const runId = (await call("POST", "/ap/application-runs", readyApp(id))).body.run.id;
+		const expiresAt = Date.now() + 60_000;
+		finalPause("final-1", ["Expected salary?"], 1, expiresAt); await call("GET", `/ap/application-runs/${runId}`);
+		const original = await d1.DB.prepare("SELECT pause, runner_seq FROM local_apply_runs WHERE id = ?1").bind(runId).first();
+		const version = (await appRow(id))!.state_version;
+		const marker = { kind: "final_review", expiresAt, budgetMs: 60_000, questions: ["Expected salary?"], ...(change === "questions" ? { questions: ["Another question"] } : change === "expiresAt" ? { expiresAt: expiresAt + 1 } : change === "budgetMs" ? { budgetMs: 90_000 } : {}) };
+		runner("paused", { pause: { reason: "missing_answer", handoffRequestId: "final-1", ...(change === "removed" ? {} : { answerWait: marker }) }, lastSeq: 2, events: [{ seq: 2, type: "run.paused", at: new Date().toISOString(), pauseReason: "missing_answer" }] });
+		const changed = await call("GET", `/ap/application-runs/${runId}`);
+		expect(changed.status).toBe(409); expect(changed.body.error).toContain("without a new key");
+		expect(await d1.DB.prepare("SELECT pause, runner_seq FROM local_apply_runs WHERE id = ?1").bind(runId).first()).toEqual(original);
+		expect((await appRow(id))!.state_version).toBe(version); expect(decisions().every(d => d.answer === null)).toBe(true);
+	});
+	it("refuses an unseen pause epoch during the run/app mirror gap and heals that gap after a crash (#1560)", async () => {
+		const runId = (await call("POST", "/ap/application-runs", readyApp("final-mirror-gap"))).body.run.id;
+		const expiresAt = Date.now() + 60_000;
+		finalPause("final-1", ["Expected salary?"], 1, expiresAt); await call("GET", `/ap/application-runs/${runId}`);
+		const oldVersion = (await appRow("final-mirror-gap"))!.state_version;
+		// The run receipt is durable; the Worker has not yet mirrored its new epoch onto the app.
+		await d1.DB.prepare("UPDATE local_apply_runs SET runner_seq = 2, pause = ?1 WHERE id = ?2").bind(JSON.stringify({ reason: "missing_answer", handoffRequestId: "final-2", answerWait: { kind: "final_review", expiresAt, budgetMs: 60_000, questions: ["Expected salary?"] } }), runId).run();
+		const ownerAnswers = [{ question: "Expected salary?", answer: "150000 AUD base" }];
+		const unseen = await call("POST", `/ap/application-runs/${runId}/resume`, { expected_version: oldVersion, expectedAnswerPauseKey: "final-2", answers: ownerAnswers });
+		expect(unseen.status).toBe(409); expect(decisions().every(d => d.answer === null)).toBe(true);
+		expect(sent.some(s => s.path === "/local-apply/resume")).toBe(false);
+		finalPause("final-2", ["Expected salary?"], 2, expiresAt);
+		expect((await Promise.all([call("GET", `/ap/application-runs/${runId}`), call("GET", `/ap/application-runs/${runId}`)])).map(r => r.status)).toEqual([200, 200]);
+		const mirroredVersion = (await appRow("final-mirror-gap"))!.state_version;
+		expect(mirroredVersion).toBe((oldVersion as number) + 1);
+		expect(await d1.DB.prepare("SELECT reason FROM job_application_events WHERE application_id = 'final-mirror-gap' AND version = ?1").bind(mirroredVersion).first()).toEqual({ reason: "final_answer_pause:final-2" });
+		await call("GET", `/ap/application-runs/${runId}`);
+		expect((await appRow("final-mirror-gap"))!.state_version).toBe(mirroredVersion);
+		answers["/local-apply/resume"] = () => { runner("running", { lastSeq: 3, events: [{ seq: 3, type: "run.resumed", at: new Date().toISOString() }] }); return { status: 200, body: {} }; };
+		const resumed = await call("POST", `/ap/application-runs/${runId}/resume`, { expected_version: mirroredVersion, expectedAnswerPauseKey: "final-2", answers: ownerAnswers });
+		expect(resumed.status, JSON.stringify(resumed.body)).toBe(200);
+		expect(decisions()).toEqual([expect.objectContaining({ question: "Expected salary?", answer: "150000 AUD base", applied_ref: runId })]);
+		expect(dispatches()).toHaveLength(1);
+	});
+	it("resumes final answers on the same approved run, preserves submission authority, and versions each partial pause (#1560)", async () => {
+		const event = readyApp("live-final");
+		await d1.DB.prepare("UPDATE job_applications SET ready_event = ?1 WHERE id = 'live-final'").bind(JSON.stringify(event)).run();
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const approved = await call("POST", "/ap/application-queue/actions", { action: "approve_and_proceed", application_id: "live-final", expected_status: "materials_ready", expected_version: 0 });
+		expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+		const runId = approved.body.result.runId;
+		const originalPolicy = JSON.parse((await d1.DB.prepare("SELECT policy FROM local_apply_runs WHERE id = ?1").bind(runId).first<{ policy: string }>())!.policy);
+		expect(originalPolicy).toMatchObject({ mode: "auto_submit" });
+		const authorization = () => d1.DB.prepare("SELECT * FROM job_application_submit_authorizations WHERE application_id = 'live-final'").first();
+		const spent = await authorization(); expect(spent).toMatchObject({ consumed_run_id: runId });
+		const expiresAt = Date.now() + 60_000;
+		finalPause("final-1", ["Expected salary?", "Infrastructure experience?"], 1, expiresAt);
+		const held = await call("GET", `/ap/application-runs/${runId}`);
+		expect(held.body.run.pause.answerWait.questions).toEqual(["Expected salary?", "Infrastructure experience?"]);
+		const firstVersion = (await appRow("live-final"))!.state_version;
+		expect((await appRow("live-final"))!.block_questions).toBe(JSON.stringify(["Expected salary?", "Infrastructure experience?"]));
+		answers["/local-apply/resume"] = () => { finalPause("final-2", ["Infrastructure experience?"], 2, expiresAt); return { status: 200, body: {} }; };
+		const partial = await call("POST", "/ap/application-queue/actions", { action: "resume", application_id: "live-final", expected_status: "blocked", expected_version: firstVersion, answers: [{ question: "Expected salary?", answer: "150000 AUD base" }] });
+		expect(partial.status, JSON.stringify(partial.body)).toBe(200);
+		expect(sent.find(s => s.path === "/local-apply/resume")?.body).toMatchObject({ runId, expectedAnswerPauseKey: "final-1", answers: [{ question: "Expected salary?", answer: "150000 AUD base" }] });
+		const next = await appRow("live-final"); expect(next!.state_version).toBeGreaterThan(firstVersion as number);
+		expect(next!.block_questions).toBe(JSON.stringify(["Infrastructure experience?"]));
+		const stale = await call("POST", "/ap/application-queue/actions", { action: "resume", application_id: "live-final", expected_status: "blocked", expected_version: firstVersion, answers: [{ question: "Infrastructure experience?", answer: "Owner supplied experience" }] });
+		expect(stale.status).toBe(409);
+		expect((await call("POST", `/ap/application-runs/${runId}/resume`, { expected_version: next!.state_version, expectedAnswerPauseKey: "final-1", answers: [{ question: "Infrastructure experience?", answer: "Owner supplied experience" }] })).status).toBe(409);
+		answers["/local-apply/resume"] = () => { runner("running", { lastSeq: 3, events: [{ seq: 3, type: "run.resumed", at: new Date().toISOString() }] }); return { status: 200, body: {} }; };
+		const resumed = await call("POST", "/ap/application-queue/actions", { action: "resume", application_id: "live-final", expected_status: "blocked", expected_version: next!.state_version, answers: [{ question: "Infrastructure experience?", answer: "Owner supplied experience" }] });
+		expect(resumed.status, JSON.stringify(resumed.body)).toBe(200);
+		expect(resumed.body.result).toMatchObject({ runId, runStatus: "running" });
+		expect(dispatches()).toHaveLength(1); expect(await authorization()).toEqual(spent);
+		expect(JSON.parse((await d1.DB.prepare("SELECT policy FROM local_apply_runs WHERE id = ?1").bind(runId).first<{ policy: string }>())!.policy)).toEqual(originalPolicy);
+	});
+	it.each(["missing_version", "missing_key", "empty", "unrelated", "duplicate", "expired", "rebound"])("refuses %s final answers before storage or browser dispatch (#1560)", async kind => {
+		const id = `final-${kind}`;
+		const runId = (await call("POST", "/ap/application-runs", readyApp(id))).body.run.id;
+		finalPause("final-1", ["Expected salary?"], 1, kind === "expired" ? Date.now() - 1 : undefined);
+		await call("GET", `/ap/application-runs/${runId}`);
+		const version = (await appRow(id))!.state_version;
+		if (kind === "rebound") await d1.DB.prepare("UPDATE job_applications SET fill_run_id = 'another-run' WHERE id = ?1").bind(id).run();
+		const ownerAnswers = kind === "empty" ? [] : kind === "unrelated" ? [{ question: "Other question", answer: "Do not use" }] : kind === "duplicate" ? [{ question: "Expected salary?", answer: "150000" }, { question: "Expected salary?", answer: "160000" }] : [{ question: "Expected salary?", answer: "150000" }];
+		const rejected = await call("POST", `/ap/application-runs/${runId}/resume`, { ...(kind === "missing_version" ? {} : { expected_version: version }), ...(kind === "missing_key" ? {} : { expectedAnswerPauseKey: "final-1" }), answers: ownerAnswers });
+		expect([400, 409]).toContain(rejected.status);
+		expect(sent.some(s => s.path === "/local-apply/resume")).toBe(false);
+		expect(decisions().every(d => d.answer === null)).toBe(true);
+		expect(dispatches()).toHaveLength(1);
+	});
 
 	it("a question pause is recorded; the answer is stored FIRST, delivered, and marked as used by that run", async () => {
 		const runId = (await call("POST", "/ap/application-runs", readyApp("lead-d1"))).body.run.id as string;

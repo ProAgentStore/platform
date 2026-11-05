@@ -96,6 +96,7 @@ import { notifyLiveBrowserBlocker, notifyUncertainSubmit } from "./handoff-notif
 import { notifyApplyInputRequired, reconcileApplyInputAttention } from "./input-attention.js";
 import { assertionFor, consumeNotSubmittedAssertion, hasUnspentAssertion } from "./owner-assertion.js";
 import { answerDecision, type DecisionVia, markDecisionsApplied, pendingAnswersFor, recordPauseDecision } from "../owner-decisions.js";
+import { assertFinalAnswerResume, finalAnswerMirrorState, mirrorFinalAnswerPause, readFinalAnswerWait } from "./final-answer-pause.js";
 
 /** The event the Runner consumes — #956's readiness event. */
 export const MATERIALS_READY_EVENT = "job.application.materials_ready";
@@ -707,15 +708,16 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	}, now).catch(() => 0);
 
 	const p = body.pause && typeof body.pause === "object" ? (body.pause as Record<string, unknown>) : null;
+	const answerWait = readFinalAnswerWait(p, run.pause);
 	const rawCheckpoint = p?.checkpoint && typeof p.checkpoint === "object" && !Array.isArray(p.checkpoint) ? (p.checkpoint as Record<string, unknown>) : null;
 	const checkpointFacts = rawCheckpoint ? sanitizeSupervisorFacts(rawCheckpoint.facts) : null;
 	const checkpoint = rawCheckpoint && rawCheckpoint.schemaVersion === 1 && typeof rawCheckpoint.checkpointId === "string" && checkpointFacts
 		? { schemaVersion: 1 as const, checkpointId: rawCheckpoint.checkpointId, facts: checkpointFacts }
 		: null;
 	const pause: LocalApplyPause | null =
-		body.state === "paused" && p && LOCAL_APPLY_PAUSE_REASONS.includes(p.reason as never)
+		body.state === "paused" && p && LOCAL_APPLY_PAUSE_REASONS.includes(p.reason as never) && (p.answerWait === undefined || !!answerWait)
 			? {
-				reason: p.reason as LocalApplyPause["reason"],
+				reason: p.reason as LocalApplyPause["reason"], ...(answerWait ? { answerWait } : {}),
 				...(typeof p.handoffRequestId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(p.handoffRequestId) ? { handoffRequestId: p.handoffRequestId } : {}),
 				// Origin and path only (#1069) — a sign-in pause's page URL carries OAuth/session parameters.
 				...(typeof p.url === "string" && traceUrl(p.url) ? { url: traceUrl(p.url) } : {}),
@@ -725,7 +727,7 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 			}
 			: null;
 	const to = body.state === "paused" && pause ? "paused" : body.state === "running" ? "running" : run.status;
-	const accepted = await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now);
+	const accepted = await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(pause?.answerWait && run.pause?.handoffRequestId !== pause.handoffRequestId ? { expectedRunnerSeq: run.runnerSeq } : {}), ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now);
 	if (!accepted || accepted.runnerSeq > lastSeq) return (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	let current: ApplyRun = accepted;
 	// Receipt is durable before a cloud brain can see the pause. The checkpoint has no prose or
@@ -735,10 +737,13 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	}
 	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
 	const signInSettings = current.pause?.reason === "login_required" ? await runnerSettingsFor(env, run.instanceId, uid).catch(() => RUNNER_DEFAULTS) : RUNNER_DEFAULTS;
-	if (current.status === "paused" && run.status !== "paused" && pause) {
+	const finalAnswerMirror = pause?.answerWait ? await finalAnswerMirrorState(env, uid, run, pause.handoffRequestId) : null;
+	if (current.status === "paused" && pause && (run.status !== "paused" || !!finalAnswerMirror && !finalAnswerMirror.mirrored)) {
 		// #1079: an answerable pause is a durable decision on this application — answered late, it is kept for the next fill.
-		if (pause.question) await recordPauseDecision(env, { instanceId: run.instanceId, userId: uid, kind: "apply_run", subjectId: run.applicationId, taskId: run.id, scope: run.applicationId, question: pause.question, now }).catch(() => undefined);
-		await move(env, uid, run.applicationId, ["filling"], { ...base, to: "blocked", reason: pause.reason, questions: pause.question ? [pause.question] : [] }, now);
+		const questions = pause.answerWait?.questions ?? (pause.question ? [pause.question] : []);
+		for (const question of questions) await recordPauseDecision(env, { instanceId: run.instanceId, userId: uid, kind: "apply_run", subjectId: run.applicationId, taskId: run.id, scope: run.applicationId, question, now }).catch(() => undefined);
+		if (finalAnswerMirror) await mirrorFinalAnswerPause(env, uid, finalAnswerMirror.app, current, questions, now);
+		else await move(env, uid, run.applicationId, ["filling"], { ...base, to: "blocked", reason: pause.reason, questions }, now);
 		// The runner has already paused on the exact page.  Only then create the bounded mobile
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
 		// successful login from a redirect.
@@ -819,6 +824,7 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 	if (answers.length !== rawAnswers.length || answers.length > 20 || answers.some((a) => a.question.length > 300 || a.answer.length > 2000)) {
 		throw new HttpError(400, "answers must be up to 20 { question (≤300 chars), answer (≤2000 chars) } objects");
 	}
+	await assertFinalAnswerResume(env, uid, run, b, answers, now);
 	// #1079: every answer is stored FIRST, on this application's decisions, whatever the run's state —
 	// they were "for that run only, never stored", and an ended run refused them outright.
 	const stored: string[] = [];
@@ -844,7 +850,7 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 	if (!runtime) throw new HttpError(409, "No runner is connected. Run `pags up` on that machine, then resume.");
 	const websiteResume = typeof b.expectedWebsitePauseKey === "string" && (b.websiteDecision === "allow" || b.websiteDecision === "deny")
 		? { expectedWebsitePauseKey: b.expectedWebsitePauseKey, websiteDecision: b.websiteDecision } : {};
-	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[], ...websiteResume, ...(run.pause?.reason === "owner_requested" ? { expectedOwnerPauseKey: run.pause.handoffRequestId } : {}) }) }).catch(() => null);
+	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[], ...websiteResume, ...(run.pause?.answerWait ? { expectedAnswerPauseKey: run.pause.handoffRequestId } : {}), ...(run.pause?.reason === "owner_requested" ? { expectedOwnerPauseKey: run.pause.handoffRequestId } : {}) }) }).catch(() => null);
 	if (!res) throw new HttpError(409, "The runner did not answer. Check `pags up` on that machine and try again.");
 	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
 	if (!res.ok) throw new HttpError(409, `The runner refused to resume: HTTP ${res.status}`);
