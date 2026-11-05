@@ -64,22 +64,15 @@ export async function getRunnerConnIgnoringLiveness(
 	runnerNode?: string | null,
 ): Promise<RunnerConn | null> {
 	const node = normalizeRunnerNode(runnerNode);
-	// WHAT `status` MEANS, because three defects in one month have turned on it (#238, #531, #532).
-	//
-	// It is the last thing a runner SAID about itself — `registered`/`online`, written by the
-	// register + heartbeat routes. NOTHING CLEARS IT ON DISCONNECT: `RelayDO.webSocketClose` does
-	// not touch D1, so a laptop whose lid closed months ago still reads `online` here forever.
-	// `/runtime/status` will write `offline` only when a probe fails AND the heartbeat has already
-	// gone stale, which by construction never happens for a machine that simply stopped calling.
-	//
-	// So this predicate excludes a runner that was explicitly marked down, and NOTHING ELSE. It is
-	// not liveness and must never be read as liveness. Liveness is `relayConnected` — the RelayDO
-	// holds the socket — and since #532 the one function responsible for asking it on this row's
-	// behalf is {@link getRunnerConn}, directly above.
+	// Availability status is a historical diagnostic, never registration revocation (#1551).
+	// A failed health read can mark the row offline while a relay later reconnects; filtering on
+	// that snapshot rejects a presently responsive socket. The live resolver checks the relay,
+	// while this loader only enforces registration and owner identity. Explicit unregistration
+	// removes the row; paused/canceled instance authorisation stays at the operation boundary.
 	const row = await env.DB.prepare(
 		node
-			? "SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv, runner_node FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node = ?3 AND status != 'offline'"
-			: "SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv, runner_node FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2 AND status != 'offline'",
+			? "SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv, runner_node FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node = ?3"
+			: "SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv, runner_node FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
 	)
 		.bind(...(node ? [instanceId, userId, node] : [instanceId, userId]))
 		.first<{
