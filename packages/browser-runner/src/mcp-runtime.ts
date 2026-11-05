@@ -304,6 +304,10 @@ export class McpRuntime {
 	}
 	private async dispatchTool(name: string, args: Record<string, unknown>, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean; expectedAccessibility?: ExpectedAccessibility }): Promise<McpToolResult> {
 		const originalVersion = this.subjectVersion;
+		// A native event (for example a file chooser) can request its first follow-up
+		// before the opening action returns. Wait for ordinary work, then validate
+		// this request from current state; an expired/failed request remains fenced.
+		await this.recovery.waitForIdle();
 		const uncertain = this.recovery.blocked();
 		if (uncertain) return this.diagnosticResult(uncertain);
 		const client = this.connected();
@@ -381,7 +385,7 @@ export class McpRuntime {
 				}
 			}
 			// Stop can arrive while a DOM/origin/upload/admission check was in flight. Check again at dispatch.
-			refusal ??= cancelled();
+			refusal = cancelled() ?? refusal;
 			if (originalVersion !== this.subjectVersion) refusal = "The run claiming this browser changed during validation. No native action was dispatched.";
 			if (!refusal && name === "browser_file_upload" && (opts.expectedUploadId || upload?.chooserId)) {
 				const pending = this.uploads.pendingId(currentPage());
@@ -474,7 +478,7 @@ export class McpRuntime {
 	}
 
 	async stop(): Promise<void> {
-		if (this.recovery.status()) this.recovery.retire();
+		if (this.recovery.blocked()) this.recovery.retire();
 		this.subjectVersion++;
 		await this.recoveryOwner?.upload?.dispose?.();
 		await this.tabs.closeIsolated();

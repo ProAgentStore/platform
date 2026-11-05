@@ -20,21 +20,8 @@ import { cancelApplyRun, resumeApplyRun, startApplicationFill, syncApplyRun } fr
 import { HANDOFF_TTL_MS, ensureFillHandoff, relayFillHandoff } from "../lib/local-apply/fill-handoff.js";
 import { LOCAL_APPLY_RECONCILIATION_HANDOFF_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_FRAME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_INPUT_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_RESUME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH, LOCAL_APPLY_RECONCILIATION_RUN_PATH, LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyReconciliationEnvelope, type LocalApplyReconciliationStatus } from "../lib/local-apply/handoff-contract.js";
 import { RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, acknowledgeAutoSubmit, effectiveRunnerSettings, mergeRunnerSettings } from "../lib/local-apply/policy.js";
-import {
-	applicationAudit,
-	createLocalApplyReconciliationHandoff,
-	getApplyRun,
-	getHandoffById,
-	getLocalApplyHandoffForRun,
-	getLocalApplyReconciliation,
-	getLocalApplyReconciliationHandoff,
-	getLocalApplyReconciliationHandoffById,
-	markLocalApplyHandoff,
-	markLocalApplyReconciliationHandoff,
-	recordLocalApplyReconciliationProof,
-	requestLocalApplyReconciliation,
-	listApplyRuns,
-} from "../lib/local-apply/store.js";
+import { applicationAudit, getApplyRun, getHandoffById, getLocalApplyHandoffForRun, markLocalApplyHandoff, listApplyRuns } from "../lib/local-apply/store.js";
+import { createLocalApplyReconciliationHandoff, getLocalApplyReconciliation, getLocalApplyReconciliationHandoff, getLocalApplyReconciliationHandoffById, markLocalApplyReconciliationHandoff, recordLocalApplyReconciliationProof, requestLocalApplyReconciliation } from "../lib/local-apply/reconciliation-store.js";
 import { SUPERVISOR_SCHEMA_VERSION, isSupervisorDirective, issueSupervisorDirective, listSupervisorCheckpoints } from "../lib/local-apply/supervision.js";
 import { getOwnedApplication } from "../lib/local-artifact/store.js";
 import { applicationHandoffLink, applicationReconciliationHandoffLink } from "../lib/console-links.js";
@@ -235,7 +222,7 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		const app = await getOwnedApplication(c.env, uid, run.applicationId);
 		if (!app) throw new HttpError(404, "Application not found");
 		const reconciliation = await requestLocalApplyReconciliation(c.env, { app, run, userId: uid }, Date.now());
-		if (!reconciliation) throw new HttpError(409, "Read-only reconciliation is available only for this exact ended submit_unconfirmed attempt.");
+		if (!reconciliation) throw new HttpError(409, "Read-only reconciliation is available only for this exact ended uncertain attempt, including Full browser runs with unverified external effects.");
 		const envelope = reconciliationEnvelope(reconciliation, run, app);
 		if (!envelope) throw new HttpError(409, "The exact application URL/profile binding is unavailable for read-only reconciliation.");
 		const runtime = await getLiveRuntime(c.env, instanceId, uid).catch(() => null);

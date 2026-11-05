@@ -38,6 +38,7 @@
  * explicit act by the owner, and because the authorization is single-use and the gate refuses an
  * application that has already attempted a submit, neither act can be doubled into two submissions.
  */
+import { assertFullSubmissionReconciled } from "./reconciliation-store.js";
 import { HttpError } from "../auth.js";
 import { deliverSupervisorDirective } from "./apply.js";
 import { type ApprovalStage, approvalEligibility, approvalStageOf, approvalState, verifiedOneClickRefusal } from "./approval.js";
@@ -163,6 +164,7 @@ export async function approveAndContinue(
 ): Promise<ApproveContinueOutcome> {
 	const stage = approvalStageOf(app, run ? { ...run, pauseReason: run.pause?.reason ?? null } : null);
 	if (stage !== "post_fill") throw new HttpError(409, `This application is ${app.status}; there is no filled form waiting for a submission decision.`);
+	await assertFullSubmissionReconciled(env, uid, app);
 	const existing = await getSubmitAuthorization(env, app.id, uid);
 	// A LIVE authorization is this very decision, already recorded — a double-clicked button, a
 	// retried MCP call, a repeated request after a lost response. #981 asks for an idempotent action,

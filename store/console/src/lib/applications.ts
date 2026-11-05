@@ -108,11 +108,13 @@ export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueA
 }
 
 /**
- * #1068: the card's read-only "was it sent?" check applies to exactly the attempt #1013 reconciles —
- * a fill that ENDED with its submit pressed and unconfirmed. It never retries, submits or clears that.
+ * Offer read-only reconciliation for unconfirmed submits and ended Full runs whose external
+ * effects remain unverified. The server checks exact-attempt eligibility; this never retries a fill.
  */
-export function canCheckSubmission(item: Pick<ApplicationQueueItem, "status" | "blockReason" | "submitAttempted" | "submittedAt" | "fillRunId">): boolean {
-	return item.status === "blocked" && item.blockReason === "submit_unconfirmed" && item.submitAttempted && !item.submittedAt && !!item.fillRunId;
+export function canCheckSubmission(item: Pick<ApplicationQueueItem, "status" | "blockReason" | "submitAttempted" | "submittedAt" | "fillRunId" | "toolAccess" | "submissionVerification">): boolean {
+	if (item.submittedAt || !item.fillRunId) return false;
+	return item.status === "blocked" && item.blockReason === "submit_unconfirmed" && item.submitAttempted ||
+		item.toolAccess === "full" && item.submissionVerification === "unverified" && ["blocked", "failed", "awaiting_review", "materials_ready", "deferred"].includes(item.status);
 }
 
 /** Does the check need the owner in the browser (sign-in or CAPTCHA) before it can read the site? */

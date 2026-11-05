@@ -67,6 +67,15 @@ describe("the read-only 'was it sent?' check (#1068)", () => {
 		expect(canCheckSubmission({ ...uncertain, status: "failed" } as never)).toBe(false);
 	});
 
+	it.each(["blocked", "failed", "awaiting_review", "materials_ready", "deferred"] as const)("offers the read-only check for an unverified Full attempt in %s", (status) => {
+		const full = { ...uncertain, status, blockReason: "incomplete", submitAttempted: false, toolAccess: "full", submissionVerification: "unverified" } as const;
+		expect(canCheckSubmission(full)).toBe(true);
+		expect(canCheckSubmission({ ...full, toolAccess: "guarded" })).toBe(false);
+		expect(canCheckSubmission({ ...full, status: "filling" })).toBe(false);
+		expect(canCheckSubmission({ ...full, submittedAt: "2026-11-05T00:00:00Z" })).toBe(false);
+		expect(canCheckSubmission({ ...full, fillRunId: null })).toBe(false);
+	});
+
 	it("needs the owner only when the Runner paused at a sign-in or CAPTCHA", () => {
 		expect(checkNeedsOwner(answer("requested", { state: "paused", pauseReason: "login_required" }))).toBe(true);
 		expect(checkNeedsOwner(answer("requested", { state: "paused", pauseReason: "captcha" }))).toBe(true);

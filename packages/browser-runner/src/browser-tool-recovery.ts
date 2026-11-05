@@ -30,7 +30,7 @@ export function diagnosticMessage(error: unknown): string {
 	return message.length > 2000 ? `${message.substring(0, 1900)} [error truncated: ${message.length} characters]` : message;
 }
 
-type Pending<T> = { tool: string; started: number; execution: "pending" | "settled" | "unknown"; reply?: T; error?: string; machine: BrowserToolDiagnostic["machine"]; lost: boolean };
+type Pending<T> = { tool: string; started: number; execution: "pending" | "settled" | "unknown"; reply?: T; error?: string; machine: BrowserToolDiagnostic["machine"]; lost: boolean; quarantined: boolean; callerDone: Promise<void>; finishCaller(): void };
 export type NativeRequestOutcome<T> = { reply: T; diagnostic?: never } | { diagnostic: BrowserToolDiagnostic; reply?: never };
 
 /**
@@ -48,7 +48,7 @@ export class BrowserToolRecovery<T> {
 	private diagnostic(pending: Pending<T>, kind?: BrowserToolDiagnostic["kind"]): BrowserToolDiagnostic {
 		const settled = pending.execution === "settled";
 		return {
-			kind: kind ?? (pending.lost ? "browser_process_lost" : pending.error ? "transport_failure" : "request_deadline"),
+			kind: kind ?? (this.retired ? "quarantined" : pending.lost ? "browser_process_lost" : pending.error ? "transport_failure" : "request_deadline"),
 			phase: kind === "quarantined" ? "recovery" : "native_response", tool: pending.tool,
 			execution: pending.execution, recoverable: settled && !this.retired && !pending.lost,
 			message: settled ? "The delayed native response arrived. Inspect its result and current page through browser_recover before any further native action. No action was replayed."
@@ -59,7 +59,12 @@ export class BrowserToolRecovery<T> {
 		};
 	}
 	status(): BrowserRecoveryStatus | null {
-		return this.pending ? { diagnostic: this.diagnostic(this.pending), deadlineCount: this.deadlines, canResume: this.pending.execution === "settled" && !this.retired && !this.pending.lost } : null;
+		return this.pending?.quarantined ? { diagnostic: this.diagnostic(this.pending), deadlineCount: this.deadlines, canResume: this.pending.execution === "settled" && !this.retired && !this.pending.lost } : null;
+	}
+	/** Defer a first dispatch behind ordinary work, never behind uncertain execution.
+	 * The caller must perform its normal authorization checks after this wait. */
+	async waitForIdle(): Promise<void> {
+		while (this.pending && !this.pending.quarantined && !this.retired) await this.pending.callerDone;
 	}
 	blocked(): BrowserToolDiagnostic | null {
 		if (this.pending) return this.diagnostic(this.pending, "quarantined");
@@ -73,11 +78,13 @@ export class BrowserToolRecovery<T> {
 		return reply;
 	}
 	settledReply(): T | undefined { return this.pending?.execution === "settled" ? this.pending.reply : undefined; }
-	retire(): void { this.retired = true; }
+	retire(): void { this.retired = true; if (this.pending) { this.pending.quarantined = true; this.pending.finishCaller(); } }
 	async request(tool: string, operation: () => Promise<T>, processLost: () => boolean): Promise<NativeRequestOutcome<T>> {
 		const blocked = this.blocked();
 		if (blocked) return { diagnostic: blocked };
-		const pending: Pending<T> = { tool, started: Date.now(), execution: "pending", machine: browserMachineEvidence(), lost: false };
+		let finishCaller!: () => void;
+		const callerDone = new Promise<void>(resolve => { finishCaller = resolve; });
+		const pending: Pending<T> = { tool, started: Date.now(), execution: "pending", machine: browserMachineEvidence(), lost: false, quarantined: false, callerDone, finishCaller };
 		this.pending = pending;
 		// Rejection is observed even after the caller deadline; no unhandled late promise.
 		const completion = Promise.resolve().then(operation).then(reply => {
@@ -90,10 +97,10 @@ export class BrowserToolRecovery<T> {
 		let timer: NodeJS.Timeout | undefined;
 		try {
 			const completed = await Promise.race([completion, new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), this.requestDeadlineMs); })]);
-			if (!completed) { this.deadlines++; return { diagnostic: this.diagnostic(pending) }; }
-			if (pending.execution === "unknown") return { diagnostic: this.diagnostic(pending) };
+			if (!completed) { this.deadlines++; pending.quarantined = true; return { diagnostic: this.diagnostic(pending) }; }
+			if (pending.execution === "unknown") { pending.quarantined = true; return { diagnostic: this.diagnostic(pending) }; }
 			this.pending = null;
 			return { reply: pending.reply as T };
-		} finally { if (timer) clearTimeout(timer); }
+		} finally { if (timer) clearTimeout(timer); finishCaller(); }
 	}
 }

@@ -13,9 +13,11 @@
  * application whose runner reported `filled: 0, uploaded: 0` came to be described as a filled form
  * waiting to be approved and sent.
  */
+import { fullSubmissionNeedsReconciliation } from "../local-apply/reconciliation-store.js";
+import { getApplyRun } from "../local-apply/store.js";
 import { type FillProgress, fillProgressOf } from "./fill-progress.js";
 import type { ExecutionCheckpoint } from "./execution-projection.js";
-import type { JobApplication } from "../local-artifact/store.js";
+import { type JobApplication, getOwnedApplication } from "../local-artifact/store.js";
 import { type OwnerAssertion, assertionFor } from "../local-apply/owner-assertion.js";
 import type { Env } from "../../types.js";
 
@@ -31,6 +33,7 @@ export interface RunDiagnostic {
 }
 
 export interface FillViews {
+	submissionUncertain?: boolean;
 	toolAccess?: "guarded" | "full";
 	submissionVerification?: "unverified";
 	diagnostic: RunDiagnostic | null;
@@ -60,15 +63,19 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick<JobApplication, "id" | "fillRunId" | "status" | "submitAttemptedAt" | "blockReason">): Promise<FillViews> {
 	if (!app.fillRunId) return NO_FILL_VIEWS;
 	const ownerAssertion = app.submitAttemptedAt ? await assertionFor(env, uid, app).catch(() => null) : null;
-	const row = await env.DB.prepare("SELECT status, pause, result, trace, policy FROM local_apply_runs WHERE id = ?1 AND user_id = ?2")
+	const row = await env.DB.prepare("SELECT instance_id, status, pause, result, trace, policy FROM local_apply_runs WHERE id = ?1 AND user_id = ?2")
 		.bind(app.fillRunId, uid)
-		.first<{ status: string; pause: string | null; result: string | null; trace: string | null; policy: string | null }>()
+		.first<{ instance_id: string; status: string; pause: string | null; result: string | null; trace: string | null; policy: string | null }>()
 		.catch(() => null);
 	if (!row) return { ...NO_FILL_VIEWS, ownerAssertion };
 	const result = parse(row.result);
 	const policy = parse(row.policy);
-	const access: Pick<FillViews, "toolAccess" | "submissionVerification"> = policy?.toolAccess === "full" ? { toolAccess: "full" as const, ...(result?.outcome !== "submitted" ? { submissionVerification: "unverified" as const } : {}) } : {};
+	const access: Pick<FillViews, "toolAccess" | "submissionVerification" | "submissionUncertain"> = policy?.toolAccess === "full" ? { toolAccess: "full" as const, ...(result?.outcome !== "submitted" ? { submissionVerification: "unverified" as const } : {}) } : {};
 
+	if (access.toolAccess === "full") {
+		const current = await getOwnedApplication(env, uid, app.id);
+		access.submissionUncertain = current ? await fullSubmissionNeedsReconciliation(env, uid, current, await getApplyRun(env, row.instance_id, uid, app.fillRunId)) : true;
+	}
 	const pause = parse(row.pause);
 	// The supervisor store is the authoritative record of what the runner measured at a checkpoint.
 	// The pause carries a copy, but only when the checkpoint resolved at pause time, and a sentence

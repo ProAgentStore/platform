@@ -1,3 +1,4 @@
+import { assertFullSubmissionReconciled } from "./reconciliation-store.js";
 import { ownerFactsReceipt, ownerFactsSnapshot, readOwnerFactValues } from "./owner-facts.js";
 import { toolAccessRunnerProblem, queuedToolAccessProblem } from "./tool-access.js";
 import { escalationRunnerProblem } from "./escalation-config.js";
@@ -274,8 +275,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		const run = app.fillRunId ? await getApplyRun(env, instanceId, uid, app.fillRunId) : null;
 		return { kind: "existing", application: app, run };
 	}
-	// #1073: an attempted submit blocks every later fill — unless the owner recorded, for this exact
-	// attempt, that nothing was sent. That assertion allows ONE new fill, spent below.
+	await assertFullSubmissionReconciled(env, uid, app);
 	const assertion = app.submitAttemptedAt ? await assertionFor(env, uid, app) : null;
 	if (app.submitAttemptedAt && (!assertion || assertion.consumedAt !== null)) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again automatically. If you checked the employer's site and nothing was sent, record that (assert_not_submitted) to allow one retry.");
 
@@ -882,11 +882,9 @@ export function ownerFillEvent(app: JobApplication): Record<string, unknown> | n
  * per-attempt key, so a repeated click finds the run it started.
  */
 export async function retryFill(env: Env, runnerInstanceId: string, uid: string, app: JobApplication, opts: { review?: boolean } = {}): Promise<StartFillOutcome> {
-	// `awaiting_review` joined the list at #981, and it is the one the whole ticket turns on: that
-	// application's run STOPPED, nothing was sent, and the browser session that held its filled form
-	// is gone — so a fresh run is the only way to carry the owner's approval to the employer. It is
-	// as safe as the other two for the same reason: the guard below refuses any application that has
-	// already attempted a submit, and the approval it spends is single-use.
+	// A new browser run needs exact-attempt certainty; Full native effects cannot be inferred
+	// from an absent supervised submit event or a previous submission authorization.
+	await assertFullSubmissionReconciled(env, uid, app);
 	const auth = await getSubmitAuthorization(env, app.id, uid).catch(() => null);
 	const oneClick = auth?.kind === "verified_one_click" ? auth : null;
 	const recovering = oneClick?.recoveryId && oneClick.recoveryRunnerInstanceId === runnerInstanceId;

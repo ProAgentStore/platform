@@ -22,6 +22,7 @@
  * HANDLES (owner-visible path + sha256), status and actionable pause reasons — never résumé text,
  * profile values, typed form values, cookies or the owner's answers.
  */
+import { assertFullSubmissionReconciled } from "../local-apply/reconciliation-store.js";
 import { parseResumeDomains } from "../local-apply/resume-domains.js";
 import { normaliseTraceEntries, type PagedTraceEntry } from "./trace-page.js";
 import { HttpError } from "../auth.js";
@@ -178,8 +179,8 @@ interface OpenRun {
 }
 
 /** The actions an application in this state can take — the lifecycle table, read for the owner. */
-function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, approvalRun: ApplyRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null, assertion: OwnerAssertion | null = null): ApplicationAction[] {
-	const canFill = pipeline.runners.length > 0;
+function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, approvalRun: ApplyRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null, assertion: OwnerAssertion | null = null, submissionUncertain = false): ApplicationAction[] {
+	const canFill = pipeline.runners.length > 0 && !submissionUncertain;
 	const postFillApprovable = canFill && !auth && !app.submitAttemptedAt && isPostFillApproval(app, approvalRun);
 	// #1073: an attempted submit blocks a new fill unless the owner asserted, for this attempt, that
 	// nothing was sent — and the assertion is offered only while there is none and no run holds it.
@@ -195,7 +196,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			// approved card shows `start_fill` rather than a second Approve button.
 			return [
 				...(canFill && !auth && !app.submitAttemptedAt ? (["approve_and_proceed"] as const) : []),
-				...(auth?.recoveryPending ? (["retry_fill"] as const) : []),
+				...(!submissionUncertain && auth?.recoveryPending ? (["retry_fill"] as const) : []),
 				...(canFill && submitAllowed && !attemptBlocks ? (["start_fill"] as const) : []),
 				...(canFill && !attemptBlocks ? (["request_review"] as const) : []),
 				...assertable,
@@ -212,7 +213,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 					...(canSaveEndedAnswers(app, approvalRun) ? (["resume"] as const) : []),
 					...(postFillApprovable ? (["approve_and_proceed"] as const) : []),
 					...(canFill && !attemptBlocks ? (["retry_fill"] as const) : []),
-					...(!auth && canRegenerateMissingMaterials(app, approvalRun) ? (["retry_tailoring"] as const) : []),
+					...(!submissionUncertain && !auth && canRegenerateMissingMaterials(app, approvalRun) ? (["retry_tailoring"] as const) : []),
 					...assertable,
 					"defer",
 					"archive",
@@ -233,7 +234,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			// is exactly "no approval means no submit".
 			return [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), ...(canFill && !app.submitAttemptedAt ? (["retry_fill"] as const) : []), "defer", "archive"];
 		case "deferred":
-			return ["apply", ...assertable, "archive"];
+			return [...(!submissionUncertain ? (["apply"] as const) : []), ...assertable, "archive"];
 		default:
 			return [];
 	}
@@ -254,7 +255,7 @@ function applicationItem(
 ): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
-	const actions = withNotInterested(applicationActions(app, pipeline, run, approvalRun, !!policy?.allowed, auth, fill.ownerAssertion));
+	const actions = withNotInterested(applicationActions(app, pipeline, run, approvalRun, !!policy?.allowed, auth, fill.ownerAssertion, fill.submissionUncertain));
 	// #1022 stale review run (live cc90cd13): a settled run always moves its application to its outcome, so
 	// materials_ready + a FINISHED fill run means the card moved past it — history (diagnostic kept), not current.
 	const staleRun = app.status === "materials_ready" && !run && !!fill.runStatus && isTerminalApplyRun(fill.runStatus as ApplyRunStatus);
@@ -671,6 +672,7 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 			return after({ runId: out.run.id, ...(out.savedAnswers ? { savedAnswers: out.savedAnswers } : {}) });
 		}
 		case "approve_and_proceed": {
+			await assertFullSubmissionReconciled(env, uid, app);
 			// TWO stages, ONE action name — which is what keeps the console and MCP exposing exactly the
 			// same permitted action and result (#981). Post-fill (awaiting_review, or parked at a
 			// checkpoint) the form already exists: record the decision and continue the EXACT run, or
@@ -680,10 +682,8 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 				const key = input.idempotencyKey ?? `approve-continue:${app.id}:${app.stateVersion}`;
 				return after(approveContinueResult(await approveAndContinue(env, uid, app, run, { idempotencyKey: key }, now)));
 			}
-			// ONE owner action: record the authorization, then dispatch the fill that spends it. The
-			// grant is idempotent (unique on the application), and `startApplicationFill` is already
-			// replay-safe on the event id — so a double-click, a retried MCP call and a redelivered
-			// event all converge on one authorization and one run, never a second submission.
+			// ONE owner action records authorization, then dispatches the fill that spends it.
+			// The unique authorization and event id make repeated owner dispatches idempotent.
 			const event = ownerFillEvent(app);
 			if (!event) throw new HttpError(409, "The application has no materials_ready event to fill from.");
 			const existingAuth = await getSubmitAuthorization(env, app.id, uid);

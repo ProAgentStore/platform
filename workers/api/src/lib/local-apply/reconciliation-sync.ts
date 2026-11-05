@@ -9,12 +9,8 @@ import { auxiliaryWebsiteAccess } from "../website-access-auxiliary.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import { LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyReconciliationStatus } from "./handoff-contract.js";
-import {
-	activeLocalApplyReconciliations,
-	getApplyRun,
-	getLocalApplyReconciliation,
-	recordLocalApplyReconciliationProof,
-} from "./store.js";
+import { getApplyRun } from "./store.js";
+import { activeLocalApplyReconciliations, getLocalApplyReconciliation, recordLocalApplyReconciliationProof } from "./reconciliation-store.js";
 
 export async function syncActiveApplyReconciliations(env: Env, limit = 25, now = Date.now()): Promise<number> {
 	let synced = 0;

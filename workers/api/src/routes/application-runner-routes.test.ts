@@ -167,6 +167,69 @@ describe("full browser tool acceptance and dispatch", () => {
 		expect(ended.body.run.result).toMatchObject({ outcome: "blocked", blockReason: "submit_unconfirmed", submissionVerification: "unverified" });
 		expect((await appRow("full-unverified"))?.status).toBe("blocked");
 	});
+	it.each(["blocked", "failed", "awaiting_review"])("reconciles ended Full %s without treating absent submit events or old approval as safe to retry", async (outcome) => {
+		await call("PUT", "/ap/application-runner/settings", accept);
+		const id = `full-uncertain-${outcome}`;
+		const event = readyApp(id);
+		await d1.DB.prepare("UPDATE job_applications SET ready_event = ?1 WHERE id = ?2").bind(JSON.stringify(event), id).run();
+		const started = await call("POST", "/ap/application-queue/actions", { action: "approve_and_proceed", application_id: id, expected_status: "materials_ready" });
+		expect(started.status, JSON.stringify(started.body)).toBe(200);
+		const runId = started.body.result.runId;
+		runner("ended", { result: RESULT(runId, { outcome, blockReason: "incomplete", questions: ["Current public profile URL?"] }) });
+		await call("GET", `/ap/application-runs/${runId}`);
+		const card = async () => (await call("GET", "/ap/application-queue")).body.items.find((i: { applicationId: string }) => i.applicationId === id);
+		const before = await card();
+		expect(before.submitAttempted).toBe(false);
+		expect(before.submitAuthorization.usable).toBe(true);
+		expect(before.actions).not.toEqual(expect.arrayContaining(["retry_fill"]));
+		expect(before.actions).not.toContain("approve_and_proceed");
+		for (const action of ["retry_fill", "approve_and_proceed"]) expect((await call("POST", "/ap/application-queue/actions", { action, application_id: id, expected_status: before.status })).status).toBe(409);
+		// Direct fill bypasses the action projection, but cannot replay the uncertain run either.
+		await d1.DB.prepare("UPDATE job_applications SET status = 'materials_ready' WHERE id = ?1").bind(id).run();
+		expect((await call("POST", "/ap/application-runs", { ...event, eventId: `${event.eventId}:unsafe-retry` })).status).toBe(409);
+		d1.exec("INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('ap2', 'runner-a', 'u1', 'active', '{\"runnerNode\":\"mac\"}')");
+		expect((await call("POST", "/ap2/application-runs", { ...event, eventId: `${event.eventId}:other-runner` })).status).toBe(409);
+		await d1.DB.prepare("UPDATE job_applications SET status = ?1 WHERE id = ?2").bind(before.status, id).run();
+		d1.exec("UPDATE agent_connections SET target_instance_id = 'ap2' WHERE id = 'c-ready'");
+		const switched = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: id, expected_status: before.status });
+		expect(switched.status).toBe(409);
+		d1.exec("UPDATE agent_connections SET target_instance_id = 'ap' WHERE id = 'c-ready'");
+		answers["/local-apply/reconciliation/run"] = (body) => ({ status: 200, body: { reconciliationId: body.reconciliationId, runId, applicationId: id, state: "ended", result: { state: "ambiguous", proofKind: "ambiguous_site_history" } } });
+		const checked = await call("POST", `/ap/application-runs/${runId}/reconciliation`);
+		expect(checked.status, JSON.stringify(checked.body)).toBe(201);
+		expect(checked.body.reconciliation).toMatchObject({ state: "ambiguous", runId, applicationId: id });
+		expect((await card()).actions).not.toContain("retry_fill");
+		if (outcome === "blocked") {
+			const current = await card();
+			expect(current.actions).toContain("resume");
+			const saved = await call("POST", "/ap/application-queue/actions", { action: "resume", application_id: id, expected_status: "blocked", expected_version: current.stateVersion, answers: [{ question: "Current public profile URL?", answer: "Leave this optional field blank" }] });
+			expect(saved.body.result).toMatchObject({ outcome: "answers_saved", resumed: false });
+		}
+		expect(dispatches()).toHaveLength(1);
+	});
+	it("requires fresh exact-run proof for each explicitly retried Full attempt", async () => {
+		await call("PUT", "/ap/application-runner/settings", accept);
+		const id = "full-exact-proof";
+		const event = readyApp(id);
+		await d1.DB.prepare("UPDATE job_applications SET ready_event = ?1 WHERE id = ?2").bind(JSON.stringify(event), id).run();
+		const first = (await call("POST", "/ap/application-runs", event)).body.run.id;
+		runner("ended", { result: RESULT(first, { outcome: "blocked", blockReason: "incomplete" }) });
+		await call("GET", `/ap/application-runs/${first}`);
+		const card = async () => (await call("GET", "/ap/application-queue")).body.items.find((i: { applicationId: string }) => i.applicationId === id);
+		expect((await card()).actions).not.toContain("retry_fill");
+		answers["/local-apply/reconciliation/run"] = (body) => ({ status: 200, body: { reconciliationId: body.reconciliationId, runId: first, applicationId: id, state: "ended", result: { state: "no_submission_proven", proofKind: "authorized_site_history_no_submission" } } });
+		expect((await call("POST", `/ap/application-runs/${first}/reconciliation`)).body.reconciliation.state).toBe("no_submission_proven");
+		const proven = await card();
+		expect(proven.actions).toContain("retry_fill");
+		const retried = await call("POST", "/ap/application-queue/actions", { action: "retry_fill", application_id: id, expected_status: proven.status, expected_version: proven.stateVersion });
+		expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+		const second = retried.body.result.runId;
+		expect(second).not.toBe(first);
+		expect(dispatches()).toHaveLength(2);
+		runner("ended", { result: RESULT(second, { outcome: "blocked", blockReason: "incomplete" }) });
+		await call("GET", `/ap/application-runs/${second}`);
+		expect((await card()).actions).not.toContain("retry_fill");
+	});
 	it("holds queued full work on old CLI or revoked acknowledgement", async () => {
 		await call("PUT", "/ap/application-runner/settings", accept);
 		answers["/local-apply/run"] = { status: 409, body: { error: "This machine is already filling 1 application(s) for this agent (limit 1)." } };

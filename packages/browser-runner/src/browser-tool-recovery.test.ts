@@ -9,6 +9,55 @@ function deferred<T>() {
 
 afterEach(() => vi.useRealTimers());
 describe("native request quarantine (#1537)", () => {
+	it("defers a first follow-up behind ordinary work without reporting a timeout", async () => {
+		const recovery = new BrowserToolRecovery<string>(60, 600), native = deferred<string>();
+		const action = recovery.request("browser_click", () => native.promise, () => false);
+		const followup = vi.fn(async () => "uploaded");
+		const next = recovery.waitForIdle().then(() => recovery.request("browser_file_upload", followup, () => false));
+		await Promise.resolve();
+		expect(recovery.status()).toBeNull();
+		expect(followup).not.toHaveBeenCalled();
+		native.resolve("chooser opened");
+		expect(await action).toEqual({ reply: "chooser opened" });
+		expect(await next).toEqual({ reply: "uploaded" });
+		expect(followup).toHaveBeenCalledTimes(1);
+	});
+	it("abandons a waiting first action if the preceding action expires", async () => {
+		vi.useFakeTimers();
+		const recovery = new BrowserToolRecovery<string>(60, 600), native = deferred<string>();
+		const action = recovery.request("browser_click", () => native.promise, () => false);
+		const followup = vi.fn(async () => "must not execute");
+		const next = recovery.waitForIdle().then(() => recovery.request("browser_file_upload", followup, () => false));
+		await vi.advanceTimersByTimeAsync(60);
+		expect((await action).diagnostic?.kind).toBe("request_deadline");
+		expect((await next).diagnostic?.kind).toBe("quarantined");
+		expect(followup).not.toHaveBeenCalled();
+		native.resolve("late"); await vi.advanceTimersByTimeAsync(0);
+		expect(followup).not.toHaveBeenCalled();
+	});
+	it("does not dispatch a waiting action after a transport rejection", async () => {
+		const recovery = new BrowserToolRecovery<string>(60, 600), native = deferred<string>();
+		const action = recovery.request("browser_click", () => native.promise, () => false);
+		const followup = vi.fn(async () => "must not execute");
+		const next = recovery.waitForIdle().then(() => recovery.request("browser_file_upload", followup, () => false));
+		native.reject(new Error("connection closed without a response"));
+		expect((await action).diagnostic?.kind).toBe("transport_failure");
+		expect((await next).diagnostic?.kind).toBe("quarantined");
+		expect(followup).not.toHaveBeenCalled();
+		expect(recovery.status()?.canResume).toBe(false);
+	});
+	it("retirement releases ordinary waiters without dispatching or replaying", async () => {
+		const recovery = new BrowserToolRecovery<string>(60, 600), native = deferred<string>();
+		const action = recovery.request("browser_click", () => native.promise, () => false);
+		const followup = vi.fn(async () => "must not execute");
+		const next = recovery.waitForIdle().then(() => recovery.request("browser_file_upload", followup, () => false));
+		recovery.retire();
+		expect((await next).diagnostic?.kind).toBe("quarantined");
+		expect(followup).not.toHaveBeenCalled();
+		native.resolve("late response"); await action;
+		expect(recovery.release()).toBeUndefined();
+		expect(recovery.blocked()?.recoverable).toBe(false);
+	});
 	it("bounds the caller, permits independent pixels, and never replays a delayed action", async () => {
 		vi.useFakeTimers();
 		const recovery = new BrowserToolRecovery<string>(60, 600), native = deferred<string>();

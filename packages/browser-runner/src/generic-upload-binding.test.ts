@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocalRunner } from "./runner.js";
 
@@ -25,6 +26,7 @@ describe("generic uploads keep the exact chooser and task binding (#1490)", () =
 		await runner.browserAct({ action: "navigate", url, screenshot: false });
 	}, 60_000);
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		await runner.close();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		vi.unstubAllEnvs();
@@ -46,6 +48,49 @@ describe("generic uploads keep the exact chooser and task binding (#1490)", () =
 	it("a styled upload click autoattaches only to its exact compatible input", async () => {
 		await runner.browserAct({ action: "click", ref: await ref("Choose resume"), name: "Choose resume", screenshot: false }, path);
 		await expect.poll(selections).toEqual([[], ["resume.txt"]]);
+	}, 60_000);
+
+	it("the explicit native chooser/upload baseline selects the same exact input", async () => {
+		const state = runner.browsers.current;
+		const chooser = state.activePage!.waitForEvent("filechooser");
+		await state.activePage!.locator("#choose").click(); await chooser;
+		const result = await state.mcp!.callTool("browser_file_upload", { paths: [path] });
+		expect(result.isError).not.toBe(true);
+		expect(result.uploadSelection?.status).toBe("selected");
+		expect(await selections()).toEqual([[], ["resume.txt"]]);
+	}, 60_000);
+
+	it.each(["unchanged", "task", "chooser", "stop"])("revalidates %s binding after a native opening action returns", async (change) => {
+		const target = await ref("Choose resume"), native = Client.prototype.callTool;
+		let returned!: () => void, release!: () => void;
+		const nativeReturned = new Promise<void>(resolve => { returned = resolve; });
+		const held = new Promise<void>(resolve => { release = resolve; });
+		vi.spyOn(Client.prototype, "callTool").mockImplementation(async function (...args) {
+			const response = await native.apply(this, args);
+			if (args[0].name === "browser_click") { returned(); await held; }
+			return response;
+		});
+		const opening = runner.browserAct({ action: "click", ref: target, name: "Choose resume", screenshot: false }, path);
+		await nativeReturned;
+		const state = runner.browsers.current;
+		expect(await selections()).toEqual([[], []]);
+		expect(state.mcp!.recoveryStatus()).toBeNull();
+		if (change === "task") state.resumeTaskId = "different-task";
+		if (change === "stop") state.mcp!.setCallPolicy({ isCancelled: () => true });
+		if (change === "chooser") {
+			state.suppressAutoAttach = true;
+			const newer = state.activePage!.waitForEvent("filechooser");
+			await state.activePage!.locator("#unrelated").evaluate((input: HTMLInputElement) => input.click()); await newer;
+			state.suppressAutoAttach = false;
+		}
+		release();
+		if (change === "stop") await expect(opening).rejects.toThrow("stopped");
+		else await opening;
+		await expect.poll(() => state.calls.page(null, 0).calls.find(call => call.tool === "browser_file_upload"), { timeout: 10_000 }).toBeDefined();
+		expect(await selections()).toEqual(change === "unchanged" ? [[], ["resume.txt"]] : [[], []]);
+		const uploads = state.calls.page(null, 0).calls.filter(call => call.tool === "browser_file_upload");
+		expect(uploads).toHaveLength(1);
+		expect(uploads[0].outcome).toBe(change === "unchanged" ? "ok" : "refused");
 	}, 60_000);
 
 	it("automatic attachment respects the exact input's accepted document types", async () => {

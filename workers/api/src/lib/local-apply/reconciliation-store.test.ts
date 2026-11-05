@@ -1,16 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, type RealSchemaD1 } from "../d1-sqlite.js";
 import type { JobApplication } from "../local-artifact/store.js";
-import {
-	auditReconciledNoSubmission,
-	createLocalApplyHandoff,
-	getHandoffById,
-	markLocalApplyHandoff,
-	reconciliationProvesNoSubmission,
-	recordLocalApplyReconciliationProof,
-	requestLocalApplyReconciliation,
-	type ApplyRun,
-} from "./store.js";
+import { createLocalApplyHandoff, getHandoffById, markLocalApplyHandoff, type ApplyRun } from "./store.js";
+import { auditReconciledNoSubmission, reconciliationProvesNoSubmission, recordLocalApplyReconciliationProof, requestLocalApplyReconciliation } from "./reconciliation-store.js";
 
 let d1: RealSchemaD1;
 const now = 1_700_000_000_000;
@@ -99,14 +91,30 @@ describe("#1013 local-apply durable reconciliation", () => {
 		const current = (await import("../local-artifact/store.js")).getOwnedApplication;
 		const stored = await current({ DB: d1.DB }, "u1", "app-1");
 		expect(stored?.submitAttemptedAt).toBe(now - 1);
-		expect(reconciliationProvesNoSubmission(await (await import("./store.js")).getLocalApplyReconciliation({ DB: d1.DB }, "run-1", "runner", "u1"), stored!, uncertain)).toBe(true);
-		const durable = await (await import("./store.js")).getLocalApplyReconciliation({ DB: d1.DB }, "run-1", "runner", "u1");
+		expect(reconciliationProvesNoSubmission(await (await import("./reconciliation-store.js")).getLocalApplyReconciliation({ DB: d1.DB }, "run-1", "runner", "u1"), stored!, uncertain)).toBe(true);
+		const durable = await (await import("./reconciliation-store.js")).getLocalApplyReconciliation({ DB: d1.DB }, "run-1", "runner", "u1");
 		expect(durable).not.toBeNull();
 		if (!durable) throw new Error("the reconciliation proof was not stored");
 		expect(await auditReconciledNoSubmission({ DB: d1.DB }, { reconciliation: durable, app: stored!, run: uncertain, userId: "u1" }, now + 3)).toBe(true);
 		expect((await current({ DB: d1.DB }, "u1", "app-1"))?.submitAttemptedAt).toBe(now - 1);
 	});
 
+	it("binds Full-mode proof to the exact current run and materials without fabricating a submit marker", async () => {
+		const full = { ...run("run-1", "blocked"), policy: { ...policy, toolAccess: "full" as const } };
+		const original = app({ blockReason: "incomplete", submitAttemptedAt: null });
+		await d1.DB.prepare("UPDATE local_apply_runs SET policy = ?1 WHERE id = 'run-1'").bind(JSON.stringify(full.policy)).run();
+		d1.exec("UPDATE job_applications SET block_reason = 'incomplete', submit_attempted_at = NULL WHERE id = 'app-1'");
+		const { fullSubmissionNeedsReconciliation } = await import("./reconciliation-store.js");
+		expect(await fullSubmissionNeedsReconciliation({ DB: d1.DB }, "u1", original, full)).toBe(true);
+		const requested = (await requestLocalApplyReconciliation({ DB: d1.DB }, { app: original, run: full, userId: "u1" }, now))!;
+		expect(requested).toMatchObject({ state: "requested", runId: "run-1" });
+		expect(await requestLocalApplyReconciliation({ DB: d1.DB }, { app: original, run: { ...full, id: "wrong-run" }, userId: "u1" }, now)).toBeNull();
+		expect(await recordLocalApplyReconciliationProof({ DB: d1.DB }, { reconciliation: requested, app: original, run: full, userId: "u1", state: "no_submission_proven", proofKind: "authorized_site_history_no_submission" }, now + 1)).not.toBeNull();
+		expect(await fullSubmissionNeedsReconciliation({ DB: d1.DB }, "u1", original, full)).toBe(false);
+		expect(await fullSubmissionNeedsReconciliation({ DB: d1.DB }, "u1", { ...original, profileVersion: "new-profile" }, full)).toBe(true);
+		expect(await fullSubmissionNeedsReconciliation({ DB: d1.DB }, "u2", original, full)).toBe(true);
+		expect(await d1.DB.prepare("SELECT submit_attempted_at FROM job_applications WHERE id = 'app-1'").first()).toEqual({ submit_attempted_at: null });
+	});
 	it("rejects changed reviewed material and never records raw reconciliation evidence", async () => {
 		const uncertain = run("run-1", "blocked");
 		const reconciliation = await requestLocalApplyReconciliation({ DB: d1.DB }, { app: app(), run: uncertain, userId: "u1" }, now);

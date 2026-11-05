@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { chromium, type Browser, type Page } from "playwright";
 import { McpRuntime } from "./mcp-runtime.js";
 import { startTestJobServer, type TestJobServer } from "./test-job-server.js";
@@ -131,15 +132,33 @@ describe("MCP action policy — no guarded action reaches the page through an al
 		expect(server.submissions).toHaveLength(before);
 		expect(mcp.pullCalls({ kind: "runtime_task", id: "stopped-run" }, 0).calls.at(-1)?.outcome).toBe("refused");
 	});
-	it("checks Stop again when it arrives while the guard is reading the DOM", async () => {
-		await page.goto(server.searchUrl);
-		const target = mcp.textOf(await mcp.callTool("browser_snapshot")).match(/button "Search"[^\n]*\[ref=(\w+)\]/)?.[1];
+	it.each(["search", "submit"])("checks Stop again when it arrives while the guard is reading the %s DOM", async (kind) => {
+		await page.goto(kind === "search" ? server.searchUrl : server.quickApplyUrl);
+		const target = kind === "submit" ? await buttonRef() : mcp.textOf(await mcp.callTool("browser_snapshot")).match(/button "Search"[^\n]*\[ref=(\w+)\]/)?.[1];
 		expect(target).toBeTruthy();
-		let checks = 0;
-		mcp.setCallPolicy({ guard: { mode: "read_only", labels: "impossible-label" }, isCancelled: () => ++checks >= 4 });
-		const result = await mcp.callTool("browser_click", { target, element: "Continue" });
-		expect(result.isError).toBe(true);
-		expect(mcp.textOf(result)).toContain("stopped");
+		let stopped = false;
+		const nativeCalls: string[] = [], before = server.submissions.length;
+		const native = Client.prototype.callTool;
+		// Return an actual native DOM observation after Stop arrives. Bind the race to the
+		// asynchronous boundary, not to how many times production reads isCancelled.
+		const spy = vi.spyOn(Client.prototype, "callTool").mockImplementation(async function (...args) {
+			nativeCalls.push(args[0].name);
+			const result = await native.apply(this, args);
+			if (args[0].name === "browser_evaluate") stopped = true;
+			return result;
+		});
+		mcp.setSubject({ kind: "runtime_task", id: "stop-during-probe" });
+		mcp.setCallPolicy({ guard: { mode: "read_only", labels: "impossible-label" }, isCancelled: () => stopped });
+		try {
+			const result = await mcp.callTool("browser_click", { target, element: "Continue" });
+			expect(stopped).toBe(true);
+			expect(result.isError).toBe(true);
+			expect(mcp.textOf(result)).toContain("stopped");
+			expect(nativeCalls).toContain("browser_evaluate");
+			expect(nativeCalls).not.toContain("browser_click");
+			expect(server.submissions).toHaveLength(before);
+			expect(mcp.pullCalls({ kind: "runtime_task", id: "stop-during-probe" }, 0).calls.at(-1)).toMatchObject({ tool: "browser_click", outcome: "refused" });
+		} finally { spy.mockRestore(); }
 	});
 	it.each(["file:///etc/passwd", "data:text/html,private", "javascript:alert(1)", "chrome://settings", "about:config"])("refuses non-web navigation %s without changing page", async (url) => {
 		const before = page.url();
