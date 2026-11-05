@@ -86,7 +86,11 @@ describe("what a machine has, for coding_engine_get (#1156)", () => {
 		expect(out.engines.grok).toMatchObject({ installed: true, path: "/Users/serge/.grok/bin/grok", version: "1.0.62", vendor: "xai", login: "missing" });
 		expect(out.engines.grok.problem).toMatch(/not signed in there.*grok login/);
 		expect(out.engines.codex).toEqual({ installed: true, path: "/usr/local/bin/codex", version: "0.162.1", login: "found", problem: null });
-		expect(out.engines.gemini.problem).toMatch(/Gemini CLI is not installed/);
+		expect(out.engines.gemini).toMatchObject({ installed: false, path: null, version: null, login: "unknown" });
+		expect(out.engines.gemini.problem).toContain('Gemini CLI is unavailable to the runner on machine "Sergeys-Mac-mini.local"');
+		expect(out.engines.gemini.problem).toContain("`gemini`");
+		expect(out.engines.gemini.problem).toContain("It may be installed");
+		expect(out.engines.gemini.problem).not.toMatch(/is not installed|not signed in|restart `pags up`/);
 	});
 
 	it("a community `grok` is named as such, with xAI's installer as the fix", async () => {

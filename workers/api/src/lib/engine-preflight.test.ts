@@ -9,7 +9,7 @@ describe("enginePreflightMessage", () => {
 		const msg = enginePreflightMessage("no-binary", { clientType: "codex", bin: "codex", machine });
 		expect(msg).toContain('Codex is unavailable to the runner on machine "pink-laptop"');
 		expect(msg).toContain("`codex`");
-		expect(msg).toContain("It may be installed elsewhere");
+		expect(msg).toContain("It may be installed outside its current PATH or other search locations");
 		expect(msg).not.toContain("is not installed");
 		expect(msg).not.toContain("restart `pags up`");
 		expect(msg).toContain("npm i -g @openai/codex");
