@@ -3,10 +3,12 @@ import {
 	callRunner,
 	getBoundRunnerConn,
 	getRunnerConn,
+	getRunnerConnForStampedNode,
 	getRunnerConnIgnoringLiveness,
 	isRunnerOnline,
 	relayConnected,
 	READ_TIMEOUT_MS,
+	sameMachine,
 	verifyRunnerResponsive,
 	type RunnerConn,
 } from "./runner-client.js";
@@ -460,5 +462,214 @@ describe("getBoundRunnerConn (live-aware routing)", () => {
 			},
 		} as unknown as Env;
 		expect(await getBoundRunnerConn(broken, INST, "u1")).toBeNull();
+	});
+});
+
+/**
+ * A plain owner-wide `instance_runtime_nodes` row, exactly the identity query reads (#1541). Lets a
+ * test state ambiguity directly — two rows under one `node` string with different `machineId`s — which
+ * the `buildEnv` fixture above cannot express (its `machines` map is one id per name).
+ */
+function idRow(node: string, machineId: string | null, opts: { instanceId?: string } = {}) {
+	return { node, machineId, instanceId: opts.instanceId ?? INST, lastSeenAt: null };
+}
+
+/** An Env whose DB answers the owner-wide identity read with `rows`, and whose RELAY reports `connected` only for `liveNames`. */
+function buildIdentityEnv(opts: { rows: ReturnType<typeof idRow>[]; liveNames?: string[] }): Env {
+	const live = new Set(opts.liveNames ?? []);
+	const DB = {
+		prepare(sql: string) {
+			return {
+				bind(..._args: unknown[]) {
+					return {
+						async first() {
+							// getRunnerConn's direct exact-name lookup: live iff the name is in `rows` at all.
+							if (sql.includes("FROM instance_runtime_nodes") && sql.includes("runner_node = ?3")) {
+								const node = String(_args[2]);
+								return opts.rows.some((r) => r.node === node)
+									? { endpoint_url: `http://${node}`, token_plaintext: "t", runner_node: node, token_ciphertext: null, token_dek_wrapped: null, token_iv: null }
+									: null;
+							}
+							return null;
+						},
+						async all() {
+							if (sql.includes("machine_id AS machineId")) return { results: opts.rows };
+							return { results: [] };
+						},
+						async run() {
+							return { meta: { changes: 0 } };
+						},
+					};
+				},
+			};
+		},
+	};
+	const RELAY = {
+		idFromName: (name: string) => ({ name }),
+		get: (id: { name: string }) => ({ fetch: async () => Response.json({ connected: live.has(id.name) }) }),
+	};
+	return { RELAY, DB } as unknown as Env;
+}
+
+/**
+ * An Env whose owner-wide identity read THROWS (a D1 blip, say), and whose RELAY records every
+ * name it was asked about — so a test can prove a rejected registry read never reaches the point
+ * of asking the relay anything, not merely that it answers null (#1541).
+ */
+function buildFailingRegistryEnv(): { env: Env; relayAsked: string[] } {
+	const relayAsked: string[] = [];
+	const DB = {
+		prepare(sql: string) {
+			return {
+				bind() {
+					return {
+						async first() {
+							return null;
+						},
+						async all() {
+							if (sql.includes("machine_id AS machineId")) throw new Error("D1_ERROR: network");
+							return { results: [] };
+						},
+						async run() {
+							return { meta: { changes: 0 } };
+						},
+					};
+				},
+			};
+		},
+	};
+	const RELAY = {
+		idFromName: (name: string) => {
+			relayAsked.push(name);
+			return { name };
+		},
+		get: (_id: { name: string }) => ({ fetch: async () => Response.json({ connected: true }) }),
+	};
+	return { env: { RELAY, DB } as unknown as Env, relayAsked };
+}
+
+describe("getRunnerConnForStampedNode — resolving a PAST STAMP, not a live pin (#1541)", () => {
+	it("the unchanged case: the stamped name is still live, no identity lookup needed", async () => {
+		const env = buildIdentityEnv({ rows: [idRow("mini", "m-1")], liveNames: [relayNameForInstance(INST, "mini")] });
+		const conn = await getRunnerConnForStampedNode(env, INST, "u1", "mini");
+		expect(conn?.endpointUrl).toBe("http://mini");
+	});
+
+	it("renamed original machine: the stamp is dead, but a proven alias of the SAME machine is live", async () => {
+		// THE issue's exact shape: `Sergeys-Mac-mini.local` stamped a session; the machine now answers as `Macmini.modem`.
+		const env = buildIdentityEnv({
+			rows: [idRow("Sergeys-Mac-mini.local", "mac-mini-id"), idRow("Macmini.modem", "mac-mini-id")],
+			liveNames: [relayNameForInstance(INST, "Macmini.modem")],
+		});
+		const conn = await getRunnerConnForStampedNode(env, INST, "u1", "Sergeys-Mac-mini.local");
+		expect(conn?.endpointUrl).toBe("http://Macmini.modem");
+		expect(conn?.runnerNode).toBe("Macmini.modem");
+	});
+
+	it("a different machine being live does not make the stamp resolve — no shared machine_id, no candidate", async () => {
+		const env = buildIdentityEnv({
+			rows: [idRow("mini", "mac-mini-id"), idRow("dell-laptop", "dell-id")],
+			liveNames: [relayNameForInstance(INST, "dell-laptop")],
+		});
+		expect(await getRunnerConnForStampedNode(env, INST, "u1", "mini")).toBeNull();
+	});
+
+	it("unknown alias: the stamped name carries no recorded machine_id — no candidate, even if another name is live", async () => {
+		const env = buildIdentityEnv({ rows: [idRow("mini", null), idRow("other", "some-id")], liveNames: [relayNameForInstance(INST, "other")] });
+		expect(await getRunnerConnForStampedNode(env, INST, "u1", "mini")).toBeNull();
+	});
+
+	it("ambiguous alias: the stamped name itself is shared by two machines — refuses every candidate rather than guessing", async () => {
+		const env = buildIdentityEnv({
+			rows: [idRow("mini", "machine-a"), idRow("mini", "machine-b"), idRow("alias-of-a", "machine-a"), idRow("alias-of-b", "machine-b")],
+			liveNames: [relayNameForInstance(INST, "alias-of-a"), relayNameForInstance(INST, "alias-of-b")],
+		});
+		expect(await getRunnerConnForStampedNode(env, INST, "u1", "mini")).toBeNull();
+	});
+
+	it("an answeredBy candidate that is ITSELF ambiguous elsewhere in the fleet is never offered, even though it shares the stamp's id", async () => {
+		// `shared-name` carries mac-mini-id (same as the stamp) AND a second, unrelated id under a
+		// different instance — two real machines answering to the same hostname. Proving the stamp's
+		// id alone is not enough; the candidate's OWN identity must be unambiguous too.
+		const env = buildIdentityEnv({
+			rows: [idRow("mini", "mac-mini-id"), idRow("shared-name", "mac-mini-id"), idRow("shared-name", "other-machine-id", { instanceId: "other-inst" })],
+			liveNames: [relayNameForInstance(INST, "shared-name")],
+		});
+		expect(await getRunnerConnForStampedNode(env, INST, "u1", "mini")).toBeNull();
+	});
+
+	it("unreachable runner: a proven alias exists but nothing is actually connected", async () => {
+		const env = buildIdentityEnv({ rows: [idRow("mini", "mac-mini-id"), idRow("desktop", "mac-mini-id")], liveNames: [] });
+		expect(await getRunnerConnForStampedNode(env, INST, "u1", "mini")).toBeNull();
+	});
+
+	it("a known-ambiguous stamped name is refused outright, even though SOMETHING is live under the exact string", async () => {
+		// Two real machines have answered to "mini" at different times; a live exact-name socket right
+		// now proves nothing about which one this record meant. The direct lookup must never even be
+		// attempted — zero stop calls to a name the fleet's own history contradicts.
+		const env = buildIdentityEnv({
+			rows: [idRow("mini", "machine-a"), idRow("mini", "machine-b")],
+			liveNames: [relayNameForInstance(INST, "mini")],
+		});
+		expect(await getRunnerConnForStampedNode(env, INST, "u1", "mini")).toBeNull();
+	});
+
+	it("a rejected owner registry read never dispatches — the failure propagates, it is not read as 'nothing recorded'", async () => {
+		const { env, relayAsked } = buildFailingRegistryEnv();
+		await expect(getRunnerConnForStampedNode(env, INST, "u1", "mini")).rejects.toThrow(/D1_ERROR/);
+		expect(relayAsked).toEqual([]); // never even asked whether "mini" (or anything) is live
+	});
+});
+
+describe("sameMachine — the independent proof before a lock is released on who answered (#1541)", () => {
+	it("exact string match is proof when nothing recorded contradicts it", async () => {
+		expect(await sameMachine(buildIdentityEnv({ rows: [] }), "u1", "mini", "mini")).toBe(true);
+		expect(await sameMachine(buildIdentityEnv({ rows: [idRow("mini", null)] }), "u1", "mini", "mini")).toBe(true);
+	});
+
+	it("a rejected owner registry read never proves sameness — the failure propagates, it cannot release a claim", async () => {
+		const { env } = buildFailingRegistryEnv();
+		await expect(sameMachine(env, "u1", "mini", "mini")).rejects.toThrow(/D1_ERROR/);
+	});
+
+	it("exact string match is REFUSED when the name is known-ambiguous — a recorded contradiction beats the string", async () => {
+		const env = buildIdentityEnv({ rows: [idRow("mini", "machine-a"), idRow("mini", "machine-b")] });
+		expect(await sameMachine(env, "u1", "mini", "mini")).toBe(false);
+	});
+
+	it("a renamed original machine proves the same via its recorded machine_id", async () => {
+		const env = buildIdentityEnv({ rows: [idRow("Sergeys-Mac-mini.local", "mac-mini-id"), idRow("Macmini.modem", "mac-mini-id")] });
+		expect(await sameMachine(env, "u1", "Sergeys-Mac-mini.local", "Macmini.modem")).toBe(true);
+	});
+
+	it("a different machine never proves the same, even though both are registered", async () => {
+		const env = buildIdentityEnv({ rows: [idRow("mini", "mac-mini-id"), idRow("dell-laptop", "dell-id")] });
+		expect(await sameMachine(env, "u1", "mini", "dell-laptop")).toBe(false);
+	});
+
+	it("an unknown stamp (no recorded machine_id) never proves a rename", async () => {
+		const env = buildIdentityEnv({ rows: [idRow("mini", null), idRow("other", "some-id")] });
+		expect(await sameMachine(env, "u1", "mini", "other")).toBe(false);
+	});
+
+	it("an ambiguous stamp (two machines share the name) refuses, rather than matching either", async () => {
+		const env = buildIdentityEnv({
+			rows: [idRow("mini", "machine-a"), idRow("mini", "machine-b"), idRow("alias-of-a", "machine-a")],
+		});
+		expect(await sameMachine(env, "u1", "mini", "alias-of-a")).toBe(false);
+	});
+
+	it("an answeredBy name that is itself ambiguous elsewhere in the fleet is rejected, not just the stamp's own ambiguity", async () => {
+		const env = buildIdentityEnv({
+			rows: [idRow("mini", "mac-mini-id"), idRow("shared-name", "mac-mini-id"), idRow("shared-name", "other-machine-id", { instanceId: "other-inst" })],
+		});
+		expect(await sameMachine(env, "u1", "mini", "shared-name")).toBe(false);
+	});
+
+	it("null/empty names never match", async () => {
+		const env = buildIdentityEnv({ rows: [] });
+		expect(await sameMachine(env, "u1", null, "mini")).toBe(false);
+		expect(await sameMachine(env, "u1", "mini", undefined)).toBe(false);
+		expect(await sameMachine(env, "u1", "", "")).toBe(false);
 	});
 });

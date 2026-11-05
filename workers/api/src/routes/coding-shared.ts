@@ -59,7 +59,16 @@ export async function readSpecialInstructions(env: Env, instanceId: string, user
  * relocating a session whose machine has gone away is `startSessionOnRunner`'s job, on the paths
  * that open or drive one.
  *
- * Measured before the fix: session `csess_c960d431…` stamped to `Sergeys-Mac-mini.local`, resolved
+ * `/end` alone resolves through `getRunnerConnForStampedNode` instead (`coding-session-end.ts`,
+ * #1541), which additionally falls back to a PROVEN alias of the stamped machine when a rename has
+ * moved it off the exact name it was stamped with — ending a renamed machine's session is what the
+ * live incident was about. Extending that fallback to this shared resolver too is a wider change
+ * than #1541 asked for: every route here already has its own test suite built around mocking
+ * `getRunnerConn` directly, and swapping the resolver under them silently stops every one of those
+ * mocks from taking effect. Left as its own follow-up if `/message` or `/restart` turn up the same
+ * renamed-machine failure.
+ *
+ * Measured before the #532 fix: session `csess_c960d431…` stamped to `Sergeys-Mac-mini.local`, resolved
  * here for ten hours across the machine being off, and `/capture` answered `runnerConnected: true`
  * off the row every time.
  */

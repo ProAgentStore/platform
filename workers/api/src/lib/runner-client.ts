@@ -4,7 +4,7 @@ import { browserSettingsForDispatch } from "./browser-settings-dispatch.js";
 import { decryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
 import { latestResourceSample, resourceHistory, resourcesView } from "./runner-resources.js";
-import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
+import { aliasNodesFor, machineNamesFor, type NodeRegistration } from "./machine-identity.js";
 import { routeFor, TIMED_OUT_READ_PATHS } from "./runner-routes.js";
 import { READ_TIMEOUT_MS, RELAY_DEFAULT_TIMEOUT_MS } from "./runner-timeouts.js";
 import { DRAINING_MARKER, NO_SOCKET_MARKER, relayFailureIsDisconnect, relayWireCode, runnerErrorCode, RunnerError, runnerErrorTag, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
@@ -225,6 +225,85 @@ export async function liveAliasForPin(env: Env, instanceId: string, userId: stri
 		if (await relayConnected(env, instanceId, alias).catch(() => false)) return alias;
 	}
 	return null;
+}
+
+/**
+ * Every node name this owner's machines have ever registered, unreduced (#1541) — the one read
+ * both {@link getRunnerConnForStampedNode} and {@link sameMachine} resolve identity against, so a
+ * name's ambiguity is judged the same way, against the same evidence, on both the SEND and the
+ * RELEASE side of one call. Owner-wide and NOT pre-filtered by any one name's `machine_id`:
+ * filtering first (as `sameMachineNodes` below does, for the different, fallback-tolerant question
+ * a live PIN asks) can miss a row that would reveal `answeredBy` ALSO carries a second, unrelated
+ * id elsewhere in the fleet — exactly the case a caller must see in order to refuse it.
+ *
+ * Deliberately does NOT catch a failed read into an empty result. An empty array here reads as "no
+ * registration under this name" — `machineNamesFor`'s `unknown` case — which both callers trust as
+ * the legacy, nothing-contradicts-the-string case. Swallowing a DB error into that same shape would
+ * turn "identity evidence unavailable" into "no contradiction found", which can dispatch a stop or
+ * release a lock on a read that never actually happened. Let it throw; `endCodingSession` has
+ * nothing that treats a thrown identity check as a confirmed stop either way.
+ */
+async function ownerNodeRegistrations(env: Env, userId: string): Promise<NodeRegistration[]> {
+	const { results } = await env.DB.prepare(
+		"SELECT runner_node AS node, machine_id AS machineId, instance_id AS instanceId, last_seen_at AS lastSeenAt FROM instance_runtime_nodes WHERE user_id = ?1",
+	)
+		.bind(userId)
+		.all<NodeRegistration>();
+	return results ?? [];
+}
+
+/**
+ * Resolve a connection for the node a PAST RECORD is stamped to, falling back to a proven alias of
+ * the same physical machine when the stamped node itself answers nothing live (#1541).
+ *
+ * The same spirit as the authoritative-pin alias walk {@link getBoundRunnerConn} already does for a
+ * live PIN (#379) — a renamed machine (DHCP, VPN, the `.local` mDNS form) can answer under a name
+ * no record mentions, and a stamp is exactly as vulnerable to that as a pin is — but stricter, and
+ * checked BEFORE any connection attempt, not after: identity is resolved first, and a stamped name
+ * the fleet's own history shows is AMBIGUOUS (two different machine ids recorded under it — two
+ * real machines have answered to this exact name) is refused outright, never even trying the exact
+ * name directly. String equality is not proof once a recorded contradiction exists; it is still
+ * trusted, as every stamp-routed call elsewhere in this file always has, only when nothing
+ * contradicts it (no id recorded at all — a legacy row, or an old CLI). Sending a command that
+ * names an exact past session (`/coding/end`, `/message`, `/restart`) to a plausible-but-unproven
+ * guess is the mistake this function exists to never make. The stamp stays authoritative — never a
+ * fallback to a genuinely different machine.
+ */
+export async function getRunnerConnForStampedNode(env: Env, instanceId: string, userId: string, stampedNode: string | null | undefined): Promise<RunnerConn | null> {
+	const node = normalizeRunnerNode(stampedNode);
+	if (!node) return getRunnerConn(env, instanceId, userId, stampedNode);
+	const resolved = machineNamesFor(node, await ownerNodeRegistrations(env, userId));
+	if (!resolved.ok && resolved.reason === "ambiguous") return null;
+	const direct = await getRunnerConn(env, instanceId, userId, node);
+	if (direct) return direct;
+	const aliases = resolved.ok ? resolved.names.filter((n) => n !== node) : [];
+	for (const alias of aliases) {
+		const conn = await getRunnerConn(env, instanceId, userId, alias);
+		if (conn) return conn;
+	}
+	return null;
+}
+
+/**
+ * Does `answeredBy` prove to be the SAME physical machine as `stamped` (#1541)?
+ *
+ * Exact string equality is trusted ONLY when nothing recorded contradicts it: `stamped` has no
+ * machine id at all (a legacy row or an old CLI), so there is nothing to disprove the string's own
+ * claim. A `stamped` name the fleet's history shows is AMBIGUOUS — two different machine ids
+ * recorded under it — is refused even when `answeredBy` is the identical string: two real machines
+ * have answered to that name, so which one is live right now proves nothing about which one this
+ * record meant. Anything else is proof only through the SAME owner-wide, fail-closed resolution
+ * {@link getRunnerConnForStampedNode} used to pick who to ask in the first place, asked again here
+ * independently before a lock is released on the answer — a caller that found a connection some
+ * other way is not trusted on its say alone.
+ */
+export async function sameMachine(env: Env, userId: string, stamped: string | null | undefined, answeredBy: string | null | undefined): Promise<boolean> {
+	const s = normalizeRunnerNode(stamped);
+	const a = normalizeRunnerNode(answeredBy);
+	if (!s || !a) return false;
+	const resolved = machineNamesFor(s, await ownerNodeRegistrations(env, userId));
+	if (resolved.ok) return resolved.names.includes(a);
+	return resolved.reason === "unknown" && s === a;
 }
 
 /**

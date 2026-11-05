@@ -18,11 +18,14 @@
 //      editing the repo is not a clean stop and must not be reported as one.
 //
 // `lib/*` may not import `routes/*` (the rule `git-credentials.ts` states), so the session's runner
-// is resolved through `getRunnerConn` directly — which is all `routes/coding-shared.ts`'s
-// `getSessionRunnerConn` is: the live-checked resolve for the machine the session is stamped to.
-// That stamp is authoritative here for the same reason it is on `/message` and `/restart`: this
-// addresses a child process that exists on ONE machine.
-import { getRunnerConn, callRunner } from "./runner-client.js";
+// is resolved here directly, through `getRunnerConnForStampedNode` (#1541) rather than the plain
+// `getRunnerConn` `routes/coding-shared.ts`'s `getSessionRunnerConn` uses for `/message`/`/restart`:
+// it additionally falls back to a PROVEN alias of the stamped machine when a rename has moved it off
+// the exact name it was stamped with (`machine-identity.ts`'s #379 proof) — the live incident this
+// closes was about ENDING a renamed machine's session specifically. That stamp is authoritative here
+// for the same reason it is on `/message` and `/restart`: this addresses a child process that exists
+// on ONE machine — never a different one, even when the resolve had to walk an alias to reach it.
+import { callRunner, getRunnerConnForStampedNode, sameMachine } from "./runner-client.js";
 import { endSession, getSession } from "./coding-store.js";
 import { releaseReservation, repoOwners } from "./coding-ownership.js";
 import { tryDequeueAndStart, type QueueDrainResult } from "./objective-queue-start.js";
@@ -73,7 +76,7 @@ export async function endCodingSession(
 ): Promise<EndCodingSessionResult> {
 	const { instanceId, userId, sessionId } = input;
 	const session = await getSession(env, instanceId, userId, sessionId);
-	const conn = session ? await getRunnerConn(env, instanceId, userId, session.runnerNode ?? null) : null;
+	const conn = session ? await getRunnerConnForStampedNode(env, instanceId, userId, session.runnerNode ?? null) : null;
 	// The direct claim as it stood BEFORE the stop (#1015): the stop is evidence about THIS turn's
 	// engine, so only this turn id may be released on it — a send admitted after the read is not.
 	const claim = session
@@ -141,9 +144,15 @@ export async function endCodingSession(
  * claim but not that reservation. Once the runner forgets the session, its watcher — if one is still
  * running, and not one that already gave up — was the only thing that could release it, so ending
  * the session (or ending it AGAIN) is the owner's exact-target way out. It acts on positive evidence
- * only: a confirmed `/coding/end` from the machine the session is stamped to. The release is keyed to
- * the turn read before the stop, so a newer send keeps its claim; only the call that actually cleared
- * it drains, and only when nothing else owns the repo — the run that drain starts then owns it, so a
+ * only: a confirmed `/coding/end` from the machine the session is stamped to — PHYSICAL machine, not
+ * name: a renamed original (#1541) answers under a different `runner_node` string than the one the
+ * session was stamped with, and the exact-string check this used to be would call that an
+ * unconfirmed stop forever, even with the real machine online and answering. `sameMachine` proves it
+ * independently of however `conn` was resolved, through the same recorded `machine_id` #379 already
+ * uses for a live pin — never a guess, and never a different machine: an unrecorded or ambiguous
+ * identity still refuses, exactly as a bare string mismatch always has. The release is keyed to the
+ * turn read before the stop, so a newer send keeps its claim; only the call that actually cleared it
+ * drains, and only when nothing else owns the repo — the run that drain starts then owns it, so a
  * repeat finds nothing to do. No queue entry is cancelled or reordered, and no engine is started here.
  */
 async function releaseStoppedDirectTurn(
@@ -151,7 +160,8 @@ async function releaseStoppedDirectTurn(
 	input: { instanceId: string; userId: string; sessionId: string; repoId: string; turnId: string; stopConfirmed: boolean; stamped: string | null | undefined; answeredBy: string | null | undefined },
 ): Promise<DirectTurnOutcome> {
 	const stamped = normalizeRunnerNode(input.stamped);
-	if (!input.stopConfirmed || !stamped || normalizeRunnerNode(input.answeredBy) !== stamped) return { turnId: input.turnId, released: false, reason: "stop_not_confirmed" };
+	if (!input.stopConfirmed || !stamped) return { turnId: input.turnId, released: false, reason: "stop_not_confirmed" };
+	if (!(await sameMachine(env, input.userId, stamped, input.answeredBy))) return { turnId: input.turnId, released: false, reason: "stop_not_confirmed" };
 	if (!(await releaseReservation(env, input.sessionId, input.turnId))) return { turnId: input.turnId, released: false, reason: "superseded" };
 	const owners = await repoOwners(env, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId });
 	if (owners.length) return { turnId: input.turnId, released: true, queue: { attempted: false, reason: "repo_still_owned" } };
