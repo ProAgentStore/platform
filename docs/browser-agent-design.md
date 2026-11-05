@@ -2,6 +2,8 @@
 
 Status: owner-directed design requirements, recorded 2026-11-04. This document describes the required direction and known gaps. It does **not** claim that the current browser runner implements it.
 
+For the dated outcome assessment, chronology, direct-browser comparison, release evidence and remaining acceptance gates, see [Job application progress and remaining gaps, 6 November 2026](browser-application-progress-2026-11-06.md).
+
 ## Owner directive
 
 The AI should interpret the website and choose how to operate it. A failure on one application must not be repaired by adding a company name, URL, question wording, answer option, CSS class, HTML layout assumption, or page-text regular expression to the execution code.
