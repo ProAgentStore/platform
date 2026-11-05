@@ -14958,6 +14958,9 @@ paths:
         changed is one machine. `stale` is true when the machine has no sample or its newest is over 3 minutes old; its series simply
         ends at its last point. `since` returns only points newer than it, so a page appends a heartbeat without reloading; a full load
         (no `since`) also carries each machine's 24-hour summary from the coarse tier. Windows machines report `loadPerCpu: null` (#1258).
+        Each machine also carries server-received heartbeat availability, independent of resource timestamps and `since`.
+        Minute buckets cover the 2-hour range; 5-minute receipt aggregates cover 24 hours. Missing buckets are unknown,
+        not evidence of host downtime. Collection begins with this feature; resource samples are not backfilled as heartbeats.
         Numbers only: no endpoint, token, path or session id. At most 50 machines, newest first (`truncated` says so).
       operationId: getTerminalFleetResources
       tags: [Terminals]
@@ -14996,6 +14999,27 @@ paths:
                         sampleAgeSec: { type: integer, nullable: true }
                         latest: { type: object, nullable: true, additionalProperties: true }
                         points: { type: array, items: { type: object, additionalProperties: true } }
+                        availability:
+                          type: object
+                          properties:
+                            source: { type: string, enum: [heartbeat_receipts] }
+                            bucketMs: { type: integer }
+                            from: { type: string, format: date-time }
+                            to: { type: string, format: date-time }
+                            retentionMs: { type: integer }
+                            coverage: { type: string, enum: [observed_only] }
+                            missingBucketMeaning: { type: string, enum: [no_recorded_receipt] }
+                            error: { type: string, nullable: true }
+                            truncated: { type: boolean }
+                            buckets:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  at: { type: string, format: date-time }
+                                  receipts: { type: integer, description: Authenticated heartbeat requests received; not an uptime percentage. }
+                                  firstReceivedAt: { type: string, format: date-time }
+                                  lastReceivedAt: { type: string, format: date-time }
                         summary24h: { type: object, nullable: true, additionalProperties: true }
         "400": { description: "`from`, `to` or `since` is not a timestamp" }
   /v1/terminals/nodes/{node}/resources:

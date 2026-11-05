@@ -112,6 +112,7 @@ import { machineDisplayNames } from "../lib/machine-names.js";
 import { wakeRunsParkedOnMachine } from "../lib/coding-park.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { healthOfError, healthOfResponse, runnerStatusView } from "../lib/runner-health.js";
+import { recordHeartbeatReceipt } from "../lib/runner-heartbeat-history.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
 import { storedCapabilityHash, upsertMachineCapabilities } from "../lib/machine-capabilities.js";
 import { describeRejection, rejectionFor, updateGateState } from "../lib/runner-admission-gate.js";
@@ -806,12 +807,14 @@ registerTerminalHistoryRoutes(instanceRoutes); // GET/DELETE /terminal-history â
 
 /** Heartbeat from user/CLI after checking the browser runtime is online. */
 instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
+	const receivedAt = Date.now();
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	await requireRuntime(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown; capabilities?: unknown; capabilityHash?: unknown; machineId?: unknown; autoUpdateStatus?: unknown; latestVersion?: unknown; lastAttemptAt?: unknown; cleanup?: unknown; cleanupNowDoneAt?: unknown };
 	const node = normalizeRunnerNode(body.runnerNode);
+	await recordHeartbeatReceipt(c.env, session.uid, node, body.machineId, receivedAt).catch(() => undefined);
 	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", node);
 		await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
 		// #1264: re-judge the admission gate off the sample just stored, so coding_loop_start reads a

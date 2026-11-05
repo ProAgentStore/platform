@@ -8,6 +8,7 @@
 // Live updates are a cursor, not a socket: `since` (epoch ms or ISO of the newest point the client holds) returns only newer points,
 // so the page polls about every heartbeat (30s) and appends. A machine that stops reporting is `stale` — the client ends its line at
 // the last point instead of drawing it flat.
+import { runnerAvailability, type RunnerAvailability } from "./runner-heartbeat-history.js";
 import type { Env } from "../types.js";
 import { machineDisplayNames } from "./machine-names.js";
 import { adoptableIdByName, normalizeMachineId } from "./machine-identity.js";
@@ -72,6 +73,7 @@ export interface FleetMachine {
 	sampleAgeSec: number | null;
 	latest: FleetMachineLatest | null;
 	points: FleetPoint[];
+	availability: RunnerAvailability;
 	/** Only on a full load (no `since`). */
 	summary24h?: FleetSummary24h | null;
 }
@@ -205,6 +207,7 @@ export async function fleetHistory(env: Pick<Env, "DB">, userId: string, o: { ti
 				sampleAgeSec: sampledMs === null ? null : Math.max(0, Math.round((now - sampledMs) / 1000)),
 				latest,
 				points: points.map(slim),
+				availability: await runnerAvailability(env, userId, [g.key, ...names.filter((name) => !g.machineId || byName.get(name) === g.machineId).map((name) => `node:${name}`)], o.from ?? now - retention, to, now, o.tier === "coarse" ? 300_000 : 60_000),
 				...(coarse ? { summary24h: summarize24h(coarse) } : {}),
 			};
 		}),

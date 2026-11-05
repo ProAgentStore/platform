@@ -44,7 +44,8 @@ describe("stable fleet identity presentation", () => {
 		expect(sortedRows(peers).map((row) => row.key)).toEqual(["a", "b"]);
 		expect(sortedRows([...peers].reverse()).map((row) => row.key)).toEqual(["a", "b"]);
 		const legacy = machine("Old hostname", { machineId: null, key: "legacy-stable" });
-		expect(machineColorIndex({ ...legacy, name: "Renamed", node: "new.local" })).toBe(machineColorIndex(legacy));
+		const renamedLegacy = { ...legacy, name: "Renamed", node: "new.local" };
+		expect(machineColorIndex(renamedLegacy)).toBe(machineColorIndex(legacy));
 	});
 	it("uses the same alphabetical order in table, lines, labels, tooltips and omissions", () => {
 		for (const input of [machines, [...machines].reverse(), [machines[1], machines[0], machines[2]]]) {

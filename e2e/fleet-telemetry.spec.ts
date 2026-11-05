@@ -6,10 +6,12 @@ async function fleetFixture(page: Page) {
 	let changed = false;
 	const machine = (name: string, stale: boolean, starts24h: number) => {
 		const sampledAt = new Date(now - (stale ? 240_000 : 10_000)).toISOString();
+		const firstReceivedAt = new Date(now - 50_000).toISOString(), lastReceivedAt = new Date(now - 20_000).toISOString();
 		return {
 			key: name, machineId: name, name, node: name, aka: [], lastSeenAt: sampledAt, sampledAt, stale, sampleAgeSec: stale ? 240 : 10,
 			latest: { sampledAt, cpus: 4, loadPerCpu: 0.2, memTotalBytes: 8 * 1024 ** 3, memUsedPct: 60, platform: "darwin", activeSessions: 1, recommendedMaxSessions: 2, diskUsedPct: 50, diskTotalBytes: 100e9, relayRttMs: 20, uptimeSec: 3600, starts24h, supervisor: "service", gateState: "accepting", warnings: [] },
 			points: [{ at: sampledAt, loadPerCpu: 0.2, memUsedPct: 60, diskUsedPct: 50, relayRttMs: 20, starts24h, sessionCount: 1 }],
+			availability: { source: "heartbeat_receipts", bucketMs: 60_000, from: new Date(now - 7_200_000).toISOString(), to: new Date(now).toISOString(), retentionMs: 86_400_000, coverage: "observed_only", missingBucketMeaning: "no_recorded_receipt", error: null, truncated: false, buckets: name === "tiny-laptop" ? [] : [{ at: new Date(now - 60_000).toISOString(), receipts: 2, firstReceivedAt, lastReceivedAt }] },
 		};
 	};
 	await page.route("https://api.proagentstore.online/**", (route) => {
@@ -30,6 +32,11 @@ test("Fleet distinguishes stale telemetry from host availability", async ({ page
 	await page.setViewportSize({ width: 1280, height: 1000 });
 	await fleetFixture(page);
 	await page.goto("/console/fleet");
+	const availability = page.getByRole("region", { name: "Availability history" });
+	await expect(availability.getByRole("heading", { name: "Availability — PAGS heartbeat" })).toBeVisible();
+	await expect(availability.getByRole("img", { name: /pink-laptop: 2 recorded heartbeats/ })).toBeVisible();
+	await expect(availability.getByRole("img", { name: /tiny-laptop: 0 recorded heartbeats; No recorded heartbeat/ })).toBeVisible();
+	expect(await availability.evaluate((element) => !!(element.compareDocumentPosition(document.querySelector("table")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
 	const pink = page.getByRole("row").filter({ hasText: "pink-laptop" });
 	await expect(pink).toContainText("telemetry stale");
 	await expect(pink).not.toContainText("offline");
@@ -44,6 +51,7 @@ test("mobile — Fleet keeps telemetry caveats readable with an internally scrol
 	await page.setViewportSize({ width: 390, height: 844 });
 	await fleetFixture(page);
 	await page.goto("/console/fleet");
+	await expect(page.getByRole("heading", { name: "Availability — PAGS heartbeat" })).toBeVisible();
 	await expect(page.getByRole("row").filter({ hasText: "pink-laptop" })).toContainText("telemetry stale");
 	await expect(page.getByText(/This does not establish host power, runner responsiveness or task progress/)).toBeVisible();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -66,6 +74,10 @@ test("Fleet keeps machine order and identity colors through refresh and range ch
 		await expect(labels).toHaveText([/alpha-new/, /macmini/, /pink-laptop/, /tiny-laptop/]);
 		const chartColors = await labels.evaluateAll((labels) => Object.fromEntries(labels.map((label) => [label.getAttribute("data-machine-key"), label.getAttribute("fill")])));
 		for (const [name, color] of Object.entries(after)) expect(chartColors[name]).toBe(color);
+		const lanes = page.getByRole("region", { name: "Availability history" }).locator("[data-availability-machine]");
+		expect(await lanes.evaluateAll((lanes) => lanes.map((lane) => lane.getAttribute("data-availability-machine")))).toEqual(["alpha-new", "macmini", "pink-laptop", "tiny-laptop"]);
+		const laneColors = await lanes.evaluateAll((lanes) => Object.fromEntries(lanes.map((lane) => [lane.getAttribute("data-availability-machine"), lane.querySelector<HTMLElement>("span[aria-hidden]")!.style.background])));
+		for (const [name, color] of Object.entries(after)) expect(laneColors[name]).toBe(color);
 		await expect(page.getByRole("list", { name: "Machines not drawn on Memory used" }).locator("li .font-semibold")).toHaveText(["alpha-new", "macmini", "pink-laptop", "tiny-laptop"]);
 	};
 	fixture.change();

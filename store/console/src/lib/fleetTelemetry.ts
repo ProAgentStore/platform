@@ -14,6 +14,8 @@
  *      of the axis (and the tooltip still says 0), it is not dropped.
  */
 
+import type { HeartbeatAvailability } from "./fleetAvailability";
+
 // ── The wire shape (workers/api/src/lib/fleet-resources.ts) ──────────────────────────────────────────
 
 export interface FleetPoint {
@@ -66,6 +68,7 @@ export interface FleetMachine {
 	latest: FleetLatest | null;
 	points: FleetPoint[];
 	summary24h?: FleetSummary | null;
+	availability?: HeartbeatAvailability;
 }
 
 export interface FleetResponse {
