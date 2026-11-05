@@ -168,7 +168,7 @@ test("standalone replay does not infer screenshots-off from an empty artifact li
 });
 
 for (const width of [375, 1280]) {
-	test(`${width === 375 ? "mobile — " : ""}history ends at the exact live browser with explicit takeover at ${width}px`, async ({ page }) => {
+	test(`mobile — responsive history ends at the exact live browser with explicit takeover at ${width}px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 812 });
 		const replay = await mockReplay(page, { handoff: "active" });
 		await expect(replay.getByRole("slider")).toHaveAttribute("max", "3");
