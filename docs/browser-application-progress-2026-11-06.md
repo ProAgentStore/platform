@@ -9,6 +9,18 @@ The work remains aligned with AI interpreting live pages rather than employer-sp
 
 This record consolidates the available conversation, implementation history and retained reports. It does not reconstruct every unretained action or claim a complete security audit. The detailed design and inherited heuristic inventory remain in [browser-agent-design.md](browser-agent-design.md).
 
+## Follow-up: runner installed, fresh application stopped in Tailor
+
+The assessment below is preserved as the earlier baseline. At 10:35 AEDT on 6 November, the runner reported **CLI 0.4.227**, online with a successful RPC probe. Update operation `b765a18e-fd41-4fc5-8450-5fb28e82ece9` reached `restarted`. The owner authorized a cooperative pause of the active Hiring coding run; AutoPickup started a replacement, so it was temporarily disabled to let the update finish, then restored to enabled. No force-kill was used. Publication is now distinguished from verified installation.
+
+A fresh Twinings & Co **BizTX Manager** application was selected after reading the live [SEEK posting](https://au.seek.com/job/95717400) with native Playwright and checking for an existing application. Application `22975b9d-c9dd-40e4-ada5-3724616d4f73` started at 10:36 AEDT. The public posting exposed work rights, experience, adjustments and salary questions. The selected uploaded résumé/profile were verified ready. The lead handoff still cannot carry the full job description (#1552); an attributed requirements summary was added to its supported `match_rationale` field. This is a scoped workaround, not delivery of full job-description transport.
+
+Tailoring run `bf0119c1-eebd-4d59-a987-d4b4435a8373` froze **engine `claude`**, despite the separate browser Runner being configured for Codex. It exited with code 1, `invalid_cli_output` / `no_json_object`, and 63 raw output characters. No artifacts or browser fill were created. The redacted result does not establish the provider cause; the earlier direct Claude quota refusal is separate evidence. Retrying this document-generation failure does not replay an uncertain browser submission.
+
+The existing Tailor settings route had no MCP control or console engine setting. [#1566](https://github.com/ProAgentStore/platform/issues/1566) adds owner-scoped MCP read/patch controls so the Tailor engine can be changed and verified independently from the Runner. Review also found that the existing local-source deletion semantics can resurrect default paths on readback; [#1567](https://github.com/ProAgentStore/platform/issues/1567) tracks that separately, and the new setter excludes source-path mutations. These controls inherit the existing route's ownership check; the route does not independently validate the instance's agent type, so the caller must identify the Tailor instance correctly.
+
+**At this follow-up checkpoint there is still no confirmed submission, and deployed answer continuation/takeover remain untested.** The next step is to deploy the settings control, verify a Codex-only engine patch without changing document selections, and retry this same application. Its [history page](https://console.proagentstore.online/instances/2e85124f-4946-49d2-b922-8636ba92ca6a/applications/22975b9d-c9dd-40e4-ada5-3724616d4f73) is the product view; an active browser is not present while tailoring is blocked.
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |

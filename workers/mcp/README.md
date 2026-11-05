@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**423 tool registrations.** 394 are always registered; 29 are gated to the console
+**425 tool registrations.** 396 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -329,6 +329,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_connection_guide` | The pasteable per-instance connection guide: id, agent type, repos, exposed tools with exact field names, worked `call_instance_tool` example | read | | |
 | `get_console_link` | A console URL for an instance, one of its loop runs, a task, a secret request or a tab — `url` for chat, `path` for a push; refuses a tab the instance does not show | read | | |
 | `list_instance_permission_requests` | An instance's permission recovery requests (#1009), newest first: status, control, connector, resource, requested/current scope, operation, the verified `link` to the exact Permissions & Connections control and, while open, the structured blocker. Grants and decides nothing | read | | |
+| `get_application_tailor_settings` | Read the Tailor document-generation engine, authentication mode, local source paths, workspace and limits; separate from browser Runner settings | read | | |
+| `set_application_tailor_settings` | Patch only supplied Tailor engine, auth mode, workspace or limits without starting work; local source-path writes are not exposed | write | yes | |
 | `get_application_runner_settings` | An Application Runner's effective policy: engine, local browser model/effort, escalation level, browser tool access/disclosure/acceptance, files, sites and auto-submit rules | read | | |
 | `set_application_runner_settings` | Patch that policy, including model-assessed judgment delegation (`conservative`, `balanced`, `autonomous`); submission permission remains separate. Auto-submit refused until a profile, approved roles, an allowed site and a daily cap exist, and enabling it needs the acknowledgement that submissions are real and irreversible (#1039) | write | yes | `auto_submit_real_submissions` (only when enabling auto-submit) |
 | `list_applications` | The job-application queue across the owner's Scout → Tailor → Runner pipeline: every state, each item's compare-and-set version, artifact handles, submit-policy verdict, pause reason and allowed actions; counts, auto-submit allowance, connection health (#958) | read | | |

@@ -265,6 +265,7 @@ const READBACK: Record<string, string | null> = {
 	"retry_application.answers": "get_profile",
 	// #953: the policy written is the policy read.
 	"set_application_runner_settings.settings": "get_application_runner_settings",
+	"set_application_tailor_settings.settings": "get_application_tailor_settings",
 	"triage_job_lead.action": "query_instance_records",
 	"triage_job_lead.defer_until": "query_instance_records",
 	"triage_job_lead.note": "query_instance_records",

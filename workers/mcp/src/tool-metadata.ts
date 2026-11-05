@@ -269,6 +269,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// #953: the Runner's handoff + submission policy — a config read and a config write (starts nothing).
 	get_application_runner_settings: "read",
 	set_application_runner_settings: "write",
+	get_application_tailor_settings: "read",
+	set_application_tailor_settings: "write",
 	runner_node_forget_preflight: "read",
 	list_supervision: "read",
 	list_stats_sources: "read",
