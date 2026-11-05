@@ -67,7 +67,7 @@ import { registerTriggerTools } from "./triggers.js";
 //            answer and is itself worth pinning.
 //   confirm  call it with full scopes and no `confirm`, and capture the string the
 //            refusal demands.
-//   dryRun   call it with `dry_run: true` and assert the network was never touched.
+//   dryRun   call with `dry_run: true`: no network except the exact declared read-only preview.
 //
 // Because it is derived, it is also the proof that the #305 split moved 67 registrations
 // between nine files WITHOUT changing any of them: this table was generated against the
@@ -158,12 +158,15 @@ const env: McpEnv = { API_BASE: "https://api.test", OAUTH_KV: auditKv };
 let scopes: string[] | null = ALL_SCOPES;
 let calls: string[] = [];
 let tools: Map<string, Captured>;
+const RESUME_PREVIEW_READ = "GET https://api.test/v1/instances/x/application-queue/item?application_id=x";
 
 beforeEach(() => {
 	calls = [];
 	vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-		calls.push(`${(init?.method || "GET").toUpperCase()} ${String(input)}`);
-		return new Response(JSON.stringify({ ok: true }), {
+		const request = `${(init?.method || "GET").toUpperCase()} ${String(input)}`;
+		calls.push(request);
+		const reply = request === RESUME_PREVIEW_READ ? { item: { applicationId: "x", status: "blocked", stateVersion: 1, fillRunId: "run-x", fillRun: { status: "paused" }, questions: [], actions: ["resume"] } } : { ok: true };
+		return new Response(JSON.stringify(reply), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
 		});
@@ -234,21 +237,26 @@ async function confirmOf(name: string): Promise<string | null> {
 	return (await say(name)).match(/requires confirm="([^"]+)"/)?.[1] ?? null;
 }
 
-/** How the tool answers `dry_run: true` — and whether it stayed off the network while
- *  doing so, which is the only property that makes a dry run worth having. */
+/** No mutation may happen in a preview. Only resume's exact authoritative item read is allowed;
+ * other endpoints, methods, additional requests and other tools still fail this contract. */
+function permittedDryRunReads(name: string, requests: string[]): boolean {
+	return name === "resume_application" && requests.length === 1 && requests[0] === RESUME_PREVIEW_READ;
+}
+
+/** How the tool answers `dry_run: true`, including whether its declared read occurred. */
 async function dryRunOf(name: string): Promise<string | null> {
 	const t = tools.get(name);
 	if (!t || !("dry_run" in t.schema)) return null;
 	const before = calls.length;
-	const txt = await say(name, { dry_run: true });
-	const touchedNetwork = calls.length !== before;
+	const txt = await say(name, { dry_run: true, ...(name === "resume_application" ? { expected_status: "blocked" } : {}) });
+	const requests = calls.slice(before);
 	let envelope = false;
 	try {
 		envelope = (JSON.parse(txt) as { dryRun?: boolean }).dryRun === true;
 	} catch {
 		envelope = false;
 	}
-	if (touchedNetwork) return "LEAKED";
+	if (requests.length) return permittedDryRunReads(name, requests) && envelope ? "read-envelope" : "LEAKED";
 	return envelope ? "envelope" : "text";
 }
 
@@ -260,6 +268,7 @@ async function dryRunOf(name: string): Promise<string | null> {
 // changed. Everything else was generated against the pre-split file and must not move.
 //
 // `dryRun`:  "envelope"  the standard `{dryRun:true, tool, action, wouldDo}` payload
+//            "read-envelope" same envelope, after exactly the declared read-only preview GET
 //            "text"      a plain sentence instead of the envelope — only
 //                        `set_instance_tool`, which does not call the `dryRun()` helper.
 //                        Recorded because it is what the tool does, not because it is
@@ -497,7 +506,7 @@ const TABLE: Record<string, Row> = {
 	transfer_prepared_application: ["applications", "runtime", null, "envelope", "application_id,connection_id,cover_letter_sha256,destination_runner_instance_id,dry_run,expected_status,expected_version,idempotency_key,instance_id,resume_sha256,token"],
 	request_application_review: ["applications", "runtime", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
 	retry_application: ["applications", "runtime", null, "envelope", "action,answers,application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
-	resume_application: ["applications", "runtime", null, "envelope", "allow_domains,answers,application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
+	resume_application: ["applications", "runtime", null, "read-envelope", "allow_domains,answers,application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
 	cancel_application: ["applications", "write", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
 	local_browser_preflight: ["localBrowser", "read", null, null, "instance_id,token"],
 	get_instance_local_browser_settings: ["localBrowser", "read", null, null, "instance_id,token"],
@@ -855,12 +864,17 @@ describe("conventions the table has to keep", () => {
 		expect(await say("remove_repo", { repo_url: undefined })).toContain('requires confirm="remove_all_repos"');
 	});
 
-	it("a declared dry run never reaches the network", async () => {
-		// `dryRunOf` returns "LEAKED" when the handler called fetch anyway. Nothing may.
+	it("a declared dry run performs no network mutation or undeclared read", async () => {
 		for (const [name, row] of rows) {
 			if (row[3] === null) continue;
 			expect(await dryRunOf(name), `${name} performed its side effect during a dry run`).not.toBe("LEAKED");
 		}
+	});
+
+	it("the resume preview exception rejects writes, unrelated reads, extra reads and other tools", () => {
+		expect(permittedDryRunReads("resume_application", [RESUME_PREVIEW_READ])).toBe(true);
+		for (const requests of [[RESUME_PREVIEW_READ.replace("GET ", "POST ")], ["GET https://api.test/v1/instances/x/application-queue/actions"], [RESUME_PREVIEW_READ, RESUME_PREVIEW_READ]]) expect(permittedDryRunReads("resume_application", requests)).toBe(false);
+		expect(permittedDryRunReads("retry_application", [RESUME_PREVIEW_READ])).toBe(false);
 	});
 
 	it("names the mutating tools that offer no dry run at all", () => {

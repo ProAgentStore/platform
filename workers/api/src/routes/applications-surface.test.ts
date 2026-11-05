@@ -286,7 +286,7 @@ describe("how far the fill actually got, on the queue response (#986)", () => {
 	}
 	const progress = async (id: string) => item((await call("GET", "/t1/application-queue")).body.items, `app:${id}`)?.fillProgress;
 
-	it("the five states read differently, and only one of them says a form was filled", async () => {
+	it("the five states distinguish recorded actions, review and blockers", async () => {
 		withRun("zero", "awaiting_review", { status: "paused", pause: { reason: "supervisor_checkpoint" }, checkpoint: { phase: "initial", filled: 0, uploaded: 0 } });
 		withRun("partial", "filling", { status: "running", result: { outcome: "awaiting_review", filled: 3, uploaded: [] } });
 		withRun("ready", "awaiting_review", { status: "awaiting_review", result: { outcome: "awaiting_review", filled: 9, uploaded: ["resume"] } });
@@ -296,14 +296,14 @@ describe("how far the fill actually got, on the queue response (#986)", () => {
 		expect(await progress("zero")).toMatchObject({ stage: "supervisor_pending", label: "Paused before form filling — supervisor decision pending. Nothing has been entered yet.", filled: 0, uploaded: 0, checkpointPhase: "initial", checkpointId: "zero:cp" });
 		expect(await progress("partial")).toMatchObject({ stage: "filling", label: "Filling the application in the browser — 3 fill actions so far." });
 		expect(await progress("ready")).toMatchObject({ stage: "ready_for_review", label: "Recorded 9 fill actions and 1 upload — waiting for your review before anything is sent.", filled: 9, uploaded: 1 });
-		expect(await progress("stuck")).toMatchObject({ stage: "blocked", label: "Stopped — login required, after 1 field." });
+		expect(await progress("stuck")).toMatchObject({ stage: "blocked", label: "Stopped — login required, after 1 fill action." });
 		expect(await progress("final")).toMatchObject({ stage: "before_submit_review", label: "Model reported ready (8 fill actions and 1 upload) — waiting for the supervisor's decision before anything is sent.", checkpointPhase: "before_submit" });
 
 		// Two applications sit at the SAME lifecycle status with opposite claims — which is the
 		// distinction the status word cannot carry and the reason this projection exists.
 		const q = await call("GET", "/t1/application-queue");
 		expect([item(q.body.items, "app:zero")?.status, item(q.body.items, "app:ready")?.status]).toEqual(["awaiting_review", "awaiting_review"]);
-		expect(q.body.items.filter((i: { fillProgress?: { label: string } }) => /Filled \d/.test(i.fillProgress?.label ?? "")).map((i: { key: string }) => i.key)).toEqual(["app:ready"]);
+		expect(q.body.items.filter((i: { fillProgress?: { stage: string } }) => i.fillProgress?.stage === "ready_for_review").map((i: { key: string }) => i.key)).toEqual(["app:ready"]);
 	});
 
 	it("the item read and the list read agree, and a lead with no run carries no progress at all", async () => {
