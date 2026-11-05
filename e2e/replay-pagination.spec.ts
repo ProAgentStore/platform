@@ -1,8 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 const API = "https://api.proagentstore.online";
 
-async function replayFixture(page: Page, total: number, failHistory = false, holdFirst = false) {
+async function replayFixture(page: Page, total: number, { failHistory = false, holdFirst = false, holdQueueRefresh = false } = {}) {
 	const images: number[] = [];
+	const historyRequests: Array<{ after: number; limit: number }> = [];
+	let queueReads = 0;
+	let releaseQueueRefresh: () => void = () => {};
+	const queueRefreshReady = new Promise<void>((resolve) => { releaseQueueRefresh = resolve; });
 	let fail = failHistory;
 	let releaseFirst: () => void = () => {};
 	const firstImageReady = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -15,11 +19,17 @@ async function replayFixture(page: Page, total: number, failHistory = false, hol
 		if (path === "/v1/auth/me") return json({ id: "owner", login: "tester", name: "Test Owner", display_name: "Test Owner", roles: ["user"] });
 		if (path === "/v1/instances/my/instances") return json({ instances: [{ id: "runner", name: "Application Runner", slug: "job-application-runner", category: "productivity", capabilities: { surfaces: [], runtime: "local_apply", workflow: null } }] });
 		if (path.endsWith("/application-queue")) return json({ pipeline: { scouts: [], tailors: [], runners: [] }, items: [], counts: {}, limits: [], connections: [], notes: [] });
-		if (path.endsWith("/application-queue/item")) return json({ item });
+		// Manual-backfill cases freeze only later queue polls. Otherwise the five-second
+		// item refresh intentionally advances another bounded batch before a slow assertion.
+		if (path.endsWith("/application-queue/item")) {
+			if (++queueReads > 1 && holdQueueRefresh) await queueRefreshReady;
+			return json({ item });
+		}
 		if (path.endsWith("/trace")) return json({ applicationId: "app-1", entries: [] });
 		if (path.endsWith("/browser-artifacts")) {
 			const after = Number(url.searchParams.get("cursor") ?? -1);
 			const limit = Number(url.searchParams.get("limit") ?? 500);
+			historyRequests.push({ after, limit });
 			if (fail && after === 100) return json({ error: "Synthetic history page unavailable" }, 503);
 			const first = Math.max(1, after + 1);
 			const artifacts = Array.from({ length: Math.max(0, Math.min(limit, total - first + 1)) }, (_, index) => {
@@ -38,34 +48,76 @@ async function replayFixture(page: Page, total: number, failHistory = false, hol
 		return json({});
 	});
 	await page.goto("/console/instances/runner/applications/app-1");
-	return { images, releaseFirst, recover: () => { fail = false; } };
+	return { images, historyRequests, releaseFirst, releaseQueueRefresh, recover: () => { fail = false; } };
 }
 
 test("a long replay reaches newest stored frame and preserves selection while backfilling", async ({ page }) => {
-	const { images } = await replayFixture(page, 1200);
-	const replay = page.getByTestId("run-replay");
-	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("max", "1099");
-	await expect(replay.getByTestId("replay-history-status")).toContainText("History pagination is incomplete");
-	await replay.getByRole("slider", { name: "Frame" }).fill("1099");
-	await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1200:/);
-	await expect.poll(() => images.includes(1200)).toBe(true);
-	expect(images.length).toBeLessThan(12);
-	await replay.getByRole("button", { name: "Load more history" }).click();
-	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("max", "1199");
-	await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1200:/);
-	await expect(replay.getByTestId("replay-history-status")).toContainText("All currently listed stored screenshots are loaded");
+	const { images, historyRequests, releaseQueueRefresh } = await replayFixture(page, 1200, { holdQueueRefresh: true });
+	try {
+		const replay = page.getByTestId("run-replay");
+		const slider = replay.getByRole("slider", { name: "Frame" });
+		// Ten contiguous pages plus the newest tail: 1..1000 and 1101..1200.
+		// Live is a separate final position, so the max equals the stored-frame count.
+		await expect(slider).toHaveAttribute("max", "1100");
+		await expect(replay.getByTestId("replay-history-status")).toContainText("1100 frames loaded; 1200 stored frames reported");
+		await expect(replay.getByTestId("replay-history-status")).toContainText("History pagination is incomplete");
+		expect(historyRequests).toEqual([...Array.from({ length: 10 }, (_, index) => ({ after: index ? index * 100 : -1, limit: 100 })), { after: 1100, limit: 100 }]);
+		await slider.fill("1099");
+		await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1200:/);
+		await expect(slider).toHaveAttribute("aria-valuetext", "Frame 1100 of 1100");
+		await expect.poll(() => images.includes(1200)).toBe(true);
+		expect(images.length).toBeLessThan(12);
+		await replay.getByRole("button", { name: "Load more history" }).click();
+		await expect(slider).toHaveAttribute("max", "1200");
+		await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1200:/);
+		await expect(slider).toHaveAttribute("aria-valuetext", "Frame 1200 of 1200");
+		await expect(replay.getByTestId("replay-history-status")).toContainText("1200 frames loaded; 1200 stored frames reported");
+		await expect(replay.getByTestId("replay-history-status")).toContainText("All currently listed stored screenshots are loaded");
+		expect(historyRequests.filter(({ after }) => after === 1000)).toHaveLength(1);
+		// The formerly missing middle page is retained and independently inspectable.
+		await slider.fill("1099");
+		await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1100:/);
+		await slider.fill("1200");
+		await expect(slider).toHaveAttribute("aria-valuetext", "Live browser");
+		await expect(replay.getByTestId("replay-live")).toContainText("Live takeover is unavailable for this run");
+		await expect(replay.getByRole("img")).toHaveCount(0);
+		await replay.getByRole("button", { name: "Previous", exact: true }).click();
+		await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1200:/);
+	} finally { releaseQueueRefresh(); }
+});
+
+test("queue refresh automatically backfills history while preserving the selected stored frame", async ({ page }) => {
+	const { releaseQueueRefresh } = await replayFixture(page, 1200, { holdQueueRefresh: true });
+	try {
+		const replay = page.getByTestId("run-replay");
+		const slider = replay.getByRole("slider", { name: "Frame" });
+		await expect(slider).toHaveAttribute("max", "1100");
+		await slider.fill("1099");
+		await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1200:/);
+		releaseQueueRefresh();
+		await expect(slider).toHaveAttribute("max", "1200", { timeout: 12000 });
+		await expect(replay.getByTestId("replay-history-status")).toContainText("1200 frames loaded; 1200 stored frames reported");
+		await expect(slider).toHaveAttribute("aria-valuetext", "Frame 1200 of 1200");
+		await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1200:/);
+	} finally { releaseQueueRefresh(); }
 });
 
 test("failed history page keeps loaded frames and reports incomplete until retry succeeds", async ({ page }) => {
-	const { recover } = await replayFixture(page, 650, true);
+	const { recover } = await replayFixture(page, 650, { failHistory: true });
 	const replay = page.getByTestId("run-replay");
 	await expect(replay.getByTestId("replay-history-status")).toContainText("history is incomplete");
 	await expect(replay.getByTestId("replay-history-status")).not.toContainText("All currently listed");
-	await expect(replay.getByRole("img")).toBeVisible();
+	await expect(replay.getByTestId("replay-history-status")).toContainText("200 frames loaded; 650 stored frames reported");
+	await replay.getByRole("slider", { name: "Frame" }).fill("199");
+	await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 650:/);
 	recover();
 	await replay.getByRole("button", { name: "Retry screenshot history" }).click();
-	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("max", "649");
+	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("max", "650");
+	await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 650:/);
+	await expect(replay.getByTestId("replay-history-status")).toContainText("650 frames loaded; 650 stored frames reported");
 	await expect(replay.getByTestId("replay-history-status")).toContainText("All currently listed stored screenshots are loaded");
+	await replay.getByRole("slider", { name: "Frame" }).fill("100");
+	await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 101:/);
 });
 
 
@@ -122,12 +174,15 @@ test("switching task routes cannot reuse a preceding task's legacy screenshot or
 
 
 test("metadata backfill does not cancel an unchanged selected image request", async ({ page }) => {
-	const { images, releaseFirst } = await replayFixture(page, 1200, false, true);
+	const { images, releaseFirst, releaseQueueRefresh } = await replayFixture(page, 1200, { holdFirst: true, holdQueueRefresh: true });
 	const replay = page.getByTestId("run-replay");
-	await expect.poll(() => images.filter((seq) => seq === 1).length).toBe(1);
-	await replay.getByRole("button", { name: "Load more history" }).click();
-	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("max", "1199");
-	try { expect(images.filter((seq) => seq === 1)).toHaveLength(1); }
-	finally { releaseFirst(); }
+	try {
+		await expect.poll(() => images.filter((seq) => seq === 1).length).toBe(1);
+		await expect(replay.getByTestId("replay-history-status")).toContainText("1100 frames loaded; 1200 stored frames reported");
+		await replay.getByRole("button", { name: "Load more history" }).click();
+		await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("max", "1200");
+		await expect(replay.getByTestId("replay-history-status")).toContainText("1200 frames loaded; 1200 stored frames reported");
+		expect(images.filter((seq) => seq === 1)).toHaveLength(1);
+	} finally { releaseFirst(); releaseQueueRefresh(); }
 	await expect(replay.getByRole("img")).toHaveAttribute("alt", /^Frame 1:/);
 });
