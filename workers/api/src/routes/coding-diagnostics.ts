@@ -366,10 +366,6 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// Relay-connected is TRUE iff getBoundRunnerConn returned a connection (it already
 		// live-checked the RelayDO internally — no second probe needed).
 		const relayIsConnected = !!conn;
-		// Use the live node's relay name when we have one; fall back to the stale row's for when
-		// there is no live connection (it is the thing the user goes to look at when there is none).
-		const relayName = relayNameForInstance(instanceId, liveNode ?? runtimeRow?.runner_node ?? null);
-
 		// Fetch the live node's own row so we report its runner_version / last_seen_at, not the
 		// stale shared row's.  `getLiveRuntime` returns the per-node row when the conn resolved to
 		// a named node; falls back to the shared row otherwise (single-machine + old-client path).
@@ -380,23 +376,27 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// verdict. The shared row stays the fallback for an unpinned agent, which has nothing better.
 		const pinned = conn ? "" : await readInstanceRunnerNode(env, instanceId, uid).catch(() => "");
 		const pinnedRow = pinned ? await getRuntimeNode(env, instanceId, uid, pinned).catch(() => null) : null;
-		const reportedRow = liveRuntimeRow ?? pinnedRow ?? runtimeRow;
+		const targetNode = liveNode || pinned || runtimeRow?.runner_node || null;
+		const relayName = relayNameForInstance(instanceId, targetNode);
+		// A shared registration proves this INSTANCE registered, not that a different target did (#1546).
+		// Keep missing target observations unknown rather than borrowing another machine's telemetry.
+		const reportedRow = [liveRuntimeRow, pinnedRow, runtimeRow].find((row) => row && (!targetNode || row.runner_node === targetNode)) ?? null;
 
 		const runner: Record<string, unknown> = {
 			registered: !!runtimeRow,
-			status: reportedRow?.status ?? "unregistered",
+			registrationScope: "instance",
+			status: reportedRow?.status ?? null,
 			endpointUrl: reportedRow?.endpoint_url ?? null,
 			placement: reportedRow?.placement ?? null,
 			capabilities: parseJsonOr(reportedRow?.capabilities, [] as unknown),
 			runnerVersion: reportedRow?.runner_version ?? null,
-			// Use the live-resolved node name, not the stale row's.
-			runnerNode: liveNode ?? reportedRow?.runner_node ?? null,
+			runnerNode: targetNode,
 			lastSeenAt: reportedRow?.last_seen_at ?? null,
 			registeredAt: runtimeRow?.created_at ?? null,
 		};
 		// What the machine itself is doing (#924) — CPU load, memory, its active coding sessions — from
 		// its last heartbeat, beside the socket state. Null on a CLI too old to send it.
-		const resourceNode = liveNode ?? reportedRow?.runner_node ?? null;
+		const resourceNode = targetNode;
 		const resourceRow = reportedRow as { resources?: string | null } | null;
 		runner.resources = resourcesView(resourceRow?.resources ?? null, resourceNode ? await activeSessionsOn(env, uid, [resourceNode]) : null);
 
@@ -800,7 +800,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				issueCount: issues.filter((i) => i.severity === "error" || i.severity === "warn").length,
 			},
 			runner,
-			relay: { connected: relayIsConnected, relayName, runnerNode: liveNode ?? runtimeRow?.runner_node ?? null },
+			relay: { connected: relayIsConnected, relayName, runnerNode: targetNode },
 			// `tmux: {...}` is gone (#247). Every figure in it described something that cannot exist
 			// for a coding session: pagsTmuxTotal was structurally 0, and tmuxTotal counted the
 			// user's own unrelated tmux sessions. `engine.trackedSessions` is the honest version —

@@ -61,6 +61,8 @@ function buildEnv(opts: {
 	/** What `instance_runtimes` row runner_node holds — the STALE node after repin. */
 	staleNode?: string;
 	pinnedNode?: string;
+	sharedCapabilities?: string[];
+	sharedResources?: unknown;
 	/** Rows in `instance_runtimes` to return (null = unregistered). */
 	hasRuntimeRow?: boolean;
 	/** The newest account-class death in `error_log` for this user, if any (#773). */
@@ -90,7 +92,8 @@ function buildEnv(opts: {
 							if (sql.includes("FROM instance_runtimes") && opts.hasRuntimeRow !== false) {
 								return {
 									endpoint_url: `http://${staleNode}`,
-									capabilities: "[]",
+									capabilities: JSON.stringify(opts.sharedCapabilities ?? []),
+									resources: opts.sharedResources ? JSON.stringify(opts.sharedResources) : null,
 									runner_version: "0.4.51",
 									runner_node: staleNode,
 									status: "registered",
@@ -224,6 +227,28 @@ describe("coding_diagnostics live-reachability (#691)", () => {
 		const issues = body.issues as Array<Record<string, unknown>>;
 		const errors = issues.filter((i) => i.severity === "error");
 		expect(errors.length).toBeGreaterThan(0);
+	});
+
+	it("keeps an unregistered target's relay name and metadata separate from the old shared registrant (#1546)", async () => {
+		const { app, env } = buildApp({ staleNode: OLD_NODE, pinnedNode: NEW_NODE, sharedCapabilities: ["pink-only"], sharedResources: { sampledAt: "2026-08-16T09:00:29Z", cpus: 4 } });
+		const { status, body } = await getDiag(app, env);
+		expect(status).toBe(200);
+		expect(body.summary).toMatchObject({ relayName: `${INSTANCE}:node:${NEW_NODE}`, relayConnected: false });
+		expect(body.relay).toMatchObject({ relayName: `${INSTANCE}:node:${NEW_NODE}`, runnerNode: NEW_NODE });
+		expect(body.runner).toMatchObject({
+			runnerNode: NEW_NODE, endpointUrl: null, placement: null, capabilities: [], runnerVersion: null,
+			lastSeenAt: null, resources: null, reportedStatus: null,
+			registered: true, registrationScope: "instance", registeredAt: "2026-08-01 00:00:00",
+			statusView: { heartbeat: { lastSeenAt: null, fresh: false } },
+		});
+	});
+
+	it("can use the shared registration when it observes the same pinned target (#1546)", async () => {
+		const { app, env } = buildApp({ staleNode: OLD_NODE, pinnedNode: OLD_NODE });
+		const { status, body } = await getDiag(app, env);
+		expect(status).toBe(200);
+		expect(body.runner).toMatchObject({ runnerNode: OLD_NODE, runnerVersion: "0.4.51", lastSeenAt: "2026-08-16 09:00:29" });
+		expect(body.summary).toMatchObject({ relayName: `${INSTANCE}:node:${OLD_NODE}` });
 	});
 
 	it("relay name uses the live node when connected, falls back to stale row when offline", async () => {
