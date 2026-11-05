@@ -92,7 +92,7 @@ describe("the stage a reader sees", () => {
 	 */
 	it("takes the progress's own sentence when the facts are in hand", () => {
 		const progress = fillProgressOf({ applicationStatus: "awaiting_review", runStatus: "awaiting_review", result: { outcome: "awaiting_review", filled: 7, uploaded: ["resume"] } });
-		expect(applicationStageLabel("fill", "awaiting_review", null, progress)).toMatch(/Filled 7 fields and 1 attachment — waiting for your review/);
+		expect(applicationStageLabel("fill", "awaiting_review", null, progress)).toMatch(/Recorded 7 fill actions and 1 upload — waiting for your review/);
 	});
 
 	it("never claims a filled form from the status word alone", () => {

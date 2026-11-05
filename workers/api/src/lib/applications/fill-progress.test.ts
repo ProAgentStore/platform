@@ -8,6 +8,8 @@
  * work unless the runner's own facts show some.
  */
 import { describe, expect, it } from "vitest";
+import { parseApplicationCard } from "./application-card-payload.js";
+import type { LocalApplyExecutionEvidence } from "../local-apply/contract.js";
 import { FILL_STAGES, type FillProgressInput, fillProgressOf, hasFilledWork } from "./fill-progress.js";
 
 const checkpointPause = (phase: string, filled: number, uploaded: number) => ({
@@ -39,25 +41,25 @@ describe("the stage a fill is actually at (#986)", () => {
 	it("reads the counts off a checkpoint the caller holds from the supervisor store, not only off the pause", () => {
 		const p = fillProgressOf({ applicationStatus: "filling", runStatus: "paused", pause: { reason: "supervisor_checkpoint" }, checkpoint: { checkpointId: "cp-7", phase: "post_navigation", filled: 4, uploaded: 1 } });
 		expect(p).toMatchObject({ stage: "partially_filled", filled: 4, uploaded: 1, checkpointPhase: "post_navigation", checkpointId: "cp-7" });
-		expect(p.label).toBe("Paused after 4 fields and 1 attachment — supervisor decision pending.");
+		expect(p.label).toBe("Paused after 4 fill actions and 1 upload — supervisor decision pending.");
 	});
 
 	it("a before_submit checkpoint says the form is complete AND that nothing has been sent", () => {
 		const p = fillProgressOf({ applicationStatus: "awaiting_review", runStatus: "paused", pause: checkpointPause("before_submit", 9, 2) });
 		expect(p.stage).toBe("before_submit_review");
-		expect(p.label).toBe("Form complete (9 fields and 2 attachments) — waiting for the supervisor's decision before anything is sent.");
+		expect(p.label).toBe("Model reported ready (9 fill actions and 2 uploads) — waiting for the supervisor's decision before anything is sent.");
 	});
 
 	it("while the run is live it distinguishes opening the page from filling it", () => {
 		expect(fillProgressOf({ applicationStatus: "filling", runStatus: "running" })).toMatchObject({ stage: "navigating", label: "Opening the application in the browser — no field filled yet." });
-		expect(fillProgressOf({ applicationStatus: "filling", runStatus: "running", result: { filled: 3 } })).toMatchObject({ stage: "filling", label: "Filling the application in the browser — 3 fields so far." });
+		expect(fillProgressOf({ applicationStatus: "filling", runStatus: "running", result: { filled: 3 } })).toMatchObject({ stage: "filling", label: "Filling the application in the browser — 3 fill actions so far." });
 		expect(fillProgressOf({ applicationStatus: "filling", runStatus: "queued" })).toMatchObject({ stage: "queued", label: "Waiting for the machine to fill it." });
 	});
 
 	it("splits the one status word `awaiting_review` by what the runner measured", () => {
 		const ready = fillProgressOf({ applicationStatus: "awaiting_review", runStatus: "awaiting_review", result: { outcome: "awaiting_review", filled: 11, uploaded: ["resume.pdf"] } });
 		expect(ready.stage).toBe("ready_for_review");
-		expect(ready.label).toBe("Filled 11 fields and 1 attachment — waiting for your review before anything is sent.");
+		expect(ready.label).toBe("Recorded 11 fill actions and 1 upload — waiting for your review before anything is sent.");
 		expect(ready.evidence).toBe("runner_result");
 
 		const stopped = fillProgressOf({ applicationStatus: "awaiting_review", runStatus: "awaiting_review", result: { outcome: "awaiting_review", filled: 0, uploaded: [] } });
@@ -68,16 +70,16 @@ describe("the stage a fill is actually at (#986)", () => {
 	});
 
 	it("names the blocker, and whether any work preceded it", () => {
-		expect(fillProgressOf({ applicationStatus: "blocked", runStatus: "blocked", result: { outcome: "blocked", blockReason: "login_required", filled: 2 } }).label).toBe("Stopped — login required, after 2 fields.");
+		expect(fillProgressOf({ applicationStatus: "blocked", runStatus: "blocked", result: { outcome: "blocked", blockReason: "login_required", filled: 2 } }).label).toBe("Stopped — login required, after 2 fill actions.");
 		expect(fillProgressOf({ applicationStatus: "blocked", runStatus: "blocked", blockReason: "captcha" }).label).toBe("Stopped — captcha, before any field was filled.");
-		expect(fillProgressOf({ applicationStatus: "filling", runStatus: "paused", pause: { reason: "missing_answer" }, result: { filled: 5 } })).toMatchObject({ stage: "blocked", label: "Paused — missing answer, after 5 fields." });
+		expect(fillProgressOf({ applicationStatus: "filling", runStatus: "paused", pause: { reason: "missing_answer" }, result: { filled: 5 } })).toMatchObject({ stage: "blocked", label: "Paused — missing answer, after 5 fill actions." });
 	});
 
 	it("an attempted submit outranks every other reading, including a status that looks earlier", () => {
 		const p = fillProgressOf({ applicationStatus: "awaiting_review", runStatus: "paused", pause: checkpointPause("initial", 0, 0), submitAttempted: true });
 		expect(p.stage).toBe("submitted");
 		expect(p.label).toBe("A final submit was attempted — check the employer's site before anything else is done.");
-		expect(fillProgressOf({ applicationStatus: "submitted", result: { filled: 8, uploaded: ["r.pdf", "c.pdf"] } }).label).toBe("Submitted to the employer after filling 8 fields and 2 attachments.");
+		expect(fillProgressOf({ applicationStatus: "submitted", result: { filled: 8, uploaded: ["r.pdf", "c.pdf"] } }).label).toBe("Submission confirmed after 8 fill actions and 2 uploads.");
 	});
 
 	it("an archived application says nothing was sent, and why it is unavailable when it is", () => {
@@ -149,5 +151,55 @@ describe("the stage a fill is actually at (#986)", () => {
 			expect(p.label, JSON.stringify(s)).not.toMatch(/\bFilled \d|filling \d|Form complete \(\d+ field/);
 			expect(p.label, JSON.stringify(s)).not.toMatch(/^Filled —/);
 		}
+	});
+});
+
+
+const nativeEvidence: LocalApplyExecutionEvidence = {
+	schemaVersion: 1, fieldCounts: "unmeasured",
+	nativeCalls: { attempted: 19, succeeded: 14, failed: 5, notDispatched: 0, truncated: false, dropped: 3, coverage: "retained" },
+	screenshotsDelivered: 2, screenshotRequests: 2, independentScreenshotAvailable: true, blockingQuestions: 1, optionalQuestions: 2,
+	browser: { state: "pending", timeouts: 5 },
+	causes: ["browser_timeout", "unresolved_answers"],
+};
+
+describe("native execution progress (#1526, #1487)", () => {
+	it("keeps browser failures and answer blockers independent, with unmeasured completion", () => {
+		const progress = fillProgressOf({ toolAccess: "full", applicationStatus: "blocked", result: { filled: 0, uploaded: [], outcome: "blocked", executionEvidence: nativeEvidence } });
+		expect(progress).toMatchObject({ stage: "blocked", filled: null, uploaded: null, fieldCounts: "unmeasured", executionEvidence: nativeEvidence });
+		expect(progress.label).toContain("19 recorded native calls (14 succeeded, 5 failed; 3 older records unavailable)");
+		expect(progress.label).toContain("5 browser request timeouts");
+		expect(progress.label).toContain("1 unresolved blocking question");
+		expect(progress.label).toContain("a native action is still pending; replay is unsafe");
+		expect(progress.label).not.toContain("0 fields");
+		expect(hasFilledWork(progress)).toBe(false);
+	});
+	it("keeps full-mode counts unmeasured even for supervised submissions and older results", () => {
+		for (const applicationStatus of ["submitted", "blocked", "awaiting_review"]) {
+			const progress = fillProgressOf({ toolAccess: "full", applicationStatus, result: { filled: 0, uploaded: [] } });
+			expect(progress.filled).toBeNull();
+			expect(progress.uploaded).toBeNull();
+			expect(progress.executionEvidence).toBeUndefined();
+		}
+	});
+	it("does not label an ended blocked run ready for review when only its result remains", () => {
+		const progress = fillProgressOf({ applicationStatus: "awaiting_review", result: { outcome: "blocked", submissionVerification: "unverified" } });
+		expect(progress.stage).toBe("blocked");
+	});
+	it("preserves safe evidence and null counts through board card and execution parsing", () => {
+		const progress = fillProgressOf({ toolAccess: "full", applicationStatus: "blocked", result: { executionEvidence: nativeEvidence } });
+		const parsed = parseApplicationCard({ applicationId: "application", kind: "fill", progress, execution: {
+			schemaVersion: 1, lifecycle: { status: "blocked", stateVersion: 2 }, currentRun: null, checkpoint: null,
+			progress: { ...progress, executionEvidence: { ...nativeEvidence, secret: "must not persist", causes: [...nativeEvidence.causes, "arbitrary content"] } },
+			permittedActions: [], directiveReconciliation: "terminal",
+		} });
+		expect(parsed?.progress).toEqual(progress);
+		expect(parsed?.execution?.progress).toEqual(progress);
+	});
+	it("does not turn malformed diagnostics into apparent measured progress", () => {
+		const progress = fillProgressOf({ toolAccess: "full", applicationStatus: "blocked", result: { executionEvidence: { ...nativeEvidence, screenshotsDelivered: -1 } } });
+		expect(progress.executionEvidence).toBeUndefined();
+		expect(progress.filled).toBeNull();
+		expect(progress.label).toContain("Native call totals are unavailable");
 	});
 });

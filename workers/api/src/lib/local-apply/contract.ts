@@ -129,6 +129,22 @@ export interface LocalApplyLimits {
 	maxActions: number;
 }
 
+/** Account facts read at this dispatch, separate from immutable tailoring documents. */
+export interface LocalApplyOwnerFacts {
+	schemaVersion: 1;
+	source: "account_profile";
+	instanceId: string;
+	applicationId: string;
+	runId: string;
+	/** Snapshot time, not a claim about when each fact was confirmed. */
+	capturedAt: string;
+	/** SHA-256 of the canonical identity/savedAnswers object. */
+	revision: string;
+	identity: Record<string, string>;
+	/** Legacy saved answers have no per-answer confirmation time or applicability scope. */
+	savedAnswers: Record<string, string>;
+}
+
 /** What PAGS sends the runner to start one run. Carries no credential of any kind. */
 export interface LocalApplyTaskEnvelope {
 	type: typeof LOCAL_APPLY_TASK_TYPE;
@@ -152,6 +168,8 @@ export interface LocalApplyTaskEnvelope {
 	artifacts: LocalApplyArtifact[];
 	/** Exact PAGS Files bytes over the private relay, materialized only for this run. */
 	cloudDocuments?: import("../local-artifact/document-contract.js").PortableDocument[];
+	/** Fresh account identity/answers, bound to this run; CLI 0.4.222+. */
+	ownerFacts?: LocalApplyOwnerFacts;
 	policy: {
 		mode: LocalApplyMode;
 		/** Frozen per-run decision threshold. Absent on older runs means conservative. */
@@ -436,6 +454,36 @@ export const LOCAL_APPLY_ENGINE_AUTHS: readonly LocalApplyEngineAuth[] = ["machi
 
 export type LocalApplyOutcome = "awaiting_review" | "submitted" | "blocked" | "failed";
 
+/** Counts describe tool execution, never verified form completion. No page text or answers. */
+export interface LocalApplyExecutionEvidence {
+	schemaVersion: 1;
+	fieldCounts: "unmeasured" | "action_counts";
+	nativeCalls: { attempted: number; succeeded: number; failed: number; notDispatched: number; dropped: number; truncated: boolean; coverage: "retained" | "unavailable" };
+	screenshotsDelivered: number;
+	screenshotRequests: number;
+	independentScreenshotAvailable: boolean;
+	blockingQuestions: number;
+	optionalQuestions: number;
+	browser: { state: "healthy" | "pending" | "settled" | "unknown" | "unavailable" | "tool_error"; timeouts: number };
+	causes: LocalApplyExecutionCause[];
+}
+export const LOCAL_APPLY_EXECUTION_CAUSES = ["browser_timeout", "browser_unavailable", "unresolved_answers", "run_timeout", "engine_failure"] as const;
+export type LocalApplyExecutionCause = (typeof LOCAL_APPLY_EXECUTION_CAUSES)[number];
+
+/** Closed, bounded diagnostic data survives cloud ingestion without opening a prose channel. */
+export function parseExecutionEvidence(raw: unknown): LocalApplyExecutionEvidence | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const e = raw as Record<string, unknown>;
+	const n = e.nativeCalls as Record<string, unknown> | undefined;
+	const b = e.browser as Record<string, unknown> | undefined;
+	const fieldCounts = oneOf(["unmeasured", "action_counts"] as const, e.fieldCounts);
+	const state = b && oneOf(["healthy", "pending", "settled", "unknown", "unavailable", "tool_error"] as const, b.state);
+	const coverage = n && oneOf(["retained", "unavailable"] as const, n.coverage);
+	const count = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1_000_000;
+	if (e.schemaVersion !== 1 || !fieldCounts || !state || !coverage || !n || !b || typeof n.truncated !== "boolean" || typeof e.independentScreenshotAvailable !== "boolean" || ![n.attempted, n.succeeded, n.failed, n.notDispatched, n.dropped, e.screenshotsDelivered, e.screenshotRequests, e.blockingQuestions, e.optionalQuestions, b.timeouts].every(count)) return undefined;
+	return { schemaVersion: 1, fieldCounts, nativeCalls: { attempted: n.attempted as number, succeeded: n.succeeded as number, failed: n.failed as number, notDispatched: n.notDispatched as number, truncated: n.truncated as boolean, dropped: n.dropped as number, coverage }, screenshotsDelivered: e.screenshotsDelivered as number, screenshotRequests: e.screenshotRequests as number, independentScreenshotAvailable: e.independentScreenshotAvailable as boolean, blockingQuestions: e.blockingQuestions as number, optionalQuestions: e.optionalQuestions as number, browser: { state, timeouts: b.timeouts as number }, causes: [...new Set((Array.isArray(e.causes) ? e.causes : []).filter((cause): cause is LocalApplyExecutionCause => LOCAL_APPLY_EXECUTION_CAUSES.includes(cause as LocalApplyExecutionCause)))] };
+}
+
 /** What the runner returns when a run ends. */
 export interface LocalApplyResultEnvelope {
 	runId: string;
@@ -450,6 +498,7 @@ export interface LocalApplyResultEnvelope {
 	submitAttempted: boolean;
 	/** Full native tools cannot prove the absence of external submission effects. */
 	submissionVerification?: "unverified";
+	executionEvidence?: LocalApplyExecutionEvidence;
 	/** Present only when `outcome` is `submitted`: the confirmed final page. */
 	submitted?: { url: string; at: string; gateId: string };
 	summary: string;
@@ -652,6 +701,8 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 	const filled = typeof o.filled === "number" && Number.isInteger(o.filled) && o.filled >= 0 ? o.filled : 0;
 	const uploaded = (Array.isArray(o.uploaded) ? o.uploaded : []).filter((k): k is LocalApplyArtifactKind => k === "resume" || k === "cover_letter");
 	const out: LocalApplyResultEnvelope = { runId, outcome, mode, traceId, engineAuth, filled, uploaded: [...new Set(uploaded)], submitAttempted: o.submitAttempted === true, summary: str(o.summary, LOCAL_APPLY_CAPS.summary) ?? "" };
+	const executionEvidence = parseExecutionEvidence(o.executionEvidence);
+	if (executionEvidence) out.executionEvidence = executionEvidence;
 	if (o.submissionVerification === "unverified") out.submissionVerification = "unverified";
 	else if (o.submissionVerification !== undefined) return { error: "submissionVerification must be unverified when present" };
 	if (outcome === "submitted") {

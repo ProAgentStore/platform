@@ -28,10 +28,14 @@ import { LOCAL_BROWSER_SOURCE_FAILURE_REASONS, redactDetail } from "./contract.j
 import type { MaskablePage, ReplayPoint, ShotRecorder } from "./replay.js";
 import type { BrowserCallsPage, BrowserCallSubject } from "../browser-call-recorder.js";
 import type { McpCallPolicy } from "../mcp-call-policy.js";
+import type { BrowserRecoveryStatus } from "../browser-tool-recovery.js";
+import type { McpToolResult } from "../mcp-runtime.js";
 import { websiteDecision, type BrowserWebsiteAccess, type WebsiteAccessBlock } from "../browser-website-access.js";
 
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
+	recover?(): Promise<McpToolResult>;
+	recoveryStatus?(): BrowserRecoveryStatus | null;
 	/** Trusted per-run setup; Full requires a runner implementing this seam. */
 	configureToolAccess?(mode: "guarded" | "full", runDir: string): Promise<void>;
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;

@@ -1,3 +1,4 @@
+import { ownerFactsReceipt, ownerFactsSnapshot, readOwnerFactValues } from "./owner-facts.js";
 import { toolAccessRunnerProblem, queuedToolAccessProblem } from "./tool-access.js";
 import { escalationRunnerProblem } from "./escalation-config.js";
 import { browserModelRunnerProblem } from "./model-config.js";
@@ -297,6 +298,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version);
+	const ownerFactValues = await readOwnerFactValues(env, uid, runtime.runner_version);
 	// Admission refuses before a run row exists. Only a connection's outbox retries this 503;
 	// an owner start has no durable retry, so its refusal must say to start again (#1520).
 	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "application runs", source === "connection");
@@ -308,6 +310,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		? { allowed: false, checks: [...verdict.checks, { check: "review_requested", ok: false, why: "the owner asked to review the filled form before anything is sent" }] }
 		: { allowed: verdict.allowed, checks: verdict.checks };
 	const runId = crypto.randomUUID();
+	const ownerFacts = await ownerFactsSnapshot(ownerFactValues, { instanceId, applicationId, runId }, now);
 	const intendedMode = gate.allowed ? "auto_submit" : "fill_and_review";
 
 	// Spent BEFORE the claim below rebinds the fill run: it names the attempt it covers. Of two racing
@@ -358,6 +361,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const trace: ApplyTraceEvent[] = [
 		{ type: "run.requested", at: iso(now), detail: { toolAccess: s.toolAccess, ...(s.toolAccessAcceptance ? { acceptanceRevision: s.toolAccessAcceptance.revision, acceptedAt: s.toolAccessAcceptance.acceptedAt } : {}), escalationLevel: s.escalationLevel, engine: s.engine, requestedModel: s.model ?? "cli_default", requestedReasoningEffort: s.reasoningEffort ?? "cli_default", modelVerification: "unverified", authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", blurFormFields, ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
 		...(instancePreferences ? [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] : []),
+		...(ownerFacts ? [{ type: "source.read" as const, at: iso(now), detail: ownerFactsReceipt(ownerFacts) }] : []),
 		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
 	if (spentApproval) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: spentApproval.id } });
@@ -369,7 +373,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
 
 	const kept = await keptAnswers(env, uid, run);
-	const envelope = { ...applyTaskEnvelope(run, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}), ...(instancePreferences ? { instancePreferences } : {}) };
+	const envelope = { ...applyTaskEnvelope(run, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}), ...(instancePreferences ? { instancePreferences } : {}), ...(ownerFacts ? { ownerFacts } : {}) };
 	const fail = async (errorCode: string, error: string) => {
 		// The machine never took it, so nothing was sent and the approval goes back (#993).
 		await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
@@ -959,8 +963,12 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	// run holds the machine (`nextDueQueuedRun`) and a run must not count itself — without both,
 	// `concurrency` refuses for ever. See `approval-at-dispatch.ts` for the rest.
 	let instancePreferences: Awaited<ReturnType<typeof instancePreferencesFor>>;
-	try { instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now); }
-	catch (error) { await noteQueued(env, "local_apply_runs", run.id, error instanceof HttpError ? error.message : "Candidate preference memory could not be read; no work was dispatched.", now); return "queued"; }
+	let ownerFacts: LocalApplyTaskEnvelope["ownerFacts"];
+	try {
+		instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now);
+		ownerFacts = await ownerFactsSnapshot(await readOwnerFactValues(env, uid, runtime.runner_version), { instanceId, applicationId: app.id, runId: run.id }, now);
+	}
+	catch (error) { await noteQueued(env, "local_apply_runs", run.id, error instanceof HttpError ? error.message : "Current owner facts or candidate preference memory could not be read; no work was dispatched.", now); return "queued"; }
 	let { run: dispatched } = await upgradeQueuedRunPolicy(
 		env,
 		uid,
@@ -970,12 +978,12 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	);
 	let res: Response | null = null;
 	const kept = await keptAnswers(env, uid, dispatched);
-	const claimedDispatch = await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null, ...(instancePreferences ? { events: [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] } : {}) }, now);
+	const claimedDispatch = await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null, events: [...(instancePreferences ? [{ type: "source.read" as const, at: iso(now), detail: instancePreferenceReceipt(instancePreferences) }] : []), ...(ownerFacts ? [{ type: "source.read" as const, at: iso(now), detail: ownerFactsReceipt(ownerFacts) }] : [])] }, now);
 	if (!claimedDispatch) return "queued";
 	dispatched = claimedDispatch;
 	if (dispatched.policy.browserWebsiteAccess) dispatched.policy.browserWebsiteAccess = await withWebsiteDecisions(env, uid, instanceId, dispatched.policy.browserWebsiteAccess);
 	try {
-		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify({ ...applyTaskEnvelope(dispatched, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}), ...(instancePreferences ? { instancePreferences } : {}) }) });
+		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify({ ...applyTaskEnvelope(dispatched, app, s, kept.answers), ...(cloudDocuments ? { cloudDocuments } : {}), ...(instancePreferences ? { instancePreferences } : {}), ...(ownerFacts ? { ownerFacts } : {}) }) });
 	} catch {
 		// A response gap is not a refusal. Poll this run; never dispatch it a second time.
 		return "dispatched";

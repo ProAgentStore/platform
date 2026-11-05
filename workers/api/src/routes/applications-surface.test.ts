@@ -12,6 +12,7 @@ import { HttpError } from "../lib/auth.js";
 import { realSchemaD1, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { JOB_LEAD_APPLY_EVENT } from "../lib/job-lead-triage.js";
 import { RECONCILE_LIMIT } from "../lib/applications/application-board.js";
+import { markDecisionsApplied, pendingAnswersFor } from "../lib/owner-decisions.js";
 import type { Env } from "../types.js";
 
 vi.mock("../lib/auth.js", async () => {
@@ -293,10 +294,10 @@ describe("how far the fill actually got, on the queue response (#986)", () => {
 		withRun("final", "awaiting_review", { status: "paused", pause: { reason: "supervisor_checkpoint" }, checkpoint: { phase: "before_submit", filled: 8, uploaded: 1 } });
 
 		expect(await progress("zero")).toMatchObject({ stage: "supervisor_pending", label: "Paused before form filling — supervisor decision pending. Nothing has been entered yet.", filled: 0, uploaded: 0, checkpointPhase: "initial", checkpointId: "zero:cp" });
-		expect(await progress("partial")).toMatchObject({ stage: "filling", label: "Filling the application in the browser — 3 fields so far." });
-		expect(await progress("ready")).toMatchObject({ stage: "ready_for_review", label: "Filled 9 fields and 1 attachment — waiting for your review before anything is sent.", filled: 9, uploaded: 1 });
+		expect(await progress("partial")).toMatchObject({ stage: "filling", label: "Filling the application in the browser — 3 fill actions so far." });
+		expect(await progress("ready")).toMatchObject({ stage: "ready_for_review", label: "Recorded 9 fill actions and 1 upload — waiting for your review before anything is sent.", filled: 9, uploaded: 1 });
 		expect(await progress("stuck")).toMatchObject({ stage: "blocked", label: "Stopped — login required, after 1 field." });
-		expect(await progress("final")).toMatchObject({ stage: "before_submit_review", label: "Form complete (8 fields and 1 attachment) — waiting for the supervisor's decision before anything is sent.", checkpointPhase: "before_submit" });
+		expect(await progress("final")).toMatchObject({ stage: "before_submit_review", label: "Model reported ready (8 fill actions and 1 upload) — waiting for the supervisor's decision before anything is sent.", checkpointPhase: "before_submit" });
 
 		// Two applications sit at the SAME lifecycle status with opposite claims — which is the
 		// distinction the status word cannot carry and the reason this projection exists.
@@ -597,7 +598,7 @@ describe("retry, cancel and resume", () => {
 		// #1011: an ordinary incomplete stop is retryable, but it is not evidence of the exact
 		// policy refusal that permits a one-click recovery approval.  It must never grow an
 		// approve-and-proceed control merely because no submit was recorded.
-		expect(blocked.body.item.actions).toEqual(["retry_fill", "defer", "archive", "mark_not_interested"]);
+		expect(blocked.body.item.actions).toEqual(["resume", "retry_fill", "defer", "archive", "mark_not_interested"]);
 		const retried = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "rf", expected_status: "blocked" });
 		expect(retried.body.result.runId).not.toBe(runId);
 		expect(dispatches("/local-apply/run")).toHaveLength(2);
@@ -714,6 +715,57 @@ describe("retry, cancel and resume", () => {
 		expect(resumed.body.item.fillRunId).toBe(runId);
 	});
 
+	it("an ended full-mode blocked fill saves exact answers without retrying or submitting (#1540)", async () => {
+		readyApp("ended-question");
+		const started = await act("t1", { action: "request_review", application_id: "ended-question", expected_status: "materials_ready" });
+		const runId = started.body.result.runId;
+		await d1.DB.prepare(`UPDATE local_apply_runs SET status = 'blocked', policy = json_set(policy, '$.toolAccess', 'full'), result = ?2 WHERE id = ?1`).bind(runId, JSON.stringify({ runId, outcome: "blocked", blockReason: "incomplete", questions: ["Portfolio URL?"], submitAttempted: false })).run();
+		d1.exec(`UPDATE job_applications SET status = 'blocked', block_reason = 'incomplete', block_questions = '["Portfolio URL?"]' WHERE id = 'ended-question'`);
+		const current = (await call("GET", "/t1/application-queue/item?application_id=ended-question")).body.item;
+		expect(current.actions).toContain("resume");
+		expect(current.fillRun).toBeNull();
+		sent.length = 0;
+		const input = { action: "resume", application_id: "ended-question", expected_status: "blocked", expected_version: current.stateVersion, answers: [{ question: "Portfolio URL?", answer: "https://example.com/old" }], surface: "mcp" };
+		const saved = await act("t1", input);
+			expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+		expect(saved.body.result).toMatchObject({ outcome: "answers_saved", savedAnswers: 1, resumed: false, runId, runStatus: "blocked" });
+		expect(saved.body.item).toMatchObject({ status: "blocked", fillRunId: runId, stateVersion: current.stateVersion + 1 });
+		expect(sent).toEqual([]);
+		const pending = () => pendingAnswersFor(env(), { instanceId: "ap", userId: "u1", kind: "apply_run", scope: "ended-question" });
+		expect(await pending()).toMatchObject([{ answer: "https://example.com/old", answeredVia: "mcp", subjectId: "ended-question", taskId: runId }]);
+		// A correction supersedes the earlier answer. Once the next run consumes it, no old value resurfaces.
+		const corrected = await act("ap", { ...input, expected_version: saved.body.item.stateVersion, answers: [{ question: "Portfolio URL?", answer: "https://example.com/current" }] });
+		expect(corrected.status).toBe(200);
+		const nextAnswers = await pending();
+		expect(nextAnswers.map((a) => a.answer)).toEqual(["https://example.com/current"]);
+		await markDecisionsApplied(env(), nextAnswers.map((a) => a.id), "separately-authorized-next-run");
+		expect(await pending()).toEqual([]);
+		expect(sent).toEqual([]);
+		expect((await audit("ended-question")).at(-1)).toMatchObject({ actor: "owner", from_status: "blocked", to_status: "blocked", reason: "answers_saved_for_next_run" });
+	});
+
+	it("ended answer saving refuses stale versions, other owners, unknown questions and domain grants without writes", async () => {
+		readyApp("ended-refused");
+		const started = await act("t1", { action: "request_review", application_id: "ended-refused", expected_status: "materials_ready" });
+		await d1.DB.prepare("UPDATE local_apply_runs SET status = 'blocked' WHERE id = ?1").bind(started.body.result.runId).run();
+		d1.exec(`UPDATE job_applications SET status = 'blocked', block_questions = '["Notice period?"]' WHERE id = 'ended-refused'`);
+		const current = (await call("GET", "/t1/application-queue/item?application_id=ended-refused")).body.item;
+		const input = { action: "resume", application_id: "ended-refused", expected_status: "blocked", expected_version: current.stateVersion, answers: [{ question: "Notice period?", answer: "four weeks" }] };
+		sent.length = 0;
+		for (const patch of [{ expected_version: current.stateVersion + 1 }, { expected_version: undefined }, { answers: [] }, { answers: [{ question: "Unasked?", answer: "invented" }] }, { answers: [null] }, { allow_domains: ["jobs.example.com"] }]) expect((await act("t1", { ...input, ...patch })).status).toBeGreaterThanOrEqual(400);
+		const batch = d1.DB.batch.bind(d1.DB);
+		const raced = vi.spyOn(d1.DB, "batch").mockImplementationOnce(async (statements) => {
+			d1.exec("UPDATE job_applications SET state_version = state_version + 1 WHERE id = 'ended-refused'");
+			return batch(statements);
+		});
+		expect((await act("t1", input)).status).toBe(409);
+		raced.mockRestore();
+		d1.exec("UPDATE job_applications SET user_id = 'u2' WHERE id = 'ended-refused'");
+		expect((await act("t1", input)).status).toBe(404);
+		expect(await d1.DB.prepare("SELECT COUNT(*) AS n FROM owner_decisions WHERE subject_id = 'ended-refused'").first()).toEqual({ n: 0 });
+		expect(sent).toEqual([]);
+	});
+
 	it("a paused fill offers resume with the owner's answer, and cancel", async () => {
 		readyApp("pz");
 		const started = await call("POST", "/t1/application-queue/actions", { action: "request_review", application_id: "pz", expected_status: "materials_ready" });
@@ -724,6 +776,7 @@ describe("retry, cancel and resume", () => {
 		expect(paused).toMatchObject({ status: "blocked", blockReason: "missing_answer", questions: ["Notice period?"], actions: ["resume", "cancel"], fillRun: { status: "paused", pause: { reason: "missing_answer" } } });
 		answers["/local-apply/status"] = { status: 200, body: { state: "running", lastSeq: 2, events: [{ seq: 2, type: "run.resumed", at: "2026-10-07T00:07:00Z" }] } };
 		const resumed = await act("t1", { action: "resume", application_id: "pz", expected_status: "blocked", answers: [{ question: "Notice period?", answer: "four weeks" }] });
+		expect(resumed.body.result.outcome).toBe("resume_requested");
 		expect(resumed.body.item.status).toBe("filling");
 		expect(dispatches("/local-apply/resume")[0].body.answers).toEqual([{ question: "Notice period?", answer: "four weeks" }]);
 		const cancelled = await call("POST", "/t1/application-queue/actions", { action: "cancel", application_id: "pz", expected_status: "filling" });

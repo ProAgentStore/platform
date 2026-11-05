@@ -4,6 +4,15 @@ import { BROWSER_CALL_CAP, BrowserCallRecorder, isBrowserCallSubjectKind, summar
 const SUBJECT = { kind: "local_apply_run", id: "run-1" };
 
 describe("BrowserCallRecorder", () => {
+	it("redacts structured diagnostics before retaining deadline evidence", () => {
+		const recorder = new BrowserCallRecorder();
+		recorder.record({ subject: SUBJECT, tool: "browser_type", args: { text: "private typed value" }, secrets: { SECRET: "secret-token" }, startedAt: Date.now(), outcome: "tool_error", internal: false,
+			toolDiagnostic: { kind: "request_deadline", phase: "native_response", tool: "browser_type", execution: "pending", recoverable: false, elapsedMs: 60_000, message: "private typed value remains uncertain", originalError: "secret-token and private typed value", machine: { cpus: 2, load1: 8, loadPerCpu: 4, freeMemoryBytes: 100, totalMemoryBytes: 200 } } });
+		const diagnostic = recorder.page(SUBJECT, 0).calls[0].toolDiagnostic;
+		expect(diagnostic).toMatchObject({ kind: "request_deadline", execution: "pending", elapsedMs: 60_000 });
+		expect(JSON.stringify(diagnostic)).not.toContain("private typed value");
+		expect(JSON.stringify(diagnostic)).not.toContain("secret-token");
+	});
 	it("masks known credentials in URL paths before keeping args or urlAfter", () => {
 		const recorder = new BrowserCallRecorder();
 		for (const path of ["FAKE_REVIEW_SECRET", "with%20space"]) recorder.record({ subject: SUBJECT, tool: "browser_navigate", args: { url: `https://fixture.test/reset/${path}?token=hidden` }, secrets: { PIN: "FAKE_REVIEW_SECRET", OTHER: "with space" }, startedAt: Date.now(), outcome: "ok", internal: false });

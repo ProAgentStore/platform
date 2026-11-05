@@ -33,6 +33,6 @@ describe("bridge-stdio", () => {
 			if (body.op === "list") return { tools: [] };
 			throw new Error("Unauthorized");
 		});
-		expect(await client.callTool({ name: "browser_snapshot", arguments: {} })).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/unavailable: Unauthorized/) }] });
+		expect(await client.callTool({ name: "browser_snapshot", arguments: {} })).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/between the CLI and runner: Unauthorized.*outcome are unknown/) }] });
 	});
 });

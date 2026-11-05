@@ -114,3 +114,22 @@ it("sanitizes embedded credential URLs before persistence and when reading legac
  expect(calls.calls[0]).toMatchObject({ args: { element: "Loading https://jobs.test/apply", target: "Loading https://jobs.test/apply" }, errorHead: "Loading https://jobs.test/apply", browserState: { tabs: [{ title: "Loading https://jobs.test/apply" }] } });
  expect(snapshot.snapshot).toMatchObject({ state: { tabs: [{ title: "Loading https://jobs.test/apply" }] } });
 });
+
+it("retains typed native timeout diagnosis through durable ingestion and sanitized offline reads", async () => {
+ const secretUrl = "https://person:PRIVATE_PASSWORD@jobs.test/apply?token=PRIVATE_TOKEN#PRIVATE_FRAGMENT";
+ const toolDiagnostic = { kind: "request_deadline", phase: "native_response", tool: "browser_file_upload", execution: "pending", recoverable: false, message: `Waiting on ${secretUrl}`, originalError: `Request timed out: ${secretUrl}`, elapsedMs: 60_001, machine: { load1: 8, loadPerCpu: 1, cpus: 8, freeMemoryBytes: 1024, totalMemoryBytes: 8192, secret: "PRIVATE" }, rawArguments: { password: "PRIVATE" } };
+ const record = { ...call(1), toolDiagnostic };
+ await refreshBrowserEvidence(env(), target, fetcher([record]));
+ const stored = await db.DB.prepare("SELECT record FROM browser_run_calls WHERE call_id='c1'").first<{record:string}>();
+ expect(stored?.record).toContain('"execution":"pending"');
+ expect(stored?.record).not.toMatch(/PRIVATE|rawArguments|"secret"/);
+ const received = await listBrowserCalls(env(), target);
+ expect(received.calls[0]?.toolDiagnostic).toEqual({ kind: "request_deadline", phase: "native_response", tool: "browser_file_upload", execution: "pending", recoverable: false, message: "Waiting on https://jobs.test/apply", originalError: "Request timed out: https://jobs.test/apply", elapsedMs: 60_001, machine: { load1: 8, loadPerCpu: 1, cpus: 8, freeMemoryBytes: 1024, totalMemoryBytes: 8192 } });
+ // An older writer may have persisted unchecked extras; reads close the same boundary offline.
+ await db.DB.prepare("UPDATE browser_run_calls SET record=?1 WHERE call_id='c1'").bind(JSON.stringify(record)).run();
+ expect(JSON.stringify(await listBrowserCalls(env(), target))).not.toMatch(/PRIVATE|rawArguments/);
+ await refreshBrowserEvidence(env(), target, fetcher([{ ...call(2), toolDiagnostic: { ...toolDiagnostic, execution: "cancelled" } }]));
+ const malformed = (await listBrowserCalls(env(), target)).calls.find(item => item.callId === "c2");
+ expect(malformed).toBeDefined();
+ expect(malformed).not.toHaveProperty("toolDiagnostic");
+});

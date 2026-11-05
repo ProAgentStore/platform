@@ -1,6 +1,7 @@
 import { FullApplyTools, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
-import { answerDecision, decisionReason, parseDecision, sourceCatalog } from "./answer-decision.js";
-import { applyTools } from "./tool-schemas.js";
+import { answerDecision, decisionReason, parseDecision, sourceCatalog, sourceId } from "./answer-decision.js";
+import { applyTools, recoveryTools } from "./tool-schemas.js";
+import { assessQuestion, type DeferredQuestion } from "./question-assessment.js";
 /**
  * The apply bridge (#957): the only way an application CLI reaches the page, and where the write
  * policy is enforced. Like the research bridge (`local-browser/bridge.ts`), the CLI gets no web
@@ -59,6 +60,9 @@ import type { InstancePreferences } from "../instance-preferences-contract.js";
 import type { LocalApplyEscalationLevel, LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
+	runId?: string;
+	/** Explicit transport reconciliation; never repeats the failed browser action. */
+	recoverBrowser?(): ReturnType<BrowserTools["callTool"]>;
 	emit(event: Omit<LocalApplyEvent, "at">): void;
 	/** Pause until the owner resumes ("resumed"), the run is cancelled ("stopped"), or the cloud provisions sign-in secrets ("sign_in", #1412). */
 	pause(p: LocalApplyPause): Promise<"resumed" | "stopped" | "sign_in">;
@@ -208,6 +212,10 @@ export class ApplyBridge {
 	reviewReady = false;
 	private reviewEnded = false;
 	readonly unresolvedQuestions: string[] = [];
+	readonly deferredQuestions: DeferredQuestion[] = [];
+	get screenshotsDelivered(): number { return this.replay.screenshotsDelivered; }
+	screenshotRequests = 0;
+	get independentScreenshotAvailable(): boolean { return this.replay.visionEnabled; }
 	summary: string | null = null;
 	/** Present only after the CLI explicitly reports a notice that the runner independently saw. */
 	unavailable: LocalApplyUnavailableEvidence | null = null;
@@ -247,6 +255,10 @@ export class ApplyBridge {
 	}
 
 	private async executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+		if (name === "browser_take_screenshot" || name === "browser_read_screenshot") {
+			this.screenshotRequests++;
+			this.host.emit({ type: "policy.decision", detail: { class: "vision", tool: name, decision: "requested", count: this.screenshotRequests } });
+		}
 		return this.replay.run(name, this.target(args)?.name, () => this.dispatch(name, args), () => this.submitAttempted);
 	}
 
@@ -255,13 +267,21 @@ export class ApplyBridge {
 	}
 
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
-		return this.full ? this.full.listTools() : applyTools(await this.browser.listTools(), this.replay.visionEnabled);
+		return this.full ? [...await this.full.listTools(), ...recoveryTools(this.replay.visionEnabled, !!this.host.recoverBrowser)] : applyTools(await this.browser.listTools(), this.replay.visionEnabled);
 	}
 
 	private async dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
 		if (this.host.isStopped?.()) return this.refuse(name, "read", "The application was stopped. No further browser action is allowed.");
 		if (this.done) return text("The application is finished for this run. Stop now.", true);
 		if (name !== "submit_application" && name !== "supervisor_checkpoint") this.full?.invalidateSubmission();
+		if (this.full && name === "browser_read_screenshot") {
+			if (this.host.overTime() || ++this.actions > this.host.limits.maxActions) return text("The action or time limit is reached.", true);
+			return this.replay.modelScreenshot(async () => true);
+		}
+		if (this.full && name === "browser_recover" && this.host.recoverBrowser) {
+			const recovered = await this.host.recoverBrowser(); this.replay.returnedImages(recovered.content);
+			return recovered as ToolResult;
+		}
 		if (name === "ready_for_review") return this.review(typeof args.summary === "string" ? args.summary : "");
 		if (name === "request_answer") return this.requestAnswer(args);
 		if (name === "supervisor_checkpoint") return this.full ? this.full.checkpoint(args) : this.supervisorCheckpoint(args);
@@ -767,20 +787,27 @@ export class ApplyBridge {
 			this.blocked = { reason: "login_required", questions: ["The browser has not verified that sign-in completed. Continue sign-in or take over this browser."] };
 			return text("Sign-in is still unresolved; it is not a missing profile or screening answer. Continue the sign-in, or call ready_for_review to report login_required. No profile question was sent.", true);
 		}
-		if (this.host.escalationLevel === "autonomous") {
-			if (!this.unresolvedQuestions.includes(question)) {
-				if (this.unresolvedQuestions.length >= LOCAL_APPLY_CAPS.answers) return text("The unresolved-question limit was reached. Complete independent known fields, then ready_for_review; do not invent answers.", true);
-				this.unresolvedQuestions.push(question);
-				this.host.emit({ type: "policy.decision", detail: { tool: "request_answer", decision: "deferred", reason: "missing_owner_fact", count: this.unresolvedQuestions.length } });
-			}
-			return text("Recorded as unresolved without pausing. Leave this answer empty, complete other supported fields and verify the form. Do not submit: report these questions with ready_for_review.");
-		}
+		let observationUrl = "";
+		try { observationUrl = this.host.page?.()?.url?.() ?? ""; } catch { /* An unavailable page cannot justify an omission. */ }
+		const assessment = assessQuestion(question, args.assessment, { url: observationUrl, now: this.host.now(), level: this.host.escalationLevel ?? "conservative", sourceIds: (this.host.groundingSources?.() ?? []).map(sourceId), redact: this.host.redact });
+		if ("error" in assessment) return text(assessment.error, true);
+		const previous = this.deferredQuestions.findIndex((entry) => entry.question === question);
+		if (previous < 0 && this.deferredQuestions.length >= LOCAL_APPLY_CAPS.answers) return text("The unresolved-question limit was reached. Complete independent known fields, then ready_for_review; do not invent answers.", true);
+		if (previous < 0) this.deferredQuestions.push(assessment); else this.deferredQuestions[previous] = assessment;
+		const blockingIndex = this.unresolvedQuestions.indexOf(question);
+		if (assessment.blocking && blockingIndex < 0) this.unresolvedQuestions.push(question);
+		if (!assessment.blocking && blockingIndex >= 0) this.unresolvedQuestions.splice(blockingIndex, 1);
+		this.host.emit({ type: "policy.decision", detail: { tool: "request_answer", decision: assessment.blocking ? "deferred" : "optional_omitted", reason: assessment.classification, count: this.unresolvedQuestions.length } });
+		if (!assessment.blocking) return text("Recorded the model-assessed optional omission without inventing an answer. It does not block submission of an otherwise verified complete form. Reassess this same question if later validation or context makes it required or material. Submission authorization is unchanged.");
+		if (this.host.escalationLevel === "autonomous") return text("Recorded as a blocking unresolved question without pausing. Leave this answer empty, complete other supported fields and verify the form. Required, material or unknown omissions block submission. If current evidence establishes a safely optional omission, update this same question with request_answer assessment; otherwise report it with ready_for_review.");
 		const reason: LocalApplyPauseReason = args.kind === "screening_ambiguity" ? "screening_ambiguity" : "missing_answer";
 		const before = this.host.grounding().length;
 		const ok = await this.pauseFor({ reason, question });
 		if (!ok) return text("Nobody answered. Do not guess. Stop now.", true);
 		// Resumed without an answer: the owner chose to leave it — never a cue to guess.
 		if (this.host.grounding().length === before) return text("The owner resumed without answering: leave that field empty and continue with the others.");
+		this.unresolvedQuestions.splice(this.unresolvedQuestions.indexOf(question), 1);
+		this.deferredQuestions.splice(this.deferredQuestions.findIndex((entry) => entry.question === question), 1);
 		return text(`The owner answered. Their answer is now part of your sources${this.full ? "; use this trusted fact in your reasoning" : " — quote it as source_quote"}. Take a browser_snapshot and continue.\n${sourceCatalog(this.host.groundingSources?.() ?? [])}`);
 	}
 

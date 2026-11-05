@@ -1,3 +1,4 @@
+import { QUESTION_ASSESSMENT_SCHEMA } from "./question-assessment.js";
 import { LOCAL_APPLY_CAPS } from "./contract.js";
 import { ANSWER_DECISION_SCHEMA, DECISION_SCHEMA } from "./answer-decision.js";
 const QUOTE_PROP = { type: "string", description: "The exact text from the owner's profile, answers or materials that this answer comes from. Required. Literal answers must appear in it; delegated interpretations also need decision with trusted sourceId." };
@@ -30,8 +31,8 @@ export function applyTools(nativeTools: Array<{ name: string; description?: stri
 		},
 		{
 			name: "request_answer",
-			description: "Record a source-missing or ambiguous question. Autonomous runs defer it and continue independent supported fields; other levels wait for the owner. Never invent an answer.",
-			inputSchema: { type: "object", properties: { question: { type: "string", maxLength: LOCAL_APPLY_CAPS.questionChars }, kind: { type: "string", enum: ["missing_answer", "screening_ambiguity"] } }, required: ["question"] },
+			description: "Record or reassess a source-missing question without inventing an answer. An optional assessment with current evidence, verified safe omission and delegated risk may remain blank without blocking submission. Required, material and unknown omissions remain blockers. Autonomous runs defer blockers and continue independent work; other levels ask the owner.",
+			inputSchema: { type: "object", properties: { question: { type: "string", maxLength: LOCAL_APPLY_CAPS.questionChars }, assessment: QUESTION_ASSESSMENT_SCHEMA, kind: { type: "string", enum: ["missing_answer", "screening_ambiguity"] } }, required: ["question"] },
 		},
 		{
 			name: "ready_for_review",
@@ -53,5 +54,13 @@ export function applyTools(nativeTools: Array<{ name: string; description?: stri
 			description: "Only while PAGS has asked you to sign in: after clicking the button that emails a sign-in code, call this and wait. When it returns, type the name PAGS_LOGIN_CODE into the code box; the runner substitutes the code.",
 			inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		},
+	];
+}
+
+/** Independent observation/reconciliation helpers do not replace or rewrite native tools. */
+export function recoveryTools(vision: boolean, recover: boolean) {
+	return [
+		...(vision ? [{ name: "browser_read_screenshot", description: "Read fresh current-page pixels directly, independently of native MCP transport. Use after native timeouts or when snapshots cannot explain the page. Obeys frozen screenshot privacy, page identity and Stop. Read-only; does not replay or settle an uncertain action.", inputSchema: { type: "object", properties: {}, additionalProperties: false } }] : []),
+		...(recover ? [{ name: "browser_recover", description: "Reconcile an unhealthy native transport without repeating the failed action or replacing the browser context. Pending actions remain quarantined. Read the recovery evidence, then inspect current state before deciding any new action.", inputSchema: { type: "object", properties: {}, additionalProperties: false } }] : []),
 	];
 }

@@ -34,6 +34,8 @@
  * second from being written as if it were the first.
  */
 
+import { type LocalApplyExecutionEvidence, parseExecutionEvidence } from "../local-apply/contract.js";
+
 /** Every stage a fill can be reported at. Ordered roughly by how far the work got. */
 export const FILL_STAGES = [
 	"queued",
@@ -59,9 +61,11 @@ export interface FillProgress {
 	stage: FillStage;
 	/** The sentence every surface shows. Never claims filled work without evidence of it. */
 	label: string;
-	/** Fields the runner reports having filled, and artifacts it reports having attached. */
-	filled: number;
-	uploaded: number;
+	/** Guarded action counts, not unique completed fields. Full native mode is unmeasured. */
+	filled: number | null;
+	uploaded: number | null;
+	fieldCounts?: "action_counts" | "unmeasured";
+	executionEvidence?: LocalApplyExecutionEvidence;
 	/** The checkpoint the run is parked at, when it is parked at one. */
 	checkpointPhase: string | null;
 	checkpointId: string | null;
@@ -105,10 +109,10 @@ export interface FillProgressInput {
 
 const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 const uploadedCount = (v: unknown): number => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).length : count(v));
-const fields = (n: number) => `${n} field${n === 1 ? "" : "s"}`;
-const attachments = (n: number) => `${n} attachment${n === 1 ? "" : "s"}`;
+const fields = (n: number) => `${n} fill action${n === 1 ? "" : "s"}`;
+const attachments = (n: number) => `${n} upload${n === 1 ? "" : "s"}`;
 
-/** "3 fields and 1 attachment", or just the half that happened. */
+/** Recorded actions and uploads, never a count of distinct completed fields. */
 function work(filled: number, uploaded: number): string {
 	if (filled && uploaded) return `${fields(filled)} and ${attachments(uploaded)}`;
 	if (filled) return fields(filled);
@@ -138,14 +142,27 @@ export function fillProgressOf(input: FillProgressInput): FillProgress {
 	const submitAttempted = input.submitAttempted === true || result?.submitAttempted === true;
 	const did = work(filled, uploaded);
 	const evidence: FillEvidence = result ? "runner_result" : checkpointPhase || pause ? "runner_checkpoint" : "run_status";
-	const at = (stage: FillStage, label: string): FillProgress => ({ stage, label, filled, uploaded, checkpointPhase, checkpointId, submitAttempted, evidence });
+	const executionEvidence = parseExecutionEvidence(result?.executionEvidence);
+	const unmeasured = input.toolAccess === "full" || result?.submissionVerification === "unverified" || executionEvidence?.fieldCounts === "unmeasured";
+	const at = (stage: FillStage, label: string): FillProgress => ({ stage, label, filled: unmeasured ? null : filled, uploaded: unmeasured ? null : uploaded, fieldCounts: unmeasured ? "unmeasured" : "action_counts", checkpointPhase, checkpointId, submitAttempted, evidence, ...(executionEvidence ? { executionEvidence } : {}) });
 
-	if (input.applicationStatus === "submitted") return at("submitted", input.toolAccess === "full" ? "Submission to the employer was confirmed. Native action counters do not measure all completed fields." : `Submitted to the employer after filling ${did}.`);
+	if (input.applicationStatus === "submitted") return at("submitted", unmeasured ? "Submission to the employer was confirmed. Native action counters do not measure all completed fields." : `Submission confirmed after ${did}.`);
 	// An attempt whose outcome nobody confirmed is the one state that must never read as progress.
 	if (submitAttempted) return at("submitted", "A final submit was attempted — check the employer's site before anything else is done.");
-	if (input.toolAccess === "full" || result?.submissionVerification === "unverified") {
-		const stage: FillStage = input.applicationStatus === "archived" ? "unavailable" : input.applicationStatus === "cancelled" ? "cancelled" : input.runStatus === "failed" ? "failed" : input.runStatus === "blocked" || input.runStatus === "paused" ? "blocked" : input.runStatus === "queued" ? "queued" : input.runStatus === "running" ? "filling" : "ready_for_review";
-		return at(stage, "Full browser access: logged actions may not capture every effect. Submission status is unverified; inspect the employer site before retrying or submitting.");
+	if (unmeasured) {
+		const stage: FillStage = input.applicationStatus === "archived" ? "unavailable" : input.applicationStatus === "cancelled" || input.runStatus === "cancelled" ? "cancelled" : input.runStatus === "failed" || result?.outcome === "failed" ? "failed" : input.runStatus === "blocked" || input.runStatus === "paused" || input.applicationStatus === "blocked" || result?.outcome === "blocked" ? "blocked" : input.runStatus === "queued" ? "queued" : input.runStatus === "running" ? "filling" : input.applicationStatus === "awaiting_review" || result?.outcome === "awaiting_review" ? "ready_for_review" : "queued";
+		const activity = stage === "filling" ? "Browser run active." : stage === "queued" ? "Waiting for the browser runner." : stage === "ready_for_review" ? "Run stopped for review; form completion is unverified." : stage === "blocked" ? "Browser run blocked." : stage === "failed" ? "Browser run failed." : stage === "cancelled" ? "Browser run cancelled." : "Application archived.";
+		const native = executionEvidence?.nativeCalls;
+		const calls = native?.coverage === "retained" ? ` ${native.attempted} recorded native calls (${native.succeeded} succeeded, ${native.failed} failed${native.dropped ? `; ${native.dropped} older records unavailable` : ""}${native.notDispatched ? `; ${native.notDispatched} not dispatched` : ""}${native.truncated ? "; bounded history incomplete" : ""}).` : " Native call totals are unavailable.";
+		const problems: string[] = [];
+		if (executionEvidence?.browser.timeouts) problems.push(`${executionEvidence.browser.timeouts} browser request timeout${executionEvidence.browser.timeouts === 1 ? "" : "s"}`);
+		if (executionEvidence?.browser.state === "pending") problems.push("a native action is still pending; replay is unsafe");
+		else if (executionEvidence?.browser.state === "unknown" || executionEvidence?.browser.state === "unavailable") problems.push("browser execution state unavailable");
+		if (executionEvidence?.browser.state === "tool_error") problems.push("native tool returned an operation error");
+		if (executionEvidence?.blockingQuestions) problems.push(`${executionEvidence.blockingQuestions} unresolved blocking question${executionEvidence.blockingQuestions === 1 ? "" : "s"}`);
+		if (executionEvidence?.causes.includes("run_timeout")) problems.push("run time limit reached");
+		if (executionEvidence?.causes.includes("engine_failure")) problems.push("model engine failed");
+		return at(stage, `${activity}${calls} Field and attachment completion is unmeasured.${problems.length ? ` Diagnostics: ${problems.join("; ")}.` : ""} Submission status is unverified.`);
 	}
 	if (input.applicationStatus === "archived") {
 		return at("unavailable", input.blockReason === "job_unavailable" ? "The listing is no longer available; nothing was sent." : "Archived; nothing was sent.");
@@ -154,7 +171,7 @@ export function fillProgressOf(input: FillProgressInput): FillProgress {
 	// What the run is doing RIGHT NOW, which outranks the application's status word.
 	if (input.runStatus === "paused" && pause?.reason === "supervisor_checkpoint") {
 		if (checkpointPhase === "before_submit") {
-			return at("before_submit_review", `Form complete (${did}) — waiting for the supervisor's decision before anything is sent.`);
+			return at("before_submit_review", `Model reported ready (${did}) — waiting for the supervisor's decision before anything is sent.`);
 		}
 		if (!filled && !uploaded) {
 			// THE #986 CASE. "initial, filled 0" is the CLI having opened the page and stopped.
@@ -179,7 +196,7 @@ export function fillProgressOf(input: FillProgressInput): FillProgress {
 	// stopped before touching one, so the counts decide which sentence is true.
 	if (input.applicationStatus === "awaiting_review" || result?.outcome === "awaiting_review") {
 		return filled || uploaded
-			? at("ready_for_review", `Filled ${did} — waiting for your review before anything is sent.`)
+			? at("ready_for_review", `Recorded ${did} — waiting for your review before anything is sent.`)
 			: at("stopped_before_filling", "Stopped before any field was filled — there is nothing to review, and nothing was sent.");
 	}
 	if (input.applicationStatus === "blocked" || result?.outcome === "blocked") {
@@ -198,4 +215,4 @@ export function fillProgressOf(input: FillProgressInput): FillProgress {
  * Is this progress safe to describe as a filled form? The one question #981's approval and the
  * Board's "review it" affordance both turn on, asked in one place rather than re-derived.
  */
-export const hasFilledWork = (p: FillProgress): boolean => p.filled > 0 || p.uploaded > 0;
+export const hasFilledWork = (p: FillProgress): boolean => (p.filled ?? 0) > 0 || (p.uploaded ?? 0) > 0;

@@ -226,4 +226,20 @@ describe("actual Playwright MCP selection receipts and uninterpreted site feedba
 			expect(verifier.pendingId(page)).toBe(newer);
 		} finally { verifier.stop(); }
 	});
+
+	it.each(["no_event", "new_document"])("retains unknown upload outcome without duplicating it after %s", async (change) => {
+		const verifier = new UploadVerifier(); verifier.track(page);
+		try {
+			await choose('<input id="resume" type="file"><input id="other" type="file">');
+			const prepared = await verifier.prepare(page, [path]);
+			prepared.markUncertain?.();
+			expect(verifier.pendingId(page)).toBeNull();
+			if (change === "new_document") await page.goto("about:blank");
+			expect((await prepared.verify?.({ uncertain: true }))?.selection).toBeUndefined();
+			await page.setContent('<input id="new" type="file">');
+			const chooser = page.waitForEvent("filechooser"); await page.locator("#new").click(); await chooser;
+			expect((await verifier.prepare(page, [path])).error).toContain("unknown selection outcome");
+			expect(await page.locator("#new").evaluate(el => (el as HTMLInputElement).files?.length)).toBe(0);
+		} finally { verifier.stop(); }
+	});
 });

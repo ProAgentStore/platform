@@ -1273,4 +1273,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.204": "sha256:c61e47862a48db07296a98ecabbe5efa2a249e79452b0eaf2f00fb4221eb526b", // #1511: per-instance local browser model and reasoning configuration.
 	"0.1.205": "sha256:5c7a55c05a72068a39df143fef5b427d4c6fba1d1dfa5aa32faabc8446c77cf1", // Per-instance Application Runner escalation level; submission authorization remains separate.
 	"0.1.206": "sha256:e68325aca97eaa27d51645def93fcb49d646a4d604ab21e4adb3e928489641ba", // #1532: full Application Runner Playwright access with separate versioned risk acceptance.
+	"0.1.207": "sha256:e68325aca97eaa27d51645def93fcb49d646a4d604ab21e4adb3e928489641ba", // #1540: state-aware resume dry-run and save-only ended answers; schemas unchanged.
 };

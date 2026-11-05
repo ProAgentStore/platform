@@ -933,7 +933,7 @@ describe("a one-click block is approvable, and the approval is spent once (#991)
 		expect(item.blockReason).toBe("incomplete");
 		// The sentence the record shows, and now an action that matches it.
 		expect(item.questions[0]).toMatch(/Approve this application to let it be sent/);
-		expect(item.actions, "the four the issue reported, PLUS the approval").toEqual(["approve_and_proceed", "retry_fill", "defer", "archive", "mark_not_interested"]);
+		expect(item.actions, "approval remains available; recorded questions also permit save-only owner answers").toEqual(["resume", "approve_and_proceed", "retry_fill", "defer", "archive", "mark_not_interested"]);
 		// Nothing was sent, and no authorization exists until the owner makes one.
 		expect(item.submitAuthorization).toBeNull();
 		expect(item.submitAttempted).toBe(false);
@@ -1164,7 +1164,7 @@ describe("an application execution appears on the normal Kanban (#978)", () => {
 		// #986: and it says WHICH checkpoint in the owner's terms — the form is complete, the counts
 		// prove it, and nothing has been sent. ("Waiting for the cloud supervisor's decision at a
 		// checkpoint" was the same sentence for a run that had filled nothing.)
-		expect(card?.application?.stage).toBe("Form complete (6 fields and 1 attachment) — waiting for the supervisor's decision before anything is sent.");
+		expect(card?.application?.stage).toBe("Model reported ready (6 fill actions and 1 upload) — waiting for the supervisor's decision before anything is sent.");
 		expect(card?.application?.progress).toMatchObject({ stage: "before_submit_review", filled: 6, uploaded: 1, checkpointPhase: "before_submit", checkpointId: "before-submit-1", submitAttempted: false });
 	});
 
@@ -1272,7 +1272,7 @@ describe("an application execution appears on the normal Kanban (#978)", () => {
 		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
 		const item = (await call("GET", "/ap/application-queue/item?application_id=lead-p4")).body.item;
 		expect(item.fillProgress).toMatchObject({ stage: "ready_for_review", filled: 12, uploaded: 2, evidence: "runner_result" });
-		expect(item.fillProgress.label).toBe("Filled 12 fields and 2 attachments — waiting for your review before anything is sent.");
+		expect(item.fillProgress.label).toBe("Recorded 12 fill actions and 2 uploads — waiting for your review before anything is sent.");
 		expect((await appCard())?.application?.stage).toBe(item.fillProgress.label);
 	});
 

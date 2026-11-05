@@ -65,7 +65,7 @@ export function createBridgeServer(endpoint: BridgeEndpoint, post: BridgePost = 
 			return (await post(endpoint, { op: "call", name: req.params.name, args: req.params.arguments ?? {} })) as never;
 		} catch (err) {
 			// The runner refusing or going away is a tool error the CLI can read, not a crash.
-			return { content: [{ type: "text", text: `The research browser is unavailable: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+			return { content: [{ type: "text", text: `The browser tool request failed between the CLI and runner: ${err instanceof Error ? err.message : String(err)}. Browser health and any in-flight action outcome are unknown; do not replay an uncertain action.` }], isError: true };
 		}
 	});
 	return server;

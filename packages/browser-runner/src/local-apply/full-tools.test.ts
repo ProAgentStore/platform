@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ApplyBridge, type ApplyBridgeHost } from "./bridge.js";
 import { fullArtifactPaths, parseToolAccess } from "./full-tools.js";
+import { sourceId } from "./answer-decision.js";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { MaskablePage } from "../local-browser/replay.js";
 
@@ -26,6 +27,7 @@ describe("accepted full native application tools", () => {
 		for (const tool of native) expect(tools.find((item) => item.name === tool.name)).toEqual(tool);
 		expect(tools.map((tool) => tool.name)).toContain("submit_application");
 		expect(await f.bridge.callTool("browser_take_screenshot", { scale: "css" })).toEqual({ content: [{ type: "text", text: "native metadata" }, { type: "image", data: "PIXELS", mimeType: "image/png" }] });
+		expect(f.bridge.screenshotRequests).toBe(1); expect(f.bridge.screenshotsDelivered).toBe(1); expect(f.bridge.independentScreenshotAvailable).toBe(false);
 	});
 	it("dispatches native forms/code/keys without page classifiers, source schema injection or routine checkpoints", async () => {
 		const f = fixture();
@@ -98,6 +100,62 @@ describe("accepted full native application tools", () => {
 		await f.bridge.callTool("ready_for_review", { summary: "Known values filled" });
 		expect(f.bridge.reviewReady).toBe(false); expect(f.bridge.blocked?.reason).toBe("incomplete"); expect(f.bridge.summary).toContain("unverified");
 	});
+	it.each(["Public portfolio?", "Additional information for this request?"])("allows an evidence-backed optional omission for %s without inventing a value", async (question) => {
+		const f = fixture();
+		await f.bridge.callTool("browser_snapshot");
+		await f.bridge.callTool("request_answer", { question });
+		expect(f.bridge.unresolvedQuestions).toEqual([question]);
+		const assessment = { classification: "optional", observationUrl: "https://forms.example.test/start", evidence: "The current review accepts the empty optional control; no material claim changes.", omissionVerified: true, decision: { risk: "minor", reason: "Leaving a voluntary detail absent asserts no new fact." } };
+		expect((await f.bridge.callTool("request_answer", { question, assessment })).isError).not.toBe(true);
+		expect(f.bridge.unresolvedQuestions).toEqual([]);
+		expect(f.bridge.deferredQuestions).toEqual([expect.objectContaining({ question, classification: "optional", blocking: false, omissionVerified: true })]);
+		expect(f.callTool.mock.calls.map(([name]) => name)).toEqual(["browser_snapshot"]);
+		await f.bridge.callTool("ready_for_review", { summary: "Required fields verified, optional detail omitted." });
+		expect(f.bridge.reviewReady).toBe(true);
+		expect(f.bridge.submitAttempted).toBe(false);
+	});
+	it.each(["required", "material", "unknown"])("reinstates an omitted question when later evidence changes its classification to %s", async (classification) => {
+		const f = fixture(); const question = "Unrecorded fact?";
+		const assessment = { classification: "optional", observationUrl: "https://forms.example.test/start", evidence: "Current form accepts omission.", omissionVerified: true, decision: { risk: "minor", reason: "Optional omission." } };
+		await f.bridge.callTool("request_answer", { question, assessment });
+		await f.bridge.callTool("request_answer", { question, assessment: { ...assessment, classification, omissionVerified: false, evidence: "Later validation or context requires clarification." } });
+		expect(f.bridge.unresolvedQuestions).toEqual([question]);
+		await f.bridge.callTool("browser_snapshot");
+		await f.bridge.callTool("ready_for_review", { summary: "Required question unresolved." });
+		expect(f.bridge.reviewReady).toBe(false);
+	});
+	it.each([
+		["balanced", "minor", true, false], ["balanced", "major", true, true],
+		["conservative", "minor", true, true], ["autonomous", "minor", false, true],
+	] as const)("applies %s authority to %s omission with verified=%s", async (escalationLevel, risk, omissionVerified, blocking) => {
+		const pause = vi.fn(async () => "resumed" as const); const f = fixture({ escalationLevel, pause });
+		await f.bridge.callTool("request_answer", { question: "Unknown optional detail?", assessment: { classification: "optional", observationUrl: "https://forms.example.test/start", evidence: "Observed current form behavior.", omissionVerified, decision: { risk, reason: "Model-assessed omission risk." } } });
+		expect(f.bridge.unresolvedQuestions.length).toBe(blocking ? 1 : 0);
+		expect(pause).toHaveBeenCalledTimes(blocking && escalationLevel !== "autonomous" ? 1 : 0);
+	});
+	it("retains current trusted provenance and bounded redacted rationale without exposing evidence in trace", async () => {
+		const source = { label: "owner memory", text: "Two historical facts remain in conflict." };
+		const f = fixture({ groundingSources: () => [source], redact: (value) => value.replaceAll("private-token", "[REDACTED]") });
+		const assessment = { classification: "optional", observationUrl: "https://forms.example.test/start", evidence: "Observed omission accepted, private-token", omissionVerified: true, sourceIds: [sourceId(source)], decision: { risk: "minor", reason: "No new assertion, private-token" } };
+		expect((await f.bridge.callTool("request_answer", { question: "Unknown detail?", assessment })).isError).not.toBe(true);
+		expect(f.bridge.deferredQuestions[0]).toMatchObject({ sourceIds: [sourceId(source)], evidence: "Observed omission accepted, [REDACTED]", reason: "No new assertion, [REDACTED]" });
+		expect(JSON.stringify(f.emit.mock.calls)).not.toContain("private-token");
+		expect(JSON.stringify(f.emit.mock.calls)).not.toContain("Observed omission accepted");
+		expect((await f.bridge.callTool("request_answer", { question: "Unknown detail?", assessment: { ...assessment, sourceIds: ["page-claimed-source"] } })).isError).toBe(true);
+	});
+	it("still records a blocking question when the browser page is unavailable", async () => {
+		const f = fixture({ page: () => { throw new Error("closed browser"); } });
+		expect((await f.bridge.callTool("request_answer", { question: "Missing required fact?" })).isError).not.toBe(true);
+		expect(f.bridge.unresolvedQuestions).toEqual(["Missing required fact?"]);
+	});
+
+	it("rejects stale or malformed reclassification without removing an existing blocker", async () => {
+		const f = fixture(); const question = "Unknown detail?";
+		await f.bridge.callTool("request_answer", { question });
+		for (const assessment of [{ classification: "optional" }, { classification: "optional", observationUrl: "https://other.example.test/", evidence: "Old page", omissionVerified: true, decision: { risk: "minor", reason: "Optional" } }]) expect((await f.bridge.callTool("request_answer", { question, assessment })).isError).toBe(true);
+		expect(f.bridge.unresolvedQuestions).toEqual([question]);
+	});
+
 });
 
 describe("full tool authority and document provenance", () => {

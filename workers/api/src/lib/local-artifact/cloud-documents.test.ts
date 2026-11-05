@@ -6,6 +6,7 @@ import type { Env } from "../../types.js";
 import type { LocalArtifactResultEnvelope } from "./contract.js";
 import type { PortableDocument } from "./document-contract.js";
 import type { JobApplication, TailorRun } from "./store.js";
+import { upsertProfile } from "../profile.js";
 
 const { exportCall, runtimeVersion } = vi.hoisted(() => ({ exportCall: vi.fn(), runtimeVersion: { value: "0.4.205" } }));
 vi.mock("../../routes/instances-runtime.js", () => ({ callRuntime: exportCall, runtimeJson: (res: Response) => res.json(), getLiveRuntime: async () => ({ runner_version: runtimeVersion.value, runner_node: "mac", instance_id: "apply" }) }));
@@ -249,6 +250,35 @@ describe("real tailoring settlement and application dispatch", () => {
 		expect(envelope.cloudDocuments.map((d: PortableDocument) => d.sha256).sort()).toEqual(docs.map((d) => d.sha256).sort());
 		expect(envelope.policy.mode).toBe("fill_and_review");
 		expect(JSON.stringify(await d1.DB.prepare("SELECT * FROM local_apply_runs").all())).not.toContain("contentBase64");
+	});
+	it("refreshes current owner facts at queued dispatch while preserving approved document bytes (#1538)", async () => {
+		serveCompletedRun(); await sync();
+		runtimeVersion.value = "0.4.222";
+		await upsertProfile(env(), "owner", { linkedin: "https://example.test/first", salaryExpectation: "180000", use_profile: "Use my current profile link." });
+		exportCall.mockImplementation(async () => Response.json({ error: "Runner is busy", code: "busy" }, { status: 409 }));
+		const started = await startApplicationFill(env(), "apply", "owner", { eventId: "ready", applicationId: "application", tailorInstanceId: "tailor" }, "owner", { review: true });
+		expect(started.run?.status).toBe("queued");
+		const first = JSON.parse(exportCall.mock.calls.filter((args) => args[2] === "/local-apply/run").at(-1)![3].body);
+		expect(first.ownerFacts.identity.linkedin).toBe("https://example.test/first");
+		expect(first.ownerFacts.savedAnswers).toEqual({ use_profile: "Use my current profile link." });
+		await upsertProfile(env(), "owner", { linkedin: "https://example.test/current" });
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at=0");
+		runtimeVersion.value = "0.4.221";
+		exportCall.mockClear();
+		expect(await dispatchNextQueuedFill(env(), "apply", "owner", Date.now() + 60_000)).toBe("queued");
+		expect(exportCall).not.toHaveBeenCalled();
+		runtimeVersion.value = "0.4.222";
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at=0");
+		exportCall.mockImplementation(async () => Response.json({ status: "running" }, { status: 202 }));
+		expect(await dispatchNextQueuedFill(env(), "apply", "owner", Date.now() + 180_000)).toBe("dispatched");
+		const next = JSON.parse(exportCall.mock.calls.at(-1)![3].body);
+		expect(next.ownerFacts).toMatchObject({ instanceId: "apply", applicationId: "application", runId: first.runId, identity: { linkedin: "https://example.test/current" } });
+		expect(next.ownerFacts.revision).not.toBe(first.ownerFacts.revision);
+		expect(next.cloudDocuments).toEqual(first.cloudDocuments);
+		expect(next.cloudDocuments.map((d: PortableDocument) => d.contentBase64)).toEqual(first.cloudDocuments.map((d: PortableDocument) => d.contentBase64));
+		const row = await d1.DB.prepare("SELECT trace FROM local_apply_runs WHERE id = ?").bind(started.run!.id).first<{ trace: string }>();
+		expect(JSON.parse(row!.trace)).toContainEqual(expect.objectContaining({ type: "source.read", detail: expect.objectContaining({ role: "current_owner_facts", sha256: next.ownerFacts.revision }) }));
+		expect(row!.trace).not.toContain("https://example.test/current");
 	});
 });
 

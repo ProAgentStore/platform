@@ -1,6 +1,7 @@
 /** Closed diagnostics fields: never persist raw MCP arguments, page HTML, or unbounded error output. */
 import { captionUrl, type BrowserArtifactSubject } from "./browser-artifacts.js";
 import { browserEvidenceText } from "./browser-evidence-text.js";
+import { sanitizeBrowserToolDiagnostic, type StoredBrowserToolDiagnostic } from "./browser-tool-diagnostic.js";
 export interface BrowserEvidenceTarget { userId: string; instanceId: string; subjectKind: BrowserArtifactSubject; subjectId: string }
 export const recordOf = (v: unknown): Record<string, unknown> | null => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : null;
 const bounded = (v: unknown, max: number) => typeof v === "string" && v.length <= max ? v : undefined;
@@ -8,7 +9,7 @@ const integer = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v)
 export interface StoredBrowserCall {
  seq: number; callId: string; subject: { kind: BrowserArtifactSubject; id: string }; tool: string;
  args: Record<string, unknown>; startedAt: string; durationMs: number;
- outcome: "ok" | "tool_error" | "thrown" | "refused"; internal: boolean; browserState?: unknown; errorHead?: string; urlAfter?: string;
+ outcome: "ok" | "tool_error" | "thrown" | "refused"; internal: boolean; browserState?: unknown; errorHead?: string; urlAfter?: string; toolDiagnostic?: StoredBrowserToolDiagnostic;
 }
 export function sanitizeBrowserCall(raw: unknown, target: BrowserEvidenceTarget): StoredBrowserCall | null {
  const r = recordOf(raw); const subject = recordOf(r?.subject);
@@ -20,7 +21,8 @@ export function sanitizeBrowserCall(raw: unknown, target: BrowserEvidenceTarget)
  const url = captionUrl(input.url).url; if (url) args.url = url;
  const observedState = r.browserState ? sanitizeBrowserState({ subject: r.subject, epoch: "call", capturedAt: r.startedAt, availability: "available", current: false, state: r.browserState }, target)?.state : undefined;
  const urlAfter = captionUrl(r.urlAfter).url; const errorHead = browserEvidenceText(r.errorHead, 200);
- return { seq: r.seq as number, callId: r.callId as string, subject: { kind: target.subjectKind, id: target.subjectId }, tool: r.tool as string, args, startedAt: r.startedAt, durationMs: r.durationMs as number, outcome: r.outcome as StoredBrowserCall["outcome"], internal: r.internal === true, ...(observedState ? { browserState: observedState } : {}), ...(errorHead !== undefined ? { errorHead } : {}), ...(urlAfter ? { urlAfter } : {}) };
+ const toolDiagnostic = sanitizeBrowserToolDiagnostic(r.toolDiagnostic);
+ return { seq: r.seq as number, callId: r.callId as string, subject: { kind: target.subjectKind, id: target.subjectId }, tool: r.tool as string, args, startedAt: r.startedAt, durationMs: r.durationMs as number, outcome: r.outcome as StoredBrowserCall["outcome"], internal: r.internal === true, ...(observedState ? { browserState: observedState } : {}), ...(errorHead !== undefined ? { errorHead } : {}), ...(urlAfter ? { urlAfter } : {}), ...(toolDiagnostic ? { toolDiagnostic } : {}) };
 }
 export function sanitizeBrowserState(raw: unknown, target: BrowserEvidenceTarget) {
  const r = recordOf(raw); const subject = recordOf(r?.subject); const s = recordOf(r?.state);

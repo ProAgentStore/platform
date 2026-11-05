@@ -189,7 +189,7 @@ export interface ApplicationExecutionProjection {
 	lifecycle: { status: string; stateVersion: number; blockReason: string | null; submitAttempted: boolean };
 	currentRun: { id: string; kind: "tailor" | "fill"; status: string; instanceId: string; mode: string | null } | null;
 	checkpoint: { id: string; phase: "initial" | "post_navigation" | "before_submit" | "uncertain"; facts: { actions: number; filled: number; uploaded: number; blockers: string[]; domain: string | null }; directive: { kind: "continue" | "request_review" | "stop"; delivery: "queued" | "delivery_attempted" | "delivered" | "acknowledged_by_runner" } | null } | null;
-	progress: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: "runner_result" | "runner_checkpoint" | "run_status" } | null;
+	progress: { stage: string; label: string; filled: number | null; uploaded: number | null; fieldCounts?: "action_counts" | "unmeasured"; executionEvidence?: import("./lib/local-apply/contract.js").LocalApplyExecutionEvidence; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: "runner_result" | "runner_checkpoint" | "run_status" } | null;
 	permittedActions: string[];
 	directiveReconciliation: "not_applicable" | "terminal" | "decision_pending" | "delivery_pending" | "retry_pending" | "acknowledged";
 }

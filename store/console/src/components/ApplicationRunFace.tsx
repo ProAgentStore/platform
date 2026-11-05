@@ -1,3 +1,5 @@
+import type { ApplicationExecutionProjection } from "../../../../workers/api/src/agent-types";
+import { applicationProgressEvidence } from "../lib/applicationProgress";
 /**
  * What a board card that IS an application execution says about it (#978).
  *
@@ -22,7 +24,7 @@ export interface ApplicationRunFields {
 		traceUrl: string;
 		checkpoint?: { checkpointId: string; phase: string; directive: string | null };
 		/** How far the fill actually got, from the runner's own facts (#986) — the counts `stage` was written from. */
-		progress?: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; submitAttempted: boolean };
+		progress?: Pick<NonNullable<ApplicationExecutionProjection["progress"]>, "stage" | "label" | "filled" | "uploaded" | "checkpointPhase" | "submitAttempted" | "fieldCounts" | "executionEvidence">;
 		blockReason?: string;
 		runnerVersion?: string;
 	};
@@ -83,7 +85,7 @@ export default function ApplicationRunFace({ item }: { item: ApplicationRunField
 			</span>
 			{app.progress && (
 				<span className="text-muted-soft">
-					{app.progress.filled} field{app.progress.filled === 1 ? "" : "s"}, {app.progress.uploaded} attachment{app.progress.uploaded === 1 ? "" : "s"}
+					{applicationProgressEvidence(app.progress)}
 					{app.progress.checkpointPhase ? ` · checkpoint ${app.progress.checkpointPhase.replace(/_/g, " ")}` : ""}
 				</span>
 			)}

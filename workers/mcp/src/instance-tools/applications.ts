@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { applicationResumePreview, type ResumePreviewItem } from "./application-resume-preview.js";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { type McpScope, audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
@@ -86,7 +87,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"list_applications",
-		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each application has `execution`, the ONE durable redacted projection shared with Board and Console: lifecycle, current run, checkpoint counts, directive delivery/runner acknowledgement, evidence-based progress, reconciliation state and permitted actions. It excludes page text, snapshots, typed values, credentials and artifact contents. `fillProgress` remains a compatibility alias; read `execution.progress` rather than inferring progress from `status`. The projection does not grant submission authority. Frozen `toolAccess: full` means arbitrary native code can bypass submission guards; `submissionVerification: unverified` and `submitAttempted: false` never establish that nothing was submitted. Also returns counts, limits, connection outbox health and `health` (#1022): `ok`, every `problems[]` entry (a disabled or dead-lettered edge, a missing Tailor/Runner, a Scout source that is unavailable, disabled, without email access, failing, unscheduled, never scanned or stale, or that still holds stored leads today's intake rules reject) and each Scout source's readiness and last scan. Read-only." + PIPELINE_INSTANCE,
+		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each application has `execution`, the ONE durable redacted projection shared with Board and Console: lifecycle, current run, checkpoint counts, directive delivery/runner acknowledgement, evidence-based progress, reconciliation state and permitted actions. It excludes page text, snapshots, typed values, credentials and artifact contents. `fillProgress` remains a compatibility alias; read `execution.progress` rather than inferring progress from `status`. `execution.progress.fieldCounts: unmeasured` means field/attachment counts are null; `executionEvidence` preserves retained native request outcomes, browser timeouts/state, delivered image payloads and independent question blockers. Counts do not prove form acceptance. The projection does not grant submission authority. Frozen `toolAccess: full` means arbitrary native code can bypass submission guards; `submissionVerification: unverified` and `submitAttempted: false` never establish that nothing was submitted. Also returns counts, limits, connection outbox health and `health` (#1022): `ok`, every `problems[]` entry (a disabled or dead-lettered edge, a missing Tailor/Runner, a Scout source that is unavailable, disabled, without email access, failing, unscheduled, never scanned or stale, or that still holds stored leads today's intake rules reject) and each Scout source's readiness and last scan. Read-only." + PIPELINE_INSTANCE,
 		{
 			...who,
 			status: z.enum(["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"]).optional().describe("Only this status."),
@@ -118,7 +119,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"get_application",
-		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now. Applications include the shared durable `execution` projection (lifecycle, current run, redacted checkpoint/directive delivery state, progress and permitted actions) plus compatibility `fillProgress`; it never says a form is filled without durable counts and never exposes page/form/credential/artifact contents. Frozen `toolAccess: full` and `submissionVerification: unverified` warn that arbitrary code can bypass submission guards: an absent observed submit is not proof of no submission. Read-only." + PIPELINE_INSTANCE,
+		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now. Applications include the shared durable `execution` projection (lifecycle, current run, redacted checkpoint/directive delivery state, progress and permitted actions) plus compatibility `fillProgress`; it never exposes page/form/credential/artifact contents. `execution.progress.fieldCounts: unmeasured` means field/attachment counts are null; `executionEvidence` preserves retained native request outcomes, browser timeouts/state, delivered image payloads and independent question blockers. Counts do not prove form acceptance. Frozen `toolAccess: full` and `submissionVerification: unverified` warn that arbitrary code can bypass submission guards: an absent observed submit is not proof of no submission. Read-only." + PIPELINE_INSTANCE,
 		{ ...who, application_id: target.application_id, scout_instance_id: target.scout_instance_id, record_id: target.record_id },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
@@ -574,11 +575,24 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			}
 			// An owner assertion (#1073) carries its attempt, the owner's words, the confirmation and the surface.
 			if (action === "assert_not_submitted") Object.assign(body, { fill_run_id: input.fill_run_id, statement: input.statement, confirm: input.confirm, surface: "mcp" });
+			if (action === "resume") body.surface = "mcp";
 			if (input.dry_run) {
+				let previewEffect = effect;
+				let outcome: string | undefined;
+				if (action === "resume") {
+					if (typeof input.application_id !== "string") return text("Error: application_id is required for an authoritative resume preview.");
+					const current = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-queue/item?application_id=${encodeURIComponent(input.application_id)}`, t, {}, env) as { error?: string; item?: ResumePreviewItem };
+					if (current.error) return text(`Error: ${current.error}`);
+					const preview = applicationResumePreview(input, current.item);
+					if (preview.error) return text(`Error: ${preview.error}`);
+					previewEffect = preview.effect as string;
+					outcome = preview.outcome;
+				}
 				return dryRun(safetyFor(token), name, `${action.replace(/_/g, " ")} one job application`, auditInput, {
 					endpoint: `/v1/instances/${instance_id}/application-queue/actions`,
 					method: "POST",
-					effect,
+					effect: previewEffect,
+					...(outcome ? { outcome } : {}),
 				});
 			}
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-queue/actions`, t, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string };
@@ -717,7 +731,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	});
 	server.tool(
 		"resume_application",
-		"Release a paused fill once the owner has handled what it waits on (a captcha, a sign-in, a consent box in the runner's browser) — optionally with answers to its question. Answers are stored on the application first (#1079): delivered to a paused run, and kept for the next fill of this application when the run has already ended." + PIPELINE_INSTANCE,
+		"Release a paused fill after the owner handles what it waits on, optionally with answers. For an ended blocked fill with recorded questions, this ONLY saves answers for its next separately authorized run: requires application_id, expected_version and answers matching those questions; does not retry, resume or submit. Receipt outcome answers_saved means saved only; resume_requested means a live resume was requested, with runStatus and any errorCode reporting the result. dry_run reads the current application to distinguish these cases." + PIPELINE_INSTANCE,
 		resume.shape,
 		resume.handler,
 	);

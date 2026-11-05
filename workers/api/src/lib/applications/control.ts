@@ -41,6 +41,7 @@ import { type FillViews, NO_FILL_VIEWS, readFillViews } from "./fill-views.js";
 import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
 import { approvalRuns } from "./approval-runs.js";
 import { canRegenerateMissingMaterials } from "./material-recovery.js";
+import { canSaveEndedAnswers, saveEndedAnswers } from "./save-ended-answers.js";
 import { pipelineForTargetedTransfer } from "./targeted-transfer-runner.js";
 import { queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
@@ -208,6 +209,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			// Terminal fills retain their exact approval/recovery evidence (#1011, #1468).
 			if (app.fillRunId) {
 				return [
+					...(canSaveEndedAnswers(app, approvalRun) ? (["resume"] as const) : []),
 					...(postFillApprovable ? (["approve_and_proceed"] as const) : []),
 					...(canFill && !attemptBlocks ? (["retry_fill"] as const) : []),
 					...(!auth && canRegenerateMissingMaterials(app, approvalRun) ? (["retry_tailoring"] as const) : []),
@@ -745,9 +747,10 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 			return after({ cancelled: run.id });
 		}
 		case "resume": {
-			const run = await fillRun(env, uid, pipeline, app);
-			const resumed = await resumeApplyRun(env, uid, run, { answers: input.answers ?? [], allowDomains: input.allowDomains });
-			return after({ runStatus: resumed.status });
+			const run = await fillRun(env, uid, applicationPipeline, app);
+			if (run.status !== "paused") return after(await saveEndedAnswers(env, app, run, { userId: uid, expectedVersion: input.expectedVersion, answers: input.answers, allowDomains: input.allowDomains, via: input.surface ?? "console" }, now));
+			const resumed = await resumeApplyRun(env, uid, run, { answers: input.answers ?? [], allowDomains: input.allowDomains }, now, input.surface ?? "console");
+			return after({ outcome: "resume_requested", runId: resumed.id, runStatus: resumed.status, ...(resumed.errorCode ? { errorCode: resumed.errorCode } : {}) });
 		}
 		default:
 			throw new HttpError(409, `${input.action} does not apply to an application.`);

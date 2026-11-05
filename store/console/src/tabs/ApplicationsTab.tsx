@@ -1,3 +1,4 @@
+import { applicationProgressEvidence } from "../lib/applicationProgress";
 import MarkdownText from "../components/MarkdownText";
 import { applicationTraceLabel } from "../lib/applicationTrace";
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
@@ -281,6 +282,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 	// legacy field as a read compatibility fallback for cards written before the projection existed.
 	const progress = item.execution?.progress ?? item.fillProgress;
 	const questions = pause?.question ? [pause.question] : item.questions;
+	const label = (action: ApplicationQueueAction) => action === "resume" && !item.fillRun ? "Save answers for next run" : actionLabel(action, item.status);
 	// #1063: the fill run's replay — every form control blurred by the runner before each frame was taken.
 	const { artifacts, screenshotsOff, history, historyLoading, loadHistory } = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, live ? item : item.stateVersion);
 	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
@@ -295,10 +297,9 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 		setMsg("");
 		try {
 			const given = questions.map((q) => ({ question: q, answer: (answers[q] ?? "").trim() })).filter((a) => a.answer);
-			// `resume` answers serve that run only; `retry_tailoring` answers are saved to the owner's
-			// Profile and read by every later Tailor run (#1066).
+			// Ended fills save answers without starting another run; the server returns that receipt.
 			const out = await api<ApplicationActionResponse>(`/v1/instances/${instanceId}/application-queue/actions`, { method: "POST", body: JSON.stringify(actionBody(item, action, { answers: action === "resume" || action === "retry_tailoring" ? given : undefined, statement })) });
-			setMsg(`${actionLabel(action, item.status)}: now ${QUEUE_STATUS_LABEL[out.item.status].label}.`);
+			setMsg(typeof out.result.message === "string" ? out.result.message : `${label(action)}: now ${QUEUE_STATUS_LABEL[out.item.status].label}.`);
 			onChanged();
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
@@ -377,7 +378,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 					<span className="font-semibold">Progress:</span> {progress.label}
 					<span className="text-xs text-muted-soft">
 						{" "}
-						({progress.filled} field{progress.filled === 1 ? "" : "s"}, {progress.uploaded} attachment{progress.uploaded === 1 ? "" : "s"}
+						({applicationProgressEvidence(progress)}
 						{progress.checkpointPhase ? ` · checkpoint ${progress.checkpointPhase.replace(/_/g, " ")}` : ""})
 					</span>
 				</p>
@@ -468,7 +469,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 			<fieldset ref={actionsRef} className="flex flex-wrap gap-1.5 border-0 p-0 m-0 min-w-0" aria-label={`Actions for ${item.title}`}>
 				{item.actions.map((a) => (
 					<Button key={a} size="sm" variant={a === "start_fill" ? "danger" : a === "request_review" || a === "apply" ? "primary" : "secondary"} disabled={!!busy} onClick={() => act(a)}>
-						{busy === a ? "…" : actionLabel(a, item.status)}
+						{busy === a ? "…" : label(a)}
 					</Button>
 				))}
 				{item.applicationId && (

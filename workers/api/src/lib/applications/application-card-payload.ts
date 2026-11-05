@@ -1,15 +1,16 @@
 /**
  * What an `application.run` board card carries (#978) — the shape alone, and how to read it back.
  *
- * A LEAF on purpose: it imports nothing. `lib/board.ts` is the generic board and must be able to
+ * A LEAF on purpose: its only runtime dependency is the import-free wire contract. `lib/board.ts` is the generic board and must be able to
  * pass this field through without acquiring a dependency on the applications domain — which, when
  * it was imported directly, pulled `board.ts` into the domain's deliberate deferred-import cycle
  * (`application-board` → `control` → `tailor` → … → `board`). The writer and the reader therefore
  * share this definition rather than one importing the other.
  *
- * The one import is a TYPE import of `fill-progress.ts`, which itself imports nothing and is erased
- * at build — so the leaf property holds: nothing is added to anybody's runtime graph.
+ * Domain projections are TYPE imports, erased at build. Runtime evidence validation comes from
+ * the import-free wire contract, so no domain execution cycle is introduced.
  */
+import { parseExecutionEvidence } from "../local-apply/contract.js";
 import type { FillProgress } from "./fill-progress.js";
 import type { ApplicationExecutionProjection, DirectiveDelivery, DirectiveReconciliation, ExecutionCheckpoint } from "./execution-projection.js";
 /** One execution correlated to an application: which stage ran it, how it went, and where. */
@@ -101,7 +102,7 @@ function parseExecution(value: unknown): ApplicationExecutionProjection | undefi
 			: null;
 	const p = v.progress && typeof v.progress === "object" && !Array.isArray(v.progress) ? (v.progress as Record<string, unknown>) : null;
 	const progress: FillProgress | null = p && typeof p.stage === "string" && typeof p.label === "string"
-		? { stage: p.stage as FillProgress["stage"], label: p.label, filled: number(p.filled), uploaded: number(p.uploaded), checkpointPhase: typeof p.checkpointPhase === "string" ? p.checkpointPhase : null, checkpointId: typeof p.checkpointId === "string" ? p.checkpointId : null, submitAttempted: p.submitAttempted === true, evidence: (p.evidence === "runner_result" || p.evidence === "runner_checkpoint" ? p.evidence : "run_status") as FillProgress["evidence"] }
+		? { stage: p.stage as FillProgress["stage"], label: p.label, filled: p.filled === null || p.fieldCounts === "unmeasured" ? null : number(p.filled), uploaded: p.uploaded === null || p.fieldCounts === "unmeasured" ? null : number(p.uploaded), fieldCounts: p.fieldCounts === "unmeasured" ? "unmeasured" : "action_counts", ...(parseExecutionEvidence(p.executionEvidence) ? { executionEvidence: parseExecutionEvidence(p.executionEvidence) } : {}), checkpointPhase: typeof p.checkpointPhase === "string" ? p.checkpointPhase : null, checkpointId: typeof p.checkpointId === "string" ? p.checkpointId : null, submitAttempted: p.submitAttempted === true, evidence: (p.evidence === "runner_result" || p.evidence === "runner_checkpoint" ? p.evidence : "run_status") as FillProgress["evidence"] }
 		: null;
 	const reconciliation = v.directiveReconciliation;
 	if (!["not_applicable", "terminal", "decision_pending", "delivery_pending", "retry_pending", "acknowledged"].includes(String(reconciliation))) return undefined;
@@ -141,8 +142,10 @@ export function parseApplicationCard(value: unknown): ApplicationCardPayload | u
 				progress: {
 					stage: p.stage as FillProgress["stage"],
 					label: str(p.label),
-					filled: n(p.filled),
-					uploaded: n(p.uploaded),
+					filled: p.filled === null || p.fieldCounts === "unmeasured" ? null : n(p.filled),
+					uploaded: p.uploaded === null || p.fieldCounts === "unmeasured" ? null : n(p.uploaded),
+					fieldCounts: p.fieldCounts === "unmeasured" ? "unmeasured" : "action_counts",
+					...(parseExecutionEvidence(p.executionEvidence) ? { executionEvidence: parseExecutionEvidence(p.executionEvidence) } : {}),
 					checkpointPhase: typeof p.checkpointPhase === "string" ? p.checkpointPhase : null,
 					checkpointId: typeof p.checkpointId === "string" ? p.checkpointId : null,
 					submitAttempted: p.submitAttempted === true,

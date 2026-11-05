@@ -1,4 +1,5 @@
 import type { BrowserStateObservation, BrowserStateSnapshot } from "./browser-state-contract.js";
+import type { BrowserToolDiagnostic } from "./browser-tool-recovery.js";
 /**
  * One recorder at the runner's Playwright chokepoint (#1409) — every browser call the agent makes,
  * on every path, lands in one ordered, redacted, in-memory stream the cloud can pull.
@@ -76,6 +77,7 @@ export interface BrowserCallRecord {
 	urlAfter?: string;
 	internal: boolean;
 	browserState?: BrowserStateSnapshot;
+	toolDiagnostic?: BrowserToolDiagnostic;
 }
 
 export interface BrowserCallsPage {
@@ -171,6 +173,7 @@ export interface RecordInput {
 	errorHead?: string;
 	internal: boolean;
 	browserState?: BrowserStateSnapshot;
+	toolDiagnostic?: BrowserToolDiagnostic;
 }
 
 /** Tool errors may echo supplied text; apply the same value policy before keeping an error. */
@@ -227,6 +230,7 @@ export class BrowserCallRecorder {
 				...(typeof args.url === "string" ? { urlAfter: args.url } : {}),
 				internal: input.internal,
 				...(input.browserState ? { browserState: structuredClone(input.browserState) } : {}),
+				...(input.toolDiagnostic ? { toolDiagnostic: { ...structuredClone(input.toolDiagnostic), message: redactCallError(input.toolDiagnostic.message, input.args, input.secrets), ...(input.toolDiagnostic.originalError ? { originalError: redactCallError(input.toolDiagnostic.originalError, input.args, input.secrets).slice(0, 2000) } : {}) } } : {}),
 			};
 			stream.records.push(record);
 		} catch {

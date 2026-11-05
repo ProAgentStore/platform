@@ -1,5 +1,7 @@
 import { parseToolAccess, fullArtifactPaths, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { parseEscalationLevel } from "./answer-decision.js";
+import { ownerFactSources, ownerFactsReceipt, parseOwnerFacts } from "./owner-facts.js";
+import { executionEvidence } from "./execution-evidence.js";
 import { CodexModelObserver } from "../local-browser/model-observation.js";
 import { modelConfigurationProblem, requestedModelEvidence } from "../local-browser/model-config.js";
 import type { BrowserStateObservation } from "../browser-state-contract.js";
@@ -254,6 +256,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		policy: { ...parseToolAccess(p, o.instanceId as string), mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
+		...(o.ownerFacts !== undefined ? { ownerFacts: parseOwnerFacts(o.ownerFacts, { instanceId: o.instanceId as string, applicationId: o.applicationId as string, runId: o.runId as string }) } : {}),
 		...(o.instancePreferences !== undefined ? { instancePreferences: validatePreferences(o.instancePreferences, o.instanceId as string) } : {}),
 	};
 }
@@ -448,6 +451,8 @@ export class LocalApplyRuntime {
 		if (preferences) this.emit(run, { type: "source.read", detail: preferenceReceipt(preferences) });
 		// #1079: answers the owner already gave this application, as a source — the same shape a resume's answers take.
 		for (const a of e.ownerAnswers ?? []) blocks.push({ label: "owner answers", text: `Q: ${a.question}\nA: ${a.answer}`, answerText: a.answer, answerQuestion: a.question });
+		blocks.push(...ownerFactSources(e.ownerFacts));
+		if (e.ownerFacts) this.emit(run, { type: "source.read", detail: ownerFactsReceipt(e.ownerFacts) });
 		run.grounding = blocks;
 
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("../local-browser/bridge-stdio.js", import.meta.url));
@@ -478,6 +483,8 @@ export class LocalApplyRuntime {
 			requestWebsiteApproval: async (block) => { await run.bridge?.admitDomain(block.url); },
 		});
 		run.bridge = new ApplyBridge(run.browser.tools, {
+			runId: e.runId,
+			...(run.browser.tools.recover ? { recoverBrowser: () => run.browser!.tools.recover!() } : {}),
 			emit: (ev) => this.emit(run, ev),
 			pause: (p) => this.pause(run, p),
 			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
@@ -950,6 +957,7 @@ export class LocalApplyRuntime {
 			uploaded: [...(b?.uploaded ?? [])],
 			submitAttempted: b?.submitAttempted ?? false,
 			...(run.envelope.policy.toolAccess === "full" && !b?.submitted ? { submissionVerification: "unverified" as const } : {}),
+			executionEvidence: executionEvidence({ tools: run.browser?.tools, bridge: b, runId: run.envelope.runId, full: run.envelope.policy.toolAccess === "full", timedOut: run.timedOut, engineExit: run.child?.exitCode }),
 			summary: redactText((r.summary ?? "").slice(0, LOCAL_APPLY_CAPS.summary), run.secrets),
 			...(r.outcome === "submitted" && r.submitted ? { submitted: r.submitted } : {}),
 			...(r.outcome === "blocked" ? { blockReason: r.blockReason ?? "incomplete", questions: (r.questions ?? []).map((q) => redactText(q, run.secrets)), ...(r.blockReason === "job_unavailable" && r.unavailable ? { unavailable: r.unavailable } : {}) } : {}),
@@ -963,6 +971,7 @@ export class LocalApplyRuntime {
 		clearCloudDocuments(run.envelope, run.dir);
 		run.grounding = [];
 		delete run.envelope.instancePreferences;
+		delete run.envelope.ownerFacts;
 		run.output = [];
 		this.persistTerminal(run);
 		if (run.child && run.child.exitCode === null) this.kill(run);

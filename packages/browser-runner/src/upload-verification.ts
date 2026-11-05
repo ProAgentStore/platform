@@ -23,8 +23,16 @@ export interface PreparedUpload {
 	error?: string;
 	chooserId?: string;
 	dispose?(): Promise<void>;
+	markUncertain?(): void;
 	/** Selection is a browser fact, never proof of acceptance by the receiving website. */
-	verify?(): Promise<{ error?: string; selection?: UploadSelectionReceipt }>;
+	verify?(options?: { uncertain?: boolean }): Promise<{ error?: string; selection?: UploadSelectionReceipt }>;
+}
+
+/** Bound independent observations/cleanup too; a deadline does not cancel their underlying work. */
+async function boundedObservation<T>(operation: Promise<T>, timeoutMs = 2_000): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	try { return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Native upload observation deadline")), timeoutMs); })]); }
+	finally { if (timer) clearTimeout(timer); }
 }
 
 /** No website text is interpreted here, and no receipt attests receiving-site acceptance. */
@@ -45,12 +53,13 @@ export interface UploadSelectionReceipt {
 export class UploadVerifier {
 	private readonly pending = new WeakMap<Page, FileChooser>();
 	private readonly identities = new WeakMap<FileChooser, string>();
+	private readonly uncertain = new WeakMap<Page, FileChooser>();
 	private readonly listeners = new Map<Page, { chooser: (chooser: FileChooser) => void; close: () => void }>();
 
 	track(page: Page): void {
 		if (this.listeners.has(page)) return;
 		const chooser = (value: FileChooser) => { this.identities.set(value, randomUUID()); this.pending.set(page, value); };
-		const close = () => { page.off("filechooser", chooser); this.listeners.delete(page); this.pending.delete(page); };
+		const close = () => { page.off("filechooser", chooser); this.listeners.delete(page); this.pending.delete(page); this.uncertain.delete(page); };
 		this.listeners.set(page, { chooser, close });
 		page.on("filechooser", chooser);
 		page.once("close", close);
@@ -69,11 +78,13 @@ export class UploadVerifier {
 			page.off("filechooser", listener.chooser);
 			page.off("close", listener.close);
 			this.pending.delete(page);
+			this.uncertain.delete(page);
 		}
 		this.listeners.clear();
 	}
 
 	async prepare(page: Page | undefined, paths: string[]): Promise<PreparedUpload> {
+		if (page && this.uncertain.has(page)) return { error: "The previous native upload has an unknown selection outcome. No repeated upload was dispatched. Recover its original response and inspect the current page; a new chooser does not resolve that uncertainty." };
 		const chooser = page && this.pending.get(page);
 		if (!page || !chooser) return { error: "No verified file chooser is open. Click the intended document upload control first." };
 		try {
@@ -84,16 +95,21 @@ export class UploadVerifier {
 			if (paths.some((path) => !acceptsUpload(path, accept))) return { error: `The approved document format does not match this upload field's accepted types (${shownAccept}). No file was attached. Request an approved artifact in a supported format; do not rename its extension.` };
 			const expected = paths.map((path) => basename(path)).sort();
 			const observation = await observeUploadSelection(input, expected);
-			return { chooserId: this.chooserId(chooser) ?? undefined, dispose: observation.dispose, verify: async () => {
+			let disposed: Promise<void> | undefined;
+			const dispose = () => disposed ??= boundedObservation(observation.dispose()).catch(() => undefined);
+			return { chooserId: this.chooserId(chooser) ?? undefined, dispose,
+				markUncertain: () => { this.uncertain.set(page, chooser); if (this.pending.get(page) === chooser) this.clear(page); },
+				verify: async () => {
 				if (this.pending.get(page) === chooser) this.clear(page);
 				try {
-					const after = await observation.read();
+					const after = await boundedObservation(observation.read());
 					const retained = after.connected && JSON.stringify(after.files.sort()) === JSON.stringify(expected);
 					if (!retained && !after.selected) return { error: "The approved file selection could not be observed in the intended input. The action may have run; inspect the page before deciding whether to retry. Website acceptance is unconfirmed." };
+					if (this.uncertain.get(page) === chooser) this.uncertain.delete(page);
 					return { selection: { status: "selected", evidence: after.selected ? "input_event" : "retained_files", inputConnected: after.connected, inputRetainsSelection: retained, ariaInvalid: after.ariaInvalid, nativeValid: after.nativeValid, customError: after.customError, validationMessage: after.validationMessage, websiteAcceptance: "unconfirmed" } };
 				} catch {
 					return { error: "The upload field is no longer available for verification. Inspect the page before retrying; website acceptance is unconfirmed." };
-				} finally { await observation.dispose(); }
+				} finally { await dispose(); }
 			} };
 		} catch {
 			return { error: "The upload field could not be inspected. Reopen the intended document upload control before proceeding." };

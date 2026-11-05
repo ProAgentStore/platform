@@ -155,7 +155,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.206`
+- `serverInfo.version`: `0.1.207`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -881,3 +881,9 @@ explicitly rather than represented as an empty successful log.
 The original download is bounded to 1MiB. Text pages contain at most 6,000 UTF-16 code units; `page.nextOffset` preserves Unicode surrogate pairs. Continue with that offset and the first page's `sha256` as `expected_sha256`; changed bytes are refused before content is returned. Supplying an expected hash on the first page also verifies a selected application bundle. Binary, invalid UTF-8, oversized, mismatched and unavailable files return explicit errors.
 
 `sha256` is computed from the complete downloaded original bytes. `provenance` separately reports the registered hash and the version/ETag from the metadata snapshot; missing registered hashes remain explicitly unverified. Pages describe their actual boundaries and do not silently truncate files.
+
+### Ended application answers and execution evidence (0.1.207)
+
+For an ended blocked application with recorded questions, `resume_application` saves answers against the exact application/run/state version and returns `outcome: answers_saved`, `resumed: false`. It does not restart that run. The next separately authorized retry receives the latest saved answers; earlier corrections are superseded. Dry-run reads current state and distinguishes this save-only action from resuming a live paused run. Domain approval remains a live-pause action.
+
+Application results and progress retain structured `executionEvidence`: bounded native tool-request totals and non-dispatched requests, image payloads delivered to the acting engine, blocking and optional question counts, browser state and concurrent stop causes. Full native mode reports field/attachment totals as unmeasured, not zero completed fields. Neither native response success nor image delivery proves website acceptance or model understanding. CLI 0.4.222 adds this evidence and a run-bound current account-identity snapshot alongside historical tailoring sources.

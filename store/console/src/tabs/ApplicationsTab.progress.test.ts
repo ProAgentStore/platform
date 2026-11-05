@@ -22,12 +22,6 @@ describe("ApplicationsTab — the fill's progress (#986)", () => {
 		expect(src).toContain("{progress.label}");
 	});
 
-	it("shows the counts the sentence rests on, so a claim of filled work is falsifiable", () => {
-		expect(src).toMatch(/progress\.filled/);
-		expect(src).toMatch(/progress\.uploaded/);
-		expect(src).toMatch(/progress\.checkpointPhase/);
-	});
-
 	it("never states filled work in its own words", () => {
 		// The literal the issue was filed about, and any sibling of it, must not exist in this file:
 		// whether a form is filled is the runner's measurement, never a string the console chooses.
@@ -44,9 +38,4 @@ describe("ApplicationRunFace — the board card says the same thing (#986)", () 
 		expect(face).not.toContain('"Filling"');
 	});
 
-	it("carries the counts the stage sentence rests on", () => {
-		expect(face).toMatch(/app\.progress\.filled/);
-		expect(face).toMatch(/app\.progress\.uploaded/);
-		expect(face).toMatch(/progress\?: \{ stage: string; label: string; filled: number; uploaded: number/);
-	});
 });

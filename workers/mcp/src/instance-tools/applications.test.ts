@@ -12,11 +12,11 @@ import { registerApplicationTools } from "./applications.js";
 
 type Handler = (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>;
 
-function tools(scopes: SafetyContext["scopes"] = ["read", "write", "runtime"]) {
+function tools(scopes: SafetyContext["scopes"] = ["read", "write", "runtime"], response: unknown = { ok: true }) {
 	const seen: Array<{ url: string; method: string; body: unknown }> = [];
 	vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
 		seen.push({ url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
-		return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+		return new Response(JSON.stringify(response), { status: 200, headers: { "Content-Type": "application/json" } });
 	});
 	const handlers = new Map<string, Handler>();
 	const schemas = new Map<string, z.ZodRawShape>();
@@ -188,7 +188,7 @@ describe("the Applications tools (#958, #953)", () => {
 		["start_application_fill", { application_id: "a1", expected_status: "materials_ready" }, { action: "start_fill", application_id: "a1", expected_status: "materials_ready" }],
 		["request_application_review", { application_id: "a1", expected_status: "materials_ready" }, { action: "request_review", application_id: "a1", expected_status: "materials_ready" }],
 		["retry_application", { action: "retry_fill", application_id: "a1", expected_status: "blocked" }, { action: "retry_fill", application_id: "a1", expected_status: "blocked" }],
-		["resume_application", { application_id: "a1", expected_status: "blocked", answers: [{ question: "Q?", answer: "A" }] }, { action: "resume", application_id: "a1", expected_status: "blocked", answers: [{ question: "Q?", answer: "A" }] }],
+		["resume_application", { application_id: "a1", expected_status: "blocked", answers: [{ question: "Q?", answer: "A" }] }, { action: "resume", application_id: "a1", expected_status: "blocked", answers: [{ question: "Q?", answer: "A" }], surface: "mcp" }],
 		["cancel_application", { application_id: "a1", expected_status: "filling" }, { action: "cancel", application_id: "a1", expected_status: "filling" }],
 	])("%s posts the console's action body to the console's action route", async (name, args, body) => {
 		const { seen, call } = tools();
@@ -197,12 +197,26 @@ describe("the Applications tools (#958, #953)", () => {
 	});
 
 	it("passes an exact per-run domain grant with its application state, without editing settings", async () => {
-		const { seen, call } = tools();
+		const { seen, call } = tools(undefined, { item: { applicationId: "a1", status: "blocked", stateVersion: 7, fillRunId: "run-1", fillRun: { status: "paused" }, questions: [], actions: ["resume"] } });
 		const args = { instance_id: "t1", application_id: "a1", expected_status: "blocked", expected_version: 7, allow_domains: ["jobs.smartrecruiters.com"] };
 		await call("resume_application", { ...args, dry_run: true });
-		expect(seen).toEqual([]);
+		expect(seen).toEqual([{ url: "https://api.test/v1/instances/t1/application-queue/item?application_id=a1", method: "GET", body: undefined }]);
+		seen.length = 0;
 		await call("resume_application", args);
-		expect(seen).toEqual([{ url: ACTIONS, method: "POST", body: { action: "resume", application_id: "a1", expected_status: "blocked", expected_version: 7, allow_domains: args.allow_domains } }]);
+		expect(seen).toEqual([{ url: ACTIONS, method: "POST", body: { action: "resume", application_id: "a1", expected_status: "blocked", expected_version: 7, allow_domains: args.allow_domains, surface: "mcp" } }]);
+	});
+
+	it("previews an ended run as answer storage, refuses stale state, and never POSTs a dry run", async () => {
+		const { seen, call } = tools(undefined, { item: { applicationId: "a1", status: "blocked", stateVersion: 7, fillRunId: "ended", fillRun: null, questions: ["Q?"], actions: ["resume", "retry_fill"] } });
+		const args = { instance_id: "t1", application_id: "a1", expected_status: "blocked", expected_version: 7, answers: [{ question: "Q?", answer: "A" }], dry_run: true };
+		const preview = await call("resume_application", args);
+		expect(preview).toContain("answers_saved");
+		expect(preview).toContain("ended run would not resume");
+		expect(await call("resume_application", { ...args, expected_version: 6 })).toContain("Error: stale");
+		expect(await call("resume_application", { ...args, expected_version: undefined })).toContain("expected_version is required");
+		expect(await call("resume_application", { ...args, answers: [] })).toContain("Error:");
+		expect(await call("resume_application", { ...args, answers: [{ question: "Other?", answer: "A" }] })).toContain("Error:");
+		expect(seen.every((s) => s.method === "GET")).toBe(true);
 	});
 
 	it("rejects malformed and oversized domain grants at the MCP boundary", () => {

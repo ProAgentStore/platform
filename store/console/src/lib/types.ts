@@ -876,7 +876,7 @@ export interface ApplicationQueueItem {
 	 * sentence — the same one the Board card and MCP carry — and it never says a form was filled
 	 * without `filled`/`uploaded` to show for it.
 	 */
-	fillProgress: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: "runner_result" | "runner_checkpoint" | "run_status" } | null;
+	fillProgress: ApplicationExecutionProjection["progress"];
 	/** #988 redacted execution projection. No raw browser payload, form values, credentials or artefact content. */
 	execution: ApplicationExecutionProjection | null;
 	/** Why nothing reached the page (#975): the structured cause, the counts and the runner's signals. */
