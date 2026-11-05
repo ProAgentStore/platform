@@ -228,18 +228,34 @@ describe("the supervisor, run for real (#1141)", () => {
 		expect(exited).toBe(0);
 	}, 20_000);
 
-	it.skipIf(process.platform === "win32")("SIGTERM during a pending retry stops it: the supervisor exits and starts nothing more", async () => {
+	it.skipIf(process.platform === "win32").each([0, 800])("SIGTERM during a pending retry stops it after %sms startup delay", async (startupDelayMs) => {
 		const ctx: ServiceContext = { platform: process.platform, home: dir, nodePath: join(dir, "missing-node"), script: join(dir, "x.mjs"), configDir: dir, pathEnv: process.env.PATH ?? "" };
 		const supervisor = servicePlan(ctx).files.find((f) => f.path === supervisorPath(ctx));
-		writeFileSync(supervisorPath(ctx), supervisor?.content ?? "");
+		// Exercise the actual generated supervisor after a deliberately slow startup too.
+		writeFileSync(supervisorPath(ctx), `await new Promise(resolve => setTimeout(resolve, ${startupDelayMs}));\n${supervisor?.content ?? ""}`);
 		const child = spawn(process.execPath, [supervisorPath(ctx)], { env: { ...process.env, PAGS_SUPERVISOR_MIN_MS: "60000", PAGS_SUPERVISOR_MAX_MS: "60000" }, stdio: "ignore" });
-		await new Promise((r) => setTimeout(r, 600));
-		const stopped = new Promise((r) => child.once("exit", r));
-		child.kill("SIGTERM");
-		await Promise.race([stopped, new Promise((_, rej) => setTimeout(() => rej(new Error("did not stop while a retry was pending")), 3_000))]);
-		const text = readFileSync(join(dir, "pags-up.log"), "utf8");
-		expect(text.match(/supervisor: starting pags up/g)?.length).toBe(1);
-		expect(text).toMatch(/stopping \(SIGTERM\)/);
+		const stopped = new Promise((resolve) => child.once("close", resolve));
+		let startupError: Error | undefined;
+		child.once("error", error => { startupError = error; });
+		const logPath = join(dir, "pags-up.log");
+		const log = () => existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+		let stopTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const deadline = Date.now() + 5_000;
+			while (!/could not start pags up: .*ENOENT; starting it again in 60s/.test(log())) {
+				if (startupError || child.exitCode !== null || child.signalCode !== null) throw new Error(`Supervisor exited before scheduling its retry: ${startupError?.message ?? child.signalCode ?? child.exitCode}; ${log()}`);
+				if (Date.now() >= deadline) throw new Error(`Supervisor never scheduled its retry: ${log()}`);
+				await new Promise(resolve => setTimeout(resolve, 25));
+			}
+			child.kill("SIGTERM");
+			await Promise.race([stopped, new Promise((_, reject) => { stopTimer = setTimeout(() => reject(new Error("did not stop while a retry was pending")), 3_000); })]);
+			expect(child.exitCode).toBe(0);
+			expect(log().match(/supervisor: starting pags up/g)?.length).toBe(1);
+			expect(log()).toMatch(/stopping \(SIGTERM\)/);
+		} finally {
+			clearTimeout(stopTimer);
+			if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await stopped; }
+		}
 	}, 10_000);
 });
 
