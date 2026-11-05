@@ -1,5 +1,6 @@
 /** Exact-attempt, owner-scoped reconciliation persistence; never infers submission from missing events. */
 import { HttpError } from "../auth.js";
+import { trustedDocumentPreflightFailure } from "./preflight-failure.js";
 import type { Env } from "../../types.js";
 import type { JobApplication } from "../local-artifact/store.js";
 import { fingerprintOf, jobIdentityOf, sameFingerprint, type ApprovalFingerprint } from "./approval.js";
@@ -60,16 +61,16 @@ const presentReconciliation = (r: ReconciliationRow): LocalApplyReconciliation =
 });
 
 /** Native code may have external effects even when no supervised submit was observed. */
-export function fullUnverifiedAttempt(run: ApplyRun): boolean {
+export function fullUnverifiedAttempt(run: ApplyRun, app?: Pick<JobApplication, "submitAttemptedAt">): boolean {
 	const result = run.result;
 	const submitted = !!result && typeof result === "object" && "outcome" in result && result.outcome === "submitted";
-	return run.policy.toolAccess === "full" && isTerminalApplyRun(run.status) && run.status !== "submitted" && !submitted;
+	return run.policy.toolAccess === "full" && isTerminalApplyRun(run.status) && run.status !== "submitted" && !submitted && (app?.submitAttemptedAt != null || !trustedDocumentPreflightFailure(run));
 }
 
 const uncertainAttemptBinding = (app: JobApplication, run: ApplyRun): boolean =>
 	app.id === run.applicationId && app.fillRunId === run.id && (
 		app.status === "blocked" && app.blockReason === "submit_unconfirmed" && app.submitAttemptedAt !== null && run.status === "blocked" ||
-		["blocked", "failed", "awaiting_review", "cancelled", "materials_ready", "deferred"].includes(app.status) && fullUnverifiedAttempt(run)
+		["blocked", "failed", "awaiting_review", "cancelled", "materials_ready", "deferred"].includes(app.status) && fullUnverifiedAttempt(run, app)
 	);
 
 // Recheck the same conditions in SQL, atomically with persistence; stale in-memory bindings cannot grant proof.
@@ -80,7 +81,7 @@ const UNCERTAIN_SQL = `(a.status = 'blocked' AND a.block_reason = 'submit_unconf
 /** Proof is exact-run/material bound. Owner assertions and absent submit events cannot clear Full-mode uncertainty. */
 export async function fullSubmissionNeedsReconciliation(env: DB, uid: string, app: JobApplication, run: ApplyRun | null): Promise<boolean> {
 	if (!run) return !!app.fillRunId;
-	if (!fullUnverifiedAttempt(run) || app.fillRunId !== run.id) return false;
+	if (!fullUnverifiedAttempt(run, app) || app.fillRunId !== run.id) return false;
 	return !reconciliationProvesNoSubmission(await getLocalApplyReconciliation(env, run.id, run.instanceId, uid), app, run);
 }
 

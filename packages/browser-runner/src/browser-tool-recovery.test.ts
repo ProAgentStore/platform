@@ -9,6 +9,24 @@ function deferred<T>() {
 
 afterEach(() => vi.useRealTimers());
 describe("native request quarantine (#1537)", () => {
+	it("uses configurable seconds as milliseconds with a later wire deadline", async () => {
+		vi.useFakeTimers();
+		try {
+			for (const seconds of [1, 600, 3600]) {
+				const recovery = new BrowserToolRecovery<string>(seconds * 1000);
+				expect(recovery.requestDeadlineMs).toBe(seconds * 1000);
+				expect(recovery.wireDeadlineMs).toBe(seconds * 1000 + 60_000);
+				const pending = recovery.request("browser_snapshot", () => new Promise<string>(() => {}), () => false);
+				await vi.advanceTimersByTimeAsync(seconds * 1000);
+				expect((await pending).diagnostic).toMatchObject({ kind: "request_deadline", execution: "pending" });
+				expect(recovery.blocked()?.kind).toBe("quarantined");
+			}
+			const defaults = new BrowserToolRecovery();
+			expect(defaults.requestDeadlineMs).toBe(600_000);
+			expect(defaults.wireDeadlineMs).toBe(660_000);
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("defers a first follow-up behind ordinary work without reporting a timeout", async () => {
 		const recovery = new BrowserToolRecovery<string>(60, 600), native = deferred<string>();
 		const action = recovery.request("browser_click", () => native.promise, () => false);

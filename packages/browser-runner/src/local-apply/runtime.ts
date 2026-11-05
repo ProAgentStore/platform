@@ -1,6 +1,6 @@
-import { parseToolAccess, fullArtifactPaths, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
+import { parseToolAccess, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { parseEscalationLevel } from "./answer-decision.js";
-import { ownerFactSources, ownerFactsReceipt, parseOwnerFacts } from "./owner-facts.js";
+import { parseOwnerFacts } from "./owner-facts.js";
 import { executionEvidence } from "./execution-evidence.js";
 import { CodexModelObserver } from "../local-browser/model-observation.js";
 import { modelConfigurationProblem, requestedModelEvidence } from "../local-browser/model-config.js";
@@ -41,9 +41,10 @@ import { BRIDGE_ENV } from "../local-browser/bridge-stdio.js";
 import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { redactReplayText } from "./apply-replay.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
-import { Blocked, clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
+import { Blocked, clearCloudDocuments, parseCloudDocuments } from "./documents.js";
 import { ApplyBridge } from "./bridge.js";
-import { preferencesSourceText, preferenceReceipt, projectPreferenceSources, validatePreferences } from "../instance-preferences.js";
+import { validatePreferences } from "../instance-preferences.js";
+import { DocumentPreflightRefusal, prepareApplySources } from "./preflight.js";
 import { resumeDomainGrants } from "./resume-domains.js";
 import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy, websiteAccessBlock, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
@@ -69,6 +70,7 @@ import {
 	type LocalApplyEvent,
 	type LocalApplyPause,
 	type LocalApplyPreflightResult,
+	type LocalApplyPreflightFailure,
 	type LocalApplyProfile,
 	type LocalApplyResultEnvelope,
 	type LocalApplyRunnerEvent,
@@ -83,6 +85,8 @@ import {
 import type { LocalApplyHandoffStatus } from "./handoff-contract.js";
 import { type SourceBlock, applyPrompt, buildApplyEngineSpec, observedApplyAuth } from "./engine.js";
 import { LocalApplyHandoffRuntime, type LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
+import { requestOwnerPause } from "./owner-pause.js";
+import { killApplyEngine } from "./engine-process.js";
 
 /** The run browser's native secret placeholders (#1412) — what `McpRuntime` provides. */
 export interface SecretStore {
@@ -164,6 +168,7 @@ interface Run {
 	endedAt?: number;
 	timer?: ReturnType<typeof setInterval>;
 	handoff?: { handoffRequestId?: string; handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: import("./handoff-contract.js").LocalApplyHandoffTerminalReason };
+	ownerPauseReady?: boolean;
 }
 
 /**
@@ -214,6 +219,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		artifacts.push({ kind: r.kind, path: r.path, sha256: r.sha256 });
 	}
 	const p = (o.policy && typeof o.policy === "object" ? o.policy : {}) as Record<string, unknown>;
+	if (p.browserCommandTimeoutSeconds !== undefined && !posInt(p.browserCommandTimeoutSeconds, 3600)) throw bad("policy.browserCommandTimeoutSeconds must be a whole number from 1 to 3600 seconds");
 	if (!LOCAL_APPLY_MODES.includes(p.mode as never)) throw bad("policy.mode must be fill_and_review or auto_submit");
 	const gate = (p.submitGate && typeof p.submitGate === "object" ? p.submitGate : null) as Record<string, unknown> | null;
 	const gateId = gate && typeof gate.gateId === "string" && SAFE_ID.test(gate.gateId) ? gate.gateId : null;
@@ -253,7 +259,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		sources,
 		artifacts,
 		...(o.cloudDocuments !== undefined ? { cloudDocuments: parseCloudDocuments(o.cloudDocuments, artifacts) } : {}),
-		policy: { ...parseToolAccess(p, o.instanceId as string), mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
+		policy: { ...parseToolAccess(p, o.instanceId as string), ...(p.browserCommandTimeoutSeconds !== undefined ? { browserCommandTimeoutSeconds: p.browserCommandTimeoutSeconds as number } : {}), mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
 		...(o.ownerFacts !== undefined ? { ownerFacts: parseOwnerFacts(o.ownerFacts, { instanceId: o.instanceId as string, applicationId: o.applicationId as string, runId: o.runId as string }) } : {}),
@@ -443,18 +449,15 @@ export class LocalApplyRuntime {
 	private async launch(run: Run, selfUrl: string): Promise<void> {
 		const e = run.envelope;
 		const home = this.deps.homeDir ?? homedir();
-		const prepared = prepareApplyDocuments(e, run.dir, home, (event) => this.emit(run, event));
-		const preferences = validatePreferences(e.instancePreferences, e.instanceId, this.now());
-		const blocks = e.policy.toolAccess === "full" ? [...prepared.blocks, ...(preferences ? [{ label: "instance_preferences", text: preferencesSourceText(preferences) }] : [])] : projectPreferenceSources(prepared.blocks, preferences);
-		const artifactPath = e.policy.toolAccess === "full" ? fullArtifactPaths(prepared.artifactPath, e.artifacts, run.dir) : prepared.artifactPath;
-		if (e.policy.toolAccess === "full") blocks.push({ label: "approved_document_paths", text: JSON.stringify(e.artifacts.map(({ kind }) => ({ kind, ...artifactPath(kind) }))) });
-		if (preferences) this.emit(run, { type: "source.read", detail: preferenceReceipt(preferences) });
-		// #1079: answers the owner already gave this application, as a source — the same shape a resume's answers take.
-		for (const a of e.ownerAnswers ?? []) blocks.push({ label: "owner answers", text: `Q: ${a.question}\nA: ${a.answer}`, answerText: a.answer, answerQuestion: a.question });
-		blocks.push(...ownerFactSources(e.ownerFacts));
-		if (e.ownerFacts) this.emit(run, { type: "source.read", detail: ownerFactsReceipt(e.ownerFacts) });
+		let prepared: ReturnType<typeof prepareApplySources>;
+		try { prepared = prepareApplySources(e, run.dir, home, this.now(), (event) => this.emit(run, event)); }
+		catch (error) {
+			if (!(error instanceof DocumentPreflightRefusal)) throw error;
+			this.end(run, { outcome: "blocked", blockReason: error.reason, questions: error.questions }, error.receipt);
+			return;
+		}
+		const { blocks, artifactPath } = prepared;
 		run.grounding = blocks;
-
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("../local-browser/bridge-stdio.js", import.meta.url));
 		let spec = buildApplyEngineSpec(e, applyPrompt(e, blocks), { command: process.execPath, args: [bridgeScript], env: { [BRIDGE_ENV.url]: selfUrl, [BRIDGE_ENV.runId]: e.runId, [BRIDGE_ENV.token]: run.token } }, join(run.dir, "mcp.json"));
 		run.secrets = secretEnvValues({ ...process.env, ...spec.env });
@@ -468,6 +471,8 @@ export class LocalApplyRuntime {
 			return;
 		}
 		if (e.policy.toolAccess === "full" && !run.browser.tools.configureToolAccess) throw new Error("This browser cannot expose full native tools.");
+		if (e.policy.browserCommandTimeoutSeconds !== undefined && !run.browser.tools.configureCommandTimeout) throw new Error("This browser cannot configure its native command timeout.");
+		run.browser.tools.configureCommandTimeout?.(e.policy.browserCommandTimeoutSeconds ?? 600);
 		await run.browser.tools.configureToolAccess?.(e.policy.toolAccess ?? "guarded", run.dir);
 		run.browser.tools.setSubject?.({ kind: "local_apply_run", id: e.runId });
 		// Configured site families keep their subdomain scope. A temporary owner grant admits
@@ -800,6 +805,7 @@ export class LocalApplyRuntime {
 		const websitePolicy = websiteResumePolicy(run.envelope.policy.browserWebsiteAccess, o.browserWebsiteAccess, websitePause, o.expectedWebsitePauseKey, o.websiteDecision);
 		const domains = resumeDomainGrants(o.allowDomains, run.state, run.pause);
 		if (run.pause?.reason === "supervisor_checkpoint") throw new RunnerInputError("This run is waiting for a persisted supervisor directive, not an owner resume", 409);
+		if (run.pause?.reason === "owner_requested" && (o.expectedOwnerPauseKey !== run.pause.handoffRequestId || run.handoff?.state === "ready" || this.handoffs.isBusy(run))) throw new RunnerInputError("Close and drain the exact owner handoff before resuming AI dispatch", 409);
 		const answers: SourceBlock[] = [];
 		for (const a of (Array.isArray(o.answers) ? o.answers : []).slice(0, LOCAL_APPLY_CAPS.answers)) {
 			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
@@ -814,6 +820,7 @@ export class LocalApplyRuntime {
 		for (const domain of domains) run.allow.add(domain);
 		// The owner took the sign-in over: whatever was provisioned for the CLI is wiped (#1412).
 		if (run.signIn) this.signInDone(run);
+		if (run.pause?.reason === "owner_requested") { run.ownerPauseReady = false; run.browser?.tools.resumeDispatch?.(); }
 		this.release(run, "resumed");
 		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
 	}
@@ -897,6 +904,7 @@ export class LocalApplyRuntime {
 	}
 
 	/** A takeover only views the exact live page; it never authorizes the paused bridge. */
+	async ownerPause(raw: unknown): Promise<LocalApplyStatusResponse> { const o = raw as { runId?: string }; const run = this.get(o?.runId ?? ""); return requestOwnerPause(run, raw, () => { void this.pause(run, { reason: "owner_requested" }); }, () => this.status({ runId: run.envelope.runId })); }
 	async handoff(raw: unknown): Promise<LocalApplyHandoffStatus> { return this.handoffs.handoff(raw); }
 	async handoffStatus(raw: unknown): Promise<LocalApplyHandoffStatus> { return this.handoffs.status(raw); }
 	async handoffFrame(raw: unknown): Promise<{ frame: string; width: number; height: number }> { return this.handoffs.frame(raw); }
@@ -914,6 +922,7 @@ export class LocalApplyRuntime {
 		const run = this.get(String(o.runId ?? ""));
 		if (!run.bridge || run.state === "ended" || run.cancelled || run.timedOut) throw new RunnerInputError("The run is not active", 409);
 		if (o.op === "list") return { tools: await run.bridge.listTools() };
+		if (o.op === "call" && run.pause?.reason === "owner_requested") { await this.pause(run, run.pause); return { content: [{ type: "text", text: "Owner control ended. This queued action was not executed. Inspect the current page before choosing a new action." }], isError: true }; }
 		// A call that arrives while the run waits on the owner (the CLI gave up waiting on its own
 		// call) does not go ahead of them: nothing reaches the page until the owner resumes.
 		if (o.op === "call" && run.state === "paused") return { content: [{ type: "text", text: `The run is paused for the owner (${run.pause?.reason.replace(/_/g, " ") ?? "waiting"}). Nothing can be done until they resume it. Stop now.` }], isError: true };
@@ -922,21 +931,11 @@ export class LocalApplyRuntime {
 	}
 
 	private get(runId: string): Run {
-		const run = this.runs.get(runId);
-		if (!run) throw new RunnerInputError(`No application run ${runId} on this runner (it may have restarted)`, 404);
+		const run = this.runs.get(runId); if (!run) throw new RunnerInputError(`No application run ${runId} on this runner (it may have restarted)`, 404);
 		return run;
 	}
-
-	private kill(run: Run): void {
-		const child = run.child;
-		if (!child || child.exitCode !== null) return;
-		child.kill("SIGTERM");
-		setTimeout(() => {
-			if (child.exitCode === null) child.kill("SIGKILL");
-		}, 5_000).unref?.();
-	}
-
-	private end(run: Run, r: Partial<LocalApplyResultEnvelope> & { outcome: LocalApplyResultEnvelope["outcome"] }): void {
+	private kill(run: Run): void { killApplyEngine(run.child); }
+	private end(run: Run, r: Partial<LocalApplyResultEnvelope> & { outcome: LocalApplyResultEnvelope["outcome"] }, preflightFailure?: LocalApplyPreflightFailure): void {
 		if (run.state === "ended") return;
 		// A terminal application outcome never means that a handoff succeeded.  Tear down only the
 		// live view and retain the explicit closed state for a caller that polls before restart.
@@ -956,7 +955,8 @@ export class LocalApplyRuntime {
 			filled: b?.filled ?? 0,
 			uploaded: [...(b?.uploaded ?? [])],
 			submitAttempted: b?.submitAttempted ?? false,
-			...(run.envelope.policy.toolAccess === "full" && !b?.submitted ? { submissionVerification: "unverified" as const } : {}),
+			...(run.envelope.policy.toolAccess === "full" && !b?.submitted && !preflightFailure ? { submissionVerification: "unverified" as const } : {}),
+			...(preflightFailure ? { preflightFailure } : {}),
 			executionEvidence: executionEvidence({ tools: run.browser?.tools, bridge: b, runId: run.envelope.runId, full: run.envelope.policy.toolAccess === "full", timedOut: run.timedOut, engineExit: run.child?.exitCode }),
 			summary: redactText((r.summary ?? "").slice(0, LOCAL_APPLY_CAPS.summary), run.secrets),
 			...(r.outcome === "submitted" && r.submitted ? { submitted: r.submitted } : {}),

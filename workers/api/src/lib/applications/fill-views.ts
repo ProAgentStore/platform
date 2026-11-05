@@ -14,6 +14,7 @@
  * waiting to be approved and sent.
  */
 import { fullSubmissionNeedsReconciliation } from "../local-apply/reconciliation-store.js";
+import { trustedDocumentPreflightFailure } from "../local-apply/preflight-failure.js";
 import { getApplyRun } from "../local-apply/store.js";
 import { type FillProgress, fillProgressOf } from "./fill-progress.js";
 import type { ExecutionCheckpoint } from "./execution-projection.js";
@@ -72,9 +73,13 @@ export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick
 	const policy = parse(row.policy);
 	const access: Pick<FillViews, "toolAccess" | "submissionVerification" | "submissionUncertain"> = policy?.toolAccess === "full" ? { toolAccess: "full" as const, ...(result?.outcome !== "submitted" ? { submissionVerification: "unverified" as const } : {}) } : {};
 
+	let documentPreflightFailed = false;
 	if (access.toolAccess === "full") {
 		const current = await getOwnedApplication(env, uid, app.id);
-		access.submissionUncertain = current ? await fullSubmissionNeedsReconciliation(env, uid, current, await getApplyRun(env, row.instance_id, uid, app.fillRunId)) : true;
+		const run = await getApplyRun(env, row.instance_id, uid, app.fillRunId);
+		documentPreflightFailed = !!current && current.status !== "submitted" && current.submitAttemptedAt === null && app.submitAttemptedAt === null && !!run && trustedDocumentPreflightFailure(run);
+		if (documentPreflightFailed) delete access.submissionVerification;
+		access.submissionUncertain = current ? await fullSubmissionNeedsReconciliation(env, uid, current, run) : true;
 	}
 	const pause = parse(row.pause);
 	// The supervisor store is the authoritative record of what the runner measured at a checkpoint.
@@ -122,6 +127,7 @@ export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick
 		: null;
 	const progress = fillProgressOf({
 		toolAccess: access.toolAccess,
+		documentPreflightFailed,
 		applicationStatus: app.status,
 		runStatus: row.status,
 		pause,

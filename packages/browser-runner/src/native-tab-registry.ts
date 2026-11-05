@@ -7,7 +7,7 @@ export class NativeTabRegistry {
 	private readonly listeners = new Map<BrowserContext, { page: (page: Page) => void; close: () => void }>();
 	private readonly closedPages = new Map<Page, () => void>();
 	private invalid?: string;
-	constructor(private readonly onIsolatedPage: (page: Page) => void, private readonly onPageClosed: (page: Page, replacement?: Page) => void) {}
+	constructor(private readonly onIsolatedPage: (page: Page) => void, private readonly onPageClosed: (page: Page, replacement?: Page) => void, private readonly onPage?: (page: Page) => void) {}
 	reset(context?: BrowserContext): void {
 		for (const [owner, listener] of this.listeners) { owner.off("page", listener.page); owner.off("close", listener.close); }
 		for (const [page, listener] of this.closedPages) page.off("close", listener);
@@ -27,6 +27,7 @@ export class NativeTabRegistry {
 	private addPage(page: Page): void {
 		if (this.ordered.includes(page)) return;
 		this.ordered.push(page);
+		this.onPage?.(page);
 		const closed = () => {
 			const index = this.ordered.slice(0, this.ordered.indexOf(page)).filter(candidate => !candidate.isClosed()).length;
 			const pages = this.ordered.filter(candidate => !candidate.isClosed());

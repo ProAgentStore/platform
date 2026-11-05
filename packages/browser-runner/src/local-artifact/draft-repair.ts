@@ -12,6 +12,7 @@ export function draftRepairPrompt(lead: LocalArtifactLead, sources: readonly Sou
 		tailorPrompt(lead, sources),
 		"This is the ONE allowed repair of a rejected draft, using exactly the source snapshot above. The rejected draft is not evidence and must never become a new source.",
 		"Correct each failing citation by copying a short exact quote from its named source (including punctuation), or select the correct existing source role. Do not paraphrase the quote.",
+		"Preference feedback names the rejected claim or document statement, its cited source/quote and the current fact from this same source snapshot. For a preference claim, copy the current answer exactly and cite instance_preferences, or omit unsupported content. A validator's field classification is not a new fact: do not change the owner's meaning merely to satisfy it; ask a specific question if the meaning remains uncertain.",
 		"If a claim is unsupported, omit it rather than inventing evidence. Do not replace it with another unsupported claim. If a required factual answer is missing, return needs_human with the specific question.",
 		"For a year absent from the sources, omit an incidental document date. For employment, qualifications or other factual dates, use only what the sources actually say; never change a year merely to pass validation.",
 		"Return the complete repaired JSON. Every original validation rule still applies. No tools, source edits, profile answers or additional facts are permitted.",

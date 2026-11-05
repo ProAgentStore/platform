@@ -169,7 +169,9 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 	 */
 	router.post("/:instanceId/application-runs/:runId/handoff", async (c) => {
 		const { uid, instanceId, run } = await ownedRun(c);
-		const { handoff, ready } = await ensureFillHandoff(c.env, uid, instanceId, run);
+		const body = await c.req.json().catch(() => ({})) as { pause?: unknown };
+		if (body.pause !== undefined && typeof body.pause !== "boolean") throw new HttpError(400, "pause must be a boolean");
+		const { handoff, ready } = await ensureFillHandoff(c.env, uid, instanceId, run, body.pause === true);
 		const now = Date.now();
 		if (!ready) return c.json({ handoff: handoffView(handoff, now) }, 409);
 		return c.json({ handoff: handoffView(handoff, now), consoleLink: applicationHandoffLink(instanceId, handoff.continuityId) }, 201);

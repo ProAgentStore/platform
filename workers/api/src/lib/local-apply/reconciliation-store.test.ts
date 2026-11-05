@@ -122,4 +122,21 @@ describe("#1013 local-apply durable reconciliation", () => {
 		const columns = d1.sqlite.prepare("PRAGMA table_info(local_apply_reconciliations)").all() as Array<{ name: string }>;
 		expect(columns.map((c) => c.name)).not.toEqual(expect.arrayContaining(["url", "receipt", "history", "cookies", "tokens", "browser_state"]));
 	});
+	it("requires exact reconciliation when an application attempt contradicts a document-preflight receipt", async () => {
+		const full = { ...run("run-1", "blocked"), policy: { ...policy, toolAccess: "full" as const }, runnerVersion: "0.4.225", result: {
+			runId: "run-1", traceId: "run-1", outcome: "blocked", mode: "fill_and_review", engineAuth: "unknown", filled: 0, uploaded: [], submitAttempted: false, summary: "", blockReason: "artifact_changed",
+			preflightFailure: { schemaVersion: 1, runId: "run-1", phase: "documents", reason: "artifact_changed" },
+			executionEvidence: { schemaVersion: 1, fieldCounts: "unmeasured", nativeCalls: { attempted: 0, succeeded: 0, failed: 0, notDispatched: 0, dropped: 0, truncated: false, coverage: "unavailable" }, screenshotsDelivered: 0, screenshotRequests: 0, independentScreenshotAvailable: false, blockingQuestions: 0, optionalQuestions: 0, browser: { state: "unavailable", timeouts: 0 }, causes: [] },
+		} };
+		await d1.DB.prepare("UPDATE local_apply_runs SET policy = ?1, result = ?2, runner_version = '0.4.225' WHERE id = 'run-1'").bind(JSON.stringify(full.policy), JSON.stringify(full.result)).run();
+		const original = app({ blockReason: "artifact_changed" });
+		const { fullSubmissionNeedsReconciliation } = await import("./reconciliation-store.js");
+		expect(await fullSubmissionNeedsReconciliation({ DB: d1.DB }, "u1", { ...original, submitAttemptedAt: null }, full)).toBe(false);
+		expect(await fullSubmissionNeedsReconciliation({ DB: d1.DB }, "u1", original, full)).toBe(true);
+		const requested = (await requestLocalApplyReconciliation({ DB: d1.DB }, { app: original, run: full, userId: "u1" }, now))!;
+		expect(requested).toMatchObject({ state: "requested", runId: "run-1" });
+		expect(await recordLocalApplyReconciliationProof({ DB: d1.DB }, { reconciliation: requested, app: original, run: full, userId: "u1", state: "no_submission_proven", proofKind: "authorized_site_history_no_submission" }, now + 1)).not.toBeNull();
+		expect(await fullSubmissionNeedsReconciliation({ DB: d1.DB }, "u1", original, full)).toBe(false);
+		expect(await d1.DB.prepare("SELECT submit_attempted_at FROM job_applications WHERE id = 'app-1'").first()).toEqual({ submit_attempted_at: now - 1 });
+	});
 });

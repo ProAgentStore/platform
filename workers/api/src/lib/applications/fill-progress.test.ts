@@ -164,6 +164,13 @@ const nativeEvidence: LocalApplyExecutionEvidence = {
 };
 
 describe("native execution progress (#1526, #1487)", () => {
+	it("uses positive document-preflight evidence while preserving submission precedence", () => {
+		const input: FillProgressInput = { toolAccess: "full", applicationStatus: "blocked", runStatus: "blocked", documentPreflightFailed: true, result: { filled: 0, uploaded: [], submitAttempted: false } };
+		expect(fillProgressOf(input)).toMatchObject({ stage: "stopped_before_filling", filled: 0, uploaded: 0, label: "Stopped during document checks before any browser or model started; nothing was submitted." });
+		expect(fillProgressOf({ ...input, documentPreflightFailed: false }).label).toContain("Submission status is unverified");
+		expect(fillProgressOf({ ...input, submitAttempted: true }).label).toContain("A final submit was attempted");
+		expect(fillProgressOf({ ...input, applicationStatus: "submitted" }).label).toContain("Submission confirmed");
+	});
 	it("keeps browser failures and answer blockers independent, with unmeasured completion", () => {
 		const progress = fillProgressOf({ toolAccess: "full", applicationStatus: "blocked", result: { filled: 0, uploaded: [], outcome: "blocked", executionEvidence: nativeEvidence } });
 		expect(progress).toMatchObject({ stage: "blocked", filled: null, uploaded: null, fieldCounts: "unmeasured", executionEvidence: nativeEvidence });

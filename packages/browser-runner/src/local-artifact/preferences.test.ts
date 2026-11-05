@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { InstancePreferences } from "../instance-preferences-contract.js";
 import { ARTIFACT_MANIFEST, LocalArtifactRuntime } from "./runtime.js";
+import { parseLocalArtifactResult } from "./contract.js";
 
 const NOW = Date.parse("2026-11-04T00:00:00Z");
 const PROFILE = "Work rights: Australian citizen.\nSalary expectation: AUD 180,000.\nLocation: Sydney.";
@@ -68,6 +69,28 @@ it("rejects stale salary even with an otherwise valid fresh-source citation and 
 	calls[1].child.answer(stale); await settle();
 	expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "needs_human", artifacts: [] });
 	expect(calls).toHaveLength(2); expect(existsSync(join(home, "jobs/applications/lead-1/run-1/resume.md"))).toBe(false);
+});
+
+it("returns bounded preference context privately to repair and owner feedback, never to runtime traces", async () => {
+	const prefs = { ...preferences(), facts: [{ field: "availability" as const, answer: "Immediately", confirmedAt: "2026-11-04" }] };
+	rt.start(request(prefs)); await settle();
+	const rejected = { status: "ready", resume_markdown: "Jane Citizen, software engineer.", cover_letter_markdown: "Availability: private-marker.", claims: [{ text: "Availability: private-marker", source: "resume", quote: "Jane Citizen" }] };
+	calls[0].child.answer(rejected); await settle();
+	expect(calls).toHaveLength(2);
+	expect(calls[1].args[1]).toContain("classified claim 1 as availability");
+	expect(calls[1].args[1]).toContain("Current instance_preferences: “Immediately”");
+	calls[1].child.answer(rejected); await settle();
+	const status = rt.status({ runId: "run-1" });
+	expect(status.result).toMatchObject({ outcome: "needs_human", artifacts: [] });
+	expect(status.result?.questions?.join("\n")).toContain("private-marker");
+	const wire = parseLocalArtifactResult(status.result);
+	if ("error" in wire) throw new Error(wire.error);
+	expect(wire.result.questions?.join("\n")).toContain("Current instance_preferences: “Immediately” (confirmed 2026-11-04)");
+	expect(wire.result.questions?.join("\n")).toContain("source: resume");
+	expect(wire.result.questions?.every((question) => question.length <= 300)).toBe(true);
+	expect(JSON.stringify(status.events)).not.toContain("private-marker");
+	expect(JSON.stringify(status.events)).not.toContain("Immediately");
+	expect(calls).toHaveLength(2);
 });
 
 it.each([

@@ -15,9 +15,9 @@ const application = {
 	execution: null, diagnostic: null, queue: null, submitAuthorization: null, updatedAt: "2026-11-03T11:00:00Z", actions: [],
 };
 
-async function mockReplay(page: Page, options: { missing?: number; longUrl?: boolean; livePause?: boolean; liveUpdates?: boolean; screenshotsOff?: boolean; emptyFrames?: boolean } = {}) {
+async function mockReplay(page: Page, options: { missing?: number; longUrl?: boolean; livePause?: boolean; liveUpdates?: boolean; screenshotsOff?: boolean; emptyFrames?: boolean; handoff?: "active" | "wrong_run" | "wrong_app" | "ended"; running?: boolean; pauseRefused?: boolean } = {}) {
 	await page.addInitScript(() => window.localStorage.setItem("pags:session", "test-pags-token"));
-	const item = options.livePause ? { ...application, fillRun: { id: "run-1", status: "paused", mode: "dry_run", pause: { reason: "login_required", url: LOGIN_URL } }, actions: ["resume"] } : application;
+	const item = options.running ? { ...application, status: "filling", fillRun: { id: "run-1", status: "running", mode: "dry_run", pause: null } } : options.livePause ? { ...application, fillRun: { id: "run-1", status: "paused", mode: "dry_run", pause: { reason: "login_required", url: LOGIN_URL } }, actions: ["resume"] } : application;
 	const jobUrl = options.longUrl ? `https://jobs.example.com/${"long-path-segment".repeat(18)}` : JOB_URL;
 	const frames = [
 		{ seq: 1, point: "navigated", action: "browser_navigate", target: null, url: jobUrl, capturedAt: "2026-11-03T10:45:45Z" },
@@ -34,6 +34,9 @@ async function mockReplay(page: Page, options: { missing?: number; longUrl?: boo
 	await page.route(`${API}/**`, (route) => {
 		const path = new URL(route.request().url()).pathname;
 		const json = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
+		if (path === "/v1/instances/runner-1/application-runs/run-1/handoff" && route.request().method() === "POST") return options.pauseRefused ? json({ error: "Native action is still settling. Retry the pause request." }, 409) : json({ handoff: { id: "handoff-1", applicationId: "app-1", runId: "run-1", state: "active", reason: "owner_requested" } });
+		if (path === "/v1/instances/runner-1/application-handoffs/handoff-1") return json({ id: "handoff-1", applicationId: options.handoff === "wrong_app" ? "other-app" : "app-1", runId: options.handoff === "wrong_run" ? "other-run" : "run-1", state: options.handoff === "ended" ? "ended" : "active", reason: "login_required" });
+		if (path === "/v1/instances/runner-1/application-runs/run-1/handoff/frame") return json({ frame: 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="1280" height="720" fill="#ffff00"/></svg>').toString("base64"), width: 1280, height: 720 });
 		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", roles: ["user"], boardConfig: null });
 		if (path === "/v1/instances/my/instances") return json({ instances: [INSTANCE] });
 		if (path === "/v1/instances/runner-1/application-queue/item") return json({ item });
@@ -50,7 +53,7 @@ async function mockReplay(page: Page, options: { missing?: number; longUrl?: boo
 		if (path.includes("/connections/deliveries")) return json({ deliveries: [] });
 		return json({});
 	});
-	await page.goto("/console/instances/runner-1/applications/app-1");
+	await page.goto(`/console/instances/runner-1/applications/app-1${options.handoff ? "?handoff=handoff-1" : ""}`);
 	return page.getByTestId("run-replay");
 }
 
@@ -153,7 +156,7 @@ test("standalone replay shows the run's recorded screenshots-off setting", async
 	await mockReplay(page, { screenshotsOff: true });
 	await expect(page.getByTestId("replay-empty")).toContainText("Screenshots were off for this run");
 	await expect(page.getByTestId("replay-empty")).toContainText("Turn it on in Settings");
-	await expect(page.getByRole("slider", { name: "Frame" })).toHaveCount(0);
+	await expect(page.getByRole("slider", { name: "Frame" })).toHaveAttribute("aria-valuetext", "Live browser");
 	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Allowed click “Apply”");
 	expect(imageRequests).toBe(0);
 });
@@ -162,4 +165,59 @@ test("standalone replay does not infer screenshots-off from an empty artifact li
 	await mockReplay(page, { emptyFrames: true });
 	await expect(page.getByTestId("replay-empty")).toContainText("No screenshots captured yet");
 	await expect(page.getByTestId("replay-empty")).not.toContainText("Screenshots were off");
+});
+
+for (const width of [375, 1280]) {
+	test(`${width === 375 ? "mobile — " : ""}history ends at the exact live browser with explicit takeover at ${width}px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 812 });
+		const replay = await mockReplay(page, { handoff: "active" });
+		await expect(replay.getByRole("slider")).toHaveAttribute("max", "3");
+		await replay.getByRole("slider").fill("3");
+		await expect(replay.getByRole("slider")).toHaveAttribute("aria-valuetext", "Live browser");
+		expect(await renderedPixel(replay.getByRole("img"))).toEqual([255, 255, 0, 255]);
+		await expect(replay.getByTestId("replay-caption")).toHaveCount(0);
+		await expect(replay.getByRole("button", { name: "Play", exact: true })).toBeDisabled();
+		expect(await replay.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+		await replay.screenshot({ path: `/tmp/pags-live-slider-${width}.png` });
+		await replay.getByRole("button", { name: "Previous", exact: true }).click();
+		expect(await renderedPixel(replay.getByRole("img"))).toEqual([0, 0, 255, 255]);
+		await expect(replay.getByRole("button", { name: "Take over live browser", exact: true })).toHaveCount(0);
+		await replay.getByRole("button", { name: "Live browser →", exact: true }).click();
+		await replay.getByRole("button", { name: "Take over live browser", exact: true }).click();
+		await expect(page.getByRole("dialog", { name: "Live Application Runner browser control" })).toBeVisible();
+	});
+}
+for (const handoff of [undefined, "wrong_run", "wrong_app", "ended"] as const) {
+	test(`live endpoint refuses missing or mismatched authorization: ${handoff}`, async ({ page }) => {
+		let frameRequests = 0;
+		page.on("request", (request) => { if (request.url().includes("/handoff/frame")) frameRequests++; });
+		const replay = await mockReplay(page, { handoff });
+		await replay.getByRole("slider").fill("3");
+		await expect(replay).toContainText("Live takeover is unavailable for this run");
+		await expect(replay.getByRole("img")).toHaveCount(0);
+		await expect(replay.getByRole("button", { name: "Take over live browser", exact: true })).toHaveCount(0);
+		expect(frameRequests).toBe(0);
+	});
+}
+
+test("entering Live never pauses the agent; an explicit click requests settled control", async ({ page }) => {
+	const writes: unknown[] = [];
+	page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith("/handoff")) writes.push(request.postDataJSON()); });
+	const replay = await mockReplay(page, { running: true });
+	await replay.getByRole("slider").fill("3");
+	await expect(replay.getByRole("button", { name: "Pause and take control", exact: true })).toBeVisible();
+	expect(writes).toEqual([]);
+	await replay.getByRole("button", { name: "Pause and take control", exact: true }).click();
+	await expect(page.getByRole("dialog", { name: "Live Application Runner browser control" })).toBeVisible();
+	expect(writes).toEqual([{ pause: true }]);
+	await expect(page).toHaveURL(/handoff=handoff-1/);
+});
+
+test("an unsettled or unsupported pause never enables live input", async ({ page }) => {
+	const replay = await mockReplay(page, { running: true, pauseRefused: true });
+	await replay.getByRole("slider").fill("3");
+	await replay.getByRole("button", { name: "Pause and take control", exact: true }).click();
+	await expect(replay.getByRole("alert")).toContainText("still settling");
+	await expect(page.getByRole("dialog")).toHaveCount(0);
+	await expect(replay.getByRole("button", { name: "Pause and take control", exact: true })).toBeEnabled();
 });

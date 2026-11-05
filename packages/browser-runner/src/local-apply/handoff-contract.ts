@@ -16,6 +16,7 @@ import type { LocalApplyProfile } from "./contract.js";
  * The id is opaque and carries no browser/profile material.  It deliberately is not a task id:
  * local-apply runs are not generic runner tasks.
  */
+export const LOCAL_APPLY_OWNER_PAUSE_PATH = "/local-apply/owner-pause";
 export const LOCAL_APPLY_HANDOFF_PATH = "/local-apply/handoff";
 export const LOCAL_APPLY_HANDOFF_STATUS_PATH = "/local-apply/handoff-status";
 export const LOCAL_APPLY_HANDOFF_FRAME_PATH = "/local-apply/handoff/frame";

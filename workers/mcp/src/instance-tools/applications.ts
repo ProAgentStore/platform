@@ -272,21 +272,21 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	server.tool(
 		"create_application_handoff",
 		"Explicitly request ONE short-lived, exact-owner browser handoff for ONE live Application Runner run (#1013). It reuses only the already-authorized local browser profile for that run; it never signs in, stores credentials, expands profile lifetime, changes OAuth/security settings, submits, resets submit_attempted/submit_unconfirmed, or creates approval. Idempotent while that exact live run/profile remains valid; returns a mobile-usable authenticated Console link. Use dry_run first.",
-		{ ...who, ...runArg, dry_run: z.boolean().optional().describe("Describe the bounded handoff request without contacting the Runner or creating it.") },
+		{ ...who, ...runArg, pause: z.boolean().optional().describe("Explicitly pause AI browser dispatch before taking owner control of this running application. Requires CLI 0.4.225; native execution must settle before control opens. Does not prove arbitrary code has no background effects."), dry_run: z.boolean().optional().describe("Describe the bounded handoff request without contacting the Runner or creating it.") },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
 			const instance_id = instanceOf(input);
 			const run_id = String(input.run_id ?? "");
 			const t = tokenFor(token);
 			if (!t) return authRequired();
-			const auditInput = { instance_id, run_id };
+			const auditInput = { instance_id, run_id, ...(input.pause !== undefined ? { pause: input.pause } : {}) };
 			const denied = await requirePermission(safetyFor(token), "runtime", "create_application_handoff", auditInput);
 			if (denied) return denied;
 			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/handoff`;
 			if (input.dry_run) return dryRun(safetyFor(token), "create_application_handoff", "request one short-lived exact-run browser handoff", auditInput, {
-				endpoint, method: "POST", effect: "The Runner would be asked for an owner-bound live handoff only if this exact run, application and already-authorized profile remain valid. No sign-in, submission, approval, browser-profile change or credential storage would occur.",
+				endpoint, method: "POST", effect: input.pause === true ? "AI browser dispatch would be paused on this exact run. Owner control opens only after native requests settle; pending or unknown execution remains unavailable. Background effects from arbitrary code are not proved stopped. Submission permission and source/profile boundaries remain unchanged." : "The Runner would be asked for an owner-bound live handoff only if this exact run, application and already-authorized profile remain valid. No sign-in, submission, approval, browser-profile change or credential storage would occur.",
 			});
-			const data = (await authedCall(endpoint, t, { method: "POST", body: "{}" }, env)) as { error?: string };
+			const data = (await authedCall(endpoint, t, { method: "POST", body: JSON.stringify(input.pause !== undefined ? { pause: input.pause } : {}) }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "create_application_handoff", action: "completed", input: auditInput, result: data });
 			return jsonText(data);
@@ -450,7 +450,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"get_application_runner_settings",
-		"An Application Runner's handoff and submission policy (#953): signed-in CLI, local browser model/reasoningEffort, owner sources, sites, escalationLevel (conservative by default), toolAccess and server-recorded toolAccessAcceptance, current toolAccessDisclosure, and auto-submit policy (off by default). Escalation permits model-assessed source-supported judgments; it does not authorize submission or invent missing personal facts. Returns effective settings for roundtrip through set_application_runner_settings. Pass the Runner's instance_id. Read-only.",
+		"An Application Runner's handoff and submission policy (#953): signed-in CLI, local browser model/reasoningEffort, browserCommandTimeoutSeconds (600 seconds by default), owner sources, sites, escalationLevel (conservative by default), toolAccess and server-recorded toolAccessAcceptance, current toolAccessDisclosure, and auto-submit policy (off by default). Escalation permits model-assessed source-supported judgments; it does not authorize submission or invent missing personal facts. Returns effective settings for roundtrip through set_application_runner_settings. Pass the Runner's instance_id. Read-only.",
 		{ ...who },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
@@ -481,6 +481,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 					workspace: z.string().optional(),
 					sources: z.object({ profile: z.string().nullable().optional(), answers: z.string().nullable().optional() }).optional(),
 					allowDomains: z.array(z.string()).optional(),
+					browserCommandTimeoutSeconds: z.coerce.number().int().min(1).max(3600).optional().describe("Native browser command caller deadline in seconds: default 600, range 1–3600. Frozen per run; requires CLI 0.4.225+. The transport deadline is 60 seconds longer. Timeout does not cancel the action; uncertainty still quarantines native tools."),
 					maxMinutes: z.coerce.number().int().optional(),
 					maxPages: z.coerce.number().int().optional(),
 					maxActions: z.coerce.number().int().optional(),

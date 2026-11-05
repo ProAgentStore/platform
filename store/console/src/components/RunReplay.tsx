@@ -6,7 +6,7 @@
  * from the frame's metadata. Frames are fetched with the owner's token (an <img> cannot send a Bearer
  * header) and held as object URLs, revoked on unmount.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { API, api, getToken } from "@proagentstore/sdk/client";
 import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import Card from "./Card";
@@ -56,12 +56,14 @@ export function useBrowserArtifacts(instanceId: string, subjectKind: ReplaySubje
 
 const fmtStamp = (at?: string) => (at ? new Date(at).toLocaleTimeString() : "");
 
-export default function RunReplay({ frames, emptyText, history, historyLoading = false, onLoadMore }: { frames: readonly ReplayFrame[]; emptyText: string; history?: ReplayHistoryState; historyLoading?: boolean; onLoadMore?: () => void }) {
+export default function RunReplay({ frames, emptyText, history, historyLoading = false, onLoadMore, liveView }: { liveView?: ReactNode; frames: readonly ReplayFrame[]; emptyText: string; history?: ReplayHistoryState; historyLoading?: boolean; onLoadMore?: () => void }) {
 	const [urls, setUrls] = useState<Record<string, string>>({});
 	const [failed, setFailed] = useState<Record<string, boolean>>({});
 	const [selectedKey, setSelectedKey] = useState<string | null>(null);
-	const idx = Math.max(0, frames.findIndex((frame) => frame.key === selectedKey));
-	const select = (index: number) => setSelectedKey(frames[Math.max(0, Math.min(frames.length - 1, index))]?.key ?? null);
+	const liveSelected = !!liveView && selectedKey === "live";
+	const idx = liveSelected ? frames.length : Math.max(0, frames.findIndex((frame) => frame.key === selectedKey));
+	const lastIndex = Math.max(0, frames.length - (liveView ? 0 : 1));
+	const select = (index: number) => setSelectedKey(liveView && index >= frames.length ? "live" : frames[Math.max(0, Math.min(frames.length - 1, index))]?.key ?? null);
 	const [playing, setPlaying] = useState(false);
 	const urlsRef = useRef<Record<string, string>>({});
 	const wantedImages = [frames[idx], frames[idx + 1], frames[idx - 1]].filter((frame): frame is ReplayFrame => !!frame);
@@ -107,8 +109,8 @@ export default function RunReplay({ frames, emptyText, history, historyLoading =
 
 	useEffect(() => () => Object.values(urlsRef.current).forEach(URL.revokeObjectURL), []);
 	useEffect(() => {
-		if (selectedKey && !frames.some((frame) => frame.key === selectedKey)) setSelectedKey(frames[0]?.key ?? null);
-	}, [frames, selectedKey]);
+		if (selectedKey && !(liveView && selectedKey === "live") && !frames.some((frame) => frame.key === selectedKey)) setSelectedKey(frames[0]?.key ?? null);
+	}, [frames, selectedKey, liveView]);
 	useEffect(() => {
 		if (!playing || frames.length === 0) return;
 		const timer = setInterval(() => setSelectedKey((current) => {
@@ -124,20 +126,22 @@ export default function RunReplay({ frames, emptyText, history, historyLoading =
 	</div>;
 
 	const noFramesText = history?.status === "loading" ? "Loading stored screenshots…" : history?.error ? "Stored screenshots could not be loaded. Retry the history request." : emptyText;
-	if (!frames.length) return <div>{historyNotice}<div className="bg-panel border border-line rounded-xl p-4 mb-5 text-sm text-muted-soft" data-testid="replay-empty">{noFramesText}</div></div>;
-	const cur = frames[Math.min(idx, frames.length - 1)];
+	if (!frames.length && !liveView) return <div>{historyNotice}<div className="bg-panel border border-line rounded-xl p-4 mb-5 text-sm text-muted-soft" data-testid="replay-empty">{noFramesText}</div></div>;
+	const cur = liveSelected || !frames.length ? null : frames[Math.min(idx, frames.length - 1)];
 	return (
 		<Card className="mb-5" data-testid="run-replay">
 			{historyNotice}
-			<div className="flex items-center gap-3 mb-3">
-				<button type="button" onClick={() => setPlaying((p) => !p)} className="w-9 h-9 flex items-center justify-center rounded-lg bg-accent text-white shrink-0" aria-label={playing ? "Pause" : "Play"}>
+			<div className="flex items-center gap-2 sm:gap-3 mb-3">
+				<button type="button" disabled={!cur} onClick={() => setPlaying((p) => !p)} className="w-9 h-9 flex items-center justify-center rounded-lg bg-accent text-white shrink-0" aria-label={playing ? "Pause" : "Play"}>
 					{playing ? <Pause size={16} /> : <Play size={16} />}
 				</button>
 				<button type="button" onClick={() => { setPlaying(false); select(idx - 1); }} disabled={idx <= 0} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Previous"><ChevronLeft size={16} /></button>
-				<button type="button" onClick={() => { setPlaying(false); select(idx + 1); }} disabled={idx >= frames.length - 1} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Next"><ChevronRight size={16} /></button>
-				<input type="range" min={0} max={Math.max(0, frames.length - 1)} value={idx} onChange={(e) => { setPlaying(false); select(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" aria-label="Frame" aria-valuetext={`Frame ${idx + 1} of ${frames.length}`} />
-				<span className="text-xs text-muted-soft font-mono shrink-0">{idx + 1}/{frames.length}</span>
+				<button type="button" onClick={() => { setPlaying(false); select(idx + 1); }} disabled={idx >= lastIndex} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Next"><ChevronRight size={16} /></button>
+				<input type="range" min={0} max={lastIndex} value={idx} onChange={(e) => { setPlaying(false); select(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" aria-label="Frame" aria-valuetext={liveSelected || !cur ? "Live browser" : `Frame ${idx + 1} of ${frames.length}`} />
+				<span className="text-xs text-muted-soft font-mono shrink-0">{liveSelected || !cur ? "Live" : `${idx + 1}/${frames.length}`}</span>
 			</div>
+			{liveView && <button type="button" className="text-xs text-accent underline mb-3" onClick={() => { setPlaying(false); select(frames.length); }}>Live browser →</button>}
+			{!cur ? <div data-testid="replay-live">{!frames.length && <p data-testid="replay-empty" className="text-sm text-muted-soft mb-3">{noFramesText}</p>}{liveView}</div> : <>
 			<div className="rounded-lg overflow-hidden border border-line bg-paper flex items-center justify-center min-h-[240px]">
 				{failed[cur.key] ? <span className="text-sm text-muted-soft py-16">Screenshot unavailable for this frame.</span> : urls[cur.key] ? <img key={cur.key} src={urls[cur.key]} alt={`Frame ${cur.seq}: ${cur.caption}`} onError={() => setFailed((old) => ({ ...old, [cur.key]: true }))} width={1280} height={720} className="w-full max-h-[520px] object-contain" /> : <span className="text-sm text-muted-soft py-16">Loading screenshot…</span>}
 			</div>
@@ -147,7 +151,8 @@ export default function RunReplay({ frames, emptyText, history, historyLoading =
 				</div>
 				<span className="text-xs text-muted-soft font-mono shrink-0">{cur.timeKind === "stored" ? "Stored " : "Captured "}{fmtStamp(cur.at)}</span>
 			</div>
-			<p className="text-xs text-muted-soft mt-1">Screenshots can show the same page between actions.</p>
+			<p className="text-xs text-muted-soft mt-1">Screenshots can show the same page between actions. History is read-only.</p>
+			</>}
 		</Card>
 	);
 }

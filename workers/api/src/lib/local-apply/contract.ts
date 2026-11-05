@@ -172,6 +172,8 @@ export interface LocalApplyTaskEnvelope {
 	ownerFacts?: LocalApplyOwnerFacts;
 	policy: {
 		mode: LocalApplyMode;
+		/** Native command caller deadline in seconds; CLI 0.4.225+. Default 600. */
+		browserCommandTimeoutSeconds?: number;
 		/** Frozen per-run decision threshold. Absent on older runs means conservative. */
 		escalationLevel?: LocalApplyEscalationLevel;
 		toolAccess?: LocalApplyToolAccess;
@@ -202,6 +204,7 @@ export interface LocalApplyTaskEnvelope {
 
 /** Why a run stops for a person. Each is a pause — never an obstacle to work around. */
 export type LocalApplyPauseReason =
+	| "owner_requested"
 	| "captcha"
 	| "login_required"
 	| "consent_required"
@@ -213,6 +216,7 @@ export type LocalApplyPauseReason =
 	/** A cloud supervisor is deciding whether the local CLI may continue. */
 	| "supervisor_checkpoint";
 export const LOCAL_APPLY_PAUSE_REASONS: readonly LocalApplyPauseReason[] = [
+	"owner_requested",
 	"captcha",
 	"login_required",
 	"consent_required",
@@ -484,6 +488,14 @@ export function parseExecutionEvidence(raw: unknown): LocalApplyExecutionEvidenc
 	return { schemaVersion: 1, fieldCounts, nativeCalls: { attempted: n.attempted as number, succeeded: n.succeeded as number, failed: n.failed as number, notDispatched: n.notDispatched as number, truncated: n.truncated as boolean, dropped: n.dropped as number, coverage }, screenshotsDelivered: e.screenshotsDelivered as number, screenshotRequests: e.screenshotRequests as number, independentScreenshotAvailable: e.independentScreenshotAvailable as boolean, blockingQuestions: e.blockingQuestions as number, optionalQuestions: e.optionalQuestions as number, browser: { state, timeouts: b.timeouts as number }, causes: [...new Set((Array.isArray(e.causes) ? e.causes : []).filter((cause): cause is LocalApplyExecutionCause => LOCAL_APPLY_EXECUTION_CAUSES.includes(cause as LocalApplyExecutionCause)))] };
 }
 
+/** Positive runtime receipt produced only by document checks before browser or model initialization. */
+export interface LocalApplyPreflightFailure {
+	schemaVersion: 1;
+	runId: string;
+	phase: "documents";
+	reason: "source_unavailable" | "artifact_changed";
+}
+
 /** What the runner returns when a run ends. */
 export interface LocalApplyResultEnvelope {
 	runId: string;
@@ -499,6 +511,7 @@ export interface LocalApplyResultEnvelope {
 	/** Full native tools cannot prove the absence of external submission effects. */
 	submissionVerification?: "unverified";
 	executionEvidence?: LocalApplyExecutionEvidence;
+	preflightFailure?: LocalApplyPreflightFailure;
 	/** Present only when `outcome` is `submitted`: the confirmed final page. */
 	submitted?: { url: string; at: string; gateId: string };
 	summary: string;
@@ -753,6 +766,14 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 		} else if (o.unavailable !== undefined) return { error: "unavailable evidence is only valid for a job_unavailable result" };
 	}
 	else if (o.unavailable !== undefined) return { error: "unavailable evidence is only valid for a job_unavailable result" };
+	if (o.preflightFailure !== undefined) {
+		const p = o.preflightFailure && typeof o.preflightFailure === "object" && !Array.isArray(o.preflightFailure) ? o.preflightFailure as Record<string, unknown> : {};
+		const reason = oneOf(["source_unavailable", "artifact_changed"] as const, p.reason);
+		const native = out.executionEvidence?.nativeCalls;
+		const rawEvidence = o.executionEvidence as Record<string, unknown> | undefined;
+		if (p.schemaVersion !== 1 || p.runId !== runId || p.phase !== "documents" || !reason || outcome !== "blocked" || out.blockReason !== reason || o.submitAttempted !== false || o.filled !== 0 || !Array.isArray(o.uploaded) || o.uploaded.length !== 0 || traceId !== runId || out.submissionVerification || o.submitted !== undefined || o.diagnostic !== undefined || out.engineAuth !== "unknown" || !out.executionEvidence || out.executionEvidence.browser.state !== "unavailable" || out.executionEvidence.browser.timeouts !== 0 || !native || native.attempted !== 0 || native.succeeded !== 0 || native.failed !== 0 || native.notDispatched !== 0 || native.dropped !== 0 || native.truncated || native.coverage !== "unavailable" || out.executionEvidence.independentScreenshotAvailable || !Array.isArray(rawEvidence?.causes) || rawEvidence.causes.length !== 0 || out.executionEvidence.blockingQuestions || out.executionEvidence.optionalQuestions || out.executionEvidence.screenshotsDelivered !== 0 || out.executionEvidence.screenshotRequests !== 0) return { error: "preflightFailure requires an exact-run document refusal before execution, without contradictory execution evidence" };
+		out.preflightFailure = { schemaVersion: 1, runId, phase: "documents", reason };
+	}
 	if (outcome === "failed") out.error = str(o.error, 1000) ?? "The run failed without a reason.";
 	return { result: out };
 }

@@ -180,7 +180,7 @@ async function fillForReview(): Promise<{ applicationId: string; fillRunId: stri
 	await call("GET", `/t1/applications/${applicationId}`);
 	const fillRunId = dispatches("/local-apply/run")[0].body.runId as string;
 	// The default configuration: fill and STOP. No submit gate exists for this run.
-	expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", escalationLevel: "conservative", allowDomains: ["jobs.example.com"], blurFormFields: true });
+	expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", browserCommandTimeoutSeconds: 600, escalationLevel: "conservative", allowDomains: ["jobs.example.com"], blurFormFields: true });
 	return { applicationId, fillRunId };
 }
 

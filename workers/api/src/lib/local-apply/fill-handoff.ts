@@ -6,6 +6,7 @@ import type { BrowserTakeover } from "../browser-takeover-types.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import { resumeApplyRun, retryFill, syncApplyRun } from "./apply.js";
+import { pauseApplicationForOwner } from "./owner-pause.js";
 import {
 	LOCAL_APPLY_HANDOFF_PATH,
 	LOCAL_APPLY_HANDOFF_STATUS_PATH,
@@ -72,12 +73,13 @@ export function fillGate(run: ApplyRun | null): { waiting: boolean; reason?: "lo
  * Create (or read back) the one handoff for this still-live apply run and make it ready on the runner.
  * `ready: false` is a handoff that exists but is closed — the caller reports it. Throws for the refusals.
  */
-export async function ensureFillHandoff(env: Env, userId: string, instanceId: string, stored: ApplyRun): Promise<{ handoff: LocalApplyHandoff; ready: boolean }> {
-	const run = await syncApplyRun(env, userId, stored);
+export async function ensureFillHandoff(env: Env, userId: string, instanceId: string, stored: ApplyRun, requestPause = false): Promise<{ handoff: LocalApplyHandoff; ready: boolean }> {
+	const current = await syncApplyRun(env, userId, stored);
+	const run = requestPause ? await pauseApplicationForOwner(env, userId, instanceId, current) : current;
 	const app = await getOwnedApplication(env, userId, run.applicationId);
 	if (!app || app.fillRunId !== run.id) throw new HttpError(409, "This application is no longer bound to that exact Runner run.");
-	if (run.status !== "paused" || !(["login_required", "captcha"] as const).includes(run.pause?.reason as "login_required" | "captcha")) {
-		throw new HttpError(409, "A live browser handoff is available only while this exact run is paused for site login or a CAPTCHA.");
+	if (run.status !== "paused" || !["login_required", "captcha", "owner_requested"].includes(run.pause?.reason ?? "")) {
+		throw new HttpError(409, "A live browser handoff requires this exact run to pause for site login, CAPTCHA, or explicit owner control.");
 	}
 	const now = Date.now();
 	let handoff = await createLocalApplyHandoff(env, { run, app, userId, browserProfile: run.policy.browserProfile, expiresAt: now + HANDOFF_TTL_MS }, now);

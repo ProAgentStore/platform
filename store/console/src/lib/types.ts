@@ -935,10 +935,10 @@ export interface ApplicationTraceView {
 export interface ConnectionDeliveryList {
 	deliveries: Array<{ id: string; connectionId: string; status: string; eventType: string; lastError: string | null; createdAt: string }>;
 }
-
 /** Copy of `ApplicationRunnerSettings` (workers/api/src/lib/local-apply/policy.ts) — the handoff + submission policy (#953). */
 export interface ApplicationRunnerSettingsView {
 	settings: {
+		browserCommandTimeoutSeconds?: number;
 		engine: "claude" | "codex";
 		authMode: "machine" | "subscription";
 		browserProfile: "isolated" | "default";

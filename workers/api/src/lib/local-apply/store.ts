@@ -309,6 +309,8 @@ export interface ApplyRunPolicy {
 	/** Frozen at creation; older runs retain conservative escalation. */
 	escalationLevel?: import("./contract.js").LocalApplyEscalationLevel;
 	browserWebsiteAccess?: BrowserWebsiteAccessWire;
+	/** Native caller deadline in seconds, fixed when the run is created. */
+	browserCommandTimeoutSeconds?: number;
 	engine: string;
 	model?: string | null;
 	reasoningEffort?: string | null;

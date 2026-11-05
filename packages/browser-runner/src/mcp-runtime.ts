@@ -3,6 +3,7 @@ import { accessibleTargetRefusal, type ExpectedAccessibility } from "./native-ac
 import { BrowserStateSampler } from "./browser-state.js";
 import type { BrowserStateObservation, BrowserStateSnapshot } from "./browser-state-contract.js";
 import { createConnection } from "@playwright/mcp";
+import { NativeTabMetadata } from "./native-tab-metadata.js";
 import { NativeTabRegistry } from "./native-tab-registry.js";
 import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { pathToFileURL } from "node:url";
@@ -64,6 +65,7 @@ export class McpRuntime {
 	private server?: Server;
 	private client?: Client;
 	private context?: BrowserContext;
+	private readonly tabMetadata = new NativeTabMetadata(() => this.recovery.requestDeadlineMs);
 	private readonly tabs = new NativeTabRegistry(
 		page => { this.uploads.track(page); this.onPageSelected?.(page); },
 		(page, replacement) => {
@@ -72,6 +74,7 @@ export class McpRuntime {
 			if (this.selectedPage === page) this.selectedPage = replacement;
 			if ((!active || active === page) && replacement) this.onPageSelected?.(replacement);
 		},
+		page => this.tabMetadata.track(page),
 	);
 	private selectedPage?: Page;
 	private activePage?: () => Page | null;
@@ -120,11 +123,31 @@ export class McpRuntime {
 	private readonly diagnosticSecrets: Record<string, string> = {};
 	private subjectVersion = 0;
 	/** One recorder at this chokepoint (#1409) — every `callTool`, every path, redacted before it is kept. */
-	constructor(private readonly calls = new BrowserCallRecorder(), private readonly recovery = new BrowserToolRecovery<McpToolResult>()) {}
+	constructor(private readonly calls = new BrowserCallRecorder(), private recovery = new BrowserToolRecovery<McpToolResult>()) {}
 	private recoveryOwner?: { version: number; page?: Page; upload?: PreparedUpload; args: Record<string, unknown>; reconcile(reply: McpToolResult): void; cannotRecover: boolean };
 	private recovering = false;
+	private dispatchSuspended = false;
+	private readonly activeCalls = new Set<Promise<void>>();
+	/** Freeze new native dispatch before waiting. Settlement is not proof that page code has no deferred effects. */
+	async suspendDispatch(): Promise<{ state: "settled" | "pending" | "unknown" }> {
+		this.dispatchSuspended = true;
+		await withTimeout(Promise.all([...this.activeCalls]), 1000);
+		if (!this.dispatchSuspended) return { state: "unknown" };
+		const uncertain = this.recovery.status();
+		if (uncertain) return { state: uncertain.diagnostic.execution === "pending" ? "pending" : "unknown" };
+		return { state: !this.client ? "unknown" : this.activeCalls.size || this.recovering ? "pending" : "settled" };
+	}
+	/** The owning runtime closes the handoff before releasing this dispatch fence. Stop remains authoritative. */
+	resumeDispatch(): void { this.dispatchSuspended = false; }
+	configureCommandTimeout(seconds: number): void {
+		if (!Number.isInteger(seconds) || seconds < 1 || seconds > 3600) throw new Error("Browser command timeout must be 1–3600 whole seconds");
+		if (this.dispatchSuspended || this.activeCalls.size || this.recovering || this.recovery.blocked()) throw new Error("Cannot change browser command timeout while browser execution is active or uncertain");
+		this.recovery = new BrowserToolRecovery<McpToolResult>(seconds * 1000);
+	}
 	recoveryStatus(): BrowserRecoveryStatus | null { return this.recovery.status(); }
 	private diagnosticResult(diagnostic: BrowserToolDiagnostic): McpToolResult {
+		const progress = this.tabMetadata.pending();
+		if (progress) diagnostic = { ...diagnostic, message: `${diagnostic.message} Native phase: ${progress}.` };
 		return { isError: true, toolDiagnostic: diagnostic, content: [{ type: "text", text: `${diagnostic.kind}: ${diagnostic.message}${diagnostic.originalError ? ` Original error: ${diagnostic.originalError}` : ""}` }] };
 	}
 	/** Acknowledge a completed delayed response, preserving the same browser, profile and tabs. Never replay. */
@@ -141,11 +164,12 @@ export class McpRuntime {
 	}
 	private async recoverCurrent(): Promise<McpToolResult> {
 		const status = this.recovery.status(), owner = this.recoveryOwner;
+		if (this.dispatchSuspended) return this.diagnosticResult({ kind: "quarantined", phase: "recovery", tool: "browser_recover", execution: "not_dispatched", recoverable: false, message: "The browser is paused for owner control; recovery cannot authorize native work.", elapsedMs: 0, machine: browserMachineEvidence() });
 		if (this.policy.isCancelled?.()) return this.diagnosticResult({ kind: "quarantined", phase: "recovery", tool: "browser_recover", execution: "not_dispatched", recoverable: false, message: "The run was stopped; recovery cannot authorize further browser work.", elapsedMs: 0, machine: browserMachineEvidence() });
 		if (!status) return { content: [{ type: "text", text: "No uncertain native request is recorded. Inspect the current page before acting." }] };
 		if (!status.canResume || !owner || owner.cannotRecover || owner.version !== this.subjectVersion || owner.page !== (this.activePage?.() ?? this.selectedPage ?? this.tabs.pages().at(-1)) || owner.page?.isClosed()) return this.diagnosticResult({ ...status.diagnostic, phase: "recovery", kind: "quarantined", recoverable: false, message: "Recovery cannot verify settled execution, an open backend and the original run/page ownership. No native action was dispatched or replayed. Stop and retire this browser if the original request never settles or its page was lost." });
 		const checked = await owner.upload?.verify?.({ uncertain: true });
-		if (owner.version !== this.subjectVersion || this.policy.isCancelled?.() || owner.page !== (this.activePage?.() ?? this.selectedPage ?? this.tabs.pages().at(-1)) || owner.page?.isClosed()) return this.diagnosticResult({ ...status.diagnostic, phase: "recovery", kind: "quarantined", recoverable: false, message: "The run or page changed or stopped during recovery. No native action is authorized." });
+		if (owner.version !== this.subjectVersion || this.policy.isCancelled?.() || this.dispatchSuspended || owner.page !== (this.activePage?.() ?? this.selectedPage ?? this.tabs.pages().at(-1)) || owner.page?.isClosed()) return this.diagnosticResult({ ...status.diagnostic, phase: "recovery", kind: "quarantined", recoverable: false, message: "The run or page changed, paused or stopped during recovery. No native action is authorized." });
 		owner.reconcile(this.recovery.settledReply()!);
 		const reply = this.recovery.release();
 		this.recoveryOwner = undefined;
@@ -274,6 +298,9 @@ export class McpRuntime {
 	 * call is recorded regardless; `internal` only tells a reader which ones were the agent's own.
 	 */
 	async callTool(name: string, args: Record<string, unknown> = {}, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean; expectedAccessibility?: ExpectedAccessibility } = {}): Promise<McpToolResult> {
+		let finish!: () => void;
+		const activity = new Promise<void>(resolve => { finish = resolve; });
+		this.activeCalls.add(activity);
 		const startedAt = Date.now(), subject = this.subject, version = this.subjectVersion;
 		// Snapshot before awaiting: teardown may clear the live store while this call is in flight.
 		const initialSecrets = { ...this.diagnosticSecrets };
@@ -287,7 +314,7 @@ export class McpRuntime {
 		} catch (error) {
 			this.calls.record({ subject, tool: name, args, secrets: secrets(), startedAt, outcome: "thrown", errorHead: error instanceof Error ? error.message : String(error), internal: opts.internal ?? false, browserState: state() });
 			throw error;
-		}
+		} finally { this.activeCalls.delete(activity); finish(); }
 	}
 	private captureState(subject: BrowserCallSubject | null): BrowserStateSnapshot | undefined {
 		if (!subject || this.subject?.kind !== subject.kind || this.subject.id !== subject.id || !this.client || !this.context) return undefined;
@@ -304,6 +331,7 @@ export class McpRuntime {
 	}
 	private async dispatchTool(name: string, args: Record<string, unknown>, opts: { internal?: boolean; expectedOrigin?: string; expectedUploadId?: string; isUploadAuthorized?: () => boolean; expectedAccessibility?: ExpectedAccessibility }): Promise<McpToolResult> {
 		const originalVersion = this.subjectVersion;
+		if (this.dispatchSuspended) return { [REFUSED_CALL]: true, isError: true, content: [{ type: "text", text: "The browser is paused for owner control; no native action was dispatched." }] };
 		// A native event (for example a file chooser) can request its first follow-up
 		// before the opening action returns. Wait for ordinary work, then validate
 		// this request from current state; an expired/failed request remains fenced.
@@ -311,7 +339,7 @@ export class McpRuntime {
 		const uncertain = this.recovery.blocked();
 		if (uncertain) return this.diagnosticResult(uncertain);
 		const client = this.connected();
-		const cancelled = () => this.policy.isCancelled?.() ? "BLOCKED by the runner — this task was stopped; no further browser action is permitted." : null;
+		const cancelled = () => this.policy.isCancelled?.() ? "BLOCKED by the runner — this task was stopped; no further browser action is permitted." : this.dispatchSuspended ? "BLOCKED by the runner — the browser is paused for owner control; no native action was dispatched." : null;
 		let refusal = cancelled();
 		if (!refusal && !opts.internal && this.toolAccess === "full" && this.policy.toolAccess !== "full" && !this.guardedToolNames.has(name)) refusal = "This native tool requires the current run to have accepted Full Playwright access.";
 		const currentPage = () => this.activePage?.() ?? this.selectedPage ?? this.tabs.pages().at(-1);
@@ -387,10 +415,12 @@ export class McpRuntime {
 			// Stop can arrive while a DOM/origin/upload/admission check was in flight. Check again at dispatch.
 			refusal = cancelled() ?? refusal;
 			if (originalVersion !== this.subjectVersion) refusal = "The run claiming this browser changed during validation. No native action was dispatched.";
-			if (!refusal && name === "browser_file_upload" && (opts.expectedUploadId || upload?.chooserId)) {
+			const uploadRefusal = () => {
+				if (name !== "browser_file_upload" || !opts.expectedUploadId && !upload?.chooserId) return null;
 				const pending = this.uploads.pendingId(currentPage());
-				if ((opts.expectedUploadId && pending !== opts.expectedUploadId) || (upload?.chooserId && pending !== upload.chooserId) || opts.isUploadAuthorized?.() === false) refusal = "The upload's chooser or task authorization changed before dispatch. No file was attached; inspect the intended upload control again.";
-			}
+				return (opts.expectedUploadId && pending !== opts.expectedUploadId) || (upload?.chooserId && pending !== upload.chooserId) || opts.isUploadAuthorized?.() === false ? "The upload's chooser or task authorization changed before dispatch. No file was attached; inspect the intended upload control again." : null;
+			};
+			refusal ??= uploadRefusal();
 			if (refusal) {
 				return { [REFUSED_CALL]: true, isError: true, content: [{ type: "text", text: refusal }], ...(websiteBlock ? { websiteAccess: websiteBlock } : {}) };
 			}
@@ -405,7 +435,10 @@ export class McpRuntime {
 			};
 			const nativeStarted = Date.now();
 			const dispatch = async () => {
-				const outcome = await this.recovery.request(name, () => client.callTool({ name, arguments: args }, undefined, { timeout: this.recovery.wireDeadlineMs }) as Promise<McpToolResult>, () => this.context?.browser()?.isConnected() === false);
+				const outcome = await this.recovery.request(name, () => {
+					const refusal = cancelled() ?? (originalVersion !== this.subjectVersion ? "The run claiming this browser changed before native dispatch." : null) ?? uploadRefusal();
+					return refusal ? Promise.resolve({ [REFUSED_CALL]: true as const, isError: true, content: [{ type: "text", text: refusal }] }) : client.callTool({ name, arguments: args }, undefined, { timeout: this.recovery.wireDeadlineMs }) as Promise<McpToolResult>;
+				}, () => this.context?.browser()?.isConnected() === false);
 				if (outcome.diagnostic) {
 					if (outcome.diagnostic.kind !== "quarantined") {
 						this.recoveryOwner = { version: originalVersion, page: pageBefore, upload, args: structuredClone(args), reconcile: reconcileTabs, cannotRecover: name === "browser_close" };
@@ -416,7 +449,7 @@ export class McpRuntime {
 				return outcome.reply;
 			};
 			let res = opts.expectedAccessibility?.role === "combobox" ? await observeControlOpening(currentPage(), currentPage, dispatch) : await dispatch();
-			if (res.toolDiagnostic) return res;
+			if (res.toolDiagnostic || res[REFUSED_CALL]) return res;
 			const obsoleteResponse = () => originalVersion !== this.subjectVersion || this.policy.isCancelled?.();
 			const obsoleteResult = () => this.diagnosticResult({ kind: "quarantined", phase: "native_response", tool: name, execution: "settled", recoverable: false, message: "The native handler returned after its run changed or stopped. Its effects are not rolled back; no returned tab or upload state was assigned to the new run.", elapsedMs: 0, machine: browserMachineEvidence() });
 			if (obsoleteResponse()) return obsoleteResult();
@@ -494,10 +527,12 @@ export class McpRuntime {
 		this.server = undefined;
 		this.context = undefined;
 		this.tabs.reset();
+		this.tabMetadata.stop();
 		this.selectedPage = undefined;
 		this.activePage = undefined;
 		this.onPageSelected = undefined;
 		this.policy = {};
+		this.dispatchSuspended = false;
 		this.startOptions = undefined;
 		this.toolAccess = "guarded";
 		this.runDir = undefined;

@@ -11,6 +11,7 @@ export async function routeLocalApplyHandoff(
 	read: () => Promise<unknown>,
 ): Promise<unknown | undefined> {
 	if (method !== "POST") return undefined;
+	if (path === "/local-apply/owner-pause") return runtime.ownerPause(await read());
 	if (path === "/local-apply/handoff") return runtime.handoff(await read());
 	if (path === "/local-apply/handoff-status") return runtime.handoffStatus(await read());
 	if (path === "/local-apply/handoff/frame") return runtime.handoffFrame(await read());

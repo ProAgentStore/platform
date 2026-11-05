@@ -60,6 +60,8 @@ export interface ApplicationRunnerSettings {
 	sources: { profile?: string; answers?: string };
 	/** Sites the runner may be on in addition to the job's own; also the auto-submit allow list. */
 	allowDomains: string[];
+	/** Native command caller deadline in seconds, frozen per run. */
+	browserCommandTimeoutSeconds: number;
 	maxMinutes: number;
 	/** Minutes without a new event before the owner is told the run stalled (#1107). Null: automatic (`stallMinutesFor`). */
 	stallMinutes: number | null;
@@ -91,6 +93,7 @@ export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
 	workspace: "~/jobs",
 	sources: { profile: "profile.md" },
 	allowDomains: [],
+	browserCommandTimeoutSeconds: 600,
 	maxMinutes: 20,
 	stallMinutes: null,
 	maxPages: 30,
@@ -184,7 +187,7 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 		if (p.stallMinutes !== null && !intIn(p.stallMinutes, 1, 60)) return { error: "stallMinutes must be a whole number from 1 to 60, or null for automatic" };
 		next.stallMinutes = p.stallMinutes as number | null;
 	}
-	for (const [key, min, max] of [["maxMinutes", 1, 60], ["maxPages", 1, 200], ["maxActions", 1, 1000]] as const) {
+	for (const [key, min, max] of [["browserCommandTimeoutSeconds", 1, 3600], ["maxMinutes", 1, 60], ["maxPages", 1, 200], ["maxActions", 1, 1000]] as const) {
 		if (p[key] === undefined) continue;
 		if (!intIn(p[key], min, max)) return { error: `${key} must be a whole number from ${min} to ${max}` };
 		next[key] = p[key] as number;

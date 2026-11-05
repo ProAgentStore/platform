@@ -1,6 +1,8 @@
 import { assertFullSubmissionReconciled } from "./reconciliation-store.js";
+import { trustedDocumentPreflightFailure } from "./preflight-failure.js";
 import { ownerFactsReceipt, ownerFactsSnapshot, readOwnerFactValues } from "./owner-facts.js";
 import { toolAccessRunnerProblem, queuedToolAccessProblem } from "./tool-access.js";
+import { browserCommandTimeoutRunnerProblem } from "./command-timeout.js";
 import { escalationRunnerProblem } from "./escalation-config.js";
 import { browserModelRunnerProblem } from "./model-config.js";
 import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "../browser-evidence.js";
@@ -82,7 +84,8 @@ import { requestOwnerAttention } from "../owner-attention.js";
 import { attentionDeps } from "../applications/attention-deps.js";
 import { applyRunSignals } from "../applications/run-signals.js";
 import { notifyUser } from "../../routes/push.js";
-import { claimVerifiedOneClickRecovery, consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
+import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
+import { claimOneClickRecoveryForRetry } from "./one-click-authorization.js";
 import { deferQueuedRunPolicy, releaseApprovalIfNothingWasSent, upgradeQueuedRunPolicy } from "./approval-at-dispatch.js";
 import { submitGateFor } from "./submission-gate.js";
 export { submitGateFor } from "./submission-gate.js";
@@ -241,7 +244,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		workspace: s.workspace,
 		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode: run.policy.mode, ...(run.policy.toolAccess === "full" ? { toolAccess: "full" as const, toolAccessAcceptance: run.policy.toolAccessAcceptance } : {}), escalationLevel: run.policy.escalationLevel ?? "conservative", allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
+		policy: { mode: run.policy.mode, ...(run.policy.browserCommandTimeoutSeconds !== undefined ? { browserCommandTimeoutSeconds: run.policy.browserCommandTimeoutSeconds } : {}), ...(run.policy.toolAccess === "full" ? { toolAccess: "full" as const, toolAccessAcceptance: run.policy.toolAccessAcceptance } : {}), escalationLevel: run.policy.escalationLevel ?? "conservative", allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
 		limits: run.policy.limits,
 		// #1079: what the owner already answered for this application, kept since an earlier fill stopped waiting.
 		...(ownerAnswers.length ? { ownerAnswers: ownerAnswers.map((a) => ({ question: a.question, answer: a.answer })) } : {}),
@@ -294,7 +297,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const blurProblem = screenshotBlurRunnerProblem(screenshotsOn ? blurFormFields : true, runtime.runner_version, runtime.runner_node);
 	if (blurProblem) throw new HttpError(409, blurProblem);
 	const browserWebsiteAccess = await websiteAccessForInstance(env, uid, instanceId);
-	const contractProblem = toolAccessRunnerProblem(s, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(s, runtime.runner_version) ?? browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const contractProblem = toolAccessRunnerProblem(s, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(s, runtime.runner_version) ?? browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node) ?? browserCommandTimeoutRunnerProblem(s, runtime.runner_version);
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version);
@@ -343,6 +346,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		toolAccess: s.toolAccess,
 		toolAccessAcceptance: s.toolAccessAcceptance ? { ...s.toolAccessAcceptance } : null,
 		escalationLevel: s.escalationLevel,
+		browserCommandTimeoutSeconds: s.browserCommandTimeoutSeconds,
 		engine: s.engine,
 		model: s.model ?? null,
 		reasoningEffort: s.reasoningEffort ?? null,
@@ -427,7 +431,7 @@ function acceptedResult(run: ApplyRun, rawResult: unknown): LocalApplyResultEnve
 	if (r.outcome === "submitted" && (run.policy.mode !== "auto_submit" || r.submitted?.gateId !== run.policy.gate.gateId)) {
 		r = { ...r, outcome: "blocked", blockReason: "submit_unconfirmed", questions: ["The runner reported a submission this run's policy did not permit. Check the employer's site before anything else is done."], submitted: undefined };
 	}
-	if (run.policy.toolAccess === "full" && r.outcome !== "submitted") r = { ...r, submissionVerification: "unverified" };
+	if (run.policy.toolAccess === "full" && r.outcome !== "submitted" && !trustedDocumentPreflightFailure(run, r)) r = { ...r, submissionVerification: "unverified", preflightFailure: undefined };
 	return r;
 }
 
@@ -840,7 +844,7 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 	if (!runtime) throw new HttpError(409, "No runner is connected. Run `pags up` on that machine, then resume.");
 	const websiteResume = typeof b.expectedWebsitePauseKey === "string" && (b.websiteDecision === "allow" || b.websiteDecision === "deny")
 		? { expectedWebsitePauseKey: b.expectedWebsitePauseKey, websiteDecision: b.websiteDecision } : {};
-	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[], ...websiteResume }) }).catch(() => null);
+	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[], ...websiteResume, ...(run.pause?.reason === "owner_requested" ? { expectedOwnerPauseKey: run.pause.handoffRequestId } : {}) }) }).catch(() => null);
 	if (!res) throw new HttpError(409, "The runner did not answer. Check `pags up` on that machine and try again.");
 	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
 	if (!res.ok) throw new HttpError(409, `The runner refused to resume: HTTP ${res.status}`);
@@ -893,21 +897,13 @@ export async function retryFill(env: Env, runnerInstanceId: string, uid: string,
 	const ready = app.readyEvent as { eventId?: unknown } | null;
 	if (!ready || typeof ready.eventId !== "string") throw new HttpError(409, "The application has no materials_ready event to fill from.");
 	let recoveryId: string | undefined = recovering ? oneClick?.recoveryId ?? undefined : undefined;
-	if (app.status === "blocked") {
-		const stored = await (async () => {
-			if (!oneClick?.approvedFillRunId) return null;
-			const run = await getApplyRun(env, runnerInstanceId, uid, oneClick.approvedFillRunId);
-			return run ? { auth: oneClick, run } : null;
-		})();
-		if (stored) recoveryId = await claimVerifiedOneClickRecovery(env, { auth: stored.auth, app, run: stored.run, userId: uid, runnerInstanceId }) ?? undefined;
-		if (oneClick && !recoveryId) throw new HttpError(409, "This one-click refusal no longer has a valid recovery authorization; reload it and do not retry automatically.");
+	if (oneClick && (oneClick.recoveryId || app.status === "blocked")) {
+		recoveryId = await claimOneClickRecoveryForRetry(env, uid, runnerInstanceId, app, oneClick) ?? undefined;
+		if (!recoveryId) throw new HttpError(409, "This one-click refusal no longer has a valid recovery authorization; reload it and do not retry automatically.");
+	}
+	if (app.status !== "materials_ready") {
 		const moved = await moveApplication(env, app, uid, { to: "materials_ready", actor: "owner", actorInstanceId: runnerInstanceId, reason: "retry_fill" }, Date.now());
 		if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
-	} else if (app.status !== "materials_ready") {
-		const moved = await moveApplication(env, app, uid, { to: "materials_ready", actor: "owner", actorInstanceId: runnerInstanceId, reason: "retry_fill" }, Date.now());
-		if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
-	} else {
-		recoveryId = oneClick?.recoveryId ?? undefined;
 	}
 	return startApplicationFill(env, runnerInstanceId, uid, { eventId: `${ready.eventId}:retry:${app.stateVersion + (app.status === "materials_ready" ? 0 : 1)}`, applicationId: app.id, tailorInstanceId: app.instanceId }, "owner", { ...opts, ...(recoveryId ? { oneClickRecoveryId: recoveryId } : {}) });
 }
@@ -941,7 +937,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		await noteQueued(env, "local_apply_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
 		return "queued";
 	}
-	const contractProblem = toolAccessRunnerProblem(run.policy, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(run.policy, runtime.runner_version) ?? browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	const contractProblem = toolAccessRunnerProblem(run.policy, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(run.policy, runtime.runner_version) ?? browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node) ?? browserCommandTimeoutRunnerProblem(run.policy, runtime.runner_version);
 	if (contractProblem) {
 		await noteQueued(env, "local_apply_runs", run.id, contractProblem, now);
 		return "queued";

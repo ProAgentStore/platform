@@ -181,6 +181,13 @@ describe("the Applications tools (#958, #953)", () => {
 		expect(await noRuntime.call("request_application_reconciliation", { instance_id: "r1", run_id: "run-1" })).toMatch(/runtime/);
 		expect(noRuntime.seen).toEqual([]);
 	});
+	it("previews explicit owner pause and forwards it only through the exact runtime handoff", async () => {
+		const { seen, call } = tools(["read", "write", "runtime"]);
+		expect(await call("create_application_handoff", { instance_id: "r1", run_id: "run-1", pause: true, dry_run: true })).toContain("AI browser dispatch would be paused");
+		expect(seen).toEqual([]);
+		await call("create_application_handoff", { instance_id: "r1", run_id: "run-1", pause: true });
+		expect(seen).toEqual([{ url: "https://api.test/v1/instances/r1/application-runs/run-1/handoff", method: "POST", body: { pause: true } }]);
+	});
 
 	it.each([
 		["triage_application", { action: "archive", application_id: "a1", expected_status: "materials_ready", expected_version: 3 }, { action: "archive", application_id: "a1", expected_status: "materials_ready", expected_version: 3 }],
@@ -281,6 +288,17 @@ describe("the Applications tools (#958, #953)", () => {
 });
 
 describe("the Runner's submission policy over MCP (#953)", () => {
+	it("publishes and forwards bounded browser command timeouts in seconds", async () => {
+		const { seen, call, schemas } = tools();
+		const schema = z.object(schemas.get("set_application_runner_settings")!);
+		for (const browserCommandTimeoutSeconds of [1, 600, 3600, "600"]) {
+			const args = schema.parse({ instance_id: "ap", settings: { browserCommandTimeoutSeconds } });
+			await call("set_application_runner_settings", args);
+			expect(seen.at(-1)?.body).toEqual({ browserCommandTimeoutSeconds: Number(browserCommandTimeoutSeconds) });
+		}
+		for (const value of [0, 3601, 1.5, null]) expect(schema.safeParse({ instance_id: "ap", settings: { browserCommandTimeoutSeconds: value } }).success).toBe(false);
+	});
+
 	it.each(["conservative", "balanced", "autonomous"])("publishes and forwards escalation level %s without changing submission authorization", async (escalationLevel) => {
 		const { seen, call, schemas } = tools();
 		const schema = z.object(schemas.get("set_application_runner_settings")!);

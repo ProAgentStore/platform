@@ -93,6 +93,8 @@ export interface FillPauseFacts {
 
 export interface FillProgressInput {
 	toolAccess?: "guarded" | "full";
+	/** Set only after the store verified a supported exact-run document-preflight receipt. */
+	documentPreflightFailed?: boolean;
 	/** The APPLICATION's lifecycle status — the fallback, and the only thing #978's card read. */
 	applicationStatus: string;
 	/** The fill run's status, when one is bound: `queued` | `running` | `paused` | terminal. */
@@ -143,12 +145,14 @@ export function fillProgressOf(input: FillProgressInput): FillProgress {
 	const did = work(filled, uploaded);
 	const evidence: FillEvidence = result ? "runner_result" : checkpointPhase || pause ? "runner_checkpoint" : "run_status";
 	const executionEvidence = parseExecutionEvidence(result?.executionEvidence);
-	const unmeasured = input.toolAccess === "full" || result?.submissionVerification === "unverified" || executionEvidence?.fieldCounts === "unmeasured";
+	const preflightFailed = input.documentPreflightFailed === true && !submitAttempted;
+	const unmeasured = !preflightFailed && (input.toolAccess === "full" || result?.submissionVerification === "unverified" || executionEvidence?.fieldCounts === "unmeasured");
 	const at = (stage: FillStage, label: string): FillProgress => ({ stage, label, filled: unmeasured ? null : filled, uploaded: unmeasured ? null : uploaded, fieldCounts: unmeasured ? "unmeasured" : "action_counts", checkpointPhase, checkpointId, submitAttempted, evidence, ...(executionEvidence ? { executionEvidence } : {}) });
 
 	if (input.applicationStatus === "submitted") return at("submitted", unmeasured ? "Submission to the employer was confirmed. Native action counters do not measure all completed fields." : `Submission confirmed after ${did}.`);
 	// An attempt whose outcome nobody confirmed is the one state that must never read as progress.
 	if (submitAttempted) return at("submitted", "A final submit was attempted — check the employer's site before anything else is done.");
+	if (preflightFailed) return at("stopped_before_filling", "Stopped during document checks before any browser or model started; nothing was submitted.");
 	if (unmeasured) {
 		const stage: FillStage = input.applicationStatus === "archived" ? "unavailable" : input.applicationStatus === "cancelled" || input.runStatus === "cancelled" ? "cancelled" : input.runStatus === "failed" || result?.outcome === "failed" ? "failed" : input.runStatus === "blocked" || input.runStatus === "paused" || input.applicationStatus === "blocked" || result?.outcome === "blocked" ? "blocked" : input.runStatus === "queued" ? "queued" : input.runStatus === "running" ? "filling" : input.applicationStatus === "awaiting_review" || result?.outcome === "awaiting_review" ? "ready_for_review" : "queued";
 		const activity = stage === "filling" ? "Browser run active." : stage === "queued" ? "Waiting for the browser runner." : stage === "ready_for_review" ? "Run stopped for review; form completion is unverified." : stage === "blocked" ? "Browser run blocked." : stage === "failed" ? "Browser run failed." : stage === "cancelled" ? "Browser run cancelled." : "Application archived.";

@@ -34,9 +34,13 @@ import { websiteDecision, type BrowserWebsiteAccess, type WebsiteAccessBlock } f
 
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
+	/** Synchronously fences native dispatch, then reports whether prior native work actually settled. */
+	suspendDispatch?(): Promise<{ state: "settled" | "pending" | "unknown" }>;
+	resumeDispatch?(): void;
 	recover?(): Promise<McpToolResult>;
 	recoveryStatus?(): BrowserRecoveryStatus | null;
 	/** Trusted per-run setup; Full requires a runner implementing this seam. */
+	configureCommandTimeout?(seconds: number): void;
 	configureToolAccess?(mode: "guarded" | "full", runDir: string): Promise<void>;
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
 	callTool(name: string, args?: Record<string, unknown>, opts?: { internal?: boolean; expectedOrigin?: string; expectedAccessibility?: ExpectedAccessibility }): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean; websiteAccess?: WebsiteAccessBlock; controlOpening?: ControlOpeningReceipt }>;

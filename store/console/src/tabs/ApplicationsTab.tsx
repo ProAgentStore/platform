@@ -14,7 +14,9 @@ import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
 import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSection";
 import ApplicationMaterials from "../components/ApplicationMaterials";
+import ApplicationReplayLive from "../components/ApplicationReplayLive";
 import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
+import ApplicationCommandTimeoutSettings from "../components/ApplicationCommandTimeoutSettings";
 import ApplicationEscalationSettings from "../components/ApplicationEscalationSettings";
 import FullBrowserRunNotice from "../components/FullBrowserRunNotice";
 import ApplicationToolAccessSettings, { type ToolAccessPatch } from "../components/ApplicationToolAccessSettings";
@@ -54,7 +56,7 @@ export default function ApplicationsTab(props: { instanceId: string; isTailor?: 
 
 /** Detail mode mounts only the requested application's live controls, never the queue UI. */
 export function ApplicationsView({ instanceId, isTailor = false, applicationId }: { instanceId: string; isTailor?: boolean; applicationId?: string }) {
-	const [searchParams] = useSearchParams();
+	const [searchParams, setSearchParams] = useSearchParams();
 	// Canonical #1013 links use query state so the existing `<tab>/<sessionId>` grammar remains
 	// honest. The opaque value is no browser/profile identifier and is re-authorized by the API.
 	const requestedHandoffId = searchParams.get("handoff")?.trim() || undefined;
@@ -70,6 +72,7 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 	const [handoff, setHandoff] = useState<ApplicationHandoffView | null>(null);
 	const [handoffError, setHandoffError] = useState("");
 	const [handoffOpen, setHandoffOpen] = useState(false);
+	const pendingTakeover = useRef<string | null>(null);
 
 	const load = useCallback(async () => {
 		try {
@@ -101,10 +104,10 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 			? api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-reconciliation-handoffs/${encodeURIComponent(requestedAnyHandoffId)}`)
 			: api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-handoffs/${encodeURIComponent(requestedAnyHandoffId)}`);
 		resolved
-			.then((next) => { if (!cancelled) setHandoff(next); })
+			.then((next) => { if (applicationId && next.applicationId !== applicationId) throw new Error("This handoff belongs to a different application."); if (!cancelled) { setHandoff(next); if (pendingTakeover.current === next.id && next.state === "active") { pendingTakeover.current = null; setHandoffOpen(true); } } })
 			.catch((e) => { if (!cancelled) setHandoffError(e instanceof Error ? e.message : String(e)); });
 		return () => { cancelled = true; };
-	}, [requestedAnyHandoffId, reconciliationHandoff, instanceId]);
+	}, [requestedAnyHandoffId, reconciliationHandoff, instanceId, applicationId]);
 	usePolling(load, 5000, !!applicationId || !!view?.items.some((i) => i.status === "tailoring" || i.status === "filling" || i.fillRun));
 
 	if (error && (applicationId || !view)) return <LoadFailed what={applicationId ? "this application" : "applications"} detail={error} onRetry={load} testId={applicationId && notFound ? "application-focus-missing" : undefined} />;
@@ -125,7 +128,7 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 					) : (
 						<>
 							<p className="text-sm text-muted mt-2">
-								{handoff.state === "active" ? reconciliationHandoff ? "Use this separate read-only browser only to sign in or complete the site challenge, then recheck. It cannot fill, upload, submit, or clear uncertainty without authoritative evidence." : "Use the existing Runner browser to complete the site step. Signing in does not by itself change an uncertain submission." : `This handoff is ${handoff.state.replace(/_/g, " ")}.`}
+								{handoff.state === "active" ? reconciliationHandoff ? "Use this separate read-only browser only to sign in or complete the site challenge, then recheck. It cannot fill, upload, submit, or clear uncertainty without authoritative evidence." : handoff.reason === "owner_requested" ? "The agent is paused while you control this exact browser. Resume returns control to the agent; submission permission is unchanged." : "Use the existing Runner browser to complete the site step. Signing in does not by itself change an uncertain submission." : `This handoff is ${handoff.state.replace(/_/g, " ")}.`}
 							</p>
 							{handoff.reason && <p className="text-xs text-muted-soft mt-1">Reason: {handoff.reason.replace(/_/g, " ")}</p>}
 							{handoff.expiresAt && <p className="text-xs text-muted-soft mt-1">Available until {new Date(handoff.expiresAt).toLocaleString()}.</p>}
@@ -200,7 +203,14 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 					The application this link is about is no longer in this queue — it may have been archived or removed.
 				</p>
 			)}
-			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} live={!!applicationId} />}</div>
+			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} live={!!applicationId} browserLive={<ApplicationReplayLive instanceId={instanceId} runId={selected.fillRunId} handoff={handoff?.applicationId === selected.applicationId ? handoff : null} reconciliation={reconciliationHandoff} onTakeOver={() => setHandoffOpen(true)} onRequestControl={selected.fillRun?.id === selected.fillRunId && (selected.fillRun.status === "running" || (selected.fillRun.status === "paused" && selected.fillRun.pause?.reason === "owner_requested")) ? async () => {
+				const result = await api<{ handoff: ApplicationHandoffView }>(`/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(selected.fillRunId!)}/handoff`, { method: "POST", body: JSON.stringify({ pause: true }) });
+				if (result.handoff.applicationId !== selected.applicationId || result.handoff.runId !== selected.fillRunId || result.handoff.state !== "active") throw new Error("The browser handoff is not ready for this exact application run. Retry after the pending action settles.");
+				const params = new URLSearchParams(searchParams); params.delete("reconciliation_handoff"); params.set("handoff", result.handoff.id);
+				pendingTakeover.current = result.handoff.id;
+				setSearchParams(params, { replace: true });
+				void load();
+			} : undefined} />} />}</div>
 
 			{!applicationId && view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} allowance={view.limits.find((l) => l.runnerInstanceId === view.pipeline.runners[0])} onChanged={load} />}
 			{handoffOpen && handoff && (
@@ -209,6 +219,7 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 					runId={handoff.runId}
 					handoffId={handoff.id}
 					reconciliation={reconciliationHandoff}
+					ownerRequested={handoff.reason === "owner_requested"}
 					onClose={() => setHandoffOpen(false)}
 					onChanged={() => {
 						setHandoffOpen(false);
@@ -271,7 +282,7 @@ function Limits({ view, instanceId, onChanged }: { view: ApplicationQueueView; i
 	);
 }
 
-function Detail({ instanceId, item, connections, onChanged, actionsRef, live = false }: { live?: boolean; instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void; actionsRef: Ref<HTMLFieldSetElement> }) {
+function Detail({ instanceId, item, connections, onChanged, actionsRef, live = false, browserLive }: { browserLive?: import("react").ReactNode; live?: boolean; instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void; actionsRef: Ref<HTMLFieldSetElement> }) {
 	const [busy, setBusy] = useState<ApplicationQueueAction | "check" | null>(null);
 	const [msg, setMsg] = useState("");
 	const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -483,7 +494,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 			{(live || !!item.fillRunId || frames.length > 0 || screenshotsOff) && (
 				<div className="mt-3">
 					<h4 className="font-semibold mb-2">Screenshot timeline</h4>
-					<RunReplay key={`${instanceId}:${item.fillRunId ?? item.applicationId}`} history={history} historyLoading={historyLoading} onLoadMore={() => void loadHistory()} frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : "No screenshots captured yet. New frames appear here as the browser works."} />
+					<RunReplay key={`${instanceId}:${item.fillRunId ?? item.applicationId}`} liveView={browserLive} history={history} historyLoading={historyLoading} onLoadMore={() => void loadHistory()} frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : "No screenshots captured yet. New frames appear here as the browser works."} />
 				</div>
 			)}
 
@@ -577,6 +588,15 @@ export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId:
 			setBusy(false);
 		}
 	};
+	const saveCommandTimeout = async (body: { browserCommandTimeoutSeconds: number }) => {
+		setBusy(true); setMsg("");
+		try {
+			const saved = await api<ApplicationRunnerSettingsView>(`/v1/instances/${runnerId}/application-runner/settings`, { method: "PUT", body: JSON.stringify(body) });
+			setS(saved.settings); onChanged(); setMsg("Browser command timeout saved for new runs.");
+		} catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+		finally { setBusy(false); }
+	};
+
 	const saveToolAccess = async (body: ToolAccessPatch) => {
 		setBusy(true);
 		setMsg("");
@@ -626,6 +646,7 @@ export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId:
 	return (
 		<Card className="mt-3 sm:mt-4">
 			<ApplicationToolAccessSettings settings={s} disclosure={toolDisclosure} busy={busy} acknowledged={fullToolsAcknowledged} onAcknowledge={setFullToolsAcknowledged} onChange={(body) => void saveToolAccess(body)} />
+			<ApplicationCommandTimeoutSettings key={s.browserCommandTimeoutSeconds ?? 600} value={s.browserCommandTimeoutSeconds} busy={busy} onChange={(body) => void saveCommandTimeout(body)} />
 			<ApplicationEscalationSettings value={s.escalationLevel} fullToolAccess={s.toolAccess === "full"} busy={busy} onChange={(body) => void saveEscalation(body)} />
 			{s.autoSubmit.enabled && <AutoSubmitDangerBanner rules={savedRules} allowance={allowance} onDisable={() => void disable()} busy={busy} />}
 			<div className="flex flex-wrap items-center gap-2 mb-1">

@@ -42,7 +42,7 @@ export class BrowserToolRecovery<T> {
 	private pending: Pending<T> | null = null;
 	private retired = false;
 	private deadlines = 0;
-	constructor(readonly requestDeadlineMs = 60_000, readonly wireDeadlineMs = 600_000) {
+	constructor(readonly requestDeadlineMs = 600_000, readonly wireDeadlineMs = requestDeadlineMs + 60_000) {
 		if (!(requestDeadlineMs > 0) || !(wireDeadlineMs > requestDeadlineMs) || wireDeadlineMs > 2_147_483_647) throw new Error("Browser request deadlines must be finite, positive and ordered");
 	}
 	private diagnostic(pending: Pending<T>, kind?: BrowserToolDiagnostic["kind"]): BrowserToolDiagnostic {

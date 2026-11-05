@@ -212,7 +212,7 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[], 
 		unmatched++;
 		if (questions.length < 20) questions.push(question);
 	};
-	const checkPreference = (statement: string, quote: unknown, sourceRole?: unknown) => {
+	const checkPreference = (statement: string, quote: unknown, location: string, sourceRole?: unknown) => {
 		if (!preferences) return;
 		const field = preferenceField(statement);
 		if (!field) return;
@@ -224,11 +224,16 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[], 
 		const negatedFact = fact && negation.test(statement) && !negation.test(fact.answer);
 		const value = fact && !conflictingSalary && !negatedFact && normalize(statement).includes(normalize(fact.answer)) ? fact.answer : statement;
 		const decision = preferenceDecision({ preferences, fieldLabel: statement, value, sourceQuote: quote, sources, now });
-		if (decision.kind === "refuse" || (fact && sourceRole !== undefined && sourceRole !== "instance_preferences")) flag(`The draft's ${field} claim is not supported by the current owner-confirmed preferences. Use the current fact exactly or omit this claim; ask the owner if its meaning is uncertain.`);
+		if (decision.kind === "refuse" || (fact && sourceRole !== undefined && sourceRole !== "instance_preferences")) {
+			const source = sourceRole === undefined ? "document text" : typeof sourceRole === "string" ? draftExcerpt(sourceRole, 20) : "(missing source)";
+			const current = fact ? `“${draftExcerpt(fact.answer, 30)}” (confirmed ${draftExcerpt(fact.confirmedAt, 10)})` : "No confirmed value; unresolved";
+			// Keep every locating/source excerpt inside the existing 300-character private question wire cap.
+			flag(draftExcerpt(`Validator classified ${location} as ${field}; rejected. Current instance_preferences: ${current}. Statement: “${draftExcerpt(statement, 35)}”; source: ${source}; quote: “${typeof quote === "string" ? draftExcerpt(quote, 35) : "(missing quote)"}”.`, 300));
+		}
 	};
 	for (const [index, raw] of claims.entries()) {
 		const c = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-		checkPreference(typeof c.text === "string" ? c.text : "", c.quote, c.source);
+		checkPreference(typeof c.text === "string" ? c.text : "", c.quote, `claim ${index + 1}`, c.source);
 		const quote = typeof c.quote === "string" ? normalize(c.quote) : "";
 		const src = typeof c.source === "string" ? byRole.get(c.source as LocalArtifactPromptRole) : undefined;
 		if (quote.length >= 3 && src?.includes(quote)) continue;
@@ -240,7 +245,9 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[], 
 	const text = `${resume}\n${coverLetter}`;
 	// Inspect document text too: an unrelated valid citation cannot authorize a stale salary claim.
 	const currentPreferenceText = sources.find((source) => source.role === "instance_preferences")?.text;
-	for (const statement of text.split(/\n|[.!?](?=\s|$)/)) checkPreference(statement, currentPreferenceText);
+	for (const [document, body] of [["résumé", resume], ["cover letter", coverLetter]]) {
+		for (const [index, statement] of body.split(/\n|[.!?](?=\s|$)/).entries()) checkPreference(statement, currentPreferenceText, `${document} statement ${index + 1}`);
+	}
 	const sourceDigits = digits(sources.map((s) => s.text).join("\n"));
 	for (const y of new Set(text.match(YEAR) ?? [])) if (!all.includes(y)) {
 		const [document, body] = resume.includes(y) ? ["résumé", resume] : ["cover letter", coverLetter];

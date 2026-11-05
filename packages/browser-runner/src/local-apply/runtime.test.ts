@@ -15,7 +15,8 @@ import type { McpCallPolicy } from "../mcp-call-policy.js";
 import type { MaskablePage } from "../local-browser/replay.js";
 import { LOCAL_APPLY_CAPS, type LocalApplyTaskEnvelope } from "./contract.js";
 import { applyPrompt, buildApplyEngineSpec } from "./engine.js";
-import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
+import { Blocked } from "./documents.js";
+import { type RunBrowser, LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
 import type { LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
 class FakeChild extends EventEmitter {
@@ -61,10 +62,14 @@ let takeoverOpen: string[];
 let takeoverInputs: unknown[];
 let takeoverPages: Page[];
 let runPage: Page | null;
+let nativePauseState: "settled" | "pending" | "unknown" = "settled";
+let dispatchSuspended = false;
 const SEEK_AD = "https://au.seek.com/job/94991284";
 const SEEK_FORM = "https://au.seek.com/job/94991284/apply";
 
 const browser: BrowserTools = {
+	suspendDispatch: async () => { dispatchSuspended = true; return { state: nativePauseState }; },
+	resumeDispatch: () => { dispatchSuspended = false; },
 	setCallPolicy: (policy) => { nativeCancelled = policy.isCancelled; nativePolicy = policy; },
 	listTools: async () => ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_evaluate"].map((name) => ({ name, inputSchema: {} })),
 	callTool: async (name, args = {}) => {
@@ -84,7 +89,7 @@ const browser: BrowserTools = {
 	},
 };
 
-function runtime(options: { handoffTtlMs?: number; now?: () => number } = {}) {
+function runtime(options: { handoffTtlMs?: number; now?: () => number; browserFor?: () => Promise<RunBrowser> } = {}) {
 	return new LocalApplyRuntime({
 		dataDir: join(dir, "data"),
 		homeDir: home,
@@ -136,6 +141,7 @@ async function approve(rt: LocalApplyRuntime, checkpointId = "initial:1", phase 
 }
 
 beforeEach(() => {
+	nativePauseState = "settled"; dispatchSuspended = false;
 	dir = mkdtempSync(join(tmpdir(), "local-apply-"));
 	home = join(dir, "home");
 	mkdirSync(join(home, "jobs/applications/lead-1/t-run"), { recursive: true });
@@ -269,6 +275,10 @@ it("cannot add a domain while running or at a non-redirect owner pause (#1478)",
 });
 
 describe("parseApplyEnvelope", () => {
+	it("validates command timeout seconds without converting them to minutes or milliseconds", () => {
+		for (const seconds of [1, 600, 3600]) expect(parseApplyEnvelope(envelope({ policy: { mode: "fill_and_review", allowDomains: ["example.com"], browserCommandTimeoutSeconds: seconds } })).policy.browserCommandTimeoutSeconds).toBe(seconds);
+		for (const seconds of [0, 3601, 1.5, "600", null]) expect(() => parseApplyEnvelope(envelope({ policy: { mode: "fill_and_review", allowDomains: ["example.com"], browserCommandTimeoutSeconds: seconds } } as never))).toThrow("browserCommandTimeoutSeconds");
+	});
 	it("validates explicit model configuration before any browser or CLI action", () => {
 		expect(parseApplyEnvelope(envelope({ engine: "codex", model: "future-model", reasoningEffort: "high" }))).toMatchObject({ model: "future-model", reasoningEffort: "high" });
 		expect(() => parseApplyEnvelope(envelope({ engine: "claude", reasoningEffort: "high" }))).toThrow(/only.*codex/);
@@ -360,12 +370,35 @@ describe("email job-page preflight", () => {
 });
 
 describe("scoped local-apply handoff (#1013)", () => {
-	const request = { handoffId: "handoff-opaque-1", runId: "run-1", applicationId: "app-1", browserProfile: "isolated" as const };
+	const request = { handoffId: "handoff-opaque-1", runId: "run-1", applicationId: "app-1", browserProfile: "isolated" as const, handoffRequestId: "" };
+	async function pause(rt: LocalApplyRuntime, runId = "run-1") { return (await rt.ownerPause({ ...request, runId })).pause!.handoffRequestId!; }
+	it("pauses exact owner control, refuses pending execution and prevents queued model replay after resume or Stop", async () => {
+		const rt = runtime(); rt.start(envelope()); await settle();
+		await expect(rt.ownerPause({ ...request, applicationId: "wrong" })).rejects.toThrow("does not match");
+		expect(dispatchSuspended).toBe(false);
+		nativePauseState = "pending";
+		await expect(rt.ownerPause(request)).rejects.toThrow("native execution is pending");
+		request.handoffRequestId = rt.status({ runId: "run-1" }).pause!.handoffRequestId!;
+		await expect(rt.handoff(request)).rejects.toThrow("settled native dispatch");
+		nativePauseState = "settled"; await rt.ownerPause(request); await rt.handoff(request);
+		const queued = call(rt, "browser_click", { target: "e2" });
+		expect(() => rt.resume({ runId: "run-1" })).toThrow("Close and drain");
+		await rt.endHandoff(request);
+		expect(() => rt.resume({ runId: "run-1", expectedOwnerPauseKey: "stale-pause" })).toThrow("Close and drain");
+		rt.resume({ runId: "run-1", expectedOwnerPauseKey: request.handoffRequestId });
+		expect((await queued).content[0].text).toContain("queued action was not executed");
+		expect(dispatchSuspended).toBe(false); expect(clicks).toEqual([]);
+		request.handoffRequestId = await pause(rt);
+		const stopped = call(rt, "browser_snapshot"); rt.cancel({ runId: "run-1" });
+		await expect(stopped).resolves.toMatchObject({ isError: true });
+		expect(rt.status({ runId: "run-1" }).state).toBe("ended");
+	});
 
 	it("keeps control on the exact live run and only exposes secret-free handoff state", async () => {
 		const rt = runtime();
 		rt.start(envelope());
 		await settle();
+		request.handoffRequestId = await pause(rt);
 		await expect(rt.handoff(request)).resolves.toEqual(expect.objectContaining({
 			handoffId: "handoff-opaque-1", runId: "run-1", applicationId: "app-1", browserProfile: "isolated", state: "ready",
 		}));
@@ -382,6 +415,7 @@ describe("scoped local-apply handoff (#1013)", () => {
 		const rt = runtime();
 		rt.start(envelope());
 		await settle();
+		request.handoffRequestId = await pause(rt);
 		await rt.handoff(request);
 		await expect(rt.handoff(request)).resolves.toMatchObject({ state: "ready", handoffId: request.handoffId });
 		await expect(rt.handoffStatus({ ...request, applicationId: "other-app" })).rejects.toThrow(/does not match/);
@@ -394,6 +428,7 @@ describe("scoped local-apply handoff (#1013)", () => {
 		const rt = runtime();
 		rt.start(envelope());
 		await settle();
+		request.handoffRequestId = await pause(rt);
 		await expect(rt.handoff(request)).resolves.toMatchObject({ state: "closed", terminalReason: "page_lost" });
 		expect(takeoverOpen).toEqual([]);
 	});
@@ -403,6 +438,7 @@ describe("scoped local-apply handoff (#1013)", () => {
 		const rt = runtime({ now: () => now, handoffTtlMs: 10 });
 		rt.start(envelope());
 		await settle();
+		request.handoffRequestId = await pause(rt);
 		await rt.handoff(request);
 		now += 11;
 		await expect(rt.handoffStatus(request)).resolves.toMatchObject({ state: "closed", terminalReason: "expired" });
@@ -410,7 +446,7 @@ describe("scoped local-apply handoff (#1013)", () => {
 		const second = runtime();
 		second.start(envelope({ runId: "run-2", requestId: "request-2" }));
 		await settle();
-		const secondRequest = { ...request, handoffId: "handoff-2", runId: "run-2" };
+		const secondRequest = { ...request, handoffId: "handoff-2", runId: "run-2", handoffRequestId: await pause(second, "run-2") };
 		await second.handoff(secondRequest);
 		takeoverOpen = [];
 		await expect(second.handoffStatus(secondRequest)).resolves.toMatchObject({ state: "closed", terminalReason: "page_lost" });
@@ -1264,6 +1300,30 @@ describe("owner instance preferences in local application launch (#1508)", () =>
 });
 
 describe("accepted full native runtime wiring", () => {
+	it.each(["missing_resume", "changed_resume", "missing_profile"])("retains a positive document-only refusal before execution: %s", async (failure) => {
+		if (failure === "missing_resume") rmSync(join(home, "jobs/applications/lead-1/t-run/resume.md"));
+		if (failure === "changed_resume") writeFileSync(join(home, "jobs/applications/lead-1/t-run/resume.md"), "Changed document");
+		if (failure === "missing_profile") rmSync(join(home, "jobs/profile.md"));
+		const browserFor = vi.fn(async () => ({ tools: browser, stop: async () => undefined }));
+		const rt = runtime({ browserFor }); const input = envelope();
+		input.policy = { ...input.policy, toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", acceptedAt: "2026-11-05T00:00:00Z", acceptedBy: "owner", instanceId: input.instanceId } };
+		rt.start(input); await settle();
+		const result = rt.status({ runId: "run-1" }).result;
+		expect(result).toMatchObject({ outcome: "blocked", engineAuth: "unknown", preflightFailure: { schemaVersion: 1, runId: "run-1", phase: "documents", reason: failure === "missing_profile" ? "source_unavailable" : "artifact_changed" } });
+		expect(result?.submissionVerification).toBeUndefined();
+		expect(browserFor).not.toHaveBeenCalled(); expect(spawned).toHaveLength(0);
+		const restarted = runtime(); expect(restarted.status({ runId: "run-1" }).result?.preflightFailure).toEqual(result?.preflightFailure);
+		rt.closeAll(); restarted.closeAll();
+	});
+	it("keeps uncertainty once browser initialization begins, even for the same refusal reason", async () => {
+		const browserFor = vi.fn(async () => { throw new Blocked("artifact_changed", ["Browser initialization failed"]); });
+		const rt = runtime({ browserFor }); const input = envelope();
+		input.policy = { ...input.policy, toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", acceptedAt: "2026-11-05T00:00:00Z", acceptedBy: "owner", instanceId: input.instanceId } };
+		rt.start(input); await settle();
+		expect(browserFor).toHaveBeenCalledOnce(); expect(spawned).toHaveLength(0);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "blocked", blockReason: "artifact_changed", submissionVerification: "unverified" });
+		expect(rt.status({ runId: "run-1" }).result?.preflightFailure).toBeUndefined(); rt.closeAll();
+	});
 	it("freezes full authority, configures workspace tools, passes actual inventory to the engine and reports unverified submission", async () => {
 		const configure = vi.fn(async () => {}); browser.configureToolAccess = configure;
 		const rt = runtime(); const input = envelope({ engine: "codex" });

@@ -116,8 +116,81 @@ function readyApp(id: string, over: { title?: string; url?: string } = {}) {
 const enableAutoSubmit = (over: Record<string, unknown> = {}) =>
 	call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1, ...over }, acknowledgeRealSubmissions: true });
 
+describe("explicit owner pause before application control", () => {
+	it.each(["0.4.224", "0.4.225"])("requires a supporting runner and confirmed native settlement (%s)", async version => {
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		const started = await call("POST", "/ap/application-runs", readyApp(`owner-${version}`));
+		const runId = started.body.run.id;
+		await d1.DB.prepare("UPDATE local_apply_runs SET runner_version = ?1 WHERE id = ?2").bind(version, runId).run();
+		runner("running", { lastSeq: 0 });
+		answers["/local-apply/owner-pause"] = () => {
+			runner("paused", { pause: { reason: "owner_requested", handoffRequestId: "owner-pause-1" }, events: [{ seq: 1, type: "run.paused", at: new Date().toISOString(), pauseReason: "owner_requested" }] });
+			return { status: 200, body: { state: "paused" } };
+		};
+		answers["/local-apply/handoff"] = { status: 200, body: { state: "ready" } };
+		const takeover = await call("POST", `/ap/application-runs/${runId}/handoff`, { pause: true });
+		if (version === "0.4.224") {
+			expect(takeover.status).toBe(409); expect(takeover.body.error).toContain("0.4.225");
+			expect(sent.some(s => s.path === "/local-apply/owner-pause")).toBe(false);
+		} else {
+			expect(takeover.status, JSON.stringify(takeover.body)).toBe(201);
+			expect(takeover.body.handoff).toMatchObject({ runId, applicationId: `owner-${version}`, state: "active" });
+			expect(sent.find(s => s.path === "/local-apply/owner-pause")?.body).toEqual({ runId, applicationId: `owner-${version}`, browserProfile: "isolated" });
+			expect(sent.find(s => s.path === "/local-apply/handoff")?.body).toMatchObject({ runId, handoffRequestId: "owner-pause-1" });
+		}
+	});
+	it("keeps pending native execution paused without exposing any handoff", async () => {
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		const started = await call("POST", "/ap/application-runs", readyApp("owner-pending")); const runId = started.body.run.id;
+		runner("running", { lastSeq: 0 });
+		answers["/local-apply/owner-pause"] = () => {
+			runner("paused", { pause: { reason: "owner_requested", handoffRequestId: "owner-pause-1" }, events: [{ seq: 1, type: "run.paused", at: new Date().toISOString(), pauseReason: "owner_requested" }] });
+			return { status: 409, body: { error: "AI dispatch is paused; native execution is pending" } };
+		};
+		expect((await call("POST", `/ap/application-runs/${runId}/handoff`, { pause: true })).status).toBe(409);
+		expect(sent.some(s => s.path === "/local-apply/handoff")).toBe(false);
+		expect(await d1.DB.prepare("SELECT count(*) AS n FROM local_apply_handoffs WHERE run_id = ?1").bind(runId).first()).toEqual({ n: 0 });
+	});
+});
+
 describe("full browser tool acceptance and dispatch", () => {
 	const accept = { toolAccess: "full", acknowledgeFullBrowserTools: "full_playwright_v1" };
+	it.each(["0.4.225", "0.4.224"])("accepts document-only failure evidence only from a supporting runner (%s)", async (version) => {
+		await call("PUT", "/ap/application-runner/settings", accept);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		const id = `preflight-${version}`;
+		const started = await call("POST", "/ap/application-runs", readyApp(id));
+		expect(started.status).toBe(201);
+		const runId = started.body.run.id;
+		await d1.DB.prepare("UPDATE local_apply_runs SET runner_version = ?1 WHERE id = ?2").bind(version, runId).run();
+		runner("ended", { events: [{ seq: 1, type: "source.read", at: new Date().toISOString(), detail: { role: "profile" } }], result: RESULT(runId, {
+			outcome: "blocked", blockReason: "artifact_changed", engineAuth: "unknown", filled: 0, uploaded: [],
+			preflightFailure: { schemaVersion: 1, runId, phase: "documents", reason: "artifact_changed" },
+			executionEvidence: { schemaVersion: 1, fieldCounts: "unmeasured", nativeCalls: { attempted: 0, succeeded: 0, failed: 0, notDispatched: 0, dropped: 0, truncated: false, coverage: "unavailable" }, screenshotsDelivered: 0, screenshotRequests: 0, independentScreenshotAvailable: false, blockingQuestions: 0, optionalQuestions: 0, browser: { state: "unavailable", timeouts: 0 }, causes: [] },
+		}) });
+		const ended = await call("GET", `/ap/application-runs/${runId}`);
+		expect(ended.body.run.status).toBe("blocked");
+		const views = await readFillViews(env(), "u1", { id, fillRunId: runId, status: "blocked", submitAttemptedAt: null, blockReason: "artifact_changed" });
+		if (version === "0.4.225") {
+			expect(ended.body.run.result.preflightFailure, JSON.stringify(ended.body.run)).toMatchObject({ runId, phase: "documents" });
+			expect(ended.body.run.result.submissionVerification).toBeUndefined();
+			expect(views.submissionUncertain).toBe(false);
+			expect(views.progress?.label).toContain("before any browser or model started; nothing was submitted");
+			await d1.DB.prepare("UPDATE job_applications SET submit_attempted_at = 1 WHERE id = ?1").bind(id).run();
+			// Fresh durable attempt evidence outranks the receipt even when a caller holds an older app.
+			const contradictory = await readFillViews(env(), "u1", { id, fillRunId: runId, status: "blocked", submitAttemptedAt: null, blockReason: "artifact_changed" });
+			expect(contradictory).toMatchObject({ submissionUncertain: true, submissionVerification: "unverified" });
+			expect(contradictory.progress?.label).not.toContain("nothing was submitted");
+			const attempted = await readFillViews(env(), "u1", { id, fillRunId: runId, status: "blocked", submitAttemptedAt: 1, blockReason: "artifact_changed" });
+			expect(attempted.progress?.label).toContain("A final submit was attempted");
+		} else {
+			expect(ended.body.run.result.preflightFailure).toBeUndefined();
+			expect(ended.body.run.result.submissionVerification).toBe("unverified");
+			expect(views.submissionUncertain).toBe(true);
+			expect(views.progress?.label).toContain("Submission status is unverified");
+		}
+		expect(dispatches()).toHaveLength(1);
+	});
 	it("requires acknowledgement, rejects forged receipts, stamps owner provenance and records the change", async () => {
 		const initial = await call("GET", "/ap/application-runner/settings");
 		expect(initial.body.settings.toolAccess).toBe("guarded");
@@ -142,7 +215,7 @@ describe("full browser tool acceptance and dispatch", () => {
 		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
 		const refused = await call("POST", "/ap/application-runs", event);
 		expect(refused.status).toBe(409); expect(refused.body.error).toContain("0.4.221"); expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.221' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", event);
 		expect(started.status).toBe(201);
 		expect(dispatches()[0].body.policy).toMatchObject({ toolAccess: "full", toolAccessAcceptance: accepted.body.settings.toolAccessAcceptance, mode: "fill_and_review" });
@@ -239,11 +312,42 @@ describe("full browser tool acceptance and dispatch", () => {
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
 		expect(dispatches()).toHaveLength(1);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.221' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
 		await call("PUT", "/ap/application-runner/settings", { toolAccess: "guarded" });
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
 		expect(dispatches()).toHaveLength(1);
+	});
+});
+
+describe("per-instance browser command timeout settings and dispatch", () => {
+	it("defaults to 600 seconds, isolates settings, and refuses an old runner before claiming", async () => {
+		expect((await call("GET", "/ap/application-runner/settings")).body.settings.browserCommandTimeoutSeconds).toBe(600);
+		expect((await call("PUT", "/ap/application-runner/settings", { browserCommandTimeoutSeconds: 900 })).body.settings.browserCommandTimeoutSeconds).toBe(900);
+		expect((await call("GET", "/t1/application-runner/settings")).body.settings.browserCommandTimeoutSeconds).toBe(600);
+		expect((await call("PUT", "/ap/application-runner/settings", { browserCommandTimeoutSeconds: 0 })).status).toBe(400);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.224' WHERE instance_id = 'ap'");
+		const event = readyApp("timeout-old");
+		const refused = await call("POST", "/ap/application-runs", event);
+		expect(refused.status).toBe(409); expect(refused.body.error).toContain("0.4.225");
+		expect((await appRow("timeout-old"))?.status).toBe("materials_ready");
+		expect(dispatches()).toHaveLength(0);
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		const started = await call("POST", "/ap/application-runs", event);
+		expect(started.status).toBe(201);
+		expect(started.body.run.policy.browserCommandTimeoutSeconds).toBe(900);
+		expect(dispatches()[0].body.policy.browserCommandTimeoutSeconds).toBe(900);
+	});
+	it("retains the frozen timeout when settings change during a queue wait", async () => {
+		await call("PUT", "/ap/application-runner/settings", { browserCommandTimeoutSeconds: 1200 });
+		answers["/local-apply/run"] = { status: 409, body: { error: "This machine is already filling 1 application(s) for this agent (limit 1)." } };
+		const started = await call("POST", "/ap/application-runs", readyApp("timeout-queued"));
+		expect(started.body.run.status).toBe("queued");
+		await call("PUT", "/ap/application-runner/settings", { browserCommandTimeoutSeconds: 1 });
+		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("dispatched");
+		expect(dispatches().at(-1)?.body.policy.browserCommandTimeoutSeconds).toBe(1200);
 	});
 });
 
@@ -260,7 +364,7 @@ describe("application escalation setting survives dispatch and queue waits", () 
 		expect(refused.body.error).toContain("0.4.220");
 		expect((await appRow("escalation-old"))?.status).toBe("materials_ready");
 		expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", event);
 		expect(started.status).toBe(201);
 		expect(started.body.run.policy).toMatchObject({ escalationLevel: "balanced", mode: "fill_and_review" });
@@ -278,7 +382,7 @@ describe("application escalation setting survives dispatch and queue waits", () 
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
 		expect(dispatches()).toHaveLength(1);
 		await call("PUT", "/ap/application-runner/settings", { escalationLevel: "autonomous" });
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
 		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("dispatched");
@@ -464,7 +568,7 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 		expect(refused.status).toBe(409);
 		expect(refused.body.error).toMatch(/0.4.199/);
 		expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.208' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", readyApp("blur-new"));
 		expect(started.status, JSON.stringify(started.body)).toBeLessThan(300);
 		expect(dispatches()[0].body.policy).toMatchObject({ blurFormFields: false });
@@ -703,7 +807,7 @@ describe("submission is gated", () => {
 		const r = await call("POST", "/ap/application-runs", readyApp("lead-6"));
 		const gateId = r.body.run.policy.gate.gateId;
 		expect(r.body.run.policy).toMatchObject({ mode: "auto_submit", gate: { allowed: true } });
-		expect(dispatches()[0].body.policy).toEqual({ mode: "auto_submit", escalationLevel: "conservative", allowDomains: ["jobs.example.com", "example.com"], submitGate: { gateId }, blurFormFields: true });
+		expect(dispatches()[0].body.policy).toEqual({ mode: "auto_submit", browserCommandTimeoutSeconds: 600, escalationLevel: "conservative", allowDomains: ["jobs.example.com", "example.com"], submitGate: { gateId }, blurFormFields: true });
 
 		const runId = r.body.run.id;
 		runner("ended", {
@@ -1064,6 +1168,64 @@ describe("a one-click block is approvable, and the approval is spent once (#991)
 		expect(dispatched.policy.submitGate).toBeUndefined();
 	});
 
+	/** A legacy undispatched queue row advanced the canonical fill after claiming recovery. */
+	async function lostClaimedRecovery(id: string) {
+		const originalRunId = await oneClickBlocked(id);
+		const before = await card(id);
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: id, expected_status: "blocked", expected_version: before.stateVersion });
+		const blocker = await call("POST", "/ap/application-runs", readyWithEvent(`${id}-busy`));
+		answers["/local-apply/run"] = { status: 409, body: { error: "This machine is already filling an application for this agent; one at a time." } };
+		const first = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: id, expected_status: "blocked" });
+		expect(first.status, JSON.stringify(first.body)).toBe(200);
+		const lostRunId = first.body.result.runId as string;
+		const lost = (await call("GET", `/ap/application-runs/${lostRunId}`)).body.run;
+		expect(lost).toMatchObject({ status: "queued", policy: { mode: "fill_and_review", approvalRecoveryId: expect.any(String) } });
+		// Simulate a row from before durable capacity waits: no dispatch acknowledgement, attempts
+		// or reason. The real sync path settles it as runner_lost without submitting or spending.
+		await d1.DB.prepare("UPDATE local_apply_runs SET queued_reason = NULL, attempts = 0, created_at = ?1 WHERE id = ?2").bind(Date.now() - 11 * 60_000, lostRunId).run();
+		await call("GET", `/ap/application-runs/${lostRunId}`);
+		expect(await card(id)).toMatchObject({ status: "blocked", blockReason: "runner_lost", fillRunId: lostRunId, submitAttempted: false, submitAuthorization: { usable: true, recoveryPending: true } });
+		runner("ended", { result: RESULT(blocker.body.run.id) });
+		await call("GET", `/ap/application-runs/${blocker.body.run.id}`);
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		return { originalRunId, lostRunId, recoveryId: lost.policy.approvalRecoveryId as string };
+	}
+
+	it.each(["blocked", "failed", "awaiting_review", "materials_ready"])("keeps an exact claimed recovery usable after a guarded undispatched run is lost (%s)", async (status) => {
+		const id = `one-click-lost-recovery-${status}`;
+		const { lostRunId, recoveryId } = await lostClaimedRecovery(id);
+		await d1.DB.prepare("UPDATE job_applications SET status = ?1, block_reason = CASE WHEN ?1 = 'materials_ready' THEN NULL ELSE block_reason END WHERE id = ?2").bind(status, id).run();
+		const count = dispatches().length;
+		const retried = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: id, expected_status: status });
+		expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+		expect(retried.body.result.runId).not.toBe(lostRunId);
+		expect(dispatches()).toHaveLength(count + 1);
+		expect(dispatches().at(-1)?.body.policy, JSON.stringify(dispatches().at(-1)?.body.policy)).toMatchObject({ mode: "auto_submit" });
+		const next = (await d1.DB.prepare("SELECT policy FROM local_apply_runs WHERE id = ?1").bind(retried.body.result.runId).first<{ policy: string }>())!;
+		expect(JSON.parse(next.policy).approvalRecoveryId).toBe(recoveryId);
+		expect(await auth(id)).toMatchObject({ consumed_run_id: retried.body.result.runId, consumed_at: expect.any(Number) });
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_application_submit_authorizations WHERE application_id = ?1").bind(id).first<{ n: number }>())?.n).toBe(1);
+	});
+
+	it.each(["blocked", "failed", "awaiting_review", "materials_ready"].flatMap((status) => ["revoked", "materials", "job", "runner", "claim", "attempt", "full uncertainty"].map((changed) => ({ status, changed }))))("does not revive a claimed recovery after $changed changes ($status)", async ({ status, changed }) => {
+		const id = `one-click-lost-${status}-${changed}`;
+		const { lostRunId } = await lostClaimedRecovery(id);
+		await d1.DB.prepare("UPDATE job_applications SET status = ?1, block_reason = CASE WHEN ?1 = 'materials_ready' THEN NULL ELSE block_reason END WHERE id = ?2").bind(status, id).run();
+		if (changed === "revoked") await d1.DB.prepare("UPDATE job_application_submit_authorizations SET revoked_at = 1 WHERE application_id = ?1").bind(id).run();
+		if (changed === "materials") await d1.DB.prepare("UPDATE job_applications SET profile_version = 'changed-profile' WHERE id = ?1").bind(id).run();
+		if (changed === "job") await d1.DB.prepare("UPDATE job_applications SET work_key = 'another-job' WHERE id = ?1").bind(id).run();
+		if (changed === "runner") await d1.DB.prepare("UPDATE job_application_submit_authorizations SET recovery_runner_instance_id = 'another-runner' WHERE application_id = ?1").bind(id).run();
+		if (changed === "claim") await d1.DB.prepare("UPDATE job_application_submit_authorizations SET recovery_id = 'superseded-claim' WHERE application_id = ?1").bind(id).run();
+		if (changed === "attempt") await d1.DB.prepare("UPDATE job_applications SET submit_attempted_at = 1 WHERE id = ?1").bind(id).run();
+		if (changed === "full uncertainty") await d1.DB.prepare("UPDATE local_apply_runs SET policy = json_set(policy, '$.toolAccess', 'full') WHERE id = ?1").bind(lostRunId).run();
+		const count = dispatches().length;
+		const refused = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: id, expected_status: status });
+		expect(refused.status).toBe(409);
+		expect(dispatches()).toHaveLength(count);
+		expect((await appRow(id))?.fill_run_id).toBe(lostRunId);
+		expect(await auth(id)).toMatchObject({ consumed_at: null, consumed_run_id: null });
+	});
+
 	it("a second approval is refused — the spent one is the record of what was authorised", async () => {
 		await oneClickBlocked("lead-oc5");
 		const before = await card("lead-oc5");
@@ -1388,11 +1550,11 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		setRunnerVersion("0.4.84");
 		const ev = readyApp("lead-v2");
 		expect((await call("POST", "/ap/application-runs", ev)).status).toBe(409);
-		setRunnerVersion("0.4.208");
+		setRunnerVersion("0.4.225");
 		const ok = await call("POST", "/ap/application-runs", ev);
 		expect(ok.body.run.status).toBe("running");
 		// And the record says WHICH runner executed it — the fact that was missing.
-		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.208" });
+		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.225" });
 	});
 
 	it("stamps the executing runner's version on every run, and returns it over the API", async () => {
@@ -1413,7 +1575,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 	});
 
 	it("an up-to-date runner still reports the #975 zero-bridge diagnosis end to end", async () => {
-		setRunnerVersion("0.4.208");
+		setRunnerVersion("0.4.225");
 		const ev = readyApp("lead-v5");
 		const started = await call("POST", "/ap/application-runs", ev);
 		const runId = started.body.run.id as string;
@@ -1432,7 +1594,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
 		// The pairing #977 asks for: the diagnosis AND the contract that produced it, on one record.
 		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0 } });
-		expect(run.runnerVersion).toBe("0.4.208");
+		expect(run.runnerVersion).toBe("0.4.225");
 		expect(await appRow("lead-v5")).toMatchObject({ status: "blocked", block_reason: "bridge_unused" });
 		// Still no free text from the CLI, whichever release ran it.
 		expect(JSON.stringify(run.result.diagnostic)).not.toMatch(/[A-Za-z]{200}/);

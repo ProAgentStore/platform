@@ -155,7 +155,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.207`
+- `serverInfo.version`: `0.1.208`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -882,7 +882,7 @@ The original download is bounded to 1MiB. Text pages contain at most 6,000 UTF-1
 
 `sha256` is computed from the complete downloaded original bytes. `provenance` separately reports the registered hash and the version/ETag from the metadata snapshot; missing registered hashes remain explicitly unverified. Pages describe their actual boundaries and do not silently truncate files.
 
-### Ended application answers and execution evidence (0.1.207)
+### Ended application answers and execution evidence (0.1.208)
 
 For an ended blocked application with recorded questions, `resume_application` saves answers against the exact application/run/state version and returns `outcome: answers_saved`, `resumed: false`. It does not restart that run. The next separately authorized retry receives the latest saved answers; earlier corrections are superseded. Dry-run reads current state and distinguishes this save-only action from resuming a live paused run. Domain approval remains a live-pause action.
 
