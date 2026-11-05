@@ -136,7 +136,7 @@ describe("read_terminal opens a session rather than refusing (#407)", () => {
 		expect(res.success).toBe(false);
 		expect(store.createSession).not.toHaveBeenCalled();
 		expect(runner.callRunner).not.toHaveBeenCalled();
-		expect(res.content).toMatch(/pags up/);
+		expect(res.content).toMatch(/host and runner process state are unknown/);
 		expect(res.content).toContain("mac");
 	});
 

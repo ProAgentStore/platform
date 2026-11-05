@@ -54,7 +54,8 @@ describe("classifySubordinateConnectivity", () => {
 		});
 		expect(c.canWork).toBe(false);
 		expect(c.state).toBe("runner-offline");
-		expect(c.remedy).toBe("pags up");
+		expect(c.remedy).toBeNull();
+		expect(c.message).toContain("host and runner process state are unknown");
 		expect(c.message).toContain("studio");
 	});
 

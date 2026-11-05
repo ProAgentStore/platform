@@ -484,9 +484,10 @@ describe("engineClause (#465)", () => {
 		expect(c).not.toMatch(/engine.*is idle/i);
 	});
 
-	it("runner-offline → machine is offline", () => {
+	it("runner-offline → local process state is unknown", () => {
 		const c = engineClause(tv("runner-offline"));
-		expect(c).toMatch(/offline/i);
+		expect(c).toContain("PAGS connection unavailable");
+		expect(c).toContain("local engine state is unknown");
 		expect(c).not.toContain("working");
 	});
 
@@ -523,7 +524,7 @@ describe("describeLoopRun engine clause (#465)", () => {
 
 	it("runner-offline → offline wording, never 'working'", () => {
 		const s = describeLoopRun(coding, NOW, undefined, tv("runner-offline"));
-		expect(s).toMatch(/offline/i);
+		expect(s).toContain("PAGS connection unavailable");
 		expect(s).not.toMatch(/engine.*working/i);
 	});
 

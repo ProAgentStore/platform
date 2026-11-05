@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { DELIVERED_TTL_MS, enqueueWatchdogCommand, MAX_DELIVERED_PER_BEAT, parseWatchdogCommand, parseWatchdogStatus, QUEUED_TTL_MS, readWatchdog, WATCHDOG_ONLINE_MS, watchdogHeartbeat } from "./machine-watchdog.js";
 import type { Env } from "../types.js";
+import { watchdogRunnerAliveHint } from "./runner-attach-report.js";
 
 const M = "3901c9c4-004f-435e-bfc5-0b87b7ac5173";
 const OTHER = "99999999-004f-435e-bfc5-0b87b7ac5173";
@@ -45,7 +46,33 @@ describe("status is clamped and carries no path or secret (#1320)", () => {
 		expect(s.payloads).toHaveLength(5);
 		expect(s.lastError).toBe("ENOENT <path>");
 		expect(JSON.stringify(s)).not.toMatch(/serge|sk-secret/);
-		expect(parseWatchdogStatus(null).runner).toEqual({ alive: false, uptimeSec: null });
+		expect(parseWatchdogStatus(null).runner).toEqual({ alive: null, aliveObserved: false, uptimeSec: null });
+	});
+});
+
+describe("runner process evidence remains tri-state (#1485)", () => {
+	it("persists unknown for missing/malformed evidence and preserves explicit true/false", async () => {
+		for (const alive of [undefined, null, "false", 0, false, true]) {
+			await watchdogHeartbeat(env, "u1", M, { status: { runner: { alive } } }, NOW);
+			const view = await readWatchdog(env, "u1", M, NOW + 1000);
+			expect(view.connected).toBe(true);
+			expect(view.status?.runner.alive).toBe(typeof alive === "boolean" ? alive : null);
+		}
+	});
+});
+
+describe("legacy watchdog defaults do not prove process absence (#1485)", () => {
+	it("accepts negative evidence only from a marked observation and keeps legacy true", async () => {
+		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, machine_id, status) VALUES ('i1', 'u1', 'pink', 'relay://', '${M}', 'registered')`);
+		for (const [runner, expected] of [
+			[{}, null], [{ alive: false }, null], [{ alive: true }, true],
+			[{ alive: false, aliveObserved: true }, false], [{ alive: null, aliveObserved: false }, null],
+		] as const) {
+			await watchdogHeartbeat(env, "u1", M, { status: {} });
+			d1.sqlite.prepare("UPDATE machine_watchdog_status SET status_json = ? WHERE user_id = 'u1' AND machine_id = ?").run(JSON.stringify({ runner }), M);
+			expect(await watchdogRunnerAliveHint(env, "u1", "i1", "pink")).toBe(expected);
+			expect((await readWatchdog(env, "u1", M)).status?.runner.alive).toBe(expected);
+		}
 	});
 });
 

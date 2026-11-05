@@ -27,7 +27,7 @@ import { agentCapabilities } from "./agent-capabilities.js";
 import { machineIdForNode } from "./coding-repo-checkouts.js";
 import { logError } from "./error-log.js";
 import { compareCliVersions, stampMs } from "./machine-identity.js";
-import { readWatchdog } from "./machine-watchdog.js";
+import { WATCHDOG_ONLINE_MS } from "./machine-watchdog.js";
 import { RUNNER_CONTROL_MIN_CLI } from "./runner-features.js";
 import { latestResourceSample, resourcesView } from "./runner-resources.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
@@ -161,9 +161,9 @@ export function windowExpiredCause(progress: AttachProgress, node: string, now =
 		case "no_carrier":
 			return {
 				cause: "no_socket",
-				detail: watchdogAlive
-					? `Nothing on ${node} holds a relay socket to ask — but its watchdog reports a \`pags up\` process IS alive there, just not connected to the relay. This is not "no process running"; it needs a restart (runner_restart), not a reinstall.`
-					: `Nothing on ${node} holds a relay socket to ask, so the attach waits on that machine's own poll. Call instance_runner_node to confirm.`,
+				detail: `No live PAGS relay connection is available on ${node} to ask for attachment. ${watchdogAlive == null
+					? "Host power and runner process state are unknown. Check the existing service and connection before starting another process."
+					: `Fresh watchdog evidence reports the \`pags up\` process ${watchdogAlive ? "IS alive, but its relay connection is not confirmed healthy" : "is not running"}.`} Call instance_runner_node to confirm attachment.`,
 			};
 		case "refused":
 			return { cause: "refused", detail: `The runner on ${node} refused the attach request.` };
@@ -184,8 +184,15 @@ export function windowExpiredCause(progress: AttachProgress, node: string, now =
 export async function watchdogRunnerAliveHint(env: Env, userId: string, instanceId: string, node: string): Promise<boolean | null> {
 	const machineId = await machineIdForNode(env, instanceId, userId, node).catch(() => null);
 	if (!machineId) return null;
-	const w = await readWatchdog(env, userId, machineId).catch(() => null);
-	return w?.connected && w.status ? w.status.runner.alive : null;
+	// Legacy stored false may be an old parser default, not a process observation (#1485).
+	// New heartbeats mark explicit boolean evidence; old true was never fabricated.
+	const row = await env.DB.prepare("SELECT reported_at, status_json FROM machine_watchdog_status WHERE user_id = ?1 AND machine_id = ?2")
+		.bind(userId, machineId).first<{ reported_at: number; status_json: string }>().catch(() => null);
+	if (!row || !Number.isFinite(row.reported_at) || Date.now() - row.reported_at > WATCHDOG_ONLINE_MS) return null;
+	try {
+		const runner = JSON.parse(row.status_json)?.runner;
+		return runner?.alive === true ? true : runner?.alive === false && runner.aliveObserved === true ? false : null;
+	} catch { return null; }
 }
 
 /** The causes that are a real failure (error log), not an expected state (activity only). */

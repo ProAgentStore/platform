@@ -38,7 +38,7 @@ export interface CleanupBeat {
 
 export interface CleanupSync {
 	collect(resources: ResourceSample): Promise<CleanupBeat>;
-	accept(response: unknown): Promise<void>;
+	accept(response: unknown, signal?: AbortSignal): Promise<void>;
 }
 
 export function createCleanupSync(localUrl: string, token: string, fetchImpl: typeof fetch = fetch, log: (line: string) => void = () => undefined): CleanupSync {
@@ -46,10 +46,11 @@ export function createCleanupSync(localUrl: string, token: string, fetchImpl: ty
 	let handledNowAt = 0;
 	let doneNowAt = 0;
 	const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-	const post = async (path: string, body: unknown, timeoutMs: number): Promise<unknown | null> => {
+	const post = async (path: string, body: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown | null> => {
 		try {
-			const res = await fetchImpl(`${localUrl}${path}`, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
-			return res.ok ? await res.json() : null;
+			const res = await fetchImpl(`${localUrl}${path}`, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]) });
+			const result = res.ok ? await res.json() : null;
+			return signal?.aborted ? null : result;
 		} catch {
 			return null; // an old runner (404), a busy one (timeout): this beat goes without
 		}
@@ -63,13 +64,15 @@ export function createCleanupSync(localUrl: string, token: string, fetchImpl: ty
 			return { status, ...(doneNowAt ? { doneAt: doneNowAt } : {}) };
 		},
 
-		async accept(response) {
+		async accept(response, signal) {
+			signal?.throwIfAborted();
 			if (!response || typeof response !== "object") return;
 			const r = response as { cleanupPolicy?: unknown; cleanupNow?: { requestedAt?: unknown } | null };
 			if (r.cleanupPolicy && typeof r.cleanupPolicy === "object") {
 				const serialized = JSON.stringify(r.cleanupPolicy);
 				if (serialized !== appliedPolicy) {
-					const ok = await post("/coding/cleanup/policy", { policy: r.cleanupPolicy }, 5000);
+					const ok = await post("/coding/cleanup/policy", { policy: r.cleanupPolicy }, 5000, signal);
+					signal?.throwIfAborted();
 					if (ok) appliedPolicy = serialized; // not remembered when it failed: the next beat tries again
 				}
 			}

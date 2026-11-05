@@ -28,6 +28,7 @@ import { activeSessionsOn, resourcesView, runnerIdentityOf } from "../lib/runner
 import { duplicateRunnersOn } from "../lib/runner-duplicates.js";
 import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus, runnerStatusView } from "../lib/runner-health.js";
 import { heartbeatFresh } from "../lib/runtime-attachment.js";
+import { watchdogRunnerAliveHint } from "../lib/runner-attach-report.js";
 import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getLiveRuntime, getRuntimeNode, updateRuntimeStatus } from "./instances-runtime.js";
@@ -379,7 +380,6 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// verdict. The shared row stays the fallback for an unpinned agent, which has nothing better.
 		const pinned = conn ? "" : await readInstanceRunnerNode(env, instanceId, uid).catch(() => "");
 		const pinnedRow = pinned ? await getRuntimeNode(env, instanceId, uid, pinned).catch(() => null) : null;
-		// What we report in the `runner` section: the live node's row, else the pinned node's, else the default.
 		const reportedRow = liveRuntimeRow ?? pinnedRow ?? runtimeRow;
 
 		const runner: Record<string, unknown> = {
@@ -433,16 +433,15 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			}
 		}
 		const effectivelyReachable = runnerReachable;
-		// The ONE status (#880). `runner.status` used to be the runtime row's `status` column — what
-		// the runner last registered as — so it read "online" beside `runnerOnline: false` for a
-		// machine whose health responder was hung. That column is still reported, as
-		// `reportedStatus`, and is no longer a claim about now.
+		// Legacy status is scoped to this agent's transport; process/host evidence is separate (#1485).
 		const liveStatus = runnerLiveStatus({ registered: !!runtimeRow, relayConnected: relayIsConnected, healthCheck });
 
 		runner.reportedStatus = runner.status;
 		runner.status = liveStatus;
-		// #1032: the same four facts `/runtime/status` reports — heartbeat, relay, health, eligibility.
-		runner.statusView = runnerStatusView({ registered: !!runtimeRow, lastSeenAt: (runner.lastSeenAt as string | null) ?? null, heartbeatFresh: heartbeatFresh(runner.lastSeenAt as string | null), relayConnected: relayIsConnected, health: healthCheck, ...(runnerHealth && (runnerHealth as { ok?: unknown }).ok === false ? { healthError: (runnerHealth as { error: string }).error } : {}) });
+		runner.statusScope = "agent_transport";
+		const processNode = liveNode || pinned || resourceNode; // shared fallback metadata must not change the target (#1485).
+		const processAlive = !runnerReachable && processNode ? await watchdogRunnerAliveHint(env, uid, instanceId, processNode).catch(() => null) : null;
+		runner.statusView = runnerStatusView({ registered: !!runtimeRow, lastSeenAt: (runner.lastSeenAt as string | null) ?? null, heartbeatFresh: heartbeatFresh(runner.lastSeenAt as string | null), relayConnected: relayIsConnected, health: healthCheck, processAlive, ...(runnerHealth && (runnerHealth as { ok?: unknown }).ok === false ? { healthError: (runnerHealth as { error: string }).error } : {}) });
 		runner.relayConnected = relayIsConnected;
 		runner.healthCheck = healthCheck;
 		runner.reachable = effectivelyReachable;
@@ -694,7 +693,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		if (!runtimeRow) {
 			issues.push({ severity: "error", message: "No runner registered for this instance", fix: "Run `pags up` to connect your machine" });
 		} else if (runtimeRow.status === "offline" && !relayIsConnected) {
-			issues.push({ severity: "error", message: "Runner status is offline", fix: healthRemedy! });
+			issues.push({ severity: "error", message: "No live PAGS relay connection for this agent; host and process state are not established by this transport status", fix: healthRemedy! });
 		} else if (!relayIsConnected) {
 			issues.push({ severity: "error", message: "Runner registered but not reachable", fix: healthRemedy! });
 		} else if (liveStatus === "unresponsive") {
@@ -787,6 +786,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				// Always agree: runnerOnline === (runnerStatus === "online") (#880).
 				runnerOnline: liveStatus === "online",
 				runnerStatus: liveStatus,
+				runnerStatusScope: "agent_transport",
 				relayConnected: relayIsConnected,
 				healthCheck,
 				relayName,

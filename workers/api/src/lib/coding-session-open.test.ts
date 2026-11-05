@@ -302,7 +302,7 @@ describe("ensureSessionForChat — the chat surface may open one too (#407)", ()
 		expect(res.ok).toBe(false);
 		expect(store.createSession).not.toHaveBeenCalled();
 		expect(runner.callRunner).not.toHaveBeenCalled();
-		expect(!res.ok && res.message).toMatch(/pags up/);
+		expect(!res.ok && res.message).toMatch(/host and runner process state are unknown/);
 		expect(!res.ok && res.message).toContain("fws/platform");
 	});
 

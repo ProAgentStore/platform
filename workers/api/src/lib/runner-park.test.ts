@@ -3,7 +3,7 @@
  * machine comes back.
  *
  * Measured incident: `coding run 3f9dfbc7 failed (runner_gone) at s22-snapshot after 3 steps: The
- * runner did not come back after waiting 10 minutes.` The guard is driven here with a fake clock and a
+ * runner did not recover after waiting 10 minutes.` The guard is driven here with a fake clock and a
  * fake `waitForEvent`; the wake is driven over the real schema with only the Workflows binding faked.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -135,7 +135,7 @@ describe("a machine away past the poll parks the run instead of ending it (#1160
 			(e) => e as Error,
 		);
 		expect(isRunnerGone(err)).toBe(true);
-		expect(err?.message).toContain("waited 24 hours for its machine");
+		expect(err?.message).toContain("waited 24 hours for its connection");
 		expect(w.now()).toBe(T0 + RUNNER_WAIT_MS + RUNNER_PARK_MS);
 		expect(w.parks.at(-1)?.op).toBe("end");
 	});
@@ -169,7 +169,7 @@ describe("a machine away past the poll parks the run instead of ending it (#1160
 	it("without park deps the old ending stands (a run with no loop-run row cannot be woken)", async () => {
 		const w = world({ backAt: T0 + 3 * HOUR });
 		const guard = makeRunnerGuard({ wait: w.wait, reconnect: async () => undefined });
-		await expect(guard(stepper(), "s0", async () => Promise.reject(gone()))).rejects.toThrow("did not come back after waiting 10 minutes");
+		await expect(guard(stepper(), "s0", async () => Promise.reject(gone()))).rejects.toThrow("did not recover after waiting 10 minutes");
 	});
 });
 

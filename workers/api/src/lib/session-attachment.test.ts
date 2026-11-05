@@ -70,10 +70,11 @@ describe("diagnoseSessionAttachment — nothing routes anywhere: the instance vo
 		expect(d.remedy).toBe("pags up");
 	});
 
-	it("the machine has gone quiet — `pags up` IS the answer here", () => {
+	it("no relay or recent heartbeat leaves the process state unknown", () => {
 		const d = diagnoseSessionAttachment(facts({ relayConnected: false, lastSeenAt: null, sessionNode: "A" }));
 		expect(d.state).toBe("runner-offline");
-		expect(d.remedy).toBe("pags up");
+		expect(d.remedy).toBeNull();
+		expect(d.message).toContain("host and runner process state are unknown");
 	});
 
 	// A pin is the one case where reopening the session CANNOT relocate it: the reopen resolves

@@ -240,7 +240,7 @@ export function resumeMessage(node: string | null, waitedMs: number): string {
  */
 export function runnerGoneMessage(d: AttachmentDiagnosis, waitedMs: number): string {
 	const waited = waitedMs > 0 ? ` after waiting ${formatDuration(waitedMs)}` : "";
-	return `The runner did not come back${waited}. ${d.message}${d.remedy ? ` Try: \`${d.remedy}\`` : ""}`;
+	return `The PAGS runner connection did not recover${waited}. ${d.message}${d.remedy ? ` Try: \`${d.remedy}\`` : ""}`;
 }
 
 /** An instant as an owner reads it in the thread: UTC, to the minute. */
@@ -250,15 +250,15 @@ function utcMinute(ms: number): string {
 
 export function parkMessage(d: AttachmentDiagnosis, until: number, leftMs: number): string {
 	return [
-		"⏸ **Runner away — the run is parked, not stopped.**",
+		"⏸ **PAGS connection unavailable — the run is parked, not stopped.**",
 		d.message,
-		`It waits until ${utcMinute(until)} (${formatDuration(leftMs)}) and continues by itself, at the same step, as soon as the machine reconnects${d.remedy ? ` (\`${d.remedy}\`)` : ""}.`,
+		`It waits until ${utcMinute(until)} (${formatDuration(leftMs)}) and continues by itself, at the same step, as soon as the runner connection recovers${d.remedy ? ` (\`${d.remedy}\`)` : ""}.`,
 		"Past that it stops as runner_gone.",
 	].join(" ");
 }
 
 export function parkExpiredMessage(d: AttachmentDiagnosis, parkedMs: number): string {
-	return `The runner did not come back: this run waited ${formatDuration(parkedMs)} for its machine, the longest a run waits (${formatDuration(RUNNER_PARK_MS)}). ${d.message}${d.remedy ? ` Try: \`${d.remedy}\`` : ""}`;
+	return `The PAGS runner connection did not recover: this run waited ${formatDuration(parkedMs)} for its connection, the longest a run waits (${formatDuration(RUNNER_PARK_MS)}). ${d.message}${d.remedy ? ` Try: \`${d.remedy}\`` : ""}`;
 }
 
 /**

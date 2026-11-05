@@ -32,6 +32,10 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({
 // getLiveRuntime reads the per-node row for the live connection. Stub it so we can control
 // which node's metadata is returned without setting up a real D1 database.
 const { getLiveRuntime } = vi.hoisted(() => ({ getLiveRuntime: vi.fn() }));
+const { watchdogRunnerAliveHint } = vi.hoisted(() => ({ watchdogRunnerAliveHint: vi.fn(async () => null as boolean | null) }));
+vi.mock("../lib/runner-attach-report.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/runner-attach-report.js")>()), watchdogRunnerAliveHint,
+}));
 vi.mock("./instances-runtime.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./instances-runtime.js")>()),
 	getLiveRuntime,
@@ -56,6 +60,7 @@ const NEW_NODE = "Sergeys-Mac-mini.local";
 function buildEnv(opts: {
 	/** What `instance_runtimes` row runner_node holds — the STALE node after repin. */
 	staleNode?: string;
+	pinnedNode?: string;
 	/** Rows in `instance_runtimes` to return (null = unregistered). */
 	hasRuntimeRow?: boolean;
 	/** The newest account-class death in `error_log` for this user, if any (#773). */
@@ -75,7 +80,7 @@ function buildEnv(opts: {
 					return {
 						async first() {
 							if (sql.includes("$.engineReauth")) return opts.engineReauth ? { state: JSON.stringify(opts.engineReauth) } : null;
-							if (sql.includes("FROM agent_instances")) return { id: INSTANCE };
+							if (sql.includes("FROM agent_instances")) return { id: INSTANCE, config: JSON.stringify(opts.pinnedNode ? { runnerNode: opts.pinnedNode } : {}) };
 							if (sql.includes("FROM error_log")) {
 								const f = opts.providerFailure;
 								return f ? { message: f.message, context: null, last_context: null, seen_at: f.seen_at } : null;
@@ -131,6 +136,7 @@ beforeEach(() => {
 	getBoundRunnerConn.mockReset();
 	callRunner.mockReset();
 	getLiveRuntime.mockReset();
+	watchdogRunnerAliveHint.mockClear();
 	getBoundRunnerConn.mockResolvedValue(null);
 	getLiveRuntime.mockResolvedValue(null);
 	// By default runner calls return a minimal health response.
@@ -374,6 +380,27 @@ describe("a live relay with a hung health responder reads one way (#880)", () =>
 		const summary = body.summary as Record<string, unknown>;
 		expect(summary).toMatchObject({ runnerOnline: false, runnerStatus: "offline", relayConnected: false, healthCheck: "not_attempted" });
 		expect(String((body.runner as Record<string, unknown>).remedy)).toContain("socket is absent or closed");
+	});
+
+	it("queries process evidence for the pin when only another machine has shared metadata (#1485)", async () => {
+		getBoundRunnerConn.mockResolvedValue(null);
+		const { app, env } = buildApp({ staleNode: OLD_NODE, pinnedNode: NEW_NODE });
+		const { status } = await getDiag(app, env);
+		expect(status).toBe(200);
+		expect(watchdogRunnerAliveHint).toHaveBeenCalledWith(env, UID, INSTANCE, NEW_NODE);
+		expect(watchdogRunnerAliveHint).not.toHaveBeenCalledWith(env, UID, INSTANCE, OLD_NODE);
+	});
+
+	it("retains fresh independent process-alive evidence when transport is missing (#1485)", async () => {
+		getBoundRunnerConn.mockResolvedValue(null);
+		watchdogRunnerAliveHint.mockResolvedValueOnce(true);
+		const { app, env } = buildApp({ staleNode: NEW_NODE });
+		const { body } = await getDiag(app, env);
+		expect(body.summary).toMatchObject({ runnerOnline: false, runnerStatus: "offline", runnerStatusScope: "agent_transport" });
+		expect((body.runner as Record<string, unknown>).statusView).toMatchObject({
+			statusScope: "agent_transport", hostState: "unknown", process: { state: "running", evidence: "watchdog" },
+			eligible: { ok: false, reason: "no_relay" },
+		});
 	});
 });
 

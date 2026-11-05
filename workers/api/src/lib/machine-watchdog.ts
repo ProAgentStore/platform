@@ -31,7 +31,7 @@ export interface WatchdogStatus {
 	version: string | null;
 	uptimeSec: number | null;
 	/** Is a `pags up` runner process alive here, and since when. */
-	runner: { alive: boolean; uptimeSec: number | null };
+	runner: { alive: boolean | null; aliveObserved: boolean; uptimeSec: number | null };
 	/** The newest cached release and the others kept for rollback. */
 	running: string | null;
 	payloads: string[];
@@ -54,18 +54,20 @@ const num = (v: unknown, lo: number, hi: number): number | null => (typeof v ===
 const ver = (v: unknown): string | null => (typeof v === "string" && VERSION.test(v.trim()) ? v.trim() : null);
 
 /** Validate and clamp a watchdog's status. Anything unreadable becomes null, never an error: a heartbeat is not refused for its telemetry. */
-export function parseWatchdogStatus(raw: unknown): WatchdogStatus {
+export function parseWatchdogStatus(raw: unknown, stored = false): WatchdogStatus {
 	const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 	const runner = r.runner && typeof r.runner === "object" ? (r.runner as Record<string, unknown>) : {};
 	const trial = r.trial && typeof r.trial === "object" ? (r.trial as Record<string, unknown>) : null;
 	const rb = r.rollback && typeof r.rollback === "object" ? (r.rollback as Record<string, unknown>) : null;
 	const service = r.service === "launchd" || r.service === "systemd" || r.service === "scheduled-task" || r.service === "unmanaged" ? r.service : null;
+	// Legacy stored false may have been a parser default. Only new marked observations prove absence.
+	const aliveObserved = typeof runner.alive === "boolean" && (!stored || runner.alive === true || runner.aliveObserved === true);
 	const trialVersion = trial ? ver(trial.version) : null;
 	const from = rb ? ver(rb.from) : null;
 	return {
 		version: ver(r.version),
 		uptimeSec: num(r.uptimeSec, 0, 1e9),
-		runner: { alive: runner.alive === true, uptimeSec: num(runner.uptimeSec, 0, 1e9) },
+		runner: { alive: aliveObserved ? runner.alive as boolean : null, aliveObserved, uptimeSec: num(runner.uptimeSec, 0, 1e9) },
 		running: ver(r.running),
 		payloads: (Array.isArray(r.payloads) ? r.payloads : []).map(ver).filter((v): v is string => !!v).filter((_, i) => i < 5),
 		trial: trialVersion ? { version: trialVersion, startsLeft: num(trial?.startsLeft, 0, 100) } : null,
@@ -183,7 +185,7 @@ export async function readWatchdog(env: Env, userId: string, machineId: string, 
 	let status: WatchdogStatus | null = null;
 	if (row) {
 		try {
-			status = parseWatchdogStatus(JSON.parse(row.status_json));
+			status = parseWatchdogStatus(JSON.parse(row.status_json), true);
 		} catch {
 			status = null;
 		}

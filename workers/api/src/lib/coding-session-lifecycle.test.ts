@@ -104,11 +104,11 @@ describe("noSessionMessage", () => {
 		expect(msg).not.toMatch(/\brun `pags up|start (one|a runner)/i);
 	});
 
-	it("does prescribe pags up — and names the machine — when the runner is really down", () => {
+	it("keeps process state unknown and names the machine when its transport is unavailable", () => {
 		// The inverse failure is just as bad: a refusal with no remedy leaves a multi-machine
 		// user guessing which laptop to wake.
 		const msg = noSessionMessage({ repoName: "fas/platform", connectivity: offline });
-		expect(msg).toContain("pags up");
+		expect(msg).toContain("host and runner process state are unknown");
 		expect(msg).toContain("studio");
 	});
 

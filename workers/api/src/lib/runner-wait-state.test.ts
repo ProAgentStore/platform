@@ -216,7 +216,7 @@ describe("the deadline is the budget, not a second clock", () => {
 		const w = world(j, { backAt: () => Number.MAX_SAFE_INTEGER, clock });
 		const guard = makeRunnerGuard({ wait: w.wait, reconnect: async () => undefined, waitMsPerLoss: 5 * MIN, totalWaitMs: 5 * MIN });
 		// the first outage spends the whole budget and gives up
-		await expect(guard(j.run, "cap-1", async () => { throw gone(); })).rejects.toThrow(/did not come back/);
+		await expect(guard(j.run, "cap-1", async () => { throw gone(); })).rejects.toThrow(/did not recover/);
 		const begins = w.states.filter((s) => s.op === "begin").length;
 		await expect(guard(j.run, "cap-2", async () => { throw gone(); })).rejects.toThrow(/already spent its 5 minutes/);
 		expect(w.states.filter((s) => s.op === "begin")).toHaveLength(begins);

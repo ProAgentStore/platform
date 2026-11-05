@@ -266,18 +266,17 @@ describe("runnerStatusPrompt states the diagnosis, not a boolean (#530)", () => 
 		expect(p).toContain(AIR);
 		expect(p).not.toContain("pags up");
 		// Not a softening either — the block still says the runner is not connected for this agent.
-		expect(p).toContain("## Runner status: OFFLINE");
+		expect(p).toContain("## Runner status: UNREACHABLE");
 		// And the remedy stays absent because `runtime-attachment.ts` decided it should be, rather
 		// than because this function has an opinion: substituting one here is the regression.
 		expect(describeFacts(RUNNER_FACTS["pinned-machine-offline"]).remedy).toBeNull();
 	});
 
-	it("still tells an owner with no runner at all to run `pags up`", () => {
-		// AC4. The obvious wrong fix for the pinned case is to stop offering a remedy anywhere.
-		const advice = " If the user wants to run, search, or fix code, tell them to start the runner first with `pags up` (then use the Coding tab).";
-		expect(promptFor("never-registered")).toContain(advice);
-		expect(promptFor("runner-offline")).toContain(advice);
-		expect(promptFor("never-registered")).toContain("No runner has registered for this agent yet.");
+	it("offers a registration command only after checking the existing service, never guesses process absence", () => {
+		expect(promptFor("never-registered")).toContain("check the existing runner service before using `pags up`");
+		expect(promptFor("runner-offline")).toContain("host and runner process state are unknown");
+		expect(promptFor("runner-offline")).not.toContain("Nothing is running");
+		expect(promptFor("runner-offline")).not.toContain("start the runner first");
 	});
 
 	it("still tells an owner whose machine is up but detached to `pags up --force`", () => {
@@ -292,15 +291,12 @@ describe("runnerStatusPrompt states the diagnosis, not a boolean (#530)", () => 
 		);
 	});
 
-	it("keeps the pre-#530 sentence when the connectivity read itself failed", () => {
-		// `null` is "we could not tell", and it must not be upgraded into a claim about which
-		// machine is where. The old wording is exactly the honest answer for an unknown reason, so
-		// the failure mode is no worse than the one it replaces.
-		expect(runnerStatusPrompt(CODER, null)).toBe(
-			"\n\n## Runner status: OFFLINE — the local runner is NOT connected right now. Nothing is running;" +
-				" the sessions below show only their LAST captured state. If the user wants to run, search, or fix code," +
-				" tell them to start the runner first with `pags up` (then use the Coding tab). Do not imply anything is happening live.",
-		);
+	it("a failed connectivity read leaves host, process and local work unknown", () => {
+		const prompt = runnerStatusPrompt(CODER, null);
+		expect(prompt).toContain("## Runner status: UNREACHABLE");
+		expect(prompt).toContain("Host, runner process and in-flight local work state are unknown");
+		expect(prompt).not.toContain("Nothing is running");
+		expect(prompt).not.toContain("start the runner first");
 	});
 
 	it("tells a cloud-only agent nothing about a runner, in any state", () => {

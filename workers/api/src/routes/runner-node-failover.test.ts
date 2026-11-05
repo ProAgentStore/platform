@@ -79,7 +79,7 @@ describe("a pinned agent whose machine is down is offered a repin (#1179)", () =
 	it("nothing else online: says so, with no candidates; an unpinned agent gets no suggestion at all", async () => {
 		const body = await runnerNode("fgs");
 		expect(body.failover?.candidates).toEqual([]);
-		expect(body.failover?.message).toMatch(/No other machine of yours is online/);
+		expect(body.failover?.message).toMatch(/No alternative PAGS relay connection is available/);
 		expect(await runnerNode("other")).not.toHaveProperty("failover");
 	});
 });

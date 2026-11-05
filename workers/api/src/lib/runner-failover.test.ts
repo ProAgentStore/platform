@@ -11,9 +11,11 @@ describe("failoverSuggestion", () => {
 	it("pinned machine down, another attached: names it and the repin action, and says nothing was changed", () => {
 		const s = failoverSuggestion({ pinned: "mac-mini.local", pinnedMachineId: "mid-mini", nodes: [MINI, LAPTOP] });
 		expect(s?.candidates).toEqual([{ displayName: "Laptop", machineId: "mid-laptop", node: "laptop.local", attached: true, repinTo: "Laptop" }]);
-		expect(s?.message).toMatch(/pinned to mac-mini\.local, which isn't connected/);
+		expect(s?.message).toMatch(/pinned to mac-mini\.local, where it has no live PAGS relay connection/);
 		expect(s?.message).toMatch(/set_instance_runner_node \(runner_node "Laptop"\)/);
 		expect(s?.message).toMatch(/Nothing was repinned/);
+		expect(s?.message).toContain("in-flight local work state are unknown");
+		expect(s?.message).not.toMatch(/not running|stays stopped/);
 	});
 
 	it("ranks machines already attached first, then merely-online ones, and falls back to id then hostname for the repin value", () => {
@@ -27,7 +29,7 @@ describe("failoverSuggestion", () => {
 		const offline = node({ node: "off", machineId: "mid-off" });
 		const s = failoverSuggestion({ pinned: "mac-mini.local", pinnedMachineId: "mid-mini", nodes: [MINI, aliasOfPinned, offline] });
 		expect(s?.candidates).toEqual([]);
-		expect(s?.message).toMatch(/No other machine of yours is online/);
+		expect(s?.message).toMatch(/No alternative PAGS relay connection is available/);
 	});
 
 	it("a stale registration name does not hide a machine that is up under another name", () => {

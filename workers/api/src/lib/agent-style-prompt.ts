@@ -105,8 +105,8 @@ export function tabClause(model: SelfModel, tab: string, clause: string): string
  * is not a command emits no command at all.
  *
  * `null` means the connectivity READ failed, which is not the same as knowing the runner is gone.
- * It keeps exactly the sentence that shipped — an unexplained OFFLINE with `pags up` — because a
- * failed read must not be upgraded into a confident claim about which machine is where.
+ * A failed read leaves host/process/work state unknown and carries no command: a connectivity
+ * lookup is not evidence that a process stopped, nor a reason to start a duplicate.
  *
  * Both halves stay gated on `hasRunner`, and the diagnosis text is why that matters as much as the
  * remedy: the pinned message ends "…or start the runner on <machine>", so an agent with no local
@@ -118,16 +118,16 @@ export function runnerStatusPrompt(model: SelfModel, status: AttachmentDiagnosis
 		return "\n\n## Runner status: ONLINE — the local runner is connected, so the sessions below can reflect live activity.";
 	}
 	const detail = model.hasRunner && status ? ` ${status.message}` : "";
-	// An unread state keeps the old default; a read one gets ITS remedy, or silence where the
-	// platform knows no command fixes it.
-	const remedy = status ? status.remedy : "pags up";
+	// An unread state offers no command; a read one gets ITS remedy, conditional on checking
+	// the existing service first so a connection failure cannot spawn a duplicate.
+	const remedy = status ? status.remedy : null;
 	const advice =
 		model.hasRunner && remedy
-			? ` If the user wants to run, search, or fix code, tell them to start the runner first with \`${remedy}\`${tabClause(model, "Coding", " (then use the Coding tab)")}.`
+			? ` If the user wants to run, search, or fix code, check the existing runner service before using \`${remedy}\`; do not start a duplicate process${tabClause(model, "Coding", " (then use the Coding tab)")}.`
 			: "";
 	return (
-		"\n\n## Runner status: OFFLINE — the local runner is NOT connected right now. Nothing is running;" +
-		` the sessions below show only their LAST captured state.${detail}${advice} Do not imply anything is happening live.`
+		"\n\n## Runner status: UNREACHABLE — no live PAGS relay connection is confirmed for this agent. Host, runner process and in-flight local work state are unknown;" +
+		` the sessions below show only their LAST captured state.${detail}${advice} Do not claim the machine is offline or local work stopped from this connection state. Do not imply live progress without current evidence.`
 	);
 }
 

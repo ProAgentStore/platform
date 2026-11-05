@@ -1,6 +1,6 @@
 /**
  * #1168 — a relay socket the network dropped silently never fires `onclose`. The CLI now notices: after a bounded silence it
- * sends its own echo probe, and no answer means the socket is replaced. Any inbound frame is proof of life.
+ * requires correlated echo probes and replaces a socket after two unanswered probes. Inbound pings alone cannot prove the return path (#1544).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openRelaySocket, RTT_ECHO_PREFIX, RTT_PROBE_PREFIX } from "./relay.js";
@@ -65,7 +65,9 @@ describe("half-open relay socket (#1168)", () => {
 		await vi.advanceTimersByTimeAsync(60_000); // the check at 60s finds a minute of silence
 		expect(ws.probes()).toHaveLength(1); // the CLI asked, rather than assuming
 		expect(FakeSocket.all).toHaveLength(1);
-		await vi.advanceTimersByTimeAsync(10_000); // no echo
+		await vi.advanceTimersByTimeAsync(10_000); // first echo lost: allow one retry
+		expect(ws.closedByCli).toBe(false);
+		await vi.advanceTimersByTimeAsync(15_000); // retry at 75s also times out at 85s
 		expect(ws.closedByCli).toBe(true);
 		expect(ws.onclose).toBeNull(); // detached: its own close event can neither double-schedule nor reconnect twice
 		expect(lines.some((l) => /half-open/.test(l))).toBe(true);
@@ -86,28 +88,49 @@ describe("half-open relay socket (#1168)", () => {
 		handle.close();
 	});
 
-	it("any inbound frame counts as life: a busy socket is never probed", async () => {
+	it("cloud pings cannot keep a one-way socket alive when its pongs and echoes never reach the cloud", async () => {
 		const { handle, ws } = await open();
-		for (let i = 0; i < 10; i++) {
-			await vi.advanceTimersByTimeAsync(30_000);
+		for (let i = 0; i < 17; i++) {
+			await vi.advanceTimersByTimeAsync(5_000);
 			await ws.onmessage?.({ data: "ping" });
 		}
-		expect(ws.probes()).toEqual([]);
-		expect(ws.sent.filter((m) => m === "pong")).toHaveLength(10);
+		expect(ws.closedByCli).toBe(true);
+		expect(ws.probes()).toHaveLength(2);
+		expect(ws.sent.filter((m) => m === "pong")).toHaveLength(16); // the old handler is detached after retry timeout
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(FakeSocket.all).toHaveLength(2);
 		handle.close();
 	});
 
-	it("traffic that arrives while the probe is out saves the socket even if the echo itself is lost", async () => {
+	it("one lost echo is tolerated and a successful retry keeps a busy connection", async () => {
 		const { handle, ws } = await open();
 		await vi.advanceTimersByTimeAsync(60_000);
-		expect(ws.probes()).toHaveLength(1);
 		await ws.onmessage?.({ data: "ping" });
-		await vi.advanceTimersByTimeAsync(11_000);
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(ws.probes()).toHaveLength(2);
+		await ws.echo();
+		await vi.advanceTimersByTimeAsync(40_000);
+		expect(ws.closedByCli).toBe(false);
+		expect(FakeSocket.all).toHaveLength(1);
+		handle.close();
+	});
+
+	it("successful heartbeat RTT probes verify the path and avoid redundant watchdog probes", async () => {
+		const { handle, ws } = await open();
+		Object.defineProperty(ws, "readyState", { value: 1 });
+		Object.assign(FakeSocket, { OPEN: 1 });
+		for (let i = 0; i < 5; i++) {
+			await vi.advanceTimersByTimeAsync(30_000);
+			const result = handle.probeRtt();
+			await ws.echo();
+			expect(await result).toBe(0);
+		}
+		expect(ws.probes()).toHaveLength(5);
 		expect(ws.closedByCli).toBe(false);
 		handle.close();
 	});
 
-	it("a probe that cannot even be written replaces the socket at once", async () => {
+	it("failed probe writes exhaust the retry budget and reconnect", async () => {
 		const { handle, ws } = await open();
 		ws.sendThrows = true;
 		await vi.advanceTimersByTimeAsync(75_000);

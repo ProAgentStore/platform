@@ -185,7 +185,8 @@ describe("a machine with nothing to ask, and a stale registration (#1114)", () =
 		const r = await call("POST", `${INTERNS}/runner-attach`, { runnerNode: "wedged-laptop" });
 		await settle();
 		expect(r.body).toMatchObject({ attached: false, cause: "no_socket" });
-		expect(r.body.detail).toMatch(/process IS alive there, just not connected to the relay/);
+		expect(r.body.detail).toMatch(/process IS alive; its PAGS connection is not confirmed healthy/);
+		expect(r.body.detail).not.toContain("No `pags up` is running");
 	});
 
 	it("no socket, and the watchdog itself has gone quiet too: unchanged — there is nothing to vouch for anything", async () => {
@@ -194,6 +195,15 @@ describe("a machine with nothing to ask, and a stale registration (#1114)", () =
 		const r = await call("POST", `${INTERNS}/runner-attach`, { runnerNode: "dark-laptop" });
 		await settle();
 		expect(r.body.detail).not.toMatch(/watchdog reports/);
+	});
+
+	it.each([{}, { runner: {} }, { runner: { alive: "false" } }])("a fresh watchdog without a literal process observation stays unknown: %j", async (status) => {
+		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, last_seen_at, machine_id) VALUES ('${INTERNS}', 'u1', 'unknown-process', 'relay://', '0.4.134', datetime('now', '-1 hour'), 'machine-unknown01')`);
+		d1.exec(`INSERT INTO machine_watchdog_status (user_id, machine_id, reported_at, first_seen_at, status_json) VALUES ('u1', 'machine-unknown01', ${Date.now()}, ${Date.now()}, '${JSON.stringify(status)}')`);
+		const r = await call("POST", `${INTERNS}/runner-attach`, { runnerNode: "unknown-process" });
+		await settle();
+		expect(r.body.detail).toContain("process state are unknown");
+		expect(r.body.detail).not.toContain("process is not running");
 	});
 
 	it("an old registration is the cause, flagged with why — and nothing is deleted or repinned", async () => {
@@ -232,10 +242,10 @@ describe("the measured-cause rules, pure (#1114)", () => {
 	});
 
 	it("windowExpiredCause's no_carrier message names 'alive but not connected' only when told so — null is unchanged (#1416)", () => {
-		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000).detail).toMatch(/waits on that machine's own poll/);
-		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000, null).detail).toMatch(/waits on that machine's own poll/);
-		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000, false).detail).toMatch(/waits on that machine's own poll/);
-		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000, true)).toMatchObject({ cause: "no_socket", detail: expect.stringMatching(/process IS alive there, just not connected to the relay/) });
+		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000).detail).toContain("process state are unknown");
+		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000, null).detail).toContain("process state are unknown");
+		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000, false).detail).toContain("process is not running");
+		expect(windowExpiredCause({ phase: "no_carrier", startedAt: 0 }, "m", 15_000, true)).toMatchObject({ cause: "no_socket", detail: expect.stringMatching(/process IS alive, but its relay connection is not confirmed healthy/) });
 		// Every OTHER phase already names a more specific cause — the hint is irrelevant there and must not change them.
 		expect(windowExpiredCause({ phase: "waiting_open", startedAt: 0, answeredAt: 5_000 }, "m", 15_000, true).detail).toMatch(/answered the attach request 10s ago/);
 	});

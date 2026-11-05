@@ -132,6 +132,10 @@ export function attachHealthRemedy(node: string, state: HealthCheckState): strin
  */
 export interface RunnerStatusView {
 	status: RunnerLiveStatus;
+	/** Legacy `offline` describes this agent's PAGS transport, never host power or process absence. */
+	statusScope: "agent_transport";
+	hostState: "unknown";
+	process: { state: "running" | "not_running" | "unknown"; evidence: "watchdog" | "not_observed" };
 	heartbeat: { lastSeenAt: string | null; fresh: boolean };
 	relay: { attached: boolean };
 	rpc: { health: HealthCheckState; error?: string };
@@ -145,6 +149,8 @@ export function runnerStatusView(input: {
 	relayConnected: boolean;
 	health: HealthCheckState;
 	healthError?: string;
+	/** Fresh independent watchdog evidence only; missing/stale evidence is null, never false. */
+	processAlive?: boolean | null;
 }): RunnerStatusView {
 	const status = runnerLiveStatus({ registered: input.registered, relayConnected: input.relayConnected, healthCheck: input.health });
 	const eligible: RunnerStatusView["eligible"] = !input.registered
@@ -155,7 +161,7 @@ export function runnerStatusView(input: {
 					reason: "no_relay",
 					detail: input.heartbeatFresh
 						? "`pags up` is reporting in, but it holds no relay socket for this agent, so no work can reach it. force_runner_attach takes the slot."
-						: "No relay socket for this agent and no recent heartbeat: the machine's `pags up` is not running or not reaching the platform.",
+						: "No live PAGS relay connection for this agent; its last heartbeat is stale or unavailable. This does not establish whether the host or `pags up` process is running. Check the existing service and connection before starting another process.",
 				}
 			: input.health === "ok"
 				? { ok: true, reason: "ready", detail: "Attached, and the runner answered its health check: work can be dispatched." }
@@ -164,6 +170,11 @@ export function runnerStatusView(input: {
 					: { ok: false, reason: "rpc_unhealthy", detail: `Attached, but the runner behind the socket did not pass its health check (${input.health}), so work sent now would fail. Attaching again will not fix that: runner_restart restarts it on the machine.` };
 	return {
 		status,
+		statusScope: "agent_transport",
+		hostState: "unknown",
+		process: input.processAlive == null
+			? { state: "unknown", evidence: "not_observed" }
+			: { state: input.processAlive ? "running" : "not_running", evidence: "watchdog" },
 		heartbeat: { lastSeenAt: input.lastSeenAt, fresh: input.heartbeatFresh },
 		relay: { attached: input.relayConnected },
 		rpc: { health: input.health, ...(input.healthError ? { error: input.healthError } : {}) },

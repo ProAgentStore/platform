@@ -64,10 +64,10 @@ function noCarrierAnswer(node: string, names: ReadonlySet<string>, rows: readonl
 		return {
 			unconfirmed: true,
 			cause: "no_socket",
-			detail: `\`pags up\` on ${node} reported in ${ago(now - seen)} ago but holds no relay socket for any of your agents, so it could not be asked directly. It picks this agent up on its own within about 20 s now that the pin names ${node} — call instance_runner_node to confirm.`,
+			detail: `\`pags up\` on ${node} reported in ${ago(now - seen)} ago but holds no relay socket for any of your agents, so it could not be asked directly. If its discovery poll is healthy, it can pick this agent up within about 20 s now that the pin names ${node} — call instance_runner_node to confirm.`,
 		};
 	}
-	return { cause: "no_socket", detail: `No \`pags up\` is running on ${node}${seen > 0 ? ` (last seen ${ago(now - seen)} ago)` : ""} — nothing there holds a relay socket to hand this agent to. Start it there; it takes the agent on its own once it is running.` };
+	return { cause: "no_socket", detail: `No live PAGS relay connection is available on ${node}${seen > 0 ? ` (last heartbeat ${ago(now - seen)} ago)` : " (no heartbeat recorded)"} to hand this agent to. Host power and \`pags up\` process state are unknown; a missing relay is not proof that either is stopped. Check the existing runner service and network connection; start it only if confirmed stopped.` };
 }
 
 /** Said when the budget ran out before the move could be confirmed either way. */
@@ -237,11 +237,12 @@ async function withFailureFacts<T extends { cause?: AttachCause; detail?: string
 	if (stale && result.cause === "no_socket") {
 		out.cause = "stale_registration";
 		out.detail = `Stale registration on ${node} (${stale.reason}). ${result.detail ?? ""}`.trim();
-	} else if (result.cause === "no_socket") {
+	}
+	if (result.cause === "no_socket" || result.cause === "runner_timeout" || result.cause === "runner_unresponsive") {
 		// #1416: "no socket" alone cannot tell "no process at all" apart from "a process is alive but
 		// wedged" — the machine's separate watchdog channel (#1320) can, when it is itself still reporting.
 		const watchdogAlive = await watchdogRunnerAliveHint(env, userId, instanceId, node).catch(() => null);
-		if (watchdogAlive) out.detail = `${result.detail ?? ""} Its watchdog reports a \`pags up\` process IS alive there, just not connected to the relay — that needs a restart (runner_restart), not a reinstall.`.trim();
+		if (watchdogAlive != null) out.detail = `${out.detail ?? ""} Fresh watchdog evidence reports the \`pags up\` process ${watchdogAlive ? "IS alive; its PAGS connection is not confirmed healthy" : "is not running"}.`.trim();
 	}
 	if (result.cause === "runner_timeout" || result.cause === "runner_unresponsive") {
 		const heartbeat = await heartbeatContext(env, userId, names, now);
@@ -323,7 +324,7 @@ async function attachTransport(env: Env, instanceId: string, userId: string, nod
 			attached: false,
 			evicted,
 			cause: "runner_unresponsive",
-			detail: `Every relay socket \`pags up\` holds on ${node} is connected but not answering (${unresponsive} tried) — the runner there is frozen or gone, so nothing on that machine can be asked to attach this agent. Restart \`pags up\` on ${node}.`,
+			detail: `The relay sockets registered on ${node} did not answer the attach request (${unresponsive} tried). This establishes an unresponsive PAGS connection, not a stopped process or powered-off host. Check the existing service and transport; if recovery is needed, use runner_restart rather than starting a duplicate \`pags up\`.`,
 		};
 	}
 

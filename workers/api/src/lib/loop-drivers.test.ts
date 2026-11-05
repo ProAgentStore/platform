@@ -488,7 +488,7 @@ describe("the coding driver's preconditions are refusals, not crashes", () => {
 		const { env } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: null, runnerOnline: false });
 		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
 		expect(out).toMatchObject({ ok: false, status: 409 });
-		if (!out.ok) expect(out.error).toMatch(/pags up/);
+		if (!out.ok) expect(out.error).toMatch(/host and runner process state are unknown/);
 	});
 
 	it("marks a machine that is away `reason: \"runner_offline\"` — waitable, so a queued objective keeps its place (#1161)", async () => {

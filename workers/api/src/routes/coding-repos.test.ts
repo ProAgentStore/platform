@@ -1166,7 +1166,7 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		const reason = reasonOf(body);
 		expect(body.recheck).toMatchObject({ ran: false, checked: 0 });
 		expect(reason).toContain("Sergeys-Mac-mini.local");
-		expect(reason).toContain("Mac is connected");
+		expect(reason).toContain("Mac has a relay connection");
 		expect(reason).toContain('"Runs on"');
 		// The two halves that were false: nothing else holds this agent, and `--force` cannot
 		// repoint a pin — `pags up` is already running on Mac with a live socket for this instance.

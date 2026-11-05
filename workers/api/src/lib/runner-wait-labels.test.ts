@@ -217,7 +217,7 @@ describe("the labels the runner guard emits are frozen (#1359)", () => {
 			sleep s1-w0-p1
 			tick s1-w0-k1 30000
 			probe s1-w0-q1
-			=> threw RunnerGoneError: The runner did not come back after waiting 30s. "
+			=> threw RunnerGoneError: The PAGS runner connection did not recover after"
 		`);
 	});
 
@@ -246,7 +246,7 @@ describe("the labels the runner guard emits are frozen (#1359)", () => {
 			park.now s1-w0-pk
 			probe s1-w0-pk-q
 			park.begin s1-w0-pk-begin 86431000
-			announce s1-w0-pk-n :: ⏸ **Runner away — the run is
+			announce s1-w0-pk-n :: ⏸ **PAGS connection unavaila
 			park.now s1-w0-pk0-at
 			park.waitForBack s1-w0-pk0 600000
 			park.now s1-w0-pk0-t
@@ -282,7 +282,7 @@ describe("the labels the runner guard emits are frozen (#1359)", () => {
 			park.now s1-w0-pk
 			probe s1-w0-pk-q
 			park.begin s1-w0-pk-begin 1531000
-			announce s1-w0-pk-n :: ⏸ **Runner away — the run is
+			announce s1-w0-pk-n :: ⏸ **PAGS connection unavaila
 			park.now s1-w0-pk0-at
 			park.waitForBack s1-w0-pk0 600000
 			park.now s1-w0-pk0-t
@@ -300,7 +300,7 @@ describe("the labels the runner guard emits are frozen (#1359)", () => {
 			probe s1-w0-pk2-q
 			park.now s1-w0-pk3-at
 			park.end s1-w0-pk-end
-			=> threw RunnerGoneError: The runner did not come back: this run waited 25"
+			=> threw RunnerGoneError: The PAGS runner connection did not recover: this"
 		`);
 	});
 
@@ -329,7 +329,7 @@ describe("the labels the runner guard emits are frozen (#1359)", () => {
 			park.now s1-w0-pk
 			probe s1-w0-pk-q
 			park.begin s1-w0-pk-begin 86431000
-			announce s1-w0-pk-n :: ⏸ **Runner away — the run is
+			announce s1-w0-pk-n :: ⏸ **PAGS connection unavaila
 			park.now s1-w0-pk0-at
 			park.waitForBack s1-w0-pk0 600000
 			park.now s1-w0-pk0-t

@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { CapabilityReporter } from "../../capabilities/detect.js";
 import { probeRuntimeHealth, type ResourceSample, recordRunnerStart, sampleDisk, sampleMemAvailable, sampleResources } from "./resources.js";
 import { createCleanupSync } from "./cleanup-sync.js";
+import { heartbeatAcceptance, heartbeatPosts } from "./heartbeat-posts.js";
 import { sessionToken } from "./session-token.js";
 import { AgentRoutePolicy } from "./route-policy.js";
 import { loadMachineIdentity } from "../../machine.js";
@@ -432,16 +433,7 @@ export async function connectViaRelay(
 	writeLine("  No cloudflared needed. Ctrl+C to disconnect.");
 	writeLine("═══════════════════════════════════════════════");
 
-	// Heartbeat loop — keeps the runtime status "online" in D1.
-	// Uses unref'd timers so the loop doesn't prevent process exit.
-	//
-	// Reported on TRANSITION, not per beat. A silently dropped heartbeat is not a lost metric:
-	// this is the only thing that keeps the console's runner badge online, so once it starts
-	// failing the console says "runner offline — run `pags up`" while this window still says
-	// CONNECTED, with nothing anywhere explaining the contradiction. The documented remedy for
-	// that banner is `pags up --force`, which SUSPENDS coding sessions owned by other machines —
-	// so the silence steered the user toward a destructive action. Once per state change keeps
-	// a 30s loop from becoming a log spammer.
+	// Report delivery transitions once per state change, without inferring process or relay state.
 	let heartbeatFailing = false;
 	// Post-run cleanup (#1265): the platform's per-machine mode goes down to the local runner on the heartbeat
 	// answer; the runner's status (mode, leftovers found, last pass) comes back up on the next heartbeat.
@@ -450,38 +442,42 @@ export async function connectViaRelay(
 	// sent in full only when the platform does not hold this hash — every other beat carries the hash alone.
 	const capabilityReporter = new CapabilityReporter();
 	capabilityReporter.refreshIfDue();
+	const acceptHeartbeat = heartbeatAcceptance(async ({ response, sent }: { response: Record<string, unknown>; sent: number }, signal) => {
+		channel.accept(response, sent); capabilityReporter.accept(response);
+		await cleanupSync.accept(response, signal);
+	});
 	const heartbeat = () => {
 		const timer = setTimeout(async () => {
-			// The live set, not the startup array — a heartbeat for a detached instance would
-			// keep it looking online, and a newly attached one would look offline until restart.
-			let failure: string | null = null;
-			// One machine reading per beat, sent with every agent's heartbeat (#924): the machine, its
-			// checkout volume, this process, one relay round trip, and which session is using what.
-			const first = attached.values().next().value as RelaySocketHandle | undefined;
-			const [relayRttMs, sessions, runtime] = await Promise.all([first ? first.probeRtt() : Promise.resolve(null), readSessionResources(localUrl, runnerToken), probeRuntimeHealth(localUrl, runnerToken)]);
-			const resources = sampleResources(undefined, undefined, {
-				disk: sampleDisk() ?? undefined,
-				memAvailableBytes: sampleMemAvailable() ?? undefined, // #1275: macOS available memory (free + inactive + purgeable)
-				runner: {
-					startedAt: processStartedAt,
-					uptimeSec: Math.round(process.uptime()),
-					starts24h,
-					relayReconnects,
-					// #896: who is heartbeating. Set by `runner connect` from the lock it took.
-					...(process.env.PAGS_RUNNER_RSID ? { rsid: process.env.PAGS_RUNNER_RSID } : {}),
-					pid: process.pid,
-					...(process.env.PAGS_RUNNER_LAUNCH ? { launch: process.env.PAGS_RUNNER_LAUNCH } : {}),
-					supervisor: restartOwner(), // #1154: what starts it again if it dies
-					sessionExpiresAt: sessionExpiresAt(pagsToken() ?? "") ?? undefined, // #1157: when this runner signs out
-				},
-				relayRttMs,
-				sessions: sessions ?? undefined,
-				runtime, // #1167: the runtime's own /health, so a wedged runtime no longer reads online off the CLI's heartbeat
-			});
-			const cleanup = await cleanupSync.collect(resources);
-			const ids = [...attached.keys()];
-			for (const id of ids) {
-				try {
+			try {
+				// The live set, not the startup array — a heartbeat for a detached instance would
+				// keep it looking online, and a newly attached one would look offline until restart.
+				let failure: string | null = null;
+				// One machine reading per beat, sent with every agent's heartbeat (#924): the machine, its
+				// checkout volume, this process, one relay round trip, and which session is using what.
+				const first = attached.values().next().value as RelaySocketHandle | undefined;
+				const [relayRttMs, sessions, runtime] = await Promise.all([first ? first.probeRtt() : Promise.resolve(null), readSessionResources(localUrl, runnerToken), probeRuntimeHealth(localUrl, runnerToken)]);
+				const resources = sampleResources(undefined, undefined, {
+					disk: sampleDisk() ?? undefined,
+					memAvailableBytes: sampleMemAvailable() ?? undefined, // #1275: macOS available memory (free + inactive + purgeable)
+					runner: {
+						startedAt: processStartedAt,
+						uptimeSec: Math.round(process.uptime()),
+						starts24h,
+						relayReconnects,
+						// #896: who is heartbeating. Set by `runner connect` from the lock it took.
+						...(process.env.PAGS_RUNNER_RSID ? { rsid: process.env.PAGS_RUNNER_RSID } : {}),
+						pid: process.pid,
+						...(process.env.PAGS_RUNNER_LAUNCH ? { launch: process.env.PAGS_RUNNER_LAUNCH } : {}),
+						supervisor: restartOwner(), // #1154: what starts it again if it dies
+						sessionExpiresAt: sessionExpiresAt(pagsToken() ?? "") ?? undefined, // #1157: when this runner signs out
+					},
+					relayRttMs,
+					sessions: sessions ?? undefined,
+					runtime, // #1167: the runtime's own /health, so a wedged runtime no longer reads online off the CLI's heartbeat
+				});
+				const cleanup = await cleanupSync.collect(resources);
+				const ids = [...attached.keys()];
+				failure = await heartbeatPosts(ids, async (id, signal) => {
 					const sent = cell.next();
 					const response = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {
 						runnerNode,
@@ -491,30 +487,28 @@ export async function connectViaRelay(
 						autoUpdateStatus: autoUpdateStatusBody(),
 						...(cleanup.status ? { cleanup: cleanup.status } : {}),
 						...(cleanup.doneAt ? { cleanupNowDoneAt: cleanup.doneAt } : {}),
-					});
-					channel.accept(response, sent);
-					capabilityReporter.accept(response);
-					await cleanupSync.accept(response);
-				} catch (e) {
-					failure = e instanceof Error ? e.message : String(e);
+					}, signal);
+					await acceptHeartbeat({ response, sent }, sent, signal);
+				});
+				if (failure && !heartbeatFailing) {
+					heartbeatFailing = true;
+					// The status line is what the pane reads. Before it existed, this message's
+					// `fetch failed` was matched as a REGISTRATION failure — so a 30-second heartbeat
+					// blip put a permanent ✗ next to "ProAgentStore" for a machine that was fine.
+					writeLine(formatStatusLine({ heartbeat: "fail", reason: failure }));
+					writeError(`Heartbeat delivery failed: ${failure} — this does not establish whether the runner process or relay is reachable. Do not infer a stopped machine or force a takeover from this failure.`);
+				} else if (!failure && heartbeatFailing) {
+					heartbeatFailing = false;
+					writeLine(formatStatusLine({ heartbeat: "ok" }));
+					writeLine("Heartbeat delivery recovered — relay reachability is checked separately.");
 				}
-			}
-			if (failure && !heartbeatFailing) {
+				// #1416: a cycle where every attached instance's POST succeeded is "reached the platform" — an
+				// empty cycle (nothing attached yet) proves nothing, so it does not count as one.
+				if (!failure && ids.length > 0) onHeartbeatOk?.();
+			} catch (error) {
 				heartbeatFailing = true;
-				// The status line is what the pane reads. Before it existed, this message's
-				// `fetch failed` was matched as a REGISTRATION failure — so a 30-second heartbeat
-				// blip put a permanent ✗ next to "ProAgentStore" for a machine that was fine.
-				writeLine(formatStatusLine({ heartbeat: "fail", reason: failure }));
-				writeError(`Heartbeat failed: ${failure} — the console will show this machine as OFFLINE until it recovers. The relay itself is still connected; don't run \`pags up --force\` elsewhere.`);
-			} else if (!failure && heartbeatFailing) {
-				heartbeatFailing = false;
-				writeLine(formatStatusLine({ heartbeat: "ok" }));
-				writeLine("Heartbeat recovered — this machine reads as online again.");
-			}
-			// #1416: a cycle where every attached instance's POST succeeded is "reached the platform" — an
-			// empty cycle (nothing attached yet) proves nothing, so it does not count as one.
-			if (!failure && ids.length > 0) onHeartbeatOk?.();
-			heartbeat();
+				writeError(`Heartbeat cycle failed: ${error instanceof Error ? error.message : String(error)}`);
+			} finally { heartbeat(); }
 		}, 30_000);
 		timer.unref(); // don't keep the process alive just for heartbeats
 	};
@@ -654,9 +648,9 @@ export const RTT_ECHO_PREFIX = "rtt-echo:";
 
 /**
  * Half-open detection (#1168). A socket the network dropped silently (NAT timeout, Wi-Fi change) never fires `onclose`, so
- * nothing would ever reconnect it while the heartbeat kept the machine looking fresh. Any inbound frame proves the path is
- * alive; after `idleMs` without one the CLI sends its own echo probe, and no answer within `probeTimeoutMs` means the socket is
- * dead and is replaced. A quiet-but-healthy socket costs one tiny frame per `idleMs`.
+ * nothing would ever reconnect it while the heartbeat kept the machine looking fresh. Incoming cloud pings prove only the
+ * inbound path (#1544), so require a correlated round trip every `idleMs`. Two failed probes recycle the socket; one lost echo
+ * is tolerated. Successful heartbeat RTT probes count too. A healthy socket costs one tiny frame per `idleMs`.
  */
 export interface RelayLiveness {
 	idleMs: number;
@@ -707,7 +701,8 @@ export function openRelaySocket(
 	const rttWaiters = new Map<string, (echoedAt: number) => void>();
 	/** The commands being forwarded to the local runtime, by relay command id, so a relay `cancel` can stop the right one (#1358). */
 	const inflight = new Map<string, AbortController>();
-	let lastInboundAt = Date.now();
+	let lastVerifiedAt = Date.now();
+	let failedProbes = 0;
 	let watchdog: ReturnType<typeof setInterval> | null = null;
 
 	const stopWatchdog = () => {
@@ -731,13 +726,17 @@ export function openRelaySocket(
 		return new Promise<number | null>((resolveRtt) => {
 			const timer = setTimeout(() => { rttWaiters.delete(id); resolveRtt(null); }, timeoutMs);
 			timer.unref?.();
-			rttWaiters.set(id, (echoedAt) => { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(echoedAt - sentAt); });
+			rttWaiters.set(id, (echoedAt) => {
+				clearTimeout(timer); rttWaiters.delete(id);
+				if (socket === ws) { lastVerifiedAt = echoedAt; failedProbes = 0; }
+				resolveRtt(echoedAt - sentAt);
+			});
 			try { ws.send(`${RTT_PROBE_PREFIX}${id}`); } catch { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(null); }
 		});
 	};
 
 	/** Drop a socket the network has stopped carrying and open a new one. Its own `onclose` may never fire, so it is detached first. */
-	const recycle = (ws: WebSocket, silentMs: number) => {
+	const recycle = (ws: WebSocket, unverifiedMs: number) => {
 		stopWatchdog();
 		ws.onopen = null;
 		ws.onmessage = null;
@@ -746,7 +745,7 @@ export function openRelaySocket(
 		try { ws.close(); } catch { /* already gone */ }
 		if (socket === ws) socket = null;
 		if (closed || reconnecting) return;
-		scheduleReconnect(`Relay silent: ${instanceId.slice(0, 8)}… sent nothing for ${Math.round(silentMs / 1000)}s and did not answer a probe (half-open socket)`);
+		scheduleReconnect(`Relay round trip failed: ${instanceId.slice(0, 8)}… no verified response for ${Math.round(unverifiedMs / 1000)}s after two probes (half-open socket)`);
 	};
 
 	const startWatchdog = (ws: WebSocket) => {
@@ -754,15 +753,16 @@ export function openRelaySocket(
 		let probing = false;
 		watchdog = setInterval(() => {
 			if (closed || socket !== ws || probing) return;
-			const silentMs = Date.now() - lastInboundAt;
-			if (silentMs < liveness.idleMs) return;
+			const unverifiedMs = Date.now() - lastVerifiedAt;
+			if (unverifiedMs < liveness.idleMs) return;
 			probing = true;
 			const startedAt = Date.now();
 			void probe(ws, liveness.probeTimeoutMs).then((rtt) => {
 				probing = false;
-				// Anything that arrived while the probe was out is proof of life, whether or not it was the echo.
-				if (closed || socket !== ws || rtt !== null || lastInboundAt >= startedAt) return;
-				recycle(ws, Date.now() - lastInboundAt);
+				// A correlated echo (including a concurrent heartbeat probe) proves BOTH directions. Inbound pings do not.
+				if (closed || socket !== ws || rtt !== null || lastVerifiedAt >= startedAt) return;
+				if (++failedProbes < 2) return; // tolerate one lost echo before replacing the connection
+				recycle(ws, Date.now() - lastVerifiedAt);
 			});
 		}, liveness.checkEveryMs);
 		watchdog.unref?.();
@@ -800,7 +800,7 @@ export function openRelaySocket(
 			backoffMs = 1000;
 			const reconnect = opened;
 			opened = true;
-			lastInboundAt = Date.now();
+			lastVerifiedAt = Date.now(); failedProbes = 0;
 			startWatchdog(ws);
 			writeLine(`Relay connected: ${instanceId.slice(0, 8)}…`);
 			// Fire-and-forget: a failing re-registration must not take the socket down with it —
@@ -809,7 +809,6 @@ export function openRelaySocket(
 		};
 
 		ws.onmessage = async (event) => {
-			lastInboundAt = Date.now();
 			const text = typeof event.data === "string" ? event.data : String(event.data);
 			// Server pings to verify liveness — respond with pong
 			if (text === "ping") { try { ws.send("pong"); } catch { /* closed */ } return; }

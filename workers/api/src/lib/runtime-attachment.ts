@@ -16,12 +16,12 @@ export type AttachmentState =
 	| "attached"
 	/** No runtime row at all — `pags up` has never registered this agent. */
 	| "never-registered"
-	/** Registered, but the machine itself has gone quiet. */
+	/** Registered, but this agent has no relay connection or recent heartbeat; host/process state is unknown. */
 	| "runner-offline"
 	/** The machine is alive and heartbeating, yet THIS agent has no socket. */
 	| "machine-online-agent-detached"
 	/**
-	 * Pinned to a machine that is down while a DIFFERENT one is up (#379/#380).
+	 * Pinned to a machine without an agent relay while a DIFFERENT one has a relay (#379/#380).
 	 *
 	 * Two invariants ride on this state, enumerated over the whole input space in
 	 * `runtime-attachment.test.ts` (#461): it NEVER carries a remedy, and no input describing a
@@ -87,7 +87,7 @@ export function diagnoseAttachment(input: {
 	if (pinned && live && live !== pinned) {
 		return {
 			state: "pinned-machine-offline",
-			message: `This agent is pinned to ${pinned}, which isn't connected. ${live} is connected — set "Runs on" to ${live} (or Automatic), or start the runner on ${pinned}.`,
+			message: `This agent is pinned to ${pinned}, where this agent has no PAGS relay connection. This does not establish whether the host or its runner process is running. ${live} has a relay connection — check the existing runner service on ${pinned}, or set "Runs on" to ${live} (or Automatic).`,
 			// No single command fixes this, and offering one would be the #259/#271/#321 failure
 			// again: `pags up` is already running (on ${live}) and `--force` would take a machine
 			// over rather than change where this agent points. The fix is one click in "Runs on".
@@ -97,8 +97,8 @@ export function diagnoseAttachment(input: {
 	if (!heartbeatFresh(input.lastSeenAt, input.now ?? Date.now())) {
 		return {
 			state: "runner-offline",
-			message: "The runner for this agent isn't running.",
-			remedy: "pags up",
+			message: "No live PAGS relay connection or recent heartbeat for this agent. The host and runner process state are unknown; check the existing runner service and its connection before starting another process.",
+			remedy: null,
 		};
 	}
 	// The interesting case, and the one that produced the unexplained amber dot: the machine is

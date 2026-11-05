@@ -490,7 +490,7 @@ describe("subordinate_status — the observe verb", () => {
 	it("says the runner is down, and which machine, when it really is", async () => {
 		const env = buildEnv({ instances: codingSubordinate, runtime: { connected: false, node: "studio", lastSeenAt: "2020-01-01 00:00:00" } });
 		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
-		expect(out.subordinates[0].connectivity).toMatchObject({ canWork: false, state: "runner-offline", remedy: "pags up" });
+		expect(out.subordinates[0].connectivity).toMatchObject({ canWork: false, state: "runner-offline", remedy: null });
 		expect(out.subordinates[0].connectivity.message).toContain("studio");
 	});
 

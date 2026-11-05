@@ -47,9 +47,9 @@ export function failoverSuggestion(input: { pinned: string | null | undefined; p
 		.filter((n) => n.node !== pinned && (n.connected || n.nodeOnline) && !(input.pinnedMachineId && n.machineId === input.pinnedMachineId))
 		.sort((a, b) => Number(b.connected) - Number(a.connected))
 		.map((n): FailoverCandidate => ({ displayName: n.displayName, machineId: n.machineId, node: n.node, attached: n.connected, repinTo: n.displayName || n.machineId || n.node }));
-	const down = `This agent is pinned to ${pinned}, which isn't connected, so it is not running.`;
+	const down = `This agent is pinned to ${pinned}, where it has no live PAGS relay connection. Host, runner process and any in-flight local work state are unknown.`;
 	if (!candidates.length) {
-		return { pinned, candidates, message: `${down} No other machine of yours is online to take it — start the runner on ${pinned} (\`pags up\`), or bring another machine up and repin then.` };
+		return { pinned, candidates, message: `${down} No alternative PAGS relay connection is available. Check the existing runner service on ${pinned} and its connection before starting another process, or reconnect another machine and repin then.` };
 	}
 	const first = candidates[0];
 	const label = first.displayName || first.node;
@@ -57,8 +57,8 @@ export function failoverSuggestion(input: { pinned: string | null | undefined; p
 		pinned,
 		candidates,
 		message:
-			`${down} ${label} is online${first.attached ? " and already attached to this agent" : ""}: repin it with set_instance_runner_node (runner_node "${first.repinTo}") or "Runs on" in the console` +
-			`${candidates.length > 1 ? `; ${candidates.length - 1} other machine${candidates.length > 2 ? "s are" : " is"} listed in candidates` : ""}. Nothing was repinned — a pin changes only when you change it, so the agent stays stopped until then.`,
+			`${down} ${label} has a PAGS relay connection${first.attached ? " already attached to this agent" : " for another agent"}: repin it with set_instance_runner_node (runner_node "${first.repinTo}") or "Runs on" in the console` +
+			`${candidates.length > 1 ? `; ${candidates.length - 1} other machine${candidates.length > 2 ? "s are" : " is"} listed in candidates` : ""}. Nothing was repinned. This reports relay availability, not whether local work has stopped.`,
 	};
 }
 

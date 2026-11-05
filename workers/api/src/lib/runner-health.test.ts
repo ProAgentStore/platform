@@ -37,7 +37,7 @@ describe("classifyHealthProbeFailure", () => {
 });
 
 describe("runnerLiveStatus", () => {
-	it("separates a wedged responder behind a live socket from an absent machine", () => {
+	it("separates a wedged responder from a missing agent transport without claiming host absence", () => {
 		expect(runnerLiveStatus({ registered: true, relayConnected: true, healthCheck: "ok" })).toBe("online");
 		expect(runnerLiveStatus({ registered: true, relayConnected: true, healthCheck: "timeout" })).toBe("unresponsive");
 		expect(runnerLiveStatus({ registered: true, relayConnected: false, healthCheck: "not_attempted" })).toBe("offline");
@@ -112,8 +112,21 @@ describe("runnerStatusView — four facts apart (#1032)", () => {
 
 	it("no socket: a fresh heartbeat points at force_runner_attach, a stale one at the machine", () => {
 		expect(runnerStatusView({ ...base, relayConnected: false, health: "not_attempted" }).eligible).toMatchObject({ reason: "no_relay", detail: expect.stringMatching(/force_runner_attach/) });
-		expect(runnerStatusView({ ...base, heartbeatFresh: false, relayConnected: false, health: "not_attempted" }).eligible.detail).toMatch(/not running or not reaching the platform/);
+		expect(runnerStatusView({ ...base, heartbeatFresh: false, relayConnected: false, health: "not_attempted" }).eligible.detail).toMatch(/does not establish whether the host/);
 		expect(runnerStatusView({ ...base, registered: false, relayConnected: false, health: "not_attempted" })).toMatchObject({ status: "unregistered", eligible: { reason: "unregistered" } });
+	});
+
+	it("stale heartbeat and absent relay cannot establish process or host state (#1485)", () => {
+		const input = { ...base, heartbeatFresh: false, relayConnected: false, health: "not_attempted" as const };
+		expect(runnerStatusView(input)).toMatchObject({
+			status: "offline", statusScope: "agent_transport", hostState: "unknown",
+			process: { state: "unknown", evidence: "not_observed" }, eligible: { ok: false, reason: "no_relay" },
+		});
+		// A positive independent process observation must survive a transport failure.
+		expect(runnerStatusView({ ...input, processAlive: true })).toMatchObject({
+			status: "offline", process: { state: "running", evidence: "watchdog" }, hostState: "unknown",
+		});
+		expect(runnerStatusView({ ...input, processAlive: false }).process).toEqual({ state: "not_running", evidence: "watchdog" });
 	});
 
 	it("reads a /health answer that came back as an HTTP error", () => {

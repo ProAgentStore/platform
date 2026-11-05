@@ -351,7 +351,7 @@ const PARKS: Record<RunWaitReason, Park> = {
 	decision: { why: "it is PARKED, waiting for YOUR ANSWER to a question", deadline: "give_up" },
 	engine_auth: { why: "the coding engine is not signed in — sign it in with coding_engine_reauth, from any device", deadline: "give_up" },
 	// #1160: woken when the machine re-registers; its `waitingUntil` is when it stops waiting.
-	runner_away: { why: "its machine went away — it continues by itself when the machine reconnects", deadline: "give_up" },
+	runner_away: { why: "its PAGS runner connection is unavailable — it continues by itself when that connection recovers", deadline: "give_up" },
 	// "Being resumed" only while a retry is actually SCHEDULED — see `waitClause` for the park without one (#855).
 	platform_interrupt: { why: "it was interrupted by something other than the work and a retry is scheduled", deadline: "resume" },
 };
@@ -465,7 +465,7 @@ const NOT_STALLED = `NOT stalled — a run counts as stalled only after ${Math.r
  *   live-active  → the engine is visibly working right now
  *   live-idle    → the engine is not producing output this turn
  *   capture-failed → could not read the engine; the caller must NOT infer idle or done
- *   runner-offline → the machine is offline; nothing is running
+ *   runner-offline → the PAGS connection is unavailable; local process/work state is unknown
  *   empty-pane / none / absent → omit the clause entirely
  */
 export function engineClause(view: TerminalView | null | undefined): string | null {
@@ -478,7 +478,7 @@ export function engineClause(view: TerminalView | null | undefined): string | nu
 		case "capture-failed":
 			return "engine: could not be read this turn — do NOT infer idle or finished";
 		case "runner-offline":
-			return "engine: the machine running it is offline";
+			return "engine: PAGS connection unavailable; local engine state is unknown";
 		default:
 			// empty-pane, none — not enough signal to make a claim either way
 			return null;

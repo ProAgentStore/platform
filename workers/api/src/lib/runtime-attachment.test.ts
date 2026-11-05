@@ -19,7 +19,9 @@ describe("diagnoseAttachment", () => {
 
 		const offline = diagnoseAttachment({ hasRuntimeRow: true, relayConnected: false, lastSeenAt: secondsAgo(600), now: NOW });
 		expect(offline.state).toBe("runner-offline");
-		expect(offline.remedy).toBe("pags up");
+		expect(offline.remedy).toBeNull();
+		expect(offline.message).toContain("host and runner process state are unknown");
+		expect(offline.message).not.toContain("isn't running");
 	});
 
 	// THE case this exists for: the machine is demonstrably alive (still heartbeating, its other
@@ -94,7 +96,7 @@ describe("diagnoseAttachment", () => {
 			liveNodeExcludedByPin: null,
 		});
 		expect(d.state).toBe("runner-offline");
-		expect(d.remedy).toBe("pags up");
+		expect(d.remedy).toBeNull();
 	});
 
 	it("a pin that resolved (relay live) is still just attached", () => {

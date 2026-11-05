@@ -362,12 +362,14 @@ describe("the incidents that motivated this", () => {
 			lowTechnicality: false,
 		});
 		expect(coder).toContain("pinned to Sergeys-Mac-mini.local");
-		expect(coder).toContain("RLs-MacBook-Air is connected");
+		expect(coder).toContain("RLs-MacBook-Air has a relay connection");
 		expect(coder).not.toContain("pags up");
 
-		// And the reason the block gates the diagnosis on `hasRunner` rather than always emitting it:
-		// the same sentence handed to a cloud-only agent IS a claim about a runner it has not got.
-		expect(promptClaimViolations(`## Runner status: OFFLINE — ${pinned?.message}`, PLAIN_CHAT).map((v) => v.claim)).toEqual(["local-runner"]);
+		// The runtime diagnosis remains gated on hasRunner even now that it no longer
+		// prescribes "start the runner" from missing transport evidence (#1485).
+		const cloud = assemblePrompt(PLAIN_CHAT, { technicalSeed: false, hasRepos: false, runner: pinned ?? null, activeSession: true, indexedRepos: false, lowTechnicality: false });
+		expect(cloud).not.toContain("pinned to Sergeys-Mac-mini.local");
+		expect(cloud).not.toContain("RLs-MacBook-Air has a relay connection");
 	});
 
 	it("naming a tool the agent was not granted", () => {
@@ -489,7 +491,7 @@ const ALLOWED_CLAIMS: Record<string, number> = {
 	// The Repo Chat branch, which genuinely does have one.
 	"lib/agent-style-prompt.ts — runtime:code-index": 2,
 	// Gated on `SelfModel.hasRunner`; a cloud-only agent is never sent to the CLI.
-	"lib/agent-style-prompt.ts — runtime:local-runner": 2,
+	"lib/agent-style-prompt.ts — runtime:local-runner": 1,
 	// "the subscriber sets it in the Settings tab" — Settings is universal in `tabsFor`.
 	"lib/agent-self-description.ts — tab:Settings": 1,
 	// The no-executor branch of `executionAuthorityPrompt`, gated on all three predicates.

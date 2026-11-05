@@ -118,3 +118,29 @@ describe("accept — the platform's answer is applied once, and 'clean now' runs
 		await vi.waitFor(() => expect(f.calls.filter((c) => c.path === "/coding/cleanup/run")).toHaveLength(2));
 	});
 });
+
+describe("heartbeat deadline fences cleanup response handling (#1545)", () => {
+	it("aborts a pending policy application and never starts clean-now after its heartbeat was abandoned", async () => {
+		let release: () => void = () => undefined;
+		const pending = new Promise<void>((resolve) => { release = resolve; });
+		const calls: string[] = [];
+		let forwarded: AbortSignal | undefined;
+		const impl = (async (url: string, init?: RequestInit) => {
+			calls.push(new URL(url).pathname);
+			forwarded = init?.signal ?? undefined;
+			if (calls.length === 1) await pending; // simulate a late response even when the transport ignores abort
+			return new Response('{"ok":true}');
+		}) as typeof fetch;
+		const sync = createCleanupSync("http://x", "t", impl);
+		const deadline = new AbortController();
+		const policy = { mode: "gentle", behaviours: {} };
+		const applying = sync.accept({ cleanupPolicy: policy, cleanupNow: { requestedAt: 100 } }, deadline.signal);
+		deadline.abort(new Error("heartbeat deadline"));
+		expect(forwarded?.aborted).toBe(true);
+		release();
+		await expect(applying).rejects.toThrow("heartbeat deadline");
+		expect(calls).toEqual(["/coding/cleanup/policy"]);
+		await sync.accept({ cleanupPolicy: policy }); // abandoned response was not remembered as applied
+		expect(calls).toEqual(["/coding/cleanup/policy", "/coding/cleanup/policy"]);
+	});
+});

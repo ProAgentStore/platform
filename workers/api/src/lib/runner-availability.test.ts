@@ -135,20 +135,20 @@ describe("waitForRunner", () => {
 		expect(d.ticks).toEqual([RUNNER_PROBE_INTERVAL_MS, 2 * RUNNER_PROBE_INTERVAL_MS]);
 	});
 
-	it("gives up after the budget and says the runner did not come back", async () => {
+	it("gives up after the budget and says the runner did not recover", async () => {
 		const d = waitDeps([OFFLINE]);
 		const r = await waitForRunner(d, { label: "s1", waitMs: 3 * RUNNER_PROBE_INTERVAL_MS });
 		expect(r.returned).toBe(false);
 		expect(r.state).toBe("runner-offline");
 		expect(d.slept).toHaveLength(3);
-		expect(r.message).toContain("did not come back");
+		expect(r.message).toContain("did not recover");
 		// The sentence this ticket exists to delete.
 		expect(r.message).not.toContain("run `pags up`");
 	});
 
 	it("uses each state's own remedy — including the one a hardcoded string can never give", () => {
 		expect(runnerGoneMessage(describeFacts(DETACHED), 60_000)).toContain("pags up --force");
-		expect(runnerGoneMessage(describeFacts(OFFLINE), 60_000)).toContain("`pags up`");
+		expect(runnerGoneMessage(describeFacts(OFFLINE), 60_000)).toContain("host and runner process state are unknown");
 		expect(runnerGoneMessage(describeFacts(NEVER), 0)).toContain("No runner has registered");
 	});
 
@@ -262,7 +262,7 @@ describe("makeRunnerGuard", () => {
 		const err = await guard(stepper(), "s0", async () => { throw new RunnerUnreachableError("No runner connected — " + NO_SOCKET_MARKER); })
 			.then(() => null, (e) => e);
 		expect(isRunnerGone(err)).toBe(true);
-		expect((err as Error).message).toContain("did not come back");
+		expect((err as Error).message).toContain("did not recover");
 		expect((err as Error).message).toContain("pags up --force");
 	});
 
@@ -275,7 +275,7 @@ describe("makeRunnerGuard", () => {
 			totalWaitMs: 2 * RUNNER_PROBE_INTERVAL_MS,
 		});
 		const boom = async () => { throw new RunnerUnreachableError(NO_SOCKET_MARKER); };
-		await expect(guard(stepper(), "a", boom)).rejects.toThrow("did not come back");
+		await expect(guard(stepper(), "a", boom)).rejects.toThrow("did not recover");
 		const second = await guard(stepper(), "b", boom).then(() => null, (e) => e as Error);
 		expect(second?.message).toContain("already spent its");
 		// Budget gone → it stopped sleeping rather than waiting a second full window.
@@ -298,7 +298,7 @@ describe("noRunnerDetail", () => {
 		expect(noRunnerDetail(NEVER)).toContain("`pags up`");
 		expect(noRunnerDetail(NEVER)).toContain("No runner has registered");
 		expect(noRunnerDetail(DETACHED)).toContain("`pags up --force`");
-		expect(noRunnerDetail(OFFLINE)).toContain("isn't running");
+		expect(noRunnerDetail(OFFLINE)).toContain("host and runner process state are unknown");
 	});
 
 	it("degrades to the plain sentence when the diagnosis could not be read", () => {

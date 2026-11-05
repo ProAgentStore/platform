@@ -156,13 +156,14 @@ describe("when the move cannot complete, the repin says why (#850)", () => {
 	// poll. When it last reported is the one fact that tells the two apart.
 	const LAST_SEEN = Date.parse("2026-09-25T22:00:00Z"); // Macmini's freshest registration above
 
-	it("no runner on the target machine for hours: says it is not running, when it was last seen, and no waiting", async () => {
+	it("stale heartbeat and no relay leave the process and host unknown (#1485)", async () => {
 		live.clear();
 		clock = LAST_SEEN + 10 * 3_600_000;
 		const out = await repin();
 		expect(out.attached).toBe(false);
-		expect(out.detail).toMatch(/^No `pags up` is running on Macmini \(last seen 10 h ago\)/);
-		expect(out.detail).toMatch(/Start it there/);
+		expect(out.detail).toMatch(/^No live PAGS relay connection is available on Macmini \(last heartbeat 10 h ago\)/);
+		expect(out.detail).toContain("process state are unknown");
+		expect(out.detail).toContain("start it only if confirmed stopped");
 		expect(slept).toEqual([]);
 	});
 
@@ -173,15 +174,15 @@ describe("when the move cannot complete, the repin says why (#850)", () => {
 		expect(out.attached).toBe(false);
 		expect(out.unconfirmed).toBe(true);
 		expect(out.detail).toMatch(/`pags up` on Macmini reported in 30 s ago but holds no relay socket/);
-		expect(out.detail).toMatch(/picks this agent up on its own within about 20 s.*instance_runner_node/);
+		expect(out.detail).toMatch(/If its discovery poll is healthy.*within about 20 s.*instance_runner_node/);
 		expect(out.detail).not.toMatch(/No `pags up` is/);
 		expect(slept).toEqual([]);
 	});
 
-	it("a machine never registered at all: not running, with no last-seen claim", async () => {
+	it("a machine never registered: no heartbeat recorded, no process-absence claim", async () => {
 		live.clear();
 		const out = await attachOnRepin(env, AGENT, "u1", "NewBox", deps);
-		expect(out.detail).toMatch(/^No `pags up` is running on NewBox — /);
+		expect(out.detail).toMatch(/^No live PAGS relay connection is available on NewBox \(no heartbeat recorded\)/);
 		expect(out.detail).not.toMatch(/last seen/);
 	});
 
@@ -298,7 +299,8 @@ describe("remote reattach — the platform's `pags up --force` for one agent (#8
 		live.add("coder-3@Macmini");
 		const out = await repin();
 		expect(out.attached).toBe(false);
-		expect(out.detail).toMatch(/connected but not answering \(2 tried\)/);
+		expect(out.detail).toMatch(/did not answer the attach request \(2 tried\)/);
+		expect(out.detail).toContain("not a stopped process or powered-off host");
 		expect(out.detail).not.toMatch(/runner window/);
 	});
 
