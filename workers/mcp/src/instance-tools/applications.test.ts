@@ -383,7 +383,12 @@ describe("the fill's progress reaches MCP verbatim (#986)", () => {
 		});
 		expect(described.get("list_applications")).toMatch(/execution/);
 		expect(described.get("list_applications")).toMatch(/does not grant submission authority/);
-		expect(described.get("get_application")).toMatch(/never says a form is filled without durable counts/);
+		for (const name of ["list_applications", "get_application"]) {
+			const description = described.get(name);
+			expect(description, name).toContain("`execution.progress.fieldCounts: unmeasured` means field/attachment counts are null");
+			expect(description, name).toContain("retained native request outcomes, browser timeouts/state, delivered image payloads and independent question blockers");
+			expect(description, name).toContain("Counts do not prove form acceptance.");
+		}
 	});
 });
 
