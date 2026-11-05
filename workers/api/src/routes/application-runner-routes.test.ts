@@ -336,7 +336,7 @@ describe("per-instance browser command timeout settings and dispatch", () => {
 		const started = await call("POST", "/ap/application-runs", event);
 		expect(started.status).toBe(201);
 		expect(started.body.run.policy.browserCommandTimeoutSeconds).toBe(900);
-		expect(dispatches()[0].body.policy.browserCommandTimeoutSeconds).toBe(900);
+		expect(dispatches()[0].body.policy).toMatchObject({ browserCommandTimeoutSeconds: 900 });
 	});
 	it("retains the frozen timeout when settings change during a queue wait", async () => {
 		await call("PUT", "/ap/application-runner/settings", { browserCommandTimeoutSeconds: 1200 });
@@ -347,7 +347,7 @@ describe("per-instance browser command timeout settings and dispatch", () => {
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
 		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("dispatched");
-		expect(dispatches().at(-1)?.body.policy.browserCommandTimeoutSeconds).toBe(1200);
+		expect(dispatches().at(-1)?.body.policy).toMatchObject({ browserCommandTimeoutSeconds: 1200 });
 	});
 });
 
