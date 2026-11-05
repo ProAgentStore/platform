@@ -11,7 +11,7 @@ const NOW = Date.parse("2026-11-06T08:00:00Z");
 let db: RealSchemaD1;
 let env: Env;
 beforeEach(() => {
- db = realSchemaD1(); env = { DB: db.DB } as Env;
+ db = realSchemaD1(); env = { DB: db.DB } as unknown as Env;
  db.exec(`INSERT INTO users (id, github_login) VALUES ('owner','owner'),('other','other');
  INSERT INTO agents (id,owner_id,slug,name) VALUES ('a','owner','availability','Coder');
  INSERT INTO agent_instances (id,agent_id,user_id,status,config) VALUES ('i','a','owner','active','{}');
