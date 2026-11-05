@@ -98,12 +98,11 @@ export default function Fleet() {
 							</thead>
 							<tbody>
 								{rows.map((r) => {
-									const idx = machines.findIndex((m) => m.key === r.key);
-									const m = machines[idx];
+									const m = machines.find((m) => m.key === r.key)!;
 									return (
 										<tr key={r.key} className="border-t border-line align-top">
 											<td className="py-1.5 pr-3 font-semibold whitespace-nowrap">
-												<span aria-hidden="true" className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ background: seriesColor(idx) }} />
+												<span aria-hidden="true" className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ background: seriesColor(r.colorIndex) }} />
 												{m.machineId ? (
 													<Link to={`/terminals/machines/${encodeURIComponent(m.machineId)}`} className="hover:text-accent">
 														{r.name}

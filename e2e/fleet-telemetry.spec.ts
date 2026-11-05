@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 async function fleetFixture(page: Page) {
 	await page.addInitScript(() => localStorage.setItem("pags:session", "fixture-session"));
 	const now = Date.now();
+	let changed = false;
 	const machine = (name: string, stale: boolean, starts24h: number) => {
 		const sampledAt = new Date(now - (stale ? 240_000 : 10_000)).toISOString();
 		return {
@@ -16,9 +17,13 @@ async function fleetFixture(page: Page) {
 		let body: unknown = {};
 		if (path === "/v1/auth/me") body = { id: "fixture-user", login: "tester", name: "Tester", roles: ["user"] };
 		if (path === "/v1/instances/my/instances") body = { instances: [] };
-		if (path === "/v1/terminals/resources") body = { tier: "dense", from: new Date(now - 7_200_000).toISOString(), to: new Date(now).toISOString(), now: new Date(now).toISOString(), cursor: null, truncated: false, machines: [machine("pink-laptop", true, 5), machine("tiny-laptop", true, 4), machine("macmini", false, 15)] };
+		if (path === "/v1/terminals/resources") {
+			const machines = [machine("pink-laptop", !changed, 5), machine("tiny-laptop", !changed, 4), machine("macmini", changed, 15)];
+			body = { tier: new URL(route.request().url()).searchParams.get("tier") ?? "dense", from: new Date(now - 7_200_000).toISOString(), to: new Date(now).toISOString(), now: new Date(now).toISOString(), cursor: null, truncated: false, machines: changed ? [machine("alpha-new", false, 1), ...machines.reverse()] : machines };
+		}
 		return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 	});
+	return { change: () => { changed = true; } };
 }
 
 test("Fleet distinguishes stale telemetry from host availability", async ({ page }, testInfo) => {
@@ -43,4 +48,31 @@ test("mobile — Fleet keeps telemetry caveats readable with an internally scrol
 	await expect(page.getByText(/This does not establish host power, runner responsiveness or task progress/)).toBeVisible();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 	await page.screenshot({ path: testInfo.outputPath("fleet-mobile.png"), fullPage: true });
+});
+
+test("Fleet keeps machine order and identity colors through refresh and range changes", async ({ page }) => {
+	const fixture = await fleetFixture(page);
+	await page.goto("/console/fleet");
+	const names = () => page.locator("tbody tr td:first-child").allTextContents().then((rows) => rows.map((text) => text.trim()));
+	await expect.poll(names).toEqual(["macmini", "pink-laptop", "tiny-laptop"]);
+	const colors = () => page.locator("tbody tr").evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.querySelector("td")!.textContent!.trim(), row.querySelector<HTMLElement>("td span")!.style.background])));
+	const before = await colors();
+	const verify = async () => {
+		await expect.poll(names).toEqual(["alpha-new", "macmini", "pink-laptop", "tiny-laptop"]);
+		const after = await colors();
+		for (const [name, color] of Object.entries(before)) expect(after[name]).toBe(color);
+		const chart = page.locator('svg[aria-label^="Disk used"]');
+		const labels = chart.locator("text[data-machine-key]");
+		await expect(labels).toHaveText([/alpha-new/, /macmini/, /pink-laptop/, /tiny-laptop/]);
+		const chartColors = await labels.evaluateAll((labels) => Object.fromEntries(labels.map((label) => [label.getAttribute("data-machine-key"), label.getAttribute("fill")])));
+		for (const [name, color] of Object.entries(after)) expect(chartColors[name]).toBe(color);
+		await expect(page.getByRole("list", { name: "Machines not drawn on Memory used" }).locator("li .font-semibold")).toHaveText(["alpha-new", "macmini", "pink-laptop", "tiny-laptop"]);
+	};
+	fixture.change();
+	await page.getByRole("button", { name: "Reload fleet telemetry" }).click();
+	await verify();
+	await page.getByRole("button", { name: "Last 24 h", exact: true }).click();
+	await verify();
+	await page.getByRole("button", { name: "Last 2 h", exact: true }).click();
+	await verify();
 });

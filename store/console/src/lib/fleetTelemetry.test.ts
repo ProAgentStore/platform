@@ -11,6 +11,7 @@ import {
 	type FleetResponse,
 	fleetRow,
 	machineStatus,
+	machineColorIndex,
 	mergeFleet,
 	niceTicks,
 	placeLabels,
@@ -34,6 +35,45 @@ const spec = (id: string) => {
 	if (!s) throw new Error(id);
 	return s;
 };
+
+describe("stable fleet identity presentation", () => {
+	const machines = [machine("Tiny", { stale: true }), machine("pink"), machine("Dell")];
+	const order = ["Dell", "pink", "Tiny"];
+	it("breaks equal case-folded display names by stable identity, including legacy identities", () => {
+		const peers = [machine("Same", { key: "b", machineId: "id-b" }), machine("same", { key: "a", machineId: "id-a" })];
+		expect(sortedRows(peers).map((row) => row.key)).toEqual(["a", "b"]);
+		expect(sortedRows([...peers].reverse()).map((row) => row.key)).toEqual(["a", "b"]);
+		const legacy = machine("Old hostname", { machineId: null, key: "legacy-stable" });
+		expect(machineColorIndex({ ...legacy, name: "Renamed", node: "new.local" })).toBe(machineColorIndex(legacy));
+	});
+	it("uses the same alphabetical order in table, lines, labels, tooltips and omissions", () => {
+		for (const input of [machines, [...machines].reverse(), [machines[1], machines[0], machines[2]]]) {
+			expect(sortedRows(input).map((row) => row.name)).toEqual(order);
+			const geom = chartGeometry(spec("disk"), input, OPTS);
+			expect(geom.series.map((row) => row.name)).toEqual(order);
+			expect(geom.labels.map((row) => row.key)).toEqual(geom.series.map((row) => row.key));
+			expect(geom.labels.map((row) => row.y)).toEqual([...geom.labels.map((row) => row.y)].sort((a, b) => a - b));
+			expect(tooltipAt(geom, geom.plot.x1, OPTS, spec("disk"))?.rows.map((row) => row.name)).toEqual(order);
+			expect(chartOmissions(spec("memory"), input.map((m) => ({ ...m, latest: latest({ platform: "darwin" }) }))).map((row) => row.name)).toEqual(order);
+		}
+	});
+	it("keeps identity colors through reordering, stale changes, ranges, missing peers and new machines", () => {
+		const colors = (input: FleetMachine[], opts = OPTS) => Object.fromEntries(chartGeometry(spec("disk"), input, opts).series.map((row) => [row.key, row.colorIndex]));
+		const expected = colors(machines);
+		const changed = [...machines].reverse().map((m) => ({ ...m, stale: !m.stale, sampleAgeSec: 999, points: [point(500)] }));
+		for (const input of [changed, [machines[1]], [machine("Alpha"), ...changed]]) {
+			const actual = colors(input, { ...OPTS, windowMs: TIER_WINDOW_MS.coarse });
+			for (const m of input.filter((m) => m.key in expected)) expect(actual[m.key]).toBe(expected[m.key]);
+		}
+		for (const m of machines) {
+			const row = fleetRow(m);
+			expect(row).toMatchObject({ colorIndex: expected[m.key] });
+			expect(chartOmissions(spec("memory"), [{ ...m, latest: latest({ platform: "darwin" }) }])[0].colorIndex).toBe(expected[m.key]);
+			const renamed = { ...m, name: "Renamed", node: "new-hostname.local" };
+			expect(colors([renamed])[m.key]).toBe(expected[m.key]);
+		}
+	});
+});
 
 describe("status rules (the prototype's thresholds)", () => {
 	it("fresh telemetry reports without claiming runtime readiness", () => {
@@ -248,14 +288,14 @@ describe("chart geometry: many machines, one set of axes", () => {
 		machine("mini", { points: [point(120, { loadPerCpu: 0.25 }), point(60, { loadPerCpu: 0.3 }), point(5, { loadPerCpu: 0.31 })] }),
 	];
 
-	it("shares one scale, keeps each machine's colour index, and labels each line directly at its end without overlap", () => {
+	it("shares one scale, keeps each machine's colour index, and lists each machine in a stable legend without overlap", () => {
 		const g = chartGeometry(spec("load"), fleet, OPTS);
-		expect(g.series.map((s) => s.colorIndex)).toEqual([0, 1, 2]);
+		expect(g.series.map((s) => [s.name, s.colorIndex])).toEqual([fleet[2], fleet[0], fleet[1]].map((m) => [m.name, machineColorIndex(m)]));
 		expect(g.labels).toHaveLength(3);
 		const ys = g.labels.map((l) => l.y).sort((a, b) => a - b);
 		for (let i = 1; i < ys.length; i++) expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(12 - 1e-9);
 		for (const l of g.labels) expect(l.x).toBe(g.plot.x1 + 6);
-		expect(g.labels[0].text).toBe("pink-laptop 7.6");
+		expect(g.labels.find((label) => label.key === fleet[0].key)?.text).toBe("pink-laptop 7.6");
 		// every point sits inside the plot
 		for (const s of g.series) for (const k of s.marks) {
 			expect(k.y).toBeGreaterThanOrEqual(g.plot.y0);
@@ -268,8 +308,8 @@ describe("chart geometry: many machines, one set of axes", () => {
 	it("draws the 1.5 overload line between the quiet machines and the loaded one", () => {
 		const g = chartGeometry(spec("load"), fleet, OPTS);
 		expect(g.threshold?.label).toBe("1.5 overload");
-		const pink = g.series[0].last as { y: number };
-		const rl = g.series[1].last as { y: number };
+		const pink = g.series.find((row) => row.name === "pink-laptop")!.last as { y: number };
+		const rl = g.series.find((row) => row.name === "rl-laptop")!.last as { y: number };
 		expect(pink.y).toBeLessThan(g.threshold?.y ?? 0);
 		expect(rl.y).toBeGreaterThan(g.threshold?.y ?? 0);
 	});
@@ -326,9 +366,9 @@ describe("summary table", () => {
 		expect(none).toMatchObject({ hardware: "—", sessions: "—", disk: "—", supervisor: "—", lastSample: "never" });
 	});
 
-	it("sorts the machine that needs you to the top", () => {
+	it("keeps alphabetical order when machine health changes", () => {
 		const rows = sortedRows([machine("b-ok"), machine("a-disk", { latest: latest({ diskUsedPct: 92 }) }), machine("z-off", { stale: true }), machine("c-load", { latest: latest({ loadPerCpu: 5 }) })]);
-		expect(rows.map((r) => r.name)).toEqual(["z-off", "c-load", "a-disk", "b-ok"]);
+		expect(rows.map((r) => r.name)).toEqual(["a-disk", "b-ok", "c-load", "z-off"]);
 	});
 
 	it("the age of the last sample reads in the right unit", () => {
@@ -350,7 +390,7 @@ describe("a chart says which machines it is not drawing, and why (#1380)", () =>
 
 	it("the memory chart names every macOS machine it leaves out, with the reason", () => {
 		const out = chartOmissions(spec("memory"), fleet);
-		expect(out.filter((o) => o.reason === "macOS counts cache as used").map((o) => o.name)).toEqual(["rl-laptop", "mac-mini", "pink-laptop", "tiny-laptop"]);
+		expect(out.filter((o) => o.reason === "macOS counts cache as used").map((o) => o.name)).toEqual(["mac-mini", "pink-laptop", "rl-laptop", "tiny-laptop"]);
 		expect(out.some((o) => o.name === "dell-laptop")).toBe(false);
 	});
 
@@ -361,7 +401,7 @@ describe("a chart says which machines it is not drawing, and why (#1380)", () =>
 
 	it("a machine silent for the whole range is listed as offline with when it last spoke, not dropped", () => {
 		const out = chartOmissions(spec("disk"), fleet);
-		expect(out).toEqual([expect.objectContaining({ name: "tiny-laptop", colorIndex: 4, reason: "telemetry stale — no samples in this range, last sample 3h ago" })]);
+		expect(out).toEqual([expect.objectContaining({ name: "tiny-laptop", colorIndex: machineColorIndex(tiny), reason: "telemetry stale — no samples in this range, last sample 3h ago" })]);
 	});
 
 	it("an online machine with no reading yet is told apart from an offline one", () => {
@@ -378,6 +418,6 @@ describe("a chart says which machines it is not drawing, and why (#1380)", () =>
 	});
 
 	it("keeps a machine's colour index across charts, so its omission line matches its dot in the table", () => {
-		expect(chartOmissions(spec("memory"), fleet).map((o) => [o.name, o.colorIndex])).toContainEqual(["tiny-laptop", 4]);
+		expect(chartOmissions(spec("memory"), fleet).map((o) => [o.name, o.colorIndex])).toContainEqual(["tiny-laptop", machineColorIndex(tiny)]);
 	});
 });

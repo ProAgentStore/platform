@@ -194,6 +194,19 @@ export const CHARTS: readonly ChartSpec[] = [
 export const SERIES_COLORS = 8;
 export const seriesColor = (index: number): string => `var(--color-series-${(index % SERIES_COLORS) + 1})`;
 
+/** Identity, never arrival position: renames, missing peers and range changes keep the same theme color.
+ * The finite theme palette may repeat in larger fleets; assignments never reshuffle to avoid a collision. */
+export function machineColorIndex(m: Pick<FleetMachine, "machineId" | "key">): number {
+	let hash = 2166136261;
+	for (const ch of m.machineId || m.key) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619) >>> 0;
+	return ((hash ^ (hash >>> 16)) >>> 0) % SERIES_COLORS;
+}
+
+/** One canonical name order in every view; telemetry severity never moves a machine around. */
+export function sortedMachines(machines: readonly FleetMachine[]): FleetMachine[] {
+	return [...machines].sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base", numeric: true }) || (a.machineId || a.key).localeCompare(b.machineId || b.key, "en") || a.key.localeCompare(b.key, "en"));
+}
+
 // ── What a chart leaves out, and why (#1380) ───────────────────────────────────────────────────────
 
 export interface Omission {
@@ -211,8 +224,8 @@ export interface Omission {
  */
 export function chartOmissions(spec: ChartSpec, machines: readonly FleetMachine[]): Omission[] {
 	const out: Omission[] = [];
-	machines.forEach((m, i) => {
-		const base = { key: m.key, name: m.name, colorIndex: i };
+	sortedMachines(machines).forEach((m) => {
+		const base = { key: m.key, name: m.name, colorIndex: machineColorIndex(m) };
 		if (spec.include && !spec.include(m)) {
 			out.push({ ...base, reason: spec.excludedWhy?.(m) ?? "not reported on this platform" });
 			return;
@@ -364,15 +377,15 @@ function timeLabel(ms: number, windowMs: number): string {
 const shortName = (n: string, max = 14) => (n.length > max ? `${n.slice(0, max - 1)}…` : n);
 
 /**
- * Project a chart: every machine a series on shared time and value axes, directly labelled at its line end.
- * The machines' colour index is their position in `machines`, so a machine keeps its colour across every chart on the page.
+ * Project a chart: every machine a series on shared time and value axes, with a name-ordered legend beside it.
+ * Machine identity determines color; the table, series, right-side legend and tooltip share one name order.
  */
 export function chartGeometry(spec: ChartSpec, machines: readonly FleetMachine[], o: ChartOpts): ChartGeometry {
 	const padL = o.padL ?? 38;
 	const padT = o.padT ?? 8;
 	const padB = o.padB ?? 18;
 	const plot = { x0: padL, x1: Math.max(padL + 10, o.width - o.labelWidth), y0: padT, y1: Math.max(padT + 10, o.height - padB) };
-	const used = machines.map((m, i) => ({ m, i })).filter(({ m }) => !spec.include || spec.include(m));
+	const used = sortedMachines(machines).map((m) => ({ m, i: machineColorIndex(m) })).filter(({ m }) => !spec.include || spec.include(m));
 	const values: number[] = [];
 	for (const { m } of used) for (const p of m.points) {
 		const v = spec.value(p);
@@ -444,7 +457,8 @@ export function chartGeometry(spec: ChartSpec, machines: readonly FleetMachine[]
 		return { x: r2(xFor(at, o.nowMs, o.windowMs, plot.x0, plot.x1)), label: timeLabel(at, o.windowMs) };
 	});
 	const withEnd = series.filter((s) => s.last);
-	const ys = placeLabels(withEnd.map((s) => (s.last as Mark).y), 12, plot.y0 + 4, plot.y1);
+	// A stable legend, not value-sorted end labels: changing a reading cannot reshuffle names.
+	const ys = withEnd.map((_, k) => plot.y0 + 8 + k * Math.min(14, (plot.y1 - plot.y0 - 8) / Math.max(1, withEnd.length - 1)));
 	const labels = withEnd.map((s, k) => ({
 		key: s.key,
 		x: plot.x1 + 6,
@@ -488,6 +502,7 @@ export function tooltipAt(geom: ChartGeometry, px: number, o: Pick<ChartOpts, "n
 export interface FleetRow {
 	key: string;
 	name: string;
+	colorIndex: number;
 	status: StatusVerdict;
 	hardware: string;
 	sessions: string;
@@ -517,6 +532,7 @@ export function fleetRow(m: FleetMachine): FleetRow {
 	return {
 		key: m.key,
 		name: m.name,
+		colorIndex: machineColorIndex(m),
 		status: machineStatus(m),
 		hardware: l ? `${l.cpus} cores · ${Math.round(l.memTotalBytes / GIB)} GiB · ${l.platform}` : "—",
 		sessions: l && l.activeSessions !== null ? `${l.activeSessions} / ${l.recommendedMaxSessions}` : "—",
@@ -529,10 +545,7 @@ export function fleetRow(m: FleetMachine): FleetRow {
 	};
 }
 
-/** Worst first, so the machine that needs you is at the top; ties by name. */
+/** Same name order and identity colors as every chart, regardless of current status. */
 export function sortedRows(machines: readonly FleetMachine[]): FleetRow[] {
-	const rank: Record<FleetStatus, number> = { "telemetry-stale": 4, overloaded: 3, "disk-low": 2, "too-many-sessions": 1, reporting: 0 };
-	return machines
-		.map(fleetRow)
-		.sort((a, b) => rank[b.status.status] - rank[a.status.status] || (b.status.tone === "danger" ? 1 : 0) - (a.status.tone === "danger" ? 1 : 0) || a.name.localeCompare(b.name));
+	return sortedMachines(machines).map(fleetRow);
 }

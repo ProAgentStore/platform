@@ -95,7 +95,7 @@ function Chart({ spec, machines, tier, nowMs, width }: { spec: ChartSpec; machin
 							</g>
 						))}
 						{geom.labels.map((l) => (
-							<text key={l.key} x={l.x} y={l.y + 3} className="text-2xs" fill={seriesColor(l.colorIndex)} opacity={l.stale ? 0.7 : 1}>
+							<text key={l.key} data-machine-key={l.key} x={l.x} y={l.y + 3} className="text-2xs" fill={seriesColor(l.colorIndex)} opacity={l.stale ? 0.7 : 1}>
 								{l.text}
 							</text>
 						))}
