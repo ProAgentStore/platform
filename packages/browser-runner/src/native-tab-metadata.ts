@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { diagnosticMessage } from "./browser-tool-recovery.js";
 
 const UNAVAILABLE = "[title unavailable: native metadata read exceeded its budget]";
 type TitleRead = { started: number; budget: number; promise: Promise<string> };
@@ -39,10 +40,10 @@ export class NativeTabMetadata {
 	}
 	/** Page identities and phases only: no titles, URLs or page-provided text in diagnostics. */
 	pending(): string {
-		return [...this.pages.values()].flatMap(state => [
+		return diagnosticMessage([...this.pages.values()].flatMap(state => [
 			...(state.foreground !== undefined ? [`page ${state.id}: bringToFront pending ${Date.now() - state.foreground}ms`] : []),
 			...(state.read ? [`page ${state.id}: title metadata pending ${Date.now() - state.read.started}ms (budget ${state.read.budget}ms)`] : []),
-		]).slice(0, 8).join("; ");
+		]).join("; "));
 	}
 	private restore(page: Page): void {
 		const state = this.pages.get(page);

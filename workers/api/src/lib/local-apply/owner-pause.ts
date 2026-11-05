@@ -1,5 +1,6 @@
 import type { Env } from "../../types.js";
 import { HttpError } from "../auth.js";
+import { clipMarked } from "../clip-marked.js";
 import { compareCliVersions } from "../machine-identity.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
@@ -25,7 +26,7 @@ export async function pauseApplicationForOwner(env: Env, userId: string, instanc
 	const body = await runtimeJson(res) as { error?: unknown };
 	if (!res.ok) {
 		await syncApplyRun(env, userId, run).catch(() => run);
-		throw new HttpError(409, typeof body.error === "string" ? body.error.slice(0, 500) : "The Runner could not safely pause native dispatch. Owner control is unavailable.");
+		throw new HttpError(409, typeof body.error === "string" ? clipMarked(body.error, 500, { within: true }) : "The Runner could not safely pause native dispatch. Owner control is unavailable.");
 	}
 	const paused = await syncApplyRun(env, userId, run);
 	if (paused.status !== "paused" || paused.pause?.reason !== "owner_requested" || !paused.pause.handoffRequestId) throw new HttpError(409, "The Runner did not confirm the exact owner pause; no owner control was opened.");

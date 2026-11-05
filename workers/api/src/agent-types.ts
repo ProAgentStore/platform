@@ -621,12 +621,15 @@ export interface ApplicationReconciliationResponse {
 	runner?: { state: "waiting_for_runtime" | "running" | "paused" | "ended"; pauseReason?: "login_required" | "captcha" };
 }
 
-/** `POST …/application-runs/:runId/reconciliation/handoff` — the bounded read-only sign-in/CAPTCHA handoff (#1013). */
-export interface ApplicationReconciliationHandoffResponse {
+/** Ordinary and reconciliation handoff creation return the same opaque identity/lifecycle projection. */
+export interface ApplicationHandoffResponse {
 	handoff: { id: string; runId: string; applicationId: string; state: "active" | "closed"; expiresAt: string; reason: string | null };
 	/** The Console page for this exact handoff; absent when it could not be opened. */
 	consoleLink?: string;
 }
+
+/** The bounded read-only sign-in/CAPTCHA handoff uses the same response envelope (#1013). */
+export type ApplicationReconciliationHandoffResponse = ApplicationHandoffResponse;
 
 /**
  * Why a GitHub App installation could not be bound to an account (#1081) — reason codes and GitHub's

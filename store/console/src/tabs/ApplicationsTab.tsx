@@ -23,7 +23,7 @@ import ApplicationToolAccessSettings, { type ToolAccessPatch } from "../componen
 import { ASSERT_STATEMENT_PROMPT, QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
 import { notificationRoute } from "../lib/deepLink";
 import { TONE_CLASS } from "../lib/localBrowser";
-import type { ApplicationActionResponse, ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueItemResponse, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
+import type { ApplicationHandoffResponse, ApplicationActionResponse, ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueItemResponse, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
 import type { PreparedApplicationTransferReceipt } from "../lib/applicationTransfer";
 
 /**
@@ -35,14 +35,7 @@ import type { PreparedApplicationTransferReceipt } from "../lib/applicationTrans
  * only when the Runner's policy allows an automatic submit for that application.
  */
 /** Secret-free projection returned by the #1013 opaque handoff resolver. */
-interface ApplicationHandoffView {
-	id: string;
-	runId: string;
-	applicationId: string;
-	state: string;
-	expiresAt: string | null;
-	reason: string | null;
-}
+type ApplicationHandoffView = ApplicationHandoffResponse["handoff"];
 
 export default function ApplicationsTab(props: { instanceId: string; isTailor?: boolean }) {
 	const [params] = useSearchParams();
@@ -204,7 +197,7 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 				</p>
 			)}
 			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} live={!!applicationId} browserLive={<ApplicationReplayLive instanceId={instanceId} runId={selected.fillRunId} handoff={handoff?.applicationId === selected.applicationId ? handoff : null} reconciliation={reconciliationHandoff} onTakeOver={() => setHandoffOpen(true)} onRequestControl={selected.fillRun?.id === selected.fillRunId && (selected.fillRun.status === "running" || (selected.fillRun.status === "paused" && selected.fillRun.pause?.reason === "owner_requested")) ? async () => {
-				const result = await api<{ handoff: ApplicationHandoffView }>(`/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(selected.fillRunId!)}/handoff`, { method: "POST", body: JSON.stringify({ pause: true }) });
+				const result = await api<ApplicationHandoffResponse>(`/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(selected.fillRunId!)}/handoff`, { method: "POST", body: JSON.stringify({ pause: true }) });
 				if (result.handoff.applicationId !== selected.applicationId || result.handoff.runId !== selected.fillRunId || result.handoff.state !== "active") throw new Error("The browser handoff is not ready for this exact application run. Retry after the pending action settles.");
 				const params = new URLSearchParams(searchParams); params.delete("reconciliation_handoff"); params.set("handoff", result.handoff.id);
 				pendingTakeover.current = result.handoff.id;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WebsiteGrantsResponse } from "./websiteAccess";
 import type { WebsiteGrantsResponse as WorkerWebsiteGrantsResponse } from "../../../../workers/api/src/lib/website-access-response-types";
-import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
+import type { ApplicationHandoffResponse as WorkerApplicationHandoffResponse, KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
 import type { KeyVerifyResponse as WorkerKeyVerifyResponse } from "../../../../workers/api/src/lib/key-verify-types";
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from "../../../../workers/api/src/lib/coding-default-engine-types";
@@ -9,7 +9,7 @@ import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, Ac
 import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, DiscordChannelListResponse as WorkerDiscordChannelListResponse, DiscordGrantListResponse as WorkerDiscordGrantListResponse, DiscordGrantResponse as WorkerDiscordGrantResponse, DiscordGuildListResponse as WorkerDiscordGuildListResponse, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse, PreparedApplicationTransferReceipt as WorkerPreparedApplicationTransferReceipt } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { AccountCodingDefaultApplyResponse, KeyVerifyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, ApplicationQueueItemResponse, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
+import type { ApplicationHandoffResponse, AccountCodingDefaultApplyResponse, KeyVerifyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, ApplicationQueueItemResponse, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
 import type { DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuildListResponse } from "./discordTypes";
 import type { GmailScoutScanResponse, LeadVerification, LeadVerificationListResponse } from "./gmailScout";
 import type { RemoteAuthRequestResponse, RemoteAuthRequestView } from "./remoteAuth";
@@ -60,6 +60,8 @@ import type { ActionsRecoveryResponse } from "./actionsRunnerStatus";
 
 /** The console field names the producer does not have. `never` when the two agree. */
 type Extra<Console, Producer> = Exclude<keyof Console, keyof Producer>;
+const _handoffEnvelopeHasNoInventedFields: Extra<ApplicationHandoffResponse, WorkerApplicationHandoffResponse> extends never ? true : never = true;
+const _handoffViewHasNoInventedFields: Extra<ApplicationHandoffResponse["handoff"], WorkerApplicationHandoffResponse["handoff"]> extends never ? true : never = true;
 
 const _websiteGrantsHaveNoInventedFields: Extra<WebsiteGrantsResponse, WorkerWebsiteGrantsResponse> extends never ? true : never = true;
 const _websiteDecisionsHaveNoInventedFields: Extra<WebsiteGrantsResponse["decisions"][number], WorkerWebsiteGrantsResponse["decisions"][number]> extends never ? true : never = true;

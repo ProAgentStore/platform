@@ -12,7 +12,7 @@
 import { acknowledgeFullBrowserTools, TOOL_ACCESS_DISCLOSURE } from "../lib/local-apply/tool-access.js";
 import { logEvent } from "../lib/events.js";
 import { isMcpRequest } from "../lib/coding-api-policy.js";
-import type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse } from "../agent-types.js";
+import type { ApplicationHandoffResponse, ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse } from "../agent-types.js";
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
@@ -173,8 +173,8 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		if (body.pause !== undefined && typeof body.pause !== "boolean") throw new HttpError(400, "pause must be a boolean");
 		const { handoff, ready } = await ensureFillHandoff(c.env, uid, instanceId, run, body.pause === true);
 		const now = Date.now();
-		if (!ready) return c.json({ handoff: handoffView(handoff, now) }, 409);
-		return c.json({ handoff: handoffView(handoff, now), consoleLink: applicationHandoffLink(instanceId, handoff.continuityId) }, 201);
+		if (!ready) return c.json({ handoff: handoffView(handoff, now) } satisfies ApplicationHandoffResponse, 409);
+		return c.json({ handoff: handoffView(handoff, now), consoleLink: applicationHandoffLink(instanceId, handoff.continuityId) } satisfies ApplicationHandoffResponse, 201);
 	});
 
 	/** Resolve only the opaque canonical Console link, still scoped to its owner and Runner. */
