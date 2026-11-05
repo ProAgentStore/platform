@@ -71,7 +71,9 @@ describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 
 	it("lists a created session with rich info", () => {
 		killSession(SESSION); // clean slate
-		createSession(SESSION, process.cwd());
+		// This fixture tests tmux primitives, not the owner's interactive shell profile.
+		// A login shell can spend the marker deadline loading nvm under suite load.
+		createSession(SESSION, process.cwd(), "/bin/sh");
 		expect(sessionExists(SESSION)).toBe(true);
 		const found = listSessionsDetailed().find((s) => s.name === SESSION);
 		expect(found).toBeTruthy();
