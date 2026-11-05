@@ -109,3 +109,60 @@ test("availability ages and its unknown gap grows while polling fails, independe
 	expect(beforeX - afterX).toBeGreaterThan(40);
 	await expect(lane).not.toContainText("offline");
 });
+
+const GRAPH_HELP = [
+	["Availability — PAGS heartbeat", "server receipt"],
+	["Load per core", "one-minute load"],
+	["Disk used (checkout volume)", "checkout volume"],
+	["Relay round trip", "milliseconds"],
+	["Runner starts in 24 h", "does not establish a crash loop"],
+	["Sessions against the recommended maximum", "configured admission limit"],
+	["Memory used", "macOS"],
+] as const;
+
+test("Fleet graph information explains every metric and supports keyboard dismissal and focus return", async ({ page }) => {
+	await fleetFixture(page);
+	await page.goto("/console/fleet");
+	for (const [title, explanation] of GRAPH_HELP) {
+		const trigger = page.getByRole("button", { name: `About ${title}`, exact: true });
+		await trigger.focus();
+		await trigger.press("Enter");
+		const popup = page.getByRole("dialog", { name: `About ${title}`, exact: true });
+		await expect(popup).toBeVisible();
+		await expect(popup).toContainText(explanation);
+		await expect(popup.getByRole("button", { name: "Close graph information" })).toBeFocused();
+		await page.keyboard.press("Tab");
+		await expect(popup.getByRole("button", { name: "Close graph information" })).toBeFocused();
+		await page.keyboard.press("Escape");
+		await expect(popup).toHaveCount(0);
+		await expect(trigger).toBeFocused();
+	}
+	const trigger = page.getByRole("button", { name: "About Availability — PAGS heartbeat", exact: true });
+	await trigger.click();
+	await page.getByRole("button", { name: "Close graph information" }).click();
+	await expect(trigger).toBeFocused();
+	await trigger.click();
+	await page.locator("[data-graph-info-backdrop]").click({ position: { x: 5, y: 5 } });
+	await expect(page.getByRole("dialog")).toHaveCount(0);
+	await expect(trigger).toBeFocused();
+});
+
+test("mobile — Fleet graph information fits the viewport with touch-sized controls", async ({ page }, testInfo) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await fleetFixture(page);
+	await page.goto("/console/fleet");
+	for (const [title] of GRAPH_HELP) {
+		const trigger = page.getByRole("button", { name: `About ${title}`, exact: true });
+		const box = await trigger.boundingBox();
+		expect(box?.width).toBeGreaterThanOrEqual(44);
+		expect(box?.height).toBeGreaterThanOrEqual(44);
+		await trigger.click();
+		const popup = page.getByRole("dialog", { name: `About ${title}`, exact: true });
+		await expect(popup).toBeVisible();
+		const bounds = await popup.boundingBox();
+		expect(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 390 && bounds.y + bounds.height <= 844).toBe(true);
+		expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+		if (title === "Relay round trip") await page.screenshot({ path: testInfo.outputPath("fleet-graph-info-mobile.png"), fullPage: true });
+		await popup.getByRole("button", { name: "Close graph information" }).click();
+	}
+});

@@ -1,6 +1,7 @@
 import { availabilityLanes, heartbeatAge } from "../lib/fleetAvailability";
 import { type FleetMachine, type FleetTier, seriesColor, TIER_WINDOW_MS } from "../lib/fleetTelemetry";
 import Card from "./Card";
+import GraphInfo from "./GraphInfo";
 
 /** PAGS receipt history comes first; resource samples and host-power guesses are not inputs. */
 export default function AvailabilityTimeline({ machines, tier, nowMs }: { machines: readonly FleetMachine[]; tier: FleetTier; nowMs: number }) {
@@ -8,7 +9,7 @@ export default function AvailabilityTimeline({ machines, tier, nowMs }: { machin
 	const stamp = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	return (
 		<Card className="mb-4" role="region" aria-label="Availability history">
-			<h2 className="text-sm font-bold">Availability — PAGS heartbeat</h2>
+			<div className="flex items-center justify-between gap-2"><h2 className="text-sm font-bold">Availability — PAGS heartbeat</h2><GraphInfo metric="availability" title="Availability — PAGS heartbeat" /></div>
 			<p className="text-2xs text-muted-soft mt-1 mb-3">Marks show heartbeats received by PAGS. Gray means no heartbeat recorded; availability is unknown.</p>
 			<div className="space-y-2">
 				{lanes.map((lane) => (

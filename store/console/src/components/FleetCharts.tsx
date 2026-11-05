@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CHARTS, type ChartOpts, type ChartSpec, chartGeometry, chartOmissions, type FleetMachine, type FleetTier, seriesColor, TIER_GAP_MS, TIER_WINDOW_MS, tooltipAt } from "../lib/fleetTelemetry";
 import Card from "./Card";
+import GraphInfo from "./GraphInfo";
 
 /**
  * The fleet's charts (#1259) — a DUMB renderer over `chartGeometry` (lib/fleetTelemetry.ts), which decides every coordinate, gap,
@@ -40,7 +41,7 @@ function Chart({ spec, machines, tier, nowMs, width }: { spec: ChartSpec; machin
 
 	return (
 		<Card className="min-w-0">
-			<h3 className="text-sm font-bold">{spec.title}</h3>
+			<div className="flex items-center justify-between gap-2"><h3 className="text-sm font-bold">{spec.title}</h3><GraphInfo metric={spec.id} title={spec.title} /></div>
 			{geom.empty ? (
 				<p className="text-2xs text-muted-soft py-6">{spec.note?.startsWith("Linux") ? spec.note : "No machine has a reading for this in the range yet."}</p>
 			) : (
