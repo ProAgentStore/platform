@@ -5,7 +5,7 @@ import { upsertProfile } from "../profile.js";
 import { ownerFactsReceipt, ownerFactsSnapshot, readOwnerFactValues } from "./owner-facts.js";
 
 let d1: RealSchemaD1;
-const env = () => ({ DB: d1.DB }) as Env;
+const env = () => ({ DB: d1.DB }) as unknown as Env;
 const scope = { instanceId: "apply", applicationId: "application", runId: "run" };
 beforeEach(() => { d1 = realSchemaD1(); d1.exec("INSERT INTO users(id, github_login) VALUES ('owner', 'owner')"); });
 afterEach(() => d1.close());
