@@ -92,8 +92,8 @@ const EXCLUSIONS = [
 	{
 		label: "The live takeover frame",
 		why:
-			"A live JPEG feed, ~2 frames per second, for the person driving an active takeover in the console (#1100, #1105). This interactive transport stays console-only. MCP can inspect retained replay screenshots with `browser_run_screenshots` and `browser_run_screenshot`, and keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`).",
-		match: /^GET \/v1\/instances\/\{\}\/takeover\/\{\}\/frame$/,
+			"A live frame feed for the person driving an active takeover or exact-run Application Runner handoff in the console (#1100, #1105). Both ordinary and read-only reconciliation handoffs require the owner-authenticated opaque continuity id. This rule excludes only GET frame transport, never handoff creation, input, resume or end. MCP can inspect retained replay screenshots with `browser_run_screenshots` and `browser_run_screenshot`, and keeps the takeover's record and its moves (`browser_takeover_*`, `resume_instance_takeover`, `end_instance_takeover`).",
+		match: /^GET \/v1\/instances\/\{\}\/(?:takeover\/\{\}\/frame|application-runs\/\{\}\/(?:reconciliation\/)?handoff\/frame)$/,
 	},
 	{
 		label: "Approving a machine's device sign-in (`pags login --device`)",

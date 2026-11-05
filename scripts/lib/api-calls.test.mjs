@@ -59,6 +59,16 @@ describe("normalisePath", () => {
 });
 
 describe("extractCalls", () => {
+	it("measures both exact Application Runner live-preview frame routes", () => {
+		const src = readFileSync(new URL("../../store/console/src/components/ApplicationReplayLive.tsx", import.meta.url), "utf8");
+		const result = extractCalls(src, ["api"]);
+		expect(result.calls.map((call) => `${call.method} ${call.path}`).sort()).toEqual([
+			"GET /v1/instances/{}/application-runs/{}/handoff/frame",
+			"GET /v1/instances/{}/application-runs/{}/reconciliation/handoff/frame",
+		]);
+		expect(result.unresolved).toEqual([]);
+	});
+
 	it.each([
 		["base.ts", "POST /v1/instances/{}/pause"],
 		["runtime.ts", "PUT /v1/instances/{}/runner-node"],

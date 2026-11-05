@@ -13,7 +13,9 @@ export default function ApplicationReplayLive({ instanceId, runId, handoff, reco
 	onRequestControl?: () => Promise<void>;
 }) {
 	const active = !!runId && handoff?.runId === runId && handoff.state === "active";
-	const base = active ? `/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(runId)}/${reconciliation ? "reconciliation/handoff" : "handoff"}/frame?handoff_id=${encodeURIComponent(handoff.id)}` : null;
+	const base = !active ? null : reconciliation
+		? `/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(runId)}/reconciliation/handoff/frame?handoff_id=${encodeURIComponent(handoff.id)}`
+		: `/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(runId)}/handoff/frame?handoff_id=${encodeURIComponent(handoff.id)}`;
 	const [image, setImage] = useState<{ base: string; frame: RemoteFrame } | null>(null);
 	const [error, setError] = useState("");
 	const [requesting, setRequesting] = useState(false);
