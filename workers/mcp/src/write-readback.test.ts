@@ -105,6 +105,7 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"connection_id",
 	"grant_id",
 	"run_id",
+	"handoff_id", // Exact existing browser-control lease; lifecycle is read through application_handoff.
 	"job_key",
 	"repo_id",
 	"node_id",
