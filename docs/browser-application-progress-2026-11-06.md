@@ -326,6 +326,37 @@ These results establish the repaired code and delivery; they are not a real empl
 or a deployed MCP approval-to-submit exercise. The next real eligible application remains that
 acceptance gate.
 
+### Next application: HCL Program Director, missing facts discovered before browser fill
+
+At 08:13 UTC (19:13 AEDT), official MCP reported the Application Runner online and RPC healthy
+on CLI **0.4.231**, with zero local runs. The owner requested the next application. Exact-job
+queue checks found no existing application for [HCL Program Director, SEEK 95719132](https://au.seek.com/job/95719132).
+This is a different job from the earlier uncertain HCL Infrastructure Project Manager attempt;
+that attempt was not replayed.
+
+A fresh isolated Playwright read of the public posting confirmed Hawthorn East, the advertised
+$160,000–$190,000 range, and the body wording **Contract-Full time**. It also exposed questions
+about Program Director experience, annual base salary, work rights and notice period, plus
+mandatory PMP certification. The approved sources establish Australian citizenship, immediate
+availability and PMP awarded in 2010, but not Program Director years, salary superannuation
+basis or current PMP validity. An attributed requirements summary and these factual limits were
+added to the existing lead through official MCP. The handoff truncates `match_rationale` to its
+existing bound; it is still not full job-description transport (#1552).
+
+The dry-run and subsequent `triage_application(apply)` created application
+`a81aaa0c-0079-488f-bc40-03a52ca7cf77` at 08:23:59 UTC. Tailoring run
+`89a641c5-e8cf-4c17-aab1-057b5d5454e2` read the selected uploaded résumé/profile versions,
+started Codex using machine authentication, and ended `needs_human` at 08:24:30 UTC.
+Application readback is **blocked / missing_information**, version 1, with exactly those three
+unresolved questions. There are no generated artifacts, browser fill run or submission receipt.
+The owner has been asked for the missing facts; no answers were invented and no retry was sent.
+
+The [application history](https://console.proagentstore.online/instances/2e85124f-4946-49d2-b922-8636ba92ca6a/applications/a81aaa0c-0079-488f-bc40-03a52ca7cf77)
+was shared. There is **no live browser to take over while tailoring is blocked**. Once the owner
+answers, the supported `retry_application(retry_tailoring, answers)` path can save those exact
+answers and continue the same application. This is earlier discovery of factual gaps, not a
+timeout or evidence that the deployed review-to-submit repair has passed a real application.
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |
