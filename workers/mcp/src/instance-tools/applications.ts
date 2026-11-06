@@ -5,6 +5,7 @@ import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { type McpScope, audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 import { fitFetchedPage } from "../wire-budget.js";
+import { registerApplicationHandoffResume } from "./application-handoff-resume.js";
 import { registerApplicationTailorSettings } from "./application-tailor-settings.js";
 
 /** The exact sentence an owner assertion is confirmed with (#1073) — a copy of `NOT_SUBMITTED_CONFIRM` in workers/api/src/lib/local-apply/owner-assertion.ts, which this worker cannot import; the API checks it too. */
@@ -40,6 +41,7 @@ export const APPLICATION_TOOL_SCOPES = {
 	application_run_supervision: "read",
 	application_handoff: "read",
 	create_application_handoff: "runtime",
+	resume_application_handoff: "runtime",
 	application_reconciliation: "read",
 	request_application_reconciliation: "runtime",
 	tailoring_run: "read",
@@ -67,6 +69,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	const { env, tokenFor, safetyFor } = ctx;
 	const pinned = opts.pinnedInstanceId;
 	registerApplicationTailorSettings(server, ctx, pinned);
+	registerApplicationHandoffResume(server, ctx, pinned);
 	// Every path is written out in full: the MCP-parity check reads these literals to prove each
 	// console capability has an MCP path (scripts/lib/api-calls.mjs).
 

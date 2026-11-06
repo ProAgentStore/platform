@@ -493,6 +493,7 @@ const TABLE: Record<string, Row> = {
 	application_run: ["applications", "read", null, null, "instance_id,run_id,token"],
 	application_run_supervision: ["applications", "read", null, null, "instance_id,run_id,token"],
 	application_handoff: ["applications", "read", null, null, "handoff_id,instance_id,run_id,token"],
+	resume_application_handoff: ["applications", "runtime", null, "envelope", "dry_run,handoff_id,instance_id,run_id,token"],
 	create_application_handoff: ["applications", "runtime", null, "envelope", "dry_run,instance_id,pause,run_id,token"],
 	application_reconciliation: ["applications", "read", null, null, "instance_id,run_id,token"],
 	request_application_reconciliation: ["applications", "runtime", null, "envelope", "dry_run,instance_id,run_id,token"],

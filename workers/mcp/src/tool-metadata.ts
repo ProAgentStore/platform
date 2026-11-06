@@ -251,6 +251,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// read-only evidence and cannot accept an owner's assertion as proof.
 	application_handoff: "read",
 	create_application_handoff: "runtime",
+	resume_application_handoff: "runtime",
 	application_reconciliation: "read",
 	request_application_reconciliation: "runtime",
 	tailoring_run: "read",

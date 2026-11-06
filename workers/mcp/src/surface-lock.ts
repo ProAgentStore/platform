@@ -1277,4 +1277,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.208": "sha256:5efc97ec8135390de3f04f4281357b1c81f946d38bfeaaf82c94fc7c95d89376", // Per-instance browser command timeout and explicit owner pause handoff.
 	"0.1.209": "sha256:98ad9b751e90548575d355e585525b49436a9e221a89867f630a9f13873ddc1e", // fleet_snapshot distinguishes waiting/queued from actively working.
 	"0.1.210": "sha256:fcd6ef26a9fb9d44df8fb8642df36ca22a0ddb514a04ad10fc8d8c0e772c2220", // #1566: owner-scoped Application Tailor engine and settings read/patch tools.
+	"0.1.211": "sha256:f7ffb4820648fe081abb055bc95c954e3d5e8cdb415cf58d88b99d305e20a864", // #1569: exact Application Runner owner-handoff resume.
 };

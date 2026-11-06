@@ -57,6 +57,7 @@ describe("the Applications tools (#958, #953)", () => {
 			"request_application_reconciliation",
 			"request_application_review",
 			"resume_application",
+			"resume_application_handoff",
 			"retry_application",
 			"set_application_runner_settings",
 			"set_application_tailor_settings",
