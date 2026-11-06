@@ -63,6 +63,25 @@ export interface PreparedUpload {
 	bytes?: number;
 }
 type ArtifactPath = (kind: LocalApplyArtifactKind) => PreparedUpload | { error: string };
+
+/** ASCII letters/digits joined by hyphens: safe on any upload validator and never a path. */
+const fileSlug = (value: string | undefined) => (value ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+/**
+ * Employers see the attachment's filename (#1574): `Sergey-Ivochkin-Resume-Program-Director.pdf`, not `resume.pdf`.
+ * Falls back to the generic name when the owner's name is unknown. The title keeps whole words up to 60 characters.
+ */
+export function documentFileName(kind: LocalApplyArtifactKind, envelope: Pick<LocalApplyTaskEnvelope, "job" | "ownerFacts">): string {
+	const identity = envelope.ownerFacts?.identity ?? {};
+	const person = [fileSlug(identity.firstName), fileSlug(identity.lastName)].filter(Boolean).join("-");
+	if (!person) return `${kind.replace("_", "-")}.pdf`;
+	let title = "";
+	for (const word of fileSlug(envelope.job.title).split("-")) {
+		if (!word || (title ? title.length + 1 : 0) + word.length > 60) break;
+		title = title ? `${title}-${word}` : word;
+	}
+	return `${[person, kind === "resume" ? "Resume" : "Cover-Letter", title].filter(Boolean).join("-")}.pdf`;
+}
 export async function prepareApplyDocuments(envelope: LocalApplyTaskEnvelope, dir: string, home: string, emit: (event: Omit<LocalApplyEvent, "at">) => void, renderPdf: DocumentPdfRenderer = renderDocumentPdf, signal?: AbortSignal): Promise<{ blocks: SourceBlock[]; artifactPath: ArtifactPath }> {
 	const blocks: SourceBlock[] = [];
 	const entries = new Map<LocalApplyArtifactKind, { name: string; text: string; sourceSha256: string; markdown: boolean; verify: () => boolean }>();
@@ -122,7 +141,7 @@ export async function prepareApplyDocuments(envelope: LocalApplyTaskEnvelope, di
 			if (!Buffer.isBuffer(bytes) || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-")) || !bytes.includes(Buffer.from("%%EOF"))) throw new Error("No complete PDF was produced");
 		} catch (error) { if (signal?.aborted || error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) throw new Blocked("source_unavailable", ["PDF preparation stopped or reached this run’s time limit. No employer-browser action or text-file fallback occurred."]); if (error instanceof PdfTextCoverageError) throw new Blocked("source_unavailable", [error.message]); throw new Blocked("source_unavailable", ["The approved document could not be rendered into a real PDF. Ensure Chromium or Chrome is installed and retry; no TXT or Markdown attachment fallback was used."]); }
 		if (!source.verify()) throw new Blocked("artifact_changed", ["The approved source changed during PDF rendering."]);
-		const name = `${kind.replace("_", "-")}.pdf`, path = join(folder, name);
+		const name = documentFileName(kind, envelope), path = join(folder, name);
 		writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
 		const upload: PreparedUpload = { path, sha256: hash(bytes), sourceSha256: source.sourceSha256, rendererRevision: PDF_RENDERER_REVISION, mimeType: "application/pdf", bytes: bytes.length };
 		uploads.set(kind, upload);

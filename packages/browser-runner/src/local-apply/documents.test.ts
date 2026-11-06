@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PortableDocument } from "../local-artifact/document-contract.js";
 import type { LocalApplyTaskEnvelope } from "./contract.js";
-import { clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
+import { clearCloudDocuments, documentFileName, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
 
 const fakePdf = async (text: string) => Buffer.from(`%PDF-1.7\n${text}\n%%EOF`);
@@ -28,6 +28,35 @@ function envelope(): LocalApplyTaskEnvelope {
 const dirs: string[] = [];
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), "pags-documents-")); dirs.push(dir); return dir; };
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
+describe("attachment filenames (#1574)", () => {
+	const facts = (identity: Record<string, string>) => ({ schemaVersion: 1 as const, source: "account_profile" as const, instanceId: "runner-1", applicationId: "app-1", runId: "run-1", capturedAt: "2026-11-07T00:00:00.000Z", revision: "r", identity, savedAnswers: {} });
+
+	it("names each document after the candidate and the job", () => {
+		const input = { job: { title: "Program Director" }, ownerFacts: facts({ firstName: "Sergey", lastName: "Ivochkin" }) };
+		expect(documentFileName("resume", input)).toBe("Sergey-Ivochkin-Resume-Program-Director.pdf");
+		expect(documentFileName("cover_letter", input)).toBe("Sergey-Ivochkin-Cover-Letter-Program-Director.pdf");
+	});
+
+	it("keeps the generic name when the candidate's name is unknown", () => {
+		expect(documentFileName("resume", { job: { title: "Program Director" } })).toBe("resume.pdf");
+		expect(documentFileName("cover_letter", { job: { title: "Program Director" }, ownerFacts: facts({}) })).toBe("cover-letter.pdf");
+	});
+
+	it("never yields a path, accents or punctuation, and bounds a long title by whole words", () => {
+		const input = { job: { title: "Sr. Engineer / Team Lead (Café) — Platform & Infrastructure, Observability and Reliability Engineering" }, ownerFacts: facts({ firstName: "José", lastName: "O'Brien" }) };
+		const name = documentFileName("resume", input);
+		expect(name).toBe("Jose-O-Brien-Resume-Sr-Engineer-Team-Lead-Cafe-Platform-Infrastructure.pdf");
+		expect(name).toMatch(/^[A-Za-z0-9-]+\.pdf$/);
+	});
+
+	it("stages the PDF under that name", async () => {
+		const dir = temp();
+		const input = { ...parseApplyEnvelope(envelope()), job: { title: "Program Director" }, ownerFacts: facts({ firstName: "Sergey", lastName: "Ivochkin" }) };
+		const prepared = await prepareApplyDocuments(input, dir, join(dir, "no-home"), () => {}, fakePdf);
+		expect(prepared.artifactPath("resume")).toMatchObject({ path: expect.stringMatching(/\/Sergey-Ivochkin-Resume-Program-Director\.pdf$/) });
+	});
+});
 
 describe("cloud application documents (#1468)", () => {
 	it("works on a second machine without a workspace and rechecks source and rendered PDF", async () => {
