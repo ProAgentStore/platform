@@ -28,7 +28,15 @@ try {
 	if (!version || !help.includes("pags-browser-runner")) throw new Error("Installed CLI or runner did not answer its smoke probe");
 	// Playwright itself is imported lazily when a browser job starts, so --help alone misses it.
 	run(process.execPath, ["--input-type=module", "--eval", "const { chromium } = await import('playwright'); if (typeof chromium.launch !== 'function') throw new Error('Playwright browser launcher unavailable');"], installed, 30_000);
-	console.log(`CLI PACKAGE GREEN ${version}: clean install, CLI, runner and browser dependency loaded`);
+	// PDF validation also loads lazily. Exercise the copied module outside workspace resolution,
+	// including PDF.js parsing, rather than just checking that the manifest lists its dependency.
+	run(process.execPath, ["--input-type=module", "--eval", `
+const { assertPdfTextCoverage, verifyPdfTextCoverage, PdfTextCoverageError } = await import('./dist/browser-runner/local-apply/pdf-text-coverage.js');
+assertPdfTextCoverage(['Approved fact'], 'Approved fact');
+try { await verifyPdfTextCoverage(Buffer.from('not a PDF'), ['Approved fact']); throw new Error('Invalid PDF was accepted'); }
+catch (error) { if (!(error instanceof PdfTextCoverageError) || error.problem !== 'unreadable_pdf') throw error; }
+`], installed, 30_000);
+	console.log(`CLI PACKAGE GREEN ${version}: clean install, CLI, runner, browser and PDF validation dependencies loaded`);
 } catch (error) {
 	console.error("CLI PACKAGE RED: the packed CLI cannot load with its published dependencies");
 	console.error(error.stderr?.toString() || error.message);

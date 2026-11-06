@@ -45,7 +45,8 @@
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "1.29.0",
 		"@playwright/mcp": "0.0.84",
-		"playwright": "1.65.0-alpha-2026-10-30"
+		"playwright": "1.65.0-alpha-2026-10-30",
+		"unpdf": "1.6.2"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

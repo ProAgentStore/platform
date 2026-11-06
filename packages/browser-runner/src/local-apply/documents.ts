@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { PDF_RENDERER_REVISION, renderDocumentPdf, renderWithSignal, type DocumentPdfRenderer } from "./document-pdf.js";
+import { PdfTextCoverageError } from "./pdf-text-coverage.js";
 import { RunnerInputError } from "../errors.js";
 import { PORTABLE_DOCUMENT_BYTES, type PortableDocument } from "../local-artifact/document-contract.js";
 import { resolveSource } from "../local-artifact/runtime.js";
@@ -119,7 +120,7 @@ export async function prepareApplyDocuments(envelope: LocalApplyTaskEnvelope, di
 		try {
 			bytes = await renderWithSignal(renderPdf, source.text, source.markdown, signal, Math.min((envelope.policy.browserCommandTimeoutSeconds ?? 600) * 1000, envelope.limits.maxMinutes * 60000));
 			if (!Buffer.isBuffer(bytes) || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-")) || !bytes.includes(Buffer.from("%%EOF"))) throw new Error("No complete PDF was produced");
-		} catch (error) { if (signal?.aborted || error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) throw new Blocked("source_unavailable", ["PDF preparation stopped or reached this run’s time limit. No employer-browser action or text-file fallback occurred."]); throw new Blocked("source_unavailable", ["The approved document could not be rendered into a real PDF. Ensure Chromium or Chrome is installed and retry; no TXT or Markdown attachment fallback was used."]); }
+		} catch (error) { if (signal?.aborted || error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) throw new Blocked("source_unavailable", ["PDF preparation stopped or reached this run’s time limit. No employer-browser action or text-file fallback occurred."]); if (error instanceof PdfTextCoverageError) throw new Blocked("source_unavailable", [error.message]); throw new Blocked("source_unavailable", ["The approved document could not be rendered into a real PDF. Ensure Chromium or Chrome is installed and retry; no TXT or Markdown attachment fallback was used."]); }
 		if (!source.verify()) throw new Blocked("artifact_changed", ["The approved source changed during PDF rendering."]);
 		const name = `${kind.replace("_", "-")}.pdf`, path = join(folder, name);
 		writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });

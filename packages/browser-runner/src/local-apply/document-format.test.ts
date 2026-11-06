@@ -9,7 +9,7 @@ import type { LocalApplyTaskEnvelope } from "./contract.js";
 import { PDF_RENDERER_REVISION } from "./document-pdf.js";
 import { parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 
-const TEXT = "# Synthetic Résumé\n\n**Engineer** — 2021–2024\n- UI/UX, testing, and data science\n- 技術 / Україна\n";
+const TEXT = "# Synthetic Résumé\n\n**Engineer** — 2021–2024\n- UI/UX, testing, and data science\n- Delivery / Україна\n";
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const document = (role: PortableDocument["role"]): PortableDocument => {
 	const bytes = Buffer.from(TEXT, "utf8");

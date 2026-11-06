@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { chromium } from "playwright";
+import { verifyPdfTextCoverage } from "./pdf-text-coverage.js";
 
 export const PDF_RENDERER_REVISION = "application_pdf_v1";
 export type DocumentPdfRenderer = (text: string, markdown: boolean, signal?: AbortSignal, timeoutMs?: number) => Promise<Buffer>;
@@ -52,8 +53,12 @@ export const renderDocumentPdf: DocumentPdfRenderer = async (text, markdown, sto
 		page.setDefaultTimeout(timeoutMs); page.setDefaultNavigationTimeout(timeoutMs);
 		await page.setContent(documentHtml(text, markdown), { waitUntil: "load" });
 		await page.emulateMedia({ media: "print" });
+		await page.evaluate(async () => { await document.fonts.ready; });
+		const expectedBlocks = await page.locator("body").evaluate((body) => Array.from(body.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6,p,li,pre")).map((block) => block.innerText));
 		const bytes = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true, tagged: true });
 		if (!bytes.subarray(0, 5).equals(Buffer.from("%PDF-")) || !bytes.includes(Buffer.from("%%EOF"))) throw new Error("Renderer did not produce a complete PDF");
+		await verifyPdfTextCoverage(bytes, expectedBlocks, signal);
+		signal.throwIfAborted();
 		return bytes;
 	} finally { signal.removeEventListener("abort", abort); await browser.close(); }
 };

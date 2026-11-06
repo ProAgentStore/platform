@@ -1,22 +1,35 @@
-import { createRequire } from "node:module";
+import { extractText } from "unpdf";
 import { chromium } from "playwright";
 import { expect, it } from "vitest";
 import { documentHtml, renderDocumentPdf } from "./document-pdf.js";
-
-// Use the existing workspace PDF reader in tests; the renderer needs only bundled Playwright.
-const { extractText } = createRequire(new URL("../../../../workers/api/package.json", import.meta.url))("unpdf") as {
-	extractText(bytes: Uint8Array, options: { mergePages: true }): Promise<{ totalPages: number; text: string }>;
-};
+import { PdfTextCoverageError, verifyPdfTextCoverage } from "./pdf-text-coverage.js";
 
 it("renders searchable Unicode text across multiple pages without dropping the final source facts", async () => {
 	const paragraphs = Array.from({ length: 120 }, (_, index) => `- Project ${index + 1}: delivered independently supported work, preserving the complete approved statement.`);
-	const bytes = await renderDocumentPdf(`# Zoë — Résumé\n\n**Engineer** · Україна · 技術\n\n## Experience\n${paragraphs.join("\n")}\n\nFinal approved fact: Étude complète.`, true);
+	const bytes = await renderDocumentPdf(`# Zoë — Résumé\n\n**Engineer** · Україна\n\n## Experience\n${paragraphs.join("\n")}\n\nFinal approved fact: Étude complète.`, true);
 	expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
 	const result = await extractText(new Uint8Array(bytes), { mergePages: true });
 	expect(result.totalPages).toBeGreaterThan(1);
 	const text = result.text.replace(/\s+/g, " ");
-	for (const expected of ["Zoë", "Résumé", "Engineer", "Україна", "技術", "Final approved fact: Étude complète."]) expect(text).toContain(expected);
+	for (const expected of ["Zoë", "Résumé", "Engineer", "Україна", "Final approved fact: Étude complète."]) expect(text).toContain(expected);
 	for (let index = 1; index <= 120; index++) expect(text).toContain(`Project ${index}: delivered independently supported work`);
+	// Real, valid PDF bytes cannot pass verification against characters absent from the output.
+	await expect(verifyPdfTextCoverage(bytes, ["技術"])).rejects.toMatchObject({ problem: "missing_characters", missingCodePoints: ["U+6280", "U+8853"] });
+}, 60_000);
+
+it("preserves mixed-script text or explicitly refuses missing host glyphs before returning an attachment (#1572)", async () => {
+ const source = "# Zoë — Résumé\n\nEngineer · Україна · 技術";
+ let bytes: Buffer;
+ try { bytes = await renderDocumentPdf(source, true); }
+ catch (error) {
+  expect(error).toBeInstanceOf(PdfTextCoverageError);
+  expect(error).toMatchObject({ code: "pdf_text_coverage", problem: "missing_characters", missingCodePoints: ["U+6280", "U+8853"] });
+  return;
+ }
+ const { text } = await extractText(new Uint8Array(bytes), { mergePages: true });
+ for (const expected of ["Zoë", "Résumé", "Україна", "技術"]) expect(text).toContain(expected);
+ expect(text).not.toContain("\u0000");
+ expect(text).not.toContain("\uFFFD");
 }, 60_000);
 
 it("escapes raw HTML and never creates executable or external-resource document elements", async () => {

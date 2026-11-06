@@ -1,6 +1,6 @@
 {
   "name": "@proagentstore/cli",
-  "version": "0.4.228",
+  "version": "0.4.229",
   "description": "CLI for creating, publishing, and running ProAgentStore agents",
   "license": "MIT",
   "type": "module",
@@ -34,9 +34,10 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/mcp": "0.0.84",
-    "playwright": "1.65.0-alpha-2026-10-30",
     "chalk": "^5.6.2",
-    "commander": "^13.0.0"
+    "commander": "^13.0.0",
+    "playwright": "1.65.0-alpha-2026-10-30",
+    "unpdf": "1.6.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

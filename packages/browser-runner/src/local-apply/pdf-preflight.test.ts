@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { prepareApplyDocuments } from "./documents.js";
+import { PdfTextCoverageError } from "./pdf-text-coverage.js";
 import { LocalApplyRuntime } from "./runtime.js";
 import { FullApplyTools } from "./full-tools.js";
 import type { ApplyBridgeHost } from "./bridge.js";
@@ -60,6 +61,14 @@ it("uses the frozen command deadline for PDF preparation and bounds it by the ru
 	const dir = temp();
 	await expect(prepareApplyDocuments(input, dir, dir, () => {}, renderer)).rejects.toHaveProperty("reason", "source_unavailable");
 	expect(renderer.mock.calls[0]).toMatchObject([expect.any(String), true, expect.any(AbortSignal), 1000]);
+	expect(existsSync(join(dir, "documents"))).toBe(false);
+});
+
+it("reports missing PDF text as a source refusal and cleans staging without a TXT fallback", async () => {
+	const dir = temp();
+	await expect(prepareApplyDocuments(envelope(), dir, dir, () => {}, async () => {
+		throw new PdfTextCoverageError("missing_characters", ["U+6280"]);
+	})).rejects.toMatchObject({ reason: "source_unavailable", questions: [expect.stringContaining("did not preserve the approved text")] });
 	expect(existsSync(join(dir, "documents"))).toBe(false);
 });
 
