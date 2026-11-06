@@ -128,6 +128,63 @@ Vitest's detailed report lists 1,530 passing and four skipped files, 24,434 pass
 cases; the wrapper's literal wording is retained. These checks validate the existing code and
 guidance integration, not delivery of the missing recovery/registration features.
 
+### 16:34 AEDT: fresh Talent test reached final review with genuine PDFs
+
+After the owner's request to apply again, independent MCP probes verified Tailor and Runner online,
+RPC healthy and eligible on **CLI 0.4.230**. Update `ab0b4af7-0b81-4ddd-afbc-4706f3002788`
+reported a reconciled restart. EPA reconciliation `b84feaf1-8742-4750-9037-937ce7e8f0f1`
+remained ambiguous; that ended attempt was not replayed.
+
+Public SEEK evidence identified Talent's **Manager - Data and Analytics Delivery**, job `95563236`,
+as permanent, Melbourne hybrid, AUD172,000–180,000 plus super, with Quick Apply. Canonical pipeline
+checks found no prior application for this lead. An attributed requirements summary was written only
+to `match_rationale`; no lifecycle fields were forced. The apply handoff was dispatched once at
+05:28:09 UTC. Application `8baaeded-3297-4a84-9613-4d5cdc877c69`, Tailor run
+`c28a9bd5-66a2-41d2-a08d-80b6f8f8874b`, and fill run `ac50a3d6-a939-4d8a-aa50-cb55de3023b0`
+identify this test. Its [history](https://console.proagentstore.online/instances/2e85124f-4946-49d2-b922-8636ba92ca6a/applications/8baaeded-3297-4a84-9613-4d5cdc877c69)
+was supplied to the owner. No takeover was requested or claimed to have been operated.
+
+The independent source review found the generated claims supported by the selected résumé and
+current structured Profile/saved answers, including hybrid availability. No dedicated data-lake
+ownership or BI-platform expertise was invented. The actual upload receipts distinguish source and
+PDF identities:
+
+| Document | Approved source SHA-256 | Uploaded PDF SHA-256 | Bytes |
+| --- | --- | --- | --- |
+| Résumé | `6957a675351c64620205ded7c04da5ba0ea421ef563c031549c30d0d193335fe` | `25cdbe99290a57241261f1d624c5acc522fde11ed0d60f3cb9ebbe0cad80b02a` | 127,127 |
+| Cover letter | `5ccc176af2f6d4408d7c56b2747ffd8225cf20450ce0c429f2cf3c6ffd84bff0` | `cfa4f0fe514cbd2b1d52163d9955f1cc5900c720b0f6d656712b8cf9fb91b93f` | 30,201 |
+
+Both use `application/pdf`, renderer `application_pdf_v1`. Local read-only inspection of the native
+upload copies verified those exact hashes and rendered all three pages. Text is readable without
+clipping; the résumé leaves the Feedzai heading/dates at the bottom of page one and its bullets on
+page two. This is a pagination quality limitation, not a missing-text claim. Rendered previews are
+temporary local evidence under `/tmp/pags-talent-pdf-review`, not committed private documents.
+Visual inspection occurred after upload, before any authorized submission; this does **not** demonstrate
+an automatic pre-upload visual-QA gate.
+
+The acting model was observed as `gpt-6-astra`, high effort, from local CLI metadata. Full mode and
+the 600-second command deadline were frozen. Nineteen retained native calls (including two internal
+tab calls) succeeded with no timeout, drop or restart reported at the read checkpoint. The browser
+used an existing SEEK session, uploaded both PDFs, and reached `/apply/review` at 05:31:03 UTC.
+Retained frame 17 shows the correct Talent job, owner identity and both PDF filenames under
+"Documents included". This establishes page acknowledgement, not employer receipt. This Quick Apply
+test did not exercise a large employer questionnaire or authentication recovery.
+
+At 05:31:30 UTC the same run paused for two substantive questions: SEEK's Asta title/dates,
+UniCredit end date and Scrum Master certification year conflict with the selected résumé; additional
+SEEK employment, education and achievement entries are absent from that source. The owner was asked
+whether to correct the conflicts and retain the additional entries. At this checkpoint the application
+is `blocked`, state version 3, while its fill run is **paused**, not ended. The recorded answer-wait
+expiry is 05:49:30 UTC. No answer, resume or submission approval was fabricated. There is still no
+confirmed submission; Full mode's unverified status must not be represented as proof that arbitrary
+code had no external effect. The next step is exact-question answer delivery and validation in this
+same run, followed by the outstanding bounded submission decision.
+
+This is operational evidence on the existing release, with no runtime code change or new full-suite
+claim. It demonstrates progress from the EPA authentication stop to final review and PDF acceptance;
+it does not close authentication recovery, deployed answer continuation, takeover use or first-submission
+acceptance gates.
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |
