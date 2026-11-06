@@ -9,6 +9,7 @@
 import { parseDecisionAssessment } from "./escalation-config.js";
 import type { LocalApplyEscalationLevel } from "./contract.js";
 import type { Env } from "../../types.js";
+import { logError } from "../error-log.js";
 import { readInstanceBrain } from "../instance-brain.js";
 import { runUserWorkersAi } from "../user-ai.js";
 import { type ApplyRun, type ApplyTraceEvent, updateApplyRun } from "./store.js";
@@ -64,6 +65,7 @@ export type DirectiveReason =
 	| "submission_authorization_required"
 	| "unknown_phase_needs_review"
 	| "brain_unavailable"
+	| "owner_approved_submission"
 	| "brain_decision"
 	| "escalation_allows_decision"
 	| "escalation_requires_review";
@@ -122,7 +124,10 @@ export function decideCheckpoint(run: ApplyRun, checkpoint: SupervisorCheckpoint
 	}
 	// `before_submit` WITH a valid one-shot gate, or a phase we do not recognise as routine. The
 	// model's judgement is used where it has one; with no answer the owner is asked, because the
-	// only actions left here are the ones that reach the employer.
+	// only actions left here are the ones that reach the employer — unless the owner already was
+	// (#1575): a gate carrying their approval of THIS application is that judgement, so a model
+	// that timed out must not cancel it. Standing auto-submit (no approval check) still fails closed.
+	if (!proposed && phase === "before_submit" && run.policy.gate.checks.some((c) => c.check === "submission_approved" && c.ok)) return policy("continue", "owner_approved_submission");
 	if (!proposed) return policy("request_review", phase === "before_submit" ? "brain_unavailable" : "unknown_phase_needs_review");
 	return { directive: proposed, escalationLevel, source: "brain", reason: "brain_decision", overrodeBrain: false };
 }
@@ -184,8 +189,9 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 		const args = call?.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : null;
 		const proposed = parsedDirective(args?.directive);
 		return decideCheckpoint(run, checkpoint, proposed);
-	} catch {
-		// A model that errored is a model that did not answer.
+	} catch (error) {
+		// A model that errored is a model that did not answer — recorded, so the next one is diagnosable (#1575).
+		await logError(env, { source: "job-apply", level: "warn", userId: uid, message: `Application checkpoint brain did not answer: ${error instanceof Error ? error.message : String(error)}`, context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase } }).catch(() => undefined);
 		return decideCheckpoint(run, checkpoint, null);
 	}
 }

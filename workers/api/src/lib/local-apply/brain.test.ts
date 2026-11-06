@@ -121,6 +121,17 @@ describe("Application Runner cloud brain", () => {
 			reason: "brain_unavailable",
 		});
 	});
+
+	it("…but a brain that cannot answer does not cancel the owner's approval of THIS application (#1575)", async () => {
+		runUserWorkersAi.mockRejectedValueOnce(new Error("timeout"));
+		const base = run("auto_submit");
+		const approved = { ...base, policy: { ...base.policy, gate: { allowed: true, gateId: "auth-1", checks: [{ check: "submission_approved", ok: true, why: "authorization auth-1" }] } } } as ApplyRun;
+		await expect(decideApplicationCheckpoint(env(), "u1", approved, checkpoint("before_submit"))).resolves.toMatchObject({ directive: "continue", source: "policy", reason: "owner_approved_submission" });
+		// A brain that DOES answer is still honoured, and a blocker still stops.
+		runUserWorkersAi.mockResolvedValueOnce({ tool_calls: [{ name: "decide_application_checkpoint", arguments: { directive: "request_review" } }] });
+		await expect(decideApplicationCheckpoint(env(), "u1", approved, checkpoint("before_submit"))).resolves.toMatchObject({ directive: "request_review", source: "brain" });
+		expect(decideCheckpoint(approved, checkpoint("before_submit", ["captcha"]), null)).toMatchObject({ directive: "stop", reason: "blocker" });
+	});
 });
 
 // ── #982: a routine checkpoint is not a review point ──────────────────────────────────────────
