@@ -164,9 +164,9 @@ export class LocalApplyReconciliationRuntime {
 		// turning generic page prose into an outcome.  Explicit end or the ten-minute deadline
 		// resolves it as ambiguous unless a future provider-specific verifier supplies exact proof.
 		if (session.handoff?.state === "ready") { session.state = "running"; session.pauseReason = undefined; return this.view(session); }
-		// SEEK has no validated account/job receipt or history contract in this runtime. Generic
-		// prose, receipt-like URLs, unauthenticated pages and absent receipts prove nothing.
-		return this.finish(session, { state: "ambiguous", proofKind: "ambiguous_site_history" });
+		// Only the validated SEEK job-page contract (#1571) yields proof. Generic prose, receipt-like
+		// URLs, unauthenticated pages and absent receipts prove nothing.
+		return this.finish(session, seekJobEvidence(session.envelope.applicationUrl, state) ?? { state: "ambiguous", proofKind: "ambiguous_site_history" });
 	}
 
 	private async blocked(session: Session, dispatched = false): Promise<boolean> {
@@ -211,7 +211,7 @@ export class LocalApplyReconciliationRuntime {
 	private page(session: Session): Page | null { const page = session.browser.handoffPage?.(); return page && !page.isClosed() ? page : null; }
 	private permitted(session: Session, raw: string): boolean { try { const host = new URL(raw).hostname.toLowerCase(); return session.envelope.allowDomains.some((d) => domainWithin(host, d)); } catch { return false; } }
 	private async blocker(page: Page | null): Promise<boolean> { const state = page ? await this.pageState(page).catch(() => null) : null; return !!state && (state.login || state.captcha); }
-	private async pageState(page: Page): Promise<{ url: string; login: boolean; captcha: boolean }> {
+	private async pageState(page: Page): Promise<PageState> {
 		return page.evaluate(() => {
 			const text = (document.body?.innerText ?? "").toLowerCase();
 			const captcha = !!document.querySelector('iframe[src*="hcaptcha.com"], .h-captcha, iframe[src*="challenges.cloudflare.com"], .cf-turnstile, iframe[src*="arkoselabs"], .geetest_holder') || /confirm (that )?you('?re| are) not a robot|i'?m not a robot|verify (that )?you('?re| are) (a )?human|checking (if the site connection is secure|your browser)/.test(text);
@@ -220,7 +220,14 @@ export class LocalApplyReconciliationRuntime {
 			const password = !!document.querySelector("input[type=password]");
 			const otp = !!document.querySelector("input[autocomplete='one-time-code'], input[name*='otp' i], input[name*='verification' i], input[id*='otp' i], input[id*='verification' i]");
 			const emailSignIn = !!document.querySelector("form[action*='login' i] input[type=email], form[action*='sign-in' i] input[type=email], [data-auth-screen] input[type=email]");
-			return { url: location.href, login: password || otp || emailSignIn, captcha };
+			// SEEK job-page markers (#1571): booleans and the apply control's own href/target/label only.
+			const apply = document.querySelector<HTMLAnchorElement>('a[data-automation="job-detail-apply"]');
+			const seek = {
+				signedIn: !!document.querySelector('[data-automation="account name"]'),
+				appliedMessage: !!document.getElementById("applied-date-message"),
+				apply: apply ? { href: apply.getAttribute("href") ?? "", target: apply.getAttribute("target") ?? "", label: (apply.innerText ?? "").replace(/[⁠\s]+/g, " ").trim().toLowerCase() } : null,
+			};
+			return { url: location.href, login: password || otp || emailSignIn, captcha, seek };
 		});
 	}
 	private require(raw: unknown): Session { const id = typeof (raw as Record<string, unknown> | null)?.reconciliationId === "string" ? (raw as Record<string, unknown>).reconciliationId as string : ""; if (!SAFE_ID.test(id)) throw new RunnerInputError("reconciliationId is required"); const session = this.sessions.get(id); if (!session) throw new RunnerInputError("Reconciliation session not found", 404); return session; }
@@ -228,6 +235,35 @@ export class LocalApplyReconciliationRuntime {
 	private assertHandoffBinding(session: Session, request: LocalApplyReconciliationHandoffRequest): void { const e = session.envelope; if (e.reconciliationId !== request.reconciliationId || e.runId !== request.runId || e.applicationId !== request.applicationId || e.browserProfile !== request.browserProfile) throw new RunnerInputError("The reconciliation handoff does not match this exact attempt", 403); }
 	private async liveHandoff(raw: unknown): Promise<Session> { const request = this.handoffRequest(raw); const session = this.require(request); this.assertHandoffBinding(session, request); if ((session.state !== "paused" && session.state !== "running") || session.handoff?.id !== request.handoffId || session.handoff.state !== "ready") throw new RunnerInputError("The reconciliation handoff is closed", 409); if (session.handoff.expiresAt <= this.now()) { await this.closeHandoff(session, "expired"); await this.finish(session, { state: "ambiguous", proofKind: "ambiguous_site_history" }); throw new RunnerInputError("The reconciliation handoff is closed", 409); } return session; }
 	private view(session: Session): LocalApplyReconciliationStatus { const e = session.envelope; return { reconciliationId: e.reconciliationId, runId: e.runId, applicationId: e.applicationId, browserProfile: e.browserProfile, context: "separate_read_only_context", state: session.state, ...(session.website.blocked ? { websiteAccess: session.website.blocked } : {}), ...(session.pauseReason ? { pauseReason: session.pauseReason } : {}), ...(session.result ? { result: session.result } : {}) }; }
+}
+
+type PageState = { url: string; login: boolean; captcha: boolean; seek?: { signedIn: boolean; appliedMessage: boolean; apply: { href: string; target: string; label: string } | null } };
+type Evidence = NonNullable<LocalApplyReconciliationStatus["result"]>;
+
+const seekJobId = (raw: string): string | null => {
+	try {
+		const url = new URL(raw);
+		if (!domainWithin(url.hostname.toLowerCase(), "seek.com.au") && !domainWithin(url.hostname.toLowerCase(), "seek.com")) return null;
+		return /^\/job\/(\d{5,})\/?$/.exec(url.pathname)?.[1] ?? null;
+	} catch { return null; }
+};
+
+/**
+ * The SEEK job-page contract (#1571), observed on signed-in au.seek.com job pages on 2026-11-07:
+ * a job this account applied to via SEEK shows `#applied-date-message` ("You applied on …") and no
+ * apply control; a job it has not applied to shows `a[data-automation="job-detail-apply"]` at
+ * `/job/<id>/apply`. Only SEEK Quick Apply (label "Quick apply", same-tab) is recorded by SEEK, so
+ * the absence of the message proves nothing for an external "Apply" that leaves for the employer's
+ * site. Proof is bound to the exact job id of the attempt and to a signed-in page; anything else,
+ * including both markers at once, is null (ambiguous).
+ */
+export function seekJobEvidence(applicationUrl: string, state: PageState): Evidence | null {
+	const id = seekJobId(applicationUrl);
+	if (!id || !state.seek?.signedIn || state.login || state.captcha || seekJobId(state.url) !== id) return null;
+	const { appliedMessage, apply } = state.seek;
+	if (appliedMessage && !apply) return { state: "submission_confirmed", proofKind: "authorized_site_receipt_confirmed" };
+	if (!appliedMessage && apply && apply.href === `/job/${id}/apply` && apply.label === "quick apply" && apply.target !== "_blank") return { state: "no_submission_proven", proofKind: "authorized_site_history_no_submission" };
+	return null;
 }
 
 function parseEnvelope(raw: unknown): LocalApplyReconciliationEnvelope {

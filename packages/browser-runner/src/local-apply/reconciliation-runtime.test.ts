@@ -18,6 +18,38 @@ function runtime(state: { url: string; login?: boolean; captcha?: boolean; confi
 	return new LocalApplyReconciliationRuntime({ dataDir: "/tmp", browserFor: async () => ({ stop: async () => undefined, handoffPage: () => page }) });
 }
 
+describe("SEEK job-page reconciliation (#1571)", () => {
+	const job = "https://au.seek.com/job/95719132";
+	const seekEnvelope = () => ({ ...envelope(), applicationUrl: job, allowDomains: ["seek.com.au", "seek.com"] });
+	const quickApply = { href: "/job/95719132/apply", target: "_self", label: "quick apply" };
+	const page = (seek: unknown, url = job) => ({ url, login: false, captcha: false, seek });
+	const run = (state: unknown) => runtime(state as never).start(seekEnvelope());
+
+	it("confirms a submission from the signed-in 'You applied on' marker on the exact job", async () => {
+		await expect(run(page({ signedIn: true, appliedMessage: true, apply: null }))).resolves.toMatchObject({ state: "ended", result: { state: "submission_confirmed", proofKind: "authorized_site_receipt_confirmed" } });
+	});
+
+	it("proves no submission when the exact job still offers SEEK Quick Apply", async () => {
+		await expect(run(page({ signedIn: true, appliedMessage: false, apply: quickApply }))).resolves.toMatchObject({ result: { state: "no_submission_proven", proofKind: "authorized_site_history_no_submission" } });
+	});
+
+	it.each([
+		["an external Apply that leaves SEEK", page({ signedIn: true, appliedMessage: false, apply: { href: "/job/95719132/apply", target: "_blank", label: "apply" } })],
+		["a signed-out page", page({ signedIn: false, appliedMessage: false, apply: quickApply })],
+		["a redirect to another job", page({ signedIn: true, appliedMessage: false, apply: { ...quickApply, href: "/job/1111111/apply" } }, "https://au.seek.com/job/1111111")],
+		["an apply control for another job", page({ signedIn: true, appliedMessage: false, apply: { ...quickApply, href: "/job/1111111/apply" } })],
+		["conflicting markers", page({ signedIn: true, appliedMessage: true, apply: quickApply })],
+		["neither marker (expired or changed page)", page({ signedIn: true, appliedMessage: false, apply: null })],
+	])("stays ambiguous for %s", async (_label, state) => {
+		await expect(run(state)).resolves.toMatchObject({ result: { state: "ambiguous", proofKind: "ambiguous_site_history" } });
+	});
+
+	it("never applies the SEEK contract to another site", async () => {
+		const result = await runtime({ url: "https://jobs.example.test/job/95719132", seek: { signedIn: true, appliedMessage: false, apply: quickApply } } as never).start(envelope());
+		expect(result).toMatchObject({ result: { state: "ambiguous" } });
+	});
+});
+
 describe("LocalApplyReconciliationRuntime", () => {
 	it("does not convert a redirect or missing receipt into no-submission proof", async () => {
 		const result = await runtime({ url: "https://jobs.example.test/login" }).start(envelope());
