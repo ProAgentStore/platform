@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, lstatSync, writeFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { extname, isAbsolute, join } from "node:path";
 /** Opt-in native tools: no interpretation of page content or native schema rewriting. */
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { ApplyBridgeHost, ToolResult } from "./bridge.js";
 import { applyTools } from "./tool-schemas.js";
 import { decisionReason, parseDecision } from "./answer-decision.js";
-import type { LocalApplyTaskEnvelope } from "./contract.js";
+import type { LocalApplyArtifactKind, LocalApplyTaskEnvelope } from "./contract.js";
+import type { PreparedUpload } from "./documents.js";
 import { RunnerInputError } from "../errors.js";
 
 export const FULL_SUBMISSION_UNKNOWN = "Full native tool access: submission state is unverified. The supervised submission counter does not cover effects inside native tools or arbitrary code.";
@@ -45,7 +46,21 @@ export class FullApplyTools {
 		const names = new Set(this.host.signInSecrets?.() ?? []);
 		const usesSecret = name === "browser_type" && names.has(String(args.text)) || name === "browser_fill_form" && Array.isArray(args.fields) && args.fields.some((field) => field && typeof field === "object" && names.has(String(field.value)));
 		const origin = usesSecret ? this.credentialOrigin ?? expectedOrigin : undefined;
+		const selected: Array<PreparedUpload & { kind: LocalApplyArtifactKind }> = [];
+		if ((name === "browser_file_upload" || name === "browser_drop") && Array.isArray(args.paths) && args.paths.length) {
+			for (const requested of args.paths) {
+				let match: (PreparedUpload & { kind: LocalApplyArtifactKind }) | undefined;
+				for (const kind of ["resume", "cover_letter"] as const) {
+					const approved = this.host.artifactPath(kind);
+					if ("error" in approved) continue;
+					try { if (typeof requested === "string" && realpathSync(this.host.resolveUploadPath ? this.host.resolveUploadPath(requested) : isAbsolute(requested) ? requested : "") === realpathSync(approved.path) && extname(approved.path).toLowerCase() === ".pdf") match = { ...approved, kind }; } catch { /* The native identity guard will also refuse an unavailable path. */ }
+				}
+				if (!match) return response("Only approved, hash-verified PDF artifacts may be selected. No file upload was dispatched.", true);
+				selected.push(match);
+			}
+		}
 		const result = await this.browser.callTool(name, args, origin ? { expectedOrigin: origin } : undefined);
+		if (!result.isError) for (const file of selected) this.host.emit({ type: "artifact.uploaded", detail: { kind: file.kind, sha256: file.sha256, ...(file.sourceSha256 ? { sourceSha256: file.sourceSha256, rendererRevision: file.rendererRevision, mimeType: file.mimeType, bytes: file.bytes } : {}), class: "fill", status: "selected", reason: "site_acceptance_unconfirmed" } });
 		// Preserve every native content block, including screenshot pixels. Do not relabel calls as fills.
 		return { ...result, content: result.content ?? [] } as ToolResult;
 	}
@@ -97,6 +112,7 @@ export function fullArtifactPaths(original: ApplyBridgeHost["artifactPath"], kin
 	const paths = new Map<string, string>();
 	for (const { kind } of kinds) {
 		const approved = original(kind); if ("error" in approved) throw new RunnerInputError(approved.error);
+		if (extname(approved.path).toLowerCase() !== ".pdf") throw new RunnerInputError("A real PDF attachment is required; text-file upload fallback is disabled.");
 		const path = join(directory, `${kind}${extname(approved.path)}`); writeFileSync(path, readFileSync(approved.path), { mode: 0o600, flag: "wx" }); paths.set(kind, path);
 	}
 	return (kind) => {
@@ -104,7 +120,7 @@ export function fullArtifactPaths(original: ApplyBridgeHost["artifactPath"], kin
 		const path = paths.get(kind); if (!path) return { error: "No approved document of this kind." };
 		try {
 			if (!lstatSync(path).isFile() || realpathSync(path) !== path || createHash("sha256").update(readFileSync(path)).digest("hex") !== approved.sha256) return { error: "The run document changed; upload refused." };
-			return { path, sha256: approved.sha256 };
+			return { ...approved, path };
 		} catch { return { error: "The approved run document is unavailable." }; }
 	};
 }

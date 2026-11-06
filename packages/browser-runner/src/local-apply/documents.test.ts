@@ -10,6 +10,7 @@ import type { LocalApplyTaskEnvelope } from "./contract.js";
 import { clearCloudDocuments, parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
 
+const fakePdf = async (text: string) => Buffer.from(`%PDF-1.7\n${text}\n%%EOF`);
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 function document(role: PortableDocument["role"], text = `Private ${role} exact owner text`): PortableDocument {
 	const bytes = Buffer.from(text);
@@ -29,32 +30,32 @@ const temp = () => { const dir = mkdtempSync(join(tmpdir(), "pags-documents-"));
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("cloud application documents (#1468)", () => {
-	it("works on a second machine without a workspace and rechecks the staged upload", () => {
+	it("works on a second machine without a workspace and rechecks source and rendered PDF", async () => {
 		const dir = temp();
 		const input = parseApplyEnvelope(envelope());
 		const events: unknown[] = [];
-		const prepared = prepareApplyDocuments(input, dir, join(dir, "no-home"), (event) => events.push(event));
+		const prepared = await prepareApplyDocuments(input, dir, join(dir, "no-home"), (event) => events.push(event), fakePdf);
 		expect(prepared.blocks.map((block) => block.label)).toEqual(["resume", "cover_letter", "profile"]);
 		const upload = prepared.artifactPath("resume");
 		expect(upload).toHaveProperty("path");
-		expect(upload).toMatchObject({ path: expect.stringMatching(/resume\.txt$/), sha256: input.artifacts[0].sha256 });
-		expect(events).toContainEqual({ type: "artifact.staged", detail: { kind: "resume", source: "resume.md", path: "resume.txt", sha256: input.artifacts[0].sha256, bytes: input.cloudDocuments![0].bytes } });
+		expect(upload).toMatchObject({ path: expect.stringMatching(/resume\.pdf$/), sha256: hash(await fakePdf("Private resume exact owner text")), sourceSha256: input.artifacts[0].sha256 });
+		expect(events).toContainEqual({ type: "artifact.staged", detail: { kind: "resume", source: "resume.md", path: "resume.pdf", sha256: hash(await fakePdf("Private resume exact owner text")), sourceSha256: input.artifacts[0].sha256, rendererRevision: "application_pdf_v1", mimeType: "application/pdf", bytes: (await fakePdf("Private resume exact owner text")).length } });
 		if (!("path" in upload)) throw new Error("Expected staged file");
-		expect(readFileSync(upload.path, "utf8")).toBe("Private resume exact owner text");
+		expect(readFileSync(upload.path)).toEqual(await fakePdf("Private resume exact owner text"));
 		expect(statSync(upload.path).mode & 0o777).toBe(0o600);
 		expect(JSON.stringify(events)).not.toContain("exact owner text");
 		writeFileSync(upload.path, "changed");
-		expect(prepared.artifactPath("resume")).toEqual({ error: "The staged document changed; it will not be uploaded." });
+		expect(prepared.artifactPath("resume")).toEqual({ error: "The approved source or rendered PDF changed; it will not be uploaded." });
 		clearCloudDocuments(input, dir);
 		expect(input.cloudDocuments).toBeUndefined();
 		expect(existsSync(join(dir, "documents"))).toBe(false);
 	});
 
-	it("allows a canonicalized temp ancestor but refuses replacing the upload with a symlink", () => {
+	it("allows a canonicalized temp ancestor but refuses replacing the upload with a symlink", async () => {
 		const dir = temp();
 		mkdirSync(join(dir, "real"));
 		symlinkSync(join(dir, "real"), join(dir, "alias"));
-		const prepared = prepareApplyDocuments(envelope(), join(dir, "alias"), dir, () => undefined);
+		const prepared = await prepareApplyDocuments(envelope(), join(dir, "alias"), dir, () => undefined, fakePdf);
 		const upload = prepared.artifactPath("resume");
 		if (!("path" in upload)) throw new Error("Expected canonical staged file");
 		const other = join(dir, "other.md");
@@ -92,6 +93,7 @@ describe("cloud application documents (#1468)", () => {
 		let spawned = 0;
 		const uploaded: string[] = [];
 		const deps = {
+			renderPdf: fakePdf,
 			dataDir: dir, homeDir: join(dir, "no-home"), selfUrl: () => "http://127.0.0.1:4999",
 			browserFor: async () => ({ tools: { listTools: async () => [], callTool: async (name: string, args: Record<string, unknown> = {}) => {
 				if (name === "browser_file_upload") uploaded.push(readFileSync((args.paths as string[])[0], "utf8"));
@@ -105,13 +107,13 @@ describe("cloud application documents (#1468)", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(spawned).toBe(1);
 		const runDir = join(dir, "local-apply/runner-1/run-1");
-		expect(existsSync(join(runDir, "documents/resume.txt"))).toBe(true);
+		expect(existsSync(join(runDir, "documents/resume.pdf"))).toBe(true);
 		const checkpoint = runtime.bridge({ runId: "run-1", op: "call", name: "supervisor_checkpoint", args: { checkpointId: "initial:1", phase: "initial" } });
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		runtime.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "initial:1", directive: "continue" });
 		await checkpoint;
 		await runtime.bridge({ runId: "run-1", op: "call", name: "upload_artifact", args: { kind: "resume" } });
-		expect(uploaded).toEqual(["Private resume exact owner text"]);
+		expect(uploaded).toEqual([(await fakePdf("Private resume exact owner text")).toString("utf8")]);
 		runtime.cancel({ runId: "run-1" });
 		expect(existsSync(join(runDir, "documents"))).toBe(false);
 		const status = runtime.status({ runId: "run-1" });

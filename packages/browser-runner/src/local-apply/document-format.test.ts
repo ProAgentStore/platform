@@ -6,9 +6,9 @@ import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { PortableDocument } from "../local-artifact/document-contract.js";
 import type { LocalApplyTaskEnvelope } from "./contract.js";
+import { PDF_RENDERER_REVISION } from "./document-pdf.js";
 import { parseCloudDocuments, prepareApplyDocuments } from "./documents.js";
 
-// No Markdown stripping, typography replacement, or ASCII-only PDF encoding may change these bytes.
 const TEXT = "# Synthetic Résumé\n\n**Engineer** — 2021–2024\n- UI/UX, testing, and data science\n- 技術 / Україна\n";
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const document = (role: PortableDocument["role"]): PortableDocument => {
@@ -20,59 +20,57 @@ let dir: string;
 beforeAll(async () => { dir = mkdtempSync(join(tmpdir(), "pags-format-")); browser = await chromium.launch({ headless: true }); }, 60_000);
 afterAll(async () => { await browser?.close(); if (dir) rmSync(dir, { recursive: true, force: true }); }, 60_000);
 
-/** A controlled employer form: selecting a file succeeds even when its own validation rejects it. */
-const form = (extension: ".txt" | ".pdf") => `
-<label>Résumé <input type="file" id="resume" accept="${extension}" required></label>
+/** A controlled attachment validator; selecting a file is separate from website acceptance. */
+const form = `
+<label>Document <input type="file" accept=".pdf,application/pdf" required></label>
 <p role="status"></p><button disabled>Continue</button>
 <script>
-{
-const input = document.querySelector('input');
-input.addEventListener('change', () => {
-  const file = input.files[0];
-  const accepted = !!file && file.name.toLowerCase().endsWith('${extension}');
-  input.setCustomValidity(accepted ? '' : 'Unsupported attachment format');
+document.querySelector('input').addEventListener('change', event => {
+  const file = event.target.files[0];
+  const accepted = !!file && file.name.toLowerCase().endsWith('.pdf') && file.type === 'application/pdf';
+  event.target.setCustomValidity(accepted ? '' : 'Unsupported attachment format');
   document.querySelector('[role=status]').textContent = accepted ? 'Accepted ' + file.name : 'Unsupported attachment format';
   document.querySelector('button').disabled = !accepted;
 });
-}
 </script>`;
 
-it("delivers exact approved bytes as TXT to a text-compatible form, without claiming PDF compatibility (#1473)", async () => {
+it("selects genuine PDF résumé and cover-letter bytes while retaining the approved Markdown identity (#1570)", async () => {
 	const documents = [document("resume"), document("cover_letter"), document("profile")];
 	const artifacts = documents.slice(0, 2).map((doc) => ({ kind: doc.role as "resume" | "cover_letter", path: `~/canonical/${doc.name}`, sha256: doc.sha256 }));
-	const input = { artifacts, cloudDocuments: parseCloudDocuments(documents, artifacts) } as LocalApplyTaskEnvelope;
-	const prepared = prepareApplyDocuments(input, dir, join(dir, "missing-home"), () => undefined);
-	const resume = prepared.artifactPath("resume");
-	const cover = prepared.artifactPath("cover_letter");
-	if (!("path" in resume) || !("path" in cover)) throw new Error("Expected verified staged documents");
-	expect(basename(resume.path)).toBe("resume.txt");
-	expect(basename(cover.path)).toBe("cover-letter.txt");
-	expect(readFileSync(resume.path)).toEqual(Buffer.from(TEXT, "utf8"));
-	expect(resume.sha256).toBe(documents[0].sha256);
-	expect(documents[0].name).toBe("resume.md");
-	expect(documents[0].mimeType).toBe("text/markdown");
-	const original = join(dir, "resume.md");
+	const input = {
+		artifacts, cloudDocuments: parseCloudDocuments(documents, artifacts),
+		policy: { mode: "fill_and_review", allowDomains: ["example.test"], browserCommandTimeoutSeconds: 600 },
+		limits: { maxMinutes: 10, maxActions: 20, maxPages: 10 },
+	} as LocalApplyTaskEnvelope;
+	const prepared = await prepareApplyDocuments(input, dir, join(dir, "missing-home"), () => undefined);
+	const original = join(dir, "not-a-professional-attachment.txt");
 	writeFileSync(original, Buffer.from(TEXT, "utf8"));
+	expect(prepared.blocks.find((block) => block.label === "resume")?.text).toBe(TEXT);
 	const page = await browser.newPage();
 	try {
-		await page.setContent(form(".txt"));
-		// The browser accepts file selection, but the form rejects the original Markdown extension.
+		await page.setContent(form);
 		await page.locator("input").setInputFiles(original);
 		expect(await page.getByRole("status").textContent()).toBe("Unsupported attachment format");
 		expect(await page.getByRole("button", { name: "Continue" }).isDisabled()).toBe(true);
-		await page.locator("input").setInputFiles(resume.path);
-		expect(await page.getByRole("status").textContent()).toBe("Accepted resume.txt");
-		expect(await page.getByRole("button", { name: "Continue" }).isDisabled()).toBe(false);
-		const received = await page.locator("input").evaluate(async (element: HTMLInputElement) => {
-			const file = element.files![0];
-			return { name: file.name, type: file.type, bytes: Array.from(new Uint8Array(await file.arrayBuffer())) };
-		});
-		expect(received.type).toBe("text/plain");
-		expect(sha256(Buffer.from(received.bytes))).toBe(resume.sha256);
-		// TXT is not a universal fallback. A PDF-only form still rejects it and blocks continuation.
-		await page.setContent(form(".pdf"));
-		await page.locator("input").setInputFiles(resume.path);
-		expect(await page.getByRole("status").textContent()).toBe("Unsupported attachment format");
-		expect(await page.getByRole("button", { name: "Continue" }).isDisabled()).toBe(true);
+		for (const kind of ["resume", "cover_letter"] as const) {
+			const upload = prepared.artifactPath(kind);
+			if (!("path" in upload)) throw new Error(upload.error);
+			const source = documents.find((doc) => doc.role === kind)!;
+			const bytes = readFileSync(upload.path);
+			expect(basename(upload.path)).toBe(kind === "resume" ? "resume.pdf" : "cover-letter.pdf");
+			expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+			expect(upload.sha256).toBe(sha256(bytes));
+			expect(upload.sha256).not.toBe(source.sha256);
+			expect(upload).toMatchObject({ sourceSha256: source.sha256, rendererRevision: PDF_RENDERER_REVISION, mimeType: "application/pdf", bytes: bytes.length });
+			await page.locator("input").setInputFiles(upload.path);
+			expect(await page.getByRole("status").textContent()).toBe(`Accepted ${basename(upload.path)}`);
+			expect(await page.getByRole("button", { name: "Continue" }).isDisabled()).toBe(false);
+			const received = await page.locator("input").evaluate(async (element: HTMLInputElement) => {
+				const file = element.files![0];
+				return { name: file.name, type: file.type, bytes: Array.from(new Uint8Array(await file.arrayBuffer())) };
+			});
+			expect(received.type).toBe("application/pdf");
+			expect(sha256(Buffer.from(received.bytes))).toBe(upload.sha256);
+		}
 	} finally { await page.close(); }
-});
+}, 60_000);

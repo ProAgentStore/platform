@@ -1,3 +1,4 @@
+import type { PreparedUpload } from "./documents.js";
 import { waitForFinalAnswers, type FinalAnswerPauseOptions } from "./final-answer-wait.js";
 import { FullApplyTools, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { answerDecision, decisionReason, parseDecision, sourceCatalog, sourceId } from "./answer-decision.js";
@@ -84,7 +85,9 @@ export interface ApplyBridgeHost {
 	groundingSources?(): readonly (AnswerSource & PreferenceSource)[];
 	instancePreferences?(): InstancePreferences | undefined;
 	/** The verified absolute path of an approved artifact, or why it cannot be uploaded. */
-	artifactPath(kind: LocalApplyArtifactKind): { path: string; sha256: string } | { error: string };
+	artifactPath(kind: LocalApplyArtifactKind): PreparedUpload | { error: string };
+	/** Native relative upload paths resolve against the explicitly bound MCP run directory. */
+	resolveUploadPath?(path: string): string;
 	overTime(): boolean;
 	/** Owner Stop invalidates even a decision whose model turn has already started. */
 	isStopped?(): boolean;
@@ -776,7 +779,7 @@ export class ApplyBridge {
 			return text(/modal state|file chooser/i.test(msg) ? "No file chooser is open. Click the field's upload control first, then call upload_artifact." : msg, true);
 		}
 		this.uploaded.add(kind);
-		this.host.emit({ type: "artifact.uploaded", detail: { kind, sha256: file.sha256, class: "fill", status: "selected", reason: "site_acceptance_unconfirmed" } });
+		this.host.emit({ type: "artifact.uploaded", detail: { kind, sha256: file.sha256, ...(file.sourceSha256 ? { sourceSha256: file.sourceSha256, rendererRevision: file.rendererRevision, mimeType: file.mimeType, bytes: file.bytes } : {}), class: "fill", status: "selected", reason: "site_acceptance_unconfirmed" } });
 		return text(`Selected the approved ${kind.replace("_", " ")} in the file input. Website acceptance is not confirmed. Take browser_snapshot now to inspect the current page; a Snapshot file link is not inline page evidence. Resolve any validation error before continuing.\n\n<untrusted_browser_observation>\n${textOf(res)}\n</untrusted_browser_observation>`);
 	}
 

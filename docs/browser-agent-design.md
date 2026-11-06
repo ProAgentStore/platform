@@ -24,6 +24,12 @@ This applies to form questions, validation messages, custom controls, upload fee
 
 Page and screenshot content is untrusted evidence. It must not become permission to change the task, disclose secrets, ignore Stop, or submit an application. The model's explanation is a decision record, not a substitute for execution evidence.
 
+## Application document format
+
+Owner directive, 2026-11-06: résumé attachments must be genuine PDFs by default, never Markdown renamed to `.txt`. Cover-letter attachments follow the same rule; entering approved text into a website's text field remains appropriate. A different professional document format needs explicit owner choice.
+
+Formatting belongs to generic document preparation, not employer-page interpretation. Retain the approved text for grounding, render it without external resources or executable content, and distinguish its source hash from the resulting PDF's hash and renderer revision. Verify the prepared bytes immediately before upload and inspect the rendered pages for clipping, pagination and readability. File selection alone does not establish website acceptance. The inherited TXT staging behavior was observed on the Twinings review page and is tracked in [#1570](https://github.com/ProAgentStore/platform/issues/1570); the directive is not a claim that a paused run's earlier attachment has been replaced.
+
 ## Responsibilities of code
 
 Code may validate and enforce concrete facts and permissions, including:

@@ -118,7 +118,7 @@ const enableAutoSubmit = (over: Record<string, unknown> = {}) =>
 
 describe("explicit owner pause before application control", () => {
 	it.each(["0.4.224", "0.4.225"])("requires a supporting runner and confirmed native settlement (%s)", async version => {
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", readyApp(`owner-${version}`));
 		const runId = started.body.run.id;
 		await d1.DB.prepare("UPDATE local_apply_runs SET runner_version = ?1 WHERE id = ?2").bind(version, runId).run();
@@ -140,7 +140,7 @@ describe("explicit owner pause before application control", () => {
 		}
 	});
 	it("keeps pending native execution paused without exposing any handoff", async () => {
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", readyApp("owner-pending")); const runId = started.body.run.id;
 		runner("running", { lastSeq: 0 });
 		answers["/local-apply/owner-pause"] = () => {
@@ -157,7 +157,7 @@ describe("full browser tool acceptance and dispatch", () => {
 	const accept = { toolAccess: "full", acknowledgeFullBrowserTools: "full_playwright_v1" };
 	it.each(["0.4.225", "0.4.224"])("accepts document-only failure evidence only from a supporting runner (%s)", async (version) => {
 		await call("PUT", "/ap/application-runner/settings", accept);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		const id = `preflight-${version}`;
 		const started = await call("POST", "/ap/application-runs", readyApp(id));
 		expect(started.status).toBe(201);
@@ -215,7 +215,7 @@ describe("full browser tool acceptance and dispatch", () => {
 		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.220' WHERE instance_id = 'ap'");
 		const refused = await call("POST", "/ap/application-runs", event);
 		expect(refused.status).toBe(409); expect(refused.body.error).toContain("0.4.221"); expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", event);
 		expect(started.status).toBe(201);
 		expect(dispatches()[0].body.policy).toMatchObject({ toolAccess: "full", toolAccessAcceptance: accepted.body.settings.toolAccessAcceptance, mode: "fill_and_review" });
@@ -312,7 +312,7 @@ describe("full browser tool acceptance and dispatch", () => {
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
 		expect(dispatches()).toHaveLength(1);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		await call("PUT", "/ap/application-runner/settings", { toolAccess: "guarded" });
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
@@ -332,7 +332,7 @@ describe("per-instance browser command timeout settings and dispatch", () => {
 		expect(refused.status).toBe(409); expect(refused.body.error).toContain("0.4.225");
 		expect((await appRow("timeout-old"))?.status).toBe("materials_ready");
 		expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", event);
 		expect(started.status).toBe(201);
 		expect(started.body.run.policy.browserCommandTimeoutSeconds).toBe(900);
@@ -364,7 +364,7 @@ describe("application escalation setting survives dispatch and queue waits", () 
 		expect(refused.body.error).toContain("0.4.220");
 		expect((await appRow("escalation-old"))?.status).toBe("materials_ready");
 		expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", event);
 		expect(started.status).toBe(201);
 		expect(started.body.run.policy).toMatchObject({ escalationLevel: "balanced", mode: "fill_and_review" });
@@ -382,7 +382,7 @@ describe("application escalation setting survives dispatch and queue waits", () 
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("queued");
 		expect(dispatches()).toHaveLength(1);
 		await call("PUT", "/ap/application-runner/settings", { escalationLevel: "autonomous" });
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at = 0 WHERE status = 'queued'");
 		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
 		expect(await dispatchNextQueuedFill(env(), "ap", "u1")).toBe("dispatched");
@@ -568,7 +568,7 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 		expect(refused.status).toBe(409);
 		expect(refused.body.error).toMatch(/0.4.199/);
 		expect(dispatches()).toHaveLength(0);
-		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.225' WHERE instance_id = 'ap'");
+		d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.228' WHERE instance_id = 'ap'");
 		const started = await call("POST", "/ap/application-runs", readyApp("blur-new"));
 		expect(started.status, JSON.stringify(started.body)).toBeLessThan(300);
 		expect(dispatches()[0].body.policy).toMatchObject({ blurFormFields: false });
@@ -1550,11 +1550,11 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		setRunnerVersion("0.4.84");
 		const ev = readyApp("lead-v2");
 		expect((await call("POST", "/ap/application-runs", ev)).status).toBe(409);
-		setRunnerVersion("0.4.225");
+		setRunnerVersion("0.4.228");
 		const ok = await call("POST", "/ap/application-runs", ev);
 		expect(ok.body.run.status).toBe("running");
 		// And the record says WHICH runner executed it — the fact that was missing.
-		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.225" });
+		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.228" });
 	});
 
 	it("stamps the executing runner's version on every run, and returns it over the API", async () => {
@@ -1575,7 +1575,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 	});
 
 	it("an up-to-date runner still reports the #975 zero-bridge diagnosis end to end", async () => {
-		setRunnerVersion("0.4.225");
+		setRunnerVersion("0.4.228");
 		const ev = readyApp("lead-v5");
 		const started = await call("POST", "/ap/application-runs", ev);
 		const runId = started.body.run.id as string;
@@ -1594,7 +1594,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
 		// The pairing #977 asks for: the diagnosis AND the contract that produced it, on one record.
 		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0 } });
-		expect(run.runnerVersion).toBe("0.4.225");
+		expect(run.runnerVersion).toBe("0.4.228");
 		expect(await appRow("lead-v5")).toMatchObject({ status: "blocked", block_reason: "bridge_unused" });
 		// Still no free text from the CLI, whichever release ran it.
 		expect(JSON.stringify(run.result.diagnostic)).not.toMatch(/[A-Za-z]{200}/);

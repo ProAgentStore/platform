@@ -55,6 +55,16 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 - Freeze accepted mode/revision per run. Reject unsupported runners and revoked queued acceptance.
   Disabling Full changes future/queued work; Stop is the control for an already active run.
 
+## Application document format (owner directive, 2026-11-06)
+
+- Never upload a résumé as `.txt` or rename Markdown to `.txt` to satisfy a file input. Generate a
+  genuine PDF by default; another professional document format requires explicit owner choice.
+- Apply the same rule to cover-letter attachments. A website's cover-letter text field may receive
+  the approved text directly; this does not authorize a plain-text file attachment.
+- Keep approved source content and derived PDF identity distinct. Verify both hashes before upload,
+  record the actual uploaded bytes, and visually inspect rendered output. Do not silently substitute
+  an older résumé, invent content during formatting, or bypass source/upload guards to replace a file.
+
 ## Git workflow
 
 - Commit finished work and push directly to `main` (see *Delivery mode*). Do not open pull requests unless Serge

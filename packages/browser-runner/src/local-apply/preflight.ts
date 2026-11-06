@@ -1,10 +1,11 @@
+import type { DocumentPdfRenderer } from "./document-pdf.js";
 import { Blocked, prepareApplyDocuments } from "./documents.js";
 import { fullArtifactPaths } from "./full-tools.js";
 import { ownerFactSources, ownerFactsReceipt } from "./owner-facts.js";
 import { preferencesSourceText, preferenceReceipt, projectPreferenceSources, validatePreferences } from "../instance-preferences.js";
 import type { LocalApplyEvent, LocalApplyPreflightFailure, LocalApplyTaskEnvelope } from "./contract.js";
 
-/** Created only around synchronous document reads, never around browser or model initialization. */
+/** Document reads/rendering precede employer-browser and model initialization. */
 export class DocumentPreflightRefusal extends Blocked {
 	readonly receipt: LocalApplyPreflightFailure;
 	constructor(runId: string, refusal: Blocked & { reason: LocalApplyPreflightFailure["reason"] }) {
@@ -13,9 +14,9 @@ export class DocumentPreflightRefusal extends Blocked {
 	}
 }
 
-export function prepareApplySources(e: LocalApplyTaskEnvelope, dir: string, home: string, now: number, emit: (event: Omit<LocalApplyEvent, "at">) => void) {
-	let prepared: ReturnType<typeof prepareApplyDocuments>;
-	try { prepared = prepareApplyDocuments(e, dir, home, emit); }
+export async function prepareApplySources(e: LocalApplyTaskEnvelope, dir: string, home: string, now: number, emit: (event: Omit<LocalApplyEvent, "at">) => void, renderPdf?: DocumentPdfRenderer, signal?: AbortSignal) {
+	let prepared: Awaited<ReturnType<typeof prepareApplyDocuments>>;
+	try { prepared = await prepareApplyDocuments(e, dir, home, emit, renderPdf, signal); }
 	catch (error) {
 		if (error instanceof Blocked && (error.reason === "source_unavailable" || error.reason === "artifact_changed")) throw new DocumentPreflightRefusal(e.runId, error as Blocked & { reason: LocalApplyPreflightFailure["reason"] });
 		throw error;

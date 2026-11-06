@@ -31,7 +31,7 @@ import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
@@ -45,6 +45,7 @@ import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js"
 import { Blocked, clearCloudDocuments, parseCloudDocuments } from "./documents.js";
 import { ApplyBridge } from "./bridge.js";
 import { validatePreferences } from "../instance-preferences.js";
+import type { DocumentPdfRenderer } from "./document-pdf.js";
 import { DocumentPreflightRefusal, prepareApplySources } from "./preflight.js";
 import { resumeDomainGrants } from "./resume-domains.js";
 import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy, websiteAccessBlock, type BrowserWebsiteAccess } from "../browser-website-access.js";
@@ -108,6 +109,8 @@ export interface RunBrowser {
 }
 
 export interface LocalApplyRuntimeDeps {
+	/** Tests/embedders may supply an offline PDF renderer; output must still be a complete PDF. */
+	renderPdf?: DocumentPdfRenderer;
 	dataDir: string;
 	selfUrl(): string | null;
 	browserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
@@ -134,6 +137,7 @@ export type PauseOutcome = "resumed" | "stopped" | "sign_in";
 const SIGN_IN_CODE_WAIT_MS = 5 * 60_000;
 
 interface Run {
+	documentPreparation?: AbortController;
 	envelope: LocalApplyTaskEnvelope;
 	dir: string;
 	token: string;
@@ -447,13 +451,18 @@ export class LocalApplyRuntime {
 	private async launch(run: Run, selfUrl: string): Promise<void> {
 		const e = run.envelope;
 		const home = this.deps.homeDir ?? homedir();
-		let prepared: ReturnType<typeof prepareApplySources>;
-		try { prepared = prepareApplySources(e, run.dir, home, this.now(), (event) => this.emit(run, event)); }
+		run.documentPreparation = new AbortController();
+		const documentSignal = AbortSignal.any([run.documentPreparation.signal, AbortSignal.timeout(Math.min(e.limits.maxMinutes * 60000, (e.policy.browserCommandTimeoutSeconds ?? 600) * 1000))]);
+		let prepared: Awaited<ReturnType<typeof prepareApplySources>>;
+		try { prepared = await prepareApplySources(e, run.dir, home, this.now(), (event) => this.emit(run, event), this.deps.renderPdf, documentSignal); }
 		catch (error) {
+			if (run.result) { clearCloudDocuments(e, run.dir); return; }
 			if (!(error instanceof DocumentPreflightRefusal)) throw error;
 			this.end(run, { outcome: "blocked", blockReason: error.reason, questions: error.questions }, error.receipt);
 			return;
 		}
+		if (run.result) { clearCloudDocuments(e, run.dir); return; }
+		delete run.documentPreparation;
 		const { blocks, artifactPath } = prepared;
 		run.grounding = blocks;
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("../local-browser/bridge-stdio.js", import.meta.url));
@@ -499,6 +508,7 @@ export class LocalApplyRuntime {
 			groundingSources: () => run.grounding,
 			instancePreferences: () => e.instancePreferences,
 			artifactPath,
+			resolveUploadPath: (path) => resolve(run.dir, path),
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			isStopped: () => run.cancelled || run.timedOut || run.state === "ended",
 			now: this.now,
@@ -934,6 +944,7 @@ export class LocalApplyRuntime {
 	private kill(run: Run): void { killApplyEngine(run.child); }
 	private end(run: Run, r: Partial<LocalApplyResultEnvelope> & { outcome: LocalApplyResultEnvelope["outcome"] }, preflightFailure?: LocalApplyPreflightFailure): void {
 		if (run.state === "ended") return;
+		run.documentPreparation?.abort(); delete run.documentPreparation;
 		// A terminal application outcome never means that a handoff succeeded.  Tear down only the
 		// live view and retain the explicit closed state for a caller that polls before restart.
 		if (run.handoff?.state === "ready") void this.handoffs.close(run, "run_ended");

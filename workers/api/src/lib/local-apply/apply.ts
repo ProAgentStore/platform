@@ -2,6 +2,7 @@ import { assertFullSubmissionReconciled } from "./reconciliation-store.js";
 import { trustedDocumentPreflightFailure } from "./preflight-failure.js";
 import { ownerFactsReceipt, ownerFactsSnapshot, readOwnerFactValues } from "./owner-facts.js";
 import { toolAccessRunnerProblem, queuedToolAccessProblem } from "./tool-access.js";
+import { pdfDocumentRunnerProblem } from "./pdf-document-runner.js";
 import { browserCommandTimeoutRunnerProblem } from "./command-timeout.js";
 import { escalationRunnerProblem } from "./escalation-config.js";
 import { browserModelRunnerProblem } from "./model-config.js";
@@ -298,7 +299,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const blurProblem = screenshotBlurRunnerProblem(screenshotsOn ? blurFormFields : true, runtime.runner_version, runtime.runner_node);
 	if (blurProblem) throw new HttpError(409, blurProblem);
 	const browserWebsiteAccess = await websiteAccessForInstance(env, uid, instanceId);
-	const contractProblem = toolAccessRunnerProblem(s, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(s, runtime.runner_version) ?? browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node) ?? browserCommandTimeoutRunnerProblem(s, runtime.runner_version);
+	const contractProblem = toolAccessRunnerProblem(s, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(s, runtime.runner_version) ?? browserModelRunnerProblem(s, runtime.runner_version) ?? websiteAccessRunnerProblem(browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node) ?? browserCommandTimeoutRunnerProblem(s, runtime.runner_version) ?? pdfDocumentRunnerProblem(runtime.runner_version);
 	if (contractProblem) throw new HttpError(409, contractProblem);
 	const cloudDocuments = await loadCloudDocuments(env, uid, app, runtime.runner_version);
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version);
@@ -943,7 +944,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		await noteQueued(env, "local_apply_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
 		return "queued";
 	}
-	const contractProblem = toolAccessRunnerProblem(run.policy, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(run.policy, runtime.runner_version) ?? browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node) ?? browserCommandTimeoutRunnerProblem(run.policy, runtime.runner_version);
+	const contractProblem = toolAccessRunnerProblem(run.policy, runtime.runner_version, { uid, instanceId }) ?? escalationRunnerProblem(run.policy, runtime.runner_version) ?? browserModelRunnerProblem(run.policy, runtime.runner_version) ?? websiteAccessRunnerProblem(run.policy.browserWebsiteAccess, runtime.runner_version, runtime.runner_node) ?? runnerContractProblem(runtime.runner_version, runtime.runner_node) ?? browserCommandTimeoutRunnerProblem(run.policy, runtime.runner_version) ?? pdfDocumentRunnerProblem(runtime.runner_version);
 	if (contractProblem) {
 		await noteQueued(env, "local_apply_runs", run.id, contractProblem, now);
 		return "queued";

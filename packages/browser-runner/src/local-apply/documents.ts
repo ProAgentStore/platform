@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { extname, join, resolve, sep } from "node:path";
+import { PDF_RENDERER_REVISION, renderDocumentPdf, renderWithSignal, type DocumentPdfRenderer } from "./document-pdf.js";
 import { RunnerInputError } from "../errors.js";
 import { PORTABLE_DOCUMENT_BYTES, type PortableDocument } from "../local-artifact/document-contract.js";
 import { resolveSource } from "../local-artifact/runtime.js";
@@ -51,70 +52,99 @@ export function verifyArtifact(workspace: string, home: string, artifact: LocalA
 	} catch { return { error: `The approved ${label} at ${artifact.path} could not be read.` }; }
 }
 
-type ArtifactPath = (kind: LocalApplyArtifactKind) => { path: string; sha256: string } | { error: string };
-export function prepareApplyDocuments(envelope: LocalApplyTaskEnvelope, dir: string, home: string, emit: (event: Omit<LocalApplyEvent, "at">) => void): { blocks: SourceBlock[]; artifactPath: ArtifactPath } {
+export interface PreparedUpload {
+	path: string;
+	/** Actual bytes selected by the file chooser. Never the Markdown source hash. */
+	sha256: string;
+	sourceSha256?: string;
+	rendererRevision?: string;
+	mimeType?: "application/pdf";
+	bytes?: number;
+}
+type ArtifactPath = (kind: LocalApplyArtifactKind) => PreparedUpload | { error: string };
+export async function prepareApplyDocuments(envelope: LocalApplyTaskEnvelope, dir: string, home: string, emit: (event: Omit<LocalApplyEvent, "at">) => void, renderPdf: DocumentPdfRenderer = renderDocumentPdf, signal?: AbortSignal): Promise<{ blocks: SourceBlock[]; artifactPath: ArtifactPath }> {
 	const blocks: SourceBlock[] = [];
+	const entries = new Map<LocalApplyArtifactKind, { name: string; text: string; sourceSha256: string; markdown: boolean; verify: () => boolean }>();
+	const requestedFolder = join(dir, "documents");
+	mkdirSync(requestedFolder, { mode: 0o700 });
+	const folder = realpathSync(requestedFolder);
+	try {
 	if (envelope.cloudDocuments) {
-		const requestedFolder = join(dir, "documents");
-		mkdirSync(requestedFolder, { mode: 0o700 });
-		const folder = realpathSync(requestedFolder);
-		const documents = new Map<PortableDocument["role"], { document: PortableDocument; path: string }>();
 		for (const document of envelope.cloudDocuments) {
-			// Markdown is UTF-8 text. Keep every byte, including markup, while using the
-			// plain-text extension that text-compatible employer inputs can accept (#1473).
-			const stagedName = `${document.role.replace("_", "-")}.txt`;
-			const path = join(folder, stagedName);
+			const sourcePath = join(folder, `${document.role}.source.${document.mimeType === "text/markdown" ? "md" : "txt"}`);
 			const bytes = Buffer.from(document.contentBase64, "base64");
-			writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
-			documents.set(document.role, { document, path });
-			blocks.push({ label: document.role, text: bytes.toString("utf8") });
-			if (document.role === "resume" || document.role === "cover_letter") emit({ type: "artifact.staged", detail: { kind: document.role, source: document.name, path: stagedName, sha256: document.sha256, bytes: document.bytes } });
-			if (document.role === "profile" || document.role === "answers") emit({ type: "source.read", detail: { role: document.role, path: `cloud/${document.role}`, sha256: document.sha256, bytes: document.bytes } });
+			if (bytes.length !== document.bytes || hash(bytes) !== document.sha256) throw new Blocked("artifact_changed", ["An approved cloud source changed before PDF rendering. Re-run tailoring."]);
+			writeFileSync(sourcePath, bytes, { flag: "wx", mode: 0o600 });
+			const text = bytes.toString("utf8");
+			blocks.push({ label: document.role, text });
+			if (document.role === "resume" || document.role === "cover_letter") {
+				if (envelope.artifacts.find((artifact) => artifact.kind === document.role)?.sha256 !== document.sha256) throw new Blocked("artifact_changed", ["A cloud source does not match the approved application artifact."]);
+				entries.set(document.role, { name: document.name, text, sourceSha256: document.sha256, markdown: document.mimeType === "text/markdown", verify: () => {
+					try { return lstatSync(sourcePath).isFile() && realpathSync(sourcePath) === sourcePath && hash(readFileSync(sourcePath)) === document.sha256; } catch { return false; }
+				} });
+			} else emit({ type: "source.read", detail: { role: document.role, path: `cloud/${document.role}`, sha256: document.sha256, bytes: document.bytes } });
 		}
-		return { blocks, artifactPath: (kind) => {
-			const selected = documents.get(kind);
-			if (!selected) return { error: `No approved ${kind} for this application.` };
+	} else {
+		let workspace: string;
+		try { workspace = resolveWorkspacePath(envelope.workspace, home); }
+		catch (error) { throw new Blocked("source_unavailable", [`The workspace ${envelope.workspace} cannot be used: ${error instanceof Error ? error.message : String(error)}`]); }
+		const missing: string[] = [];
+		if (!envelope.sources.some((source) => source.role === "profile")) missing.push("No profile source is configured. Choose one in the Application Runner settings.");
+		for (const source of envelope.sources) {
 			try {
-				if (!lstatSync(selected.path).isFile() || realpathSync(selected.path) !== selected.path) return { error: "The staged document is no longer a regular file." };
-				const bytes = readFileSync(selected.path);
-				if (bytes.length !== selected.document.bytes || hash(bytes) !== selected.document.sha256) return { error: "The staged document changed; it will not be uploaded." };
-				return { path: selected.path, sha256: selected.document.sha256 };
-			} catch { return { error: "The staged document could not be read." }; }
-		} };
+				const bytes = readFileSync(resolveSource(workspace, source.path));
+				if (!bytes.length || bytes.length > PORTABLE_DOCUMENT_BYTES) throw new Error("empty or too large");
+				blocks.push({ label: source.role, text: bytes.toString("utf8") });
+				emit({ type: "source.read", detail: { role: source.role, path: `${envelope.workspace}/${source.path}`, sha256: hash(bytes), bytes: bytes.length } });
+			} catch { missing.push(`Your ${source.role} source could not be read. Add it, or choose another file in the Application Runner settings.`); }
+		}
+		if (missing.length) throw new Blocked("source_unavailable", missing);
+		for (const artifact of envelope.artifacts) {
+			const verified = verifyArtifact(workspace, home, artifact);
+			if ("error" in verified) throw new Blocked("artifact_changed", [`${verified.error} Re-run tailoring for this application.`]);
+			if (![".md", ".markdown", ".txt"].includes(extname(verified.path).toLowerCase())) throw new Blocked("source_unavailable", ["This approved local artifact format cannot be used as a grounded PDF source. Existing PDF/binary artifacts need explicit text provenance; no text-file upload or binary-as-text fallback was used."]);
+			const bytes = readFileSync(verified.path);
+			if (hash(bytes) !== artifact.sha256) throw new Blocked("artifact_changed", ["The approved local source changed before rendering."]);
+			let text: string;
+			try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { throw new Blocked("source_unavailable", ["The approved local document is not valid UTF-8 text. No attachment was prepared."]); }
+			if (!bytes.length || bytes.length > PORTABLE_DOCUMENT_BYTES) throw new Blocked("source_unavailable", ["The approved local text document is empty or too large to render safely."]);
+			blocks.push({ label: artifact.kind, text });
+			entries.set(artifact.kind, { name: `${artifact.kind}${extname(verified.path)}`, text, sourceSha256: artifact.sha256, markdown: extname(verified.path).toLowerCase() !== ".txt", verify: () => !("error" in verifyArtifact(workspace, home, artifact)) });
+		}
 	}
-	let workspace: string;
-	try { workspace = resolveWorkspacePath(envelope.workspace, home); }
-	catch (error) { throw new Blocked("source_unavailable", [`The workspace ${envelope.workspace} cannot be used: ${error instanceof Error ? error.message : String(error)}`]); }
-	const missing: string[] = [];
-	if (!envelope.sources.some((source) => source.role === "profile")) missing.push("No profile source is configured. Choose one in the Application Runner settings.");
-	for (const source of envelope.sources) {
-		const shown = `${envelope.workspace}/${source.path}`;
+	const uploads = new Map<LocalApplyArtifactKind, PreparedUpload>();
+	for (const [kind, source] of entries) {
+		if (!source.verify()) throw new Blocked("artifact_changed", ["The approved source changed before PDF rendering."]);
+		let bytes: Buffer;
 		try {
-			const bytes = readFileSync(resolveSource(workspace, source.path));
-			if (!bytes.length || bytes.length > PORTABLE_DOCUMENT_BYTES) throw new Error("empty or too large");
-			blocks.push({ label: source.role, text: bytes.toString("utf8") });
-			emit({ type: "source.read", detail: { role: source.role, path: shown, sha256: hash(bytes), bytes: bytes.length } });
-		} catch { missing.push(`Your ${source.role} at ${shown} could not be read. Add it, or choose another file in the Application Runner settings.`); }
-	}
-	if (missing.length) throw new Blocked("source_unavailable", missing);
-	for (const artifact of envelope.artifacts) {
-		const verified = verifyArtifact(workspace, home, artifact);
-		if ("error" in verified) throw new Blocked("artifact_changed", [`${verified.error} Re-run tailoring for this application.`]);
-		blocks.push({ label: artifact.kind, text: verified.text });
+			bytes = await renderWithSignal(renderPdf, source.text, source.markdown, signal, Math.min((envelope.policy.browserCommandTimeoutSeconds ?? 600) * 1000, envelope.limits.maxMinutes * 60000));
+			if (!Buffer.isBuffer(bytes) || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-")) || !bytes.includes(Buffer.from("%%EOF"))) throw new Error("No complete PDF was produced");
+		} catch (error) { if (signal?.aborted || error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) throw new Blocked("source_unavailable", ["PDF preparation stopped or reached this run’s time limit. No employer-browser action or text-file fallback occurred."]); throw new Blocked("source_unavailable", ["The approved document could not be rendered into a real PDF. Ensure Chromium or Chrome is installed and retry; no TXT or Markdown attachment fallback was used."]); }
+		if (!source.verify()) throw new Blocked("artifact_changed", ["The approved source changed during PDF rendering."]);
+		const name = `${kind.replace("_", "-")}.pdf`, path = join(folder, name);
+		writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+		const upload: PreparedUpload = { path, sha256: hash(bytes), sourceSha256: source.sourceSha256, rendererRevision: PDF_RENDERER_REVISION, mimeType: "application/pdf", bytes: bytes.length };
+		uploads.set(kind, upload);
+		emit({ type: "artifact.staged", detail: { kind, source: source.name, path: name, sha256: upload.sha256, sourceSha256: source.sourceSha256, rendererRevision: PDF_RENDERER_REVISION, mimeType: "application/pdf", bytes: bytes.length } });
 	}
 	return { blocks, artifactPath: (kind) => {
-		const artifact = envelope.artifacts.find((item) => item.kind === kind);
-		if (!artifact) return { error: `No approved ${kind.replace("_", " ")} for this application.` };
-		const verified = verifyArtifact(workspace, home, artifact);
-		return "error" in verified ? verified : { path: verified.path, sha256: artifact.sha256 };
+		const upload = uploads.get(kind), source = entries.get(kind);
+		if (!upload || !source) return { error: `No approved ${kind} PDF for this application.` };
+		try {
+			if (!source.verify() || !lstatSync(upload.path).isFile() || realpathSync(upload.path) !== upload.path || hash(readFileSync(upload.path)) !== upload.sha256) return { error: "The approved source or rendered PDF changed; it will not be uploaded." };
+			return { ...upload };
+		} catch { return { error: "The approved source or rendered PDF could not be read." }; }
 	} };
+	} catch (error) {
+		try { rmSync(folder, { recursive: true, force: true }); } catch { /* Fail closed even if OS cleanup is unavailable. */ }
+		throw error;
+	}
 }
 
 /** Remove payloads before journaling; terminal hydration needs only identity and result metadata. */
 export function clearCloudDocuments(envelope: LocalApplyTaskEnvelope, dir: string): void {
 	if (envelope.policy.toolAccess === "full") { try { rmSync(join(dir, "native-documents"), { recursive: true, force: true }); } catch { /* Preserve the terminal receipt even if cleanup fails. */ } }
-	if (!envelope.cloudDocuments) return;
-	for (const document of envelope.cloudDocuments) document.contentBase64 = "";
+	for (const document of envelope.cloudDocuments ?? []) document.contentBase64 = "";
 	delete envelope.cloudDocuments;
 	try { rmSync(join(dir, "documents"), { recursive: true, force: true }); } catch { /* Keep the execution receipt even if OS cleanup fails. */ }
 }

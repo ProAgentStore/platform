@@ -90,7 +90,7 @@ const browser: BrowserTools = {
 };
 
 function runtime(options: { handoffTtlMs?: number; now?: () => number; browserFor?: () => Promise<RunBrowser> } = {}) {
-	return new LocalApplyRuntime({
+	return new LocalApplyRuntime({ renderPdf: async (text) => Buffer.from(`%PDF-1.7\n${text}\n%%EOF`),
 		dataDir: join(dir, "data"),
 		homeDir: home,
 		selfUrl: () => "http://127.0.0.1:4999",
@@ -477,7 +477,7 @@ describe("the owner's screenshot switch (#1064)", () => {
 				return Buffer.from("/9j/4AAQSkZJRgABAQ==", "base64");
 			},
 		};
-		const rt = new LocalApplyRuntime({ dataDir: join(dir, "data"), homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", browserFor: async () => ({ tools, stop: async () => undefined, handoffPage: () => page }), takeover, spawn: (() => (child = new FakeChild())) as never });
+		const rt = new LocalApplyRuntime({ renderPdf: async (text) => Buffer.from(`%PDF-1.7\n${text}\n%%EOF`), dataDir: join(dir, "data"), homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", browserFor: async () => ({ tools, stop: async () => undefined, handoffPage: () => page }), takeover, spawn: (() => (child = new FakeChild())) as never });
 		const input = envelope({ policy: { mode: "fill_and_review", allowDomains: ["jobs.example.com"], ...(screenshots === false ? { screenshots } : {}), blurFormFields: blurFormFields as boolean } });
 		rt.start(input);
 		input.policy.blurFormFields = blurFormFields === false; // freeze before any asynchronous browser work.
@@ -1139,7 +1139,7 @@ describe("sign-in secrets (#1412)", () => {
 		};
 	}
 	function runtimeWithSecrets(store: ReturnType<typeof secretStore>) {
-		return new LocalApplyRuntime({
+		return new LocalApplyRuntime({ renderPdf: async (text) => Buffer.from(`%PDF-1.7\n${text}\n%%EOF`),
 			dataDir: join(dir, "data"),
 			homeDir: home,
 			selfUrl: () => "http://127.0.0.1:4999",
@@ -1332,7 +1332,7 @@ describe("accepted full native runtime wiring", () => {
 			rt.start(input); await settle();
 			expect(spawned).toHaveLength(1); expect(configure).toHaveBeenCalledWith("full", expect.stringContaining("run-1"));
 			expect(nativePolicy?.toolAccess).toBe("full");
-			expect(nativePolicy?.approvedUploadPaths?.()).toEqual([expect.stringContaining("native-documents/resume.md"), expect.stringContaining("native-documents/cover_letter.md")]);
+			expect(nativePolicy?.approvedUploadPaths?.()).toEqual([expect.stringContaining("native-documents/resume.pdf"), expect.stringContaining("native-documents/cover_letter.pdf")]);
 			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"browser_evaluate"');
 			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"submit_application"');
 			await call(rt, "browser_type", { target: "e1", text: "Jane Citizen" });
