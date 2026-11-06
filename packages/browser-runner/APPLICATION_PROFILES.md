@@ -43,72 +43,67 @@ lives only in the browser profile.
    - the site is SEEK (`seek.com`, `seek.com.au`, `seek.co.nz`) and you have never signed in here;
    - an earlier press bounced to the site's sign-in page; or
    - a session cookie recorded at sign-in is gone or expired.
-2. **You sign in once** in that same browser through the existing sign-in handoff, then resume. The run
-   records which cookies appeared, then reopens the job page and carries on.
+2. **Sign in on the same browser.** The supported agent-driven flow below attempts sign-in first;
+   if it needs the owner, use the bounded handoff and resume. The run records which cookies appeared,
+   then reopens the job page and carries on.
 3. **Later runs** check those cookies and press without asking.
 
-**SEEK signs itself in with the emailed code (#1106).** SEEK signs you in with a one-time code it emails
-to your account address. Set **SEEK sign-in email** in the Runner's submission policy (`signInEmail`) to
-the address your SEEK account uses. That address must be the Gmail this Runner is pinned to, with email
-access on (Settings → Permissions & Connections). After that, a SEEK sign-in pause is not handed to you:
-- PAGS has the runner open SEEK's sign-in, enter that address and press "Email me a sign in code".
-- PAGS reads the newest SEEK mail that arrived after the request and names a code. That is one search and
-  one message, read-only.
-- The runner types the code into the paused browser. Once SEEK lets the browser in, the run resumes and the
-  sign-in is recorded as above.
+## Authentication sequence required by the owner
 
-The code is never stored or written to a trace. The trace keeps the mailbox and the Gmail message id. Not
-reaching the sign-in is an outcome with a reason, and you then get the ordinary sign-in handoff:
-- email access off;
-- the address is not the pinned mailbox — the run says which two differ;
-- no code within 5 minutes;
-- SEEK refusing the code;
-- a runner older than CLI 0.4.138.
+The 6 November 2026 directive is: reuse an existing session for the intended account, try the existing
+site credential, recover/reset an existing account through the site's flow and the connected pinned
+Gmail when necessary, and create an account only when none exists. Complete the new account's email
+verification through that Gmail connection and confirm its signed-in identity before continuing.
+A missing vault credential or a rejected password does not establish that no account exists.
 
-**A site where you have no account gets one (#1230, off by default).** Turn on `accountCreation` in the Runner's
-settings and a fill that pauses for a sign-in on a listed job board, where your vault holds no login for it,
-creates the account instead of handing you a sign-in that has nothing to sign in to. The sites are listed in
-`workers/api/src/lib/local-apply/account-creation-hosts.json`: SEEK and Indeed are on; LinkedIn and Glassdoor are
-listed but off, because their terms restrict automated sign-up. Add a host there to extend it; an unlisted host is
-never touched.
-- The account is registered under the Gmail this Runner is pinned to (email access on), with your profile's
-  name, phone, location and LinkedIn. Nothing is made up: a field your profile lacks ends the attempt.
-- The password (24 random characters) is saved to your vault BEFORE the form is submitted, marked unconfirmed
-  and never used to sign in. When the site accepts the registration it is confirmed and used for this run at once.
-  A site that signs in with an emailed code and asks for no password stores only a note of the address.
-- A verification code is read from the pinned Gmail the same way the SEEK sign-in reads its code.
-- A CAPTCHA, a terms box (unless the entry sets `acceptTerms`), an address that already has an account, or a page
-  that is not as expected ends the attempt with its reason and you get the ordinary sign-in handoff, once. A
-  site is tried once.
-- Every attempt is an audit event (`credential.account_creation_started`, `credential.account_created`,
-  `credential.account_creation_failed`) naming the host and the outcome, never a value.
+The acting model interprets the live controls and responses. Do not implement employer-specific
+selectors, answer maps or registration playbooks. Keep site permissions, credential-origin and identity
+checks, protected secret handling, Stop, consent and submission permission. Match recovery mail to the
+intended identity, site and current request; do not reuse stale messages. CAPTCHA, required owner consent
+or legal acceptance, unsupported security steps and missing personal facts require a bounded handoff.
+Authentication never grants permission to submit the application.
 
-There is one try per run.
+## Current authentication capability (CLI 0.4.229)
 
-**Any site signs in from the vault (#1229).** If a login for the site is stored under Knowledge → Credentials
-(a username and a password), a sign-in pause there is not handed to you either:
-- PAGS reads that credential, for the paused page's own site, and sends it to the runner in one request.
-- The runner types it into the paused browser — the CLI never sees it — and, once the site lets the browser
-  in, the run resumes and the sign-in is recorded as above. A two-step form (username, Continue, password) works.
-- Each use stamps the credential's last-used time and writes a `credential.use` event naming the site and the
-  outcome. The username and password are never stored by the runner or written to a trace, log or event.
+Agent-driven sign-in (#1412) replaced the fixed password, emailed-code and account-creation macros;
+the old macros and `account-creation-hosts.json` were removed in #1422. The current cloud broker is
+`workers/api/src/lib/local-apply/agent-sign-in.ts`:
 
-It ends with a reason, and you then get the ordinary sign-in handoff, when:
-- the site shows a CAPTCHA or other proof of a human (never worked around);
-- it asks for a second factor (a code);
-- it refuses the password — that password is **not tried again** on later runs until you change it;
-- it does not let the browser in, or its sign-in page is not one the runner can read;
-- the page is not on the credential's own site (nothing is typed);
-- the runner's CLI is older than the release that added this.
+- On an eligible `login_required` pause, it first looks for an existing vault username/password
+  matching the paused host. A match makes a sign-in attempt possible, not guaranteed successful.
+- Without that credential, only the supported SEEK hosts can receive username-only provisioning
+  from `signInEmail`, with email access permitted. This is not generic email-first sign-in for every ATS.
+- The broker sends named secret placeholders to the runner for the paused origin. The model drives
+  ordinary browser tools using those placeholders; secret values are substituted at execution.
+  Passwords, codes and recovery links must not appear in chat, model output, traces or documents.
+- When that sign-in requests an emailed code, the current Gmail path reads one matching message for
+  a 4–8 digit sign-in code, with a five-minute wait. The Gmail connection must be permitted and pinned
+  to the intended account. This is not a generic reset-link or verification-link broker.
+- The broker records one sign-in attempt per run, its host, credential/message references and outcome.
+  The runner's observed sign-in result is needed before the flow is treated as successful. Failed or
+  unsupported sign-in reports a reason and offers the owner handoff when available.
 
-On SEEK, with **SEEK sign-in email** set, the emailed code goes first and the vault is tried only if the code failed.
-There is one try per run. Not verified on a live site's sign-in page.
+**Account creation and recovery are not currently implemented generically.** `accountCreation` is a
+saved setting, default `false`, with no execution consumer. Setting it to `true` does not create accounts,
+generate or save new passwords, or confirm registration credentials. Those missing capabilities,
+account-existence discovery and reset/recovery-link handling must be implemented before claiming the
+owner's full sequence works. The former SEEK/Indeed registration support must not be advertised as
+current. Website allow lists and credential origins remain independent controls; adding a domain
+does not implement sign-in for that site.
+
+See the [runtime user manual](../../platform-docs/browser-runtime.md#signing-in-recovering-access-and-creating-an-account)
+and [browser-agent design contract](../../docs/browser-agent-design.md) for the target behavior and
+evidence requirements. A persistent session or accepted Full Playwright mode does not fill these
+broker gaps or prove that no other website action occurred.
 
 **If the run ended before you signed in (#1100).** A sign-in pause lasts only as long as the run, and a
 run that runs out of time ends `blocked` (`login_required`). Taking over its board card then opens
 **this profile** at the job's page, with no run behind it. Sign in there and press Resume: the sign-in
 is recorded the same way, and the application is filled again. This is refused while an application
 run is using the profile, and only one such sign-in can be open per profile.
+An ended attempt with uncertain submission effects still needs the exact-attempt reconciliation
+required by the [browser-agent design contract](../../docs/browser-agent-design.md); signing in does
+not establish that replay is safe or authorize another application.
 
 ## Limits
 

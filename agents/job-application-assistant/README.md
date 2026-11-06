@@ -42,6 +42,39 @@ The other supported path is the owner-controlled pipeline: triage a lead with th
 (`triage_application`), `generate_application_materials` through the Application Tailor, then
 `request_application_review` or `start_application_fill` with the Application Runner.
 
+## Application authentication: required behavior and current limits
+
+The owner's 6 November 2026 directive treats normal site authentication as part of an authorized
+application: reuse the intended account's existing browser session, then try its stored credentials;
+recover/reset an existing account through the site's flow and the connected, pinned Gmail account
+when needed; create a new account only after establishing that none exists, and complete its email
+verification before continuing. A missing saved password or a rejected login does not prove that
+there is no account. Avoid duplicate accounts and repeated attempts with a rejected password.
+
+This is a required behavior, **not a claim that generic recovery and registration are implemented**.
+For the separate `local_apply` Application Runner, CLI 0.4.229 can reuse persistent sessions and
+provision a matching vault username/password. Username-only email sign-in provisioning is restricted
+to supported SEEK hosts; its Gmail integration obtains numeric sign-in codes, not general reset or
+verification links. The `accountCreation` setting defaults to `false` and has no execution consumer;
+enabling it does not restore the removed account-creation macro. Generic password generation,
+registration credential storage/confirmation and account recovery remain missing. A website allow
+list is instance access configuration, not a universal ATS support list. This document's `JOB_APPLY` workflow must not be credited with the
+`local_apply` broker's capabilities merely because both drive a browser.
+
+The acting model must interpret current pages and verification feedback without employer-specific
+form scripts. Preserve credential-origin and account-identity checks, existing site/mailbox
+permissions, secret substitution, Stop and explicit submission permission. Passwords, codes and
+reset links must not be exposed in chat, traces, model output or application documents. Recovery
+messages must match the intended account, site and current request. CAPTCHA, required owner consent
+or legal acceptance, unsupported security steps and unknown facts still need a bounded handoff.
+Sign-in success never authorizes a final application submission.
+
+See the [runtime user manual](../../platform-docs/browser-runtime.md#signing-in-recovering-access-and-creating-an-account)
+for the operational sequence and current limits, and the
+[browser-agent design contract](../../docs/browser-agent-design.md) for the required implementation
+and evidence standards. A blocked run should name the missing capability and offer its live browser
+when available, rather than claiming that recovery or account creation was completed.
+
 ## Human handoffs
 
 The brain pauses rather than guessing. Three reasons, one pause/resume machine
@@ -94,9 +127,10 @@ prompt. Read it with `GET /v1/instances/{id}/apply-tips`.
 - The agent never invents employment history, education, qualifications, work authorisation,
   compensation expectations, dates, or screening answers. A missing required value is a handoff,
   not a guess.
-- CAPTCHA, login/security checks, and controls the browser cannot operate remain hard stops until
-  the subscriber resolves that specific obstacle; they are not a review gate for ordinary
-  submissions.
+- CAPTCHA, unsupported login/security checks, required owner consent and controls the browser cannot
+  operate remain hard stops until the subscriber resolves that obstacle. The authentication directive
+  above requires trying supported session/credential paths first; generic recovery and registration
+  must not be assumed available.
 - Single-flight per instance prevents duplicate submissions from a double-click or from the
   console racing the chat tool.
 - Every run is written to the unified trace (`GET /v1/instances/{id}/trace`, or the MCP

@@ -20,6 +20,10 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
   not site-specific scripts, page-text/HTML heuristics or hardcoded answer mappings.
 - Distinguish model/prompt failures, unavailable tools and deterministic guard refusals. Verify the
   acting model and screenshot-input path; require varied-form evidence before calling a fix generic.
+- Scope application authentication as normal work: existing session/login, authorized recovery,
+  then registration only when no account exists, with account-matched Gmail verification. Require
+  exact account/origin and secret handling, duplicate prevention and separate submission permission.
+  Treat premature takeover and unsupported broker operations as distinct gaps, not completed flows.
 
 - Require explicit escalation configuration in browser acceptance criteria: model-owned risk,
   frozen user thresholds, truthful unresolved facts and separate submission permission.

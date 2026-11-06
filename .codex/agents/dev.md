@@ -21,6 +21,10 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
   mappings. Improve model/prompt/evidence first; generic tooling and authorization remain code.
 - Verify the browser-driving model separately from the cloud brain, and image input separately
   from replay capture. Never report a configuration or capability as active without evidence.
+- Follow the application-authentication directive in AGENTS.md: existing session/login, authorized
+  recovery, then registration only when no account exists, with account-matched Gmail verification.
+  Use model-led pages and generic credential brokers; takeover is the fallback. Document unsupported
+  capability honestly rather than treating a prompt change as delivered recovery or registration.
 
 - Keep escalation as frozen per-instance configuration. Model-assessed risk controls owner takeover;
   source identity and submission authorization remain independent. Do not classify page wording in code.

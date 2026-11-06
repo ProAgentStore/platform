@@ -444,6 +444,50 @@ The push names the job by title and links to Settings, never to the posting.
 
 ### Application Runner fills (`runtime: "local_apply"`)
 
+#### Signing in, recovering access and creating an account
+
+**Required behavior, owner directive of 6 November 2026.** Authentication is part of completing an
+authorized application. The Runner should work through these steps before handing an ordinary login
+page back to the owner:
+
+1. Reuse the run's existing signed-in browser session when it belongs to the intended account.
+2. Try the existing credential for the observed site's authorized origin through the credential
+   broker. A missing vault entry does not establish that the owner has no account.
+3. If an existing account needs recovery, use the site's recovery/reset flow and the connected,
+   pinned Gmail account to receive the relevant recovery message. Do not keep retrying a rejected
+   password or create a duplicate account to avoid recovery.
+4. Create an account only when the site establishes that none exists for the intended identity and
+   account creation is authorized. Complete its email verification through that same pinned Gmail
+   account, then verify the signed-in identity before continuing the application.
+
+The model interprets the live site's controls and feedback; this sequence is not a set of
+employer-specific scripts. Credentials, verification codes and reset links must use the protected,
+origin-bound broker rather than appear in model output, chat, logs or application documents. Mail
+must be matched to the intended account, site and current request; an unrelated or stale message is
+not recovery evidence. Site permission, mailbox permission and account identity remain separate checks.
+CAPTCHA, a required owner consent or legal acceptance, unsupported security steps and missing personal
+facts still need the owner. Authentication does not grant application-submission permission.
+
+**What is implemented as of CLI 0.4.229:** persistent application profiles can reuse sessions, and
+agent-driven sign-in can provision an existing matching vault username/password. Without a vault
+login, username-only provisioning is currently limited to the supported SEEK hosts with
+`signInEmail` and permitted email access. The Gmail path reads a requested numeric sign-in code; it
+is not a general password-reset-link or account-verification service.
+
+Generic account discovery, password recovery/reset, password generation and registration credential
+storage/confirmation are **not delivered**. The saved `accountCreation` setting defaults to `false`
+and currently has no execution consumer; setting it to `true` does not enable registration. The old
+SEEK/Indeed account-creation macro and its host registry were removed. Likewise, a saved website
+allow list is access configuration, not evidence that authentication works there. An external
+employer ATS needs its observed destinations authorized; that does not supply missing broker tools.
+
+Until the missing capability is implemented, report which step is unsupported and offer the same
+run's bounded browser handoff when available. Do not claim that an account was absent, recovered,
+created or verified from a settings change or a successful click alone. See the
+[browser-agent design contract](https://github.com/ProAgentStore/platform/blob/main/docs/browser-agent-design.md)
+for the required behavior and execution-evidence rules. These application permissions do not change
+the read-only research agents' sign-in restrictions described above.
+
 **Job preferences live on the instance (#1508, CLI 0.4.213).** Open the relevant Tailor or
 Application Runner → **Knowledge → Memory** and edit **Job application preferences**. Employment
 type, salary expectation, availability, planned holidays and recruitment adjustments belong to that
@@ -485,8 +529,10 @@ ordered history, paged (`cursor`/`limit`).
 An Application Runner does not use these takeovers. Its `get_instance_browser_verification` reports
 `capability.declared: false`, and that is expected. A fill run escalates to the owner in two ways of its own:
 
-- **The run pauses at a sign-in or CAPTCHA** (#1013). The run's own browser is offered to the owner as a
-  bounded handoff (`blocker_required`: "Sign in to continue an application"). The owner clears the step
+- **The run needs help at a sign-in or CAPTCHA** (#1013). Supported agent-driven sign-in is attempted
+  first as described above; unavailable recovery/registration remains a reported capability gap.
+  The run's own browser is offered to the owner as a bounded handoff
+  (`blocker_required`: "Sign in to continue an application"). The owner clears the step
   on their device and resumes the same run.
 - **The site needs a sign-in before the one-click press** (#1094). The application browser keeps its
   sign-ins between runs (on-disk profile, per machine and profile). Before pressing a control that may

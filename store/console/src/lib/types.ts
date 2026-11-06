@@ -952,7 +952,7 @@ export interface ApplicationRunnerSettingsView {
 		maxPages: number;
 		maxActions: number;
 		signInEmail: string | null; // #1106: the SEEK account's address, for the email-code sign-in
-		accountCreation?: boolean; // #1230: may the Runner create an account on an allow-listed job board when you have none
+		accountCreation?: boolean; // Legacy saved flag; #1422 retired its executor. Does not enable registration or recovery.
 		autoSubmit: { enabled: boolean; roles: string[]; locations: string[]; exclude: string[]; minSalary: number | null; dailyCap: number; acknowledgedAt?: string | null }; // acknowledgedAt (#1039): server-set when the owner acknowledged real submissions
 	};
 	toolAccessDisclosure?: { revision: "full_playwright_v1"; title: string; risks: string[] };

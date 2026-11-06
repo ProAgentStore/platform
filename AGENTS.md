@@ -65,6 +65,25 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
   record the actual uploaded bytes, and visually inspect rendered output. Do not silently substitute
   an older résumé, invent content during formatting, or bypass source/upload guards to replace a file.
 
+## Application authentication (owner directive, 2026-11-06)
+
+- Treat routine authentication as part of an authorized application: reuse a valid session, try
+  the correct saved login, use supported password recovery when needed, and create an account
+  only when evidence establishes that none exists for the intended identity. Verify through the
+  connected, account-matched Gmail using supported broker tools. Takeover is a fallback, not the
+  default response to a login page. Do not ask again for an action already authorized by the owner.
+- AI interprets current login/recovery/registration pages and feedback. Do not implement employer
+  playbooks, page-text heuristics or a growing site-name allowlist to choose these steps.
+- Keep recovery and registration authorization bound to the job-site account and run, separate
+  from submission. Do not reset unrelated accounts, create duplicate identities, guess passwords,
+  expose secrets, silently accept terms, or bypass CAPTCHA/MFA. Use brokered secret placeholders,
+  origin-bound credentials and narrowly scoped verification evidence; confirm a replacement
+  password works before replacing a working vault record.
+- Report exactly what was attempted, what succeeded and what blocked further automation. Check
+  supported capabilities before handoff; a missing recovery/registration tool is an implementation
+  gap, not a reason to claim these flows are inherently manual. A saved policy or prose instruction
+  does not implement missing tools. Current limits are recorded in `docs/browser-agent-design.md`.
+
 ## Git workflow
 
 - Commit finished work and push directly to `main` (see *Delivery mode*). Do not open pull requests unless Serge

@@ -1278,4 +1278,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.209": "sha256:98ad9b751e90548575d355e585525b49436a9e221a89867f630a9f13873ddc1e", // fleet_snapshot distinguishes waiting/queued from actively working.
 	"0.1.210": "sha256:fcd6ef26a9fb9d44df8fb8642df36ca22a0ddb514a04ad10fc8d8c0e772c2220", // #1566: owner-scoped Application Tailor engine and settings read/patch tools.
 	"0.1.211": "sha256:f7ffb4820648fe081abb055bc95c954e3d5e8cdb415cf58d88b99d305e20a864", // #1569: exact Application Runner owner-handoff resume.
+	"0.1.212": "sha256:ebd56f188f369bc6bf91447b72d76e58dc1d8799407f13279dce881b83ef748b", // Correct the legacy accountCreation argument's capability claim; its executor was retired in #1422.
 };

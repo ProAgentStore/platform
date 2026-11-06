@@ -87,6 +87,47 @@ Exact local CLI metadata verified `gpt-6-astra/high`. The model navigated SEEK, 
 
 **Result at this checkpoint:** real PDF staging and cross-domain employer navigation verified; the requested many-field test remains pending employer sign-in. No confirmed submission, no employer upload receipt and no verified field-completion count. The older uncertain Twinings attempt was not retried.
 
+### Authentication directive: stop treating a login page as inherently manual
+
+The owner challenged the EPA takeover and explicitly requested the normal workflow: existing
+session/login, supported passwordless or forgot-password recovery, registration only when there
+is no account, and verification through connected Gmail. This is now recorded in AGENTS.md, both
+project agent specs, the browser design, runtime user manual, application-profile manual and agent
+README. Shared guidance is included in both guarded and Full browser prompts for CLI 0.4.230;
+the Full sign-in tool description now explains broker-first provisioning rather than implying
+that its pause inherently requires a person. These are instructions, not new auth operations.
+
+Through official MCP, the previously empty account operator manual was populated with this rule
+scoped to authorized job-application accounts. The Runner's stale operator manual was updated
+(including its obsolete machine and site-playbook claims), and its existing Special Instructions
+were preserved with an expanded authentication section. Independent readback verified all three
+exact saved values. The first Special Instructions write exceeded the 4,000-character limit and
+was refused without changes; the revised 3,967-character text succeeded. Existing owner facts,
+unresolved screening questions and explicit submission controls were retained.
+
+Source audit found the actual limitation: matching-host vault sign-in exists, and brokered sign-in
+can receive numeric email codes, but username-only fallback is SEEK-specific. Generic reset links,
+registration verification links, replacement-password provisioning and confirmed vault promotion
+are not wired into application execution. `accountCreation` has no execution consumer after the
+old macros were removed. MCP 0.1.212 corrects its misleading parameter description; enabling this
+legacy setting is not a remedy. Existing issues [#1533](https://github.com/ProAgentStore/platform/issues/1533)
+and [#1226](https://github.com/ProAgentStore/platform/issues/1226) remain open; no duplicate issue or
+automatic implementation run was created. No credentials, account registrations or password resets
+were changed during this instruction update.
+
+The EPA run ended at 15:15:38 AEDT as `blocked` / `incomplete`, with nine retained native requests,
+all successful, zero browser-command timeouts and no upload receipt. The engine exited without
+marking review ready. Its summary says no fields/uploads/submission, but Full-mode submission
+verification remains `unverified`; this is not authoritative negative submission proof. The earlier
+handoff link does not establish a still-active run. This attempt was not replayed.
+
+Validation for the authentication-guidance update: 64 MCP conformance, 22 cloud sign-in and 123
+runner/tool cases passed; runner and CLI builds passed. The canonical full suite completed with
+`SUITE GREEN  Test Files  0 failed | 1534 passed (1534) · Tests  0 failed | 24434 passed (24442)`.
+Vitest's detailed report lists 1,530 passing and four skipped files, 24,434 passing and eight skipped
+cases; the wrapper's literal wording is retained. These checks validate the existing code and
+guidance integration, not delivery of the missing recovery/registration features.
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |

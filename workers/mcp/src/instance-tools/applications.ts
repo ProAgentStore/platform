@@ -493,7 +493,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 					maxPages: z.coerce.number().int().optional(),
 					maxActions: z.coerce.number().int().optional(),
 					signInEmail: z.string().nullable().optional().describe("The address your SEEK account uses (#1106). Set, a fill paused for a SEEK sign-in signs itself in with the code SEEK emails there, read from the Gmail this Runner is pinned to (which must be the same address, with email access on). null turns it off."),
-					accountCreation: z.boolean().optional().describe("Default false (#1230). True lets a fill that pauses for a sign-in on an allow-listed job board (account-creation-hosts.json: SEEK and Indeed; LinkedIn and Glassdoor are listed but off) where you have no stored login create an account under the Gmail this Runner is pinned to, keep its generated password in your credential vault, and carry on. A CAPTCHA, a terms box, a field your profile lacks or an existing account stops it and you get the ordinary sign-in handoff."),
+					accountCreation: z.boolean().optional().describe("Legacy saved setting, default false. The account-creation executor was retired in #1422; changing this field currently does not create accounts, reset passwords or enable Gmail verification. Existing vault sign-in and supported email-code sign-in are separate capabilities. Do not claim registration or recovery is enabled from this setting."),
 					autoSubmit: z
 						.object({
 							enabled: z.boolean().optional(),
