@@ -235,7 +235,7 @@ describe("real tailoring settlement and application dispatch", () => {
 	});
 	it.each([false, true])("hydrates exact cloud bytes on dispatch (queued=%s)", async (queued) => {
 		serveCompletedRun(); await sync();
-		runtimeVersion.value = "0.4.225";
+		runtimeVersion.value = "0.4.228";
 		exportCall.mockImplementation(async (_env: unknown, _runtime: unknown, path: string) => path === "/local-apply/run"
 			? Response.json(queued ? { error: "Runner is busy", code: "busy" } : { status: "running" }, { status: queued ? 409 : 202 }) : Response.json({}));
 		const started = await startApplicationFill(env(), "apply", "owner", { eventId: "ready", applicationId: "application", tailorInstanceId: "tailor" }, "owner", { review: true });
@@ -253,7 +253,7 @@ describe("real tailoring settlement and application dispatch", () => {
 	});
 	it("refreshes current owner facts at queued dispatch while preserving approved document bytes (#1538)", async () => {
 		serveCompletedRun(); await sync();
-		runtimeVersion.value = "0.4.225";
+		runtimeVersion.value = "0.4.228";
 		await upsertProfile(env(), "owner", { linkedin: "https://example.test/first", salaryExpectation: "180000", use_profile: "Use my current profile link." });
 		exportCall.mockImplementation(async () => Response.json({ error: "Runner is busy", code: "busy" }, { status: 409 }));
 		const started = await startApplicationFill(env(), "apply", "owner", { eventId: "ready", applicationId: "application", tailorInstanceId: "tailor" }, "owner", { review: true });
@@ -267,7 +267,7 @@ describe("real tailoring settlement and application dispatch", () => {
 		exportCall.mockClear();
 		expect(await dispatchNextQueuedFill(env(), "apply", "owner", Date.now() + 60_000)).toBe("queued");
 		expect(exportCall).not.toHaveBeenCalled();
-		runtimeVersion.value = "0.4.225";
+		runtimeVersion.value = "0.4.228";
 		d1.exec("UPDATE local_apply_runs SET next_attempt_at=0");
 		exportCall.mockImplementation(async () => Response.json({ status: "running" }, { status: 202 }));
 		expect(await dispatchNextQueuedFill(env(), "apply", "owner", Date.now() + 180_000)).toBe("dispatched");
