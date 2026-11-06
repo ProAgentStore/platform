@@ -733,6 +733,8 @@ describe("retry, cancel and resume", () => {
 		expect(sent).toEqual([]);
 		const pending = () => pendingAnswersFor(env(), { instanceId: "ap", userId: "u1", kind: "apply_run", scope: "ended-question" });
 		expect(await pending()).toMatchObject([{ answer: "https://example.com/old", answeredVia: "mcp", subjectId: "ended-question", taskId: runId }]);
+		// #1577: remembered on the owner's Profile for later applications.
+		expect(await d1.DB.prepare("SELECT custom FROM user_profile WHERE user_id = 'u1'").first<{ custom: string }>()).toMatchObject({ custom: expect.stringContaining('"portfolio_url":"https://example.com/old"') });
 		// A correction supersedes the earlier answer. Once the next run consumes it, no old value resurfaces.
 		const corrected = await act("ap", { ...input, expected_version: saved.body.item.stateVersion, answers: [{ question: "Portfolio URL?", answer: "https://example.com/current" }] });
 		expect(corrected.status).toBe(200);

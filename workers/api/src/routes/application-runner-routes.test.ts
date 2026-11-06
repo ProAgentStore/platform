@@ -504,6 +504,8 @@ describe("end to end: approved lead → materials_ready → filled and awaiting 
 		expect(resumed.body.run.status).toBe("running");
 		expect(sent.find((s) => s.path === "/local-apply/resume")?.body).toMatchObject({ runId, answers: [{ question: "Expected salary?", answer: "150000 AUD" }] });
 		expect(JSON.stringify(await appRow(apps[0].id))).not.toContain("150000");
+		// #1577: and it is remembered on the owner's Profile for later applications.
+		expect(await d1.DB.prepare("SELECT custom FROM user_profile WHERE user_id = 'u1'").first<{ custom: string }>()).toMatchObject({ custom: expect.stringContaining('"expected_salary":"150000 AUD"') });
 
 		runner("ended", { lastSeq: 3, events: [{ seq: 3, type: "review.ready", at: "2026-10-07T00:08:00Z", detail: { class: "review" } }], result: RESULT(runId) });
 		await syncActiveApplyRuns(env());

@@ -4,12 +4,13 @@ import { HttpError } from "../auth.js";
 import type { JobApplication } from "../local-artifact/store.js";
 import type { ApplyRun } from "../local-apply/store.js";
 import { MAX_DECISION_ANSWER_CHARS, type DecisionVia } from "../owner-decisions.js";
+import { saveReusableAnswer } from "../profile.js";
 
 export function canSaveEndedAnswers(app: JobApplication, run: ApplyRun | null): run is ApplyRun {
 	return app.status === "blocked" && app.blockQuestions.length > 0 && run?.status === "blocked" && run.id === app.fillRunId && run.applicationId === app.id;
 }
 
-export async function saveEndedAnswers(env: Pick<Env, "DB">, app: JobApplication, run: ApplyRun, input: { userId: string; expectedVersion?: number; answers?: Array<{ question: string; answer: string }>; allowDomains?: string[]; via: DecisionVia }, now = Date.now()): Promise<Record<string, unknown>> {
+export async function saveEndedAnswers(env: Env, app: JobApplication, run: ApplyRun, input: { userId: string; expectedVersion?: number; answers?: Array<{ question: string; answer: string }>; allowDomains?: string[]; via: DecisionVia }, now = Date.now()): Promise<Record<string, unknown>> {
 	if (!canSaveEndedAnswers(app, run)) throw new HttpError(409, "This application has no ended fill with questions to answer.");
 	if (input.expectedVersion === undefined) throw new HttpError(400, "expected_version is required when saving answers for an ended run.");
 	if (input.expectedVersion !== app.stateVersion) throw new HttpError(409, "stale: reload the application before saving answers.");
@@ -43,5 +44,7 @@ export async function saveEndedAnswers(env: Pick<Env, "DB">, app: JobApplication
 	statements.push(env.DB.prepare(`UPDATE job_applications SET state_version = state_version + 1, updated_at = ?6 WHERE id = ?1 AND ${fence} RETURNING state_version`).bind(...binding, now));
 	const results = await env.DB.batch(statements);
 	if (!results.at(-1)?.results.length) throw new HttpError(409, "stale: the application or its run changed before the answers could be saved. Reload and decide again.");
+	// #1577: remembered for later applications too, as Tailor answers are (#1066).
+	for (const a of answers) await saveReusableAnswer(env, input.userId, a.question, a.answer.trim()).catch(() => undefined);
 	return { outcome: "answers_saved", savedAnswers: answers.length, runId: run.id, runStatus: run.status, resumed: false, message: "Answers saved for the next separately authorized run. No browser was started or resumed, and no submission was requested." };
 }

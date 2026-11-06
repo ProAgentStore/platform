@@ -99,6 +99,7 @@ import { notifyLiveBrowserBlocker, notifyUncertainSubmit } from "./handoff-notif
 import { notifyApplyInputRequired, reconcileApplyInputAttention } from "./input-attention.js";
 import { assertionFor, consumeNotSubmittedAssertion, hasUnspentAssertion } from "./owner-assertion.js";
 import { answerDecision, type DecisionVia, markDecisionsApplied, pendingAnswersFor, recordPauseDecision } from "../owner-decisions.js";
+import { saveReusableAnswer } from "../profile.js";
 import { assertFinalAnswerResume, finalAnswerMirrorState, mirrorFinalAnswerPause, readFinalAnswerWait } from "./final-answer-pause.js";
 
 /** The event the Runner consumes — #956's readiness event. */
@@ -824,6 +825,8 @@ export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body:
 	for (const a of answers) {
 		const r = await answerDecision(env, { instanceId: run.instanceId, userId: uid, taskId: run.id, question: a.question, value: a.answer, via, create: { kind: "apply_run", subjectId: run.applicationId, scope: run.applicationId }, now }).catch(() => null);
 		if (r && r.outcome !== "already_applied") stored.push(r.decision.id);
+		// #1577: the owner's fact is also remembered for later applications, as Tailor answers are (#1066).
+		if (a.answer.trim()) await saveReusableAnswer(env, uid, a.question, a.answer.trim()).catch(() => undefined);
 	}
 	// A run that is no longer paused keeps the answers for the next fill of this application, instead of refusing them.
 	if (run.status !== "paused") {
