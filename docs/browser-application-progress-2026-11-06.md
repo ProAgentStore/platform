@@ -185,6 +185,47 @@ claim. It demonstrates progress from the EPA authentication stop to final review
 it does not close authentication recovery, deployed answer continuation, takeover use or first-submission
 acceptance gates.
 
+### 16:38 AEDT: owner answers resumed the same run; successful review then closed it
+
+The owner replied **"proceed!"** to the two presented profile decisions. Exact-question answers
+were delivered through `resume_application` after a dry run. At 05:37:02 UTC the application moved
+from blocked/version 3 to filling/version 4. The same fill, native page and recorder epoch continued;
+no new application or fill was created. The model saved the Asta title/dates, UniCredit end date and
+Scrum Master year corrections, retaining the other existing profile entries as approved. Retained
+pixels corroborate the edited Asta fields, saved certification year and both PDF attachments; exact
+UniCredit saved content is supported by the runner result, not independently visible in the inspected
+post-save frame. This is live deployed owner-answer continuity evidence, beyond the earlier synthetic test.
+
+The model inspected the final review, reporting no missing required answers or validation errors.
+It called `ready_for_review` at 05:38:26 UTC, exited at 05:38:31, and the run **ended** at 05:38:37
+as `awaiting_review`. Its result reports 48 successful native action calls, zero failures/timeouts,
+zero blocking questions and both uploads. Independent diagnostics contain 50 native records including
+internal tab operations, the same page/epoch and no drops/restart. All 52 retained screenshot sequences
+are present. No model screenshot-image requests were recorded; replay pixels do not prove acting-model vision.
+
+This exposed a distinct approval-continuity defect: successful Full-mode review ends the engine/run,
+then `submissionVerification: unverified` causes `applicationActions` to remove both
+`approve_and_proceed` and `retry_fill`. Application version 5 offers only defer/archive/disposition.
+`approve_application` dry-run returned a generic description, not eligibility validation or an actual
+authorization. No live approval mutation was sent against the unavailable action.
+Reconciliation `4e41b4d6-cbe2-4853-97ef-81554ee8d6dc` returned `ambiguous_site_history`; it did not
+establish a safe replay. The owner subsequently reiterated **"i'm fine with what i saw, proceed with
+application"**. Their bounded approval is clear; the blocker is the ended workflow, not missing consent.
+
+Relevant implementation: `bridge.ts` marks `reviewReady`; `runtime.ts` converts it into a terminal
+`awaiting_review` outcome on engine exit; `applications/control.ts` withholds approval/retry when
+submission is uncertain. A future repair must preserve a bounded exact-run review checkpoint through
+approval, revalidate page/material identity and cover Stop/expiry/duplicate approval, without deleting
+Full-mode uncertainty checks. Recovery of this already-ended run remains the separate #1571 limitation.
+An attempt to file the scoped defect through the connected GitHub integration returned HTTP403
+`Resource not accessible by integration`; **no issue was created**.
+
+The previously authorized direct-Playwright alternative was also checked. Its browser tool returned
+"Browser is already in use". Computer-use browser inventory reported an unavailable browser access
+host; native Chrome's available windows did not expose the SEEK application. No browser was killed,
+no profile/cookies copied and no private PAGS API used to work around these limits. No direct submit
+was performed. **There is still no confirmed employer submission.**
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |
