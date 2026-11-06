@@ -1,4 +1,5 @@
 import { finalAnswerLease, finalAnswerPageAvailable, finalAnswerTimeout, finalAnswerUnavailable, readFinalAnswerPage, resumeAnswerSources, type FinalAnswerLease, type FinalAnswerPauseOptions } from "./final-answer-wait.js";
+import { reviewApprovalFailure, sameReviewAuthorization, validateReviewAuthorization, type ReviewApprovalLease } from "./review-approval.js";
 import { parseToolAccess, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
 import { parseEscalationLevel } from "./answer-decision.js";
 import { parseOwnerFacts } from "./owner-facts.js";
@@ -171,6 +172,7 @@ interface Run {
 	handoff?: { handoffRequestId?: string; handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: import("./handoff-contract.js").LocalApplyHandoffTerminalReason };
 	ownerPauseReady?: boolean;
 	finalAnswerLease?: FinalAnswerLease;
+	reviewApprovalLease?: ReviewApprovalLease;
 }
 
 /**
@@ -501,6 +503,7 @@ export class LocalApplyRuntime {
 			pause: (p, options) => this.pause(run, p, options),
 			beginFinalAnswerWait: (options) => { run.finalAnswerLease = finalAnswerLease(run.finalAnswerLease, options, readFinalAnswerPage(() => run.browser?.handoffPage?.())); },
 			finishFinalAnswerWait: (key, expired) => { if (run.finalAnswerLease?.key === key) { const timeout = expired ? finalAnswerTimeout(run.finalAnswerLease, this.now(), run.bridge?.unresolvedQuestions ?? []) : null; if (timeout) this.end(run, timeout); delete run.finalAnswerLease; } },
+			waitForReviewApproval: () => this.waitForReviewApproval(run),
 			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
 			isAllowed: isAllowedDomain,
 			websiteAccess: () => e.policy.browserWebsiteAccess,
@@ -559,6 +562,7 @@ export class LocalApplyRuntime {
 		run.timer = setInterval(() => {
 			observeModel();
 			const answerTimeout = finalAnswerTimeout(run.finalAnswerLease, this.now(), run.bridge?.unresolvedQuestions ?? []); if (answerTimeout) this.end(run, answerTimeout);
+			const reviewFailure = reviewApprovalFailure(run.reviewApprovalLease, run.browser?.handoffPage?.(), this.now()); if (reviewFailure) this.end(run, { outcome: "blocked", blockReason: "incomplete", summary: `${reviewFailure} External effects remain unverified; no replay is authorized.` });
 			if (run.state !== "ended" && this.activeMs(run) >= e.limits.maxMinutes * 60_000 + 60_000) {
 				run.timedOut = true;
 				this.kill(run);
@@ -650,6 +654,16 @@ export class LocalApplyRuntime {
 			questions: [`The CLI stopped before marking the form ready for review${tail}. Review the form yourself, or retry.`],
 			diagnostic: this.diagnosticOf(run, code, code !== 0 ? "engine_exited_nonzero" : "bridge_unused"),
 		};
+	}
+
+	private async waitForReviewApproval(run: Run): Promise<boolean> {
+		const page = run.browser?.handoffPage?.();
+		if (!page || page.isClosed() || run.reviewApprovalLease || run.state !== "running") { this.end(run, { outcome: "blocked", blockReason: "incomplete", summary: "This run cannot retain an exact live page for owner review. No submission or replay is authorized." }); return false; }
+		const budgetMs = Math.floor(run.envelope.limits.maxMinutes * 60_000 * 0.9);
+		const lease: ReviewApprovalLease = { checkpointId: crypto.randomUUID(), page, url: page.url(), budgetMs, expiresAt: this.now() + budgetMs };
+		run.reviewApprovalLease = lease;
+		const directive = await this.supervisorCheckpoint(run, { schemaVersion: 1, checkpointId: lease.checkpointId, facts: { phase: "before_submit", reviewWait: { expiresAt: lease.expiresAt, budgetMs }, actions: run.bridge?.actions ?? 0, filled: run.bridge?.filled ?? 0, uploaded: run.bridge?.uploaded.size ?? 0, blockers: [], url: lease.url, domain: new URL(lease.url).hostname } });
+		return directive === "continue" && !!lease.authorization && !run.result && !run.cancelled;
 	}
 
 	private activeMs(run: Run): number {
@@ -843,6 +857,23 @@ export class LocalApplyRuntime {
 		const checkpointId = typeof o.checkpointId === "string" && SAFE_ID.test(o.checkpointId) ? o.checkpointId : null;
 		const directive: LocalApplySupervisorDirective | null = o.directive === "continue" || o.directive === "request_review" || o.directive === "stop" ? o.directive : null;
 		if (o.schemaVersion !== 1 || !checkpointId || !directive) throw new RunnerInputError("directive needs schemaVersion: 1, a safe checkpointId, and directive continue, request_review or stop");
+		const lease = run.reviewApprovalLease;
+		if (o.submitAuthorization && lease?.checkpointId !== checkpointId) throw new RunnerInputError("Submission approval is only valid at this run's exact live review checkpoint.", 409);
+		if (lease?.checkpointId === checkpointId) {
+			if (lease.authorization) {
+				if (directive !== "continue" || !sameReviewAuthorization(lease.authorization, o.submitAuthorization)) throw new RunnerInputError("A different authorization is already recorded for this review.", 409);
+				return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
+			}
+			if (directive === "request_review") throw new RunnerInputError("This checkpoint is already waiting for explicit owner approval.", 409);
+			if (directive === "continue") {
+				if (run.handoff?.state === "ready" || this.handoffs.isBusy(run)) throw new RunnerInputError("Close and drain owner browser control before approving this review.", 409);
+				const failure = reviewApprovalFailure(lease, run.browser?.handoffPage?.(), this.now());
+				if (failure) { this.end(run, { outcome: "blocked", blockReason: "incomplete", summary: failure }); throw new RunnerInputError(failure, 409); }
+				if (run.state !== "paused" || run.pause?.checkpoint?.checkpointId !== checkpointId || !run.bridge || run.cancelled) throw new RunnerInputError("The exact live review is no longer waiting.", 409);
+				const auth = validateReviewAuthorization(o.submitAuthorization, run.envelope, (kind) => run.bridge!.verifyArtifact(kind));
+				lease.authorization = auth; run.envelope.policy.mode = "auto_submit"; run.envelope.policy.submitGate = { gateId: auth.gateId }; run.bridge.authorizeSubmission(auth.gateId);
+			}
+		}
 		let checkpoint = run.checkpoints.get(checkpointId);
 		if (checkpoint?.directive) {
 			if (checkpoint.directive !== directive) throw new RunnerInputError("A different directive is already recorded for this checkpoint", 409);
@@ -895,6 +926,7 @@ export class LocalApplyRuntime {
 	status(raw: unknown): LocalApplyStatusResponse {
 		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; afterSeq?: unknown };
 		const run = this.get(String(o.runId ?? ""));
+		const failure = run.state !== "ended" && reviewApprovalFailure(run.reviewApprovalLease, run.browser?.handoffPage?.(), this.now()); if (failure) this.end(run, { outcome: "blocked", blockReason: "incomplete", summary: `${failure} External effects remain unverified; no replay is authorized.` });
 		const after = typeof o.afterSeq === "number" && o.afterSeq > 0 ? o.afterSeq : 0;
 		// A page of at most 500 events; `lastSeq` is the cursor for the next page, so nothing is skipped.
 		const pending = run.events.filter((e) => e.seq > after);

@@ -226,6 +226,43 @@ host; native Chrome's available windows did not expose the SEEK application. No 
 no profile/cookies copied and no private PAGS API used to work around these limits. No direct submit
 was performed. **There is still no confirmed employer submission.**
 
+### Repair: retain final review until scoped owner approval
+
+The repair targets the observed CLI 0.4.230 failure above. CLI **0.4.231** keeps a successful
+Full-mode `ready_for_review` call pending on the same engine and exact page. Its runner-generated
+checkpoint carries an absolute deadline (90% of the configured engine tool budget; 18 minutes with
+the current 20-minute run setting). Approval atomically claims the exact application/document grant,
+changes only that run's submission policy, and releases that checkpoint. The model must refresh its
+snapshot, validate the review, obtain a new before-submit checkpoint and use the supervised submit.
+No employer-specific selectors, answer mappings or form playbooks were added.
+
+The API refuses unscoped directives before they can occupy the immutable review checkpoint. Lost
+acknowledgements redeliver the same consumed grant. The runner rechecks source/PDF/native-upload bytes,
+page identity, deadline and owner-control state. Changed grants, Stop, page loss and expiry cannot
+start a replacement fill. The Live takeover path retains the review checkpoint when control returns, without treating that
+return as submission approval. Approval clears stale page references. Confirmed submission replaces the
+old review summary so a submitted result no longer says that no submission was attempted.
+
+Independent local validation used the production runner, native Playwright and real Codex CLI on two
+separate synthetic forms. Both retained one engine/page, recorded **zero POSTs before approval and
+exactly one afterward**, and returned a supervised submission receipt. One included a missing-answer
+pause before review; the other used staged contact/availability sections. Effective model metadata
+was `gpt-6-astra/high`; the model received two screenshot image blocks in the first case and one in
+the second. Durations were approximately 155 and 129 seconds. The supervisor was synthetic: these
+results do not establish deployed MCP approval delivery or an employer submission.
+
+The original ten regression cases all failed against `47822689` in an isolated temporary worktree;
+that comparison touched neither the active checkout nor the stash. All 16 focused runner cases pass, covering exact
+scope, duplicate delivery, document tampering, Stop, expiry, page loss, stale references and final
+summary accuracy. CLI 0.4.231 builds successfully and the documentation drift check passes. The retained live report is
+`$TMPDIR/pags-live-review-approval-1i62Pf/report.json`; the durable reproduction command is in
+[scripts/browser-baseline/README.md](../scripts/browser-baseline/README.md).
+
+**Delivery and acceptance remain separate:** this entry records implementation and local evidence.
+The full-suite result, commit, publication, API deployment and installed version are recorded below
+only when verified. The already-ended Talent run is still unverified and is not resurrected by this
+fix. Its recovery remains #1571; there is still no confirmed real employer submission.
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |

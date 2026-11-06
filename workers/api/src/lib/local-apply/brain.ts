@@ -228,6 +228,8 @@ export function checkpointDecisionEvent(checkpoint: SupervisorCheckpoint, decisi
  */
 export async function directApplicationCheckpoint(env: Env, uid: string, run: ApplyRun, checkpoint: SupervisorCheckpoint, now: number): Promise<SupervisorDirective | null> {
 	if (checkpoint.directive) return checkpoint.directive;
+	// A marked live review is the owner's decision, never an automatic terminal directive.
+	if (checkpoint.facts.reviewWait) return null;
 	const decision = await decideApplicationCheckpoint(env, uid, run, checkpoint);
 	const outcome = await issueSupervisorDirective(env, run, uid, {
 		checkpointId: checkpoint.checkpointId,

@@ -234,6 +234,28 @@ CLI 0.4.227 retains the exact active browser when final `ready_for_review` still
 
 The CLI 0.4.227 local production-path final-answer smoke used observed `gpt-6-astra/high` metadata. In 85.9 seconds it filled supported synthetic fields, paused on an unknown required cohort label, and resumed after the exact scoped fake owner answer arrived through `LocalApplyRuntime.resume`. Independent assertions verified one browser, one page identity and one engine throughout; the pending review response returned fresh answer sources, and the model filled and validated the answer. All 13 native calls succeeded, two screenshot responses carried pixels, no questions remained and the fixture received zero submission POSTs. This verifies local runtime continuation with a synthetic supervisor, not deployed API/MCP answer delivery.
 
+### Live final-review approval
+
+CLI 0.4.231 extends Full-mode `fill_and_review` continuity to a completed form. `ready_for_review`
+keeps the same engine/page paused at a runner-generated `before_submit` checkpoint with a bounded
+`reviewWait`. Its deadline is 90% of the engine MCP tool budget, derived from `maxMinutes`; neither
+polling nor duplicate approval extends it. The cloud exposes owner approval and Stop, and does not
+ask the supervisor model to decide this owner-only checkpoint. Ordinary resume or a bare continue
+directive cannot release it.
+
+Approval validates the current application revision and document fingerprint, atomically claims the
+single-use grant for this exact run and records its submission policy before relay delivery. The
+runner verifies the run/checkpoint, instance/application, source hashes, prepared PDF bytes, retained
+page identity/URL and deadline before enabling intentional submission. A duplicate identical grant
+is idempotent; a different grant is refused. The model must then refresh its observations and obtain
+a new immediate `before_submit` checkpoint before `submit_application`. Account auto-submit settings
+are not changed. Stop, expiry or page loss ends continuity; older runners cannot receive this grant.
+
+This mechanism is not a sandbox for Full native tools. It neither proves absence of unobserved
+effects nor restores an already-ended run. The Talent attempt on 6 November resumed its missing
+answers successfully, then ended on successful review in CLI 0.4.230. Its ambiguous reconciliation
+remains subject to #1571; installing this prospective fix cannot authorize replay of that attempt.
+
 ### PDF text fidelity and font coverage (#1572)
 
 CLI 0.4.229 checks the generated PDF’s searchable text against its visible document blocks before staging. Missing characters, sequence loss, empty coverage or an unreadable PDF refuse preparation; there is no text-file fallback. The check retains the existing Stop and configured deadline. System fonts must cover the approved characters; the renderer downloads no fonts. Text extraction is not visual proof of glyph shape or layout, so rendered-page review remains necessary. CLI 0.4.228 remains the minimum real-PDF capability, while 0.4.229 adds this fidelity check.

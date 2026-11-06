@@ -36,7 +36,7 @@ export function applyTools(nativeTools: Array<{ name: string; description?: stri
 		},
 		{
 			name: "ready_for_review",
-			description: "The form is filled as far as the sources allow. Stop here; the owner reviews it. Call once, last.",
+			description: "Report completed and remaining work. Unresolved mandatory answers wait on this same run. In Full fill-and-review mode a completed form waits for bounded owner approval; after approval, refresh observations and follow the returned submission instructions. A stopped or expired wait never authorizes replay.",
 			inputSchema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
 		},
 		{

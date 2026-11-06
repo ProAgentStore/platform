@@ -9,6 +9,8 @@
  * directive store with its immutability, the run store and its trace. Faked: the machine at the end
  * of the relay, so what was asked of it is assertable — and so is the fact that nothing was.
  */
+import { directApplicationCheckpoint } from "./brain.js";
+import { deliverSupervisorDirective, syncApplyRun } from "./apply.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../d1-sqlite.js";
 import { CONTINUE_RECOVERY, approveAndContinue, continueCorrelatedRun, isPostFillApproval, refusalDetail, CONTINUE_REFUSALS } from "./approve-continue.js";
@@ -23,6 +25,7 @@ let env: Env;
 /** Every command the cloud sent the machine. */
 let sent: Array<{ path: string; body: Record<string, unknown> }>;
 let relayOk: boolean;
+let runnerStatus: Record<string, unknown> | null;
 
 const NOW = 1_760_000_000_000;
 
@@ -60,7 +63,7 @@ beforeEach(() => {
 	d1 = realSchemaD1();
 	seedTenant(d1, { userId: "u1", instanceIds: ["t1", "ap"] });
 	sent = [];
-	relayOk = true;
+	relayOk = true; runnerStatus = null;
 	d1.exec(
 		`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, status, last_seen_at)
 		 VALUES ('ap', 'u1', 'mac', 'relay://', '0.6.0', 'online', datetime('now'))`,
@@ -73,6 +76,7 @@ beforeEach(() => {
 				async fetch(req: Request) {
 					if (new URL(req.url).pathname === "/status") return new Response(JSON.stringify({ connected: true }));
 					const cmd = (await req.json().catch(() => ({}))) as { path?: string; body?: string | Record<string, unknown> };
+					if (cmd.path === "/local-apply/status" && runnerStatus) return Response.json(runnerStatus);
 					sent.push({ path: cmd.path ?? "", body: (typeof cmd.body === "string" ? JSON.parse(cmd.body) : cmd.body) ?? {} });
 					return new Response(JSON.stringify(relayOk ? { ok: true } : { error: "no" }), { status: relayOk ? 200 : 500 });
 				},
@@ -312,5 +316,121 @@ describe("what approving can NEVER do (#981)", () => {
 		// The one row it wrote is scoped to this application, by construction.
 		const rows = (await d1.DB.prepare("SELECT application_id FROM job_application_submit_authorizations").all<{ application_id: string }>()).results ?? [];
 		expect(rows).toEqual([{ application_id: "app-1" }]);
+	});
+});
+
+
+/** Protect live review continuity without weakening terminal Full-mode uncertainty. */
+describe("bounded live Full review approval", () => {
+	async function liveReview() {
+		const app = appFixture({ lead: { leadUrl: "https://jobs.example.com/role", lead: { title: "Engineer" } }, blockReason: null });
+		await env.DB.prepare(`INSERT INTO job_applications(id,instance_id,user_id,source_instance_id,lead_id,lifecycle_version,idempotency_key,status,lead,resume_artifact,cover_letter_artifact,profile_version,created_at,updated_at,state_version,fill_run_id)
+		 VALUES(?1,'t1','u1','scout','lead-1',1,'app-key','awaiting_review',?2,?3,?4,?5,?6,?6,4,'run-1')`).bind(app.id, JSON.stringify(app.lead), JSON.stringify(app.resumeArtifact), JSON.stringify(app.coverLetterArtifact), app.profileVersion, NOW).run();
+		let run = await seedRun({ status: "running" });
+		const checkpoint = { schemaVersion: 1 as const, checkpointId: "review-1", facts: { phase: "before_submit" as const, actions: 4, filled: 0, uploaded: 2, blockers: [], reviewWait: { expiresAt: NOW + 600_000, budgetMs: 600_000 } } };
+		run = (await updateApplyRun(env, run, { to: "paused", policy: { ...POLICY, toolAccess: "full" }, pause: { reason: "supervisor_checkpoint", checkpoint } }, NOW))!;
+		await receiveSupervisorCheckpoint(env, run, "u1", { ...checkpoint, runnerSeq: 1 }, NOW);
+		return { app, run };
+	}
+
+	it("leaves a marked review undirected until owner approval, then consumes and delivers to the exact run", async () => {
+		const { app, run } = await liveReview();
+		const cp = (await listSupervisorCheckpoints(env, run))[0];
+		expect(await directApplicationCheckpoint(env, "u1", run, cp, NOW)).toBeNull();
+		expect(await directives()).toEqual([]);
+		const first = await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW);
+		expect(first.continuation).toMatchObject({ kind: "continued", delivered: true, checkpointId: "review-1" });
+		expect(await auth()).toMatchObject({ consumedRunId: run.id });
+		expect(sent[0].body).toMatchObject({ runId: run.id, checkpointId: "review-1", submitAuthorization: { id: first.authorizationId, gateId: first.authorizationId, instanceId: "ap", applicationId: app.id, artifacts: [{ kind: "resume", sha256: "a".repeat(64) }, { kind: "cover_letter", sha256: "b".repeat(64) }] } });
+		const fresh = (await getApplyRun(env, "ap", "u1", run.id))!;
+		expect(fresh.policy).toMatchObject({ mode: "auto_submit", gate: { allowed: true, gateId: first.authorizationId } });
+		const again = await approveAndContinue(env, "u1", app, fresh, { idempotencyKey: "owner-review" }, NOW + 1);
+		expect(again.authorizationId).toBe(first.authorizationId);
+		expect(sent.filter(s => s.path === "/local-apply/directive")).toHaveLength(1);
+	});
+
+	it.each(["continue", "request_review"] as const)("refuses an unscoped %s before it can poison the owner's review checkpoint", async (directive) => {
+		const { app, run } = await liveReview();
+		await expect(issueSupervisorDirective(env, run, "u1", { checkpointId: "review-1", schemaVersion: 1, directive, idempotencyKey: "generic-supervisor" }, NOW)).rejects.toThrow(/No directive was recorded/);
+		expect(await directives()).toEqual([]);
+		const approved = await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW + 1);
+		expect(approved.continuation).toMatchObject({ kind: "continued", delivered: true });
+	});
+
+	it("retries an undelivered approval with exactly the same grant and payload", async () => {
+		const { app, run } = await liveReview(); relayOk = false;
+		await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW);
+		relayOk = true;
+		const cp = (await listSupervisorCheckpoints(env, run))[0];
+		await deliverSupervisorDirective(env, "u1", (await getApplyRun(env, "ap", "u1", run.id))!, cp.directive!, NOW + 1);
+		expect(sent).toHaveLength(2);
+		expect(sent[1].body).toEqual(sent[0].body);
+	});
+
+	it("reconstructs the same consumed payload after a lost ack and a running status sync", async () => {
+		const { app, run } = await liveReview(); relayOk = false;
+		await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW);
+		const cp = (await listSupervisorCheckpoints(env, run))[0];
+		const fresh = (await getApplyRun(env, "ap", "u1", run.id))!;
+		await updateApplyRun(env, fresh, { to: "running", pause: null }, NOW + 1);
+		d1.exec(`UPDATE job_applications SET status='filling', state_version=5 WHERE id='app-1'`);
+		relayOk = true;
+		const out = await deliverSupervisorDirective(env, "u1", (await getApplyRun(env, "ap", "u1", run.id))!, cp.directive!, NOW + 600_001);
+		expect(out.deliveredAt).toBe(NOW + 600_001);
+		expect(sent).toHaveLength(2);
+		expect(sent[1].body).toEqual(sent[0].body);
+	});
+
+	it("status sync retries an unacknowledged approval even after observing the run resume", async () => {
+		const { app, run } = await liveReview(); relayOk = false;
+		await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW);
+		const initial = sent.find(s => s.path === "/local-apply/directive")!.body;
+		relayOk = true; runnerStatus = { state: "running", events: [], lastSeq: 0 };
+		const synced = await syncApplyRun(env, "u1", (await getApplyRun(env, "ap", "u1", run.id))!, NOW + 1);
+		expect(synced.status).toBe("running");
+		const cp = (await listSupervisorCheckpoints(env, run))[0];
+		expect(cp.directive?.deliveredAt).toBe(NOW + 1);
+		expect(sent.filter(s => s.path === "/local-apply/directive").map(s => s.body)).toEqual([initial, initial]);
+	});
+
+	it("projects a confirmed terminal result directly from the live review application state", async () => {
+		const { app, run } = await liveReview();
+		const approval = await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW);
+		runnerStatus = { state: "ended", events: [], lastSeq: 0, result: { runId: run.id, outcome: "submitted", mode: "auto_submit", traceId: run.id, engineAuth: "machine-login", filled: 1, uploaded: ["resume", "cover_letter"], submitAttempted: true, summary: "Confirmed by employer", submitted: { at: new Date(NOW).toISOString(), url: "https://jobs.example.com/confirmation", gateId: approval.authorizationId } } };
+		await syncApplyRun(env, "u1", (await getApplyRun(env, "ap", "u1", run.id))!, NOW + 1);
+		expect(await env.DB.prepare("SELECT status FROM job_applications WHERE id='app-1'").first()).toEqual({ status: "submitted" });
+	});
+
+	it("never redelivers a consumed review grant after its run ends", async () => {
+		const { app, run } = await liveReview(); relayOk = false;
+		await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW);
+		const cp = (await listSupervisorCheckpoints(env, run))[0];
+		await updateApplyRun(env, (await getApplyRun(env, "ap", "u1", run.id))!, { to: "awaiting_review" }, NOW + 1);
+		relayOk = true;
+		const out = await deliverSupervisorDirective(env, "u1", (await getApplyRun(env, "ap", "u1", run.id))!, cp.directive!, NOW + 2);
+		expect(out.deliveredAt).toBeNull();
+		expect(sent).toHaveLength(1);
+	});
+
+	it.each(["expired", "materials", "ended", "old_runner", "version"])("refuses %s review without dispatch or replay", async (cause) => {
+		const { app, run } = await liveReview();
+		if (cause === "materials") d1.exec(`UPDATE job_applications SET profile_version='changed' WHERE id='app-1'`);
+		if (cause === "version") d1.exec(`UPDATE job_applications SET state_version=5 WHERE id='app-1'`);
+		if (cause === "old_runner") d1.exec(`UPDATE instance_runtime_nodes SET runner_version='0.4.230'`);
+		if (cause === "ended") await updateApplyRun(env, run, { to: "awaiting_review" }, NOW + 1);
+		await expect(approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, cause === "expired" ? NOW + 600_001 : NOW + 1)).rejects.toThrow();
+		expect(sent).toEqual([]);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs").first<{ n: number }>())?.n).toBe(1);
+	});
+
+	it("withholds a delayed directive after the approved materials change", async () => {
+		const { app, run } = await liveReview(); relayOk = false;
+		await approveAndContinue(env, "u1", app, run, { idempotencyKey: "owner-review" }, NOW);
+		const cp = (await listSupervisorCheckpoints(env, run))[0];
+		d1.exec(`UPDATE job_applications SET profile_version='changed' WHERE id='app-1'`);
+		relayOk = true;
+		const out = await deliverSupervisorDirective(env, "u1", (await getApplyRun(env, "ap", "u1", run.id))!, cp.directive!, NOW + 1);
+		expect(out.deliveredAt).toBeNull();
+		expect(sent).toHaveLength(1);
 	});
 });

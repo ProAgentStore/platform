@@ -196,7 +196,7 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 					The application this link is about is no longer in this queue — it may have been archived or removed.
 				</p>
 			)}
-			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} live={!!applicationId} browserLive={<ApplicationReplayLive instanceId={instanceId} runId={selected.fillRunId} handoff={handoff?.applicationId === selected.applicationId ? handoff : null} reconciliation={reconciliationHandoff} onTakeOver={() => setHandoffOpen(true)} onRequestControl={selected.fillRun?.id === selected.fillRunId && (selected.fillRun.status === "running" || (selected.fillRun.status === "paused" && selected.fillRun.pause?.reason === "owner_requested")) ? async () => {
+			<div>{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} actionsRef={actionsRef} live={!!applicationId} browserLive={<ApplicationReplayLive instanceId={instanceId} runId={selected.fillRunId} handoff={handoff?.applicationId === selected.applicationId ? handoff : null} reconciliation={reconciliationHandoff} onTakeOver={() => setHandoffOpen(true)} onRequestControl={selected.fillRun?.id === selected.fillRunId && (selected.fillRun.status === "running" || (selected.fillRun.status === "paused" && (selected.fillRun.pause?.reason === "owner_requested" || selected.status === "awaiting_review" && selected.fillRun.pause?.reason === "supervisor_checkpoint"))) ? async () => {
 				const result = await api<ApplicationHandoffResponse>(`/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(selected.fillRunId!)}/handoff`, { method: "POST", body: JSON.stringify({ pause: true }) });
 				if (result.handoff.applicationId !== selected.applicationId || result.handoff.runId !== selected.fillRunId || result.handoff.state !== "active") throw new Error("The browser handoff is not ready for this exact application run. Retry after the pending action settles.");
 				const params = new URLSearchParams(searchParams); params.delete("reconciliation_handoff"); params.set("handoff", result.handoff.id);
@@ -213,6 +213,7 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 					handoffId={handoff.id}
 					reconciliation={reconciliationHandoff}
 					ownerRequested={handoff.reason === "owner_requested"}
+					awaitingApproval={selected?.fillRun?.id === handoff.runId && selected.status === "awaiting_review" && selected.fillRun.pause?.reason === "supervisor_checkpoint"}
 					onClose={() => setHandoffOpen(false)}
 					onChanged={() => {
 						setHandoffOpen(false);

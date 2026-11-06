@@ -552,6 +552,8 @@ export const LOCAL_APPLY_SUPERVISOR_PHASES: readonly LocalApplySupervisorPhase[]
 export type LocalApplySupervisorBlocker = "captcha" | "login_required" | "anti_bot" | "missing_answer" | "screening_ambiguity" | "external_redirect" | "duplicate_application";
 export interface LocalApplySupervisorFacts {
 	phase: LocalApplySupervisorPhase;
+	/** Runner-owned live review lease; only explicit scoped owner approval may release it. */
+	reviewWait?: { expiresAt: number; budgetMs: number };
 	/** The acting model assesses the decision; code does not classify page content. */
 	decision?: LocalApplyDecisionAssessment;
 	actions: number;
@@ -574,6 +576,16 @@ export interface LocalApplySupervisorCheckpoint {
 export interface LocalApplyDirectiveRequest extends Pick<LocalApplySupervisorCheckpoint, "schemaVersion" | "checkpointId"> {
 	runId: string;
 	directive: LocalApplySupervisorDirective;
+	submitAuthorization?: LocalApplyReviewAuthorization;
+}
+
+/** Authenticated cloud grant, consumed for this exact run/checkpoint, never model-supplied. */
+export interface LocalApplyReviewAuthorization {
+	id: string;
+	gateId: string;
+	instanceId: string;
+	applicationId: string;
+	artifacts: Array<Pick<LocalApplyArtifact, "kind" | "sha256">>;
 }
 
 /** `POST /local-apply/status {runId, afterSeq}`. */

@@ -159,7 +159,7 @@ beforeEach(() => {
 	takeoverOpen = [];
 	takeoverInputs = [];
 	takeoverPages = [];
-	runPage = { isClosed: () => false } as Page;
+	runPage = { isClosed: () => false, url: () => "https://jobs.globex.example/apply" } as Page;
 	takeover = {
 		open: async ({ handoffId }, page) => { takeoverOpen.push(handoffId); takeoverPages.push(page); },
 		state: async (handoffId) => takeoverOpen.includes(handoffId) ? "ready" : "page_lost",
@@ -1336,8 +1336,10 @@ describe("accepted full native runtime wiring", () => {
 			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"browser_evaluate"');
 			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"submit_application"');
 			await call(rt, "browser_type", { target: "e1", text: "Jane Citizen" });
-			await call(rt, "ready_for_review", { summary: "Model report" }); child.exit(0);
-			expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "awaiting_review", filled: 0, submitAttempted: false, submissionVerification: "unverified" });
+			const review = call(rt, "ready_for_review", { summary: "Model report" }); await settle();
+			expect(rt.status({ runId: "run-1" }).pause?.checkpoint?.facts.reviewWait).toBeDefined();
+			rt.cancel({ runId: "run-1" }); expect((await review).isError).toBe(true);
+			expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", filled: 0, submitAttempted: false, submissionVerification: "unverified" });
 		} finally { rt.closeAll(); delete browser.configureToolAccess; }
 	});
 });
@@ -1375,8 +1377,9 @@ describe("final-review answer handoff retains the original run (#1560)", () => {
 			const response = await waiting; expect(response.isError).not.toBe(true); expect(JSON.stringify(response)).toContain("REG-123"); expect(JSON.stringify(response)).toContain("fresh browser_snapshot"); expect(JSON.stringify(response)).not.toContain("wrong epoch");
 			expect(rt.status({ runId: "run-1" }).state).toBe("running"); expect(browserFor).toHaveBeenCalledOnce(); expect(spawned).toHaveLength(1); expect(stop).not.toHaveBeenCalled();
 			expect((await call(rt, "browser_snapshot")).isError, "14 owner-wait minutes must not consume the remaining active budget").not.toBe(true); expect((await call(rt, "submit_application", { ref: "e2" })).isError).toBe(true);
-			await call(rt, "ready_for_review", { summary: "Owner facts filled and observed; review requested." }); child.exit(0);
-			expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "awaiting_review", mode: "fill_and_review", submitAttempted: false, submissionVerification: "unverified" });
+			const review = call(rt, "ready_for_review", { summary: "Owner facts filled and observed; review requested." }); await settle();
+			expect(rt.status({ runId: "run-1" }).pause?.checkpoint?.facts.reviewWait).toBeDefined();
+			expect(rt.status({ runId: "run-1" }).result).toBeUndefined(); rt.cancel({ runId: "run-1" }); expect((await review).isError).toBe(true);
 		} finally { rt.closeAll(); }
 	});
 	it("owner Stop releases the pending tool call and closes this exact browser", async () => {

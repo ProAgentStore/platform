@@ -34,6 +34,7 @@ import { cancelTailoring, retryTailoring, startTailoring } from "../local-artifa
 import { type PipelineHealth, pipelineHealth } from "./pipeline-health.js";
 import { cancelApplyRun, ownerFillEvent, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
+import { liveReviewCheckpoint } from "../local-apply/live-review-approval.js";
 import { approveAndContinue, approveContinueResult, isPostFillApproval } from "../local-apply/approve-continue.js";
 import { traceUrl } from "../local-apply/contract.js";
 import type { FillProgress } from "./fill-progress.js";
@@ -226,6 +227,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			if (app.fillRunId) return [...(canFill && !app.submitAttemptedAt && app.status === "failed" ? (["retry_fill"] as const) : []), "archive"];
 			return ["retry_tailoring", "archive"];
 		case "awaiting_review":
+			if (run) return [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), "cancel"];
 			// #981: the form is filled, nothing was sent, and the only offers here were defer, archive
 			// and not-interested — so the owner who ASKED for the review could not act on it.
 			// `approve_and_proceed` records the decision; `retry_fill` is the run that spends it, and is
@@ -594,7 +596,7 @@ const LEAD_ACTIONS: readonly ApplicationAction[] = ["apply", "skip", "defer", "a
  * is not `usable`, so it does not qualify here.
  */
 function isIdempotentApprovalRepeat(item: QueueItem, app: JobApplication, run: ApplyRun | null, action: ApplicationAction): boolean {
-	return action === "approve_and_proceed" && !!item.submitAuthorization?.usable && isPostFillApproval(app, run);
+	return action === "approve_and_proceed" && (!!item.submitAuthorization?.usable || !!run && !!liveReviewCheckpoint(run) && item.submitAuthorization?.consumedRunId === run.id) && isPostFillApproval(app, run);
 }
 
 /**

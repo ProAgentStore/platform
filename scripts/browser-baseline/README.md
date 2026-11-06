@@ -57,3 +57,16 @@ Behavioral tests:
 ```sh
 pnpm exec vitest run --project unit scripts/browser-baseline/mcp-recording-proxy.test.mjs scripts/browser-baseline/trace-viewer.test.mjs --maxWorkers 1
 ```
+
+For the opt-in live review-approval test, build the runner, then run:
+
+```sh
+pnpm --filter @proagentstore/browser-runner build
+PAGS_ENGINE_SMOKE=1 node scripts/browser-baseline/review-approval-smoke.mjs
+```
+
+It uses machine-authenticated Codex, the production local runtime and two isolated local forms with
+fake applicant data. It checks missing-answer continuation, retained review, scoped approval, one
+engine/page/browser and exactly one fixture submission after approval. Reports are written into a
+fresh private temporary directory. The supervisor is synthetic: this is not a deployed MCP test or
+an employer submission. It does not change the owner's application pipeline or browser profile.

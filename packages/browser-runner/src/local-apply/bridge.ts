@@ -70,6 +70,7 @@ export interface ApplyBridgeHost {
 	pause(p: LocalApplyPause, options?: FinalAnswerPauseOptions): Promise<"resumed" | "stopped" | "sign_in">;
 	beginFinalAnswerWait?(options: FinalAnswerPauseOptions): void;
 	finishFinalAnswerWait?(key: string, expired: boolean): void;
+	waitForReviewApproval?(): Promise<boolean>;
 	/** The secret NAMES provisioned for the sign-in in progress (#1412); never a value. */
 	signInSecrets?(): string[];
 	/** The CLI asked for the emailed code: resolves true once `PAGS_LOGIN_CODE` is provisioned, false when the wait ran out. */
@@ -259,6 +260,10 @@ export class ApplyBridge {
 		this.toolQueue = call.then(() => undefined, () => undefined);
 		return call;
 	}
+
+	/** Called only by the authenticated runtime after exact live-review grant validation. */
+	authorizeSubmission(gateId: string): void { this.host.mode = "auto_submit"; this.host.gateId = gateId; this.full?.invalidateSubmission(); this.lastSnapshot = ""; this.supervisorApproved = false; }
+	verifyArtifact(kind: LocalApplyArtifactKind): PreparedUpload | { error: string } { return this.host.artifactPath(kind); }
 
 	private async executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
 		if (name === "browser_take_screenshot" || name === "browser_read_screenshot") {
@@ -905,6 +910,11 @@ export class ApplyBridge {
 		}
 		if (this.full) {
 			this.summary = `${summary}\n${FULL_SUBMISSION_UNKNOWN}`;
+			if (this.host.mode === "fill_and_review" && (this.full.calls || this.uploaded.size) && this.host.waitForReviewApproval) {
+				const approved = await this.host.waitForReviewApproval();
+				if (!approved) { this.blocked = { reason: "incomplete", questions: [] }; return text("The live review ended without submission approval. Do not submit or start another application.", true); }
+				return text("The owner approved this exact application and its documents. This same run is now authorized for one intentional submission. Read a fresh browser_snapshot, verify the current review and attachments, then obtain a fresh before_submit checkpoint and use submit_application. Do not start a new application or use native tools to bypass submission checks.");
+			}
 			this.reviewEnded = true;
 			if (this.unresolvedQuestions.length || !this.full.calls && !this.uploaded.size) this.blocked = { reason: "incomplete", questions: [...this.unresolvedQuestions] };
 			else this.reviewReady = true;
@@ -1038,6 +1048,7 @@ export class ApplyBridge {
 		if (seen.marker) {
 			const at = after as PageState;
 			this.submitted = { url: at.url, at: new Date(this.host.now()).toISOString(), gateId: this.host.gateId };
+			this.summary = `The site confirmed the authorized supervised submission.${this.full ? " Other actions through Full browser tools remain unverified." : ""}`;
 			this.host.emit({ type: "submit.confirmed", url: at.url, domain: hostOf(at.url) ?? domain, detail: { gateId: this.host.gateId, marker: seen.marker, ...evidence } });
 			return text("Submitted, and the site confirmed it. Stop now.");
 		}
@@ -1053,6 +1064,7 @@ export class ApplyBridge {
 					(wall ? ` The site asked for a sign-in, so the next run on this machine will ask you to sign in to ${wall} first.` : ""),
 			],
 		};
+		this.summary = "The authorized submit was pressed, but the site did not confirm it. Check the employer site or email before any retry.";
 		this.host.emit({ type: "submit.unconfirmed", ...(after ? { url: after.url } : {}), domain, detail: { gateId: this.host.gateId, ...evidence } });
 		return text("The submit was pressed but no confirmation was seen. Do not press it again. Stop now.", true);
 	}

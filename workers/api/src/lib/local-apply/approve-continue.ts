@@ -38,6 +38,7 @@
  * explicit act by the owner, and because the authorization is single-use and the gate refuses an
  * application that has already attempted a submit, neither act can be doubled into two submissions.
  */
+import { liveReviewCheckpoint, prepareLiveReviewApproval } from "./live-review-approval.js";
 import { assertFullSubmissionReconciled } from "./reconciliation-store.js";
 import { HttpError } from "../auth.js";
 import { deliverSupervisorDirective } from "./apply.js";
@@ -172,7 +173,7 @@ export async function approveAndContinue(
 	// and the continuation below is re-attempted and re-reported for it. Everything else goes through
 	// the eligibility rule, which is the security boundary: a SPENT authorization still refuses,
 	// because a second grant would hide a second send.
-	if (!(existing && approvalState(existing, app).usable)) {
+	if (!(existing && (approvalState(existing, app).usable || !!run && !!liveReviewCheckpoint(run) && existing.consumedRunId === run.id && !existing.revokedAt))) {
 		const eligible = approvalEligibility(app, existing, stage);
 		if (!eligible.eligible) throw new HttpError(409, `This application cannot be approved: ${eligible.why}.`);
 	}
@@ -190,6 +191,7 @@ export async function approveAndContinue(
 		},
 		now,
 	);
+	if (run && liveReviewCheckpoint(run)) run = await prepareLiveReviewApproval(env, uid, app, run, granted.authorization, now);
 	const continuation = await continueCorrelatedRun(env, uid, run, `continue:${granted.authorization.id}`, now);
 
 	if (run) {

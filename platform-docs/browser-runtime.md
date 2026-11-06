@@ -129,6 +129,21 @@ remain visible for a human takeover.
 
 The console's machine view receives the launch kind with each heartbeat, so a background runner reports itself as `background` rather than as a terminal. Showing that on the Terminals page is a follow-up.
 
+## Reviewing an Application Runner application
+
+With CLI 0.4.231, a Full-mode application configured for manual review retains its browser and AI
+run while awaiting your approval. Approve the exact application from its review view or MCP
+`approve_application`; this grants one submission for those documents, not global auto-submit.
+The agent checks the current page again and continues in the same session. Ordinary Resume does
+not authorize submission. The history slider’s Live position lets you take control of the same
+review page. Return control before approval can continue; returning alone grants no submission
+permission. Use Stop to end the run.
+
+The review wait is bounded to 90% of the configured engine tool budget (`maxMinutes`), and the
+checkpoint records its expiry. If the page is lost, the wait expires or the run already ended,
+approval cannot revive it. Full-mode uncertain attempts need supported reconciliation before any
+retry; a status of “awaiting review” on an old ended run is not proof that retry is safe.
+
 ## Brain vs Hands
 
 The workflow brain runs in ProAgentStore. The hands run locally.

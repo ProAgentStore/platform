@@ -40,7 +40,8 @@ export const APPLICATION_TRANSITIONS: Readonly<Partial<Record<ApplicationStatus,
 	// was waiting for a supervisor decision that had already been made, and the terminal reason —
 	// nothing was entered; approve it or apply yourself — never reached the record.
 	blocked: ["tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "failed", "deferred", "archived", "blocked"],
-	awaiting_review: ["materials_ready", "filling", "deferred", "archived"],
+	// A bounded live review can settle before a poll observes its resumed running state.
+	awaiting_review: ["materials_ready", "filling", "submitted", "blocked", "failed", "deferred", "archived"],
 	deferred: ["materials_ready", "archived"],
 	failed: ["tailoring", "materials_ready", "archived"],
 	cancelled: ["tailoring", "archived"],

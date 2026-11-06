@@ -6,6 +6,7 @@
  * gives retries an unambiguous operation: deliver the already-recorded directive, never decide a
  * second time.
  */
+import { HttpError } from "../auth.js";
 import { parseDecisionAssessment } from "./escalation-config.js";
 import type { Env } from "../../types.js";
 import type { LocalApplySupervisorFacts } from "./contract.js";
@@ -94,10 +95,13 @@ export function sanitizeSupervisorFacts(value: unknown): LocalApplySupervisorFac
 	if (!PHASES.has(facts.phase as LocalApplySupervisorFacts["phase"]) || !validCount(facts.actions) || !validCount(facts.filled) || !validCount(facts.uploaded)) return null;
 	if (!Array.isArray(facts.blockers) || facts.blockers.length > BLOCKERS.size || facts.blockers.some((v) => typeof v !== "string" || !BLOCKERS.has(v))) return null;
 	if ((facts.url !== undefined && !validUrl(facts.url)) || (facts.domain !== undefined && !validDomain(facts.domain)) || (facts.title !== undefined && !validTitle(facts.title))) return null;
+	const reviewWait = facts.reviewWait as Record<string, unknown> | undefined;
+	if (reviewWait !== undefined && (!reviewWait || typeof reviewWait !== "object" || facts.phase !== "before_submit" || (facts.blockers as unknown[]).length || !Number.isSafeInteger(reviewWait.expiresAt) || Number(reviewWait.expiresAt) <= 0 || !Number.isSafeInteger(reviewWait.budgetMs) || Number(reviewWait.budgetMs) <= 0 || Number(reviewWait.budgetMs) > 86_400_000)) return null;
 	const decision = facts.decision === undefined ? undefined : parseDecisionAssessment(facts.decision);
 	if (decision === null) return null;
 	return {
 		...(decision ? { decision } : {}),
+		...(reviewWait ? { reviewWait: { expiresAt: Number(reviewWait.expiresAt), budgetMs: Number(reviewWait.budgetMs) } } : {}),
 		phase: facts.phase as LocalApplySupervisorFacts["phase"],
 		actions: facts.actions,
 		filled: facts.filled,
@@ -217,6 +221,20 @@ export async function issueSupervisorDirective(
 	}
 	const checkpoint = await getSupervisorCheckpoint(env, run, input.checkpointId);
 	if (!checkpoint) return { kind: "missing_checkpoint" };
+	// Review checkpoints are immutable: refuse an unscoped decision before it can occupy
+	// the slot that the owner's consumed grant must use. Stop always remains available.
+	if (checkpoint.facts.reviewWait && input.directive !== "stop") {
+		const scoped = input.directive === "continue" && await env.DB.prepare(`SELECT a.id FROM job_application_submit_authorizations a
+		 JOIN local_apply_runs r ON r.id = a.consumed_run_id JOIN job_applications j ON j.id = a.application_id
+		 WHERE r.id = ?1 AND r.instance_id = ?2 AND a.user_id = ?3 AND a.revoked_at IS NULL
+		 AND 'continue:' || a.id = ?4 AND j.fill_run_id = r.id AND j.user_id = ?3
+		 AND r.status = 'paused' AND json_extract(r.pause, '$.checkpoint.checkpointId') = ?5
+		 AND json_extract(r.policy, '$.mode') = 'auto_submit' AND json_extract(r.policy, '$.gate.gateId') = a.id
+		 AND a.fingerprint_lead_version IS j.lifecycle_version AND a.fingerprint_profile IS j.profile_version
+		 AND a.fingerprint_resume_sha IS json_extract(j.resume_artifact, '$.sha256') AND a.fingerprint_cover_sha IS json_extract(j.cover_letter_artifact, '$.sha256')`)
+			.bind(run.id, run.instanceId, userId, input.idempotencyKey, input.checkpointId).first();
+		if (!scoped) throw new HttpError(409, "This live review requires Approve & continue for the exact application. No directive was recorded.");
+	}
 	const byKey = await env.DB.prepare(
 		"SELECT * FROM local_apply_supervisor_directives WHERE run_id = ?1 AND idempotency_key = ?2",
 	)

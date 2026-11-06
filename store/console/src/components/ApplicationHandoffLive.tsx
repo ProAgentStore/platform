@@ -18,13 +18,14 @@ export { MobileTakeoverEntry, mobileTakeoverKey, mobileTakeoverText } from "./Re
  * are rendered here but never put in React state outside this mounted, authenticated view, stored
  * in localStorage, or copied into an application trace.
  */
-export default function ApplicationHandoffLive({ instanceId, runId, handoffId, reconciliation = false, ownerRequested = false, onClose, onChanged }: {
+export default function ApplicationHandoffLive({ instanceId, runId, handoffId, reconciliation = false, ownerRequested = false, awaitingApproval = false, onClose, onChanged }: {
 	instanceId: string;
 	runId: string;
 	handoffId: string;
 	/** A reconciliation session permits only login/CAPTCHA input and a read-only recheck. */
 	reconciliation?: boolean;
 	ownerRequested?: boolean;
+	awaitingApproval?: boolean;
 	onClose: () => void;
 	onChanged: () => void;
 }) {
@@ -102,9 +103,9 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	return <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Live Application Runner browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
 		<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
 			<span className="font-bold text-ink text-sm">🖥 {reconciliation ? "Application reconciliation — read-only browser" : "Application Runner — live browser control"}</span>
-			<span className="text-xs text-muted-soft hidden md:inline">{reconciliation ? "Sign in or complete the site challenge only. This browser cannot fill, upload, submit, or clear the original uncertainty." : ownerRequested ? "The agent is paused while you control this browser. Resume returns control to the agent. Submission permission is unchanged." : "Sign in or complete the site step in this existing browser, then resume. A sign-in alone never changes submission status."}</span>
+			<span className="text-xs text-muted-soft hidden md:inline">{reconciliation ? "Sign in or complete the site challenge only. This browser cannot fill, upload, submit, or clear the original uncertainty." : awaitingApproval ? "Review this application, then return control. Submission still requires its separate approval." : ownerRequested ? "The agent is paused while you control this browser. Resume returns control to the agent. Submission permission is unchanged." : "Sign in or complete the site step in this existing browser, then resume. A sign-in alone never changes submission status."}</span>
 			<div className="ml-auto flex items-center gap-2">
-				<Button variant="primary" size="lg" onClick={resume}>{reconciliation ? "Recheck — done" : "Resume — done"}</Button>
+				<Button variant="primary" size="lg" onClick={resume}>{reconciliation ? "Recheck — done" : awaitingApproval ? "Return control" : "Resume — done"}</Button>
 				<Button variant="danger" size="md" onClick={end}>End</Button>
 				<Button variant="secondary" size="md" onClick={onClose}>Close ✕</Button>
 			</div>

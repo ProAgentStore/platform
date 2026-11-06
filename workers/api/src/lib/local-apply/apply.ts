@@ -1,3 +1,4 @@
+import { reviewDirectiveAuthorization } from "./live-review-approval.js";
 import { assertFullSubmissionReconciled } from "./reconciliation-store.js";
 import { trustedDocumentPreflightFailure } from "./preflight-failure.js";
 import { ownerFactsReceipt, ownerFactsSnapshot, readOwnerFactValues } from "./owner-facts.js";
@@ -165,9 +166,10 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
 	if (!runtime) return settle(false, "runner_offline");
 	try {
+		const submitAuthorization = await reviewDirectiveAuthorization(env, uid, run, directive, runtime.runner_version, now);
 		const res = await callRuntime(env, runtime, LOCAL_APPLY_DIRECTIVE_PATH, {
 			method: "POST",
-			body: JSON.stringify({ runId: run.id, checkpointId: directive.checkpointId, schemaVersion: directive.schemaVersion, directive: directive.directive }),
+			body: JSON.stringify({ runId: run.id, checkpointId: directive.checkpointId, schemaVersion: directive.schemaVersion, directive: directive.directive, ...(submitAuthorization ? { submitAuthorization } : {}) }),
 		});
 		return settle(res.ok, res.ok ? "acknowledged" : `runner_refused_${res.status}`);
 	} catch {
@@ -443,7 +445,7 @@ async function reconcileResultOutcome(env: Env, uid: string, run: ApplyRun, r: L
 		const app = await getOwnedApplication(env, uid, run.applicationId);
 		// The result was already projected (or the application moved on) if it no longer has the
 		// in-flight state. Do not replay notifications/history on every scheduled sweep.
-		if (app?.status !== "filling") return;
+		if (app?.status !== "filling" && !(app?.status === "awaiting_review" && r.outcome !== "awaiting_review")) return;
 	}
 	const attempted = run.trace.some((e) => e.type === "submit.attempted") || r.submitAttempted === true;
 	if (attempted) await markSubmitAttempted(env, run.applicationId, uid, now);
@@ -453,7 +455,7 @@ async function reconcileResultOutcome(env: Env, uid: string, run: ApplyRun, r: L
 	// The contract carries structured evidence for this condition. Keep it opaque here: the
 	// contract parser is the trust boundary, while this layer only persists and relays it.
 	const unavailableEvidence = r.unavailable;
-	const from = ["filling", "blocked"] as const;
+	const from = ["filling", "blocked", "awaiting_review"] as const;
 	let projected = false;
 	if (unavailable) {
 		projected = await move(env, uid, run.applicationId, from, {
@@ -515,7 +517,7 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 		const checked = parseLocalApplyResult(rawResult);
 		const error = "error" in checked ? `The runner sent a result PAGS cannot accept: ${checked.error}` : "The runner's result names another run.";
 		const failed = await updateApplyRun(env, run, { to: "failed", expectedRunnerSeq, errorCode: "runner_result_invalid", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_result_invalid" } }] }, now);
-		if (failed) await move(env, uid, run.applicationId, ["filling", "blocked"], { ...base, to: "blocked", reason: attempted ? "submit_state_unknown" : "runner_result_invalid", questions: [error] }, now);
+		if (failed) await move(env, uid, run.applicationId, ["filling", "blocked", "awaiting_review"], { ...base, to: "blocked", reason: attempted ? "submit_state_unknown" : "runner_result_invalid", questions: [error] }, now);
 		return failed ?? (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	}
 	const to = r.outcome;
@@ -594,7 +596,7 @@ async function endLost(env: Env, uid: string, run: ApplyRun, error: string, now:
 		env,
 		uid,
 		run.applicationId,
-		["filling", "blocked"],
+		["filling", "blocked", "awaiting_review"],
 		{ actor: "system", actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id, to: "blocked", reason: unknown ? "submit_state_unknown" : "runner_lost", questions: [unknown ? `${error} It was allowed to submit, so check the employer's site before anything is retried.` : error] },
 		now,
 	);
@@ -623,7 +625,7 @@ async function endTimedOut(env: Env, uid: string, run: ApplyRun, error: string, 
 		env,
 		uid,
 		run.applicationId,
-		["filling", "blocked"],
+		["filling", "blocked", "awaiting_review"],
 		{
 			actor: "system",
 			actorInstanceId: run.instanceId,
@@ -744,14 +746,14 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		const questions = pause.answerWait?.questions ?? (pause.question ? [pause.question] : []);
 		for (const question of questions) await recordPauseDecision(env, { instanceId: run.instanceId, userId: uid, kind: "apply_run", subjectId: run.applicationId, taskId: run.id, scope: run.applicationId, question, now }).catch(() => undefined);
 		if (finalAnswerMirror) await mirrorFinalAnswerPause(env, uid, finalAnswerMirror.app, current, questions, now);
-		else await move(env, uid, run.applicationId, ["filling"], { ...base, to: "blocked", reason: pause.reason, questions }, now);
+		else await move(env, uid, run.applicationId, ["filling", "blocked", "awaiting_review"], { ...base, to: pause.checkpoint?.facts.reviewWait ? "awaiting_review" : "blocked", reason: pause.checkpoint?.facts.reviewWait ? null : pause.reason, questions }, now);
 		// The runner has already paused on the exact page.  Only then create the bounded mobile
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
 		// successful login from a redirect.
 		// #1412: a sign-in the agent will clear itself with provisioned secrets is not the owner's yet; they hear of it if it fails.
 		if (!(await agentSignInWillTry(env, uid, current, signInSettings))) await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
 	} else if (current.status === "running" && run.status === "paused") {
-		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
+		await move(env, uid, run.applicationId, ["blocked", "awaiting_review"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
 	if (body.state === "ended" && body.result !== undefined && !isTerminalApplyRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now, lastSeq);
 	if (current.runnerSeq > lastSeq) return current;
@@ -774,12 +776,12 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	}
 	// Delivery is deliberately best-effort: the directive was persisted first. A later pull retries
 	// an unacknowledged directive with exactly the same checkpoint and decision.
-	if (current.status === "paused" && current.pause?.reason === "supervisor_checkpoint") {
+	if (current.status === "running" || current.status === "paused" && current.pause?.reason === "supervisor_checkpoint") {
 		let runnerStateMayHaveChanged = false;
 		for (const checkpoint of await listSupervisorCheckpoints(env, current)) {
 			// This is the existing Runner instance's brain, not a second agent: its only authority is
 			// the durable directive for this exact checkpoint. A retry sees the same row and relays it.
-			const directive = checkpoint.directive ?? await directApplicationCheckpoint(env, uid, current, checkpoint, now);
+			const directive = checkpoint.directive ?? (current.status === "paused" ? await directApplicationCheckpoint(env, uid, current, checkpoint, now) : null);
 			if (directive && !directive.deliveredAt) {
 				const delivered = await deliverSupervisorDirective(env, uid, current, directive, now);
 				runnerStateMayHaveChanged ||= !!delivered.deliveredAt;
@@ -866,7 +868,7 @@ export async function cancelApplyRun(env: Env, uid: string, run: ApplyRun, now =
 	if (runtime) await callRuntime(env, runtime, LOCAL_APPLY_CANCEL_PATH, { method: "POST", body: JSON.stringify({ runId: run.id }) }).catch(() => null);
 	const cancelled = await updateApplyRun(env, run, { to: "cancelled", errorCode: "cancelled", error: "Cancelled by the owner", pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "cancelled" } }] }, now);
 	if (!cancelled) throw new HttpError(409, "The run changed while cancelling — reload it.");
-	await move(env, uid, run.applicationId, ["filling", "blocked"], { actor: "owner", actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id, to: "blocked", reason: "cancelled_by_owner", questions: ["You cancelled this application run."] }, now);
+	await move(env, uid, run.applicationId, ["filling", "blocked", "awaiting_review"], { actor: "owner", actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id, to: "blocked", reason: "cancelled_by_owner", questions: ["You cancelled this application run."] }, now);
 	return cancelled;
 }
 

@@ -6,6 +6,7 @@ import type { BrowserTakeover } from "../browser-takeover-types.js";
 import { getOwnedApplication } from "../local-artifact/store.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import { resumeApplyRun, retryFill, syncApplyRun } from "./apply.js";
+import { liveReviewCheckpoint } from "./live-review-approval.js";
 import { pauseApplicationForOwner } from "./owner-pause.js";
 import {
 	LOCAL_APPLY_HANDOFF_PATH,
@@ -75,11 +76,11 @@ export function fillGate(run: ApplyRun | null): { waiting: boolean; reason?: "lo
  */
 export async function ensureFillHandoff(env: Env, userId: string, instanceId: string, stored: ApplyRun, requestPause = false): Promise<{ handoff: LocalApplyHandoff; ready: boolean }> {
 	const current = await syncApplyRun(env, userId, stored);
-	const run = requestPause ? await pauseApplicationForOwner(env, userId, instanceId, current) : current;
+	const run = requestPause && !liveReviewCheckpoint(current) ? await pauseApplicationForOwner(env, userId, instanceId, current) : current;
 	const app = await getOwnedApplication(env, userId, run.applicationId);
 	if (!app || app.fillRunId !== run.id) throw new HttpError(409, "This application is no longer bound to that exact Runner run.");
-	if (run.status !== "paused" || !["login_required", "captcha", "owner_requested"].includes(run.pause?.reason ?? "")) {
-		throw new HttpError(409, "A live browser handoff requires this exact run to pause for site login, CAPTCHA, or explicit owner control.");
+	if (run.status !== "paused" || !liveReviewCheckpoint(run) && !["login_required", "captcha", "owner_requested"].includes(run.pause?.reason ?? "")) {
+		throw new HttpError(409, "A live browser handoff requires this exact run to pause for site login, CAPTCHA, owner review, or explicit owner control.");
 	}
 	const now = Date.now();
 	let handoff = await createLocalApplyHandoff(env, { run, app, userId, browserProfile: run.policy.browserProfile, expiresAt: now + HANDOFF_TTL_MS }, now);
@@ -106,7 +107,7 @@ export async function ensureFillHandoff(env: Env, userId: string, instanceId: st
 	return { handoff, ready: true };
 }
 
-/** Relay one live-view operation through a usable handoff of this run. Resume also resumes the run. */
+/** Return owner control; a scoped review stays paused until its separate approval is delivered. */
 export async function relayFillHandoff(env: Env, userId: string, instanceId: string, run: ApplyRun, handoff: LocalApplyHandoff, suffix: HandoffSuffix, input?: unknown): Promise<unknown> {
 	const continuityId = handoff.continuityId;
 	const now = Date.now();
@@ -132,7 +133,11 @@ export async function relayFillHandoff(env: Env, userId: string, instanceId: str
 	if (suffix === "end") await markLocalApplyHandoff(env, { continuityId, instanceId, userId, state: "closed", terminalReason: "unavailable" }, now);
 	if (suffix === "resume") {
 		await markLocalApplyHandoff(env, { continuityId, instanceId, userId, state: "closed", terminalReason: "unavailable" }, now);
-		return { run: await resumeApplyRun(env, userId, run, {}) };
+		const current = (await getApplyRun(env, instanceId, userId, run.id)) ?? run;
+		// Closing the browser view is not submission approval. Keep the exact review lease;
+		// any already-approved pending directive can be delivered by the next normal sync.
+		if (liveReviewCheckpoint(current)) return { run: current };
+		return { run: await resumeApplyRun(env, userId, current, {}) };
 	}
 	return payload;
 }
