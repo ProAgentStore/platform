@@ -288,6 +288,44 @@ Its response explicitly said processing could delay availability; registry looku
 404 at the first checks. The application machine still reported 0.4.230, idle and RPC healthy.
 API deployment and installation are not claimed by those publication results.
 
+### Review repair deployed and runner installed
+
+The import-cycle correction is `72bc612ab3b4c825d0ede94bb8f732d99db8b463`. The graph, approval
+and takeover tests passed (51 cases), followed by API source/test typechecks and the push gate's
+**237 files / 4,856 tests**. The correction changes only the API's shared settings import; CLI
+0.4.231 and the deployed console retain the implementation from `1045886b`.
+
+The [API deployment](https://github.com/ProAgentStore/platform/actions/runs/42177589555) succeeded
+on that corrected SHA: 1,532 test files and 24,463 tests passed, with four files/eleven tests skipped.
+This workflow uses a separate test command, so these counts are not a canonical `SUITE GREEN`
+verdict. Worker version `0d184bbb-e0ac-4747-ae17-b2ebf91f70c0` deployed at 07:07 UTC.
+
+Registry lookup subsequently returned CLI **0.4.231**. Official MCP update operation
+`02ed1da0-3d3c-4473-aaf3-2a83cc1357e1` started at 07:08:50 UTC after the machine reported zero
+coding turns and zero local runs. The operation was passively reconciled as `restarted` after the
+machine re-registered on 0.4.231; it explicitly did not verify held-agent reattachments itself.
+Separate MCP RPC probes then verified **all 13 held instances**: 0.4.231, online, relay attached,
+RPC healthy and eligible, including Scout, Tailor and Application Runner. Publication, API
+rollout and actual machine installation are therefore independently evidenced.
+
+A post-deployment `get_application` read of Talent application
+`8baaeded-3297-4a84-9613-4d5cdc877c69` still showed version 5, no active `fillRun`,
+`submissionVerification: unverified`, null submission receipt and only defer/archive/disposition
+actions. The repair did not reopen that ended attempt or remove its uncertainty guard. No new
+employer application was started during this repair; there is still no confirmed real submission.
+
+The [corrected code CI run](https://github.com/ProAgentStore/platform/actions/runs/42177589476)
+completed successfully for the exact corrected code SHA. The retained canonical line is:
+
+`SUITE GREEN  Test Files  0 failed | 1536 passed (1536) · Tests  0 failed | 24467 passed (24474)`
+
+The denominator is preserved as printed; 24,474 is not the number of passing tests. The same run
+passed the native-browser/screenshot/takeover checks, **832 end-to-end tests (9.2 minutes)** and
+all final typechecks. Browser dependency installation delayed CI but eventually completed.
+These results establish the repaired code and delivery; they are not a real employer submission
+or a deployed MCP approval-to-submit exercise. The next real eligible application remains that
+acceptance gate.
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |
