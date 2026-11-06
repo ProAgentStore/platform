@@ -59,7 +59,7 @@ import {
 	isWorkspaceRelative,
 	parseLocalArtifactLead,
 } from "./contract.js";
-import { type SourceText, buildArtifactEngineSpec, checkDraft, finalText, missingLogin, observedArtifactAuth, ownerAnswersText, parseDraft, tailorPrompt } from "./engine.js";
+import { type SourceText, buildArtifactEngineSpec, checkDraft, draftExcerpt, finalText, missingLogin, observedArtifactAuth, ownerAnswersText, parseDraft, tailorPrompt } from "./engine.js";
 
 export interface LocalArtifactRuntimeDeps {
 	/** The runner's data dir; per-run scratch folders live under `<dataDir>/local-artifact/`. */
@@ -400,6 +400,13 @@ export class LocalArtifactRuntime {
 		};
 		this.emit(run, { type: "claims.checked", detail: { total: check.claims, unmatched: check.ok ? 0 : check.unmatched, ...(diagnostic ? { validationError: diagnostic.validationError, parseAttempts: diagnostic.parseAttempts.join(","), rawOutputChars: diagnostic.rawOutputChars, runId: diagnostic.runId, attemptNumber } : {}) } });
 		if (!check.ok) {
+			// A failed CLI's last message is its error (e.g. Codex "You've hit your usage limit … try again at …"), not a
+			// malformed draft: report it in the CLI's own words rather than as invalid output (#1573).
+			if (code !== 0 && check.reason === "invalid_cli_output") {
+				this.removeIfEmpty(ctx.outDir);
+				this.end(run, { outcome: "failed", error: `The ${e.engine} CLI exited with code ${code}: ${draftExcerpt(text, 800)}` });
+				return;
+			}
 			const prompt = !run.repairAttempted && code === 0 ? draftRepairPrompt(ctx.lead, ctx.texts, parsed, check) : null;
 			if (prompt) {
 				run.repairAttempted = true;

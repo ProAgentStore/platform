@@ -178,7 +178,7 @@ const PHONE = /\+?\d[\d\s().-]{7,}\d/g;
 const digits = (s: string) => s.replace(/\D/g, "");
 
 /** A bounded draft excerpt must say when content was omitted; it is never a complete quote. */
-function draftExcerpt(value: string, maxChars: number): string {
+export function draftExcerpt(value: string, maxChars: number): string {
 	const text = value.replace(/\s+/g, " ").trim();
 	return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
 }

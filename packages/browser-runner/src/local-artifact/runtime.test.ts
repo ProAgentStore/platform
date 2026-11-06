@@ -384,6 +384,30 @@ describe("it pauses instead of guessing", () => {
 	});
 });
 
+describe("a CLI that fails with a message (#1573)", () => {
+	it("ends failed in the CLI's own words, not as invalid output", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		answer(0, "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 11th, 2026 5:38 PM.", 1);
+		await settle();
+		const r = rt.status({ runId: "run-1" }).result;
+		expect(r).toMatchObject({ outcome: "failed" });
+		expect(r?.blockReason).toBeUndefined();
+		expect(r?.error).toBe("The claude CLI exited with code 1: You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 11th, 2026 5:38 PM.");
+		expect(spawned).toHaveLength(1);
+	});
+
+	it("still accepts a valid draft from a CLI that exits non-zero", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		answer(0, GOOD, 1);
+		await settle();
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "completed" });
+	});
+});
+
 describe("one bounded citation repair (#1472)", () => {
 	const badCitation = () => ({ ...GOOD, claims: [{ text: "Migrated 40 services", source: "profile", quote: "Led the migration of 40 services to Cloudflare Workers." }] });
 
