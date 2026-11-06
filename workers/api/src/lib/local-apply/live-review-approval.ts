@@ -4,7 +4,7 @@ import { HttpError } from "../auth.js";
 import { getOwnedApplication, type JobApplication } from "../local-artifact/store.js";
 import { cliAtLeast } from "../runner-upgrade.js";
 import { getLiveRuntime } from "../../routes/instances-runtime.js";
-import { runnerSettingsFor } from "./apply.js";
+import { runnerSettingsFor } from "./runner-settings.js";
 import { fingerprintOf, sameFingerprint, type SubmitAuthorization } from "./approval.js";
 import { getSubmitAuthorization } from "./approval-store.js";
 import type { LocalApplyDirectiveRequest } from "./contract.js";

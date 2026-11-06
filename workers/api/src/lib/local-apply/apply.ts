@@ -1,3 +1,5 @@
+import { runnerSettingsFor } from "./runner-settings.js";
+export { runnerSettingsFor } from "./runner-settings.js";
 import { reviewDirectiveAuthorization } from "./live-review-approval.js";
 import { assertFullSubmissionReconciled } from "./reconciliation-store.js";
 import { trustedDocumentPreflightFailure } from "./preflight-failure.js";
@@ -37,7 +39,6 @@ import { SCREENSHOTS_OFF_REASON, browserScreenshotSettings, screenshotBlurRunner
 import { ingestRunnerShots } from "../browser-artifacts.js";
 import { HttpError } from "../auth.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
-import { readInstanceConfigPair } from "../instance-config.js";
 import { type JobApplication, getOwnedApplication } from "../local-artifact/store.js";
 import type { Env } from "../../types.js";
 import { parseApplyRunnerBatch } from "./trace-integrity.js";
@@ -59,7 +60,7 @@ import {
 	parseLocalApplyResult,
 	traceUrl,
 } from "./contract.js";
-import { type ApplicationRunnerSettings, RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, hostOfUrl } from "./policy.js";
+import { type ApplicationRunnerSettings, RUNNER_DEFAULTS, hostOfUrl } from "./policy.js";
 import { advanceAgentSignIn, agentSignInWillTry, parseRunnerSignIn, signedInEventIn } from "./agent-sign-in.js";
 import {
 	type ApplicationMove,
@@ -209,20 +210,6 @@ async function move(env: Env, uid: string, applicationId: string, from: readonly
 }
 
 /**
- * Start filling one application — the ONE start path, for the connection action and the owner's
- * route. Throws 409 when this is not a Runner or the input is not a materials_ready event for one
- * of the owner's applications, and 503 when no runner is connected — before anything is recorded,
- * so the outbox retries.
- */
-/** The Runner's effective settings, or why they cannot be used. */
-export async function runnerSettingsFor(env: Env, runnerInstanceId: string, uid: string): Promise<ApplicationRunnerSettings> {
-	const pair = await readInstanceConfigPair(env, runnerInstanceId, uid);
-	const settings = effectiveRunnerSettings((pair?.config as Record<string, unknown> | undefined)?.[RUNNER_SETTINGS_KEY]);
-	if ("error" in settings) throw new HttpError(409, `The Application Runner settings are invalid: ${settings.error}`);
-	return settings.settings;
-}
-
-/**
  * The task the runner is sent, built from the run's OWN recorded policy (#974).
  *
  * One builder for the first dispatch and for a re-dispatch out of the queue: a second construction
@@ -262,6 +249,9 @@ async function keptAnswers(env: Env, uid: string, run: ApplyRun): Promise<{ ids:
 }
 
 /**
+ * Start filling one application: the shared dispatch path for connections and owner actions.
+ * Throws 409 for invalid Runner/material state and 503 when no runner is connected, so the
+ * outbox can retry before dispatch is recorded.
  * `review: true` (#958 "Request review") pins the run to fill_and_review whatever the policy says:
  * the gate is still evaluated and recorded, with `review_requested` as a failing check.
  */

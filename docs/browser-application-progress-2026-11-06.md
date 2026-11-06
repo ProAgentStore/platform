@@ -263,6 +263,31 @@ The full-suite result, commit, publication, API deployment and installed version
 only when verified. The already-ended Talent run is still unverified and is not resurrected by this
 fix. Its recovery remains #1571; there is still no confirmed real employer submission.
 
+### Release validation of the review repair
+
+Commit `1045886b8ab543288241fa4f74c5ec8cf6b9cb25` was pushed directly to main. All push guards,
+source/test typechecks and **294 related test files / 5,784 tests** passed. The local canonical full
+suite was interrupted after four unrelated timeouts on the shared machine; its actual verdict was
+`SUITE RED no report` (vitest exit 130), not green. Those four files then passed a single-worker
+rerun: 99 tests. The local live-model report has SHA-256
+`1d1d5386ab1db1f3e15049b916e61fb4cc5616b1cbd89ff2fb1c856406c3a179`. It preceded the final
+stale-reference, summary and takeover-return refinements; those have focused behavioral coverage.
+
+[CI 42175704814](https://github.com/ProAgentStore/platform/actions/runs/42175704814) caught an
+implementation defect missed by the related-test gate: `apply.ts` and `live-review-approval.ts`
+formed a static import cycle through `runnerSettingsFor`. Its exact verdict was
+`SUITE RED  Test Files  1 failed | 1535 passed (1536) · Tests  2 failed | 24465 passed (24474)`.
+The two failures were the import-graph invariants; this was a defect in the repair, not an external
+flaky test. The correction extracts the shared settings reader into a leaf module, without weakening
+the graph test or adding a deferred-cycle exception.
+
+The [console deployment](https://github.com/ProAgentStore/platform/actions/runs/42175704889)
+succeeded for `1045886b`. The [npm workflow](https://github.com/ProAgentStore/platform/actions/runs/42175704852)
+passed Linux/Windows startup and self-update checks and npm accepted CLI 0.4.231 at 06:43 UTC.
+Its response explicitly said processing could delay availability; registry lookups still returned
+404 at the first checks. The application machine still reported 0.4.230, idle and RPC healthy.
+API deployment and installation are not claimed by those publication results.
+
 ## Original requests and present evidence
 
 | Owner request | What changed | Status and remaining proof |
