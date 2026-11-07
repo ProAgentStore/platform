@@ -3,7 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import GmailScoutScanLog from "./GmailScoutScanLog";
-import { type GmailScoutScanReceipt, type GmailScoutScanResponse, type LeadVerification, type LeadVerificationListResponse, leadVerificationLine, rejectionSummary, scanNowMessage } from "../../lib/gmailScout";
+import { type GmailScoutScanReceipt, type GmailScoutScanResponse, type LeadVerification, type LeadVerificationListResponse, leadVerificationLine, rejectionSummary, scanNowMessage, scanTime } from "../../lib/gmailScout";
 
 const GMAIL_SCOUT_MAILBOX = "serge.pro.job@gmail.com";
 
@@ -78,7 +78,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 		<label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enable Gmail job-alert scans</label>
 		<div className="mt-3 flex flex-wrap items-center gap-2"><Button size="sm" onClick={() => void save()} disabled={busy}>Save Gmail source</Button>{message && <span className="text-xs text-muted-soft" role="status">{message}</span>}</div>
 		<div className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-			<div><span className="block text-xs text-muted-soft">Last scan</span>{state?.lastScanAt ? new Date(state.lastScanAt).toLocaleString() : "Never"}</div>
+			<div><span className="block text-xs text-muted-soft">Last scan</span>{state?.lastScanAt ? scanTime(state.lastScanAt) : "Never"}</div>
 			<div><span className="block text-xs text-muted-soft">Candidates</span>{state?.candidateCount ?? 0}</div>
 			<div><span className="block text-xs text-muted-soft">Duplicates</span>{state?.dedupeCount ?? 0}</div>
 			<div><span className="block text-xs text-muted-soft">New leads</span>{status?.newLeadCount ?? 0} / {status?.leadCount ?? 0}</div>
@@ -89,7 +89,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 				<ul className="flex flex-col gap-1 text-xs">
 					{status.receipts.slice(0, 5).map((r) => (
 						<li key={r.id}>
-							{new Date(r.startedAt).toLocaleString()} · {r.trigger === "on_demand" ? "Scan now" : r.trigger === "reprocess" ? "Reprocess" : "Scheduled"} ·{" "}
+							{scanTime(r.startedAt)} · {r.trigger === "on_demand" ? "Scan now" : r.trigger === "reprocess" ? "Reprocess" : "Scheduled"} ·{" "}
 							<span className={r.status === "failed" ? "text-danger" : "text-muted"}>{r.status}</span>
 							{r.status === "completed" ? ` · ${r.added ?? 0} added${r.awaitingBrowserVerification ? ` (${r.awaitingBrowserVerification} awaiting browser verification)` : ""}, ${r.deduped ?? 0} duplicate(s)${rejectionSummary(r.rejected) ? `, skipped: ${rejectionSummary(r.rejected)}` : ""}` : ""}
 							{r.status === "failed" && r.errorMessage ? ` · ${r.errorMessage}` : ""}
@@ -131,6 +131,6 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 				</ul>
 			</div>
 		) : null}
-		{state?.failureCount ? <p className="mt-3 text-sm text-danger">{state.failureCount} scan failure(s){state.lastFailureAt ? `; latest ${new Date(state.lastFailureAt).toLocaleString()}` : ""}: {state.lastFailureMessage || "Unknown failure"}</p> : null}
+		{state?.failureCount ? <p className="mt-3 text-sm text-danger">{state.failureCount} scan failure(s){state.lastFailureAt ? `; latest ${scanTime(state.lastFailureAt)}` : ""}: {state.lastFailureMessage || "Unknown failure"}</p> : null}
 	</Card>;
 }

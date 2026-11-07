@@ -14,7 +14,7 @@ import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState } from "../gmail-scout/config.js";
 import { emailPermitted } from "../connectors/gmail.js";
 import { jobsAccountProblem } from "../jobs-app.js";
-import { listGmailScoutReceipts } from "../gmail-scout/receipts.js";
+import { listGmailScoutReceipts, utcIso as iso } from "../gmail-scout/receipts.js";
 import { gmailLeadIntakeRejection, readGmailScoutLeadRecords } from "../gmail-scout/scan.js";
 import { type FinderFact, finderFacts, finderProblems } from "../original-finder/health.js";
 
@@ -121,10 +121,6 @@ export interface SourceFact {
 	 */
 	browser?: { scheduled: boolean; lastCompletedAt: string | null } | null;
 }
-
-/** SQLite `datetime('now')` text is UTC without a zone; read it as UTC. */
-const utc = (v: string | null): number => (v ? Date.parse(v.includes("T") ? v : `${v.replace(" ", "T")}Z`) : Number.NaN);
-const iso = (v: string | null): string | null => (Number.isFinite(utc(v)) ? new Date(utc(v)).toISOString() : null);
 
 /** Pure: the facts in, every problem out. */
 export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[]; finders?: FinderFact[]; engineQuota?: EngineQuotaFact[] }): PipelineHealth {

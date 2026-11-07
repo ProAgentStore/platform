@@ -2,6 +2,7 @@
 import type { Env } from "../../types.js";
 import { listConnectorAccounts, resolveConnectorAccount } from "../connector-accounts.js";
 import { patchInstanceConfig } from "../instance-config.js";
+import { utcIso } from "./receipts.js";
 
 export const GMAIL_SCOUT_TOOLS = ["gmail_search", "gmail_read_message"] as const;
 export const GMAIL_SCOUT_CAPABILITY = { connector: "gmail", readOnly: true, tools: GMAIL_SCOUT_TOOLS } as const;
@@ -80,8 +81,8 @@ export async function resolveGmailScoutAccount(env: Env, _instanceId: string, us
 export async function getGmailScoutScanState(env: Env, instanceId: string): Promise<GmailScoutScanState> {
 	const r = await env.DB.prepare("SELECT instance_id, last_scan_at, last_message_id_cursor, candidate_count, dedupe_count, failure_count, last_failure_at, last_failure_message FROM gmail_scout_scan_state WHERE instance_id = ?1").bind(instanceId).first<Record<string, unknown>>();
 	return {
-		instanceId, lastScanAt: typeof r?.last_scan_at === "string" ? r.last_scan_at : null, lastMessageIdCursor: typeof r?.last_message_id_cursor === "string" ? r.last_message_id_cursor : null,
+		instanceId, lastScanAt: utcIso(r?.last_scan_at), lastMessageIdCursor: typeof r?.last_message_id_cursor === "string" ? r.last_message_id_cursor : null,
 		candidateCount: Number(r?.candidate_count ?? 0), dedupeCount: Number(r?.dedupe_count ?? 0), failureCount: Number(r?.failure_count ?? 0),
-		lastFailureAt: typeof r?.last_failure_at === "string" ? r.last_failure_at : null, lastFailureMessage: typeof r?.last_failure_message === "string" ? r.last_failure_message : null,
+		lastFailureAt: utcIso(r?.last_failure_at), lastFailureMessage: typeof r?.last_failure_message === "string" ? r.last_failure_message : null,
 	};
 }

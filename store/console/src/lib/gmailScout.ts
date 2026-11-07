@@ -176,3 +176,8 @@ export function leadVerificationLine(v: LeadVerification): { text: string; tone:
 		canVerifyNow: v.state === "awaiting",
 	};
 }
+
+/** A scan time for display, in the viewer's zone. The API sends ISO-8601 UTC for every scan time (#1597). */
+export function scanTime(iso: string): string {
+	return new Date(iso).toLocaleString();
+}

@@ -14,6 +14,12 @@ const health = (edges: EdgeFact[], sources: SourceFact[], pipeline = PIPELINE) =
 const codes = (h: ReturnType<typeof health>) => h.problems.map((p) => p.code);
 
 describe("pipeline health (#1022)", () => {
+	it("accepts ISO scan times (the API now returns ISO) without changing staleness (#1597)", () => {
+		const iso = new Date(NOW - SOURCE_STALE_AFTER_MS - 60_000).toISOString();
+		const h = health([edge()], [gmail({ lastScanAt: iso })]);
+		expect(codes(h)).toEqual(["source_stale"]);
+		expect(h.sources[0]).toMatchObject({ lastScanAt: iso });
+	});
 	it("a healthy pipeline: enabled edges, a recently scanned scheduled mailbox — ok, nothing to report", () => {
 		const h = health([edge()], [gmail()]);
 		expect(h).toMatchObject({ ok: true, problems: [] });

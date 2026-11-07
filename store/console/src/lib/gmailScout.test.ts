@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type GmailScoutScanResult, rejectionSummary, scanLogVerdict, scanNowMessage } from "./gmailScout";
+import { type GmailScoutScanResult, rejectionSummary, scanLogVerdict, scanNowMessage, scanTime } from "./gmailScout";
 
 const scan = (over: Partial<GmailScoutScanResult> = {}): GmailScoutScanResult => ({
 	mailbox: "m", candidates: 2, added: 1, deduped: 1, lastMessageId: null, rejected: {}, reused: false, handoff: "none",
@@ -28,5 +28,21 @@ describe("a logged email's verdict, in plain words (#1247)", () => {
 		expect(scanLogVerdict({ decision: "deduped", classification: "duplicate" }).text).toBe("Duplicate · duplicate");
 		expect(scanLogVerdict({ decision: "rejected", classification: "digest" })).toEqual({ text: "Not taken · digest", tone: "muted" });
 		expect(scanLogVerdict({ decision: "rejected", classification: "non_job" }).text).toBe("Not taken · not a job alert");
+	});
+});
+
+describe("scanTime (#1597)", () => {
+	it("shows one string for the same instant under a non-UTC TZ", () => {
+		const prev = process.env.TZ;
+		process.env.TZ = "Australia/Sydney";
+		try {
+			const lastScanAt = "2026-11-07T05:42:00.000Z";
+			const receiptStartedAt = "2026-11-07T05:42:00.000Z";
+			expect(scanTime(lastScanAt)).toBe(scanTime(receiptStartedAt));
+			// The old bug: zone-less text parsed as local shows the UTC digits unchanged.
+			expect(scanTime(lastScanAt)).not.toBe(new Date("2026-11-07T05:42:00").toLocaleString());
+		} finally {
+			if (prev === undefined) delete process.env.TZ; else process.env.TZ = prev;
+		}
 	});
 });

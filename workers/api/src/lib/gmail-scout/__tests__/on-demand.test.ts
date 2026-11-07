@@ -12,7 +12,7 @@ import { HttpError } from "../../auth.js";
 import { signSession } from "../../session.js";
 import { pipelineHealth } from "../../applications/pipeline-health.js";
 import { GMAIL_SCOUT_PINNED_EMAIL } from "../config.js";
-import { type GmailScoutScanReceipt, listGmailScoutReceipts } from "../receipts.js";
+import { type GmailScoutScanReceipt, listGmailScoutReceipts, utcIso } from "../receipts.js";
 import { type GmailScoutMailbox, type GmailScoutMailboxFactory, gmailScoutStatus, runDueGmailScoutScans, scanGmailScout, setGmailScoutMailboxForTest } from "../scan.js";
 import type { GmailMessage } from "../../gmail.js";
 import type { Env } from "../../../types.js";
@@ -225,6 +225,20 @@ describe("the Scan now route (Console) and its receipt", () => {
 		expect(res.body.scan).toMatchObject({ added: 1, handoff: "none", receipt: { trigger: "on_demand", triggeredBy: "u1", status: "completed" } });
 		const status = await post("/v1/instances/scout/gmail-scout/status");
 		expect(status.body.receipts[0]).toMatchObject({ id: res.body.scan.receipt.id, status: "completed" });
+	});
+
+	it("status returns the scan and failure times as ISO UTC, not zone-less SQLite text (#1597)", async () => {
+		d1.exec("INSERT INTO gmail_scout_scan_state (instance_id, last_scan_at, last_failure_at, failure_count) VALUES ('scout', '2026-11-07 05:42:00', '2026-11-07 06:00:30', 1)");
+		const res = await post("/v1/instances/scout/gmail-scout/status") as unknown as { body: { state: { lastScanAt: string; lastFailureAt: string } } };
+		expect(res.body.state).toMatchObject({ lastScanAt: "2026-11-07T05:42:00.000Z", lastFailureAt: "2026-11-07T06:00:30.000Z" });
+		const never = await post("/v1/instances/scout-b/gmail-scout/status") as unknown as { body: { state: { lastScanAt: null; lastFailureAt: null } } };
+		expect(never.body.state).toMatchObject({ lastScanAt: null, lastFailureAt: null });
+	});
+
+	it("utcIso reads zone-less SQLite text as UTC and returns null, never throws, on bad input (#1597)", () => {
+		expect(utcIso("2026-11-07 05:42:00")).toBe("2026-11-07T05:42:00.000Z");
+		expect(utcIso("2026-11-07T05:42:00.000Z")).toBe("2026-11-07T05:42:00.000Z");
+		for (const bad of ["garbage", "", null, undefined, 5]) expect(utcIso(bad)).toBeNull();
 	});
 
 	it("a failed read answers 502 with the failed receipt, never a bare error", async () => {

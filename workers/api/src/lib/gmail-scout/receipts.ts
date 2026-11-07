@@ -51,7 +51,12 @@ export const RUNNING_RECEIPT_TTL_MS = 5 * 60_000;
 export const RECEIPTS_KEPT = 50;
 export const RECEIPTS_KEPT_DAYS = 30;
 
-const utcIso = (v: unknown): string | null => (typeof v === "string" && v ? new Date(v.includes("T") ? v : `${v.replace(" ", "T")}Z`).toISOString() : null);
+/** SQLite `datetime('now')` text is UTC without a zone: read it as UTC. Null for empty or unparseable input; never throws. */
+export const utcIso = (v: unknown): string | null => {
+	if (typeof v !== "string" || !v) return null;
+	const ms = Date.parse(v.includes("T") ? v : `${v.replace(" ", "T")}Z`);
+	return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+};
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
 function parseWindow(v: unknown): Record<string, unknown> | null {
