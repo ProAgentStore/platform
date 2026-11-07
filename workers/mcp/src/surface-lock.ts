@@ -1279,4 +1279,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.210": "sha256:fcd6ef26a9fb9d44df8fb8642df36ca22a0ddb514a04ad10fc8d8c0e772c2220", // #1566: owner-scoped Application Tailor engine and settings read/patch tools.
 	"0.1.211": "sha256:f7ffb4820648fe081abb055bc95c954e3d5e8cdb415cf58d88b99d305e20a864", // #1569: exact Application Runner owner-handoff resume.
 	"0.1.212": "sha256:ebd56f188f369bc6bf91447b72d76e58dc1d8799407f13279dce881b83ef748b", // Correct the legacy accountCreation argument's capability claim; its executor was retired in #1422.
+	"0.1.213": "sha256:b53ef8eb6086d1a94586e7b553701ae9041d4c3c75b59ecdc791d89c57280fb3", // create_instance_trigger accepts start_loop and run_po_triage, the actions list_trigger_actions already reported (#1581).
 };

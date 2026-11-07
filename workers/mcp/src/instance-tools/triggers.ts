@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
-import { type InstanceToolsCtx, normalizeTriggerConfig, triggerConfigSchema } from "./shared.js";
+import { type InstanceToolsCtx, TRIGGER_ACTION_NAMES, normalizeTriggerConfig, triggerConfigSchema } from "./shared.js";
 
 /**
  * Webhook, cron and connector-sync triggers — the scheduled and event-driven edges into an
@@ -46,7 +46,7 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 			instance_id: z.string(),
 			name: z.string().describe("Human-readable trigger name."),
 			type: z.enum(["webhook", "cron"]).describe("Webhook exposes a capability URL; cron runs on a schedule."),
-			action: z.enum(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse", "run_local_browser", "generate_application_materials", "start_application_fill"]),
+			action: z.enum(TRIGGER_ACTION_NAMES),
 			schedule: z.string().optional().describe("Required for cron. Examples: @daily, @hourly, every 15 minutes, 0 8 * * *"),
 			config: triggerConfigSchema,
 			dry_run: z.boolean().optional(),

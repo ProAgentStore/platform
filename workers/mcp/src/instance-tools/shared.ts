@@ -17,6 +17,12 @@ export interface InstanceToolsCtx {
 	groups: Set<string>;
 }
 
+/** Every action `create_instance_trigger` accepts. Pinned to the API's `TRIGGER_ACTIONS` by a test (#1581). */
+export const TRIGGER_ACTION_NAMES = [
+	"create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse",
+	"run_local_browser", "generate_application_materials", "start_application_fill", "start_loop", "run_po_triage",
+] as const;
+
 export const triggerConfigSchema = z.object({
 	title: z.string().optional(),
 	description: z.string().optional(),
@@ -31,10 +37,10 @@ export const triggerConfigSchema = z.object({
 	collection: z.string().optional(),
 	url: z.string().optional().describe("run_browse: the start URL for the scheduled browser task."),
 	dry_run: z.boolean().optional().describe("run_browse: walk the flow but block the committing clicks."),
-	objective: z.string().max(4000).optional().describe("run_local_browser: what the scheduled research run should find (a local_browser agent, e.g. a job scout)."),
+	objective: z.string().max(4000).optional().describe("run_local_browser: what the scheduled run should do. run_local_browser: what the research run should find (a local_browser agent, e.g. a job scout). start_loop: the standing instruction for the agent's next chat turn (e.g. push new leads to an outbound MCP tool)."),
 	jitter_minutes: z.coerce.number().int().min(0).max(720).optional().describe("cron: randomise the fire time by ± this many minutes (avoid firing exactly on the dot)."),
 	timezone: z.string().optional().describe("cron: IANA zone the schedule's wall clock is read in, e.g. Australia/Melbourne. Omit for UTC."),
-	mapping: z.record(z.string()).optional().describe("Map payload paths onto the action's fields, e.g. {\"title\":\"lead.name\"}. create_task: title, description. add_knowledge: title, content, source_url. log_event: message. run_local_browser: objective."),
+	mapping: z.record(z.string()).optional().describe("Map payload paths onto the action's fields, e.g. {\"title\":\"lead.name\"}. create_task: title, description. add_knowledge: title, content, source_url. log_event: message. run_local_browser and start_loop: objective."),
 }).optional();
 
 export interface InstanceSummary {
